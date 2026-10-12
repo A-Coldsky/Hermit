@@ -17,13 +17,13 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.hermit.crab.runtime.CrabServer;
 import dev.hermit.crab.testing.LegacyOaFixture;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -50,7 +50,6 @@ class Phase1AcceptanceTest {
     @Test
     @Timeout(value = 3, unit = TimeUnit.MINUTES)
     void phaseOne() throws Exception {
-        Path repo = Path.of(System.getProperty("hermit.repo.root"));
         Path reefJar = Path.of(System.getProperty("hermit.reef.jar"));
         assertThat(reefJar).isRegularFile();
 
@@ -150,6 +149,14 @@ class Phase1AcceptanceTest {
 
                     assertCode(get(crabBase, "/", null), 404, "NOT_FOUND");
                     assertCode(get(crabBase, "/dev/x", null), 404, "NOT_FOUND");
+                    Assumptions.assumingThat(!"true".equals(System.getProperty("hermit.web.skip")), () -> {
+                        HttpResponse<String> reefPage = get(reefBase, "/", null);
+                        assertThat(reefPage.statusCode()).isEqualTo(200);
+                        assertThat(reefPage.body()).contains("<div id=\"app\">");
+                        HttpResponse<String> crabPage = get(crabBase, "/console/", null);
+                        assertThat(crabPage.statusCode()).isEqualTo(200);
+                        assertThat(crabPage.body()).contains("<div id=\"app\">");
+                    });
                 }
             } finally {
                 reef.destroy();
@@ -157,12 +164,6 @@ class Phase1AcceptanceTest {
                     reef.destroyForcibly();
                 }
             }
-        }
-
-        assertThat(Files.isDirectory(repo.resolve("hermit-web"))).isFalse();
-        assertThat(Files.exists(repo.resolve("package.json"))).isFalse();
-        try (Stream<Path> walk = Files.walk(repo)) {
-            assertThat(walk.filter(Phase1AcceptanceTest::vueFile).findAny()).isEmpty();
         }
     }
 
@@ -179,15 +180,6 @@ class Phase1AcceptanceTest {
             assertThat(hit.cookie()).doesNotContain("sid-" + other + "-");
         }
         assertThat(seen).as("todo cookie for " + owner).isTrue();
-    }
-
-    private static boolean vueFile(Path path) {
-        String text = path.toString().replace('\\', '/');
-        if (text.contains("/target/") || text.contains("/.git/")) {
-            return false;
-        }
-        String name = path.getFileName().toString();
-        return name.endsWith(".vue") || name.equals("vue.config.js");
     }
 
     private Process startReef(Path jar, int port, Path dataDir, Path log) throws Exception {

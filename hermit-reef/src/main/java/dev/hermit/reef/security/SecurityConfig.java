@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -16,6 +17,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
+import org.springframework.security.web.header.HeaderWriter;
 
 @Configuration
 public class SecurityConfig {
@@ -74,7 +76,6 @@ public class SecurityConfig {
                 .build();
     }
 
-    // 自定义链会关掉 Boot 的默认链。没被上面两条匹配到的请求在这里拒绝；前端静态资源下一期再放行。
     @Bean
     @Order(Ordered.LOWEST_PRECEDENCE)
     SecurityFilterChain denyByDefault(HttpSecurity http, ApiAuthenticationEntryPoint entryPoint,
@@ -87,7 +88,26 @@ public class SecurityConfig {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
                 .exceptionHandling(errors -> errors.authenticationEntryPoint(entryPoint).accessDeniedHandler(denied))
-                .authorizeHttpRequests(auth -> auth.anyRequest().denyAll())
+                .headers(headers -> headers
+                        .cacheControl(cache -> cache.disable())
+                        .addHeaderWriter(cacheControlIfAbsent()))
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.GET, "/", "/login", "/shells", "/shells/upload", "/shells/{shell}",
+                                "/tide", "/alerts", "/audit", "/settings", "/assets/**")
+                        .permitAll()
+                        .anyRequest().denyAll())
                 .build();
+    }
+
+    // 默认的 Cache-Control 写在响应提交时，会盖住静态资源自己的头。没写过头的拒绝响应仍不进缓存。
+    private static HeaderWriter cacheControlIfAbsent() {
+        return (request, response) -> {
+            if (response.containsHeader(HttpHeaders.CACHE_CONTROL)) {
+                return;
+            }
+            response.setHeader(HttpHeaders.CACHE_CONTROL, "no-cache, no-store, max-age=0, must-revalidate");
+            response.setHeader(HttpHeaders.PRAGMA, "no-cache");
+            response.setHeader(HttpHeaders.EXPIRES, "0");
+        };
     }
 }

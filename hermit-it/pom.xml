@@ -63,6 +63,7 @@
           <systemPropertyVariables>
             <hermit.repo.root>${maven.multiModuleProjectDirectory}</hermit.repo.root>
             <hermit.reef.jar>${maven.multiModuleProjectDirectory}/hermit-reef/target/hermit-reef-${project.version}.jar</hermit.reef.jar>
+            <hermit.web.skip>${hermit.web.skip}</hermit.web.skip>
           </systemPropertyVariables>
         </configuration>
       </plugin>

@@ -9,16 +9,16 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 
-final class Db {
+public final class Db {
     private Db() {
     }
 
     @FunctionalInterface
-    interface Work<T> {
+    public interface Work<T> {
         T run(Connection connection) throws SQLException;
     }
 
-    static <T> T transaction(DataSource dataSource, Work<T> work) {
+    public static <T> T transaction(DataSource dataSource, Work<T> work) {
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
@@ -42,12 +42,12 @@ final class Db {
         }
     }
 
-    static Instant instant(ResultSet resultSet, String column) throws SQLException {
+    public static Instant instant(ResultSet resultSet, String column) throws SQLException {
         OffsetDateTime value = resultSet.getObject(column, OffsetDateTime.class);
         return value == null ? null : value.toInstant();
     }
 
-    static void setInstant(PreparedStatement statement, int index, Instant instant) throws SQLException {
+    public static void setInstant(PreparedStatement statement, int index, Instant instant) throws SQLException {
         statement.setObject(index, OffsetDateTime.ofInstant(instant, ZoneOffset.UTC));
     }
 

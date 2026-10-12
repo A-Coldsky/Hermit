@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -105,6 +106,25 @@ class CredentialVaultTest {
         fixture.accounts.create(Origin.OFFICIAL, "oa", "carol", "cli");
         SecretChecks.sameMap(fixture.vault.decryptForExecution(Origin.OFFICIAL, "oa", "carol"), Map.of());
         assertThat(fixture.vault.fieldNames(Origin.OFFICIAL, "oa", "carol")).isEmpty();
+    }
+
+    @Test
+    void deleteFieldsRemovesTheDeclarationForEveryOfficialAccount() throws Exception {
+        fixture.vault.write(Origin.OFFICIAL, "oa", "alice", Map.of("password", PASSWORD, "username", "alice"), "cli");
+        fixture.vault.write(Origin.OFFICIAL, "oa", "bob", Map.of("password", TOKEN), "cli");
+        fixture.vault.write(Origin.LOCAL, "oa", "alice", Map.of("password", "HermitLocalOnly-cc33"), "cli");
+
+        fixture.vault.deleteFields(Origin.OFFICIAL, "oa", Set.of("password"));
+        fixture.vault.deleteFields(Origin.OFFICIAL, "oa", Set.of());
+
+        assertThat(fixture.vault.fieldNames(Origin.OFFICIAL, "oa", "alice")).containsExactly("username");
+        assertThat(fixture.vault.fieldNames(Origin.OFFICIAL, "oa", "bob")).isEmpty();
+        SecretChecks.contains(fixture.vault.allSecretValues(Origin.LOCAL, "oa"), "HermitLocalOnly-cc33");
+        SecretChecks.missing(fixture.vault.allSecretValues(Origin.OFFICIAL, "oa"), PASSWORD);
+        SecretChecks.missing(fixture.vault.allSecretValues(Origin.OFFICIAL, "oa"), TOKEN);
+        TextColumnScanner.assertAbsent(fixture.dataSource, PASSWORD, TOKEN);
+        assertThatThrownBy(() -> fixture.vault.deleteFields(Origin.OFFICIAL, "oa", null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private byte[] readCiphertext(String account, String field) throws Exception {

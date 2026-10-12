@@ -162,6 +162,42 @@ public final class CredentialVault {
         });
     }
 
+    /**
+     * Deletes a declaration that no longer exists, for every account of this shell.
+     * Plaintext is neither read nor written. No audit row is appended: the store only accepts
+     * {@code cli} and {@code console} actors, and this call has no actor.
+     */
+    public void deleteFields(Origin origin, String shell, Set<String> fields) {
+        Origin checkedOrigin = Checks.origin(origin);
+        String checkedShell = Checks.shell(shell);
+        if (fields == null) {
+            throw new IllegalArgumentException("fields are required");
+        }
+        Set<String> checked = new LinkedHashSet<>();
+        for (String field : fields) {
+            checked.add(Checks.field(field));
+        }
+        if (checked.isEmpty()) {
+            return;
+        }
+        synchronized (ShellLocks.of(dataSource, checkedOrigin, checkedShell)) {
+            Db.transaction(dataSource, connection -> {
+                for (String field : checked) {
+                    try (PreparedStatement statement = connection.prepareStatement("""
+                            DELETE FROM credentials
+                            WHERE origin = ? AND shell = ? AND field = ?
+                            """)) {
+                        statement.setString(1, checkedOrigin.name());
+                        statement.setString(2, checkedShell);
+                        statement.setString(3, field);
+                        statement.executeUpdate();
+                    }
+                }
+                return null;
+            });
+        }
+    }
+
     @Override
     public String toString() {
         return "CredentialVault";

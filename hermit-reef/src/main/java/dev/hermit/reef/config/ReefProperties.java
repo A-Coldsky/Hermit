@@ -1,0 +1,101 @@
+package dev.hermit.reef.config;
+
+import jakarta.annotation.PostConstruct;
+import java.nio.file.Path;
+import java.time.Duration;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties(prefix = "hermit.reef")
+public class ReefProperties {
+
+    private String dataDir = "./reef-data";
+    private String agentToken = "";
+    private Duration jwtTtl = Duration.ofHours(8);
+    private String latestCrabVersion = "";
+    private String crabDownloadUrl = "";
+    private int reportRetentionDays = 90;
+
+    @PostConstruct
+    void validate() {
+        if (dataDir == null || dataDir.isBlank()) {
+            throw new IllegalStateException("hermit.reef.data-dir must not be blank");
+        }
+        if (jwtTtl == null || jwtTtl.isZero() || jwtTtl.isNegative()) {
+            throw new IllegalStateException("hermit.reef.jwt-ttl must be positive");
+        }
+        if (reportRetentionDays < 1) {
+            throw new IllegalStateException("hermit.reef.report-retention-days must be positive");
+        }
+    }
+
+    public Path dataDirectory() {
+        return Path.of(dataDir);
+    }
+
+    public String configuredAgentToken() {
+        return blankToNull(agentToken);
+    }
+
+    public String latestCrabVersionOrNull() {
+        return blankToNull(latestCrabVersion);
+    }
+
+    public String crabDownloadUrlOrNull() {
+        return blankToNull(crabDownloadUrl);
+    }
+
+    public String getDataDir() {
+        return dataDir;
+    }
+
+    public void setDataDir(String dataDir) {
+        this.dataDir = dataDir;
+    }
+
+    public String getAgentToken() {
+        return agentToken;
+    }
+
+    public void setAgentToken(String agentToken) {
+        this.agentToken = agentToken;
+    }
+
+    public Duration getJwtTtl() {
+        return jwtTtl;
+    }
+
+    public void setJwtTtl(Duration jwtTtl) {
+        this.jwtTtl = jwtTtl;
+    }
+
+    public String getLatestCrabVersion() {
+        return latestCrabVersion;
+    }
+
+    public void setLatestCrabVersion(String latestCrabVersion) {
+        this.latestCrabVersion = latestCrabVersion;
+    }
+
+    public String getCrabDownloadUrl() {
+        return crabDownloadUrl;
+    }
+
+    public void setCrabDownloadUrl(String crabDownloadUrl) {
+        this.crabDownloadUrl = crabDownloadUrl;
+    }
+
+    public int getReportRetentionDays() {
+        return reportRetentionDays;
+    }
+
+    public void setReportRetentionDays(int reportRetentionDays) {
+        this.reportRetentionDays = reportRetentionDays;
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value;
+    }
+}

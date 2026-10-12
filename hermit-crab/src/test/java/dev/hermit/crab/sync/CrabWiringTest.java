@@ -117,6 +117,53 @@ class CrabWiringTest {
         }
     }
 
+    @Test
+    void scheduledSyncIsVisibleOnConsoleAndFailureKeepsThePreviousReport() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            CrabConfig config = config(reef.base().toString(), Ed25519Keys.writePublicPem(reef.keys().getPublic()), false)
+                    .withListen("127.0.0.1", 0);
+            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("scheduled")), config, name -> null);
+            try (CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+                JsonNode startup = awaitSyncReport(http, server.port());
+                assertThat(startup.path("report").path("shells").size()).isZero();
+
+                reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+                runtime.shellSync().runScheduled();
+
+                JsonNode scheduled = syncData(http, server.port());
+                JsonNode shells = scheduled.path("report").path("shells");
+                assertThat(shells.size()).isEqualTo(1);
+                assertThat(shells.get(0).path("shell").asText()).isEqualTo("legacy_oa");
+                assertThat(shells.get(0).path("version").asText()).isEqualTo("1.0.0");
+                assertThat(shells.get(0).path("kind").asText()).isEqualTo("INSTALLED");
+
+                reef.manifestStatus(500);
+                runtime.shellSync().runScheduled();
+                assertThat(syncData(http, server.port())).isEqualTo(scheduled);
+            }
+        }
+    }
+
+    private static JsonNode awaitSyncReport(HttpClient http, int port) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        JsonNode last = null;
+        while (System.nanoTime() < deadline) {
+            last = syncData(http, port);
+            if (last.path("report").isObject()) {
+                return last;
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("startup sync did not publish a report: " + last);
+    }
+
+    private static JsonNode syncData(HttpClient http, int port) throws Exception {
+        HttpResponse<String> status = send(http, port, "GET", "/console/api/sync", null);
+        assertThat(status.statusCode()).as(status.body()).isEqualTo(200);
+        return JSON.readTree(status.body()).path("data");
+    }
+
     private static HttpResponse<String> send(HttpClient http, int port, String method, String path, String body)
             throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))

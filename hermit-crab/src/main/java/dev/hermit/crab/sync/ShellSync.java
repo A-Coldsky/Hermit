@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Consumer;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
@@ -49,6 +50,7 @@ public final class ShellSync {
     private final HttpClient client;
     private final SemVer crabVersion = CrabVersion.CURRENT;
     private final AtomicBoolean started = new AtomicBoolean();
+    private volatile Consumer<SyncReport> reportListener;
     private int credentialDeleteFailures;
 
     public ShellSync(
@@ -82,6 +84,15 @@ public final class ShellSync {
         this.reef = new ReefClient(settings, client);
     }
 
+    /**
+     * Receives each report before {@link #syncOnce()} returns. Not called when sync throws or
+     * produces no report. Runs on the sync thread while the sync lock is held; must not call
+     * {@link #syncOnce()}.
+     */
+    public void onReport(Consumer<SyncReport> listener) {
+        this.reportListener = listener;
+    }
+
     public SyncReport syncOnce() {
         synchronized (this) {
             retryPendingCredentialDeletes();
@@ -91,7 +102,7 @@ public final class ShellSync {
                 if (manifest.etag() != null) {
                     store.saveEtag(manifest.etag());
                 }
-                return new SyncReport(true, List.of(), List.of(), List.of(), latest);
+                return deliver(new SyncReport(true, List.of(), List.of(), List.of(), latest));
             }
             List<ShellOutcome> shells = new ArrayList<>();
             List<CredentialDeclarationChange> changes = new ArrayList<>();
@@ -124,8 +135,19 @@ public final class ShellSync {
             if (manifest.etag() != null) {
                 store.saveEtag(manifest.etag());
             }
-            return new SyncReport(false, shells, removed, changes, latest);
+            return deliver(new SyncReport(false, shells, removed, changes, latest));
         }
+    }
+
+    private SyncReport deliver(SyncReport report) {
+        if (report == null) {
+            return null;
+        }
+        Consumer<SyncReport> listener = reportListener;
+        if (listener != null) {
+            listener.accept(report);
+        }
+        return report;
     }
 
     public void start(ScheduledExecutorService executor) {

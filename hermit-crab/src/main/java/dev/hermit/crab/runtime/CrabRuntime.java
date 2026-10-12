@@ -101,6 +101,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private ShellSync shellSync;
     private ReportQueue reportQueue;
     private ReportSender reportSender;
+    /** Last completed sync, from startup, the timer, or a manual request. Sync threads write; HTTP threads read. */
     private volatile SyncReport lastSync;
     private ScheduledExecutorService scheduler;
 
@@ -210,7 +211,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         Optional<String> token = Optional.ofNullable(config.reefToken()).filter(value -> !value.isBlank());
         SyncSettings syncSettings = new SyncSettings(
                 reefUrl, token, reefKey, Duration.ofSeconds(config.syncIntervalSeconds()), instance);
-        this.shellSync = new ShellSync(syncSettings, paths, registry, vault, database.dataSource(), clock);
+        ShellSync sync = new ShellSync(syncSettings, paths, registry, vault, database.dataSource(), clock);
+        sync.onReport(this::rememberCompletedSync);
+        this.shellSync = sync;
         ReportSettings reportSettings = new ReportSettings(
                 config.reportEnabled(), reefUrl, token, instance, CrabVersion.CURRENT.toString());
         this.reportQueue = new ReportQueue(reportSettings, database.dataSource(), clock);
@@ -260,7 +263,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return Optional.empty();
         }
         SyncReport report = shellSync.syncOnce();
-        lastSync = report;
+        if (report == null) {
+            return Optional.empty();
+        }
         recordCredentialChanges(report);
         if (requestedBy != null) {
             AuditLog.record(database.dataSource(), requestedBy, AuditKind.SYNC_REQUESTED, "sync", "{}");
@@ -377,6 +382,12 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             purgeExpired();
         } catch (RuntimeException ex) {
             LOG.warning("retention failed: " + ex.getClass().getName());
+        }
+    }
+
+    private void rememberCompletedSync(SyncReport report) {
+        if (report != null) {
+            lastSync = report;
         }
     }
 

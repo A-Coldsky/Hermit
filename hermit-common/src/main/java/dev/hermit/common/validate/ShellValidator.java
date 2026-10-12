@@ -65,7 +65,7 @@ public final class ShellValidator {
             checkRefs("auth.steps", doc.auth().steps(), doc, errors);
             AliveCheck alive = doc.auth().aliveCheck();
             if (alive != null) {
-                checkPlainMap("auth.alive_check.request", alive.request(), false, errors);
+                checkPlainMap("auth.alive_check.request", alive.request(), false, false, errors);
                 checkScalar("auth.alive_check.expect_not_redirect", "expect_not_redirect",
                         alive.expectNotRedirect(), errors);
                 checkRefs("auth.alive_check.request", alive.request(), doc, errors);
@@ -206,7 +206,7 @@ public final class ShellValidator {
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
             boolean variableNames = "extract".equals(step.type());
-            checkPlainMap(path + "[" + i + "]", step.def(), variableNames, errors);
+            checkPlainMap(path + "[" + i + "]", step.def(), variableNames, "assert".equals(step.type()), errors);
         }
     }
 
@@ -214,16 +214,17 @@ public final class ShellValidator {
             String path,
             Map<String, Object> map,
             boolean keysAreVariableNames,
+            boolean assertStep,
             List<ValidationIssue> errors
     ) {
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             String childPath = path + "." + entry.getKey();
             Object value = entry.getValue();
             if (value instanceof Map<?, ?> nested) {
-                checkPlainMap(childPath, cast(nested), false, errors);
+                checkPlainMap(childPath, cast(nested), false, assertStep, errors);
             } else if (value instanceof List<?> list) {
-                checkPlainList(childPath, entry.getKey(), list, keysAreVariableNames, errors);
-            } else if (!keysAreVariableNames) {
+                checkPlainList(childPath, entry.getKey(), list, keysAreVariableNames, assertStep, errors);
+            } else if (!keysAreVariableNames && !exemptAssertKey(assertStep, entry.getKey())) {
                 checkScalar(childPath, entry.getKey(), value, errors);
             }
         }
@@ -234,16 +235,17 @@ public final class ShellValidator {
             String parentKey,
             List<?> list,
             boolean parentKeySkipped,
+            boolean assertStep,
             List<ValidationIssue> errors
     ) {
         for (int i = 0; i < list.size(); i++) {
             Object value = list.get(i);
             String childPath = path + "[" + i + "]";
             if (value instanceof Map<?, ?> nested) {
-                checkPlainMap(childPath, cast(nested), false, errors);
+                checkPlainMap(childPath, cast(nested), false, assertStep, errors);
             } else if (value instanceof List<?> nested) {
-                checkPlainList(childPath, parentKey, nested, parentKeySkipped, errors);
-            } else if (!parentKeySkipped) {
+                checkPlainList(childPath, parentKey, nested, parentKeySkipped, assertStep, errors);
+            } else if (!parentKeySkipped && !exemptAssertKey(assertStep, parentKey)) {
                 checkScalar(childPath, parentKey, value, errors);
             }
         }
@@ -259,25 +261,21 @@ public final class ShellValidator {
         errors.add(issue(ValidationCodes.PLAINTEXT_CREDENTIAL, path, "疑似明文凭证"));
     }
 
+    private static final Set<String> ASSERT_NAME_KEYS = Set.of("cookie_exists", "header_exists");
+
+    /** assert 里这两个键的值是要检查的名字，不是秘密。其他位置的 cookie_* / authorization_* 仍算敏感键。 */
+    private static boolean exemptAssertKey(boolean assertStep, String key) {
+        return assertStep && key != null && ASSERT_NAME_KEYS.contains(key.toLowerCase(Locale.ROOT));
+    }
+
     private static boolean suspicious(String key) {
         String lower = key.toLowerCase(Locale.ROOT);
         for (String needle : SECRET_KEYS) {
-            int at = lower.indexOf(needle);
-            if (at < 0) {
-                continue;
+            if (lower.contains(needle)) {
+                return true;
             }
-            // cookie_exists 是设计里的 assert 键。cookie / authorization 后面紧跟下划线时不是凭证字段。
-            if (("cookie".equals(needle) || "authorization".equals(needle))
-                    && continuesWithUnderscore(lower, at + needle.length())) {
-                continue;
-            }
-            return true;
         }
         return false;
-    }
-
-    private static boolean continuesWithUnderscore(String key, int index) {
-        return index < key.length() && key.charAt(index) == '_';
     }
 
     private static void checkCredentialInOutput(String path, Object node, List<ValidationIssue> errors) {

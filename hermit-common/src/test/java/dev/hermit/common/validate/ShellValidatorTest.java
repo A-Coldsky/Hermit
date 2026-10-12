@@ -218,6 +218,27 @@ class ShellValidatorTest {
     }
 
     @Test
+    void assertExistenceKeysAreNamesButCookiePrefixesElsewhereAreSecrets() {
+        ValidationResult result = ShellValidator.validate(ShellParser.parse(referencing("""
+                - assert:
+                    cookie_exists: ASP.NET_SessionId
+                    header_exists: X-Request-Id
+                - request:
+                    headers:
+                      cookie_value: "abc"
+                      authorization_token: "Bearer literal"
+                    form:
+                      cookie_exists: "not-a-name-here"
+                """)), ShellValidator.Context.of(null));
+        assertThat(result.errors()).extracting(ValidationIssue::path).containsExactly(
+                "actions.list_todo.steps[1].headers.cookie_value",
+                "actions.list_todo.steps[1].headers.authorization_token",
+                "actions.list_todo.steps[1].form.cookie_exists");
+        assertThat(result.errors()).extracting(ValidationIssue::code)
+                .containsOnly(ValidationCodes.PLAINTEXT_CREDENTIAL);
+    }
+
+    @Test
     void outputTemplateMustNotReferenceCredentials() {
         ValidationResult leaked = ShellValidator.validate(ShellParser.parse(shellWithOutput("""
                       items:

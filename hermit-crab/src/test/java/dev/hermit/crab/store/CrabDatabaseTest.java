@@ -25,8 +25,24 @@ class CrabDatabaseTest {
             fixture.accounts.create(Origin.OFFICIAL, "oa", "alice", "cli");
             assertThat(Files.exists(temp.resolve("data").resolve("crab.mv.db"))).isTrue();
             assertThat(tableNames(fixture)).contains(
-                    "ACCOUNTS", "CREDENTIALS", "SHELL_CONFIG", "API_KEYS", "CONFIG_AUDIT", "SCHEMA_VERSION");
-            assertThat(versions(fixture)).containsExactly(1);
+                    "ACCOUNTS",
+                    "CREDENTIALS",
+                    "SHELL_CONFIG",
+                    "API_KEYS",
+                    "CONFIG_AUDIT",
+                    "SCHEMA_VERSION",
+                    "VERSION_SUCCESS",
+                    "PINNED_ROLLBACKS",
+                    "MISMATCH_STREAK",
+                    "SHELL_PREVIOUS",
+                    "INSTALLED_VERSIONS",
+                    "SYNC_STATE",
+                    "REPORT_QUEUE",
+                    "ROLLBACK_QUEUE",
+                    "HOURLY_COUNTS",
+                    "REPORT_META",
+                    "PENDING_CREDENTIAL_DELETES");
+            assertThat(versions(fixture)).containsExactly(1, 3);
             assertThat(columnType(fixture, "CREDENTIALS", "CIPHERTEXT")).contains("BINARY");
         } finally {
             fixture.close();
@@ -36,7 +52,7 @@ class CrabDatabaseTest {
             Account account = reopened.accounts.resolve(Origin.OFFICIAL, "oa", Optional.of("alice"));
             assertThat(account.account()).isEqualTo("alice");
             assertThat(account.defaultAccount()).isTrue();
-            assertThat(versions(reopened)).containsExactly(1);
+            assertThat(versions(reopened)).containsExactly(1, 3);
         }
     }
 

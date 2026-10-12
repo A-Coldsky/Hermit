@@ -43,9 +43,10 @@ public final class InstanceIds {
         } catch (IOException ex) {
             throw new IllegalStateException("cannot read instance id");
         }
-        if (id.isEmpty() || id.length() > 128 || id.indexOf('\n') >= 0 || id.indexOf('\r') >= 0) {
-            throw new IllegalStateException("instance id file is invalid");
+        try {
+            return UUID.fromString(id).toString();
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalStateException("instance id is not a UUID");
         }
-        return id;
     }
 }

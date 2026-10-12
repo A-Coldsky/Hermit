@@ -28,7 +28,7 @@ public final class CrabConfigLoader {
     private static final Set<String> REEF = Set.of("url", "token", "public_key");
     private static final Set<String> SERVER = Set.of("host", "port");
     private static final Set<String> SYNC = Set.of("interval_seconds");
-    private static final Set<String> REPORT = Set.of("enabled");
+    private static final Set<String> REPORT = Set.of("enabled", "interval_seconds");
     private static final Set<String> CAPABILITIES = Set.of("disabled");
     private static final Set<String> ENGINE = Set.of(
             "capability_timeout_seconds", "session_idle_minutes", "max_login_failures");
@@ -93,6 +93,8 @@ public final class CrabConfigLoader {
                     integer(file, server, "port", "server.port", defaults.serverPort(), 0, 65535),
                     integer(file, sync, "interval_seconds", "sync.interval_seconds", defaults.syncIntervalSeconds(), 1, Integer.MAX_VALUE),
                     bool(file, report, "enabled", "report.enabled", defaults.reportEnabled()),
+                    integer(file, report, "interval_seconds", "report.interval_seconds",
+                            defaults.reportIntervalSeconds(), 1, Integer.MAX_VALUE),
                     disabled(file, capabilities),
                     aliases(file, root.get("aliases")),
                     integer(file, engine, "capability_timeout_seconds", "engine.capability_timeout_seconds",

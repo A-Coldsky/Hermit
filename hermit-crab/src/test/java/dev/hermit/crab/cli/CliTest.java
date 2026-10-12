@@ -7,8 +7,11 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.KeyPair;
 import java.util.function.Function;
 
+import dev.hermit.common.pkg.Ed25519Keys;
+import dev.hermit.common.pkg.ShellPackage;
 import dev.hermit.crab.CrabMain;
 import dev.hermit.crab.store.CrabDatabase;
 import dev.hermit.crab.store.CrabPaths;
@@ -106,13 +109,34 @@ class CliTest {
         return name -> "HERMIT_HOME".equals(name) ? root.toString() : null;
     }
 
+    @Test
+    void syncWithoutReefUrlExits() {
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {"sync"},
+                env(temp.resolve("nosync")),
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(err));
+        assertThat(code).isEqualTo(1);
+        assertThat(err.toString(StandardCharsets.UTF_8)).contains("reef.url is not configured");
+    }
+
     private static void installLegacy(Path root) throws Exception {
-        Path dir = root.resolve("shells").resolve("legacy_oa");
-        Files.createDirectories(dir.resolve("1.0.0"));
-        Files.writeString(dir.resolve("current"), "1.0.0\n");
+        byte[] yaml;
         try (InputStream in = CliTest.class.getClassLoader().getResourceAsStream("samples/legacy_oa.yaml")) {
-            Files.writeString(dir.resolve("1.0.0").resolve("shell.yaml"), new String(in.readAllBytes(), StandardCharsets.UTF_8));
+            yaml = in.readAllBytes();
         }
+        KeyPair keys = Ed25519Keys.generate();
+        byte[] zip = ShellPackage.write(yaml, keys.getPrivate());
+        Path version = root.resolve("shells").resolve("legacy_oa").resolve("1.0.0");
+        Files.createDirectories(version);
+        Files.write(version.resolve("package.zip"), zip);
+        Files.write(version.resolve("shell.yaml"), yaml);
+        Files.writeString(version.getParent().resolve("current"), "1.0.0\n");
+        Path pub = root.resolve("reef.pub");
+        Files.writeString(pub, Ed25519Keys.writePublicPem(keys.getPublic()));
+        Files.writeString(root.resolve("config.yml"), "reef:\n  public_key: \"" + pub.toAbsolutePath() + "\"\n");
     }
 
     private static PrintStream stdout() {

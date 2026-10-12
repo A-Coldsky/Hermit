@@ -15,6 +15,7 @@ public record CrabConfig(
         int serverPort,
         int syncIntervalSeconds,
         boolean reportEnabled,
+        int reportIntervalSeconds,
         List<String> disabledCapabilities,
         Map<String, String> aliases,
         int capabilityTimeoutSeconds,
@@ -30,6 +31,9 @@ public record CrabConfig(
         }
         if (syncIntervalSeconds < 1) {
             throw new IllegalArgumentException("sync.interval_seconds must be positive");
+        }
+        if (reportIntervalSeconds < 1) {
+            throw new IllegalArgumentException("report.interval_seconds must be positive");
         }
         if (capabilityTimeoutSeconds < 1) {
             throw new IllegalArgumentException("engine.capability_timeout_seconds must be positive");
@@ -51,7 +55,7 @@ public record CrabConfig(
     }
 
     public static CrabConfig defaults() {
-        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, List.of(), Map.of(), 60, 10, 3);
+        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 60, List.of(), Map.of(), 60, 10, 3);
     }
 
     public EngineSettings engineSettings() {
@@ -64,19 +68,22 @@ public record CrabConfig(
     public CrabConfig withListen(String host, int port) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, host, port, syncIntervalSeconds, reportEnabled,
-                disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes, maxLoginFailures);
+                reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
+                maxLoginFailures);
     }
 
     public CrabConfig withAliases(Map<String, String> aliasMap) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
-                disabledCapabilities, aliasMap, capabilityTimeoutSeconds, sessionIdleMinutes, maxLoginFailures);
+                reportIntervalSeconds, disabledCapabilities, aliasMap, capabilityTimeoutSeconds, sessionIdleMinutes,
+                maxLoginFailures);
     }
 
     public CrabConfig withDisabled(List<String> disabled) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
-                disabled, aliases, capabilityTimeoutSeconds, sessionIdleMinutes, maxLoginFailures);
+                reportIntervalSeconds, disabled, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
+                maxLoginFailures);
     }
 
     public static void requireAlias(String path, String target) {

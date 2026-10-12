@@ -24,6 +24,7 @@ class CrabConfigLoaderTest {
         assertThat(config.serverPort()).isEqualTo(7777);
         assertThat(config.syncIntervalSeconds()).isEqualTo(300);
         assertThat(config.reportEnabled()).isTrue();
+        assertThat(config.reportIntervalSeconds()).isEqualTo(60);
         assertThat(config.capabilityTimeoutSeconds()).isEqualTo(60);
         assertThat(config.sessionIdleMinutes()).isEqualTo(10);
         assertThat(config.maxLoginFailures()).isEqualTo(3);

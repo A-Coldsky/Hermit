@@ -17,6 +17,7 @@ hermit:
       quiet-hours: 24
       dedup-hours: 6
       webhook-url: ""
+      evaluate-cron: "0 */5 * * * *"
 
 spring:
   application:

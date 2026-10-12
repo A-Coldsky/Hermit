@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -19,6 +20,7 @@ import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.DeclaredSettings;
 import dev.hermit.crab.runtime.StatusCodes;
+import dev.hermit.crab.report.FlushResult;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.Actors;
@@ -27,6 +29,10 @@ import dev.hermit.crab.store.ApiKeySummary;
 import dev.hermit.crab.store.CallLogStore;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.DebugStateStore;
+import dev.hermit.crab.sync.CrabRelease;
+import dev.hermit.crab.sync.CredentialDeclarationChange;
+import dev.hermit.crab.sync.ShellOutcome;
+import dev.hermit.crab.sync.SyncReport;
 import io.javalin.http.Context;
 import io.javalin.http.HandlerType;
 
@@ -60,6 +66,9 @@ final class ConsoleApi {
         get(app, "/console/api/debug", ctx -> debug(runtime, ctx));
         post(app, "/console/api/debug", ctx -> setDebug(runtime, ctx));
         post(app, "/console/api/sync", ctx -> sync(runtime, ctx));
+        get(app, "/console/api/sync", ctx -> syncStatus(runtime, ctx));
+        get(app, "/console/api/reports/preview", ctx -> reportPreview(runtime, ctx));
+        post(app, "/console/api/reports/send", ctx -> reportSend(runtime, ctx));
     }
 
     private static void shells(CrabRuntime runtime, Context ctx) {
@@ -278,11 +287,82 @@ final class ConsoleApi {
     }
 
     private static void sync(CrabRuntime runtime, Context ctx) {
-        if (!runtime.syncNow(Actors.CONSOLE)) {
+        Optional<SyncReport> report = runtime.syncOnce(Actors.CONSOLE);
+        if (report.isEmpty()) {
             GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "sync is not configured");
             return;
         }
-        GatewayResponses.writeData(ctx, Map.of("ok", true));
+        GatewayResponses.writeData(ctx, syncView(report.get()));
+    }
+
+    private static void syncStatus(CrabRuntime runtime, Context ctx) {
+        if (runtime.shellSync() == null) {
+            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "sync is not configured");
+            return;
+        }
+        SyncReport report = runtime.lastSync().orElse(null);
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("report", report == null ? null : syncView(report));
+        body.put("latestCrab", report == null ? null : crabView(report.latestCrab().orElse(null)));
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void reportPreview(CrabRuntime runtime, Context ctx) {
+        if (!runtime.reportsConfigured()) {
+            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "reports are not configured");
+            return;
+        }
+        GatewayResponses.writeData(ctx, runtime.reportSender().preview());
+    }
+
+    private static void reportSend(CrabRuntime runtime, Context ctx) {
+        if (!runtime.reportsConfigured()) {
+            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "reports are not configured");
+            return;
+        }
+        FlushResult result = runtime.reportSender().confirmAndSend();
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("attempted", result.attempted());
+        body.put("accepted", result.accepted());
+        body.put("status", result.status());
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static Map<String, Object> syncView(SyncReport report) {
+        ArrayList<Map<String, Object>> shells = new ArrayList<>();
+        for (ShellOutcome outcome : report.shells()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("shell", outcome.shell());
+            row.put("version", outcome.version());
+            row.put("kind", outcome.kind() == null ? null : outcome.kind().name());
+            row.put("reason", outcome.reason());
+            shells.add(row);
+        }
+        ArrayList<Map<String, Object>> changes = new ArrayList<>();
+        for (CredentialDeclarationChange change : report.credentialChanges()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("shell", change.shell());
+            row.put("addedRequired", change.addedRequired());
+            row.put("removed", change.removed());
+            changes.add(row);
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("notModified", report.notModified());
+        body.put("shells", shells);
+        body.put("removed", report.removed());
+        body.put("credentialChanges", changes);
+        body.put("latestCrab", crabView(report.latestCrab().orElse(null)));
+        return body;
+    }
+
+    private static Map<String, Object> crabView(CrabRelease release) {
+        if (release == null) {
+            return null;
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("latestVersion", release.latestVersion());
+        body.put("downloadUrl", release.downloadUrl());
+        return body;
     }
 
     private static void get(io.javalin.Javalin app, String path, io.javalin.http.Handler handler) {

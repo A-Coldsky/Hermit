@@ -16,6 +16,7 @@
     <module>hermit-common</module>
     <module>hermit-reef</module>
     <module>hermit-crab</module>
+    <module>hermit-it</module>
   </modules>
 
   <properties>

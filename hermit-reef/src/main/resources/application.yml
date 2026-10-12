@@ -21,6 +21,11 @@ hermit:
 spring:
   application:
     name: hermit-reef
+  servlet:
+    multipart:
+      # Shell 上传上限。容器先拒绝，服务里再查一次字节长度。
+      max-file-size: 1MB
+      max-request-size: 1MB
   datasource:
     url: jdbc:h2:file:${hermit.reef.data-dir}/db/reef;MODE=REGULAR
     driver-class-name: org.h2.Driver

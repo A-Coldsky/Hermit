@@ -37,6 +37,17 @@ class CredentialCipherTest {
     }
 
     @Test
+    void tuplesThatDifferOnlyBySplitPositionCannotDecryptEachOther() {
+        String account = "acct";
+        byte[] shellThenField = cipher.encrypt(Origin.OFFICIAL, "a", account, "b|c", PLAINTEXT);
+        byte[] fieldThenShell = cipher.encrypt(Origin.OFFICIAL, "a|b", account, "c", PLAINTEXT);
+        assertThat(cipher.decrypt(Origin.OFFICIAL, "a", account, "b|c", shellThenField)).isEqualTo(PLAINTEXT);
+        assertThat(cipher.decrypt(Origin.OFFICIAL, "a|b", account, "c", fieldThenShell)).isEqualTo(PLAINTEXT);
+        assertRejected(() -> cipher.decrypt(Origin.OFFICIAL, "a|b", account, "c", shellThenField));
+        assertRejected(() -> cipher.decrypt(Origin.OFFICIAL, "a", account, "b|c", fieldThenShell));
+    }
+
+    @Test
     void movedToAnotherAccountFieldShellOrOriginFails() {
         byte[] stored = cipher.encrypt(Origin.OFFICIAL, "oa", "alice", "password", PLAINTEXT);
         assertRejected(() -> cipher.decrypt(Origin.OFFICIAL, "oa", "bob", "password", stored));

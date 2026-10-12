@@ -11,6 +11,11 @@ import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.Set;
@@ -92,6 +97,24 @@ class ApiKeyServiceTest {
     }
 
     @Test
+    void lastUsedAtIsNotRewrittenUntilSixtySecondsHavePassed() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-10-12T00:00:00Z"));
+        ApiKeyService apiKeys = new ApiKeyService(fixture.dataSource, clock);
+        CreatedApiKey created = apiKeys.create("metered", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+
+        assertThat(apiKeys.authenticate(created.plaintext())).isPresent();
+        Instant first = lastUsedAt(apiKeys, created.id());
+
+        clock.advance(Duration.ofSeconds(59));
+        assertThat(apiKeys.authenticate(created.plaintext())).isPresent();
+        assertThat(lastUsedAt(apiKeys, created.id())).isEqualTo(first);
+
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(apiKeys.authenticate(created.plaintext())).isPresent();
+        assertThat(lastUsedAt(apiKeys, created.id())).isAfter(first);
+    }
+
+    @Test
     void shellActionAndReadOnlyScopesAllApply() {
         ApiKeyPrincipal shell = principal(new ApiKeyScope(Set.of("oa"), Set.of(), false));
         assertThat(shell.permits("oa", "delete", false)).isTrue();
@@ -112,6 +135,14 @@ class ApiKeyServiceTest {
         assertThat(combined.permits("oa", "delete", true)).isFalse();
         assertThat(combined.permits("erp", "list", true)).isFalse();
         assertThat(combined.permits(null, "list", true)).isFalse();
+    }
+
+    private static Instant lastUsedAt(ApiKeyService apiKeys, String id) {
+        return apiKeys.list().stream()
+                .filter(summary -> summary.id().equals(id))
+                .findFirst()
+                .orElseThrow()
+                .lastUsedAt();
     }
 
     private ApiKeyPrincipal principal(ApiKeyScope scope) {
@@ -143,6 +174,33 @@ class ApiKeyServiceTest {
             return text.toString();
         } catch (Exception ex) {
             throw new IllegalStateException("cannot read audit", ex);
+        }
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant instant;
+
+        private MutableClock(Instant instant) {
+            this.instant = instant;
+        }
+
+        private void advance(Duration duration) {
+            instant = instant.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return instant;
         }
     }
 }

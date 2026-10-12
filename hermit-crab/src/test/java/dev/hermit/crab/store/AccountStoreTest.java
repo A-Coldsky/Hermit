@@ -140,6 +140,17 @@ class AccountStoreTest {
     }
 
     @Test
+    void actorIsOnlyCliOrConsole() {
+        assertThat(fixture.accounts.create(Origin.OFFICIAL, "oa", "alice", Actors.CONSOLE).account()).isEqualTo("alice");
+        String supplied = "HermitRequestActor-not-allowed";
+        Throwable thrown = catchThrowable(() -> fixture.accounts.create(Origin.OFFICIAL, "erp", "bob", supplied));
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class);
+        assertThat(thrown.getMessage()).isEqualTo("actor must be cli or console");
+        SecretChecks.absent(thrown, supplied);
+        assertThat(auditText()).doesNotContain(supplied);
+    }
+
+    @Test
     void accountNamesMustMatchTheContractAndAreNotEchoed() {
         assertThat(fixture.accounts.create(Origin.OFFICIAL, "oa", "A_b-1", "cli").account()).isEqualTo("A_b-1");
         assertThat(fixture.accounts.create(Origin.OFFICIAL, "oa", "a".repeat(64), "cli").account()).hasSize(64);

@@ -28,8 +28,8 @@ final class Checks {
     }
 
     static String actor(String actor) {
-        if (actor == null || actor.isBlank()) {
-            throw new IllegalArgumentException("actor is required");
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
+            throw new IllegalArgumentException("actor must be cli or console");
         }
         return actor;
     }

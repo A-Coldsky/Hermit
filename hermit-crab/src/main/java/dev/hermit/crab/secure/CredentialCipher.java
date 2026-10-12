@@ -5,6 +5,9 @@ import dev.hermit.crab.store.Origin;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Arrays;
@@ -14,8 +17,9 @@ import java.util.Objects;
  * AES-256-GCM for one credential field.
  *
  * <p>Stored bytes are {@code 0x01 || nonce || ciphertext+tag}. The nonce is 12 bytes and the
- * tag is 128 bits. AAD is the UTF-8 of {@code hermit:cred:v1|origin|shell|account|field}, using
- * {@link Origin#name()}. A blob decrypted with any other tuple fails the tag check.
+ * tag is 128 bits. AAD is the UTF-8 of {@code hermit:cred:v1}, then origin, shell, account, and
+ * field as a 4-byte big-endian length plus UTF-8 bytes. Origin uses {@link Origin#name()}.
+ * A blob decrypted with any other tuple fails the tag check.
  */
 public final class CredentialCipher {
     static final int KEY_LENGTH = 32;
@@ -46,7 +50,7 @@ public final class CredentialCipher {
         byte[] associated = associatedData(origin, shell, account, field);
         byte[] nonce = new byte[NONCE_LENGTH];
         random.nextBytes(nonce);
-        byte[] plainBytes = plaintext.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] plainBytes = plaintext.getBytes(StandardCharsets.UTF_8);
         try {
             byte[] body = transform(Cipher.ENCRYPT_MODE, nonce, associated, plainBytes);
             byte[] stored = new byte[1 + NONCE_LENGTH + body.length];
@@ -75,7 +79,7 @@ public final class CredentialCipher {
             throw new CredentialDecryptException();
         }
         try {
-            return new String(plainBytes, java.nio.charset.StandardCharsets.UTF_8);
+            return new String(plainBytes, StandardCharsets.UTF_8);
         } finally {
             Arrays.fill(plainBytes, (byte) 0);
         }
@@ -98,7 +102,27 @@ public final class CredentialCipher {
         Objects.requireNonNull(shell, "shell");
         Objects.requireNonNull(account, "account");
         Objects.requireNonNull(field, "field");
-        String value = "hermit:cred:v1|" + origin.name() + "|" + shell + "|" + account + "|" + field;
-        return value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] prefix = "hermit:cred:v1".getBytes(StandardCharsets.UTF_8);
+        byte[] originBytes = origin.name().getBytes(StandardCharsets.UTF_8);
+        byte[] shellBytes = shell.getBytes(StandardCharsets.UTF_8);
+        byte[] accountBytes = account.getBytes(StandardCharsets.UTF_8);
+        byte[] fieldBytes = field.getBytes(StandardCharsets.UTF_8);
+        long total = (long) prefix.length + 16L
+                + originBytes.length + shellBytes.length + accountBytes.length + fieldBytes.length;
+        if (total > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("credential binding data is too large");
+        }
+        ByteBuffer buffer = ByteBuffer.allocate((int) total).order(ByteOrder.BIG_ENDIAN);
+        buffer.put(prefix);
+        putUtf8(buffer, originBytes);
+        putUtf8(buffer, shellBytes);
+        putUtf8(buffer, accountBytes);
+        putUtf8(buffer, fieldBytes);
+        return buffer.array();
+    }
+
+    private static void putUtf8(ByteBuffer buffer, byte[] utf8) {
+        buffer.putInt(utf8.length);
+        buffer.put(utf8);
     }
 }

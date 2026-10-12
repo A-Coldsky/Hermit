@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
@@ -133,18 +134,9 @@ class MasterKeyProviderTest {
 
     @Test
     void invalidDefaultFileIsNotReplaced() throws IOException {
-        String sentinel = "HermitBrokenDefaultKey-not-base64";
         Path fallback = new CrabPaths(temp).masterKeyFile();
-        Files.writeString(fallback, sentinel);
-
-        Throwable thrown = catchThrowable(() ->
-                MasterKeyProvider.load(new CrabPaths(temp), Optional.empty(), name -> null));
-
-        assertThat(thrown).isInstanceOf(MasterKeyException.class);
-        SecretChecks.absent(thrown, sentinel);
-        if (!sentinel.equals(Files.readString(fallback))) {
-            throw new AssertionError("invalid default master key file was replaced");
-        }
+        assertDefaultFileStaysUntouched(fallback, "HermitBrokenDefaultKey-not-base64".getBytes(StandardCharsets.US_ASCII));
+        assertDefaultFileStaysUntouched(fallback, Base64.getEncoder().encode(new byte[16]));
     }
 
     @Test
@@ -154,6 +146,33 @@ class MasterKeyProviderTest {
                 MasterKeyProvider.load(new CrabPaths(temp), Optional.of(missing), name -> null));
         assertThat(thrown).isInstanceOf(MasterKeyException.class);
         assertThat(thrown.getMessage()).contains(missing.toString());
+    }
+
+    private void assertDefaultFileStaysUntouched(Path fallback, byte[] contents) throws IOException {
+        Files.write(fallback, contents);
+        byte[] before = Files.readAllBytes(fallback);
+        String visible = new String(contents, StandardCharsets.US_ASCII);
+
+        Throwable first = catchThrowable(() ->
+                MasterKeyProvider.load(new CrabPaths(temp), Optional.empty(), name -> null));
+        assertThat(first).isInstanceOf(MasterKeyException.class);
+        assertThat(first.getCause()).isNull();
+        assertThat(first.getMessage()).contains("default master key file");
+        SecretChecks.absent(first, visible);
+        assertFileBytes(fallback, before);
+
+        Throwable second = catchThrowable(() ->
+                MasterKeyProvider.load(new CrabPaths(temp), Optional.empty(), name -> null));
+        assertThat(second).isInstanceOf(MasterKeyException.class);
+        assertThat(second.getCause()).isNull();
+        SecretChecks.absent(second, visible);
+        assertFileBytes(fallback, before);
+    }
+
+    private static void assertFileBytes(Path file, byte[] expected) throws IOException {
+        if (!Arrays.equals(expected, Files.readAllBytes(file))) {
+            throw new AssertionError("invalid default master key file was replaced");
+        }
     }
 
     private static byte[] key(byte fill) {

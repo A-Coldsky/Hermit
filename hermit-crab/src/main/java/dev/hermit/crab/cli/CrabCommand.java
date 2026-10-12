@@ -23,6 +23,7 @@ import dev.hermit.crab.config.ConfigFileException;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.config.CrabConfigLoader;
 import dev.hermit.crab.engine.ShellRejectedException;
+import dev.hermit.crab.mcp.McpStdio;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.CrabServer;
 import dev.hermit.crab.sync.ShellOutcome;
@@ -55,6 +56,7 @@ public final class CrabCommand {
               crab apikey create <name> [--shells a,b] [--actions s.a] [--read-only]
               crab apikey list
               crab apikey revoke <id>
+              crab mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
             """;
 
     public int run(String[] args, Function<String, String> env, InputStream in, PrintStream out, PrintStream err) {
@@ -100,6 +102,7 @@ public final class CrabCommand {
             case "credential" -> credential(args, env, in, out, err);
             case "config" -> config(args, env, out, err);
             case "apikey" -> apiKey(args, env, out, err);
+            case "mcp-stdio" -> new McpStdio().run(args, env, in, out, err);
             default -> {
                 err.print(USAGE);
                 yield 1;

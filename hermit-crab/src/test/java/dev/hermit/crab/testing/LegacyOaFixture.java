@@ -1,4 +1,4 @@
-package dev.hermit.crab.engine;
+package dev.hermit.crab.testing;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -24,7 +24,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 /** 老 OA 夹具。密码只以 MD5 形式保存，响应用于规则引擎测试。 */
-final class LegacyOaFixture implements AutoCloseable {
+public final class LegacyOaFixture implements AutoCloseable {
 
     private static final String VIEW_STATE = "vs-fixture";
 
@@ -48,7 +48,7 @@ final class LegacyOaFixture implements AutoCloseable {
     private volatile String todoTitle = "张三的请假申请";
     private volatile String welcome = "欢迎回来";
 
-    LegacyOaFixture(String password) throws IOException {
+    public LegacyOaFixture(String password) throws IOException {
         this.passwordMd5 = md5(password);
         this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         this.executor = Executors.newCachedThreadPool(task -> {
@@ -62,52 +62,52 @@ final class LegacyOaFixture implements AutoCloseable {
         this.baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
     }
 
-    String baseUrl() {
+    public String baseUrl() {
         return baseUrl;
     }
 
-    void breakTable(boolean broken) {
+    public void breakTable(boolean broken) {
         this.brokenTable = broken;
     }
 
-    void todoStatus(int status) {
+    public void todoStatus(int status) {
         this.todoStatus = status;
     }
 
-    void homeStatus(int status) {
+    public void homeStatus(int status) {
         this.homeStatus = status;
     }
 
-    void todoDelay(Duration delay) {
+    public void todoDelay(Duration delay) {
         this.delayMillis = delay.toMillis();
     }
 
-    void todoTitle(String title) {
+    public void todoTitle(String title) {
         this.todoTitle = title;
     }
 
-    void welcome(String text) {
+    public void welcome(String text) {
         this.welcome = text;
     }
 
-    void expireNextAuthenticated() {
+    public void expireNextAuthenticated() {
         expireNext.incrementAndGet();
     }
 
-    void invalidateSessions() {
+    public void invalidateSessions() {
         validSessions.clear();
     }
 
-    void armRendezvous() {
+    public void armRendezvous() {
         rendezvous = true;
         arrived.set(0);
     }
 
-    int maxInFlight() {
+    public int maxInFlight() {
         return maxInFlight.get();
     }
 
-    int count(String method, String path) {
+    public int count(String method, String path) {
         int count = 0;
         for (Hit hit : hits()) {
             if (hit.method().equals(method) && hit.path().equals(path)) {
@@ -117,7 +117,7 @@ final class LegacyOaFixture implements AutoCloseable {
         return count;
     }
 
-    List<Hit> hits() {
+    public List<Hit> hits() {
         synchronized (hits) {
             return List.copyOf(hits);
         }
@@ -298,7 +298,7 @@ final class LegacyOaFixture implements AutoCloseable {
     }
 
     private void huge(HttpExchange exchange) throws IOException {
-        int total = HttpCalls.MAX_BODY_BYTES + 1;
+        int total = (5 * 1024 * 1024) + 1;
         exchange.getResponseHeaders().set("Content-Type", "text/plain");
         exchange.sendResponseHeaders(200, total);
         try {
@@ -396,6 +396,6 @@ final class LegacyOaFixture implements AutoCloseable {
         }
     }
 
-    record Hit(String method, String path, String query, String cookie) {
+    public record Hit(String method, String path, String query, String cookie) {
     }
 }

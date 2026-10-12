@@ -99,6 +99,61 @@ public final class RuleEngine {
         }
     }
 
+    /**
+     * Runs auth steps only. The caller resets the login pause and invalidates the session first.
+     * Success does not include auth step logs; {@code login} keeps those logs on the failure path.
+     */
+    public ExecutionResult testLogin(ExecutionRequest request) {
+        long start = System.nanoTime();
+        long deadline = Math.addExact(start, settings.capabilityTimeout().toNanos());
+        Map<String, String> credentials = copyStrings(request.accountContext().credentials());
+        Map<String, String> config = copyStrings(request.accountContext().config());
+        String version = null;
+        try {
+            ShellDoc shell = registry.find(request.shell()).orElse(null);
+            if (shell == null) {
+                return finish(false, null, ErrorCode.NOT_FOUND, "shell 不存在", null, null, "shell 不存在",
+                        List.of(), version, request, credentials, List.of(), start);
+            }
+            version = shell.version().toString();
+            SessionKey key = new SessionKey(request.origin(), request.shell(), request.account());
+            boolean locked;
+            try {
+                locked = sessions.tryLock(key, deadline);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return internal(request, credentials, List.of(), version, start, ex);
+            }
+            if (!locked) {
+                return finish(false, null, ErrorCode.TIMEOUT, "执行超时", null, null, "执行超时",
+                        List.of(), version, request, credentials, List.of(), start);
+            }
+            try {
+                URI base = baseUri(shell, config);
+                login(shell, request.rawInput(), credentials, config, key, base, deadline);
+                return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
+                        credentials, sessions.seenCookieValues(key), start);
+            } catch (StepFailure ex) {
+                Integer index = ex.index < 0 ? null : ex.index;
+                return finish(false, null, ex.code, ex.summary, index, ex.type, ex.summary, ex.logs, version, request,
+                        credentials, sessions.seenCookieValues(key), start);
+            } catch (DeadlineExceeded ex) {
+                Integer index = ex.index < 0 ? null : ex.index;
+                return finish(false, null, ErrorCode.TIMEOUT, "执行超时", index, ex.type, "执行超时", ex.logs, version,
+                        request, credentials, sessions.seenCookieValues(key), start);
+            } catch (RuleProblem ex) {
+                return finish(false, null, ex.code, ex.summary, null, null, ex.summary, List.of(), version, request,
+                        credentials, sessions.seenCookieValues(key), start);
+            } catch (RuntimeException ex) {
+                return internal(request, credentials, sessions.seenCookieValues(key), version, start, ex);
+            } finally {
+                sessions.unlock(key);
+            }
+        } catch (RuntimeException ex) {
+            return internal(request, credentials, List.of(), version, start, ex);
+        }
+    }
+
     private ExecutionResult locked(
             ExecutionRequest request,
             ShellDoc shell,

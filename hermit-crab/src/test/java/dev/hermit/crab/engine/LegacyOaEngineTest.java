@@ -414,6 +414,57 @@ class LegacyOaEngineTest {
         }
     }
 
+    @Test
+    void masksSecretsEmbeddedInOutput() throws Exception {
+        String action = """
+                show_secret:
+                  title: 查看回显
+                  description: 查看页面回显。
+                  output:
+                    greet: { type: string, description: 问候 }
+                    sid: { type: string, description: 会话 }
+                    note: { type: string, description: 备注 }
+                  examples:
+                    - input: {}
+                      output: { greet: hi, sid: x, note: ok }
+                  notes: 测试回显。
+                  steps:
+                    - request: { method: GET, path: /profile.aspx }
+                    - extract:
+                        greet: { css: "#greet" }
+                        sid: { css: "#sid" }
+                        note: { css: "#note" }
+                """.stripIndent().indent(2);
+        try (Running running = Running.start();
+                EngineTestSupport.LogCapture logs = new EngineTestSupport.LogCapture();
+                EngineTestSupport.StreamCapture streams = new EngineTestSupport.StreamCapture()) {
+            running.registry.put(ShellParser.parse(
+                    EngineTestSupport.legacyYaml().replace("health_check:", action + "health_check:")));
+            running.fixture.welcome("欢迎 alice，你的密码是 " + EngineTestSupport.PASSWORD);
+            ExecutionResult result = running.engine.execute(EngineTestSupport.request(
+                    Origin.OFFICIAL,
+                    "legacy_oa",
+                    "show_secret",
+                    "alice",
+                    Map.of(),
+                    EngineTestSupport.account("alice", EngineTestSupport.PASSWORD, running.fixture.baseUrl())));
+            String sid = sessionId(running, "/profile.aspx");
+            absent(result, logs, streams, EngineTestSupport.PASSWORD);
+            absent(result, logs, streams, sid);
+            if (!result.success()) {
+                throw new AssertionError("profile request failed: " + result.error().code());
+            }
+            Map<String, Object> data = data(result);
+            if (!"欢迎 ***，你的密码是 ***".equals(data.get("greet"))) {
+                throw new AssertionError("greeting was not masked");
+            }
+            if (!"***".equals(data.get("sid"))) {
+                throw new AssertionError("session value was not masked");
+            }
+            assertThat(data.get("note")).isEqualTo("待办");
+        }
+    }
+
     private static void absent(
             ExecutionResult result,
             EngineTestSupport.LogCapture logs,

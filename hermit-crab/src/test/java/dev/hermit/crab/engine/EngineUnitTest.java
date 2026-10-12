@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
@@ -18,6 +19,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.parse.ShellParser;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
+import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.testing.SecretChecks;
 
@@ -88,22 +90,32 @@ class EngineUnitTest {
     }
 
     @Test
-    void masksOnlyExactCredentialValues() {
-        Map<String, String> credentials = Map.of("password", EngineTestSupport.PASSWORD, "pin", "ab");
+    void masksSecretSubstringsAndLeavesMapKeys() {
+        Redactor redactor = Redactor.of(Set.of(EngineTestSupport.PASSWORD, "ab", "sid-alice-1"));
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put(EngineTestSupport.PASSWORD, "待办");
         ArrayList<Object> values = new ArrayList<>();
         values.add(EngineTestSupport.PASSWORD);
-        values.add("xx" + EngineTestSupport.PASSWORD);
+        values.add("欢迎 alice，你的密码是 " + EngineTestSupport.PASSWORD);
+        values.add("cookie=sid-alice-1");
         values.add("ab");
         values.add("ok");
         values.add(null);
-        Object masked = OutputMask.exact(values, credentials);
-        ArrayList<Object> expected = new ArrayList<>();
-        expected.add("***");
-        expected.add("xx" + EngineTestSupport.PASSWORD);
-        expected.add("ab");
-        expected.add("ok");
-        expected.add(null);
-        assertThat(masked).isEqualTo(expected);
+        values.add(row);
+        Object masked = OutputMask.apply(values, redactor);
+        if (!(masked instanceof List<?> list) || list.size() != 7 || !(list.get(6) instanceof Map<?, ?> map)) {
+            throw new AssertionError("masked shape changed");
+        }
+        assertThat(list.get(0)).isEqualTo("***");
+        assertThat(list.get(1)).isEqualTo("欢迎 alice，你的密码是 ***");
+        assertThat(list.get(2)).isEqualTo("cookie=***");
+        assertThat(list.get(3)).isEqualTo("ab");
+        assertThat(list.get(4)).isEqualTo("ok");
+        assertThat(list.get(5)).isNull();
+        if (!map.containsKey(EngineTestSupport.PASSWORD)) {
+            throw new AssertionError("map key was rewritten");
+        }
+        assertThat(map.get(EngineTestSupport.PASSWORD)).isEqualTo("待办");
     }
 
     @Test

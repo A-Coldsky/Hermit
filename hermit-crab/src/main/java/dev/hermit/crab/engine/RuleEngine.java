@@ -392,7 +392,7 @@ public final class RuleEngine {
                     redactor.redact(type),
                     redactor.redact(summary));
         }
-        Object masked = success ? OutputMask.exact(data, credentials) : null;
+        Object masked = success ? OutputMask.apply(data, redactor) : null;
         return new ExecutionResult(
                 success,
                 masked,

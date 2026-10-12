@@ -46,6 +46,7 @@ final class LegacyOaFixture implements AutoCloseable {
     private volatile int homeStatus = 200;
     private volatile long delayMillis;
     private volatile String todoTitle = "张三的请假申请";
+    private volatile String welcome = "欢迎回来";
 
     LegacyOaFixture(String password) throws IOException {
         this.passwordMd5 = md5(password);
@@ -83,6 +84,10 @@ final class LegacyOaFixture implements AutoCloseable {
 
     void todoTitle(String title) {
         this.todoTitle = title;
+    }
+
+    void welcome(String text) {
+        this.welcome = text;
     }
 
     void expireNextAuthenticated() {
@@ -159,6 +164,10 @@ final class LegacyOaFixture implements AutoCloseable {
         }
         if ("/home.aspx".equals(path)) {
             home(exchange, cookie);
+            return;
+        }
+        if ("/profile.aspx".equals(path)) {
+            profile(exchange, cookie);
             return;
         }
         if ("/gbk/name.aspx".equals(path)) {
@@ -247,6 +256,20 @@ final class LegacyOaFixture implements AutoCloseable {
         } finally {
             inFlight.decrementAndGet();
         }
+    }
+
+    private void profile(HttpExchange exchange, String cookie) throws IOException {
+        if (!acceptSession(exchange, cookie)) {
+            return;
+        }
+        String sid = sessionId(cookie);
+        html(exchange, 200, """
+                <html><body>
+                <span id="greet">%s</span>
+                <span id="sid">%s</span>
+                <span id="note">待办</span>
+                </body></html>
+                """.formatted(escape(welcome), escape(sid == null ? "" : sid)));
     }
 
     private void home(HttpExchange exchange, String cookie) throws IOException {

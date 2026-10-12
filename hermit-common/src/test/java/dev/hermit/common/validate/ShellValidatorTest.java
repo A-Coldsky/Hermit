@@ -168,6 +168,86 @@ class ShellValidatorTest {
     }
 
     @Test
+    void plaintextCoversNumbersHeadersAndSkipsExtractSelectors() {
+        ValidationResult result = ShellValidator.validate(ShellParser.parse("""
+                shell: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - request:
+                          headers:
+                            Authorization: "Basic xxx"
+                            Cookie: "sid=1"
+                          form:
+                            password: 123456
+                            token_enabled: true
+                      - extract:
+                          css: "div.password"
+                          attr: "data-token"
+                          row:
+                            css: "#id"
+                            attr: "href"
+                            authorization: "Bearer literal"
+                      - assert: { cookie_exists: ASP.NET_SessionId }
+                """), ShellValidator.Context.of(null));
+        assertThat(result.errors()).extracting(ValidationIssue::path).containsExactly(
+                "actions.list_todo.steps[0].headers.Authorization",
+                "actions.list_todo.steps[0].headers.Cookie",
+                "actions.list_todo.steps[0].form.password",
+                "actions.list_todo.steps[1].row.authorization");
+        assertThat(result.errors()).extracting(ValidationIssue::code)
+                .containsOnly(ValidationCodes.PLAINTEXT_CREDENTIAL);
+    }
+
+    @Test
+    void outputTemplateMustNotReferenceCredentials() {
+        ValidationResult leaked = ShellValidator.validate(ShellParser.parse(shellWithOutput("""
+                      items:
+                        type: string
+                        description: 结果
+                        value: "{{credential.password}}"
+                """)), ShellValidator.Context.of(null));
+        assertThat(leaked.errors()).extracting(ValidationIssue::code)
+                .containsExactly(ValidationCodes.CREDENTIAL_IN_OUTPUT);
+        assertThat(leaked.errors().get(0).path()).isEqualTo("actions.list_todo.output.items");
+
+        ValidationResult viaDefault = ShellValidator.validate(ShellParser.parse(shellWithOutput("""
+                      token:
+                        type: string
+                        description: 令牌
+                        value: "id={{input.id | default(credential.password)}}"
+                """)), ShellValidator.Context.of(null));
+        assertThat(viaDefault.errors()).extracting(ValidationIssue::path)
+                .containsExactly("actions.list_todo.output.token");
+
+        ValidationResult allowed = ShellValidator.validate(ShellParser.parse(shellWithOutput("""
+                      items:
+                        type: string
+                        description: 结果
+                        value: "{{config.base_url}}"
+                """)), ShellValidator.Context.of(null));
+        assertThat(allowed.errors()).isEmpty();
+    }
+
+    @Test
     void configBaseUrlIsAllowedWithoutADeclaration() {
         ValidationResult allowed = ShellValidator.validate(ShellParser.parse(referencing("""
                 - request: { path: "{{config.base_url}}/home" }
@@ -246,6 +326,35 @@ class ShellValidatorTest {
                     notes: 注意
                     related: [%s]
                 """.formatted(shell, action, action);
+    }
+
+    private static String shellWithOutput(String output) {
+        String base = """
+                shell: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - request: { path: "{{credential.password}}" }
+                    output:
+                """.stripIndent();
+        String indented = output.stripIndent().stripTrailing().replace("\n", "\n      ");
+        return base + "      " + indented + "\n";
     }
 
     private static String referencing(String steps) {

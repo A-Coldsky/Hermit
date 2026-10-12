@@ -14,6 +14,7 @@ public final class ValidationCodes {
     public static final String UNDECLARED_CREDENTIAL = "UNDECLARED_CREDENTIAL";
     public static final String UNDECLARED_CONFIG = "UNDECLARED_CONFIG";
     public static final String PLAINTEXT_CREDENTIAL = "PLAINTEXT_CREDENTIAL";
+    public static final String CREDENTIAL_IN_OUTPUT = "CREDENTIAL_IN_OUTPUT";
     public static final String MIN_CRAB_VERSION = "MIN_CRAB_VERSION";
     public static final String TEMPLATE_SYNTAX = "TEMPLATE_SYNTAX";
     public static final String MISSING_NOTES = "MISSING_NOTES";

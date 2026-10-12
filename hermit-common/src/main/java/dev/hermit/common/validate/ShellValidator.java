@@ -22,7 +22,8 @@ public final class ShellValidator {
     private static final Set<String> DEFAULT_STEP_TYPES = Set.of(
             "request", "extract", "assert", "set", "script");
     private static final List<String> SECRET_KEYS = List.of(
-            "password", "passwd", "pwd", "secret", "token", "otp", "apikey", "api_key");
+            "password", "passwd", "pwd", "secret", "token", "otp", "apikey", "api_key",
+            "authorization", "cookie");
     private static final java.util.regex.Pattern NAME = java.util.regex.Pattern.compile(
             "^[a-z][a-z0-9_]{1,63}$");
 
@@ -104,6 +105,7 @@ public final class ShellValidator {
         }
         checkOutput(path + ".output", action.output(), errors);
         checkRefs(path + ".output", action.output(), doc, errors);
+        checkCredentialInOutput(path + ".output", action.outputTemplate(), errors);
         checkSteps(action.steps(), path + ".steps", ctx, errors);
         checkPlainStepList(action.steps(), path + ".steps", errors);
         checkRefs(path + ".steps", action.steps(), doc, errors);
@@ -248,22 +250,63 @@ public final class ShellValidator {
     }
 
     private static void checkScalar(String path, String key, Object value, List<ValidationIssue> errors) {
-        if (!(value instanceof String text) || text.isEmpty() || text.contains("{{")) {
+        if (value == null || value instanceof Boolean || !suspicious(key)) {
             return;
         }
-        if (suspicious(key)) {
-            errors.add(issue(ValidationCodes.PLAINTEXT_CREDENTIAL, path, "疑似明文凭证"));
+        if (value instanceof String text && (text.isEmpty() || text.contains("{{"))) {
+            return;
         }
+        errors.add(issue(ValidationCodes.PLAINTEXT_CREDENTIAL, path, "疑似明文凭证"));
     }
 
     private static boolean suspicious(String key) {
         String lower = key.toLowerCase(Locale.ROOT);
         for (String needle : SECRET_KEYS) {
-            if (lower.contains(needle)) {
-                return true;
+            int at = lower.indexOf(needle);
+            if (at < 0) {
+                continue;
             }
+            // cookie_exists 是设计里的 assert 键。cookie / authorization 后面紧跟下划线时不是凭证字段。
+            if (("cookie".equals(needle) || "authorization".equals(needle))
+                    && continuesWithUnderscore(lower, at + needle.length())) {
+                continue;
+            }
+            return true;
         }
         return false;
+    }
+
+    private static boolean continuesWithUnderscore(String key, int index) {
+        return index < key.length() && key.charAt(index) == '_';
+    }
+
+    private static void checkCredentialInOutput(String path, Object node, List<ValidationIssue> errors) {
+        if (node == null) {
+            return;
+        }
+        if (node instanceof String text) {
+            try {
+                for (String ref : TEMPLATES.referencedPaths(text)) {
+                    if (ref.startsWith("credential.")) {
+                        errors.add(issue(ValidationCodes.CREDENTIAL_IN_OUTPUT, path, "返回值不得引用凭证"));
+                    }
+                }
+            } catch (TemplateException ex) {
+                // 语法错误已由原始 output 的引用扫描记为 TEMPLATE_SYNTAX。
+            }
+            return;
+        }
+        if (node instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                checkCredentialInOutput(path + "." + entry.getKey(), entry.getValue(), errors);
+            }
+            return;
+        }
+        if (node instanceof List<?> list) {
+            for (int i = 0; i < list.size(); i++) {
+                checkCredentialInOutput(path + "[" + i + "]", list.get(i), errors);
+            }
+        }
     }
 
     private static void checkRefs(String path, Object node, ShellDoc doc, List<ValidationIssue> errors) {

@@ -35,6 +35,23 @@ class TemplateEngineTest {
     }
 
     @Test
+    void interpolationSerializesMapsAndListsAsJson() {
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("id", "A");
+        row.put("n", 1);
+        LinkedHashMap<String, Object> obj = new LinkedHashMap<>();
+        obj.put("ok", true);
+        obj.put("row", row);
+        assertThat(engine.render("{{row}}", Map.of("row", row))).isEqualTo(row);
+        assertThat(engine.render("x={{row}}", Map.of("row", row))).isEqualTo("x={\"id\":\"A\",\"n\":1}");
+        assertThat(engine.render("ids={{items}}", Map.of("items", List.of(row, "b"))))
+                .isEqualTo("ids=[{\"id\":\"A\",\"n\":1},\"b\"]");
+        assertThat(engine.render("{{obj}}!", Map.of("obj", obj)))
+                .isEqualTo("{\"ok\":true,\"row\":{\"id\":\"A\",\"n\":1}}!");
+        assertThat(engine.render("e={{items}}", Map.of("items", List.of()))).isEqualTo("e=[]");
+    }
+
+    @Test
     void missingPathThrowsUnlessDefaultIsInTheChain() {
         assertThatThrownBy(() -> engine.render("{{credential.password}}", Map.of()))
                 .isInstanceOf(TemplateException.class)

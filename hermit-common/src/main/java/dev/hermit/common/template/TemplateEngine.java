@@ -9,7 +9,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 public final class TemplateEngine {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final FilterRegistry registry;
 
@@ -65,11 +70,22 @@ public final class TemplateEngine {
             } else if (segment instanceof Expressions.Expr expr) {
                 Object value = eval(expr, vars);
                 if (value != null) {
-                    rendered.append(value);
+                    rendered.append(stringify(value, expr.path()));
                 }
             }
         }
         return rendered.toString();
+    }
+
+    private static String stringify(Object value, String path) {
+        if (value instanceof Map<?, ?> || value instanceof List<?>) {
+            try {
+                return JSON.writeValueAsString(value);
+            } catch (JsonProcessingException ex) {
+                throw new TemplateException(path, "值无法序列化为 JSON");
+            }
+        }
+        return String.valueOf(value);
     }
 
     private Object eval(Expressions.Expr expr, Map<String, Object> vars) {

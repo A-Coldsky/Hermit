@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.hermit.common.pkg.Ed25519Keys;
+import dev.hermit.reef.testsupport.MemoryLogAppender;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -75,17 +76,40 @@ class SigningKeyStoreTest {
     }
 
     @Test
-    void doesNotCreateAPrivateKeyWhenOnlyThePublicFileExists() throws Exception {
+    void replacesALeftoverPublicKeyWithANewPair() throws Exception {
         Path publicFile = directory.resolve(SigningKeyStore.PUBLIC_FILE);
-        Files.writeString(publicFile, Ed25519Keys.writePublicPem(Ed25519Keys.generate().getPublic()));
+        String leftover = Ed25519Keys.writePublicPem(Ed25519Keys.generate().getPublic());
+        Files.writeString(publicFile, leftover);
+        int logStart = MemoryLogAppender.LINES.size();
+
+        SigningKeyStore.Loaded loaded = SigningKeyStore.loadOrCreate(directory);
+
+        Path privateFile = directory.resolve(SigningKeyStore.PRIVATE_FILE);
+        assertThat(loaded.publicPem()).contains("BEGIN PUBLIC KEY");
+        assertThat(loaded.publicPem()).isNotEqualTo(leftover);
+        assertThat(Files.readString(publicFile)).isEqualTo(loaded.publicPem());
+        assertThat(Files.getPosixFilePermissions(privateFile)).isEqualTo(SigningKeyStore.PRIVATE_PERMS);
+        assertSignature(loaded.privateKey(), Ed25519Keys.readPublicPem(loaded.publicPem()));
+        assertPrivateKeyStaysInTheFile(Files.readAllBytes(privateFile), loaded.publicPem());
+        assertLeftoverWasLoggedWithoutKeyMaterial(logStart, leftover, Files.readString(privateFile));
+
+        byte[] privateBytes = Files.readAllBytes(privateFile);
         byte[] publicBytes = Files.readAllBytes(publicFile);
+        SigningKeyStore.Loaded again = SigningKeyStore.loadOrCreate(directory);
+        assertUnchanged(privateBytes, publicBytes);
+        assertThat(again.publicPem()).isEqualTo(loaded.publicPem());
+    }
+
+    @Test
+    void rejectsADirectoryThatOnlyHasThePrivateKey() throws Exception {
+        Path privateFile = directory.resolve(SigningKeyStore.PRIVATE_FILE);
+        Files.writeString(privateFile, Ed25519Keys.writePrivatePem(Ed25519Keys.generate().getPrivate()));
+        byte[] privateBytes = Files.readAllBytes(privateFile);
         assertThatThrownBy(() -> SigningKeyStore.loadOrCreate(directory))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("without signing.key");
-        assertThat(Files.exists(directory.resolve(SigningKeyStore.PRIVATE_FILE))).isFalse();
-        if (!java.util.Arrays.equals(Files.readAllBytes(publicFile), publicBytes)) {
-            throw new AssertionError("signing.pub was overwritten");
-        }
+                .hasMessageContaining("incomplete");
+        assertUnchanged(privateBytes, null);
+        assertThat(Files.exists(directory.resolve(SigningKeyStore.PUBLIC_FILE))).isFalse();
     }
 
     @Test
@@ -129,6 +153,23 @@ class SigningKeyStoreTest {
         }
     }
 
+    private static void assertLeftoverWasLoggedWithoutKeyMaterial(int logStart, String leftover, String privatePem) {
+        String leftoverBody = pemBodyLine(leftover);
+        String privateBody = pemBodyLine(privatePem);
+        boolean warned = false;
+        for (String line : MemoryLogAppender.LINES.subList(logStart, MemoryLogAppender.LINES.size())) {
+            if (line.contains(SigningKeyStore.LEFTOVER_PUBLIC_KEY)) {
+                warned = true;
+            }
+            if (line.contains("BEGIN PRIVATE KEY") || line.contains(privateBody) || line.contains(leftoverBody)) {
+                throw new AssertionError("signing key material appeared in the log");
+            }
+        }
+        if (!warned) {
+            throw new AssertionError("leftover signing.pub was not logged");
+        }
+    }
+
     private static void assertPrivateKeyStaysInTheFile(byte[] privateBytes, String publicPem) {
         String privatePem = new String(privateBytes, StandardCharsets.UTF_8);
         if (publicPem.contains("BEGIN PRIVATE KEY") || publicPem.contains(privateBodyLine(privatePem))) {
@@ -137,7 +178,11 @@ class SigningKeyStoreTest {
     }
 
     private static String privateBodyLine(String privatePem) {
-        for (String line : privatePem.split("\\R")) {
+        return pemBodyLine(privatePem);
+    }
+
+    private static String pemBodyLine(String pem) {
+        for (String line : pem.split("\\R")) {
             String trimmed = line.trim();
             if (!trimmed.startsWith("-----") && trimmed.length() >= 16) {
                 return trimmed;

@@ -15,6 +15,8 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -30,7 +32,10 @@ public class SigningKeyStore {
             PosixFilePermission.OWNER_WRITE,
             PosixFilePermission.GROUP_READ,
             PosixFilePermission.OTHERS_READ);
+    /** 崩溃残留的公钥被删掉时的日志。不含密钥字节。 */
+    static final String LEFTOVER_PUBLIC_KEY = "removing leftover signing.pub because signing.key is absent";
 
+    private static final Logger log = LoggerFactory.getLogger(SigningKeyStore.class);
     private static final int RACE_ATTEMPTS = 100;
     private static final long RACE_WAIT_MILLIS = 10L;
 
@@ -58,8 +63,9 @@ public class SigningKeyStore {
     }
 
     /**
-     * 两个 PEM 都先写临时文件，再硬链接到最终名字。
-     * 目标已存在时 link 失败，改为读取，绝不覆盖。私钥以 {@code signing.key} 是否存在为准。
+     * 两个 PEM 都先写临时文件。先硬链接 {@code signing.pub}，再硬链接 {@code signing.key}。
+     * {@code signing.key} 存在即表示一对完整；链接目标已存在则读取，绝不覆盖。
+     * 只有公钥时先按竞态等待私钥，仍没有则删掉这份崩溃残留并重新生成。
      */
     static Loaded loadOrCreate(Path directory) {
         try {
@@ -73,37 +79,23 @@ public class SigningKeyStore {
                 return readPair(privateFile, publicFile);
             }
             if (Files.exists(publicFile)) {
-                throw new IllegalStateException("signing.pub exists without signing.key");
-            }
-            KeyPair generated = Ed25519Keys.generate();
-            String privatePem = Ed25519Keys.writePrivatePem(generated.getPrivate());
-            String publicPem = Ed25519Keys.writePublicPem(generated.getPublic());
-            Path privateTemp = Files.createTempFile(
-                    directory, ".signing-", ".key.tmp", PosixFilePermissions.asFileAttribute(PRIVATE_PERMS));
-            Path publicTemp = Files.createTempFile(
-                    directory, ".signing-", ".pub.tmp", PosixFilePermissions.asFileAttribute(PUBLIC_PERMS));
-            try {
-                Files.writeString(privateTemp, privatePem, StandardCharsets.UTF_8);
-                Files.writeString(publicTemp, publicPem, StandardCharsets.UTF_8);
-                Files.setPosixFilePermissions(privateTemp, PRIVATE_PERMS);
-                Files.setPosixFilePermissions(publicTemp, PUBLIC_PERMS);
-                try {
-                    Files.createLink(privateFile, privateTemp);
-                } catch (FileAlreadyExistsException ex) {
-                    return readPairAfterRace(privateFile, publicFile);
+                Loaded raced = waitForCompletePair(privateFile, publicFile);
+                if (raced != null) {
+                    return raced;
                 }
-                Files.setPosixFilePermissions(privateFile, PRIVATE_PERMS);
-                try {
-                    Files.createLink(publicFile, publicTemp);
-                } catch (FileAlreadyExistsException ex) {
+                if (Files.isRegularFile(privateFile)) {
                     return readPair(privateFile, publicFile);
                 }
-                Files.setPosixFilePermissions(publicFile, PUBLIC_PERMS);
-                return readPair(privateFile, publicFile);
-            } finally {
-                Files.deleteIfExists(privateTemp);
-                Files.deleteIfExists(publicTemp);
+                if (!Files.isRegularFile(publicFile)) {
+                    throw new IllegalStateException("signing key files are incomplete");
+                }
+                log.warn(LEFTOVER_PUBLIC_KEY);
+                Files.deleteIfExists(publicFile);
+                if (Files.exists(privateFile)) {
+                    return readPair(privateFile, publicFile);
+                }
             }
+            return publishNewPair(directory, privateFile, publicFile);
         } catch (IOException | InterruptedException ex) {
             if (ex instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
@@ -112,14 +104,60 @@ public class SigningKeyStore {
         }
     }
 
+    private static Loaded publishNewPair(Path directory, Path privateFile, Path publicFile)
+            throws IOException, InterruptedException {
+        KeyPair generated = Ed25519Keys.generate();
+        String privatePem = Ed25519Keys.writePrivatePem(generated.getPrivate());
+        String publicPem = Ed25519Keys.writePublicPem(generated.getPublic());
+        Path privateTemp = Files.createTempFile(
+                directory, ".signing-", ".key.tmp", PosixFilePermissions.asFileAttribute(PRIVATE_PERMS));
+        Path publicTemp = Files.createTempFile(
+                directory, ".signing-", ".pub.tmp", PosixFilePermissions.asFileAttribute(PUBLIC_PERMS));
+        try {
+            Files.writeString(privateTemp, privatePem, StandardCharsets.UTF_8);
+            Files.writeString(publicTemp, publicPem, StandardCharsets.UTF_8);
+            Files.setPosixFilePermissions(privateTemp, PRIVATE_PERMS);
+            Files.setPosixFilePermissions(publicTemp, PUBLIC_PERMS);
+            try {
+                Files.createLink(publicFile, publicTemp);
+            } catch (FileAlreadyExistsException ex) {
+                return readPairAfterRace(privateFile, publicFile);
+            }
+            Files.setPosixFilePermissions(publicFile, PUBLIC_PERMS);
+            try {
+                Files.createLink(privateFile, privateTemp);
+            } catch (FileAlreadyExistsException ex) {
+                return readPair(privateFile, publicFile);
+            }
+            Files.setPosixFilePermissions(privateFile, PRIVATE_PERMS);
+            return readPair(privateFile, publicFile);
+        } finally {
+            Files.deleteIfExists(privateTemp);
+            Files.deleteIfExists(publicTemp);
+        }
+    }
+
     private static Loaded readPairAfterRace(Path privateFile, Path publicFile) throws IOException, InterruptedException {
+        Loaded loaded = waitForCompletePair(privateFile, publicFile);
+        if (loaded == null) {
+            throw new IllegalStateException("signing key files are incomplete");
+        }
+        return loaded;
+    }
+
+    /** 另一进程可能刚链上公钥、还没链上私钥。等到一对都在，或尝试次数用尽。 */
+    private static Loaded waitForCompletePair(Path privateFile, Path publicFile)
+            throws IOException, InterruptedException {
         for (int attempt = 0; attempt < RACE_ATTEMPTS; attempt++) {
             if (Files.isRegularFile(privateFile) && Files.isRegularFile(publicFile)) {
                 return readPair(privateFile, publicFile);
             }
             Thread.sleep(RACE_WAIT_MILLIS);
         }
-        throw new IllegalStateException("signing key files are incomplete");
+        if (Files.isRegularFile(privateFile) && Files.isRegularFile(publicFile)) {
+            return readPair(privateFile, publicFile);
+        }
+        return null;
     }
 
     private static Loaded readPair(Path privateFile, Path publicFile) throws IOException {

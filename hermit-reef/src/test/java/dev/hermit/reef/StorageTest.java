@@ -176,11 +176,12 @@ class StorageTest {
     }
 
     private void insertFailure(Instant receivedAt, String summary) {
+        // (instance_id, trace_id) 从 V2 起唯一，夹具用各不相同的 summary 当 trace。
         jdbc.update(
                 "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, shell, "
                         + "shell_version, action, step_index, step_type, error_code, summary, occurred_at) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "1.0.0", "trace-1",
+                Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "1.0.0", summary,
                 "legacy_oa", "1.0.0", "list_todo", 1, "request", "UPSTREAM_ERROR", summary,
                 Timestamp.from(receivedAt));
     }

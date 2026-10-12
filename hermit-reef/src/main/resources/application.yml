@@ -7,6 +7,16 @@ hermit:
     latest-crab-version: ""
     crab-download-url: ""
     report-retention-days: 90
+    tide:
+      new-version-min-calls: 20
+      regression-delta: "0.20"
+      no-baseline-failure-rate: "0.50"
+      baseline-window-days: 7
+      surge-window-minutes: 15
+      surge-min-count: 10
+      quiet-hours: 24
+      dedup-hours: 6
+      webhook-url: ""
 
 spring:
   application:

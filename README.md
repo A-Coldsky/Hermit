@@ -132,3 +132,13 @@ curl -s http://127.0.0.1:7777/api/legacy_oa/list_todo \
   -H "Authorization: Bearer $API_KEY" \
   -H 'X-Hermit-Account: nobody'
 ```
+
+## 管理页面
+
+Reef 管理端：`http://<reef>:8080/`，用初始化的管理员登录。
+
+Crab 控制台：`http://127.0.0.1:7777/console/`，只能在 Crab 本机打开。
+
+前端开发：`cd hermit-web && npm ci && npm run dev:reef`（代理到 `REEF_URL`，默认 `http://localhost:8080`）/ `npm run dev:crab`（代理到 `CRAB_URL`，默认 `http://127.0.0.1:7777`）。
+
+构建时需要下载 Node。离线或不需要页面时用 `-Dhermit.web.skip=true`。

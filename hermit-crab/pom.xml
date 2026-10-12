@@ -29,6 +29,11 @@
       <version>${project.version}</version>
     </dependency>
     <dependency>
+      <groupId>dev.hermit</groupId>
+      <artifactId>hermit-web</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
       <groupId>com.networknt</groupId>
       <artifactId>json-schema-validator</artifactId>
     </dependency>

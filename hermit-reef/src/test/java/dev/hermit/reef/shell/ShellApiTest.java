@@ -1,0 +1,548 @@
+package dev.hermit.reef.shell;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.hermit.common.model.ShellDoc;
+import dev.hermit.common.parse.ShellParseException;
+import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.pkg.Ed25519Keys;
+import dev.hermit.common.pkg.ShellPackage;
+import dev.hermit.common.pkg.VerifiedShell;
+import dev.hermit.common.validate.ShellDiff;
+import dev.hermit.common.validate.ShellValidator;
+import dev.hermit.common.validate.ValidationCodes;
+import dev.hermit.common.validate.ValidationResult;
+import dev.hermit.reef.security.AgentAccessFilter;
+import dev.hermit.reef.testsupport.MemoryLogAppender;
+import dev.hermit.reef.testsupport.ReefTestConfig;
+import dev.hermit.reef.testsupport.TestDataDirs;
+import dev.hermit.reef.testsupport.TestSecrets;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.PublicKey;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+@SpringBootTest(properties = "hermit.reef.agent-token=" + ShellApiTest.TOKEN)
+@AutoConfigureMockMvc
+@Import(ReefTestConfig.class)
+class ShellApiTest {
+
+    static final String TOKEN = "reef-agent-token-test";
+    private static final String INSTANCE = "123e4567-e89b-12d3-a456-426614174000";
+    private static final Path DATA = TestDataDirs.create("shell-api");
+
+    @DynamicPropertySource
+    static void dataDirectory(DynamicPropertyRegistry registry) {
+        registry.add("hermit.reef.data-dir", DATA::toString);
+    }
+
+    @Autowired
+    MockMvc mockMvc;
+
+    @Autowired
+    ObjectMapper objectMapper;
+
+    @Autowired
+    JdbcTemplate jdbc;
+
+    @Autowired
+    PasswordEncoder passwordEncoder;
+
+    private String adminToken;
+    private String privatePem;
+
+    @BeforeEach
+    void reset() throws Exception {
+        privatePem = Files.readString(DATA.resolve("keys/signing.key"));
+        jdbc.update("DELETE FROM shell_versions");
+        jdbc.update("DELETE FROM audit_log");
+        jdbc.update("DELETE FROM admin_login_failures");
+        jdbc.update("DELETE FROM admin_users");
+        jdbc.update(
+                "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                TestSecrets.USERNAME,
+                passwordEncoder.encode(TestSecrets.PASSWORD),
+                Timestamp.from(ReefTestConfig.START));
+        cleanShellFiles();
+        adminToken = login();
+    }
+
+    @AfterEach
+    void privateKeyStaysOutOfLogs() {
+        for (String line : MemoryLogAppender.LINES) {
+            assertNoPrivateKey(line);
+        }
+    }
+
+    @Test
+    void rejectsEveryIllegalCommonFixture() throws Exception {
+        List<Path> fixtures = illegalFixtures();
+        assertThat(fixtures).extracting(path -> path.getFileName().toString())
+                .contains(
+                        "alias_conflict.yaml",
+                        "mapping_output.yaml",
+                        "missing_description.yaml",
+                        "plaintext_password.yaml",
+                        "undeclared_credential.yaml",
+                        "unknown_step.yaml");
+        for (Path fixture : fixtures) {
+            byte[] yaml = Files.readAllBytes(fixture);
+            MvcResult result = upload(yaml);
+            assertThat(result.getResponse().getStatus()).isEqualTo(422);
+            JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
+            assertThat(body.get("success").asBoolean()).isFalse();
+            assertThat(body.get("error").get("code").asText()).isEqualTo("INVALID_INPUT");
+            try {
+                ShellDoc doc = ShellParser.parse(new String(yaml, StandardCharsets.UTF_8));
+                ValidationResult expected = ShellValidator.validate(doc, ShellValidator.Context.of(null));
+                assertThat(expected.errors()).isNotEmpty();
+                assertCodes(body.get("data").get("errors"), expected.errors().stream().map(issue -> issue.code()).toList());
+                assertCodes(body.get("data").get("warnings"), expected.warnings().stream().map(issue -> issue.code()).toList());
+            } catch (ShellParseException ex) {
+                assertThat(body.get("data").get("path").asText()).isEqualTo(ex.path());
+                assertThat(body.get("data").get("message").asText()).isEqualTo(ex.getMessage());
+                assertThat(body.get("error").get("message").asText()).isEqualTo(ex.getMessage());
+            }
+        }
+        assertThat(versionCount()).isZero();
+    }
+
+    @Test
+    void uploadsTheSampleAndRejectsDuplicatesAndLowerVersions() throws Exception {
+        byte[] sample = sample();
+        JsonNode uploaded = json(upload(sample));
+        assertThat(uploaded.get("success").asBoolean()).isTrue();
+        assertThat(uploaded.get("data").get("shell").asText()).isEqualTo("legacy_oa");
+        assertThat(uploaded.get("data").get("version").asText()).isEqualTo("1.0.0");
+        assertCodes(uploaded.get("data").get("warnings"), List.of(
+                ValidationCodes.UNKNOWN_RELATED, ValidationCodes.UNKNOWN_RELATED));
+        assertThat(uploaded.get("data").get("diff").size()).isZero();
+        assertThat(Files.readAllBytes(DATA.resolve("shells/legacy_oa/1.0.0/shell.yaml"))).isEqualTo(sample);
+
+        JsonNode duplicate = json(upload(sample));
+        assertThat(duplicate.get("error").get("code").asText()).isEqualTo("CONFLICT");
+        assertThat(duplicate.get("error").get("message").asText()).isEqualTo(ShellUploadService.VERSION_EXISTS);
+
+        JsonNode lower = json(upload(withVersion(sample, "0.9.0")));
+        assertThat(lower.get("error").get("message").asText()).isEqualTo(ShellUploadService.VERSION_NOT_GREATER);
+
+        JsonNode prerelease = json(upload(withVersion(sample, "1.0.0-rc.1")));
+        assertThat(prerelease.get("error").get("message").asText()).isEqualTo(ShellUploadService.VERSION_NOT_GREATER);
+
+        assertThat(json(upload(withVersion(sample, "1.2.0"))).get("success").asBoolean()).isTrue();
+        JsonNode between = json(upload(withVersion(sample, "1.1.0")));
+        assertThat(between.get("error").get("message").asText()).isEqualTo(ShellUploadService.VERSION_NOT_GREATER);
+        assertThat(versionCount()).isEqualTo(2);
+    }
+
+    @Test
+    void listsUploadedShellsAndPublishesRollbackAndDistribution() throws Exception {
+        byte[] sample = sample();
+        upload(sample);
+
+        mockMvc.perform(get("/api/admin/shells").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].shell").value("legacy_oa"))
+                .andExpect(jsonPath("$.data[0].version").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].title").value("协同办公 OA"))
+                .andExpect(jsonPath("$.data[0].owner").value("平台组"))
+                .andExpect(jsonPath("$.data[0].capabilityCount").value(1))
+                .andExpect(jsonPath("$.data[0].publishedAt").value(nullValue()));
+        mockMvc.perform(get("/api/admin/shells/legacy_oa").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+        mockMvc.perform(get("/api/admin/shells/legacy_oa/versions").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].version").value("1.0.0"))
+                .andExpect(jsonPath("$.data[0].status").value("UPLOADED"))
+                .andExpect(jsonPath("$.data[0].uploadedBy").value(TestSecrets.USERNAME))
+                .andExpect(jsonPath("$.data[0].current").value(false))
+                .andExpect(jsonPath("$.data[0].warningCount").value(2))
+                .andExpect(jsonPath("$.data[0].publishedBy").value(nullValue()));
+
+        MvcResult yaml = mockMvc.perform(get("/api/admin/shells/legacy_oa/versions/1.0.0/yaml")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "text/plain; charset=utf-8"))
+                .andReturn();
+        assertThat(yaml.getResponse().getContentAsByteArray()).isEqualTo(sample);
+        assertNoPrivateKey(new String(yaml.getResponse().getContentAsByteArray(), StandardCharsets.ISO_8859_1));
+
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.0.0"));
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(ShellPublishService.PUBLISH_NOT_UPLOADED));
+
+        String firstEtag = manifestEtag("1.0.0");
+        byte[] firstZip = download("1.0.0");
+        PublicKey publicKey = Ed25519Keys.readPublicPem(Files.readString(DATA.resolve("keys/signing.pub")));
+        VerifiedShell verified = ShellPackage.readVerified(firstZip, publicKey);
+        assertThat(verified.manifest().sha256()).hasSize(64);
+        assertThat(verified.manifest().version()).isEqualTo("1.0.0");
+        mockMvc.perform(agent("/agent/shells/manifest").header(HttpHeaders.IF_NONE_MATCH, firstEtag))
+                .andExpect(status().isNotModified())
+                .andExpect(header().string(HttpHeaders.ETAG, firstEtag))
+                .andExpect(content().string(""));
+
+        byte[] next = withOtp(withVersion(sample, "1.1.0"));
+        MvcResult zipped = upload(zip("shell.yaml", next));
+        assertThat(zipped.getResponse().getStatus()).isEqualTo(200);
+        JsonNode diff = json(zipped).get("data").get("diff");
+        assertThat(diff.get("addedCredentials").get(0).asText()).isEqualTo("otp");
+        ShellDoc oldDoc = ShellParser.parse(new String(sample, StandardCharsets.UTF_8));
+        ShellDoc newDoc = ShellParser.parse(new String(next, StandardCharsets.UTF_8));
+        JsonNode expectedDiff = objectMapper.valueToTree(ShellDiff.between(oldDoc, newDoc));
+        assertThat(diff).isEqualTo(expectedDiff);
+        mockMvc.perform(get("/api/admin/shells/legacy_oa/diff")
+                        .param("from", "1.0.0")
+                        .param("to", "1.1.0")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.addedCredentials[0]").value("otp"));
+
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/versions/1.1.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+        String secondEtag = manifestEtag("1.1.0");
+        assertThat(secondEtag).isNotEqualTo(firstEtag);
+        mockMvc.perform(agent("/agent/shells/manifest").header(HttpHeaders.IF_NONE_MATCH, firstEtag))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].version").value("1.1.0"));
+
+        String detail = mockMvc.perform(get("/api/admin/shells/legacy_oa")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.1.0"))
+                .andExpect(jsonPath("$.data.actions.list_todo.effectiveMethod").value("GET"))
+                .andExpect(jsonPath("$.data.credentials.password.type").value("secret"))
+                .andExpect(jsonPath("$.data.credentials.password.required").value(true))
+                .andExpect(jsonPath("$.data.config.base_url.default").value("http://oa.intranet.local"))
+                .andExpect(jsonPath("$.data.actions.list_todo.mcp.readOnly").value(true))
+                .andExpect(jsonPath("$.data.actions.list_todo.inputJsonSchema.type").value("object"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertThat(detail).doesNotContain("\"steps\"");
+        assertThat(detail).doesNotContain("login.aspx");
+        assertThat(detail).doesNotContain("healthCheck");
+        assertThat(detail).doesNotContain("{{credential.password");
+        assertNoPrivateKey(detail);
+
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/rollback")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":\"1.0.0\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.from").value("1.1.0"))
+                .andExpect(jsonPath("$.data.to").value("1.0.0"));
+        manifestEtag("1.0.0");
+        assertThat(download("1.1.0")).isNotEmpty();
+        assertThat(ShellPackage.readVerified(download("1.0.0"), publicKey).manifest().version()).isEqualTo("1.0.0");
+
+        upload(withVersion(sample, "1.2.0"));
+        mockMvc.perform(agent("/agent/shells/legacy_oa/1.2.0"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/rollback")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":\"1.0.0\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(ShellPublishService.ROLLBACK_REJECTED));
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/rollback")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":\"1.2.0\"}"))
+                .andExpect(status().isConflict());
+
+        String rollbackDetail = jdbc.queryForObject(
+                "SELECT detail FROM audit_log WHERE action = 'ROLLBACK'", String.class);
+        JsonNode rollback = objectMapper.readTree(rollbackDetail);
+        assertThat(rollback.get("from").asText()).isEqualTo("1.1.0");
+        assertThat(rollback.get("to").asText()).isEqualTo("1.0.0");
+        Integer publishes = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM audit_log WHERE action = 'PUBLISH'", Integer.class);
+        assertThat(publishes).isEqualTo(2);
+        Integer currents = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM shell_versions WHERE is_current = TRUE", Integer.class);
+        assertThat(currents).isEqualTo(1);
+    }
+
+    @Test
+    void rejectsBadZipsEmptyFilesAndOversizeUploads() throws Exception {
+        assertThat(upload(new byte[0]).getResponse().getStatus()).isEqualTo(422);
+        assertThat(upload(new byte[ShellPaths.MAX_UPLOAD_BYTES + 1]).getResponse().getStatus()).isEqualTo(422);
+        assertThat(upload(zip("dir/shell.yaml", sample())).getResponse().getStatus()).isEqualTo(422);
+        assertThat(upload(zip(new String[] {"shell.yaml", "readme.txt"}, sample(), "nope".getBytes(StandardCharsets.UTF_8)))
+                .getResponse().getStatus()).isEqualTo(422);
+        mockMvc.perform(multipart("/api/admin/shells").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isUnprocessableEntity());
+        mockMvc.perform(get("/api/admin/shells/legacy_oa/diff").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/rollback")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/admin/shells/missing/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isNotFound());
+        assertThat(versionCount()).isZero();
+    }
+
+    @Test
+    void signingKeyEndpointReturnsOnlyThePublicPem() throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/admin/signing-key").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.publicKey").isNotEmpty())
+                .andReturn();
+        String body = result.getResponse().getContentAsString();
+        assertNoPrivateKey(body);
+        String publicPem = objectMapper.readTree(body).get("data").get("publicKey").asText();
+        assertThat(publicPem).isEqualTo(Files.readString(DATA.resolve("keys/signing.pub")));
+        assertThat(publicPem).contains("BEGIN PUBLIC KEY");
+        assertThat(Files.getPosixFilePermissions(DATA.resolve("keys/signing.key")))
+                .isEqualTo(SigningKeyStore.PRIVATE_PERMS);
+        mockMvc.perform(get("/api/admin/signing-key"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void agentShellRoutesUseTheInstanceAndTokenChecks() throws Exception {
+        mockMvc.perform(get("/agent/shells/manifest").header(AgentAccessFilter.TOKEN_HEADER, TOKEN))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+        mockMvc.perform(get("/agent/shells/manifest")
+                        .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
+                        .header(AgentAccessFilter.TOKEN_HEADER, "wrong-token"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/agent/shells/legacy_oa/1.0.0"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(agent("/agent/shells/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty())
+                .andExpect(header().exists(HttpHeaders.ETAG));
+        mockMvc.perform(agent("/agent/shells/manifest").header(HttpHeaders.IF_NONE_MATCH, "*"))
+                .andExpect(status().isNotModified());
+    }
+
+    private String manifestEtag(String version) throws Exception {
+        MvcResult result = mockMvc.perform(agent("/agent/shells/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].shell").value("legacy_oa"))
+                .andExpect(jsonPath("$.data[0].version").value(version))
+                .andExpect(jsonPath("$.data[0].minCrabVersion").value("1.0.0"))
+                .andExpect(jsonPath("$.data[0].title").value("协同办公 OA"))
+                .andExpect(header().exists(HttpHeaders.ETAG))
+                .andReturn();
+        assertNoPrivateKey(result.getResponse().getContentAsString());
+        String sha = objectMapper.readTree(result.getResponse().getContentAsString())
+                .get("data").get(0).get("sha256").asText();
+        PublicKey publicKey = Ed25519Keys.readPublicPem(Files.readString(DATA.resolve("keys/signing.pub")));
+        assertThat(ShellPackage.readVerified(download(version), publicKey).manifest().sha256()).isEqualTo(sha);
+        return result.getResponse().getHeader(HttpHeaders.ETAG);
+    }
+
+    private byte[] download(String version) throws Exception {
+        MvcResult result = mockMvc.perform(agent("/agent/shells/legacy_oa/" + version))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "application/zip"))
+                .andReturn();
+        byte[] body = result.getResponse().getContentAsByteArray();
+        assertNoPrivateKey(new String(body, StandardCharsets.ISO_8859_1));
+        assertThat(body[0]).isEqualTo((byte) 'P');
+        assertThat(body[1]).isEqualTo((byte) 'K');
+        return body;
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder agent(String path) {
+        return get(path)
+                .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
+                .header(AgentAccessFilter.TOKEN_HEADER, TOKEN);
+    }
+
+    private MvcResult upload(byte[] bytes) throws Exception {
+        MvcResult result = mockMvc.perform(multipart("/api/admin/shells")
+                        .file(new MockMultipartFile("file", "shell.yaml", "application/octet-stream", bytes))
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andReturn();
+        String text = result.getResponse().getContentAsString();
+        if (!text.isEmpty()) {
+            assertNoPrivateKey(text);
+        }
+        return result;
+    }
+
+    private JsonNode json(MvcResult result) throws Exception {
+        return objectMapper.readTree(result.getResponse().getContentAsString());
+    }
+
+    private String login() throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/admin/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"" + TestSecrets.USERNAME + "\",\"password\":\"" + TestSecrets.PASSWORD
+                                + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString()).get("data").get("token").asText();
+    }
+
+    private String bearer() {
+        return "Bearer " + adminToken;
+    }
+
+    private int versionCount() {
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM shell_versions", Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    private void assertNoPrivateKey(String text) {
+        if (text.contains("BEGIN PRIVATE KEY") || text.contains("END PRIVATE KEY")) {
+            throw new AssertionError("private key pem appeared");
+        }
+        for (String line : privatePem.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("-----") || trimmed.length() < 16) {
+                continue;
+            }
+            if (text.contains(trimmed)) {
+                throw new AssertionError("private key material appeared");
+            }
+        }
+    }
+
+    private static void assertCodes(JsonNode array, List<String> expected) {
+        List<String> actual = new ArrayList<>();
+        array.forEach(node -> actual.add(node.get("code").asText()));
+        assertThat(actual).containsExactlyElementsOf(expected);
+    }
+
+    private static byte[] sample() throws IOException {
+        try (InputStream in = ShellApiTest.class.getClassLoader().getResourceAsStream("samples/legacy_oa.yaml")) {
+            if (in == null) {
+                throw new IllegalStateException("missing samples/legacy_oa.yaml");
+            }
+            return in.readAllBytes();
+        }
+    }
+
+    private static List<Path> illegalFixtures() throws IOException {
+        try (Stream<Path> files = Files.list(fixtureDir())) {
+            return files.filter(path -> path.getFileName().toString().endsWith(".yaml"))
+                    .filter(path -> !path.getFileName().toString().equals("legacy_oa_valid.yaml"))
+                    .sorted()
+                    .toList();
+        }
+    }
+
+    private static Path fixtureDir() {
+        Path dir = Path.of("").toAbsolutePath();
+        for (int i = 0; i < 5 && dir != null; i++) {
+            Path candidate = dir.resolve("hermit-common/src/test/resources/shells");
+            if (Files.isDirectory(candidate)) {
+                return candidate;
+            }
+            dir = dir.getParent();
+        }
+        throw new IllegalStateException("hermit-common shell fixtures not found");
+    }
+
+    private static byte[] withVersion(byte[] yaml, String version) {
+        String text = new String(yaml, StandardCharsets.UTF_8);
+        String updated = text.replace("\nversion: 1.0.0\n", "\nversion: " + version + "\n");
+        if (updated.equals(text)) {
+            throw new IllegalStateException("version line not found");
+        }
+        return updated.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] withOtp(byte[] yaml) {
+        String text = new String(yaml, StandardCharsets.UTF_8);
+        String needle = "\nconfig:\n";
+        String updated = text.replace(
+                needle,
+                "\n  otp:\n    type: secret\n    label: 口令\n    required: true\n    description: 一次性口令\n\nconfig:\n");
+        if (updated.equals(text)) {
+            throw new IllegalStateException("config block not found");
+        }
+        return updated.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] zip(String name, byte[] content) throws IOException {
+        return zip(new String[] {name}, content);
+    }
+
+    private static byte[] zip(String[] names, byte[]... contents) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(buffer)) {
+            for (int i = 0; i < names.length; i++) {
+                zip.putNextEntry(new ZipEntry(names[i]));
+                zip.write(contents[i]);
+                zip.closeEntry();
+            }
+        }
+        return buffer.toByteArray();
+    }
+
+    private static void cleanShellFiles() {
+        Path shells = DATA.resolve("shells");
+        if (!Files.exists(shells)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(shells)) {
+            walk.sorted(Comparator.reverseOrder())
+                    .filter(path -> !path.equals(shells))
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ex) {
+                            throw new UncheckedIOException(ex);
+                        }
+                    });
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
+}

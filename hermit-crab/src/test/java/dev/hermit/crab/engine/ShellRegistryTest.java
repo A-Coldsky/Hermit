@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
@@ -79,6 +80,45 @@ class ShellRegistryTest {
                     assertThat(rejected.issues().size()).isGreaterThanOrEqualTo(5);
                 });
         assertThat(registry.snapshot()).containsOnlyKeys("legacy_oa");
+        assertThat(registry.find("sample_shell")).isEmpty();
+    }
+
+    @Test
+    void notifiesListenersAfterSuccessfulChanges() {
+        ShellRegistry registry = new ShellRegistry();
+        AtomicInteger calls = new AtomicInteger();
+        registry.addListener(() -> {
+            throw new IllegalStateException("listener failed");
+        });
+        registry.addListener(calls::incrementAndGet);
+        registry.put(EngineTestSupport.legacy());
+        assertThat(calls).hasValue(1);
+        registry.remove("missing");
+        assertThat(calls).hasValue(1);
+        registry.remove("legacy_oa");
+        assertThat(calls).hasValue(2);
+        registry.put(EngineTestSupport.legacy());
+        assertThatThrownBy(() -> registry.put(ShellParser.parse("""
+                shell: sample_shell
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 能力
+                    description: 说明
+                    output:
+                      value: { type: string, description: 结果 }
+                    examples:
+                      - input: {}
+                        output: { value: ok }
+                    steps:
+                      - set: { input: x }
+                """)))
+                .isInstanceOf(ShellRejectedException.class);
+        assertThat(calls).hasValue(3);
+        assertThat(registry.find("legacy_oa")).isPresent();
         assertThat(registry.find("sample_shell")).isEmpty();
     }
 

@@ -17,6 +17,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -90,6 +91,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final DebugStateStore debug;
     private final Set<String> configDisabled;
     private final Set<String> switchDisabled;
+    private final List<Runnable> catalogListeners = new CopyOnWriteArrayList<>();
     private final Invoker invoker;
     private final ShellAdmin admin;
     private final String instanceId;
@@ -315,6 +317,24 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             switchDisabled.add(key);
         } else {
             switchDisabled.remove(key);
+        }
+        notifyCatalogListeners();
+    }
+
+    /** MCP tool-list notifications when a capability switch changes. */
+    public void addCatalogListener(Runnable listener) {
+        if (listener != null) {
+            catalogListeners.add(listener);
+        }
+    }
+
+    private void notifyCatalogListeners() {
+        for (Runnable listener : catalogListeners) {
+            try {
+                listener.run();
+            } catch (RuntimeException ex) {
+                LOG.warning("catalog listener failed: " + ex.getClass().getName());
+            }
         }
     }
 

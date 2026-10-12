@@ -11,6 +11,7 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.crab.config.CrabConfig;
+import dev.hermit.crab.mcp.McpEndpoint;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
@@ -23,7 +24,7 @@ import io.javalin.http.HandlerType;
 import io.javalin.http.HttpResponseException;
 
 /**
- * Local HTTP server. {@code /mcp} is intentionally absent. Unmatched routes use the same
+ * Local HTTP server. {@code /mcp} is the caller-side MCP endpoint. Unmatched routes use the same
  * envelope as capability calls and do not echo the request path.
  */
 public final class CrabHttpServer implements AutoCloseable {
@@ -39,6 +40,7 @@ public final class CrabHttpServer implements AutoCloseable {
     };
 
     private final CrabRuntime runtime;
+    private final McpEndpoint mcp;
     private final Javalin app;
     private final AtomicBoolean started = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -46,6 +48,7 @@ public final class CrabHttpServer implements AutoCloseable {
     public CrabHttpServer(CrabRuntime runtime) {
         this.runtime = runtime;
         checkAliases(runtime.config().aliases());
+        this.mcp = new McpEndpoint(runtime);
         this.app = build();
     }
 
@@ -63,6 +66,7 @@ public final class CrabHttpServer implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        mcp.close();
         if (started.get()) {
             app.stop();
         }
@@ -83,6 +87,7 @@ public final class CrabHttpServer implements AutoCloseable {
                 }
             }
         });
+        mcp.register(http);
         http.get("/openapi.json", ctx -> {
             byte[] body = OpenApiDocument.bytes(runtime, http.port());
             GatewayResponses.write(ctx, 200, body, GatewayResponses.trace(ctx), false);

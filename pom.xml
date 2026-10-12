@@ -28,6 +28,7 @@
     <junit.version>5.12.2</junit.version>
     <assertj.version>3.27.7</assertj.version>
     <rhino.version>1.9.1</rhino.version>
+    <mcp.version>2.0.1</mcp.version>
   </properties>
 
   <dependencyManagement>
@@ -60,6 +61,11 @@
         <groupId>org.mozilla</groupId>
         <artifactId>rhino</artifactId>
         <version>${rhino.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.modelcontextprotocol.sdk</groupId>
+        <artifactId>mcp-core</artifactId>
+        <version>${mcp.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

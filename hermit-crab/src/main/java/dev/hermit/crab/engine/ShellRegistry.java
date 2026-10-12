@@ -7,7 +7,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Logger;
 
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.Auth;
@@ -18,11 +20,24 @@ import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
 
 public final class ShellRegistry {
+    private static final Logger LOG = Logger.getLogger(ShellRegistry.class.getName());
 
     static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now");
     private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script");
 
     private final AtomicReference<Map<String, ShellDoc>> shells = new AtomicReference<>(Map.of());
+    private final List<Listener> listeners = new CopyOnWriteArrayList<>();
+
+    /** Fired after a shell is added, replaced, or removed. */
+    public void addListener(Listener listener) {
+        if (listener != null) {
+            listeners.add(listener);
+        }
+    }
+
+    public interface Listener {
+        void changed();
+    }
 
     public void put(ShellDoc doc) {
         if (doc == null) {
@@ -36,18 +51,23 @@ public final class ShellRegistry {
         if (!issues.isEmpty()) {
             throw new ShellRejectedException(issues);
         }
-        shells.updateAndGet(current -> {
+        Map<String, ShellDoc> before = shells.get();
+        Map<String, ShellDoc> after = shells.updateAndGet(current -> {
             LinkedHashMap<String, ShellDoc> copy = new LinkedHashMap<>(current);
             copy.put(doc.shell(), doc);
             return Collections.unmodifiableMap(copy);
         });
+        if (after != before) {
+            changed();
+        }
     }
 
     public void remove(String shell) {
         if (shell == null) {
             return;
         }
-        shells.updateAndGet(current -> {
+        Map<String, ShellDoc> before = shells.get();
+        Map<String, ShellDoc> after = shells.updateAndGet(current -> {
             if (!current.containsKey(shell)) {
                 return current;
             }
@@ -55,6 +75,19 @@ public final class ShellRegistry {
             copy.remove(shell);
             return Collections.unmodifiableMap(copy);
         });
+        if (after != before) {
+            changed();
+        }
+    }
+
+    private void changed() {
+        for (Listener listener : listeners) {
+            try {
+                listener.changed();
+            } catch (RuntimeException ex) {
+                LOG.warning("shell registry listener failed: " + ex.getClass().getName());
+            }
+        }
     }
 
     public Map<String, ShellDoc> snapshot() {

@@ -123,7 +123,7 @@ class RollbackGuardTest {
     private static ShellSync sync(FakeReef reef, OpenCrab crab, ShellRegistry registry) {
         return new ShellSync(
                 new SyncSettings(reef.base(), Optional.empty(), reef.keys().getPublic(), Duration.ofMinutes(5),
-                        INSTANCE, "1.0.0"),
+                        INSTANCE),
                 crab.paths,
                 registry,
                 crab.vault,

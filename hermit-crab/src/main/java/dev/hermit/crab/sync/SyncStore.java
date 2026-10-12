@@ -7,8 +7,11 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 
 import javax.sql.DataSource;
 
@@ -279,6 +282,62 @@ final class SyncStore {
         });
         rows.sort(Comparator.comparing(Installed::at).reversed().thenComparing(Installed::version, SyncStore::semverDesc));
         return rows;
+    }
+
+    Set<String> pendingCredentialFields(String shell) {
+        return Db.transaction(dataSource, connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT field FROM pending_credential_deletes WHERE shell = ?")) {
+                statement.setString(1, shell);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    Set<String> fields = new TreeSet<>();
+                    while (resultSet.next()) {
+                        fields.add(resultSet.getString(1));
+                    }
+                    return fields;
+                }
+            }
+        });
+    }
+
+    List<String> shellsWithPendingCredentialDeletes() {
+        return Db.transaction(dataSource, connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT DISTINCT shell FROM pending_credential_deletes");
+                 ResultSet resultSet = statement.executeQuery()) {
+                List<String> shells = new ArrayList<>();
+                while (resultSet.next()) {
+                    shells.add(resultSet.getString(1));
+                }
+                return shells;
+            }
+        });
+    }
+
+    void replacePendingCredentialFields(String shell, Set<String> fields) {
+        Db.transaction(dataSource, connection -> {
+            try (PreparedStatement delete = connection.prepareStatement(
+                    "DELETE FROM pending_credential_deletes WHERE shell = ?")) {
+                delete.setString(1, shell);
+                delete.executeUpdate();
+            }
+            if (fields == null || fields.isEmpty()) {
+                return null;
+            }
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "INSERT INTO pending_credential_deletes (shell, field) VALUES (?, ?)")) {
+                for (String field : new LinkedHashSet<>(fields)) {
+                    if (field == null || field.isBlank()) {
+                        continue;
+                    }
+                    insert.setString(1, shell);
+                    insert.setString(2, field);
+                    insert.addBatch();
+                }
+                insert.executeBatch();
+            }
+            return null;
+        });
     }
 
     private static int semverDesc(String left, String right) {

@@ -211,8 +211,12 @@ public final class CrabDatabase implements AutoCloseable {
                     action VARCHAR(256) NOT NULL,
                     success_count BIGINT NOT NULL,
                     failure_count_by_code CLOB NOT NULL,
+                    sum_ms BIGINT NOT NULL,
+                    latency_buckets CLOB NOT NULL,
                     sent_total BIGINT,
                     sent_codes CLOB,
+                    sent_sum_ms BIGINT,
+                    sent_buckets CLOB,
                     PRIMARY KEY ("hour", shell, version, action)
                 )
                 """);
@@ -220,6 +224,13 @@ public final class CrabDatabase implements AutoCloseable {
                 CREATE TABLE IF NOT EXISTS report_meta (
                     name VARCHAR(64) NOT NULL PRIMARY KEY,
                     amount BIGINT NOT NULL
+                )
+                """);
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS pending_credential_deletes (
+                    shell VARCHAR(256) NOT NULL,
+                    field VARCHAR(256) NOT NULL,
+                    PRIMARY KEY (shell, field)
                 )
                 """);
     }

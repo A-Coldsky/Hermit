@@ -59,10 +59,17 @@ class ReportSenderTest {
                 assertThat(row.summary()).isNull();
                 assertThat(row.errorCode()).isEqualTo(ErrorCode.RULE_MISMATCH);
             });
+            long[] buckets = LatencyHistogram.empty();
+            LatencyHistogram.add(buckets, 5);
+            LatencyHistogram.add(buckets, 5);
+            LatencyHistogram.add(buckets, 9);
             assertThat(preview.batch().counts()).singleElement().satisfies(count -> {
                 assertThat(count.hourStart()).isEqualTo(Instant.parse("2026-06-01T00:00:00Z"));
                 assertThat(count.success()).isEqualTo(2);
                 assertThat(count.failure()).isEqualTo(1);
+                assertThat(count.avgMillis()).isEqualTo(6);
+                assertThat(count.p95Millis()).isEqualTo(LatencyHistogram.p95(buckets));
+                assertThat(count.p95Millis()).isPositive();
             });
             assertSecretsAbsent(previewJson);
             assertSecretsAbsent(textColumns(database));
@@ -81,6 +88,39 @@ class ReportSenderTest {
             });
             assertThat(sender.preview().batch().failures()).isEmpty();
             assertThat(sender.preview().batch().counts()).isEmpty();
+        }
+    }
+
+    @Test
+    void hourlyLatencyUsesTheAverageAndTheBucketUpperBound() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-06-01T00:30:00Z"));
+        try (CrabDatabase database = database()) {
+            ReportSettings settings = new ReportSettings(
+                    true, URI("http://127.0.0.1:9/"), Optional.empty(), INSTANCE, "1.0.0");
+            ReportQueue queue = new ReportQueue(settings, database.dataSource(), clock);
+            ReportSender sender = new ReportSender(settings, queue, clock);
+            queue.record("legacy_oa", "1.0.0", "list_todo", result(true, 4));
+            queue.record("legacy_oa", "1.0.0", "list_todo", result(true, 4));
+            queue.record("legacy_oa", "1.0.0", "list_todo", result(false, 40_000));
+
+            long[] bounds = LatencyHistogram.bounds();
+            assertThat(bounds).hasSize(LatencyHistogram.BUCKETS);
+            assertThat(bounds[0]).isEqualTo(LatencyHistogram.MIN_MS);
+            assertThat(bounds[bounds.length - 1]).isEqualTo(LatencyHistogram.MAX_MS);
+            long[] buckets = LatencyHistogram.empty();
+            LatencyHistogram.add(buckets, 4);
+            LatencyHistogram.add(buckets, 4);
+            LatencyHistogram.add(buckets, 40_000);
+            long upper = LatencyHistogram.upperBound(40_000);
+            assertThat(upper).isGreaterThanOrEqualTo(40_000);
+            assertThat(upper).isLessThanOrEqualTo(60_000);
+            assertThat(sender.preview().batch().counts()).singleElement().satisfies(count -> {
+                assertThat(count.success()).isEqualTo(2);
+                assertThat(count.failure()).isEqualTo(1);
+                assertThat(count.avgMillis()).isEqualTo(40_008L / 3);
+                assertThat(count.p95Millis()).isEqualTo(LatencyHistogram.p95(buckets));
+                assertThat(count.p95Millis()).isEqualTo(upper);
+            });
         }
     }
 
@@ -157,7 +197,18 @@ class ReportSenderTest {
     }
 
     private static ExecutionResult success() {
-        return new ExecutionResult(true, INPUT, null, 5, List.of(), "1.0.0", "trace-ok");
+        return result(true, 5);
+    }
+
+    private static ExecutionResult result(boolean succeeded, long durationMillis) {
+        return new ExecutionResult(
+                succeeded,
+                INPUT,
+                succeeded ? null : new ExecutionError(ErrorCode.RULE_MISMATCH, MESSAGE, 1, "assert", MESSAGE),
+                durationMillis,
+                List.of(),
+                "1.0.0",
+                succeeded ? "trace-ok" : "trace-slow");
     }
 
     private static ExecutionResult failure(String traceId) {

@@ -173,6 +173,10 @@ public final class FakeReef implements AutoCloseable {
                 zip));
     }
 
+    public void catalog(String shell, String version) {
+        put(new Entry(shell, version, "abc", "1.0.0", "标题", new byte[0]));
+    }
+
     public void publishOversize(String shell) {
         byte[] body = new byte[1024 * 1024 + 1];
         put(new Entry(shell, "1.0.0", "abc", "1.0.0", "标题", body));

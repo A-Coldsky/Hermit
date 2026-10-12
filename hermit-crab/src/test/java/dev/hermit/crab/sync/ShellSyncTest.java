@@ -178,6 +178,99 @@ class ShellSyncTest {
     }
 
     @Test
+    void aFailedCurrentPointerLeavesTheRegistryAndCredentialsUntouched() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            crab.accounts.create(Origin.OFFICIAL, "legacy_oa", "alice", "cli");
+            crab.vault.write(Origin.OFFICIAL, "legacy_oa", "alice", Map.of("password", SECRET), "cli");
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+            ShellRegistry registry = new ShellRegistry();
+            ShellSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+
+            Path current = crab.paths.shells().resolve("legacy_oa").resolve("current");
+            Files.delete(current);
+            Files.createDirectory(current);
+            reef.publish(ShellTexts.withoutPassword("legacy_oa", "1.0.1"));
+            SyncReport report = sync.syncOnce();
+
+            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.REJECTED);
+            assertThat(outcome(report, "legacy_oa").reason()).isEqualTo(SyncReasons.CURRENT_WRITE_FAILED);
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            assertThat(crab.vault.decryptForExecution(Origin.OFFICIAL, "legacy_oa", "alice"))
+                    .containsEntry("password", SECRET);
+            assertThat(Files.exists(crab.paths.shells().resolve("legacy_oa/1.0.1"))).isFalse();
+            assertThat(Files.exists(crab.paths.shells().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
+        }
+    }
+
+    @Test
+    void retriesAFailedCredentialDeleteOnTheNextSync() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            crab.accounts.create(Origin.OFFICIAL, "legacy_oa", "alice", "cli");
+            crab.vault.write(Origin.OFFICIAL, "legacy_oa", "alice", Map.of("password", SECRET, "username", "alice"), "cli");
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+            ShellRegistry registry = new ShellRegistry();
+            ShellSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            reef.publish(ShellTexts.withoutPassword("legacy_oa", "1.0.1"));
+            sync.failNextCredentialDelete();
+
+            Logger logger = Logger.getLogger(ShellSync.class.getName());
+            List<String> messages = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    messages.add(String.valueOf(record.getMessage()) + " " + java.util.Arrays.toString(record.getParameters()));
+                }
+
+                @Override
+                public void flush() {
+                }
+
+                @Override
+                public void close() {
+                }
+            };
+            handler.setLevel(Level.ALL);
+            logger.addHandler(handler);
+            Level previous = logger.getLevel();
+            logger.setLevel(Level.ALL);
+            try {
+                SyncReport report = sync.syncOnce();
+                assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+                assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+                assertThat(crab.vault.decryptForExecution(Origin.OFFICIAL, "legacy_oa", "alice"))
+                        .containsEntry("password", SECRET);
+
+                sync.syncOnce();
+                assertThat(crab.vault.fieldNames(Origin.OFFICIAL, "legacy_oa", "alice")).containsExactly("username");
+            } finally {
+                logger.removeHandler(handler);
+                logger.setLevel(previous);
+            }
+            assertThat(messages).anyMatch(message -> message.contains("credential delete failed"));
+            assertThat(messages).noneMatch(message -> message.contains(SECRET));
+        }
+    }
+
+    @Test
+    void anIllegalShellNameDoesNotBlockTheOtherEntries() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            reef.catalog("../x", "1.0.0");
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+            ShellRegistry registry = new ShellRegistry();
+            SyncReport report = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC()).syncOnce();
+
+            assertThat(outcome(report, "../x").kind()).isEqualTo(OutcomeKind.REJECTED);
+            assertThat(outcome(report, "../x").reason()).isEqualTo(SyncReasons.SHELL_NAME);
+            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(registry.snapshot()).containsOnlyKeys("legacy_oa");
+            assertThat(reef.paths()).noneMatch(path -> path.contains(".."));
+            assertThat(Files.exists(crab.paths.shells().getParent().resolve("x"))).isFalse();
+        }
+    }
+
+    @Test
     void keepsTheCurrentVersionThePreviousSuccessAndThreeRecentDirectories() throws Exception {
         try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
             ShellRegistry registry = new ShellRegistry();
@@ -318,7 +411,7 @@ class ShellSyncTest {
     }
 
     private static SyncSettings settings(FakeReef reef, Optional<String> token, Duration interval) {
-        return new SyncSettings(reef.base(), token, reef.keys().getPublic(), interval, INSTANCE, "1.0.0");
+        return new SyncSettings(reef.base(), token, reef.keys().getPublic(), interval, INSTANCE);
     }
 
     private static dev.hermit.crab.engine.ExecutionResult success(String version) {

@@ -36,6 +36,11 @@ public final class ShellValidator {
     private ShellValidator() {
     }
 
+    /** Shell 名，规则 {@code ^[a-z][a-z0-9_]{1,63}$}。 */
+    public static boolean isShellName(String name) {
+        return name != null && NAME.matcher(name).matches();
+    }
+
     public static ValidationResult validate(ShellDoc doc, Context ctx) {
         Objects.requireNonNull(doc, "doc");
         Objects.requireNonNull(ctx, "ctx");

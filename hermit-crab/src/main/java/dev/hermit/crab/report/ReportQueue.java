@@ -135,18 +135,23 @@ public final class ReportQueue {
                 for (CountSnapshot count : pending.counts()) {
                     try (PreparedStatement statement = connection.prepareStatement("""
                             UPDATE hourly_counts
-                            SET sent_total = ?, sent_codes = ?
+                            SET sent_total = ?, sent_codes = ?, sent_sum_ms = ?, sent_buckets = ?
                             WHERE "hour" = ? AND shell = ? AND version = ? AND action = ?
                               AND success_count = ? AND failure_count_by_code = ?
+                              AND sum_ms = ? AND latency_buckets = ?
                             """)) {
                         statement.setLong(1, count.success() + count.failure());
                         statement.setString(2, count.failureJson());
-                        Db.setInstant(statement, 3, count.hour());
-                        statement.setString(4, count.shell());
-                        statement.setString(5, count.version());
-                        statement.setString(6, count.action());
-                        statement.setLong(7, count.success());
-                        statement.setString(8, count.failureJson());
+                        statement.setLong(3, count.sumMs());
+                        statement.setString(4, count.bucketsJson());
+                        Db.setInstant(statement, 5, count.hour());
+                        statement.setString(6, count.shell());
+                        statement.setString(7, count.version());
+                        statement.setString(8, count.action());
+                        statement.setLong(9, count.success());
+                        statement.setString(10, count.failureJson());
+                        statement.setLong(11, count.sumMs());
+                        statement.setString(12, count.bucketsJson());
                         statement.executeUpdate();
                     }
                 }
@@ -215,7 +220,7 @@ public final class ReportQueue {
         if (countRoom > 0) {
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT "hour", shell, version, action, success_count, failure_count_by_code,
-                           sent_total, sent_codes
+                           sum_ms, latency_buckets, sent_total, sent_codes, sent_sum_ms, sent_buckets
                     FROM hourly_counts
                     """);
                  ResultSet resultSet = statement.executeQuery()) {
@@ -223,17 +228,33 @@ public final class ReportQueue {
                     long success = resultSet.getLong("success_count");
                     String json = resultSet.getString("failure_count_by_code");
                     long failure = FailureCodes.total(FailureCodes.read(json));
+                    long sumMs = resultSet.getLong("sum_ms");
+                    String bucketsJson = resultSet.getString("latency_buckets");
+                    long calls = success + failure;
                     Long sentTotal = resultSet.getObject("sent_total") == null ? null : resultSet.getLong("sent_total");
                     String sentCodes = resultSet.getString("sent_codes");
-                    if (sentTotal != null && sentTotal == success + failure && Objects.equals(json, sentCodes)) {
+                    Long sentSum = resultSet.getObject("sent_sum_ms") == null ? null : resultSet.getLong("sent_sum_ms");
+                    String sentBuckets = resultSet.getString("sent_buckets");
+                    if (sentTotal != null && sentTotal == calls && Objects.equals(json, sentCodes)
+                            && sentSum != null && sentSum == sumMs && Objects.equals(bucketsJson, sentBuckets)) {
                         continue;
                     }
                     Instant hour = Db.instant(resultSet, "hour");
                     String shell = resultSet.getString("shell");
                     String version = resultSet.getString("version");
                     String action = resultSet.getString("action");
-                    counts.add(new CountReport(shell, version, action, hour, success, failure, 0L, 0L));
-                    snapshots.add(new CountSnapshot(hour, shell, version, action, success, failure, json));
+                    long[] buckets = LatencyHistogram.read(bucketsJson);
+                    counts.add(new CountReport(
+                            shell,
+                            version,
+                            action,
+                            hour,
+                            success,
+                            failure,
+                            LatencyHistogram.average(sumMs, calls),
+                            LatencyHistogram.p95(buckets)));
+                    snapshots.add(new CountSnapshot(
+                            hour, shell, version, action, success, failure, json, sumMs, bucketsJson));
                 }
             }
         }
@@ -293,10 +314,12 @@ public final class ReportQueue {
     ) throws SQLException {
         Instant hour = clock.instant().truncatedTo(ChronoUnit.HOURS);
         long success = 0;
+        long sumMs = 0;
         String json = FailureCodes.write(Map.of());
+        long[] buckets = LatencyHistogram.empty();
         boolean found = false;
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT success_count, failure_count_by_code
+                SELECT success_count, failure_count_by_code, sum_ms, latency_buckets
                 FROM hourly_counts
                 WHERE "hour" = ? AND shell = ? AND version = ? AND action = ?
                 """)) {
@@ -309,6 +332,8 @@ public final class ReportQueue {
                     found = true;
                     success = resultSet.getLong("success_count");
                     json = resultSet.getString("failure_count_by_code");
+                    sumMs = resultSet.getLong("sum_ms");
+                    buckets = LatencyHistogram.read(resultSet.getString("latency_buckets"));
                 }
             }
         }
@@ -321,26 +346,33 @@ public final class ReportQueue {
                     : result.error().code();
             codes.merge(code.name(), 1L, Long::sum);
         }
+        long duration = Math.max(0L, result.durationMillis());
+        sumMs = saturatingAdd(sumMs, duration);
+        LatencyHistogram.add(buckets, duration);
         String stored = FailureCodes.write(codes);
+        String bucketJson = LatencyHistogram.write(buckets);
         if (found) {
             try (PreparedStatement statement = connection.prepareStatement("""
                     UPDATE hourly_counts
-                    SET success_count = ?, failure_count_by_code = ?
+                    SET success_count = ?, failure_count_by_code = ?, sum_ms = ?, latency_buckets = ?
                     WHERE "hour" = ? AND shell = ? AND version = ? AND action = ?
                     """)) {
                 statement.setLong(1, success);
                 statement.setString(2, stored);
-                Db.setInstant(statement, 3, hour);
-                statement.setString(4, shell);
-                statement.setString(5, version);
-                statement.setString(6, action);
+                statement.setLong(3, sumMs);
+                statement.setString(4, bucketJson);
+                Db.setInstant(statement, 5, hour);
+                statement.setString(6, shell);
+                statement.setString(7, version);
+                statement.setString(8, action);
                 statement.executeUpdate();
             }
             return;
         }
         try (PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO hourly_counts ("hour", shell, version, action, success_count, failure_count_by_code)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO hourly_counts (
+                    "hour", shell, version, action, success_count, failure_count_by_code, sum_ms, latency_buckets
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
             Db.setInstant(statement, 1, hour);
             statement.setString(2, shell);
@@ -348,7 +380,17 @@ public final class ReportQueue {
             statement.setString(4, action);
             statement.setLong(5, success);
             statement.setString(6, stored);
+            statement.setLong(7, sumMs);
+            statement.setString(8, bucketJson);
             statement.executeUpdate();
+        }
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        try {
+            return Math.addExact(left, right);
+        } catch (ArithmeticException ex) {
+            return Long.MAX_VALUE;
         }
     }
 
@@ -454,7 +496,9 @@ public final class ReportQueue {
             String action,
             long success,
             long failure,
-            String failureJson
+            String failureJson,
+            long sumMs,
+            String bucketsJson
     ) {
     }
 

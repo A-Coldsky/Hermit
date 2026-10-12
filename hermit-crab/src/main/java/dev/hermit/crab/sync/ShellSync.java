@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -25,7 +26,9 @@ import dev.hermit.common.pkg.ShellManifest;
 import dev.hermit.common.pkg.ShellPackage;
 import dev.hermit.common.pkg.VerifiedShell;
 import dev.hermit.common.version.SemVer;
+import dev.hermit.common.validate.ShellValidator;
 import dev.hermit.common.validate.ValidationIssue;
+import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.ShellRegistry;
 import dev.hermit.crab.engine.ShellRejectedException;
 import dev.hermit.crab.store.CrabPaths;
@@ -44,8 +47,9 @@ public final class ShellSync {
     private final ReefClient reef;
     private final Clock clock;
     private final HttpClient client;
-    private final SemVer crabVersion;
+    private final SemVer crabVersion = CrabVersion.CURRENT;
     private final AtomicBoolean started = new AtomicBoolean();
+    private int credentialDeleteFailures;
 
     public ShellSync(
             SyncSettings settings,
@@ -71,7 +75,6 @@ public final class ShellSync {
         this.vault = vault;
         this.store = new SyncStore(dataSource);
         this.clock = clock;
-        this.crabVersion = SemVer.parse(settings.crabVersion());
         this.client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -81,6 +84,7 @@ public final class ShellSync {
 
     public SyncReport syncOnce() {
         synchronized (this) {
+            retryPendingCredentialDeletes();
             Optional<CrabRelease> latest = readLatest();
             ReefClient.ManifestFetch manifest = reef.manifest(store.etag().orElse(null));
             if (manifest.notModified()) {
@@ -93,10 +97,16 @@ public final class ShellSync {
             List<CredentialDeclarationChange> changes = new ArrayList<>();
             Set<String> present = new LinkedHashSet<>();
             for (ReefClient.CatalogEntry entry : manifest.entries()) {
-                if (entry.shell() != null) {
-                    present.add(entry.shell());
-                }
                 try {
+                    if (!ShellValidator.isShellName(entry.shell())) {
+                        shells.add(rejected(entry, SyncReasons.SHELL_NAME));
+                        continue;
+                    }
+                    present.add(entry.shell());
+                    if (!version(entry.version()).isPresent()) {
+                        shells.add(rejected(entry, SyncReasons.VERSION_INVALID));
+                        continue;
+                    }
                     InstallResult result = installEntry(entry);
                     shells.add(result.outcome());
                     result.change().ifPresent(changes::add);
@@ -126,6 +136,10 @@ public final class ShellSync {
         executor.scheduleWithFixedDelay(this::runScheduled, delay, delay, TimeUnit.MILLISECONDS);
     }
 
+    void failNextCredentialDelete() {
+        credentialDeleteFailures++;
+    }
+
     void runScheduled() {
         try {
             syncOnce();
@@ -143,15 +157,17 @@ public final class ShellSync {
     }
 
     private InstallResult installEntry(ReefClient.CatalogEntry entry) {
-        if (!ShellFiles.safeSegment(entry.shell()) || !ShellFiles.safeSegment(entry.version())) {
-            return InstallResult.of(rejected(entry, SyncReasons.PATH_UNSAFE));
+        if (!ShellValidator.isShellName(entry.shell())) {
+            return InstallResult.of(rejected(entry, SyncReasons.SHELL_NAME));
         }
-        SemVer incoming;
-        try {
-            incoming = SemVer.parse(entry.version());
-        } catch (IllegalArgumentException ex) {
+        Optional<SemVer> parsed = version(entry.version());
+        if (parsed.isEmpty()) {
             return InstallResult.of(rejected(entry, SyncReasons.VERSION_INVALID));
         }
+        if (!ShellFiles.safeSegment(entry.version())) {
+            return InstallResult.of(rejected(entry, SyncReasons.PATH_UNSAFE));
+        }
+        SemVer incoming = parsed.get();
         if (entry.sha256() == null || entry.minCrabVersion() == null) {
             return InstallResult.of(rejected(entry, SyncReasons.MANIFEST_ENTRY_MISMATCH));
         }
@@ -242,16 +258,14 @@ public final class ShellSync {
                 registryRestore(shell, previous);
                 return InstallResult.of(rejected(entry, SyncReasons.REGISTRY_REJECTED));
             }
-            if (change.isPresent() && !change.get().removed().isEmpty()) {
-                try {
-                    vault.deleteFields(Origin.OFFICIAL, shell, change.get().removed());
-                } catch (RuntimeException ex) {
-                    registryRestore(shell, previous);
-                    ShellFiles.deleteVersion(paths, shell, version);
-                    return InstallResult.of(rejected(entry, SyncReasons.CREDENTIAL_DELETE_FAILED));
-                }
+            try {
+                ShellFiles.writeCurrent(paths, shell, version);
+            } catch (RuntimeException ex) {
+                LOG.log(Level.WARNING, "current pointer write failed shell={0}", shell);
+                registryRestore(shell, previous);
+                ShellFiles.deleteVersion(paths, shell, version);
+                return InstallResult.of(rejected(entry, SyncReasons.CURRENT_WRITE_FAILED));
             }
-            ShellFiles.writeCurrent(paths, shell, version);
             String switchedFrom = currentNow.orElse(previousCurrent);
             if (switchedFrom != null) {
                 store.setPrevious(shell, switchedFrom);
@@ -271,7 +285,52 @@ public final class ShellSync {
             } catch (RuntimeException ex) {
                 LOG.log(Level.WARNING, "shell prune failed shell={0}", shell);
             }
+            Set<String> removed = change.map(CredentialDeclarationChange::removed).orElseGet(Set::of);
+            deleteRemovedFields(shell, verified.shellDoc(), removed);
             return new InstallResult(outcome(entry, OutcomeKind.INSTALLED, null), change);
+        }
+    }
+
+    private void retryPendingCredentialDeletes() {
+        for (String shell : store.shellsWithPendingCredentialDeletes()) {
+            deleteRemovedFields(shell, registry.find(shell).orElse(null), Set.of());
+        }
+    }
+
+    private void deleteRemovedFields(String shell, ShellDoc installed, Set<String> extra) {
+        Set<String> fields = new TreeSet<>(store.pendingCredentialFields(shell));
+        if (extra != null) {
+            fields.addAll(extra);
+        }
+        if (installed != null && installed.credentials() != null) {
+            fields.removeAll(installed.credentials().keySet());
+        }
+        if (fields.isEmpty()) {
+            store.replacePendingCredentialFields(shell, Set.of());
+            return;
+        }
+        try {
+            deleteOfficialFields(shell, fields);
+            store.replacePendingCredentialFields(shell, Set.of());
+        } catch (RuntimeException ex) {
+            LOG.log(Level.WARNING, "credential delete failed shell={0} count={1}", new Object[] {shell, fields.size()});
+            store.replacePendingCredentialFields(shell, fields);
+        }
+    }
+
+    private void deleteOfficialFields(String shell, Set<String> fields) {
+        if (credentialDeleteFailures > 0) {
+            credentialDeleteFailures--;
+            throw new IllegalStateException("credential delete failed");
+        }
+        vault.deleteFields(Origin.OFFICIAL, shell, fields);
+    }
+
+    private static Optional<SemVer> version(String text) {
+        try {
+            return Optional.of(SemVer.parse(text));
+        } catch (IllegalArgumentException ex) {
+            return Optional.empty();
         }
     }
 

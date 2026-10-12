@@ -40,7 +40,8 @@ class CrabDatabaseTest {
                     "REPORT_QUEUE",
                     "ROLLBACK_QUEUE",
                     "HOURLY_COUNTS",
-                    "REPORT_META");
+                    "REPORT_META",
+                    "PENDING_CREDENTIAL_DELETES");
             assertThat(versions(fixture)).containsExactly(1, 3);
             assertThat(columnType(fixture, "CREDENTIALS", "CIPHERTEXT")).contains("BINARY");
         } finally {

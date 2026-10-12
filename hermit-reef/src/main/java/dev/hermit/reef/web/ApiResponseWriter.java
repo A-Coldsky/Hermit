@@ -16,7 +16,7 @@ public class ApiResponseWriter {
         this.objectMapper = objectMapper;
     }
 
-    public void write(HttpServletResponse response, int status, String code, String message, String traceId)
+    public void write(HttpServletResponse response, int status, ReefErrorCode code, String message, String traceId)
             throws IOException {
         if (response.isCommitted()) {
             return;

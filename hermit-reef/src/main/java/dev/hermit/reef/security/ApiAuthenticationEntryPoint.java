@@ -1,7 +1,7 @@
 package dev.hermit.reef.security;
 
 import dev.hermit.reef.web.ApiResponseWriter;
-import dev.hermit.reef.web.ErrorCodes;
+import dev.hermit.reef.web.ReefErrorCode;
 import dev.hermit.reef.web.TraceIds;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -23,7 +23,7 @@ public class ApiAuthenticationEntryPoint implements AuthenticationEntryPoint {
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response,
             AuthenticationException authException) throws IOException {
-        writer.write(response, HttpStatus.UNAUTHORIZED.value(), ErrorCodes.UNAUTHORIZED,
-                ErrorCodes.UNAUTHORIZED_MESSAGE, TraceIds.current(request));
+        writer.write(response, HttpStatus.UNAUTHORIZED.value(), ReefErrorCode.UNAUTHORIZED,
+                ReefErrorCode.UNAUTHORIZED.message(), TraceIds.current(request));
     }
 }

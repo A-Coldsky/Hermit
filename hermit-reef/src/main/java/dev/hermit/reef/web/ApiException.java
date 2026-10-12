@@ -3,9 +3,9 @@ package dev.hermit.reef.web;
 public class ApiException extends RuntimeException {
 
     private final int status;
-    private final String code;
+    private final ReefErrorCode code;
 
-    public ApiException(int status, String code, String message) {
+    public ApiException(int status, ReefErrorCode code, String message) {
         super(message);
         this.status = status;
         this.code = code;
@@ -15,11 +15,11 @@ public class ApiException extends RuntimeException {
         return status;
     }
 
-    public String code() {
+    public ReefErrorCode code() {
         return code;
     }
 
     public static ApiException invalidInput() {
-        return new ApiException(400, ErrorCodes.INVALID_INPUT, ErrorCodes.INVALID_INPUT_MESSAGE);
+        return new ApiException(400, ReefErrorCode.INVALID_INPUT, ReefErrorCode.INVALID_INPUT.message());
     }
 }

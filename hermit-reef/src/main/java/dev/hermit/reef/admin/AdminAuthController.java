@@ -1,7 +1,7 @@
 package dev.hermit.reef.admin;
 
 import dev.hermit.reef.web.ApiResponse;
-import dev.hermit.reef.web.ErrorCodes;
+import dev.hermit.reef.web.ReefErrorCode;
 import dev.hermit.reef.web.TraceIds;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -35,7 +35,7 @@ public class AdminAuthController {
         return loginService.login(request.username(), request.password())
                 .map(body -> ResponseEntity.ok(ApiResponse.ok(body, traceId)))
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                        .body(ApiResponse.fail(ErrorCodes.UNAUTHORIZED, LoginService.FAILURE_MESSAGE, traceId)));
+                        .body(ApiResponse.fail(ReefErrorCode.UNAUTHORIZED, LoginService.FAILURE_MESSAGE, traceId)));
     }
 
     @GetMapping("/me")

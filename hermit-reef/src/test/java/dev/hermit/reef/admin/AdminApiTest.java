@@ -244,6 +244,30 @@ class AdminApiTest {
     }
 
     @Test
+    void passwordLimitIsUtf8Bytes() throws Exception {
+        String fits = "密".repeat(24);
+        String tooLong = "密".repeat(25);
+        assertThat(fits.getBytes(StandardCharsets.UTF_8)).hasSize(72);
+        assertThat(tooLong.length()).isLessThan(72);
+        assertThat(tooLong.getBytes(StandardCharsets.UTF_8).length).isGreaterThan(72);
+
+        mockMvc.perform(post("/api/admin/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(TraceIds.HEADER, TRACE)
+                        .content(credentials(TestSecrets.USERNAME, fits)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
+        mockMvc.perform(post("/api/admin/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(TraceIds.HEADER, TRACE)
+                        .content(credentials(TestSecrets.USERNAME, tooLong)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("invalid input"))
+                .andExpect(content().string(not(org.hamcrest.Matchers.containsString(tooLong))));
+    }
+
+    @Test
     void malformedLoginDoesNotEchoThePassword() throws Exception {
         int before = MemoryLogAppender.LINES.size();
         mockMvc.perform(post("/api/admin/login")

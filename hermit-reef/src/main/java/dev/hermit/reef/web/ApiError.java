@@ -1,4 +1,4 @@
 package dev.hermit.reef.web;
 
-public record ApiError(String code, String message) {
+public record ApiError(ReefErrorCode code, String message) {
 }

@@ -1,7 +1,7 @@
 package dev.hermit.reef.security;
 
 import dev.hermit.reef.web.ApiResponseWriter;
-import dev.hermit.reef.web.ErrorCodes;
+import dev.hermit.reef.web.ReefErrorCode;
 import dev.hermit.reef.web.TraceIds;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -23,7 +23,7 @@ public class ApiAccessDeniedHandler implements AccessDeniedHandler {
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response,
             AccessDeniedException accessDeniedException) throws IOException {
-        writer.write(response, HttpStatus.FORBIDDEN.value(), ErrorCodes.FORBIDDEN, ErrorCodes.FORBIDDEN_MESSAGE,
+        writer.write(response, HttpStatus.FORBIDDEN.value(), ReefErrorCode.FORBIDDEN, ReefErrorCode.FORBIDDEN.message(),
                 TraceIds.current(request));
     }
 }

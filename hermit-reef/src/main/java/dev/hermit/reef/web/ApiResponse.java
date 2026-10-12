@@ -6,7 +6,7 @@ public record ApiResponse<T>(boolean success, T data, ApiError error, String tra
         return new ApiResponse<>(true, data, null, traceId);
     }
 
-    public static <T> ApiResponse<T> fail(String code, String message, String traceId) {
+    public static <T> ApiResponse<T> fail(ReefErrorCode code, String message, String traceId) {
         return new ApiResponse<>(false, null, new ApiError(code, message), traceId);
     }
 }

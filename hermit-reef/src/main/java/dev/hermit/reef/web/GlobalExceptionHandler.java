@@ -34,27 +34,28 @@ public class GlobalExceptionHandler {
     })
     public ResponseEntity<ApiResponse<Void>> invalidInput(Exception ex, HttpServletRequest request) {
         // 校验失败、坏 JSON、被防火墙拒绝的头，异常消息里可能有请求内容，不能写进日志或响应。
-        return fail(HttpStatus.BAD_REQUEST, ErrorCodes.INVALID_INPUT, ErrorCodes.INVALID_INPUT_MESSAGE, request);
+        return fail(HttpStatus.BAD_REQUEST, ReefErrorCode.INVALID_INPUT, ReefErrorCode.INVALID_INPUT.message(), request);
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<ApiResponse<Void>> methodNotAllowed(HttpRequestMethodNotSupportedException ex,
             HttpServletRequest request) {
-        return fail(HttpStatus.METHOD_NOT_ALLOWED, ErrorCodes.INVALID_INPUT, ErrorCodes.INVALID_INPUT_MESSAGE, request);
+        return fail(HttpStatus.METHOD_NOT_ALLOWED, ReefErrorCode.INVALID_INPUT, ReefErrorCode.INVALID_INPUT.message(),
+                request);
     }
 
     @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
     public ResponseEntity<ApiResponse<Void>> notFound(Exception ex, HttpServletRequest request) {
-        return fail(HttpStatus.NOT_FOUND, ErrorCodes.NOT_FOUND, ErrorCodes.NOT_FOUND_MESSAGE, request);
+        return fail(HttpStatus.NOT_FOUND, ReefErrorCode.NOT_FOUND, ReefErrorCode.NOT_FOUND.message(), request);
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> unhandled(Exception ex, HttpServletRequest request) {
         log.error("Unhandled request failure traceId={}", TraceIds.current(request), ex);
-        return fail(HttpStatus.INTERNAL_SERVER_ERROR, ErrorCodes.INTERNAL, ErrorCodes.INTERNAL_MESSAGE, request);
+        return fail(HttpStatus.INTERNAL_SERVER_ERROR, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message(), request);
     }
 
-    private static ResponseEntity<ApiResponse<Void>> fail(HttpStatus status, String code, String message,
+    private static ResponseEntity<ApiResponse<Void>> fail(HttpStatus status, ReefErrorCode code, String message,
             HttpServletRequest request) {
         return ResponseEntity.status(status).body(ApiResponse.fail(code, message, TraceIds.current(request)));
     }

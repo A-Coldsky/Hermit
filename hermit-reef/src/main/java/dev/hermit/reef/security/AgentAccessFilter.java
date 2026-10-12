@@ -2,7 +2,7 @@ package dev.hermit.reef.security;
 
 import dev.hermit.reef.config.ReefProperties;
 import dev.hermit.reef.web.ApiResponseWriter;
-import dev.hermit.reef.web.ErrorCodes;
+import dev.hermit.reef.web.ReefErrorCode;
 import dev.hermit.reef.web.TraceIds;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -43,12 +43,12 @@ public class AgentAccessFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         if (!INSTANCE_ID.matcher(header(request, INSTANCE_HEADER)).matches()) {
-            writer.write(response, 400, ErrorCodes.INVALID_INPUT, "invalid instance id", TraceIds.current(request));
+            writer.write(response, 400, ReefErrorCode.INVALID_INPUT, "invalid instance id", TraceIds.current(request));
             return;
         }
         String configured = properties.configuredAgentToken();
         if (configured != null && !TokenEquality.constantTimeEquals(configured, request.getHeader(TOKEN_HEADER))) {
-            writer.write(response, 401, ErrorCodes.UNAUTHORIZED, ErrorCodes.UNAUTHORIZED_MESSAGE,
+            writer.write(response, 401, ReefErrorCode.UNAUTHORIZED, ReefErrorCode.UNAUTHORIZED.message(),
                     TraceIds.current(request));
             return;
         }

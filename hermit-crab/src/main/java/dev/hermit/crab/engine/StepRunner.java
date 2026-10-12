@@ -1,6 +1,7 @@
 package dev.hermit.crab.engine;
 
 import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
@@ -17,6 +18,7 @@ final class StepRunner {
 
     private final TemplateEngine templates;
     private final FilterRegistry filters;
+    private final ScriptStep scripts = new ScriptStep();
 
     StepRunner(TemplateEngine templates, FilterRegistry filters) {
         this.templates = templates;
@@ -36,7 +38,9 @@ final class StepRunner {
             URI base,
             long deadlineNanos
     ) {
-        Object rendered = templates.render(step.def(), vars);
+        Object rendered = "script".equals(step.type())
+                ? renderScript(step.def(), vars)
+                : templates.render(step.def(), vars);
         Map<String, Object> spec = Values.map(rendered);
         if (spec == null) {
             throw new RuleProblem(ErrorCode.RULE_MISMATCH, "步骤定义无效", null, null, null);
@@ -46,9 +50,23 @@ final class StepRunner {
             case "extract" -> extract(spec, vars);
             case "assert" -> check(spec, vars, cookies);
             case "set" -> set(spec, vars);
+            case "script" -> scripts.run(spec, vars, deadlineNanos);
             default -> throw new RuleProblem(
                     ErrorCode.RULE_MISMATCH, "不支持的步骤类型 " + step.type(), null, null, null);
         };
+    }
+
+    /** code 是字面量。into 和 timeout_ms 仍走模板。 */
+    private Map<String, Object> renderScript(Map<String, Object> def, Map<String, Object> vars) {
+        LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : def.entrySet()) {
+            if ("code".equals(entry.getKey())) {
+                copy.put("code", entry.getValue());
+            } else {
+                copy.put(entry.getKey(), templates.render(entry.getValue(), vars));
+            }
+        }
+        return copy;
     }
 
     private Outcome request(

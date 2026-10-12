@@ -20,6 +20,7 @@ public final class ValidationCodes {
     public static final String MISSING_NOTES = "MISSING_NOTES";
     public static final String MISSING_RELATED = "MISSING_RELATED";
     public static final String UNKNOWN_RELATED = "UNKNOWN_RELATED";
+    public static final String SCRIPT_STEP = "SCRIPT_STEP";
 
     private ValidationCodes() {
     }

@@ -20,7 +20,7 @@ import dev.hermit.common.validate.ValidationResult;
 public final class ShellRegistry {
 
     static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now");
-    private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set");
+    private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script");
 
     private final AtomicReference<Map<String, ShellDoc>> shells = new AtomicReference<>(Map.of());
 
@@ -81,6 +81,16 @@ public final class ShellRegistry {
     private static void reservedSteps(List<Step> steps, String path, List<ValidationIssue> issues) {
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
+            if ("script".equals(step.type())) {
+                Object into = step.def().get("into");
+                if (into instanceof String name && RESERVED.contains(name)) {
+                    issues.add(new ValidationIssue(
+                            "RESERVED_VARIABLE",
+                            path + "[" + i + "].into",
+                            "不能写入保留变量 " + name));
+                }
+                continue;
+            }
             if (!"extract".equals(step.type()) && !"set".equals(step.type())) {
                 continue;
             }

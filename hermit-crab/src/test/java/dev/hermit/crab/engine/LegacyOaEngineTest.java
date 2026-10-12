@@ -465,6 +465,63 @@ class LegacyOaEngineTest {
         }
     }
 
+    @Test
+    void summarizesTodosWithScript() throws Exception {
+        String action = """
+                summarize_todo:
+                  title: 汇总待办
+                  description: 用脚本汇总当前页待办条数和第一条标题。
+                  input:
+                    page: { type: integer, default: 1, description: 页码 }
+                  steps:
+                    - request:
+                        method: GET
+                        path: /todo/list.aspx
+                        query: { p: "{{input.page}}" }
+                    - extract:
+                        items:
+                          css: "table#todo tr:not(:first-child)"
+                          each:
+                            id: { css: "td:nth-child(1)" }
+                            title: { css: "td:nth-child(2) a" }
+                    - script:
+                        code: |
+                          var rows = vars.items;
+                          var first = rows.length === 0 ? null : rows[0].title;
+                          return { total: rows.length, first: first };
+                  output:
+                    total: { type: integer, description: 条数 }
+                    first: { type: string, description: 第一条标题 }
+                  examples:
+                    - input: { page: 1 }
+                      output: { total: 1, first: 张三的请假申请 }
+                  notes: 只汇总本页。
+                  related: [list_todo]
+                  idempotent: true
+                """.stripIndent().indent(2);
+        try (Running running = Running.start();
+                EngineTestSupport.LogCapture logs = new EngineTestSupport.LogCapture();
+                EngineTestSupport.StreamCapture streams = new EngineTestSupport.StreamCapture()) {
+            running.registry.put(ShellParser.parse(
+                    EngineTestSupport.legacyYaml().replace("health_check:", action + "health_check:")));
+            ExecutionResult result = running.engine.execute(EngineTestSupport.request(
+                    Origin.OFFICIAL,
+                    "legacy_oa",
+                    "summarize_todo",
+                    "alice",
+                    Map.of(),
+                    EngineTestSupport.account("alice", EngineTestSupport.PASSWORD, running.fixture.baseUrl())));
+            absent(result, logs, streams, EngineTestSupport.PASSWORD);
+            absent(result, logs, streams, sessionId(running, "/todo/list.aspx"));
+            assertThat(result.success()).isTrue();
+            assertThat(data(result)).containsEntry("total", 1L).containsEntry("first", "张三的请假申请");
+            assertThat(result.stepLogs()).extracting(StepLog::type).containsExactly("request", "extract", "script");
+            assertThat(result.stepLogs().get(0).path()).isEqualTo("/todo/list.aspx");
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
+            assertThat(running.fixture.count("GET", "/todo/list.aspx")).isEqualTo(1);
+        }
+    }
+
     private static void absent(
             ExecutionResult result,
             EngineTestSupport.LogCapture logs,

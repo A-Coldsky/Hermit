@@ -3,13 +3,21 @@ package dev.hermit.crab.mcp;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -33,6 +41,9 @@ import io.modelcontextprotocol.spec.ProtocolVersions;
  * capabilities outside an API key. Tool definitions still use the SDK schema types.
  */
 public final class McpEndpoint {
+    static final Duration IDLE_LIMIT = Duration.ofHours(1);
+    static final int MAX_SESSIONS = 1000;
+
     private static final Logger LOG = Logger.getLogger(McpEndpoint.class.getName());
     private static final String SESSION_HEADER = "Mcp-Session-Id";
     private static final Set<String> PROTOCOLS = Set.of(
@@ -50,15 +61,34 @@ public final class McpEndpoint {
     private final CrabRuntime runtime;
     private final McpCatalog catalog;
     private final McpCalls calls;
+    private final Clock clock;
+    private final long idleMillis;
+    private final int maxSessions;
     private final Map<String, McpSession> sessions = new ConcurrentHashMap<>();
+    private final Object sessionLock = new Object();
+    private final AtomicLong useSequence = new AtomicLong();
+    private final ScheduledExecutorService sweeper;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public McpEndpoint(CrabRuntime runtime) {
+        this(runtime, Clock.systemUTC(), IDLE_LIMIT, MAX_SESSIONS);
+    }
+
+    McpEndpoint(CrabRuntime runtime, Clock clock, Duration idleLimit, int maxSessions) {
         this.runtime = runtime;
         this.catalog = new McpCatalog(runtime.registry(), runtime::disabled);
         this.calls = new McpCalls(runtime, catalog);
+        this.clock = clock == null ? Clock.systemUTC() : clock;
+        this.idleMillis = (idleLimit == null ? IDLE_LIMIT : idleLimit).toMillis();
+        this.maxSessions = maxSessions;
         runtime.registry().addListener(this::broadcastChanges);
         runtime.addCatalogListener(this::broadcastChanges);
+        this.sweeper = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "mcp-session-sweep");
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.sweeper.scheduleWithFixedDelay(this::sweepQuietly, 1, 1, TimeUnit.MINUTES);
     }
 
     public void register(Javalin http) {
@@ -71,10 +101,13 @@ public final class McpEndpoint {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        for (McpSession session : sessions.values()) {
-            session.wake();
+        sweeper.shutdownNow();
+        synchronized (sessionLock) {
+            for (McpSession session : sessions.values()) {
+                session.wake();
+            }
+            sessions.clear();
         }
-        sessions.clear();
     }
 
     private void broadcastChanges() {
@@ -95,6 +128,7 @@ public final class McpEndpoint {
         if (closed.get()) {
             return;
         }
+        sweep();
         Optional<ApiKeyPrincipal> principal = authenticate(ctx);
         if (principal.isEmpty()) {
             writeAuth(ctx);
@@ -183,7 +217,12 @@ public final class McpEndpoint {
                 ? request.protocolVersion()
                 : ProtocolVersions.MCP_2025_11_25;
         McpSession session = new McpSession(UUID.randomUUID().toString(), principal.id(), request.capabilities());
-        sessions.put(session.id, session);
+        synchronized (sessionLock) {
+            reap(clock.millis());
+            session.touch(clock.millis(), useSequence.incrementAndGet());
+            sessions.put(session.id, session);
+            trim();
+        }
         McpSchema.InitializeResult result = McpSchema.InitializeResult.builder(protocol, CAPABILITIES, SERVER_INFO).build();
         writeResult(ctx, id, result, session);
     }
@@ -208,6 +247,10 @@ public final class McpEndpoint {
     }
 
     private void get(Context ctx) {
+        if (closed.get()) {
+            return;
+        }
+        sweep();
         Optional<ApiKeyPrincipal> principal = authenticate(ctx);
         if (principal.isEmpty()) {
             writeAuth(ctx);
@@ -246,6 +289,10 @@ public final class McpEndpoint {
     }
 
     private void delete(Context ctx) {
+        if (closed.get()) {
+            return;
+        }
+        sweep();
         Optional<ApiKeyPrincipal> principal = authenticate(ctx);
         if (principal.isEmpty()) {
             writeAuth(ctx);
@@ -255,7 +302,9 @@ public final class McpEndpoint {
         if (session == null) {
             return;
         }
-        sessions.remove(session.id, session);
+        synchronized (sessionLock) {
+            sessions.remove(session.id, session);
+        }
         session.wake();
         ctx.status(200);
         ctx.result("");
@@ -276,7 +325,57 @@ public final class McpEndpoint {
             writeAuth(ctx);
             return null;
         }
+        synchronized (sessionLock) {
+            if (session.closed.get() || !sessions.containsKey(session.id)) {
+                writeRpcError(ctx, null, 404, McpSchema.ErrorCodes.INVALID_REQUEST, "session not found", null);
+                return null;
+            }
+            session.touch(clock.millis(), useSequence.incrementAndGet());
+        }
         return session;
+    }
+
+    private void sweep() {
+        synchronized (sessionLock) {
+            reap(clock.millis());
+        }
+    }
+
+    private void sweepQuietly() {
+        try {
+            sweep();
+        } catch (RuntimeException ex) {
+            LOG.warning("mcp session sweep failed: " + ex.getClass().getName());
+        }
+    }
+
+    /** Caller holds {@code sessionLock}. Drops sessions idle for an hour, then the least recently used past the cap. */
+    private void reap(long now) {
+        long cutoff = now - idleMillis;
+        for (McpSession session : List.copyOf(sessions.values())) {
+            if (session.lastUsed() <= cutoff) {
+                drop(session);
+            }
+        }
+        trim();
+    }
+
+    private void trim() {
+        int extra = sessions.size() - maxSessions;
+        if (extra <= 0) {
+            return;
+        }
+        ArrayList<McpSession> ranked = new ArrayList<>(sessions.values());
+        ranked.sort(Comparator.comparingLong(McpSession::lastUsed).thenComparingLong(McpSession::sequence));
+        for (int i = 0; i < extra; i++) {
+            drop(ranked.get(i));
+        }
+    }
+
+    private void drop(McpSession session) {
+        if (sessions.remove(session.id, session)) {
+            session.wake();
+        }
     }
 
     private Optional<ApiKeyPrincipal> authenticate(Context ctx) {

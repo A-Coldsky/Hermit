@@ -171,7 +171,12 @@ final class McpCalls {
             Thread.currentThread().interrupt();
             return toolError("INTERNAL", "internal error");
         }
-        if (answer == null || !"accept".equals(answer.path("action").asText(""))) {
+        JsonNode confirm = answer == null ? null : answer.path("content").path("confirm");
+        boolean accepted = answer != null
+                && "accept".equals(answer.path("action").asText(""))
+                && confirm.isBoolean()
+                && confirm.booleanValue();
+        if (!accepted) {
             return toolError("FORBIDDEN", REJECTED);
         }
         return null;

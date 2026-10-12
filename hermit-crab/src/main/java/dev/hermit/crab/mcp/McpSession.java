@@ -22,6 +22,8 @@ final class McpSession {
     final String apiKeyId;
     final McpSchema.ClientCapabilities capabilities;
     final AtomicBoolean closed = new AtomicBoolean();
+    private long lastUsed;
+    private long sequence;
     private final CopyOnWriteArrayList<Sink> sinks = new CopyOnWriteArrayList<>();
     private final ConcurrentHashMap<String, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
     private final AtomicInteger serverIds = new AtomicInteger();
@@ -32,6 +34,19 @@ final class McpSession {
         this.capabilities = capabilities == null
                 ? new McpSchema.ClientCapabilities(null, null, null, null)
                 : capabilities;
+    }
+
+    synchronized void touch(long nowMillis, long useSequence) {
+        lastUsed = nowMillis;
+        sequence = useSequence;
+    }
+
+    synchronized long lastUsed() {
+        return lastUsed;
+    }
+
+    synchronized long sequence() {
+        return sequence;
     }
 
     boolean supportsElicitation() {

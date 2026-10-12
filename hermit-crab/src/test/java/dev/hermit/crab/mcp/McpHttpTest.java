@@ -12,7 +12,11 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +24,7 @@ import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -33,6 +38,7 @@ import dev.hermit.common.parse.ShellParser;
 import dev.hermit.crab.cli.CrabCommand;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.gateway.CrabHttpServer;
+import dev.hermit.crab.gateway.RequestBodies;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.store.Actors;
@@ -41,6 +47,7 @@ import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.testing.LegacyOaFixture;
 import dev.hermit.crab.testing.SecretChecks;
+import io.javalin.Javalin;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -244,6 +251,19 @@ class McpHttpTest {
                 assertThat(toolError(declined.get()).path("message").asText()).isEqualTo(McpCalls.REJECTED);
                 assertThat(server.runtime.callLogs().list("bulk_shell", "act_w", 5)).isEmpty();
 
+                AtomicReference<Reply> unchecked = new AtomicReference<>();
+                Thread uncheck = new Thread(() -> unchecked.set(callUnchecked(server, scoped.plaintext(), confirming,
+                        "call_capability", Map.of("name", "bulk_shell__act_w", "arguments", Map.of("text", "nope"), "account", "main"))));
+                uncheck.start();
+                JsonNode form = sse.awaitMethod("elicitation/create");
+                server.post(scoped.plaintext(), confirming, null, """
+                        {"jsonrpc":"2.0","id":"%s","result":{"action":"accept","content":{"confirm":false}}}
+                        """.formatted(form.get("id").asText()));
+                uncheck.join(15_000);
+                assertThat(unchecked.get().json().path("result").path("isError").asBoolean()).isTrue();
+                assertThat(toolError(unchecked.get()).path("code").asText()).isEqualTo("FORBIDDEN");
+                assertThat(server.runtime.callLogs().list("bulk_shell", "act_w", 5)).isEmpty();
+
                 AtomicReference<Reply> accepted = new AtomicReference<>();
                 Thread accept = new Thread(() -> accepted.set(callUnchecked(server, scoped.plaintext(), confirming,
                         "call_capability", Map.of("name", "bulk_shell__act_w", "arguments", Map.of("text", "yes"), "account", "main"))));
@@ -258,6 +278,32 @@ class McpHttpTest {
                 assertThat(server.runtime.callLogs().list("bulk_shell", "act_w", 5)).hasSize(1);
                 SecretChecks.absent(accepted.get().body(), PASSWORD);
             }
+        }
+    }
+
+    @Test
+    void sessionsExpireAfterAnIdleHourAndStayUnderTheCap() throws Exception {
+        assertThat(McpEndpoint.IDLE_LIMIT).isEqualTo(Duration.ofHours(1));
+        assertThat(McpEndpoint.MAX_SESSIONS).isEqualTo(1000);
+        MutableClock clock = new MutableClock();
+        try (SessionServer server = SessionServer.open(temp.resolve("sessions"), clock, 2)) {
+            String key = server.apiKey.plaintext();
+            String kept = server.initialize(key);
+            clock.advance(Duration.ofMinutes(59));
+            assertThat(server.ping(key, kept).status()).isEqualTo(200);
+
+            clock.advance(Duration.ofHours(1));
+            Reply expired = server.ping(key, kept);
+            assertThat(expired.status()).isEqualTo(404);
+            assertThat(expired.json().path("error").path("message").asText()).isEqualTo("session not found");
+
+            String oldest = server.initialize(key);
+            String middle = server.initialize(key);
+            String newest = server.initialize(key);
+            assertThat(server.ping(key, oldest).status()).isEqualTo(404);
+            assertThat(server.ping(key, oldest).json().path("error").path("message").asText()).isEqualTo("session not found");
+            assertThat(server.ping(key, middle).status()).isEqualTo(200);
+            assertThat(server.ping(key, newest).status()).isEqualTo(200);
         }
     }
 
@@ -718,6 +764,104 @@ class McpHttpTest {
 
         String text() {
             return text.toString();
+        }
+    }
+
+    private static final class SessionServer implements AutoCloseable {
+        final CrabRuntime runtime;
+        final McpEndpoint endpoint;
+        final Javalin app;
+        final CreatedApiKey apiKey;
+        final String base;
+        final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+
+        private SessionServer(CrabRuntime runtime, McpEndpoint endpoint, Javalin app, CreatedApiKey apiKey) {
+            this.runtime = runtime;
+            this.endpoint = endpoint;
+            this.app = app;
+            this.apiKey = apiKey;
+            this.base = "http://127.0.0.1:" + app.port();
+        }
+
+        static SessionServer open(Path root, Clock clock, int maxSessions) {
+            CrabRuntime runtime = CrabRuntime.open(
+                    new CrabPaths(root), CrabConfig.defaults().withListen("127.0.0.1", 0), name -> null);
+            McpEndpoint endpoint = new McpEndpoint(runtime, clock, McpEndpoint.IDLE_LIMIT, maxSessions);
+            Javalin app = Javalin.create(config -> {
+                config.showJavalinBanner = false;
+                config.http.maxRequestSize = RequestBodies.MAX_BYTES;
+            });
+            endpoint.register(app);
+            try {
+                CreatedApiKey apiKey = runtime.admin().createApiKey(
+                        "mcp-sessions", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+                app.start("127.0.0.1", 0);
+                return new SessionServer(runtime, endpoint, app, apiKey);
+            } catch (RuntimeException ex) {
+                endpoint.close();
+                runtime.close();
+                throw ex;
+            }
+        }
+
+        String initialize(String key) throws Exception {
+            Reply reply = post(key, null, McpHttpTest.initialize("{}"));
+            if (reply.status() != 200 || reply.header("Mcp-Session-Id") == null) {
+                throw new AssertionError("initialize failed: " + reply.status() + " " + reply.body());
+            }
+            return reply.header("Mcp-Session-Id");
+        }
+
+        Reply ping(String key, String session) throws Exception {
+            return post(key, session, McpHttpTest.request(1, "ping", null));
+        }
+
+        private Reply post(String key, String session, String body) throws Exception {
+            HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(base + "/mcp"))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + key)
+                    .POST(HttpRequest.BodyPublishers.ofString(body));
+            if (session != null) {
+                builder.header("Mcp-Session-Id", session);
+            }
+            HttpResponse<String> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            return new Reply(response.statusCode(), response.body(), response.headers().map());
+        }
+
+        @Override
+        public void close() {
+            endpoint.close();
+            app.stop();
+            runtime.close();
+        }
+    }
+
+    private static final class MutableClock extends Clock {
+        private final AtomicLong millis = new AtomicLong(1_700_000_000_000L);
+
+        void advance(Duration duration) {
+            millis.addAndGet(duration.toMillis());
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return Instant.ofEpochMilli(millis.get());
+        }
+
+        @Override
+        public long millis() {
+            return millis.get();
         }
     }
 }

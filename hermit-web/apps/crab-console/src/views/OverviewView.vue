@@ -90,11 +90,11 @@ onMounted(load)
     </PageHeader>
 
     <el-alert
-      v-if="latestCrab"
+      v-if="latestCrab?.latestVersion"
       type="info"
       show-icon
       :closable="false"
-      :title="`Reef 上有 Crab ${latestCrab.latestVersion} 可用`"
+      :title="`Reef 上有 Crab ${latestCrab?.latestVersion} 可用`"
       class="notice"
     >
       <template v-if="latestCrab.downloadUrl" #default>

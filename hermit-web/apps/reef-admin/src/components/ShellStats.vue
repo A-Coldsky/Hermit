@@ -19,7 +19,7 @@ const failureVersion = ref('')
 
 const published = computed(() => props.versions.filter((v) => v.status === 'PUBLISHED').slice(0, 5))
 const bucket = computed(() => rangeQuery(range.value).bucket)
-const bars = computed(() => toBars(summary.value?.series ?? [], bucket.value))
+const bars = computed(() => toBars(summary.value?.series ?? [], bucket.value, summary.value?.from, summary.value?.to))
 const sum = computed(() => totals(summary.value?.series ?? []))
 const actions = computed(() => totalsByAction(summary.value?.series ?? []))
 
@@ -91,7 +91,7 @@ onMounted(load)
     <div class="hm-card">
       <div class="hm-card-title">
         <span>按能力</span>
-        <span v-if="summary" class="hm-muted small">{{ summary.p95Note }}</span>
+        <span class="hm-muted small">P95 取各小时 P95 的最大值，是近似值</span>
       </div>
       <el-table :data="actions" empty-text="所选范围内没有调用">
         <el-table-column label="能力" min-width="160">

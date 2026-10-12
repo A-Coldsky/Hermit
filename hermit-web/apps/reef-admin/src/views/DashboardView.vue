@@ -18,7 +18,7 @@ const rollbacks = ref<RollbackEvent[]>([])
 
 const published = computed(() => shells.value.filter((s) => s.version).length)
 const week = computed(() => totals(tide.value?.series ?? []))
-const bars = computed(() => toBars(tide.value?.series ?? [], 'day'))
+const bars = computed(() => toBars(tide.value?.series ?? [], 'day', tide.value?.from, tide.value?.to))
 
 async function load() {
   loading.value = true

@@ -14,6 +14,15 @@ const chartHeight = computed(() => props.height ?? 200)
 const max = computed(() => Math.max(1, ...props.points.map((p) => p.success + p.failure)))
 const barWidth = computed(() => (props.points.length ? 100 / props.points.length : 100))
 
+const ticks = computed(() => {
+  const n = props.points.length
+  if (!n) {
+    return []
+  }
+  const picks = n === 1 ? [0] : n < 5 ? [0, n - 1] : [0, Math.floor((n - 1) / 2), n - 1]
+  return picks.map((i) => props.points[i].label)
+})
+
 function heightOf(value: number): number {
   return (value / max.value) * (chartHeight.value - 24)
 }
@@ -49,8 +58,7 @@ function heightOf(value: number): number {
       <span class="fail">失败 {{ points[hovered].failure }}</span>
     </div>
     <div v-if="points.length" class="axis hm-muted">
-      <span>{{ points[0].label }}</span>
-      <span>{{ points[points.length - 1].label }}</span>
+      <span v-for="tick in ticks" :key="tick">{{ tick }}</span>
     </div>
   </div>
 </template>
@@ -83,6 +91,7 @@ function heightOf(value: number): number {
 
 .axis {
   position: absolute;
+  min-height: 16px;
   bottom: 0;
   left: 0;
   right: 0;

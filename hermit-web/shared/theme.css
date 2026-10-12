@@ -67,6 +67,10 @@ pre,
   margin-top: 16px;
 }
 
+.hm-grid > .hm-card + .hm-card {
+  margin-top: 0;
+}
+
 .hm-card-title {
   font-size: 15px;
   font-weight: 600;

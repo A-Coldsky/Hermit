@@ -18,18 +18,27 @@ export function bucketLabel(value: string, bucket: string): string {
   return bucket === 'hour' ? `${day} ${pad(date.getHours())}:00` : day
 }
 
-export function toBars(series: TidePoint[], bucket: string): BarPoint[] {
-  const byBucket = new Map<string, BarPoint>()
+export function toBars(series: TidePoint[], bucket: string, from?: string, to?: string): BarPoint[] {
+  const step = bucket === 'hour' ? 3_600_000 : 86_400_000
+  const byBucket = new Map<number, BarPoint>()
+  const start = from ? Math.floor(new Date(from).getTime() / step) * step : NaN
+  const end = to ? new Date(to).getTime() : NaN
+  if (Number.isFinite(start) && Number.isFinite(end) && (end - start) / step <= 24 * 92) {
+    for (let t = start; t < end; t += step) {
+      byBucket.set(t, { label: bucketLabel(new Date(t).toISOString(), bucket), success: 0, failure: 0 })
+    }
+  }
   for (const point of series) {
-    let bar = byBucket.get(point.bucketStart)
+    const t = new Date(point.bucketStart).getTime()
+    let bar = byBucket.get(t)
     if (!bar) {
       bar = { label: bucketLabel(point.bucketStart, bucket), success: 0, failure: 0 }
-      byBucket.set(point.bucketStart, bar)
+      byBucket.set(t, bar)
     }
     bar.success += point.success
     bar.failure += point.failure
   }
-  return [...byBucket.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, bar]) => bar)
+  return [...byBucket.entries()].sort(([a], [b]) => a - b).map(([, bar]) => bar)
 }
 
 export function totalsByAction(series: TidePoint[]): ActionTotals[] {

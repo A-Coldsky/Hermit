@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.hermit.reef.security.AgentAccessFilter;
 import dev.hermit.reef.testsupport.ReefTestConfig;
 import dev.hermit.reef.testsupport.TestDataDirs;
+import java.net.URI;
 import java.util.Locale;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -65,6 +66,13 @@ class AgentTokenTest {
     }
 
     @Test
+    void obfuscatedAgentPathsCannotSkipTheAccessCheck() throws Exception {
+        assertNotOk(URI.create("http://localhost//agent/version"));
+        assertNotOk(URI.create("http://localhost/agent;x=1/version"));
+        assertNotOk(URI.create("http://localhost/agent/%2e%2e/api/admin/me"));
+    }
+
+    @Test
     void matchingTokenReturnsTheConfiguredVersion() throws Exception {
         mockMvc.perform(get("/agent/version")
                         .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE.toUpperCase(Locale.ROOT))
@@ -76,6 +84,16 @@ class AgentTokenTest {
                 .andExpect(jsonPath("$.traceId").value("trace-agent-ok"))
                 .andExpect(jsonPath("$.data.latestVersion").value("1.2.3"))
                 .andExpect(jsonPath("$.data.downloadUrl").value("https://example.invalid/crab.jar"));
+    }
+
+    private void assertNotOk(URI uri) throws Exception {
+        int withoutCredentials = mockMvc.perform(get(uri)).andReturn().getResponse().getStatus();
+        int tokenWithoutInstance = mockMvc.perform(get(uri).header(AgentAccessFilter.TOKEN_HEADER, TOKEN))
+                .andReturn()
+                .getResponse()
+                .getStatus();
+        assertThat(withoutCredentials).isIn(400, 401, 403);
+        assertThat(tokenWithoutInstance).isIn(400, 401, 403);
     }
 
     private MvcResult version(String token, String traceId) throws Exception {

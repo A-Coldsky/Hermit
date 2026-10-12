@@ -10,13 +10,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.regex.Pattern;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 10)
+/**
+ * 只挂在 {@code /agent/**} 那条安全链上，和 {@code securityMatcher} 用同一套路径匹配。
+ * 不注册成全局 Servlet 过滤器，避免在防火墙规范化路径之前用原始 URI 做判断。
+ */
 public class AgentAccessFilter extends OncePerRequestFilter {
 
     public static final String INSTANCE_HEADER = "X-Hermit-Instance";
@@ -32,11 +31,6 @@ public class AgentAccessFilter extends OncePerRequestFilter {
     public AgentAccessFilter(ReefProperties properties, ApiResponseWriter writer) {
         this.properties = properties;
         this.writer = writer;
-    }
-
-    @Override
-    protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !pathWithinApplication(request).startsWith("/agent/");
     }
 
     @Override
@@ -58,14 +52,5 @@ public class AgentAccessFilter extends OncePerRequestFilter {
     private static String header(HttpServletRequest request, String name) {
         String value = request.getHeader(name);
         return value == null ? "" : value;
-    }
-
-    static String pathWithinApplication(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        String context = request.getContextPath();
-        if (context != null && !context.isEmpty() && uri.startsWith(context)) {
-            return uri.substring(context.length());
-        }
-        return uri;
     }
 }

@@ -3,6 +3,8 @@ package dev.hermit.reef;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.hermit.reef.admin.LoginService;
+import dev.hermit.reef.retention.PurgeCounts;
 import dev.hermit.reef.retention.RetentionJob;
 import dev.hermit.reef.retention.RetentionService;
 import dev.hermit.reef.testsupport.AdjustableClock;
@@ -55,6 +57,7 @@ class StorageTest {
     void resetRows() {
         clock.setInstant(ReefTestConfig.START);
         jdbc.update("DELETE FROM failure_reports");
+        jdbc.update("DELETE FROM admin_login_failures");
         jdbc.update("DELETE FROM rollback_events");
         jdbc.update("DELETE FROM hourly_counts");
         jdbc.update("DELETE FROM shell_versions");
@@ -138,7 +141,22 @@ class StorageTest {
         assertThat(summaries("failure_reports")).containsExactlyInAnyOrder("boundary-failure", "new-failure");
         assertThat(reasons()).containsExactly("new-rollback");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hourly_counts", Integer.class)).isEqualTo(1);
-        assertThat(retentionService.purge()).isEqualTo(new dev.hermit.reef.retention.PurgeCounts(0, 0));
+        assertThat(retentionService.purge()).isEqualTo(new PurgeCounts(0, 0, 0));
+    }
+
+    @Test
+    void retentionDeletesLoginFailuresOlderThanTheLockWindow() {
+        Instant now = ReefTestConfig.START;
+        clock.setInstant(now);
+        Instant windowStart = now.minus(LoginService.LOCK_WINDOW);
+        insertLoginFailure(windowStart.minusSeconds(1));
+        insertLoginFailure(windowStart);
+        insertLoginFailure(windowStart.plusSeconds(1));
+
+        assertThat(retentionService.purge().loginFailures()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM admin_login_failures", Integer.class)).isEqualTo(2);
+        Timestamp oldest = jdbc.queryForObject("SELECT MIN(failed_at) FROM admin_login_failures", Timestamp.class);
+        assertThat(oldest.toInstant()).isEqualTo(windowStart);
     }
 
     private void insertShellVersion(String shell, String version, String status) {
@@ -165,6 +183,13 @@ class StorageTest {
                 Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "1.0.0", "trace-1",
                 "legacy_oa", "1.0.0", "list_todo", 1, "request", "UPSTREAM_ERROR", summary,
                 Timestamp.from(receivedAt));
+    }
+
+    private void insertLoginFailure(Instant failedAt) {
+        jdbc.update(
+                "INSERT INTO admin_login_failures (username, failed_at) VALUES (?, ?)",
+                "guessed-user",
+                Timestamp.from(failedAt));
     }
 
     private void insertRollback(Instant receivedAt, String reason) {

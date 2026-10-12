@@ -286,22 +286,40 @@ class AdminApiTest {
     }
 
     @Test
-    void errorsUseTheEnvelopeAndDoNotLeakInternals() throws Exception {
-        mockMvc.perform(get("/api/no-such").header(TraceIds.HEADER, "trace-from-caller"))
-                .andExpect(status().isNotFound())
+    void unmatchedPathsAreDenied() throws Exception {
+        mockMvc.perform(get("/api/other").header(TraceIds.HEADER, "trace-from-caller"))
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
+                .andExpect(jsonPath("$.error.message").value("unauthorized"))
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.traceId").value("trace-from-caller"));
+        mockMvc.perform(get("/anything").header(TraceIds.HEADER, "trace-from-caller"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
+                .andExpect(jsonPath("$.error.message").value("unauthorized"))
+                .andExpect(jsonPath("$.data").value(nullValue()))
+                .andExpect(jsonPath("$.traceId").value("trace-from-caller"));
+        mockMvc.perform(get("/api/other").header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.error.message").value("forbidden"));
         mockMvc.perform(get("/h2-console"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    void errorsUseTheEnvelopeAndDoNotLeakInternals() throws Exception {
         mockMvc.perform(get("/api/admin/login"))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get("/api/admin/login").header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
-        mockMvc.perform(get("/api/test/boom").header(TraceIds.HEADER, TRACE))
+        mockMvc.perform(get("/api/admin/boom")
+                        .header(TraceIds.HEADER, TRACE)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.error.code").value("INTERNAL"))
                 .andExpect(jsonPath("$.error.message").value("internal error"))

@@ -31,6 +31,12 @@ class CrabDatabaseTest {
                     "API_KEYS",
                     "CONFIG_AUDIT",
                     "SCHEMA_VERSION",
+                    "CALL_LOGS",
+                    "STEP_LOGS",
+                    "IDEMPOTENCY",
+                    "SESSIONS",
+                    "CAPABILITY_SWITCHES",
+                    "DEBUG_STATE",
                     "VERSION_SUCCESS",
                     "PINNED_ROLLBACKS",
                     "MISMATCH_STREAK",
@@ -42,7 +48,7 @@ class CrabDatabaseTest {
                     "HOURLY_COUNTS",
                     "REPORT_META",
                     "PENDING_CREDENTIAL_DELETES");
-            assertThat(versions(fixture)).containsExactly(1, 3);
+            assertThat(versions(fixture)).containsExactly(1, 2, 3);
             assertThat(columnType(fixture, "CREDENTIALS", "CIPHERTEXT")).contains("BINARY");
         } finally {
             fixture.close();
@@ -52,7 +58,44 @@ class CrabDatabaseTest {
             Account account = reopened.accounts.resolve(Origin.OFFICIAL, "oa", Optional.of("alice"));
             assertThat(account.account()).isEqualTo("alice");
             assertThat(account.defaultAccount()).isTrue();
-            assertThat(versions(reopened)).containsExactly(1, 3);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3);
+        }
+    }
+
+    @Test
+    void appliesVersionTwoWhenVersionThreeIsAlreadyRecorded() throws Exception {
+        StoreFixture fixture = StoreFixture.open(temp);
+        try {
+            forgetVersionTwo(fixture);
+            assertThat(versions(fixture)).containsExactly(1, 3);
+            assertThat(tableNames(fixture)).doesNotContain("CALL_LOGS", "SESSIONS", "IDEMPOTENCY");
+            assertThat(tableNames(fixture)).contains("REPORT_QUEUE", "SYNC_STATE");
+        } finally {
+            fixture.close();
+        }
+
+        try (StoreFixture reopened = StoreFixture.open(temp)) {
+            assertThat(versions(reopened)).containsExactly(1, 2, 3);
+            assertThat(tableNames(reopened)).contains(
+                    "CALL_LOGS", "STEP_LOGS", "IDEMPOTENCY", "SESSIONS", "CAPABILITY_SWITCHES", "DEBUG_STATE",
+                    "REPORT_QUEUE", "SYNC_STATE");
+        }
+    }
+
+    /**
+     * Leaves a database that recorded versions 1 and 3 and has no version-2 tables.
+     * Version 3 tables stay; version 2 must not need them.
+     */
+    private static void forgetVersionTwo(StoreFixture fixture) throws Exception {
+        try (Connection connection = fixture.dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("DROP TABLE IF EXISTS step_logs");
+            statement.execute("DROP TABLE IF EXISTS call_logs");
+            statement.execute("DROP TABLE IF EXISTS idempotency");
+            statement.execute("DROP TABLE IF EXISTS sessions");
+            statement.execute("DROP TABLE IF EXISTS capability_switches");
+            statement.execute("DROP TABLE IF EXISTS debug_state");
+            statement.execute("DELETE FROM schema_version WHERE version = 2");
         }
     }
 

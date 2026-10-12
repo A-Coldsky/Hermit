@@ -5,6 +5,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * Local Crab directories. The root defaults to {@code ~/.hermit}; tests pass a temporary root.
@@ -15,6 +16,24 @@ public final class CrabPaths {
 
     public CrabPaths() {
         this(Path.of(System.getProperty("user.home"), ".hermit"));
+    }
+
+    /** {@code HERMIT_HOME} when it is non-blank; otherwise {@link #CrabPaths()}. */
+    public static CrabPaths fromEnvironment(Function<String, String> environment) {
+        Objects.requireNonNull(environment, "environment");
+        String home = environment.apply("HERMIT_HOME");
+        if (home == null || home.isBlank()) {
+            return new CrabPaths();
+        }
+        return new CrabPaths(Path.of(home));
+    }
+
+    public Path configFile() {
+        return root.resolve("config.yml");
+    }
+
+    public Path instanceIdFile() {
+        return data().resolve("instance-id");
     }
 
     public CrabPaths(Path root) {

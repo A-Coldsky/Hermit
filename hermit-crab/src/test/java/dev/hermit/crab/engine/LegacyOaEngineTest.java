@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Timeout;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.parse.ShellParser;
 import dev.hermit.crab.store.Origin;
+import dev.hermit.crab.testing.LegacyOaFixture;
 import dev.hermit.crab.testing.SecretChecks;
 
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -462,6 +463,24 @@ class LegacyOaEngineTest {
                 throw new AssertionError("session value was not masked");
             }
             assertThat(data.get("note")).isEqualTo("待办");
+        }
+    }
+
+    @Test
+    void testLoginRunsAuthStepsOnly() throws Exception {
+        try (Running running = Running.start()) {
+            ExecutionResult result = running.engine.testLogin(EngineTestSupport.request(
+                    Origin.OFFICIAL,
+                    "legacy_oa",
+                    "test_login",
+                    "alice",
+                    Map.of(),
+                    EngineTestSupport.account("alice", EngineTestSupport.PASSWORD, running.fixture.baseUrl())));
+            assertThat(result.success()).isTrue();
+            assertThat(data(result)).containsEntry("ok", true);
+            assertThat(result.stepLogs()).isEmpty();
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
+            assertThat(running.fixture.count("GET", "/todo/list.aspx")).isZero();
         }
     }
 

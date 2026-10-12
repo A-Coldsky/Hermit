@@ -7,6 +7,8 @@ package dev.hermit.crab.store;
 public final class Actors {
     public static final String CLI = "cli";
     public static final String CONSOLE = "console";
+    /** Background sync. Not taken from a request. */
+    public static final String SYNC = "sync";
 
     private Actors() {
     }

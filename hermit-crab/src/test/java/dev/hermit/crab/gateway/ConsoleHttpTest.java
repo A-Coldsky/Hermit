@@ -49,6 +49,13 @@ class ConsoleHttpTest {
             TestServer.Reply sync = server.console("POST", "/console/api/sync", "{}", true);
             assertThat(sync.status()).isEqualTo(409);
             assertThat(sync.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            TestServer.Reply syncStatus = server.console("GET", "/console/api/sync", null, true);
+            assertThat(syncStatus.status()).isEqualTo(409);
+            TestServer.Reply preview = server.console("GET", "/console/api/reports/preview", null, true);
+            assertThat(preview.status()).isEqualTo(409);
+            assertThat(preview.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            TestServer.Reply send = server.console("POST", "/console/api/reports/send", "{}", true);
+            assertThat(send.status()).isEqualTo(409);
 
             TestServer.Reply enabled = server.console(
                     "POST", "/console/api/capabilities/legacy_oa/list_todo/enable", "{}", true);

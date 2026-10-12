@@ -23,8 +23,10 @@ import dev.hermit.crab.config.ConfigFileException;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.config.CrabConfigLoader;
 import dev.hermit.crab.engine.ShellRejectedException;
-import dev.hermit.crab.gateway.CrabHttpServer;
 import dev.hermit.crab.runtime.CrabRuntime;
+import dev.hermit.crab.runtime.CrabServer;
+import dev.hermit.crab.sync.ShellOutcome;
+import dev.hermit.crab.sync.SyncReport;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.Actors;
@@ -42,6 +44,7 @@ public final class CrabCommand {
     private static final String USAGE = """
             usage:
               crab serve
+              crab sync
               crab account list <shell>
               crab account add|remove|default <shell> <name>
               crab credential set <shell> <account> <field> [--from-env VAR]
@@ -92,6 +95,7 @@ public final class CrabCommand {
         }
         return switch (args[0]) {
             case "serve" -> serve(args, env, out, err);
+            case "sync" -> sync(args, env, out, err);
             case "account" -> account(args, env, out, err);
             case "credential" -> credential(args, env, in, out, err);
             case "config" -> config(args, env, out, err);
@@ -108,18 +112,15 @@ public final class CrabCommand {
             err.print(USAGE);
             return 1;
         }
-        CrabRuntime runtime = open(env);
         boolean handedOff = false;
+        CrabServer server = null;
         try {
-            runtime.loadInstalledShells();
-            CrabHttpServer server = new CrabHttpServer(runtime);
-            server.start();
-            runtime.startBackground();
-            out.println("listening on " + runtime.config().serverHost() + ":" + server.port());
+            server = CrabServer.start(env);
+            out.println("listening on " + server.runtime().config().serverHost() + ":" + server.port());
             CountDownLatch latch = new CountDownLatch(1);
+            CrabServer running = server;
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                server.close();
-                runtime.close();
+                running.close();
                 latch.countDown();
             }, "hermit-crab-shutdown"));
             handedOff = true;
@@ -128,14 +129,35 @@ public final class CrabCommand {
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 server.close();
-                runtime.close();
                 return 1;
             }
             return 0;
         } finally {
-            if (!handedOff) {
-                runtime.close();
+            if (!handedOff && server != null) {
+                server.close();
             }
+        }
+    }
+
+    private int sync(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 1) {
+            err.print(USAGE);
+            return 1;
+        }
+        try (CrabRuntime runtime = open(env)) {
+            runtime.loadInstalledShells();
+            if (runtime.shellSync() == null) {
+                err.println("reef.url is not configured");
+                return 1;
+            }
+            SyncReport report = runtime.syncOnce(Actors.CLI).orElseThrow();
+            if (report.notModified()) {
+                out.println("not modified");
+            }
+            for (ShellOutcome outcome : report.shells()) {
+                out.println(outcome.shell() + " " + text(outcome.version()) + " " + outcome.kind());
+            }
+            return 0;
         }
     }
 
@@ -225,7 +247,12 @@ public final class CrabCommand {
         String field = parsed.positionals.get(4);
         CrabRuntime runtime = open(env);
         try {
-            ShellDoc doc = runtime.installedShells().load(shell);
+            runtime.loadInstalledShells();
+            ShellDoc doc = runtime.registry().find(shell).orElse(null);
+            if (doc == null) {
+                err.println("shell is not installed");
+                return 1;
+            }
             if (doc.credentials() == null || !doc.credentials().containsKey(field)) {
                 err.println("unknown credential field");
                 return 1;
@@ -463,10 +490,9 @@ public final class CrabCommand {
 
     private int withDeclaration(Function<String, String> env, String shell, PrintStream err, DeclaredTask task) {
         return withRuntime(env, runtime -> {
-            ShellDoc doc;
-            try {
-                doc = runtime.installedShells().load(shell);
-            } catch (IllegalArgumentException ex) {
+            runtime.loadInstalledShells();
+            ShellDoc doc = runtime.registry().find(shell).orElse(null);
+            if (doc == null) {
                 err.println("shell is not installed");
                 return 1;
             }
@@ -478,6 +504,10 @@ public final class CrabCommand {
         CrabPaths paths = CrabPaths.fromEnvironment(env);
         CrabConfig config = CrabConfigLoader.load(paths);
         return CrabRuntime.open(paths, config, env);
+    }
+
+    private static String text(String value) {
+        return value == null ? "-" : value;
     }
 
     private static String clientMessage(RuntimeException ex) {

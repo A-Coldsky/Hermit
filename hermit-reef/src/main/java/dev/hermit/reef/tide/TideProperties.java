@@ -18,6 +18,7 @@ public class TideProperties {
     private int quietHours = 24;
     private int dedupHours = 6;
     private String webhookUrl = "";
+    private String evaluateCron = "0 */5 * * * *";
 
     @PostConstruct
     void validate() {
@@ -30,8 +31,10 @@ public class TideProperties {
         if (noBaselineFailureRate == null || noBaselineFailureRate.signum() < 0) {
             throw new IllegalStateException("hermit.reef.tide.no-baseline-failure-rate must be >= 0");
         }
-        if (baselineWindowDays < 1 || surgeWindowMinutes < 1 || surgeMinCount < 1 || quietHours < 1
-                || dedupHours < 1) {
+        if (quietHours < 0) {
+            throw new IllegalStateException("hermit.reef.tide.quiet-hours must be >= 0");
+        }
+        if (baselineWindowDays < 1 || surgeWindowMinutes < 1 || surgeMinCount < 1 || dedupHours < 1) {
             throw new IllegalStateException("hermit.reef.tide windows and surge-min-count must be positive");
         }
     }
@@ -113,5 +116,13 @@ public class TideProperties {
 
     public void setWebhookUrl(String webhookUrl) {
         this.webhookUrl = webhookUrl;
+    }
+
+    public String getEvaluateCron() {
+        return evaluateCron;
+    }
+
+    public void setEvaluateCron(String evaluateCron) {
+        this.evaluateCron = evaluateCron;
     }
 }

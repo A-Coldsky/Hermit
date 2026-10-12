@@ -26,6 +26,7 @@ final class ShellTexts {
                 version: %s
                 driver: http
                 min_crab_version: %s
+                base_url: http://127.0.0.1:9/
                 title: 标题
                 description: 说明
                 credentials:

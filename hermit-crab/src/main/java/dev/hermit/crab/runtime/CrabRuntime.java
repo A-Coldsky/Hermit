@@ -1,10 +1,21 @@
 package dev.hermit.crab.runtime;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.PublicKey;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -12,18 +23,24 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ShellDoc;
 import dev.hermit.crab.config.CrabConfig;
+import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.EngineSettings;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.engine.ShellRegistry;
+import dev.hermit.crab.report.ReportQueue;
+import dev.hermit.crab.report.ReportSender;
+import dev.hermit.crab.report.ReportSettings;
 import dev.hermit.crab.secure.CredentialCipher;
 import dev.hermit.crab.secure.MasterKeyProvider;
 import dev.hermit.crab.store.AccountStore;
+import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyService;
 import dev.hermit.crab.store.AuditKind;
 import dev.hermit.crab.store.AuditLog;
@@ -37,11 +54,18 @@ import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.store.ShellConfigStore;
+import dev.hermit.crab.sync.CredentialDeclarationChange;
+import dev.hermit.crab.sync.InstalledShells;
+import dev.hermit.crab.sync.LoadReport;
+import dev.hermit.crab.sync.RollbackGuard;
+import dev.hermit.crab.sync.ShellSync;
+import dev.hermit.crab.sync.SyncReport;
+import dev.hermit.crab.sync.SyncSettings;
 
 /**
- * Composition root for one Crab process. Slice 2d attaches {@link ShellSync}, {@link ReportQueue},
- * and {@link RollbackGuard}; until then sync reports {@code NOT_CONFIGURED} and the per-call hooks
- * stay unset. Listeners run after every engine execution.
+ * Composition root for one Crab process. {@link #loadInstalledShells()} verifies packages when a
+ * Reef public key is configured and binds sync, rollback, and report hooks when {@code reef.url}
+ * is set. Listeners run after every engine execution.
  */
 public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate {
     private static final Logger LOG = Logger.getLogger(CrabRuntime.class.getName());
@@ -68,10 +92,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final Set<String> switchDisabled;
     private final Invoker invoker;
     private final ShellAdmin admin;
-    private final InstalledShellReader installedShells;
     private final String instanceId;
     private final AtomicBoolean closed = new AtomicBoolean();
-    private volatile ShellSync shellSync;
+    private final AtomicBoolean prepared = new AtomicBoolean();
+    private PublicKey reefKey;
+    private ShellSync shellSync;
+    private ReportQueue reportQueue;
+    private ReportSender reportSender;
+    private volatile SyncReport lastSync;
     private ScheduledExecutorService scheduler;
 
     public interface ExecutionListener {
@@ -105,7 +133,6 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.switchDisabled.addAll(switches.disabledKeys(Origin.OFFICIAL));
         this.invoker = new Invoker(registry, accounts, vault, shellConfig, engine, callLogs, idempotency, this);
         this.admin = new ShellAdmin(database.dataSource(), accounts, vault, shellConfig, apiKeys, sessions, engine);
-        this.installedShells = new InstalledShellReader(paths);
         this.instanceId = InstanceIds.loadOrCreate(paths);
     }
 
@@ -161,14 +188,102 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         return settings;
     }
 
-    public void loadInstalledShells() {
-        for (ShellDoc doc : installedShells.loadAll()) {
-            registry.put(doc);
+    /**
+     * Parses the Reef key and, when {@code reef.url} is set, builds sync and report objects.
+     * Safe to call more than once.
+     */
+    public void prepare() {
+        if (!prepared.compareAndSet(false, true)) {
+            return;
+        }
+        this.reefKey = ReefPublicKeys.read(config.reefPublicKey(), paths.root());
+        if (config.reefUrl() == null) {
+            return;
+        }
+        if (reefKey == null) {
+            throw new IllegalStateException("reef.url is set but reef.public_key is missing");
+        }
+        URI reefUrl = reefUri(config.reefUrl());
+        UUID instance = UUID.fromString(instanceId);
+        Optional<String> token = Optional.ofNullable(config.reefToken()).filter(value -> !value.isBlank());
+        SyncSettings syncSettings = new SyncSettings(
+                reefUrl, token, reefKey, Duration.ofSeconds(config.syncIntervalSeconds()), instance);
+        this.shellSync = new ShellSync(syncSettings, paths, registry, vault, database.dataSource(), clock);
+        ReportSettings reportSettings = new ReportSettings(
+                config.reportEnabled(), reefUrl, token, instance, CrabVersion.CURRENT.toString());
+        this.reportQueue = new ReportQueue(reportSettings, database.dataSource(), clock);
+        RollbackGuard rollbackGuard = new RollbackGuard(
+                paths, reefKey, registry, database.dataSource(), reportQueue, clock);
+        invoker.bindHooks(reportQueue, rollbackGuard);
+        if (config.reportEnabled()) {
+            this.reportSender = new ReportSender(reportSettings, reportQueue, clock);
         }
     }
 
-    public InstalledShellReader installedShells() {
-        return installedShells;
+    public LoadReport loadInstalledShells() {
+        prepare();
+        if (reefKey == null) {
+            if (hasInstalledPointer()) {
+                throw new IllegalStateException("reef.public_key is required to verify installed shells");
+            }
+            return new LoadReport(List.of(), List.of());
+        }
+        paths.shells();
+        return InstalledShells.loadAll(paths, reefKey, registry);
+    }
+
+    public javax.sql.DataSource dataSource() {
+        return database.dataSource();
+    }
+
+    public ShellSync shellSync() {
+        return shellSync;
+    }
+
+    public ReportSender reportSender() {
+        return reportSender;
+    }
+
+    public boolean reportsConfigured() {
+        return config.reportEnabled() && reportSender != null;
+    }
+
+    public Optional<SyncReport> lastSync() {
+        return Optional.ofNullable(lastSync);
+    }
+
+    public Optional<SyncReport> syncOnce(String requestedBy) {
+        prepare();
+        if (shellSync == null) {
+            return Optional.empty();
+        }
+        SyncReport report = shellSync.syncOnce();
+        lastSync = report;
+        recordCredentialChanges(report);
+        if (requestedBy != null) {
+            AuditLog.record(database.dataSource(), requestedBy, AuditKind.SYNC_REQUESTED, "sync", "{}");
+        }
+        return Optional.of(report);
+    }
+
+    void syncQuietly() {
+        try {
+            syncOnce(null);
+        } catch (Exception ex) {
+            LOG.warning("shell sync failed: " + ex.getClass().getName());
+        }
+    }
+
+    void flushQuietly() {
+        ReportSender sender = reportSender;
+        if (sender == null) {
+            return;
+        }
+        try {
+            sender.flushOnce();
+        } catch (Exception ex) {
+            LOG.warning("report flush failed: " + ex.getClass().getName());
+        }
     }
 
     public Optional<Action> enabledAction(String shell, String action) {
@@ -207,28 +322,6 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         invoker.addListener(listener);
     }
 
-    public void attach(ShellSync shellSync) {
-        this.shellSync = shellSync;
-    }
-
-    public void attach(ReportQueue reportQueue) {
-        invoker.setReportQueue(reportQueue);
-    }
-
-    public void attach(RollbackGuard rollbackGuard) {
-        invoker.setRollbackGuard(rollbackGuard);
-    }
-
-    public boolean syncNow(String actor) {
-        ShellSync sync = shellSync;
-        if (sync == null) {
-            return false;
-        }
-        sync.syncNow();
-        AuditLog.record(database.dataSource(), actor, AuditKind.SYNC_REQUESTED, "sync", "{}");
-        return true;
-    }
-
     public void startBackground() {
         purgeExpired();
         if (scheduler == null) {
@@ -238,10 +331,6 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 return thread;
             });
             scheduler.scheduleWithFixedDelay(this::safePurge, 1, 1, TimeUnit.HOURS);
-        }
-        ShellSync sync = shellSync;
-        if (sync != null) {
-            sync.start();
         }
     }
 
@@ -259,14 +348,6 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (scheduler != null) {
             scheduler.shutdownNow();
         }
-        ShellSync sync = shellSync;
-        if (sync != null) {
-            try {
-                sync.close();
-            } catch (Exception ex) {
-                LOG.warning("shell sync close failed: " + ex.getClass().getName());
-            }
-        }
         sessions.close();
         database.close();
     }
@@ -277,5 +358,50 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         } catch (RuntimeException ex) {
             LOG.warning("retention failed: " + ex.getClass().getName());
         }
+    }
+
+    private void recordCredentialChanges(SyncReport report) {
+        for (CredentialDeclarationChange change : report.credentialChanges()) {
+            LinkedHashMap<String, Object> detail = new LinkedHashMap<>();
+            detail.put("addedRequired", new ArrayList<>(new TreeSet<>(change.addedRequired())));
+            detail.put("removed", new ArrayList<>(new TreeSet<>(change.removed())));
+            AuditLog.record(
+                    database.dataSource(),
+                    Actors.SYNC,
+                    AuditKind.CREDENTIAL_DECLARATION,
+                    change.shell(),
+                    ApiJson.write(detail));
+        }
+    }
+
+    private boolean hasInstalledPointer() {
+        Path root = paths.shells();
+        if (!Files.isDirectory(root)) {
+            return false;
+        }
+        try (Stream<Path> children = Files.list(root)) {
+            for (Path child : children.filter(Files::isDirectory).toList()) {
+                if (Files.isRegularFile(child.resolve("current"))) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (IOException ex) {
+            throw new UncheckedIOException("cannot list installed shells", ex);
+        }
+    }
+
+    private static URI reefUri(String text) {
+        URI uri;
+        try {
+            uri = URI.create(text);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalStateException("reef.url is not a usable http(s) address");
+        }
+        String scheme = uri.getScheme();
+        if (scheme == null || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
+            throw new IllegalStateException("reef.url is not a usable http(s) address");
+        }
+        return uri;
     }
 }

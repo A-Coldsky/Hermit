@@ -115,9 +115,10 @@ class AlertEvaluationTest {
         assertThat(properties.getQuietHours()).isEqualTo(24);
         assertThat(properties.getDedupHours()).isEqualTo(6);
         assertThat(properties.webhookUrlOrNull()).isNull();
+        assertThat(properties.getEvaluateCron()).isEqualTo("0 */5 * * * *");
         assertThat(TideWebhookClient.TIMEOUT).isEqualTo(Duration.ofSeconds(5));
         Scheduled scheduled = AlertJob.class.getMethod("evaluateAlerts").getAnnotation(Scheduled.class);
-        assertThat(scheduled.cron()).isEqualTo("0 */5 * * * *");
+        assertThat(scheduled.cron()).isEqualTo("${hermit.reef.tide.evaluate-cron:0 */5 * * * *}");
         assertThat(scheduled.zone()).isEqualTo("UTC");
     }
 

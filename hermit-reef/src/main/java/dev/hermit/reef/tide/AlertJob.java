@@ -12,7 +12,7 @@ public class AlertJob {
         this.alertService = alertService;
     }
 
-    @Scheduled(cron = "0 */5 * * * *", zone = "UTC")
+    @Scheduled(cron = "${hermit.reef.tide.evaluate-cron:0 */5 * * * *}", zone = "UTC")
     public void evaluateAlerts() {
         alertService.evaluate();
     }

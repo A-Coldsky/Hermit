@@ -28,8 +28,8 @@ final class Checks {
     }
 
     static String actor(String actor) {
-        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
-            throw new IllegalArgumentException("actor must be cli or console");
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor) && !Actors.SYNC.equals(actor)) {
+            throw new IllegalArgumentException("actor must be cli, console, or sync");
         }
         return actor;
     }

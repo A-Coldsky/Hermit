@@ -19,7 +19,9 @@ import dev.hermit.crab.engine.ExecutionRequest;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.ShellRegistry;
+import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.secure.Redactor;
+import dev.hermit.crab.sync.RollbackGuard;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.AccountStore;
@@ -71,11 +73,8 @@ public final class Invoker {
         listeners.add(listener);
     }
 
-    public void setReportQueue(ReportQueue reportQueue) {
+    public void bindHooks(ReportQueue reportQueue, RollbackGuard rollbackGuard) {
         this.reportQueue = reportQueue;
-    }
-
-    public void setRollbackGuard(RollbackGuard rollbackGuard) {
         this.rollbackGuard = rollbackGuard;
     }
 
@@ -209,10 +208,11 @@ public final class Invoker {
                 LOG.warning("execution listener failed: " + ex.getClass().getName());
             }
         }
+        String version = result.shellVersion() == null ? "" : result.shellVersion();
         ReportQueue reports = reportQueue;
         if (reports != null) {
             try {
-                reports.record(result, invocation.origin(), invocation.shell(), invocation.action(), invocation.account());
+                reports.record(invocation.shell(), version, invocation.action(), result);
             } catch (RuntimeException ex) {
                 LOG.warning("report hook failed: " + ex.getClass().getName());
             }
@@ -220,7 +220,7 @@ public final class Invoker {
         RollbackGuard guard = rollbackGuard;
         if (guard != null) {
             try {
-                guard.observe(result, invocation.origin(), invocation.shell(), invocation.action(), invocation.account());
+                guard.onResult(invocation.shell(), version, result);
             } catch (RuntimeException ex) {
                 LOG.warning("rollback hook failed: " + ex.getClass().getName());
             }

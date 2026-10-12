@@ -27,6 +27,25 @@ class RedactorTest {
     }
 
     @Test
+    void redactsUrlEncodedSecretsWithBothSpaceEncodings() {
+        String secret = "p@ss!";
+        Redactor redactor = Redactor.of(Set.of(secret));
+        String query = "password=p%40ss%21&next=1";
+        assertThat(redactor.redact(query)).isEqualTo("password=***&next=1");
+        SecretChecks.absent(redactor.redact(query), secret);
+        SecretChecks.absent(redactor.redact(query), "p%40ss%21");
+
+        String spaced = "a b!c";
+        Redactor spacedRedactor = Redactor.of(Set.of(spaced));
+        assertThat(spacedRedactor.redact("q=a+b%21c")).isEqualTo("q=***");
+        assertThat(spacedRedactor.redact("q=a%20b%21c")).isEqualTo("q=***");
+        assertThat(spacedRedactor.redact("q=a b!c")).isEqualTo("q=***");
+        SecretChecks.absent(spacedRedactor.redact("a+b%21c a%20b%21c a b!c"), spaced);
+        SecretChecks.absent(spacedRedactor.redact("a+b%21c a%20b%21c a b!c"), "a+b%21c");
+        SecretChecks.absent(spacedRedactor.redact("a+b%21c a%20b%21c a b!c"), "a%20b%21c");
+    }
+
+    @Test
     void replacementIsLiteralNotARegularExpression() {
         Redactor redactor = Redactor.of(Set.of("a.b+", "pa$$"));
         assertThat(redactor.redact("a.b+ axb pa$$")).isEqualTo("*** axb ***");

@@ -9,9 +9,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Stream;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -140,6 +142,48 @@ class MasterKeyProviderTest {
     }
 
     @Test
+    void failedDefaultWriteLeavesNoMasterKeyAndTheNextLoadGeneratesOne() throws IOException {
+        CrabPaths paths = new CrabPaths(temp);
+        String sentinel = "HermitKeyWriteFailed-do-not-keep";
+        Throwable thrown = catchThrowable(() -> MasterKeyProvider.load(
+                paths,
+                Optional.empty(),
+                name -> null,
+                (tempFile, key) -> {
+                    Files.writeString(tempFile, "partial");
+                    throw new IOException(sentinel);
+                }));
+
+        assertThat(thrown).isInstanceOf(MasterKeyException.class);
+        assertThat(thrown.getCause()).isNull();
+        SecretChecks.absent(thrown, sentinel);
+        assertThat(paths.masterKeyFile()).doesNotExist();
+        assertThat(dataFiles(paths)).isEmpty();
+
+        byte[] generated = MasterKeyProvider.load(paths, Optional.empty(), name -> null);
+        assertThat(generated).hasSize(32);
+        assertThat(Files.readString(paths.masterKeyFile())).isEqualTo(encode(generated));
+        sameKey(MasterKeyProvider.load(paths, Optional.empty(), name -> null), generated);
+        assertThat(dataFiles(paths)).containsExactly("master.key");
+    }
+
+    @Test
+    void defaultFileThatAppearsBeforePublishIsReadAndNotReplaced() throws IOException {
+        CrabPaths paths = new CrabPaths(temp);
+        byte[] existing = key((byte) 11);
+        byte[] before = encode(existing).getBytes(StandardCharsets.US_ASCII);
+
+        byte[] loaded = MasterKeyProvider.load(paths, Optional.empty(), name -> null, (tempFile, key) -> {
+            Files.write(tempFile.resolveSibling("master.key"), before);
+            Files.writeString(tempFile, encode(key));
+        });
+
+        sameKey(loaded, existing);
+        assertFileBytes(paths.masterKeyFile(), before);
+        assertThat(dataFiles(paths)).containsExactly("master.key");
+    }
+
+    @Test
     void missingExplicitKeyFileFails() {
         Path missing = temp.resolve("missing.key");
         Throwable thrown = catchThrowable(() ->
@@ -167,6 +211,12 @@ class MasterKeyProviderTest {
         assertThat(second.getCause()).isNull();
         SecretChecks.absent(second, visible);
         assertFileBytes(fallback, before);
+    }
+
+    private static List<String> dataFiles(CrabPaths paths) throws IOException {
+        try (Stream<Path> files = Files.list(paths.data())) {
+            return files.map(path -> path.getFileName().toString()).sorted().toList();
+        }
     }
 
     private static void assertFileBytes(Path file, byte[] expected) throws IOException {

@@ -40,7 +40,7 @@ public final class ApiKeyService {
         String checkedActor = Checks.actor(actor);
         ApiKeyTokens.Issued issued = ApiKeyTokens.issue();
         String id = UUID.randomUUID().toString();
-        Instant createdAt = Instant.now();
+        Instant createdAt = clock.instant();
         String scopeJson = Json.write(scope);
         Db.transaction(dataSource, connection -> {
             // Persist the hash and prefix only. The plaintext stays in the return value.
@@ -114,7 +114,7 @@ public final class ApiKeyService {
             try (PreparedStatement statement = connection.prepareStatement("""
                     UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL
                     """)) {
-                Db.setInstant(statement, 1, Instant.now());
+                Db.setInstant(statement, 1, clock.instant());
                 statement.setString(2, id);
                 if (statement.executeUpdate() != 1) {
                     throw new IllegalStateException("api key is already revoked");

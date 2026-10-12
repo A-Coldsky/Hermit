@@ -1,9 +1,12 @@
 package dev.hermit.crab.secure;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -11,8 +14,10 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Masks known secret values and sensitive field or header names. Callers that need both
- * behaviors apply {@link #redact(String)} and {@link #redactFields(Map)} themselves.
+ * Masks known secret values and sensitive field or header names. {@link #redact(String)}
+ * also masks the UTF-8 URL encoding of each secret, with spaces as {@code +} and as
+ * {@code %20}. Callers that need both behaviors apply {@link #redact(String)} and
+ * {@link #redactFields(Map)} themselves.
  */
 public final class Redactor {
     static final String MASK = "***";
@@ -48,9 +53,17 @@ public final class Redactor {
         if (secretValues.stream().anyMatch(Objects::isNull)) {
             throw new IllegalArgumentException("secret value must not be null");
         }
-        List<String> ordered = secretValues.stream()
-                .filter(value -> value.length() >= MIN_SECRET_LENGTH)
-                .distinct()
+        Set<String> needles = new LinkedHashSet<>();
+        for (String secret : secretValues) {
+            if (secret.length() < MIN_SECRET_LENGTH) {
+                continue;
+            }
+            needles.add(secret);
+            String formEncoded = URLEncoder.encode(secret, StandardCharsets.UTF_8);
+            needles.add(formEncoded);
+            needles.add(formEncoded.replace("+", "%20"));
+        }
+        List<String> ordered = needles.stream()
                 .sorted(Comparator.comparingInt(String::length).reversed().thenComparing(Comparator.naturalOrder()))
                 .toList();
         return new Redactor(ordered);

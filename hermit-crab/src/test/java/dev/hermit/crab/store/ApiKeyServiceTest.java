@@ -115,6 +115,22 @@ class ApiKeyServiceTest {
     }
 
     @Test
+    void createAndRevokeUseTheInjectedClock() {
+        Instant createdAt = Instant.parse("2026-10-12T03:04:05Z");
+        MutableClock clock = new MutableClock(createdAt);
+        ApiKeyService apiKeys = new ApiKeyService(fixture.dataSource, clock);
+        CreatedApiKey created = apiKeys.create("timed", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+
+        assertThat(created.createdAt()).isEqualTo(createdAt);
+        assertThat(apiKeys.list()).singleElement().extracting(ApiKeySummary::createdAt).isEqualTo(createdAt);
+
+        Instant revokedAt = createdAt.plus(Duration.ofHours(2));
+        clock.advance(Duration.ofHours(2));
+        apiKeys.revoke(created.id(), Actors.CONSOLE);
+        assertThat(apiKeys.list()).singleElement().extracting(ApiKeySummary::revokedAt).isEqualTo(revokedAt);
+    }
+
+    @Test
     void shellActionAndReadOnlyScopesAllApply() {
         ApiKeyPrincipal shell = principal(new ApiKeyScope(Set.of("oa"), Set.of(), false));
         assertThat(shell.permits("oa", "delete", false)).isTrue();

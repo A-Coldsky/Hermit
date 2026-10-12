@@ -61,7 +61,7 @@ class ShellRegistryTest {
                     notes: 注意
                     steps:
                       - set: { input: x }
-                      - script: { source: "1" }
+                      - browser: { source: "1" }
                       - request:
                           headers:
                             Authorization: "Basic xxx"

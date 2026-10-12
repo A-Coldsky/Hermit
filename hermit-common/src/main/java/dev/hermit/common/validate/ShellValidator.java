@@ -1,5 +1,6 @@
 package dev.hermit.common.validate;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -28,6 +29,9 @@ public final class ShellValidator {
             "^[a-z][a-z0-9_]{1,63}$");
 
     private static final TemplateEngine TEMPLATES = new TemplateEngine();
+    private static final int SCRIPT_SOURCE_LIMIT = 64 * 1024;
+    private static final int SCRIPT_TIMEOUT_MAX = 5000;
+    private static final Set<String> SCRIPT_KEYS = Set.of("code", "into", "timeout_ms");
 
     private ShellValidator() {
     }
@@ -307,6 +311,39 @@ public final class ShellValidator {
         }
     }
 
+    private static void checkScriptStep(String path, Step step, List<ValidationIssue> errors) {
+        Map<String, Object> def = step.def();
+        for (String key : def.keySet()) {
+            if (!SCRIPT_KEYS.contains(key)) {
+                errors.add(issue(ValidationCodes.SCRIPT_STEP, path + "." + key, "未知的 script 字段"));
+            }
+        }
+        if (!def.containsKey("code")) {
+            errors.add(issue(ValidationCodes.SCRIPT_STEP, path + ".code", "script 缺少 code"));
+        } else if (!(def.get("code") instanceof String text)) {
+            errors.add(issue(ValidationCodes.SCRIPT_STEP, path + ".code", "script code 必须是字符串"));
+        } else if (text.getBytes(StandardCharsets.UTF_8).length > SCRIPT_SOURCE_LIMIT) {
+            errors.add(issue(ValidationCodes.SCRIPT_STEP, path + ".code", "脚本源码超过 64KB"));
+        }
+        if (def.containsKey("into") && (!(def.get("into") instanceof String name) || name.isBlank())) {
+            errors.add(issue(ValidationCodes.SCRIPT_STEP, path + ".into", "script into 无效"));
+        }
+        if (def.containsKey("timeout_ms") && !validTimeout(def.get("timeout_ms"))) {
+            errors.add(issue(
+                    ValidationCodes.SCRIPT_STEP,
+                    path + ".timeout_ms",
+                    "script timeout_ms 必须是 1 到 5000 的整数"));
+        }
+    }
+
+    private static boolean validTimeout(Object value) {
+        if (!(value instanceof Number number)) {
+            return false;
+        }
+        double raw = number.doubleValue();
+        return Double.isFinite(raw) && raw == Math.rint(raw) && raw >= 1 && raw <= SCRIPT_TIMEOUT_MAX;
+    }
+
     private static void checkRefs(String path, Object node, ShellDoc doc, List<ValidationIssue> errors) {
         if (node == null) {
             return;
@@ -322,6 +359,15 @@ public final class ShellValidator {
             return;
         }
         if (node instanceof Step step) {
+            if ("script".equals(step.type())) {
+                checkScriptStep(path, step, errors);
+                for (Map.Entry<String, Object> entry : step.def().entrySet()) {
+                    if (!"code".equals(entry.getKey())) {
+                        checkRefs(path + "." + entry.getKey(), entry.getValue(), doc, errors);
+                    }
+                }
+                return;
+            }
             checkRefs(path, step.def(), doc, errors);
             return;
         }

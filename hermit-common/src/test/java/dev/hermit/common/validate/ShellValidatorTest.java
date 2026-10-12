@@ -283,6 +283,41 @@ class ShellValidatorTest {
     }
 
     @Test
+    void scriptCodeIsLiteralAndBounded() {
+        ValidationResult literal = ShellValidator.validate(ShellParser.parse(referencing("""
+                - script:
+                    code: |
+                      var raw = "{{credential.not_a_field}}";
+                      return { raw: raw };
+                    timeout_ms: 5000
+                """)), ShellValidator.Context.of(null));
+        assertThat(literal.errors()).isEmpty();
+
+        ValidationResult missing = ShellValidator.validate(ShellParser.parse(referencing("""
+                - script: { into: value }
+                """)), ShellValidator.Context.of(null));
+        assertThat(missing.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.SCRIPT_STEP) && issue.path().endsWith(".code"));
+
+        ValidationResult timeout = ShellValidator.validate(ShellParser.parse(referencing("""
+                - script: { code: "return { ok: 1 };", timeout_ms: 5001 }
+                """)), ShellValidator.Context.of(null));
+        assertThat(timeout.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.SCRIPT_STEP)
+                        && issue.path().endsWith(".timeout_ms")
+                        && !issue.message().contains("5001"));
+
+        String bulky = "a".repeat(64 * 1024 + 1);
+        ValidationResult oversized = ShellValidator.validate(ShellParser.parse(referencing("""
+                - script: { code: "%s" }
+                """.formatted(bulky))), ShellValidator.Context.of(null));
+        assertThat(oversized.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.SCRIPT_STEP)
+                        && issue.message().equals("脚本源码超过 64KB")
+                        && !issue.message().contains("aaa"));
+    }
+
+    @Test
     void customStepTypesAndTemplateSyntax() {
         ShellDoc doc = ShellParser.parse(referencing("""
                 - browse: { url: /x }

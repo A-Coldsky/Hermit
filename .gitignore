@@ -10,3 +10,5 @@ target/
 .DS_Store
 reef-data/
 *.log
+node_modules/
+hermit-web/dist/

@@ -1,0 +1,27 @@
+{
+  "name": "hermit-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Hermit 管理页面：reef-admin 与 crab-console。构建结果由 Maven 打进 Reef 与 Crab 的 jar。",
+  "scripts": {
+    "dev:reef": "vite --config apps/reef-admin/vite.config.ts",
+    "dev:crab": "vite --config apps/crab-console/vite.config.ts",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "build:reef": "vite build --config apps/reef-admin/vite.config.ts",
+    "build:crab": "vite build --config apps/crab-console/vite.config.ts",
+    "build": "npm run typecheck && npm run build:reef && npm run build:crab"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "2.3.2",
+    "element-plus": "2.14.7",
+    "vue": "3.5.43",
+    "vue-router": "4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.10",
+    "typescript": "5.9.3",
+    "vite": "8.3.4",
+    "vue-tsc": "3.3.13"
+  }
+}

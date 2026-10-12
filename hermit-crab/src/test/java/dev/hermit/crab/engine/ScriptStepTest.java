@@ -348,6 +348,53 @@ class ScriptStepTest {
     }
 
     @Test
+    void doesNotKeepBuiltinPrototypeChanges() throws Exception {
+        String yaml = shell("""
+                - script:
+                    code: |
+                      if (vars.input.sample === "first") {
+                        Object.prototype.x = 1;
+                        Array.prototype.map = null;
+                        return { ok: 1 };
+                      }
+                      var mapped = [1].map(function (n) { return n + 1; });
+                      return { x: ({}).x, mapped: mapped[0] };
+                    into: value
+                """, """
+                value: { type: string, description: 结果 }
+                """);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), EngineSettings.defaults(), Clock.systemUTC())) {
+            ShellRegistry registry = new ShellRegistry();
+            registry.put(ShellParser.parse(yaml));
+            RuleEngine engine = new RuleEngine(registry, sessions, EngineSettings.defaults());
+            ExecutionResult first = execute(engine, "first");
+            assertThat(first.success()).as(first.error() == null ? "" : first.error().message()).isTrue();
+            ExecutionResult second = execute(engine, "second");
+            assertThat(second.success()).as(second.error() == null ? "" : second.error().message()).isTrue();
+            assertThat(map(data(second).get("value"))).containsEntry("x", null).containsEntry("mapped", 2L);
+        }
+    }
+
+    @Test
+    void rejectsDeepRecursion() {
+        ExecutionResult result = run("""
+                - script:
+                    code: |
+                      function f(){ return f(); }
+                      return f();
+                    into: value
+                """, """
+                value: { type: string, description: 结果 }
+                """);
+        assertThat(result.success()).isFalse();
+        assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+        assertThat(result.error().failedStepType()).isEqualTo("script");
+        assertThat(result.error().message()).doesNotContain("function f");
+        EngineTestSupport.secretsAbsent(EngineTestSupport.flatten(result), EngineTestSupport.PASSWORD);
+    }
+
+    @Test
     void doesNotShareScopeAcrossCalls() throws Exception {
         String yaml = shell("""
                 - script:

@@ -64,7 +64,6 @@ final class ScriptStep {
 
     private final SandboxFactory factory = new SandboxFactory();
     private final ThreadLocal<Window> windows = new ThreadLocal<>();
-    private volatile ScriptableObject standard;
 
     Outcome run(Map<String, Object> spec, Map<String, Object> vars, long capabilityDeadlineNanos) {
         try {
@@ -73,6 +72,8 @@ final class ScriptStep {
             throw ex;
         } catch (ScriptTimeExceeded ex) {
             throw timeout(ex);
+        } catch (StackOverflowError ex) {
+            throw mismatch("脚本调用栈过深");
         } catch (RuntimeException ex) {
             throw described(ex);
         }
@@ -109,27 +110,14 @@ final class ScriptStep {
     }
 
     private Scriptable newScope(Context cx) {
-        ScriptableObject shared = standardScope(cx);
+        // 顶层 sealObject 封不住内置原型，标准对象不能跨调用复用。
+        ScriptableObject shared = cx.initSafeStandardObjects(null, false);
+        deny(shared);
+        shared.sealObject();
         ScriptableObject scope = (ScriptableObject) cx.newObject(shared);
         scope.setPrototype(shared);
         scope.setParentScope(null);
         return scope;
-    }
-
-    private ScriptableObject standardScope(Context cx) {
-        ScriptableObject existing = standard;
-        if (existing != null) {
-            return existing;
-        }
-        synchronized (this) {
-            if (standard == null) {
-                ScriptableObject scope = cx.initSafeStandardObjects(null, false);
-                deny(scope);
-                scope.sealObject();
-                standard = scope;
-            }
-            return standard;
-        }
     }
 
     private static void deny(ScriptableObject scope) {
@@ -403,6 +391,7 @@ final class ScriptStep {
             Context cx = super.makeContext();
             cx.setOptimizationLevel(-1);
             cx.setInstructionObserverThreshold(10_000);
+            cx.setMaximumInterpreterStackDepth(1000);
             cx.setClassShutter(SHUTTER);
             cx.setWrapFactory(WRAP);
             return cx;

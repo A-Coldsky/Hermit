@@ -168,7 +168,7 @@ class MasterKeyProviderTest {
     }
 
     @Test
-    void defaultFileThatAppearsBeforePublishIsReadAndNotReplaced() throws IOException {
+    void publishReadsAnExistingMasterKeyAndDoesNotReplaceIt() throws IOException {
         CrabPaths paths = new CrabPaths(temp);
         byte[] existing = key((byte) 11);
         byte[] before = encode(existing).getBytes(StandardCharsets.US_ASCII);

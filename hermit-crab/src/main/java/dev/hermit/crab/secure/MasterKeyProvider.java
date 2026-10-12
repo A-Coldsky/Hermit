@@ -5,9 +5,9 @@ import dev.hermit.crab.store.CrabPaths;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.SecureRandom;
@@ -26,8 +26,9 @@ import java.util.function.Function;
  * An invalid value from either of the first two sources aborts; it is not replaced by a later
  * source. An existing default file that cannot be decoded is left untouched, so previously
  * encrypted credentials are not orphaned by generating a new key over it. A missing default
- * file is written to a temporary file in the same directory and published with an atomic
- * move. If the destination exists by then, that file is read instead. A failed write deletes
+ * file is written to a temporary file in the same directory, then published with a hard link
+ * so an existing destination fails atomically and is read instead. File systems without hard
+ * links fall back to a move that does not replace the destination. A failed write deletes
  * the temporary file and does not leave {@code master.key} behind.
  */
 public final class MasterKeyProvider {
@@ -124,13 +125,7 @@ public final class MasterKeyProvider {
             restrictToOwner(temp);
             writer.write(temp, key);
             restrictToOwner(temp);
-            // POSIX rename replaces an existing destination, so an existing master.key is read.
-            if (Files.exists(file)) {
-                return readFile(file, "default master key file");
-            }
-            try {
-                Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE);
-            } catch (FileAlreadyExistsException ex) {
+            if (!linkNewFile(temp, file)) {
                 return readFile(file, "default master key file");
             }
             restrictToOwner(file);
@@ -140,6 +135,28 @@ public final class MasterKeyProvider {
                 Files.deleteIfExists(temp);
             } catch (IOException ex) {
                 // The next start must still be able to create master.key. Do not hide the original failure.
+            }
+        }
+    }
+
+    /**
+     * Publish {@code temp} as {@code file}. {@code link} fails with EEXIST when the name is
+     * taken; {@code rename} would replace a key another process already used.
+     *
+     * @return {@code false} when {@code file} already exists
+     */
+    private static boolean linkNewFile(Path temp, Path file) throws IOException {
+        try {
+            Files.createLink(file, temp);
+            return true;
+        } catch (FileAlreadyExistsException ex) {
+            return false;
+        } catch (UnsupportedOperationException | FileSystemException ex) {
+            try {
+                Files.move(temp, file);
+                return true;
+            } catch (FileAlreadyExistsException already) {
+                return false;
             }
         }
     }

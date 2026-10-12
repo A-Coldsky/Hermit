@@ -1,0 +1,178 @@
+package dev.hermit.crab.engine;
+
+import java.net.URI;
+import java.util.Locale;
+import java.util.Map;
+
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.cookie.BasicCookieStore;
+import org.apache.hc.client5.http.cookie.Cookie;
+
+import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.model.Step;
+import dev.hermit.common.template.FilterRegistry;
+import dev.hermit.common.template.TemplateEngine;
+
+final class StepRunner {
+
+    private final TemplateEngine templates;
+    private final FilterRegistry filters;
+
+    StepRunner(TemplateEngine templates, FilterRegistry filters) {
+        this.templates = templates;
+        this.filters = filters;
+    }
+
+    /**
+     * 步骤定义在这里渲染一次。提取出来的文本不会再送回模板引擎。
+     */
+    Outcome run(
+            Step step,
+            Map<String, Object> vars,
+            String expectPrefix,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            BasicCookieStore cookies,
+            URI base,
+            long deadlineNanos
+    ) {
+        Object rendered = templates.render(step.def(), vars);
+        Map<String, Object> spec = Values.map(rendered);
+        if (spec == null) {
+            throw new RuleProblem(ErrorCode.RULE_MISMATCH, "步骤定义无效", null, null, null);
+        }
+        return switch (step.type()) {
+            case "request" -> request(spec, vars, expectPrefix, client, afterExchange, base, deadlineNanos);
+            case "extract" -> extract(spec, vars);
+            case "assert" -> check(spec, vars, cookies);
+            case "set" -> set(spec, vars);
+            default -> throw new RuleProblem(
+                    ErrorCode.RULE_MISMATCH, "不支持的步骤类型 " + step.type(), null, null, null);
+        };
+    }
+
+    private Outcome request(
+            Map<String, Object> spec,
+            Map<String, Object> vars,
+            String expectPrefix,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            URI base,
+            long deadlineNanos
+    ) {
+        HttpResult result = HttpCalls.execute(spec, client, afterExchange, base, expectPrefix, deadlineNanos);
+        vars.put("response", result.view());
+        return new Outcome(result.method(), result.path(), result.status(), null, result.sessionLost());
+    }
+
+    private Outcome extract(Map<String, Object> spec, Map<String, Object> vars) {
+        int count = Extractors.apply(spec, vars, filters, templates);
+        return new Outcome(null, null, null, count, false);
+    }
+
+    private Outcome set(Map<String, Object> spec, Map<String, Object> vars) {
+        for (Map.Entry<String, Object> entry : spec.entrySet()) {
+            if (ShellRegistry.RESERVED.contains(entry.getKey())) {
+                throw new RuleProblem(ErrorCode.RULE_MISMATCH, "不能写入保留变量", null, null, null);
+            }
+            vars.put(entry.getKey(), entry.getValue());
+        }
+        return new Outcome(null, null, null, null, false);
+    }
+
+    private Outcome check(Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies) {
+        Object response = vars.get("response");
+        Map<String, Object> map = Values.map(response);
+        if (map == null || !map.containsKey("status")) {
+            throw new RuleProblem(ErrorCode.RULE_MISMATCH, "没有响应", null, null, null);
+        }
+        int status = Values.integer(map.get("status"), -1);
+        String body = map.get("body") == null ? "" : Values.text(map.get("body"));
+        String redirect = map.get("redirect") == null ? null : Values.text(map.get("redirect"));
+        String url = map.get("url") == null ? "" : Values.text(map.get("url"));
+        Map<String, Object> headers = Values.map(map.get("headers"));
+        if (headers == null) {
+            headers = Map.of();
+        }
+        for (Map.Entry<String, Object> entry : spec.entrySet()) {
+            switch (entry.getKey()) {
+                case "status" -> checkStatus(entry.getValue(), status);
+                case "contains" -> {
+                    if (!body.contains(Values.text(entry.getValue()))) {
+                        fail("assert 未通过: contains");
+                    }
+                }
+                case "not_contains" -> {
+                    if (body.contains(Values.text(entry.getValue()))) {
+                        fail("assert 未通过: not_contains");
+                    }
+                }
+                case "cookie_exists" -> checkCookie(Values.text(entry.getValue()), cookies);
+                case "header_exists" -> checkHeader(Values.text(entry.getValue()), headers);
+                case "not_redirected_to" -> {
+                    if (redirectedTo(redirect, url, Values.text(entry.getValue()))) {
+                        fail("assert 未通过: not_redirected_to");
+                    }
+                }
+                default -> fail("未知的 assert 键");
+            }
+        }
+        return new Outcome(null, null, null, null, false);
+    }
+
+    private static void checkStatus(Object expected, int actual) {
+        if (expected instanceof java.util.List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Number number && number.intValue() == actual) {
+                    return;
+                }
+            }
+            fail("assert 未通过: status 期望 " + expected + " 实际 " + actual);
+        }
+        if (expected instanceof Number number && number.intValue() == actual) {
+            return;
+        }
+        fail("assert 未通过: status 期望 " + expected + " 实际 " + actual);
+    }
+
+    private static void checkCookie(String name, BasicCookieStore cookies) {
+        for (Cookie cookie : cookies.getCookies()) {
+            if (name.equals(cookie.getName())) {
+                return;
+            }
+        }
+        fail("assert 未通过: cookie_exists");
+    }
+
+    private static void checkHeader(String name, Map<String, Object> headers) {
+        if (!headers.containsKey(name.toLowerCase(Locale.ROOT))) {
+            fail("assert 未通过: header_exists");
+        }
+    }
+
+    private static boolean redirectedTo(String redirect, String currentUrl, String prefix) {
+        if (redirect == null || prefix == null || prefix.isEmpty()) {
+            return false;
+        }
+        try {
+            URI current = URI.create(currentUrl);
+            URI target = current.resolve(redirect);
+            String path = target.getPath() == null ? "" : target.getPath();
+            return path.startsWith(prefix);
+        } catch (IllegalArgumentException ex) {
+            String path = redirect;
+            int query = path.indexOf('?');
+            if (query >= 0) {
+                path = path.substring(0, query);
+            }
+            return path.startsWith(prefix);
+        }
+    }
+
+    private static void fail(String summary) {
+        throw new RuleProblem(ErrorCode.RULE_MISMATCH, summary, null, null, null);
+    }
+}
+
+record Outcome(String method, String path, Integer status, Integer extractCount, boolean sessionLost) {
+}

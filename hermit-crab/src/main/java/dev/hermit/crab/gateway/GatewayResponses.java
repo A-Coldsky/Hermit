@@ -7,6 +7,9 @@ import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.InvokeOutcome;
 import io.javalin.http.Context;
+import org.eclipse.jetty.http.HttpField;
+import org.eclipse.jetty.http.HttpHeader;
+import org.eclipse.jetty.server.Response;
 
 final class GatewayResponses {
     static final String TRACE = "hermit.traceId";
@@ -41,6 +44,22 @@ final class GatewayResponses {
 
     static void writeOutcome(Context ctx, InvokeOutcome outcome) {
         write(ctx, outcome.status(), outcome.body(), outcome.traceId(), outcome.replayed());
+    }
+
+    static void writeBytes(Context ctx, int status, String contentType, String cacheControl, byte[] body) {
+        if (written(ctx)) {
+            return;
+        }
+        ctx.attribute(WRITTEN, Boolean.TRUE);
+        ctx.status(status);
+        ctx.header("Content-Type", contentType);
+        // Jetty 把已知的 text/html;charset=UTF-8 收成预编码的 utf-8。页面约定要原样的 charset 名。
+        if (ctx.res() instanceof Response jetty) {
+            jetty.getHttpFields().put(new HttpField(HttpHeader.CONTENT_TYPE, contentType));
+        }
+        ctx.header("Cache-Control", cacheControl);
+        ctx.header("X-Hermit-Trace", trace(ctx));
+        ctx.result(body);
     }
 
     static void write(Context ctx, int status, byte[] body, String traceId, boolean replayed) {

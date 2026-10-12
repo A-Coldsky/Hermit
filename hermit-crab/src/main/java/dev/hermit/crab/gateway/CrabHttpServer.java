@@ -80,11 +80,15 @@ public final class CrabHttpServer implements AutoCloseable {
         http.before(ctx -> {
             GatewayResponses.trace(ctx);
             String path = ctx.path();
-            if ("/console".equals(path) || path.startsWith("/console/")) {
+            if (consoleApi(path)) {
                 if (!Loopback.address(ctx.req().getRemoteAddr()) || !"1".equals(ctx.header("X-Hermit-Console"))) {
                     GatewayResponses.writeError(ctx, 403, ErrorCode.FORBIDDEN, "console access denied");
                     ctx.skipRemainingHandlers();
                 }
+            } else if (consolePage(path) && !Loopback.address(ctx.req().getRemoteAddr())) {
+                // 浏览器导航带不了 X-Hermit-Console，页面和静态资源只认套接字上的回环地址。
+                GatewayResponses.writeError(ctx, 403, ErrorCode.FORBIDDEN, "console access denied");
+                ctx.skipRemainingHandlers();
             }
         });
         mcp.register(http);
@@ -100,6 +104,7 @@ public final class CrabHttpServer implements AutoCloseable {
             route(http, alias.getKey(), ctx -> handleApi(ctx, shell, action));
         }
         ConsoleApi.register(http, runtime);
+        ConsoleUi.register(http);
         http.exception(HttpResponseException.class, (exception, ctx) -> {
             if (GatewayResponses.written(ctx)) {
                 return;
@@ -211,6 +216,14 @@ public final class CrabHttpServer implements AutoCloseable {
         for (HandlerType method : METHODS) {
             http.addHttpHandler(method, path, handler);
         }
+    }
+
+    private static boolean consoleApi(String path) {
+        return "/console/api".equals(path) || path.startsWith("/console/api/");
+    }
+
+    private static boolean consolePage(String path) {
+        return "/console".equals(path) || path.startsWith("/console/");
     }
 
     static void checkAliases(Map<String, String> aliases) {

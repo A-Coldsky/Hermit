@@ -11,7 +11,9 @@
 
 ## Docker 部署
 
-Reef 可以用 Docker Compose 一次拉起 `reef`、`nginx`、`mysql`。Crab 不在这个 compose 里：它跑在内网、要访问老系统，仍然按下一节单独启动。
+Reef 可以用 Docker Compose 一次拉起 `reef`、`nginx`、`mysql`。默认服务列表里没有 Crab：它要留在能访问老系统的内网机器上，生产环境仍按下一节单独启动。
+
+在同一台 Linux 机器上连 Crab 一起启动时，加上 `client` profile。Crab 使用宿主机网络，监听 `127.0.0.1`，这样控制台的回环校验仍然成立。Docker Desktop 的 Mac/Windows 上，宿主机网络落在虚拟机里，浏览器打不开 Crab 控制台。
 
 复制环境文件。生产环境必须改掉 `.env.example` 里标明的数据库密码、root 密码、管理员口令和 agent token：
 
@@ -19,21 +21,28 @@ Reef 可以用 Docker Compose 一次拉起 `reef`、`nginx`、`mysql`。Crab 不
 cp .env.example .env
 ```
 
-启动：
+只启动 Reef：
 
 ```bash
 docker compose up -d --build
 ```
 
-浏览器打开 `http://localhost/`（`.env` 里的 `HTTP_PORT` 默认是 80）。看 Reef 日志：
+Reef 和 Crab 一起启动：
+
+```bash
+docker compose --profile client up -d --build
+```
+
+浏览器打开 `http://localhost/`（`.env` 里的 `HTTP_PORT` 默认是 80）进入 Reef 管理页。Crab 控制台是 `http://127.0.0.1:7777/console/`（端口由 `HERMIT_CRAB_PORT` 决定）。看日志：
 
 ```bash
 docker compose logs -f reef
+docker compose --profile client logs -f crab
 ```
 
-数据在两个卷里：`reef-mysql` 是 MySQL 数据，`reef-data` 挂在容器的 `/data`（签名密钥和已发布的 YAML）。升级时保留这两个卷，否则密钥和库会换掉。
+数据在三个卷里：`reef-mysql` 是 MySQL 数据，`reef-data` 挂在 Reef 容器的 `/data`（签名密钥和已发布的 YAML），`crab-data` 挂在 Crab 的 `HERMIT_HOME`（`config.yml`、公钥和本地库）。升级时保留这些卷，否则密钥和库会换掉。
 
-库里还没有管理员时，第一次启动用 `.env` 的 `HERMIT_REEF_ADMIN_USER` 和 `HERMIT_REEF_ADMIN_PASSWORD` 创建第一个管理员。之后再启动不会改已有管理员的密码。
+库里还没有管理员时，第一次启动用 `.env` 的 `HERMIT_REEF_ADMIN_USER` 和 `HERMIT_REEF_ADMIN_PASSWORD` 创建第一个管理员。之后再启动不会改已有管理员的密码。`client` profile 在 Crab 的数据卷里还没有 `config.yml` 时，用同一组管理员口令登录 Reef，取签名公钥，并写入 `config.yml` 和 `reef.pub`。卷里已有 `config.yml` 时不会覆盖。
 
 ## 第一期快速开始
 

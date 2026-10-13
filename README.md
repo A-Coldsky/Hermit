@@ -9,6 +9,32 @@
 ./mvnw -B verify
 ```
 
+## Docker 部署
+
+Reef 可以用 Docker Compose 一次拉起 `reef`、`nginx`、`mysql`。Crab 不在这个 compose 里：它跑在内网、要访问老系统，仍然按下一节单独启动。
+
+复制环境文件。生产环境必须改掉 `.env.example` 里标明的数据库密码、root 密码、管理员口令和 agent token：
+
+```bash
+cp .env.example .env
+```
+
+启动：
+
+```bash
+docker compose up -d --build
+```
+
+浏览器打开 `http://localhost/`（`.env` 里的 `HTTP_PORT` 默认是 80）。看 Reef 日志：
+
+```bash
+docker compose logs -f reef
+```
+
+数据在两个卷里：`reef-mysql` 是 MySQL 数据，`reef-data` 挂在容器的 `/data`（签名密钥和已发布的 YAML）。升级时保留这两个卷，否则密钥和库会换掉。
+
+库里还没有管理员时，第一次启动用 `.env` 的 `HERMIT_REEF_ADMIN_USER` 和 `HERMIT_REEF_ADMIN_PASSWORD` 创建第一个管理员。之后再启动不会改已有管理员的密码。
+
 ## 第一期快速开始
 
 下面用命令行和 curl 走通：启动 Reef、初始化管理员、上传并发布带凭证声明的 `legacy_oa`、配置 Crab、创建账号和凭证、创建 API Key，然后不带 `X-Hermit-Account` 调用待办查询。示例里的口令请换成你自己的，不要提交到仓库。

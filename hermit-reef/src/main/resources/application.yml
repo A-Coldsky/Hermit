@@ -1,4 +1,4 @@
-# spring.datasource.url 可覆盖由 data-dir 推导的地址，便于以后换 MySQL / PostgreSQL。
+# spring.datasource.url 可覆盖由 data-dir 推导的地址。驱动随 URL 走，这里不指定驱动类。
 hermit:
   reef:
     data-dir: ./reef-data
@@ -29,7 +29,6 @@ spring:
       max-request-size: 1MB
   datasource:
     url: jdbc:h2:file:${hermit.reef.data-dir}/db/reef;MODE=REGULAR
-    driver-class-name: org.h2.Driver
     username: sa
     password: ""
   flyway:

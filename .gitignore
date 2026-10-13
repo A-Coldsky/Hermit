@@ -12,3 +12,4 @@ reef-data/
 *.log
 node_modules/
 hermit-web/dist/
+.env

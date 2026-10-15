@@ -8,8 +8,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
@@ -99,44 +101,91 @@ public final class ShellSync {
             Optional<CrabRelease> latest = readLatest();
             ReefClient.ManifestFetch manifest = reef.manifest(store.etag().orElse(null));
             if (manifest.notModified()) {
-                if (manifest.etag() != null) {
-                    store.saveEtag(manifest.etag());
-                }
-                return deliver(new SyncReport(true, List.of(), List.of(), List.of(), latest));
-            }
-            List<ShellOutcome> shells = new ArrayList<>();
-            List<CredentialDeclarationChange> changes = new ArrayList<>();
-            Set<String> present = new LinkedHashSet<>();
-            for (ReefClient.CatalogEntry entry : manifest.entries()) {
-                try {
-                    if (!ShellValidator.isShellName(entry.shell())) {
-                        shells.add(rejected(entry, SyncReasons.SHELL_NAME));
-                        continue;
+                if (snapshotMatches()) {
+                    if (manifest.etag() != null) {
+                        store.saveEtag(manifest.etag());
                     }
-                    present.add(entry.shell());
-                    if (!version(entry.version()).isPresent()) {
-                        shells.add(rejected(entry, SyncReasons.VERSION_INVALID));
-                        continue;
-                    }
-                    InstallResult result = installEntry(entry);
-                    shells.add(result.outcome());
-                    result.change().ifPresent(changes::add);
-                } catch (RuntimeException ex) {
-                    shells.add(new ShellOutcome(entry.shell(), entry.version(), OutcomeKind.REJECTED, safeReason(ex)));
+                    return deliver(unchanged(latest));
+                }
+                // The stored tag no longer describes this disk. Drop it and read the full
+                // manifest once; a second 304 must not loop or be recorded.
+                store.clearEtagAndSnapshot();
+                manifest = reef.manifest(null);
+                if (manifest.notModified()) {
+                    return deliver(unchanged(latest));
                 }
             }
-            List<String> removed = new ArrayList<>();
-            for (String shell : registry.snapshot().keySet()) {
-                if (!present.contains(shell)) {
-                    registry.remove(shell);
-                    removed.add(shell);
-                }
-            }
-            if (manifest.etag() != null) {
-                store.saveEtag(manifest.etag());
-            }
-            return deliver(new SyncReport(false, shells, removed, changes, latest));
+            return deliver(install(manifest, latest));
         }
+    }
+
+    private SyncReport install(ReefClient.ManifestFetch manifest, Optional<CrabRelease> latest) {
+        List<ShellOutcome> shells = new ArrayList<>();
+        List<CredentialDeclarationChange> changes = new ArrayList<>();
+        Set<String> present = new LinkedHashSet<>();
+        for (ReefClient.CatalogEntry entry : manifest.entries()) {
+            try {
+                if (!ShellValidator.isShellName(entry.shell())) {
+                    shells.add(rejected(entry, SyncReasons.SHELL_NAME));
+                    continue;
+                }
+                present.add(entry.shell());
+                if (!version(entry.version()).isPresent()) {
+                    shells.add(rejected(entry, SyncReasons.VERSION_INVALID));
+                    continue;
+                }
+                InstallResult result = installEntry(entry);
+                shells.add(result.outcome());
+                result.change().ifPresent(changes::add);
+            } catch (RuntimeException ex) {
+                shells.add(new ShellOutcome(entry.shell(), entry.version(), OutcomeKind.REJECTED, safeReason(ex)));
+            }
+        }
+        List<String> removed = new ArrayList<>();
+        for (String shell : registry.snapshot().keySet()) {
+            if (!present.contains(shell)) {
+                registry.remove(shell);
+                removed.add(shell);
+            }
+        }
+        if (shells.stream().anyMatch(SyncFailures::retryable)) {
+            store.clearEtagAndSnapshot();
+        } else if (manifest.etag() != null) {
+            store.saveEtagAndSnapshot(manifest.etag(), expectedVersions(shells));
+        }
+        return new SyncReport(false, shells, removed, changes, latest);
+    }
+
+    private boolean snapshotMatches() {
+        Optional<Map<String, String>> snapshot = store.manifestSnapshot();
+        if (snapshot.isEmpty()) {
+            return false;
+        }
+        for (Map.Entry<String, String> entry : snapshot.get().entrySet()) {
+            Optional<String> current = ShellFiles.readCurrent(paths, entry.getKey());
+            if (current.isEmpty() || !current.get().equals(entry.getValue())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Map<String, String> expectedVersions(List<ShellOutcome> shells) {
+        Map<String, String> versions = new TreeMap<>();
+        for (ShellOutcome outcome : shells) {
+            if (outcome.kind() != OutcomeKind.INSTALLED && outcome.kind() != OutcomeKind.SKIPPED_SAME) {
+                continue;
+            }
+            if (outcome.shell() == null || outcome.version() == null) {
+                continue;
+            }
+            versions.put(outcome.shell(), outcome.version());
+        }
+        return versions;
+    }
+
+    private static SyncReport unchanged(Optional<CrabRelease> latest) {
+        return new SyncReport(true, List.of(), List.of(), List.of(), latest);
     }
 
     private SyncReport deliver(SyncReport report) {

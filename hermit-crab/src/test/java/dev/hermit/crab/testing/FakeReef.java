@@ -41,6 +41,7 @@ public final class FakeReef implements AutoCloseable {
     private final List<Entry> entries = new ArrayList<>();
     private final List<String> paths = new CopyOnWriteArrayList<>();
     private final List<String> reportBodies = new CopyOnWriteArrayList<>();
+    private final Map<String, Integer> downloadStatuses = new LinkedHashMap<>();
     private int etagSalt;
     private int manifestStatus = 200;
     private int reportStatus = 200;
@@ -80,6 +81,17 @@ public final class FakeReef implements AutoCloseable {
 
     public void manifestStatus(int status) {
         manifestStatus = status;
+    }
+
+    /** Next downloads of {@code shell} return {@code status} and an empty body. 200 serves the package. */
+    public void downloadStatus(String shell, int status) {
+        synchronized (lock) {
+            if (status == 200) {
+                downloadStatuses.remove(shell);
+            } else {
+                downloadStatuses.put(shell, status);
+            }
+        }
     }
 
     public void redirectManifest() {
@@ -295,12 +307,18 @@ public final class FakeReef implements AutoCloseable {
         }
         String shell = rest.substring(0, slash);
         String version = rest.substring(slash + 1);
+        Integer forced;
         Entry match;
         synchronized (lock) {
+            forced = downloadStatuses.get(shell);
             match = entries.stream()
                     .filter(entry -> entry.shell.equals(shell) && entry.version.equals(version))
                     .findFirst()
                     .orElse(null);
+        }
+        if (forced != null) {
+            send(exchange, forced, new byte[0], null, null);
+            return;
         }
         if (match == null) {
             send(exchange, 404, new byte[0], null, null);

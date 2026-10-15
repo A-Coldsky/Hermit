@@ -37,12 +37,14 @@ class Phase1AcceptanceTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String ADMIN_USER = "phase1-admin";
     private static final String ADMIN_PASSWORD = "phase1-admin-secret";
+    private static final String AGENT_TOKEN = "phase1-agent-token";
     private static final String OA_PASSWORD = "phase1-oa-secret";
     private static final String LITERAL_PASSWORD = "literal-password";
     private static final Duration POLL = Duration.ofSeconds(30);
 
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
-    private final List<String> secrets = new ArrayList<>(List.of(ADMIN_PASSWORD, OA_PASSWORD, LITERAL_PASSWORD));
+    private final List<String> secrets = new ArrayList<>(
+            List.of(ADMIN_PASSWORD, AGENT_TOKEN, OA_PASSWORD, LITERAL_PASSWORD));
 
     @TempDir
     Path temp;
@@ -76,6 +78,7 @@ class Phase1AcceptanceTest {
                 Files.writeString(crabHome.resolve("config.yml"), """
                         reef:
                           url: %s
+                          token: %s
                           public_key: %s
                         server:
                           host: 127.0.0.1
@@ -85,7 +88,7 @@ class Phase1AcceptanceTest {
                         report:
                           enabled: true
                           interval_seconds: 1
-                        """.formatted(reefBase, pub.toAbsolutePath()));
+                        """.formatted(reefBase, AGENT_TOKEN, pub.toAbsolutePath()));
                 Function<String, String> env = name -> "HERMIT_HOME".equals(name) ? crabHome.toString() : null;
                 try (CrabServer crab = CrabServer.start(env)) {
                     String crabBase = "http://127.0.0.1:" + crab.port();
@@ -195,6 +198,7 @@ class Phase1AcceptanceTest {
                 "--hermit.reef.tide.evaluate-cron=*/1 * * * * *");
         builder.environment().put("HERMIT_REEF_ADMIN_USER", ADMIN_USER);
         builder.environment().put("HERMIT_REEF_ADMIN_PASSWORD", ADMIN_PASSWORD);
+        builder.environment().put("HERMIT_REEF_AGENT_TOKEN", AGENT_TOKEN);
         builder.redirectErrorStream(true);
         builder.redirectOutput(log.toFile());
         return builder.start();

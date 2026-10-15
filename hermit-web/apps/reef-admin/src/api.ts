@@ -98,6 +98,7 @@ export interface ShellVersion {
   publishedAt: string | null
   current: boolean
   warningCount: number
+  warnings: ValidationIssue[]
 }
 
 export interface UploadResult {

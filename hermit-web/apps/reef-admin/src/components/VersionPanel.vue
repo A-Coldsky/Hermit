@@ -6,6 +6,7 @@ import { copyText, formatTime, notifyError } from '@shared/format'
 import { api, type ShellDiff, type ShellVersion } from '../api'
 import { versionStatusLabels } from '../labels'
 import DiffSummary from './DiffSummary.vue'
+import IssueList from './IssueList.vue'
 
 const props = defineProps<{ shell: string; versions: ShellVersion[]; loading?: boolean }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -14,6 +15,7 @@ const busy = ref<string | null>(null)
 const current = computed(() => props.versions.find((v) => v.current) ?? null)
 
 const yamlDialog = reactive({ open: false, version: '', loading: false, text: '' })
+const warningDialog = reactive({ open: false, row: null as ShellVersion | null })
 const diffDialog = reactive({
   open: false,
   from: '',
@@ -65,6 +67,11 @@ async function rollback(row: ShellVersion) {
   } finally {
     busy.value = null
   }
+}
+
+function showWarnings(row: ShellVersion) {
+  warningDialog.row = row
+  warningDialog.open = true
 }
 
 async function showYaml(row: ShellVersion) {
@@ -138,10 +145,19 @@ async function runDiff() {
       </el-table-column>
       <el-table-column label="警告" width="80" align="right">
         <template #default="{ row }">
-          <span :class="{ warn: row.warningCount }">{{ row.warningCount }}</span>
+          <el-button
+            v-if="row.warningCount"
+            link
+            class="warn"
+            :aria-label="`查看 v${row.version} 的 ${row.warningCount} 条警告`"
+            @click="showWarnings(row)"
+          >
+            {{ row.warningCount }}
+          </el-button>
+          <span v-else class="hm-muted">0</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="280" fixed="right">
+      <el-table-column label="操作" width="280">
         <template #default="{ row }">
           <el-button link type="primary" @click="showYaml(row)">YAML</el-button>
           <el-button link type="primary" :disabled="versions.length < 2" @click="openDiff(row)">对比</el-button>
@@ -170,6 +186,11 @@ async function runDiff() {
       <el-button :icon="CopyDocument" :disabled="!yamlDialog.text" @click="copyText(yamlDialog.text, 'YAML 已复制')">复制</el-button>
       <el-button type="primary" @click="yamlDialog.open = false">关闭</el-button>
     </template>
+  </el-dialog>
+
+  <el-dialog v-model="warningDialog.open" :title="`v${warningDialog.row?.version ?? ''} 的校验警告`" width="640px">
+    <p class="hm-muted hint">警告不影响发布，但说明这个版本的描述还不完整。</p>
+    <IssueList v-if="warningDialog.row" :issues="warningDialog.row.warnings" tone="warning" />
   </el-dialog>
 
   <el-dialog v-model="diffDialog.open" title="版本对比" width="720px">
@@ -204,6 +225,10 @@ async function runDiff() {
 .warn {
   color: var(--hm-accent);
   font-weight: 600;
+}
+
+.hint {
+  margin: 0 0 12px;
 }
 
 .yaml {

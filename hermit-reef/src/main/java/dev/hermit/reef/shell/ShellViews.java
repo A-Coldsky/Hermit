@@ -49,7 +49,8 @@ record ShellVersionItem(
         String publishedBy,
         Instant publishedAt,
         boolean current,
-        int warningCount) {
+        int warningCount,
+        List<ValidationIssue> warnings) {
 }
 
 record CredentialDeclaration(

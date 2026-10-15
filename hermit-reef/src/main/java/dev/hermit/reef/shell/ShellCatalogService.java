@@ -70,6 +70,7 @@ public class ShellCatalogService {
         rows.sort(Comparator.comparing((VersionRow row) -> SemVer.parse(row.version())).reversed());
         List<ShellVersionItem> items = new ArrayList<>();
         for (VersionRow row : rows) {
+            List<ValidationIssue> warnings = warnings(row.validationJson());
             items.add(new ShellVersionItem(
                     row.version(),
                     row.status(),
@@ -78,7 +79,8 @@ public class ShellCatalogService {
                     row.publishedBy(),
                     row.publishedAt(),
                     row.current(),
-                    warningCount(row.validationJson())));
+                    warnings.size(),
+                    warnings));
         }
         return items;
     }
@@ -128,14 +130,14 @@ public class ShellCatalogService {
         }
     }
 
-    private int warningCount(String validationJson) {
+    private List<ValidationIssue> warnings(String validationJson) {
         if (validationJson == null || validationJson.isBlank()) {
-            return 0;
+            return List.of();
         }
         try {
             List<ValidationIssue> warnings = objectMapper.readValue(validationJson, new TypeReference<List<ValidationIssue>>() {
             });
-            return warnings.size();
+            return warnings == null ? List.of() : List.copyOf(warnings);
         } catch (IOException ex) {
             throw new ApiException(500, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message());
         }

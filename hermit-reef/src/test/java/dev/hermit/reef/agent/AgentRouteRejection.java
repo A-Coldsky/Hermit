@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.hermit.reef.security.AgentAccessFilter;
+import dev.hermit.reef.testsupport.MemoryLogAppender;
 import dev.hermit.reef.web.TraceIds;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +30,18 @@ abstract class AgentRouteRejection {
         assertSameUnauthorized(this::version);
         assertSameUnauthorized(this::manifest);
         assertSameUnauthorized(this::reports);
+    }
+
+    @Test
+    void startupWarnsThatAgentRoutesWillBeRejected() {
+        assertThat(MemoryLogAppender.LINES)
+                .filteredOn(line -> line.contains("All /agent/** requests will be rejected")
+                        && line.contains("Set HERMIT_REEF_AGENT_TOKEN."))
+                .isNotEmpty()
+                .allSatisfy(line -> {
+                    assertThat(line).startsWith("WARN ");
+                    assertThat(line).doesNotContain(ARBITRARY_TOKEN);
+                });
     }
 
     @Test

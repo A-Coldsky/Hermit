@@ -6,7 +6,7 @@ import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, formatTime, notifyError, relativeTime } from '@shared/format'
 import { api, type ApiKey, type CreatedApiKey, type ShellDetail } from '../api'
 
-const loading = ref(false)
+const loading = ref(true)
 const keys = ref<ApiKey[]>([])
 const showRevoked = ref(false)
 const shellDetails = ref<ShellDetail[]>([])
@@ -110,7 +110,8 @@ onMounted(load)
     </PageHeader>
 
     <div class="hm-card">
-      <el-table v-loading="loading" :data="visible" empty-text="还没有 API Key">
+      <el-table v-loading="loading" :data="visible">
+        <template #empty>{{ loading ? '' : '还没有 API Key' }}</template>
         <el-table-column label="名称" min-width="160">
           <template #default="{ row }">
             <strong>{{ row.name }}</strong>

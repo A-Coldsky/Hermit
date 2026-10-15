@@ -10,7 +10,7 @@ import { refreshOpenAlerts } from '../alerts'
 import { alertKindLabels, isoDaysAgo } from '../labels'
 import { toBars, totals } from '../tide'
 
-const loading = ref(false)
+const loading = ref(true)
 const shells = ref<ShellSummary[]>([])
 const tide = ref<TideSummary | null>(null)
 const alerts = ref<Alert[]>([])
@@ -70,7 +70,7 @@ onMounted(load)
           <span>每日调用量</span>
           <router-link to="/tide" class="more">查看 Tide</router-link>
         </div>
-        <BarChart :points="bars" :height="220" />
+        <BarChart :points="bars" :height="220" :loading="loading" />
       </div>
 
       <div class="hm-card">
@@ -78,8 +78,7 @@ onMounted(load)
           <span>未处理告警</span>
           <router-link to="/alerts" class="more">全部告警</router-link>
         </div>
-        <el-empty v-if="!alerts.length" description="一切正常" :image-size="64" />
-        <ul v-else class="list">
+        <ul v-if="alerts.length" class="list">
           <li v-for="alert in alerts.slice(0, 6)" :key="alert.id">
             <el-tag type="danger" size="small" effect="plain">{{ alertKindLabels[alert.kind] ?? alert.kind }}</el-tag>
             <router-link :to="`/shells/${encodeURIComponent(alert.shell)}`" class="mono">{{ alert.shell }}</router-link>
@@ -88,12 +87,14 @@ onMounted(load)
             <span class="hm-muted">{{ relativeTime(alert.createdAt) }}</span>
           </li>
         </ul>
+        <el-empty v-else-if="!loading" description="一切正常" :image-size="64" />
       </div>
     </div>
 
     <div class="hm-card row">
       <div class="hm-card-title"><span>最近的自动回退</span></div>
-      <el-table :data="rollbacks.slice(0, 10)" empty-text="7 天内没有 Crab 发生自动回退">
+      <el-table :data="rollbacks.slice(0, 10)">
+        <template #empty>{{ loading ? '' : '7 天内没有 Crab 发生自动回退' }}</template>
         <el-table-column label="Shell" min-width="160">
           <template #default="{ row }">
             <router-link :to="`/shells/${encodeURIComponent(row.shell)}`" class="mono">{{ row.shell }}</router-link>

@@ -10,7 +10,7 @@ import { api, type CallSummary, type CrabRelease, type DebugState, type ShellSum
 import { outcomeLabels } from '../labels'
 import { refreshPending } from '../status'
 
-const loading = ref(false)
+const loading = ref(true)
 const syncing = ref(false)
 const shells = ref<ShellSummary[]>([])
 const calls = ref<CallSummary[]>([])
@@ -129,9 +129,7 @@ onMounted(load)
           <span>同步状态</span>
           <span v-if="syncedAt" class="hm-muted small">{{ relativeTime(syncedAt) }}同步</span>
         </div>
-        <el-empty v-if="!syncConfigured" :image-size="60" description="没有配置 Reef，只使用本地 Shell。在 config.yml 设置 reef.url 和 reef.public_key 后重启 Crab。" />
-        <el-empty v-else-if="!report" :image-size="60" description="本次启动后还没有同步过" />
-        <template v-else>
+        <template v-if="report">
           <p v-if="report.notModified" class="hm-muted">上次同步时 Reef 没有变化。</p>
           <ul class="outcomes">
             <li v-for="item in changedShells" :key="item.shell">
@@ -156,6 +154,8 @@ onMounted(load)
             class="notice"
           />
         </template>
+        <el-empty v-else-if="!loading && !syncConfigured" :image-size="60" description="没有配置 Reef，只使用本地 Shell。在 config.yml 设置 reef.url 和 reef.public_key 后重启 Crab。" />
+        <el-empty v-else-if="!loading" :image-size="60" description="本次启动后还没有同步过" />
       </div>
 
       <div class="hm-card">
@@ -176,7 +176,8 @@ onMounted(load)
         <span>最近失败</span>
         <router-link to="/calls" class="small">全部调用</router-link>
       </div>
-      <el-table :data="calls.filter((c) => !c.success).slice(0, 8)" empty-text="最近没有失败的调用">
+      <el-table :data="calls.filter((c) => !c.success).slice(0, 8)">
+        <template #empty>{{ loading ? '' : '最近没有失败的调用' }}</template>
         <el-table-column label="时间" width="120">
           <template #default="{ row }">{{ relativeTime(row.at) }}</template>
         </el-table-column>

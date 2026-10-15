@@ -7,7 +7,7 @@ import { api, type ShellDiff, type ShellVersion } from '../api'
 import { versionStatusLabels } from '../labels'
 import DiffSummary from './DiffSummary.vue'
 
-const props = defineProps<{ shell: string; versions: ShellVersion[] }>()
+const props = defineProps<{ shell: string; versions: ShellVersion[]; loading?: boolean }>()
 const emit = defineEmits<{ changed: [] }>()
 
 const busy = ref<string | null>(null)
@@ -106,7 +106,8 @@ async function runDiff() {
 
 <template>
   <div class="hm-card">
-    <el-table :data="versions" empty-text="还没有版本">
+    <el-table :data="versions">
+      <template #empty>{{ loading ? '' : '还没有版本' }}</template>
       <el-table-column label="版本" width="150">
         <template #default="{ row }">
           <span class="mono strong">v{{ row.version }}</span>

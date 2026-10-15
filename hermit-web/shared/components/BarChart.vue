@@ -7,7 +7,7 @@ export interface BarPoint {
   failure: number
 }
 
-const props = defineProps<{ points: BarPoint[]; height?: number }>()
+const props = defineProps<{ points: BarPoint[]; height?: number; loading?: boolean }>()
 
 const hovered = ref<number | null>(null)
 const chartHeight = computed(() => props.height ?? 200)
@@ -30,7 +30,7 @@ function heightOf(value: number): number {
 
 <template>
   <div class="chart" :style="{ height: `${chartHeight}px` }">
-    <div v-if="!points.length" class="empty hm-muted">所选范围内没有调用数据</div>
+    <div v-if="!points.length" class="empty hm-muted">{{ loading ? '' : '所选范围内没有调用数据' }}</div>
     <svg v-else :viewBox="`0 0 100 ${chartHeight}`" preserveAspectRatio="none" class="svg">
       <g v-for="(point, index) in points" :key="point.label" @mouseenter="hovered = index" @mouseleave="hovered = null">
         <rect :x="index * barWidth" y="0" :width="barWidth" :height="chartHeight" fill="transparent" />

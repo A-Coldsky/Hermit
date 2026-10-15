@@ -8,7 +8,7 @@ import { api, type ShellSummary } from '../api'
 import { refreshPending } from '../status'
 
 const router = useRouter()
-const loading = ref(false)
+const loading = ref(true)
 const shells = ref<ShellSummary[]>([])
 
 async function load() {
@@ -40,10 +40,10 @@ onMounted(load)
       <el-table
         v-loading="loading"
         :data="shells"
-        empty-text="还没有 Shell。到概览页从 Reef 同步，或把 YAML 放进本地 Shell 目录"
         row-class-name="clickable"
         @row-click="open"
       >
+        <template #empty>{{ loading ? '' : '还没有 Shell。到概览页从 Reef 同步，或把 YAML 放进本地 Shell 目录' }}</template>
         <el-table-column label="Shell" min-width="220">
           <template #default="{ row }">
             <div class="name">

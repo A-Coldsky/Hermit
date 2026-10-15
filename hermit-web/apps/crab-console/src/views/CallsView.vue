@@ -10,7 +10,7 @@ import { originLabels, stepTypeLabels } from '../labels'
 const route = useRoute()
 const router = useRouter()
 
-const loading = ref(false)
+const loading = ref(true)
 const calls = ref<CallSummary[]>([])
 const shells = ref<ShellSummary[]>([])
 const filter = reactive({ shell: '', action: '', limit: 100, failedOnly: false })
@@ -98,7 +98,8 @@ onMounted(async () => {
         <el-checkbox v-model="filter.failedOnly">只看失败</el-checkbox>
       </div>
 
-      <el-table v-loading="loading" :data="visible" empty-text="没有调用记录" row-class-name="clickable" @row-click="onRow">
+      <el-table v-loading="loading" :data="visible" row-class-name="clickable" @row-click="onRow">
+        <template #empty>{{ loading ? '' : '没有调用记录' }}</template>
         <el-table-column label="时间" width="170">
           <template #default="{ row }">{{ formatTime(row.at) }}</template>
         </el-table-column>

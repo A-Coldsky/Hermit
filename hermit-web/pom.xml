@@ -15,6 +15,36 @@
   <name>Hermit Web</name>
   <description>把 reef-admin 与 crab-console 的构建结果打进 classpath。</description>
 
+  <properties>
+    <hermit.web.skipTests>false</hermit.web.skipTests>
+  </properties>
+
+  <profiles>
+    <profile>
+      <id>skip-web-tests</id>
+      <activation>
+        <property>
+          <name>skipTests</name>
+        </property>
+      </activation>
+      <properties>
+        <hermit.web.skipTests>true</hermit.web.skipTests>
+      </properties>
+    </profile>
+    <profile>
+      <id>skip-web</id>
+      <activation>
+        <property>
+          <name>hermit.web.skip</name>
+          <value>true</value>
+        </property>
+      </activation>
+      <properties>
+        <hermit.web.skipTests>true</hermit.web.skipTests>
+      </properties>
+    </profile>
+  </profiles>
+
   <build>
     <plugins>
       <plugin>
@@ -75,6 +105,17 @@
             </goals>
             <configuration>
               <arguments>run build</arguments>
+            </configuration>
+          </execution>
+          <execution>
+            <id>npm-test</id>
+            <phase>test</phase>
+            <goals>
+              <goal>npm</goal>
+            </goals>
+            <configuration>
+              <skip>${hermit.web.skipTests}</skip>
+              <arguments>test</arguments>
             </configuration>
           </execution>
         </executions>

@@ -10,7 +10,8 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "build:reef": "vite build --config apps/reef-admin/vite.config.ts",
     "build:crab": "vite build --config apps/crab-console/vite.config.ts",
-    "build": "npm run typecheck && npm run build:reef && npm run build:crab"
+    "build": "npm run typecheck && npm run build:reef && npm run build:crab",
+    "test": "vitest run"
   },
   "dependencies": {
     "@element-plus/icons-vue": "2.3.2",
@@ -20,8 +21,11 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "6.0.10",
+    "@vue/test-utils": "2.5.1",
+    "jsdom": "27.4.0",
     "typescript": "5.9.3",
     "vite": "8.3.4",
+    "vitest": "5.0.4",
     "vue-tsc": "3.3.13"
   }
 }

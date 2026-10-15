@@ -6,7 +6,7 @@ import { formatTime, notifyError } from '@shared/format'
 import { api, type AuditPage } from '../api'
 import { auditActionLabels } from '../labels'
 
-const loading = ref(false)
+const loading = ref(true)
 const query = reactive({ shell: '', page: 1, size: 20 })
 const result = ref<AuditPage>({ items: [], page: 1, size: 20, total: 0 })
 
@@ -62,7 +62,8 @@ onMounted(load)
           </template>
         </el-input>
       </div>
-      <el-table v-loading="loading" :data="result.items" empty-text="没有记录">
+      <el-table v-loading="loading" :data="result.items">
+        <template #empty>{{ loading ? '' : '没有记录' }}</template>
         <el-table-column label="时间" width="180">
           <template #default="{ row }">{{ formatTime(row.at) }}</template>
         </el-table-column>

@@ -11,7 +11,7 @@ import FailureGroups from './FailureGroups.vue'
 const props = defineProps<{ shell: string; versions: ShellVersion[] }>()
 
 const range = ref('7d')
-const loading = ref(false)
+const loading = ref(true)
 const summary = ref<TideSummary | null>(null)
 const groups = ref<FailureGroup[]>([])
 const compare = ref<VersionStats[]>([])
@@ -66,14 +66,15 @@ onMounted(load)
     <div class="hm-grid cols-2">
       <div class="hm-card">
         <div class="hm-card-title"><span>调用趋势</span></div>
-        <BarChart :points="bars" :height="220" />
+        <BarChart :points="bars" :height="220" :loading="loading" />
       </div>
       <div class="hm-card">
         <div class="hm-card-title">
           <span>版本对比</span>
           <span class="hm-muted small">全部历史累计，最近 5 个已发布版本</span>
         </div>
-        <el-table :data="compare" empty-text="还没有已发布版本">
+        <el-table :data="compare">
+          <template #empty>{{ loading ? '' : '还没有已发布版本' }}</template>
           <el-table-column label="版本" min-width="100">
             <template #default="{ row }"><span class="mono">v{{ row.version }}</span></template>
           </el-table-column>
@@ -93,7 +94,8 @@ onMounted(load)
         <span>按能力</span>
         <span class="hm-muted small">P95 取各小时 P95 的最大值，是近似值</span>
       </div>
-      <el-table :data="actions" empty-text="所选范围内没有调用">
+      <el-table :data="actions">
+        <template #empty>{{ loading ? '' : '所选范围内没有调用' }}</template>
         <el-table-column label="能力" min-width="160">
           <template #default="{ row }"><span class="mono">{{ row.action }}</span></template>
         </el-table-column>
@@ -118,7 +120,7 @@ onMounted(load)
           <el-option v-for="v in versions" :key="v.version" :label="`v${v.version}`" :value="v.version" />
         </el-select>
       </div>
-      <FailureGroups :groups="groups" />
+      <FailureGroups :groups="groups" :loading="loading" />
     </div>
   </div>
 </template>

@@ -79,7 +79,7 @@ watch([range, shell], load, { immediate: true })
         <span>调用趋势</span>
         <span class="hm-muted small">按{{ bucket === 'hour' ? '小时' : '天' }}汇总</span>
       </div>
-      <BarChart :points="bars" :height="240" />
+      <BarChart :points="bars" :height="240" :loading="loading" />
     </div>
 
     <div class="hm-card">
@@ -87,7 +87,8 @@ watch([range, shell], load, { immediate: true })
         <span>按能力</span>
         <span class="hm-muted small">P95 取各小时 P95 的最大值，是近似值</span>
       </div>
-      <el-table :data="actions" empty-text="所选范围内没有调用" max-height="420">
+      <el-table :data="actions" max-height="420">
+        <template #empty>{{ loading ? '' : '所选范围内没有调用' }}</template>
         <el-table-column label="Shell" min-width="140">
           <template #default="{ row }">
             <router-link :to="`/shells/${encodeURIComponent(row.shell)}?tab=stats`" class="mono">{{ row.shell }}</router-link>
@@ -117,12 +118,13 @@ watch([range, shell], load, { immediate: true })
         <span>失败下钻</span>
         <span class="hm-muted small">共 {{ failureTotal }} 条失败样本，按版本、能力、步骤和错误码分组</span>
       </div>
-      <FailureGroups :groups="groups" show-shell />
+      <FailureGroups :groups="groups" :loading="loading" show-shell />
     </div>
 
     <div class="hm-card">
       <div class="hm-card-title"><span>自动回退记录</span></div>
-      <el-table :data="rollbacks" empty-text="所选范围内没有自动回退">
+      <el-table :data="rollbacks">
+        <template #empty>{{ loading ? '' : '所选范围内没有自动回退' }}</template>
         <el-table-column label="Shell" min-width="140">
           <template #default="{ row }"><span class="mono">{{ row.shell }}</span></template>
         </el-table-column>

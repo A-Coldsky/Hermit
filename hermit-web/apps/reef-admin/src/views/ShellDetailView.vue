@@ -142,7 +142,7 @@ watch(() => props.shell, load, { immediate: true })
         </el-tab-pane>
 
         <el-tab-pane :label="`版本（${versions.length}）`" name="versions">
-          <VersionPanel :shell="shell" :versions="versions" @changed="load" />
+          <VersionPanel :shell="shell" :versions="versions" :loading="loading" @changed="load" />
         </el-tab-pane>
 
         <el-tab-pane label="运行统计" name="stats" lazy>

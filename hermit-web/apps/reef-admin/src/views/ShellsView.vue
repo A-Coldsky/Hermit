@@ -7,7 +7,7 @@ import { formatTime, notifyError } from '@shared/format'
 import { api, type ShellSummary } from '../api'
 
 const router = useRouter()
-const loading = ref(false)
+const loading = ref(true)
 const shells = ref<ShellSummary[]>([])
 const keyword = ref('')
 
@@ -52,7 +52,8 @@ onMounted(load)
         <span class="spacer" />
         <span class="hm-muted">共 {{ filtered.length }} 个</span>
       </div>
-      <el-table v-loading="loading" :data="filtered" empty-text="还没有 Shell，先上传一个 YAML" row-class-name="clickable" @row-click="open">
+      <el-table v-loading="loading" :data="filtered" row-class-name="clickable" @row-click="open">
+        <template #empty>{{ loading ? '' : '还没有 Shell，先上传一个 YAML' }}</template>
         <el-table-column label="Shell" min-width="220">
           <template #default="{ row }">
             <div class="name">

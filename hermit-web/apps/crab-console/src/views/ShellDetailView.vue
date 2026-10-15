@@ -37,8 +37,9 @@ async function load() {
   loading.value = true
   missing.value = false
   try {
-    detail.value = await api.shell(props.shell)
+    const shell = await api.shell(props.shell)
     await loadParts()
+    detail.value = shell
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       missing.value = true

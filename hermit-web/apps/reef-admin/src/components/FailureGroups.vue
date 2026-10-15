@@ -3,11 +3,12 @@ import { CopyDocument } from '@element-plus/icons-vue'
 import { copyText, errorCodeLabels } from '@shared/format'
 import type { FailureGroup } from '../api'
 
-defineProps<{ groups: FailureGroup[]; showShell?: boolean }>()
+defineProps<{ groups: FailureGroup[]; showShell?: boolean; loading?: boolean }>()
 </script>
 
 <template>
-  <el-table :data="groups" empty-text="所选范围内没有失败上报">
+  <el-table :data="groups">
+    <template #empty>{{ loading ? '' : '所选范围内没有失败上报' }}</template>
     <el-table-column type="expand">
       <template #default="{ row }">
         <ul class="recent">

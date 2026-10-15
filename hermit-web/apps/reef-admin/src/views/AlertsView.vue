@@ -10,7 +10,7 @@ import { refreshOpenAlerts } from '../alerts'
 import { alertKindLabels } from '../labels'
 
 const status = ref<'open' | 'all'>('open')
-const loading = ref(false)
+const loading = ref(true)
 const alerts = ref<Alert[]>([])
 const acking = ref<number | null>(null)
 
@@ -53,7 +53,8 @@ onMounted(load)
     </PageHeader>
 
     <div class="hm-card">
-      <el-table v-loading="loading" :data="alerts" :empty-text="status === 'open' ? '没有未处理的告警' : '还没有告警'">
+      <el-table v-loading="loading" :data="alerts">
+        <template #empty>{{ loading ? '' : status === 'open' ? '没有未处理的告警' : '还没有告警' }}</template>
         <el-table-column type="expand">
           <template #default="{ row }">
             <div class="detail">

@@ -44,6 +44,11 @@ async function openTrace(traceId: string) {
   }
 }
 
+function failureTitle(code: string | null): string {
+  const label = errorCodeLabels[code ?? ''] ?? code ?? '调用失败'
+  return code && code !== 'AUTH_FAILED' ? `${label}（${code}）` : label
+}
+
 function onRow(row: CallSummary) {
   void router.replace({ query: { ...route.query, trace: row.traceId } })
 }
@@ -139,7 +144,7 @@ onMounted(async () => {
             type="error"
             :closable="false"
             show-icon
-            :title="`${errorCodeLabels[drawer.call.errorCode ?? ''] ?? drawer.call.errorCode}（${drawer.call.errorCode}）`"
+            :title="failureTitle(drawer.call.errorCode)"
             :description="drawer.call.errorMessage ?? ''"
             class="notice"
           />

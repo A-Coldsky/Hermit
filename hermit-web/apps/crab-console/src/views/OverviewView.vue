@@ -73,7 +73,7 @@ async function syncNow() {
 async function toggleDebug(enabled: string | number | boolean) {
   try {
     debug.value = await api.setDebug(Boolean(enabled))
-    ElMessage.success(debug.value.enabled ? '已开启调试日志' : '已关闭调试日志')
+    ElMessage.success(debug.value.enabled ? '已开启调试开关' : '已关闭调试开关')
   } catch (error) {
     notifyError(error)
   }
@@ -159,10 +159,13 @@ onMounted(load)
       </div>
 
       <div class="hm-card">
-        <div class="hm-card-title"><span>调试日志</span></div>
+        <div class="hm-card-title">
+          <span>调试开关</span>
+          <el-tag type="info" effect="plain" size="small">未接入调用记录</el-tag>
+        </div>
         <div class="debug">
-          <el-switch :model-value="debug.enabled" active-text="调试模式" @change="toggleDebug" />
-          <p class="hm-muted">调试开关开启 24 小时后自动关闭。当前版本只记录开关状态，调用记录的内容不受影响。</p>
+          <el-switch :model-value="debug.enabled" active-text="开启" @change="toggleDebug" />
+          <p class="hm-muted">当前版本只保存开关状态，不影响调用记录，也不会额外记录请求或返回内容。开启 24 小时后自动关闭。</p>
           <p v-if="debug.enabled && debug.expiresAt">
             <el-icon><Warning /></el-icon>
             将于 {{ formatTime(debug.expiresAt) }} 自动关闭

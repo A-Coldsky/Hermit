@@ -3,6 +3,7 @@ import { Lock, User } from '@element-plus/icons-vue'
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { errorText } from '@shared/format'
+import { ApiError } from '@shared/http'
 import { api } from '../api'
 import { signIn } from '../auth'
 
@@ -25,7 +26,7 @@ async function submit() {
     const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/') ? route.query.redirect : '/'
     await router.replace(redirect)
   } catch (error) {
-    failure.value = errorText(error)
+    failure.value = error instanceof ApiError && error.status === 401 ? '用户名或密码错误' : errorText(error)
   } finally {
     loading.value = false
   }

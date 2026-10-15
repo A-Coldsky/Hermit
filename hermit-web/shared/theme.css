@@ -18,8 +18,39 @@
   --hm-sidebar-text: #b8c9cc;
   --hm-sidebar-active: #1d3f44;
   --hm-accent: #f59e0b;
+  --hm-warning: var(--hm-accent);
   --hm-danger: #dc2626;
   --hm-success: #16a34a;
+
+  /* 明暗阶是对应 --hm-* 与白/黑按 Element 的比例混合，改主色时要一起重算。 */
+  --el-color-success: var(--hm-success);
+  --el-color-success-light-3: #5cbf80;
+  --el-color-success-light-5: #8bd1a5;
+  --el-color-success-light-7: #b9e3c9;
+  --el-color-success-light-8: #d0eddb;
+  --el-color-success-light-9: #e8f6ed;
+  --el-color-success-dark-2: #12823b;
+  --el-color-warning: var(--hm-warning);
+  --el-color-warning-light-3: #f8bb54;
+  --el-color-warning-light-5: #facf85;
+  --el-color-warning-light-7: #fce2b6;
+  --el-color-warning-light-8: #fdecce;
+  --el-color-warning-light-9: #fef5e7;
+  --el-color-warning-dark-2: #c47e09;
+  --el-color-danger: var(--hm-danger);
+  --el-color-danger-light-3: #e76767;
+  --el-color-danger-light-5: #ee9393;
+  --el-color-danger-light-7: #f5bebe;
+  --el-color-danger-light-8: #f8d4d4;
+  --el-color-danger-light-9: #fce9e9;
+  --el-color-danger-dark-2: #b01e1e;
+  --el-color-error: var(--el-color-danger);
+  --el-color-error-light-3: var(--el-color-danger-light-3);
+  --el-color-error-light-5: var(--el-color-danger-light-5);
+  --el-color-error-light-7: var(--el-color-danger-light-7);
+  --el-color-error-light-8: var(--el-color-danger-light-8);
+  --el-color-error-light-9: var(--el-color-danger-light-9);
+  --el-color-error-dark-2: var(--el-color-danger-dark-2);
   --hm-shadow: 0 1px 2px rgba(16, 39, 43, 0.06), 0 1px 3px rgba(16, 39, 43, 0.04);
   --hm-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
 }

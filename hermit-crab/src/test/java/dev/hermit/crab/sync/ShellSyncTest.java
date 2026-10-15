@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import dev.hermit.common.pkg.Ed25519Keys;
+import dev.hermit.common.pkg.PackageReason;
 import dev.hermit.common.pkg.ShellPackage;
 import dev.hermit.crab.engine.ShellRegistry;
 import dev.hermit.crab.store.Origin;
@@ -41,6 +42,37 @@ class ShellSyncTest {
 
     @TempDir
     Path temp;
+
+    @Test
+    void classifiesRetryablePermanentAndUnknownReasons() {
+        assertRetryable(SyncReasons.http(500));
+        assertRetryable(SyncReasons.http(404));
+        assertRetryable(SyncReasons.CURRENT_WRITE_FAILED);
+        assertRetryable(SyncReasons.REGISTRY_REJECTED);
+        assertRetryable(SyncReasons.REGISTRY_REJECTED + ":SHELL_NAME");
+        assertRetryable(SyncReasons.REGISTRY_REJECTED + ":A:B");
+        for (PackageReason reason : PackageReason.values()) {
+            assertRetryable(reason.name());
+        }
+        assertRetryable("SYNC_FAILED");
+        assertRetryable("package unreadable");
+        assertRetryable(SyncReasons.PACKAGE_MISSING);
+        assertRetryable("NOT_A_KNOWN_REASON");
+        assertRetryable(null);
+
+        assertPermanent(SyncReasons.SHELL_NAME);
+        assertPermanent(SyncReasons.VERSION_INVALID);
+        assertPermanent(SyncReasons.PATH_UNSAFE);
+        assertPermanent(SyncReasons.ZIP_TOO_LARGE);
+        assertPermanent(SyncReasons.MANIFEST_ENTRY_MISMATCH);
+
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.INSTALLED, null))).isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION))).isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_MIN_VERSION, SyncReasons.MIN_CRAB_VERSION)))
+                .isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_PINNED, SyncReasons.PINNED))).isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.INSTALLED, "HTTP_500"))).isFalse();
+    }
 
     @Test
     void installsHotReloadsAndLeavesCurrentAsARegularFile() throws Exception {
@@ -386,6 +418,18 @@ class ShellSyncTest {
 
     private static ShellOutcome outcome(SyncReport report, String shell) {
         return report.shells().stream().filter(item -> shell.equals(item.shell())).findFirst().orElseThrow();
+    }
+
+    private static void assertRetryable(String reason) {
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.REJECTED, reason))).as(String.valueOf(reason)).isTrue();
+    }
+
+    private static void assertPermanent(String reason) {
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.REJECTED, reason))).as(reason).isFalse();
+    }
+
+    private static ShellOutcome outcome(OutcomeKind kind, String reason) {
+        return new ShellOutcome("legacy_oa", "1.0.0", kind, reason);
     }
 
     private static List<String> versionDirs(OpenCrab crab) throws Exception {

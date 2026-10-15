@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.HashSet;
@@ -48,7 +49,7 @@ class CrabDatabaseTest {
                     "HOURLY_COUNTS",
                     "REPORT_META",
                     "PENDING_CREDENTIAL_DELETES");
-            assertThat(versions(fixture)).containsExactly(1, 2, 3);
+            assertThat(versions(fixture)).containsExactly(1, 2, 3, 4);
             assertThat(columnType(fixture, "CREDENTIALS", "CIPHERTEXT")).contains("BINARY");
         } finally {
             fixture.close();
@@ -58,7 +59,42 @@ class CrabDatabaseTest {
             Account account = reopened.accounts.resolve(Origin.OFFICIAL, "oa", Optional.of("alice"));
             assertThat(account.account()).isEqualTo("alice");
             assertThat(account.defaultAccount()).isTrue();
-            assertThat(versions(reopened)).containsExactly(1, 2, 3);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4);
+        }
+    }
+
+    @Test
+    void widensSyncStateValueWhenUpgradingFromVersionThree() throws Exception {
+        StoreFixture fixture = StoreFixture.open(temp);
+        try {
+            try (Connection connection = fixture.dataSource.getConnection();
+                 Statement statement = connection.createStatement()) {
+                statement.execute("DELETE FROM schema_version WHERE version = 4");
+                statement.execute("ALTER TABLE sync_state ALTER COLUMN \"value\" SET DATA TYPE VARCHAR(512)");
+            }
+            assertThat(versions(fixture)).containsExactly(1, 2, 3);
+        } finally {
+            fixture.close();
+        }
+
+        try (StoreFixture reopened = StoreFixture.open(temp)) {
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4);
+            String value = "v".repeat(600);
+            try (Connection connection = reopened.dataSource.getConnection();
+                 PreparedStatement insert = connection.prepareStatement(
+                         "INSERT INTO sync_state (name, \"value\") VALUES (?, ?)")) {
+                insert.setString(1, "manifest_snapshot");
+                insert.setString(2, value);
+                assertThat(insert.executeUpdate()).isEqualTo(1);
+                try (PreparedStatement query = connection.prepareStatement(
+                        "SELECT \"value\" FROM sync_state WHERE name = ?")) {
+                    query.setString(1, "manifest_snapshot");
+                    try (ResultSet resultSet = query.executeQuery()) {
+                        assertThat(resultSet.next()).isTrue();
+                        assertThat(resultSet.getString(1)).hasSize(600);
+                    }
+                }
+            }
         }
     }
 
@@ -67,7 +103,7 @@ class CrabDatabaseTest {
         StoreFixture fixture = StoreFixture.open(temp);
         try {
             forgetVersionTwo(fixture);
-            assertThat(versions(fixture)).containsExactly(1, 3);
+            assertThat(versions(fixture)).containsExactly(1, 3, 4);
             assertThat(tableNames(fixture)).doesNotContain("CALL_LOGS", "SESSIONS", "IDEMPOTENCY");
             assertThat(tableNames(fixture)).contains("REPORT_QUEUE", "SYNC_STATE");
         } finally {
@@ -75,7 +111,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4);
             assertThat(tableNames(reopened)).contains(
                     "CALL_LOGS", "STEP_LOGS", "IDEMPOTENCY", "SESSIONS", "CAPABILITY_SWITCHES", "DEBUG_STATE",
                     "REPORT_QUEUE", "SYNC_STATE");
@@ -83,7 +119,7 @@ class CrabDatabaseTest {
     }
 
     /**
-     * Leaves a database that recorded versions 1 and 3 and has no version-2 tables.
+     * Leaves a database that recorded versions 1, 3, and 4 and has no version-2 tables.
      * Version 3 tables stay; version 2 must not need them.
      */
     private static void forgetVersionTwo(StoreFixture fixture) throws Exception {

@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * H2 file database at {@code data/crab}. Startup applies migrations recorded in
  * {@code schema_version}. Version 1 is the account store. Version 2 adds call logs, idempotency,
  * encrypted sessions, capability switches, and the debug flag. Version 3 is sync and report state.
+ * Version 4 widens {@code sync_state.value} so a manifest snapshot can be stored beside the ETag.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Do not rewrite an applied migration.
@@ -80,6 +81,10 @@ public final class CrabDatabase implements AutoCloseable {
             if (current < 3) {
                 applyV3(connection);
                 insertVersion(connection, 3);
+            }
+            if (current < 4) {
+                applyV4(connection);
+                insertVersion(connection, 4);
             }
             return null;
         });
@@ -339,6 +344,12 @@ public final class CrabDatabase implements AutoCloseable {
                     field VARCHAR(256) NOT NULL,
                     PRIMARY KEY (shell, field)
                 )
+                """);
+    }
+
+    private static void applyV4(Connection connection) throws SQLException {
+        execute(connection, """
+                ALTER TABLE sync_state ALTER COLUMN "value" SET DATA TYPE CLOB
                 """);
     }
 

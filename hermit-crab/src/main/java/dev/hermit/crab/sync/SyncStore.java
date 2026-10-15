@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -32,13 +33,52 @@ final class SyncStore {
     }
 
     void saveEtag(String etag) {
-        if (etag == null || etag.length() > 512) {
+        if (!etagStorable(etag)) {
             return;
         }
         Db.transaction(dataSource, connection -> {
             upsertState(connection, "manifest_etag", etag);
             return null;
         });
+    }
+
+    /**
+     * Writes the ETag and the expected local versions in one transaction.
+     * A rejected ETag writes neither, so a later 304 cannot trust a snapshot that has no tag.
+     */
+    void saveEtagAndSnapshot(String etag, Map<String, String> versions) {
+        if (!etagStorable(etag)) {
+            return;
+        }
+        String snapshot = ManifestSnapshot.encode(versions);
+        Db.transaction(dataSource, connection -> {
+            upsertState(connection, "manifest_etag", etag);
+            upsertState(connection, "manifest_snapshot", snapshot);
+            return null;
+        });
+    }
+
+    void clearEtagAndSnapshot() {
+        Db.transaction(dataSource, connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "DELETE FROM sync_state WHERE name IN ('manifest_etag', 'manifest_snapshot')")) {
+                statement.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    Optional<Map<String, String>> manifestSnapshot() {
+        Optional<String> raw = Db.transaction(dataSource, connection -> optionalString(connection,
+                "SELECT \"value\" FROM sync_state WHERE name = 'manifest_snapshot'"));
+        if (raw.isEmpty()) {
+            return Optional.empty();
+        }
+        return ManifestSnapshot.decode(raw.get());
+    }
+
+    private static boolean etagStorable(String etag) {
+        return etag != null && etag.length() <= 512;
     }
 
     Optional<Pin> pin(String shell) {

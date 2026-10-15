@@ -1,0 +1,23 @@
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /src
+COPY . .
+RUN ./mvnw -B -pl hermit-crab -am install -DskipTests \
+    && ./mvnw -B -pl hermit-crab -DincludeScope=runtime dependency:copy-dependencies -DoutputDirectory=/src/hermit-crab/target/lib \
+    && mkdir -p /image/app/lib \
+    && jar=$(find hermit-crab/target -maxdepth 1 -type f -name 'hermit-crab-*.jar' ! -name '*-tests.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar') \
+    && test -n "$jar" \
+    && cp "$jar" /image/app/crab.jar \
+    && cp hermit-crab/target/lib/*.jar /image/app/lib/
+
+FROM eclipse-temurin:17-jre
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl jq util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 hermit \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /home/hermit --create-home --shell /usr/sbin/nologin hermit
+WORKDIR /app
+COPY --from=build /image/app/crab.jar /app/crab.jar
+COPY --from=build /image/app/lib /app/lib
+COPY deploy/crab-entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

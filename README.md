@@ -11,7 +11,11 @@
 
 ## Docker 部署
 
-Reef 可以用 Docker Compose 一次拉起 `reef`、`nginx`、`mysql`。Crab 不在这个 compose 里：它跑在内网、要访问老系统，仍然按下一节单独启动。
+Reef 用 Docker Compose 拉起 `reef`、`nginx`、`mysql`。Crab 要留在能访问老系统的机器上，有两种容器跑法：和 Reef 同机用 `client` profile，或者在另一台机器上只跑 Crab。也可以按下一节用 java 启动，不经过 Docker。
+
+`HERMIT_REEF_AGENT_TOKEN` 必须非空，而且 Reef 和 Crab 用同一个值。Reef 用它拒绝空令牌的 `/agent/**`，Crab 把它写进 `reef.token`。空令牌时两边都不会启动。
+
+Crab 控制台只认套接字上的回环地址，页面是 `http://127.0.0.1:<端口>/console/`。`/console/api` 还要请求头 `X-Hermit-Console: 1`。容器不会为了方便关掉这两条限制，也没有把 `server.host` 改成 `0.0.0.0`。Crab 使用宿主机网络并监听 `127.0.0.1`，这样宿主机上打开控制台时对端仍是回环。不用端口映射：即便写成 `127.0.0.1:7777:7777`，容器里看到的对端也是代理或网桥地址，回环校验会返回 403。Docker Desktop 的 Mac/Windows 上，宿主机网络落在虚拟机里，浏览器打不开 Crab 控制台。
 
 复制环境文件。生产环境必须改掉 `.env.example` 里标明的数据库密码、root 密码、管理员口令和 agent token：
 
@@ -19,21 +23,56 @@ Reef 可以用 Docker Compose 一次拉起 `reef`、`nginx`、`mysql`。Crab 不
 cp .env.example .env
 ```
 
-启动：
+只启动 Reef：
 
 ```bash
 docker compose up -d --build
 ```
 
-浏览器打开 `http://localhost/`（`.env` 里的 `HTTP_PORT` 默认是 80）。看 Reef 日志：
+同一台 Linux 机器上连 Crab 一起启动。Crab 访问的 Reef 地址是 `http://127.0.0.1:$HTTP_PORT`，令牌用同一份 `HERMIT_REEF_AGENT_TOKEN`：
+
+```bash
+docker compose --profile client up -d --build
+```
+
+浏览器打开 `http://localhost/`（`.env` 里的 `HTTP_PORT` 默认是 80）进入 Reef 管理页。Crab 控制台是 `http://127.0.0.1:7777/console/`（端口由 `HERMIT_CRAB_PORT` 决定）。看日志：
 
 ```bash
 docker compose logs -f reef
+docker compose --profile client logs -f crab
 ```
 
-数据在两个卷里：`reef-mysql` 是 MySQL 数据，`reef-data` 挂在容器的 `/data`（签名密钥和已发布的 YAML）。升级时保留这两个卷，否则密钥和库会换掉。
+在另一台机器上只部署 Crab 时，用独立的 compose。`.env` 里写上 Reef 的地址、同一个令牌，以及管理员口令或公钥文件。实例号和主密钥可选：
 
-库里还没有管理员时，第一次启动用 `.env` 的 `HERMIT_REEF_ADMIN_USER` 和 `HERMIT_REEF_ADMIN_PASSWORD` 创建第一个管理员。之后再启动不会改已有管理员的密码。
+```bash
+docker compose -f docker-compose.crab.yml up -d --build
+```
+
+等价的 `docker run`（把变量换成实际值；公钥文件和主密钥文件二选一，见 `.env.example`）：
+
+```bash
+docker build -f Dockerfile.crab -t hermit-crab .
+docker run -d --name hermit-crab --network host \
+  -e HERMIT_HOME=/var/lib/hermit \
+  -e HERMIT_REEF_URL=http://reef.example \
+  -e HERMIT_REEF_AGENT_TOKEN='与 Reef 相同的令牌' \
+  -e HERMIT_CRAB_PORT=7777 \
+  -e HERMIT_CRAB_INSTANCE_ID='11111111-1111-1111-1111-111111111111' \
+  -e HERMIT_REEF_PUBLIC_KEY_FILE=/run/hermit/reef.pub \
+  -v hermit-crab:/var/lib/hermit \
+  -v /path/to/reef.pub:/run/hermit/reef.pub:ro \
+  hermit-crab
+```
+
+不挂公钥时，加上 `HERMIT_REEF_ADMIN_USER` 和 `HERMIT_REEF_ADMIN_PASSWORD`，第一次启动会登录 Reef 并把签名公钥写入卷里的 `reef.pub`。
+
+数据卷：`reef-mysql` 是 MySQL 数据，`reef-data` 挂在 Reef 的 `/data`（签名密钥和已发布的 YAML），`crab-data`（或 `docker run` 的命名卷）挂在 Crab 的 `HERMIT_HOME`（`config.yml`、`reef.pub`、`data/`）。升级时保留这些卷，否则密钥和库会换掉。
+
+凭证主密钥不进镜像，也不进 `config.yml`。设置 `HERMIT_MASTER_KEY`（32 字节的 Base64）时只用环境变量；不设时 Crab 读写数据卷里的 `data/master.key`，没有就创建。`HERMIT_MASTER_KEY_FILE` 指向容器内已有的密钥文件，入口脚本把它复制到 `data/master.key`。已经有凭证之后不要更换来源。
+
+`HERMIT_CRAB_INSTANCE_ID` 是可选的 UUID。不设则第一次启动写到 `data/instance-id`。卷里已有另一份实例号时不会覆盖。
+
+库里还没有管理员时，第一次启动用 `.env` 的 `HERMIT_REEF_ADMIN_USER` 和 `HERMIT_REEF_ADMIN_PASSWORD` 创建第一个管理员。之后再启动不会改已有管理员的密码。Crab 卷里已有 `config.yml` 时不会覆盖；这时 `HERMIT_REEF_URL`、令牌和端口必须和文件里的一致，否则入口脚本退出。
 
 ## 第一期快速开始
 

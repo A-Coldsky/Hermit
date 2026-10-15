@@ -1,0 +1,37 @@
+# 只在客户端机器上跑 Crab。Reef 在别的机器上，用 HERMIT_REEF_URL 指过去。
+# 不要和仓库根目录的 compose 同时占用同一份数据卷和同一个 HERMIT_CRAB_PORT。
+#
+# 控制台只听 127.0.0.1，并且 /console/api 要带 X-Hermit-Console: 1。
+# 这里用宿主机网络，不用端口映射：即便映射绑在 127.0.0.1，容器里看到的对端也不是回环，控制台会 403。
+# 不要把 server.host 改成 0.0.0.0，也不要在容器里关掉回环校验。
+
+services:
+  crab:
+    image: hermit-crab
+    build:
+      context: .
+      dockerfile: Dockerfile.crab
+    network_mode: host
+    environment:
+      HERMIT_HOME: /var/lib/hermit
+      HERMIT_REEF_URL: ${HERMIT_REEF_URL:-}
+      HERMIT_REEF_AGENT_TOKEN: ${HERMIT_REEF_AGENT_TOKEN:-}
+      HERMIT_REEF_ADMIN_USER: ${HERMIT_REEF_ADMIN_USER:-}
+      HERMIT_REEF_ADMIN_PASSWORD: ${HERMIT_REEF_ADMIN_PASSWORD:-}
+      HERMIT_REEF_PUBLIC_KEY_FILE: ${HERMIT_REEF_PUBLIC_KEY_FILE:-}
+      HERMIT_CRAB_PORT: ${HERMIT_CRAB_PORT:-7777}
+      HERMIT_CRAB_INSTANCE_ID: ${HERMIT_CRAB_INSTANCE_ID:-}
+      HERMIT_MASTER_KEY: ${HERMIT_MASTER_KEY:-}
+      HERMIT_MASTER_KEY_FILE: ${HERMIT_MASTER_KEY_FILE:-}
+      TZ: UTC
+    volumes:
+      - crab-data:/var/lib/hermit
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS \"http://127.0.0.1:$${HERMIT_CRAB_PORT:-7777}/console/\""]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
+volumes:
+  crab-data:

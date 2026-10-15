@@ -19,6 +19,7 @@ services:
       start_period: 40s
 
   reef:
+    image: hermit-reef
     build: .
     # eclipse-temurin:17-jre 基于 Ubuntu，/bin/sh 是 dash，脚本保持 POSIX。
     entrypoint:
@@ -63,6 +64,41 @@ services:
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
 
+  # 和 Reef 共用 HERMIT_REEF_AGENT_TOKEN，入口脚本把它写成 reef.token。
+  # 宿主机网络 + 只听 127.0.0.1，控制台的回环校验才仍然成立。不要改成端口映射。
+  crab:
+    profiles: ["client"]
+    image: hermit-crab
+    build:
+      context: .
+      dockerfile: Dockerfile.crab
+    network_mode: host
+    depends_on:
+      reef:
+        condition: service_healthy
+      nginx:
+        condition: service_started
+    environment:
+      HERMIT_HOME: /var/lib/hermit
+      HERMIT_REEF_URL: http://127.0.0.1:${HTTP_PORT:-80}
+      HERMIT_REEF_AGENT_TOKEN: ${HERMIT_REEF_AGENT_TOKEN}
+      HERMIT_REEF_ADMIN_USER: ${HERMIT_REEF_ADMIN_USER}
+      HERMIT_REEF_ADMIN_PASSWORD: ${HERMIT_REEF_ADMIN_PASSWORD}
+      HERMIT_CRAB_PORT: ${HERMIT_CRAB_PORT:-7777}
+      HERMIT_CRAB_INSTANCE_ID: ${HERMIT_CRAB_INSTANCE_ID:-}
+      HERMIT_MASTER_KEY: ${HERMIT_MASTER_KEY:-}
+      HERMIT_MASTER_KEY_FILE: ${HERMIT_MASTER_KEY_FILE:-}
+      TZ: UTC
+    volumes:
+      - crab-data:/var/lib/hermit
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS \"http://127.0.0.1:$${HERMIT_CRAB_PORT:-7777}/console/\""]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
 volumes:
   reef-mysql:
   reef-data:
+  crab-data:

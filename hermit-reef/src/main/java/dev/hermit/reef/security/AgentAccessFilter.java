@@ -40,8 +40,9 @@ public class AgentAccessFilter extends OncePerRequestFilter {
             writer.write(response, 400, ReefErrorCode.INVALID_INPUT, "invalid instance id", TraceIds.current(request));
             return;
         }
+        // 未配置和写错走同一条拒绝。空令牌不能把 /agent/** 放开。
         String configured = properties.configuredAgentToken();
-        if (configured != null && !TokenEquality.constantTimeEquals(configured, request.getHeader(TOKEN_HEADER))) {
+        if (configured == null || !TokenEquality.constantTimeEquals(configured, request.getHeader(TOKEN_HEADER))) {
             writer.write(response, 401, ReefErrorCode.UNAUTHORIZED, ReefErrorCode.UNAUTHORIZED.message(),
                     TraceIds.current(request));
             return;

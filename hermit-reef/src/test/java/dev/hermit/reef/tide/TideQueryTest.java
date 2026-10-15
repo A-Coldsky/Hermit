@@ -36,11 +36,12 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest
+@SpringBootTest(properties = "hermit.reef.agent-token=" + TideQueryTest.TOKEN)
 @AutoConfigureMockMvc
 @Import(ReefTestConfig.class)
 class TideQueryTest {
 
+    static final String TOKEN = "tide-query-agent-token";
     private static final String INSTANCE = "123e4567-e89b-12d3-a456-426614174000";
     private static final Instant DAY = Instant.parse("2026-06-01T00:00:00Z");
     private static final Instant NEXT_HOUR = Instant.parse("2026-06-01T01:00:00Z");
@@ -90,6 +91,7 @@ class TideQueryTest {
         mockMvc.perform(post("/agent/reports")
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
+                        .header(AgentAccessFilter.TOKEN_HEADER, TOKEN)
                         .content(ReportJson.write(batch)))
                 .andExpect(status().isOk());
 

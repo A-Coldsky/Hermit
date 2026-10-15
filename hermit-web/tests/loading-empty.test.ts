@@ -38,7 +38,7 @@ describe('Reef Shell 目录', () => {
   it('请求返回前不显示空态', async () => {
     const pending = deferred<unknown[]>()
     reef.shells.mockReturnValue(pending.promise)
-    const wrapper = mountPage(ReefShellsView)
+    const wrapper = await mountPage(ReefShellsView)
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('还没有 Shell')
@@ -50,7 +50,7 @@ describe('Reef Shell 目录', () => {
 
   it('有数据时不显示空态', async () => {
     reef.shells.mockResolvedValue([reefShell])
-    const wrapper = mountPage(ReefShellsView)
+    const wrapper = await mountPage(ReefShellsView)
     await flushPromises()
 
     expect(wrapper.text()).toContain('协同办公 OA')
@@ -65,7 +65,7 @@ describe('Reef 概览', () => {
     reef.tideSummary.mockResolvedValue({ bucket: 'day', from: '', to: '', p95Note: '', series: [] })
     reef.alerts.mockReturnValue(alerts.promise)
     reef.tideRollbacks.mockResolvedValue({ events: [] })
-    const wrapper = mountPage(DashboardView)
+    const wrapper = await mountPage(DashboardView)
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('一切正常')
@@ -83,7 +83,7 @@ describe('Crab Shell 列表', () => {
   it('请求返回前不显示空态', async () => {
     const pending = deferred<{ shells: unknown[] }>()
     crab.shells.mockReturnValue(pending.promise)
-    const wrapper = mountPage(CrabShellsView)
+    const wrapper = await mountPage(CrabShellsView)
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('还没有 Shell')

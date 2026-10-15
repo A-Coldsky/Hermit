@@ -16,10 +16,23 @@ export function deferred<T>(): Deferred<T> {
   return { promise, resolve }
 }
 
-export function mountPage(component: Component, props: Record<string, unknown> = {}) {
+export interface MountOptions {
+  props?: Record<string, unknown>
+  /** 弹窗和抽屉会传送到 body，断言它们时需要挂到文档上。 */
+  attach?: boolean
+  path?: string
+}
+
+export async function mountPage(component: Component, options: MountOptions = {}) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/:pathMatch(.*)*', component: { render: () => null } }],
   })
-  return mount(component, { props, global: { plugins: [ElementPlus, router] } })
+  await router.push(options.path ?? '/')
+  await router.isReady()
+  return mount(component, {
+    props: options.props ?? {},
+    attachTo: options.attach ? document.body : undefined,
+    global: { plugins: [ElementPlus, router] },
+  })
 }

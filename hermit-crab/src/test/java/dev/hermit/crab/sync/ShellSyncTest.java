@@ -6,6 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -118,6 +121,171 @@ class ShellSyncTest {
             assertThat(again.removed()).isEmpty();
             assertThat(reef.downloads()).isEqualTo(downloads);
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+        }
+    }
+
+    @Test
+    void retriesAPackageAfterTheDownloadFails() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+            reef.downloadStatus("legacy_oa", 500);
+            ShellRegistry registry = new ShellRegistry();
+            ShellSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+
+            SyncReport failed = sync.syncOnce();
+
+            assertThat(outcome(failed, "legacy_oa").reason()).isEqualTo(SyncReasons.http(500));
+            assertThat(syncState(crab, "manifest_etag")).isNull();
+            assertThat(syncState(crab, "manifest_snapshot")).isNull();
+            int downloads = reef.downloads();
+
+            reef.downloadStatus("legacy_oa", 200);
+            SyncReport installed = sync.syncOnce();
+
+            assertThat(installed.notModified()).isFalse();
+            assertThat(reef.downloads()).isGreaterThan(downloads);
+            assertThat(outcome(installed, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(Files.readString(crab.paths.shells().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.0");
+        }
+    }
+
+    @Test
+    void retriesAnInstallAfterTheCurrentPointerCannotBeWritten() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+            ShellRegistry registry = new ShellRegistry();
+            ShellSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            assertThat(syncState(crab, "manifest_etag")).isNotNull();
+
+            Path current = crab.paths.shells().resolve("legacy_oa").resolve("current");
+            Files.delete(current);
+            Files.createDirectory(current);
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.1"));
+            SyncReport failed = sync.syncOnce();
+
+            assertThat(outcome(failed, "legacy_oa").reason()).isEqualTo(SyncReasons.CURRENT_WRITE_FAILED);
+            assertThat(syncState(crab, "manifest_etag")).isNull();
+            assertThat(syncState(crab, "manifest_snapshot")).isNull();
+            int downloads = reef.downloads();
+
+            Files.delete(current);
+            SyncReport installed = sync.syncOnce();
+
+            assertThat(installed.notModified()).isFalse();
+            assertThat(reef.downloads()).isGreaterThan(downloads);
+            assertThat(outcome(installed, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(Files.readString(crab.paths.shells().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
+        }
+    }
+
+    @Test
+    void aPermanentRejectionStillStoresTheEtag() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            reef.publishWrongSha(ShellTexts.standard("legacy_oa", "1.0.0"));
+            ShellSync sync = sync(reef, crab, new ShellRegistry(), Optional.empty(), Clock.systemUTC());
+            SyncReport rejected = sync.syncOnce();
+
+            assertThat(outcome(rejected, "legacy_oa").reason()).isEqualTo(SyncReasons.MANIFEST_ENTRY_MISMATCH);
+            assertThat(syncState(crab, "manifest_etag")).isNotBlank();
+            assertThat(syncState(crab, "manifest_snapshot")).isEqualTo("{}");
+            int downloads = reef.downloads();
+
+            SyncReport again = sync.syncOnce();
+
+            assertThat(again.notModified()).isTrue();
+            assertThat(again.shells()).isEmpty();
+            assertThat(reef.downloads()).isEqualTo(downloads);
+        }
+    }
+
+    @Test
+    void refetchesWhenTheLocalCurrentDriftsFromTheSnapshot() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+            ShellRegistry registry = new ShellRegistry();
+            ShellSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            Path current = crab.paths.shells().resolve("legacy_oa").resolve("current");
+            assertThat(syncState(crab, "manifest_snapshot")).isEqualTo("{\"legacy_oa\":\"1.0.0\"}");
+
+            Files.writeString(current, "9.9.9\n");
+            int downloads = reef.downloads();
+            int manifests = manifestRequests(reef);
+            SyncReport changed = sync.syncOnce();
+
+            assertThat(changed.notModified()).isFalse();
+            assertThat(outcome(changed, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(Files.readString(current).trim()).isEqualTo("1.0.0");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            assertThat(reef.downloads()).isGreaterThan(downloads);
+            assertThat(manifestRequests(reef) - manifests).isEqualTo(2);
+
+            Files.delete(current);
+            downloads = reef.downloads();
+            manifests = manifestRequests(reef);
+            SyncReport deleted = sync.syncOnce();
+
+            assertThat(deleted.notModified()).isFalse();
+            assertThat(outcome(deleted, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(Files.readString(current).trim()).isEqualTo("1.0.0");
+            assertThat(reef.downloads()).isGreaterThan(downloads);
+            assertThat(manifestRequests(reef) - manifests).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void refetchesWhenTheStoredSnapshotIsMissing() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+            ShellSync sync = sync(reef, crab, new ShellRegistry(), Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            try (Connection connection = crab.dataSource.getConnection()) {
+                connection.setAutoCommit(true);
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "DELETE FROM sync_state WHERE name = 'manifest_snapshot'")) {
+                    assertThat(statement.executeUpdate()).isEqualTo(1);
+                }
+            }
+
+            int downloads = reef.downloads();
+            int manifests = manifestRequests(reef);
+            SyncReport report = sync.syncOnce();
+
+            assertThat(report.notModified()).isFalse();
+            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.SKIPPED_SAME);
+            assertThat(reef.downloads()).isEqualTo(downloads);
+            assertThat(manifestRequests(reef) - manifests).isEqualTo(2);
+            assertThat(syncState(crab, "manifest_etag")).isNotBlank();
+            assertThat(syncState(crab, "manifest_snapshot")).isEqualTo("{\"legacy_oa\":\"1.0.0\"}");
+        }
+    }
+
+    @Test
+    void aRetryableFailureDoesNotCheckpointASuccessfulSibling() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+            reef.publishTamperedSignature(ShellTexts.standard("other_sys", "1.0.0"));
+            ShellRegistry registry = new ShellRegistry();
+            ShellSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+
+            SyncReport first = sync.syncOnce();
+
+            assertThat(outcome(first, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(outcome(first, "other_sys").reason()).isEqualTo("BAD_SIGNATURE");
+            assertThat(syncState(crab, "manifest_etag")).isNull();
+            assertThat(registry.snapshot()).containsOnlyKeys("legacy_oa");
+
+            reef.publish(ShellTexts.standard("other_sys", "1.0.0"));
+            int before = reef.paths().size();
+            SyncReport second = sync.syncOnce();
+            List<String> paths = reef.paths();
+            List<String> added = paths.subList(before, paths.size());
+
+            assertThat(outcome(second, "legacy_oa").kind()).isEqualTo(OutcomeKind.SKIPPED_SAME);
+            assertThat(outcome(second, "other_sys").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(added).noneMatch(path -> path.startsWith("/agent/shells/legacy_oa/"));
+            assertThat(added).anyMatch(path -> path.startsWith("/agent/shells/other_sys/"));
         }
     }
 
@@ -418,6 +586,30 @@ class ShellSyncTest {
 
     private static ShellOutcome outcome(SyncReport report, String shell) {
         return report.shells().stream().filter(item -> shell.equals(item.shell())).findFirst().orElseThrow();
+    }
+
+    private static String syncState(OpenCrab crab, String name) throws Exception {
+        try (Connection connection = crab.dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT \"value\" FROM sync_state WHERE name = ?")) {
+            statement.setString(1, name);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return null;
+                }
+                return resultSet.getString(1);
+            }
+        }
+    }
+
+    private static int manifestRequests(FakeReef reef) {
+        int count = 0;
+        for (String path : reef.paths()) {
+            if ("/agent/shells/manifest".equals(path)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static void assertRetryable(String reason) {

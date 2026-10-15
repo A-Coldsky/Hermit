@@ -36,12 +36,14 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-@SpringBootTest
+@SpringBootTest(properties = "hermit.reef.agent-token=" + ReportIngestTest.TOKEN)
 @AutoConfigureMockMvc
 @Import(ReefTestConfig.class)
 class ReportIngestTest {
 
+    static final String TOKEN = "report-ingest-agent-token";
     private static final String INSTANCE = "123e4567-e89b-12d3-a456-426614174000";
     private static final String OTHER = "123e4567-e89b-12d3-a456-426614174001";
     private static final Instant SENT = Instant.parse("2026-06-01T00:00:00Z");
@@ -84,7 +86,7 @@ class ReportIngestTest {
                 Integer.class);
         assertThat(ackColumn).isEqualTo(1);
 
-        mockMvc.perform(post("/agent/reports")
+        mockMvc.perform(agent(post("/agent/reports"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
                         .header(TraceIds.HEADER, "trace-fixed")
@@ -146,7 +148,7 @@ class ReportIngestTest {
         assertThat(mismatch.getResponse().getStatus()).isEqualTo(422);
         assertThat(storedRows()).isZero();
 
-        mockMvc.perform(post("/agent/reports")
+        mockMvc.perform(agent(post("/agent/reports"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(ReportJson.write(sample("1.2.3"))))
                 .andExpect(status().isBadRequest())
@@ -160,7 +162,7 @@ class ReportIngestTest {
         ObjectMapper mapper = new ObjectMapper();
         ObjectNode again = (ObjectNode) mapper.readTree(ReportJson.write(sample("1.2.3")));
         ((ObjectNode) again.get("failures").get(0)).put("summary", "later");
-        mockMvc.perform(post("/agent/reports")
+        mockMvc.perform(agent(post("/agent/reports"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
                         .content(mapper.writeValueAsString(again)))
@@ -174,7 +176,7 @@ class ReportIngestTest {
                 .add(failureNode(mapper, "same-trace", "first"))
                 .add(failureNode(mapper, "same-trace", "second")));
         jdbc.update("DELETE FROM failure_reports");
-        mockMvc.perform(post("/agent/reports")
+        mockMvc.perform(agent(post("/agent/reports"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
                         .content(mapper.writeValueAsString(pair)))
@@ -274,8 +276,12 @@ class ReportIngestTest {
         assertThat(count("failure_reports")).isEqualTo(1);
     }
 
+    private static MockHttpServletRequestBuilder agent(MockHttpServletRequestBuilder request) {
+        return request.header(AgentAccessFilter.TOKEN_HEADER, TOKEN);
+    }
+
     private MvcResult send(String json, String instance) throws Exception {
-        return mockMvc.perform(post("/agent/reports")
+        return mockMvc.perform(agent(post("/agent/reports"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(AgentAccessFilter.INSTANCE_HEADER, instance)
                         .content(json))
@@ -283,7 +289,7 @@ class ReportIngestTest {
     }
 
     private void postBytes(byte[] body, int status) throws Exception {
-        mockMvc.perform(post("/agent/reports")
+        mockMvc.perform(agent(post("/agent/reports"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
                         .content(body))
@@ -292,7 +298,7 @@ class ReportIngestTest {
     }
 
     private void expectStatus(ReportBatch batch, int status) throws Exception {
-        mockMvc.perform(post("/agent/reports")
+        mockMvc.perform(agent(post("/agent/reports"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
                         .content(ReportJson.write(batch)))

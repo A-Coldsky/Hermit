@@ -20,6 +20,17 @@ services:
 
   reef:
     build: .
+    # eclipse-temurin:17-jre 基于 Ubuntu，/bin/sh 是 dash，脚本保持 POSIX。
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        token=$$(printf '%s' "$$HERMIT_REEF_AGENT_TOKEN" | tr -d '[:space:]')
+        if [ -z "$$token" ]; then
+          echo '必须设置 HERMIT_REEF_AGENT_TOKEN，空令牌不会启动 Reef。' >&2
+          exit 1
+        fi
+        exec java -jar /app/reef.jar
     depends_on:
       mysql:
         condition: service_healthy

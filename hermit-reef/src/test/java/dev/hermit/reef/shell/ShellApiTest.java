@@ -195,6 +195,11 @@ class ShellApiTest {
                 .andExpect(jsonPath("$.data[0].uploadedBy").value(TestSecrets.USERNAME))
                 .andExpect(jsonPath("$.data[0].current").value(false))
                 .andExpect(jsonPath("$.data[0].warningCount").value(2))
+                .andExpect(jsonPath("$.data[0].warnings.length()").value(2))
+                .andExpect(jsonPath("$.data[0].warnings[0].code").value(ValidationCodes.UNKNOWN_RELATED))
+                .andExpect(jsonPath("$.data[0].warnings[0].path").value("actions.list_todo.related[0]"))
+                .andExpect(jsonPath("$.data[0].warnings[0].message").value("related 指向不存在的能力 approve"))
+                .andExpect(jsonPath("$.data[0].warnings[1].message").value("related 指向不存在的能力 list_done"))
                 .andExpect(jsonPath("$.data[0].publishedBy").value(nullValue()));
 
         MvcResult yaml = mockMvc.perform(get("/api/admin/shells/legacy_oa/versions/1.0.0/yaml")

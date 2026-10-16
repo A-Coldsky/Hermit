@@ -11,6 +11,7 @@ import java.util.Set;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
+import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.ParamSpec;
 import dev.hermit.common.model.ShellDoc;
 import dev.hermit.common.model.Step;
@@ -60,6 +61,16 @@ public final class ShellValidator {
         }
         if (doc.credentials() == null) {
             errors.add(issue(ValidationCodes.MISSING_CREDENTIALS, "credentials", "缺少 credentials"));
+        }
+        // 解析器仍接受 type: secret，这里拒绝并指向该字段的 type，便于改放到 credentials。
+        for (Map.Entry<String, ConfigField> entry : doc.config().entrySet()) {
+            ConfigField field = entry.getValue();
+            if (field != null && "secret".equals(field.type())) {
+                errors.add(issue(
+                        ValidationCodes.CONFIG_SECRET,
+                        "config." + entry.getKey() + ".type",
+                        "秘密要放在 credentials"));
+            }
         }
         if (ctx.currentCrabVersion() != null
                 && doc.minCrabVersion().compareTo(ctx.currentCrabVersion()) > 0) {

@@ -269,6 +269,77 @@ class ShellValidatorTest {
     }
 
     @Test
+    void rejectsConfigSecretAndAllowsCredentialSecret() {
+        ValidationResult rejected = ShellValidator.validate(ShellParser.parse("""
+                shell: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                config:
+                  access_value: { type: secret, label: Access value }
+                  page_size: { type: text, default: "20" }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - request: { path: "{{credential.password}}" }
+                """), ShellValidator.Context.of(null));
+        assertThat(rejected.errors())
+                .filteredOn(issue -> issue.code().equals(ValidationCodes.CONFIG_SECRET))
+                .singleElement()
+                .satisfies(issue -> {
+                    assertThat(issue.path()).isEqualTo("config.access_value.type");
+                    assertThat(issue.message()).isEqualTo("秘密要放在 credentials");
+                });
+        assertThat(rejected.warnings()).extracting(ValidationIssue::code)
+                .doesNotContain(ValidationCodes.CONFIG_SECRET);
+
+        ValidationResult credentialsOnly = ShellValidator.validate(ShellParser.parse("""
+                shell: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                config:
+                  page_size: { type: text, default: "20" }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - request: { path: "{{credential.password}}" }
+                """), ShellValidator.Context.of(null));
+        assertThat(codes(credentialsOnly)).doesNotContain(ValidationCodes.CONFIG_SECRET);
+        assertThat(credentialsOnly.errors()).isEmpty();
+    }
+
+    @Test
     void configBaseUrlIsAllowedWithoutADeclaration() {
         ValidationResult allowed = ShellValidator.validate(ShellParser.parse(referencing("""
                 - request: { path: "{{config.base_url}}/home" }

@@ -130,7 +130,7 @@ Reef 要一致备份数据库、shells、keys。Compose 的 `reef-mysql` 与 `re
 - 仓库 Crab 容器方案按 Linux host 网络使用；不应改成普通端口映射来绕过控制台的回环校验。macOS/Windows 可直接运行 Java，本次未验证 Docker Desktop 网络行为。
 - Reef 的 token 是共享令牌，不是每实例独立证书；实例 UUID 是标识，不能替代鉴权。
 - 规则签名证明发布来源与完整性，不证明规则业务正确；上线新规则仍要针对老系统验收。
-- `config.type: secret` 当前只影响输入呈现，数据库仍为明文；秘密必须放 `credentials`，见审计 A02。
+- `config` 的 `type: secret` 会被校验拒绝；秘密必须放 `credentials`。
 
 ## 排障
 

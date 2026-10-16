@@ -11,7 +11,7 @@
 | HTTP 请求、登录、alive_check、Cookie 会话 | 已实现，有缺陷 | RuleEngine/HttpCalls/SessionManager；慢速总超时、Cookie 历史增长见 A03/A04 |
 | CSS/XPath/JSONPath/regex 提取 | 已实现 | Extractors + EngineUnitTest/LegacyOaEngineTest |
 | assert/set/script | 已实现 | StepRunner/ScriptStep；脚本 Java 隔离和时间/结果限制有测试，无进程级内存隔离 |
-| 多账号/默认账号/凭证/配置 | 已实现，有缺陷 | ShellAdmin + store；credentials 加密只写；config.secret 漏洞见 A02 |
+| 多账号/默认账号/凭证/配置 | 已实现，有缺陷 | ShellAdmin + store；credentials 加密只写 |
 | API Key 创建、撤销、scope | 已实现，有缺陷 | ApiKeyService/Principal；按 Shell/action/只读限制，未按账号限制；版本切换风险 A01 |
 | HTTP 网关/别名/OpenAPI | 已实现 | GatewayHttpTest；OpenAPI 无鉴权且仅描述能力接口 |
 | POST 幂等响应缓存 | 已实现，有缺陷 | 24h 密文缓存；无参数摘要/版本区分，锁不回收见 A05 |

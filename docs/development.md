@@ -13,7 +13,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 ./mvnw -B verify
 ```
 
-Maven 前端插件固定 Node 22.14.0。本地前端开发可用 Node 22.14+，具体依赖约束以 lockfile 的 engines 为准。
+Maven 前端插件固定 Node 22.14.0，本地前端开发可使用相同版本。当前 lockfile 中 Vitest 的 Node 约束为 `^22.12.0 || ^24.0.0 || >=26.0.0`，不能理解为任意高于 22 的版本都支持；升级工具链时同时检查 Vite、jsdom 等依赖的 engines。
 
 ## 常用命令
 
@@ -43,6 +43,8 @@ Maven 前端插件固定 Node 22.14.0。本地前端开发可用 Node 22.14+，�
 `hermit-it` 用 Surefire 执行，但依赖上游 package 阶段生成的 Reef 可执行 jar 和 Crab test-jar；干净仓库全量入口是 `verify`，不能以根目录 `test` 替代。
 
 `-DskipTests` 跳过 Java 测试执行，并通过 Maven profile 跳过前端测试，仍可能编译 Java 测试。`-Dhermit.web.skip=true` 跳过 npm/前端测试/页面资源复制，并清掉旧的 classpath 页面资源；缺页面时有占位页。仅跳过 Vitest 可用 `-Dhermit.web.skipTests=true`。完整发布验证不要带这些跳过参数。跳过前端不等于离线模式。
+
+注意 `skip-web-tests` profile 按 `skipTests` 属性是否存在激活，所以 `-DskipTests=false` 也会跳过 Vitest，即使 Java 测试正常执行。全量验证最直接的方式是不传 `skipTests`；必须保留此参数时，同时显式设置 `-Dhermit.web.skipTests=false`，并检查构建日志确实执行了 Vitest。
 
 ## 前端开发
 

@@ -61,7 +61,7 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 外部方法：显式 method 优先；否则 `mcp.read_only` 或 `idempotent` 为 true 时选 GET，其余 POST。方法枚举只支持 GET/POST，这与步骤内可配置的上游 HTTP method 不同。
 
 - 权限中的只读仅由 `mcp.read_only` 决定，不能因为 GET 或 idempotent 就推断只读。
-- `idempotent` 决定会话失效后是否允许重新登录并重放，默认 false。
+- `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
 - POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。
 - `mcp.expose` 默认 true，read_only/destructive 默认 false。当前 MCP destructiveHint 从“非只读且非幂等”计算，声明的 destructive 字段没有独立传入注解，见功能状态。
 
@@ -98,7 +98,9 @@ CSS/各提取器的详细参数看 [Extractors](../hermit-crab/src/main/java/dev
 
 `input`、`credential`、`config`、`response`、`now` 是保留变量，不能通过 set/extract/script.into 覆盖。request 更新 response，extract/set 产生后续步骤可用的变量。
 
-输出可采用映射模板，也可用说明式字段。说明式字段省略 value 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。禁止直接把 credential 引用放进输出，执行后还会对已知凭证/Cookie 和敏感字段做脱敏。
+输出可采用映射模板，也可用说明式字段。说明式字段省略 value 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。校验器禁止在输出中直接引用 credential。
+
+实际输出由 `OutputMask` 遍历字符串值，替换长度至少 4 个字符的已知凭证/Cookie 值及其 URL 编码形式。它不按 `password`、`token` 等字段名屏蔽内容，也不替换 Map 的键；短值、尚未登记的上游秘密及哈希等派生值没有普遍保护。`Redactor.redactFields` 虽提供字段名屏蔽能力，但当前输出链没有调用它。规则应只返回业务需要的数据，不能依靠字段名自动脱敏。
 
 ```yaml
 - script:

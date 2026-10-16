@@ -82,7 +82,7 @@ sequenceDiagram
   I-->>C: API envelope / MCP result
 ```
 
-同一 `(origin, shell, account)` 由公平锁串行执行；不同账号可并行。会话失效时只有 `idempotent: true` 的能力会重新登录并重放一次，其他返回 `SESSION_EXPIRED`。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。
+同一 `(origin, shell, account)` 由公平锁串行执行；不同账号可并行。执行能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中检测到会话失效时，只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。
 
 ## 数据与信任
 

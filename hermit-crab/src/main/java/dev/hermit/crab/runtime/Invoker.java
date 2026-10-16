@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Logger;
 
@@ -35,6 +34,8 @@ import dev.hermit.crab.store.ShellConfigStore;
 public final class Invoker {
     private static final Logger LOG = Logger.getLogger(Invoker.class.getName());
     private static final int NAME_LIMIT = 256;
+    /** Power of two. Distinct keys share a stripe; stripes are not removed after a request. */
+    static final int IDEMPOTENCY_STRIPES = 64;
 
     private final ShellRegistry registry;
     private final AccountStore accounts;
@@ -45,7 +46,7 @@ public final class Invoker {
     private final IdempotencyStore idempotency;
     private final CapabilityGate disabled;
     private final List<CrabRuntime.ExecutionListener> listeners = new CopyOnWriteArrayList<>();
-    private final ConcurrentHashMap<String, Object> idempotencyLocks = new ConcurrentHashMap<>();
+    private final Object[] idempotencyLocks = newIdempotencyLocks();
     private volatile ReportQueue reportQueue;
     private volatile RollbackGuard rollbackGuard;
 
@@ -141,7 +142,7 @@ public final class Invoker {
             String traceId
     ) {
         String lockId = Origin.OFFICIAL.name() + "\0" + doc.shell() + "\0" + account.account() + "\0" + action + "\0" + key;
-        Object lock = idempotencyLocks.computeIfAbsent(lockId, ignored -> new Object());
+        Object lock = idempotencyLocks[stripe(lockId)];
         synchronized (lock) {
             Optional<String> stored = idempotency.findFresh(
                     Origin.OFFICIAL, doc.shell(), account.account(), action, key);
@@ -275,6 +276,25 @@ public final class Invoker {
         int status = code == null ? 200 : StatusCodes.of(code);
         String json = ApiEnvelope.json(data, code, message, traceId);
         return new InvokeOutcome(status, ApiJson.bytes(json), traceId, false);
+    }
+
+    int idempotencyStripes() {
+        return idempotencyLocks.length;
+    }
+
+    private static Object[] newIdempotencyLocks() {
+        if (Integer.bitCount(IDEMPOTENCY_STRIPES) != 1) {
+            throw new IllegalStateException("idempotency stripes must be a power of two");
+        }
+        Object[] locks = new Object[IDEMPOTENCY_STRIPES];
+        for (int index = 0; index < locks.length; index++) {
+            locks[index] = new Object();
+        }
+        return locks;
+    }
+
+    private static int stripe(String lockId) {
+        return lockId.hashCode() & (IDEMPOTENCY_STRIPES - 1);
     }
 
     /** Capability disable flags, config file union in-memory switches. */

@@ -14,7 +14,7 @@
 | 多账号/默认账号/凭证/配置 | 已实现 | ShellAdmin + store；credentials 加密只写 |
 | API Key 创建、撤销、scope | 已实现，有缺陷 | ApiKeyService/Principal；按 Shell/action/只读限制，未按账号限制 |
 | HTTP 网关/别名/OpenAPI | 已实现 | GatewayHttpTest；OpenAPI 无鉴权且仅描述能力接口 |
-| POST 幂等响应缓存 | 已实现，有缺陷 | 24h 密文缓存；无参数摘要/版本区分，锁不回收见 A05 |
+| POST 幂等响应缓存 | 已实现，有缺陷 | 24h 密文缓存；无参数摘要/版本区分 |
 | MCP HTTP/SSE/工具/资源 | 已实现 | McpHttpTest；≤40 直接工具，>40 目录模式，确认行为不同 |
 | MCP stdio 桥接 | 已实现 | McpStdio；需要已运行的 HTTP Crab，CLI/验收覆盖不足以代表所有真实客户端兼容 |
 | Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest；没有完整管理员生命周期管理 API |

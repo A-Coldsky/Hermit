@@ -52,13 +52,23 @@ public final class RuleEngine {
     }
 
     public ExecutionResult execute(ExecutionRequest request) {
+        return execute(request, null);
+    }
+
+    /**
+     * Runs {@code request} against {@code authorized} when that snapshot is non-null.
+     * The shell name must equal {@code request.shell()}; otherwise the shell is missing.
+     * Actions come only from the snapshot, even when the action is absent.
+     * A null snapshot looks the shell up in the registry, matching {@link #execute(ExecutionRequest)}.
+     */
+    public ExecutionResult execute(ExecutionRequest request, ShellDoc authorized) {
         long start = System.nanoTime();
         long deadline = Math.addExact(start, settings.capabilityTimeout().toNanos());
         Map<String, String> credentials = copyStrings(request.accountContext().credentials());
         Map<String, String> config = copyStrings(request.accountContext().config());
         String version = null;
         try {
-            ShellDoc shell = registry.find(request.shell()).orElse(null);
+            ShellDoc shell = authorizedShell(request, authorized);
             if (shell == null) {
                 return finish(false, null, ErrorCode.NOT_FOUND, "shell 不存在", null, null, "shell 不存在",
                         List.of(), version, request, credentials, List.of(), start);
@@ -97,6 +107,16 @@ public final class RuleEngine {
         } catch (RuntimeException ex) {
             return internal(request, credentials, List.of(), version, start, ex);
         }
+    }
+
+    private ShellDoc authorizedShell(ExecutionRequest request, ShellDoc authorized) {
+        if (authorized == null) {
+            return registry.find(request.shell()).orElse(null);
+        }
+        if (!authorized.shell().equals(request.shell())) {
+            return null;
+        }
+        return authorized;
     }
 
     /**

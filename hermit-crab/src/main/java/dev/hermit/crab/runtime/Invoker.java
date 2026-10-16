@@ -182,7 +182,7 @@ public final class Invoker {
                 input,
                 account.account(),
                 new MappedAccount(secrets, merged));
-        ExecutionResult result = engine.execute(request);
+        ExecutionResult result = engine.execute(request, doc);
         Invocation invocation = new Invocation(
                 traceId,
                 Origin.OFFICIAL,

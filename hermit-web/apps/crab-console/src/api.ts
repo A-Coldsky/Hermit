@@ -154,7 +154,14 @@ export interface ReportBatch {
     avgMillis: number
     p95Millis: number
   }[]
-  events: { shell: string; fromVersion: string; toVersion: string; reason: string; occurredAt: string }[]
+  events: {
+    shell: string
+    fromVersion: string
+    toVersion: string
+    reason: string
+    occurredAt: string
+    eventId: string
+  }[]
 }
 
 const shellPath = (shell: string) => `${base}/shells/${seg(shell)}`

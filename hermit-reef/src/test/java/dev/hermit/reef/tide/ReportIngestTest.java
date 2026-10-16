@@ -23,6 +23,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -120,6 +125,9 @@ class ReportIngestTest {
                 with(mapper, valid, node -> ((ObjectNode) node.get("counts").get(0)).put("shellVersion", "1.0")),
                 with(mapper, valid, node -> ((ObjectNode) node.get("failures").get(0)).put("errorCode", "NOPE")),
                 with(mapper, valid, node -> ((ObjectNode) node.get("events").get(0)).put("fromVersion", "1.0.0+build")),
+                with(mapper, valid, node -> ((ObjectNode) node.get("events").get(0)).remove("eventId")),
+                with(mapper, valid, node -> ((ObjectNode) node.get("events").get(0)).put("eventId", " ")),
+                with(mapper, valid, node -> ((ObjectNode) node.get("events").get(0)).put("eventId", "e".repeat(65))),
                 with(mapper, valid, node -> node.put("account", "bob")),
                 with(mapper, valid, node -> node.remove("sentAt")),
                 with(mapper, valid, node -> node.put("instanceId", OTHER)),
@@ -265,6 +273,49 @@ class ReportIngestTest {
     }
 
     @Test
+    void rollbackEventsDeduplicateByEventIdIncludingConcurrentIngest() throws Exception {
+        String shared = "11111111-1111-4111-8111-111111111111";
+        expectStatus(batch(List.of(), List.of(), List.of(event(shared, "first"))), 200);
+        expectStatus(batch(List.of(failure("trace-kept", "kept")), List.of(), List.of(event(shared, "second"))), 200);
+        assertThat(count("rollback_events")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT event_id FROM rollback_events", String.class)).isEqualTo(shared);
+        assertThat(jdbc.queryForObject("SELECT reason FROM rollback_events", String.class)).isEqualTo("first");
+        assertThat(jdbc.queryForObject("SELECT summary FROM failure_reports", String.class)).isEqualTo("kept");
+
+        expectStatus(batch(List.of(), List.of(), List.of(event(
+                "22222222-2222-4222-8222-222222222222", "other"))), 200);
+        assertThat(count("rollback_events")).isEqualTo(2);
+
+        jdbc.update("DELETE FROM rollback_events");
+        String concurrentId = "33333333-3333-4333-8333-333333333333";
+        String json = ReportJson.write(batch(List.of(), List.of(), List.of(event(concurrentId, "race"))));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<MvcResult>> futures = List.of(
+                    pool.submit(() -> {
+                        start.await();
+                        return send(json, INSTANCE);
+                    }),
+                    pool.submit(() -> {
+                        start.await();
+                        return send(json, INSTANCE);
+                    }));
+            start.countDown();
+            for (Future<MvcResult> future : futures) {
+                MvcResult result = future.get(30, TimeUnit.SECONDS);
+                assertThat(result.getResponse().getStatus())
+                        .as(result.getResponse().getContentAsString())
+                        .isEqualTo(200);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(count("rollback_events")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT event_id FROM rollback_events", String.class)).isEqualTo(concurrentId);
+    }
+
+    @Test
     void uniqueIndexRejectsASecondRawInsertOfTheSameTrace() throws Exception {
         send(ReportJson.write(sample("1.2.3")), INSTANCE);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update(
@@ -330,7 +381,7 @@ class ReportIngestTest {
         return new ReportBatch(INSTANCE, crabVersion, SENT,
                 List.of(failure("t1", "状态码 302")),
                 List.of(count(3, 1, 12, 40)),
-                List.of(new RollbackEvent("legacy_oa", "1.0.1", "1.0.0", "RULE_MISMATCH", SENT)));
+                List.of(event("evt-sample", "RULE_MISMATCH")));
     }
 
     private static ReportBatch batch(List<FailureReport> failures, List<CountReport> counts,
@@ -365,10 +416,14 @@ class ReportIngestTest {
         return reports;
     }
 
+    private static RollbackEvent event(String eventId, String reason) {
+        return new RollbackEvent("legacy_oa", "1.0.1", "1.0.0", reason, SENT, eventId);
+    }
+
     private static List<RollbackEvent> events(int n) {
         List<RollbackEvent> reports = new ArrayList<>();
         for (int i = 0; i < n; i++) {
-            reports.add(new RollbackEvent("legacy_oa", "1.0.1", "1.0.0", "r" + i, SENT));
+            reports.add(event("evt-" + i, "r" + i));
         }
         return reports;
     }

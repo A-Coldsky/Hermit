@@ -57,7 +57,7 @@ Agent 路由：
 | GET | `/agent/shells/{shell}/{version}` | 已发布 ZIP |
 | POST | `/agent/reports` | ReportBatch；instanceId 须与请求头一致 |
 
-ReportBatch 包含 instanceId/crabVersion/sentAt/failures/counts/events，严格 DTO 在 [common/report](../hermit-common/src/main/java/dev/hermit/common/report)。失败按实例+trace 去重，小时统计按复合主键覆盖；回滚事件当前未去重，见审计 A06。
+ReportBatch 包含 instanceId/crabVersion/sentAt/failures/counts/events，严格 DTO 在 [common/report](../hermit-common/src/main/java/dev/hermit/common/report)。失败按实例+trace 去重，小时统计按复合主键覆盖；回滚事件按实例和 eventId 去重。
 
 ## Crab 能力 API
 

@@ -5,8 +5,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +29,9 @@ import org.apache.hc.core5.util.Timeout;
  * 替换 Shell 版本不会清掉这里的会话。
  */
 public final class SessionManager implements AutoCloseable {
+
+    /** 已见 Cookie 值去重后的上限；超出时按加入顺序丢掉最早的值。 */
+    private static final int MAX_SEEN_COOKIE_VALUES = 64;
 
     private final SessionPersistence persistence;
     private final EngineSettings settings;
@@ -155,9 +161,7 @@ public final class SessionManager implements AutoCloseable {
         AccountState state = state(key);
         List<StoredCookie> cookies = dump(state.cookies);
         for (StoredCookie cookie : cookies) {
-            if (cookie.value() != null && cookie.value().length() >= 4) {
-                state.seenCookieValues.add(cookie.value());
-            }
+            rememberCookieValue(state.seenCookieValues, cookie.value());
         }
         persistence.save(key, List.copyOf(cookies));
     }
@@ -210,9 +214,7 @@ public final class SessionManager implements AutoCloseable {
         }
         for (StoredCookie cookie : loaded) {
             addCookie(state.cookies, cookie);
-            if (cookie.value() != null && cookie.value().length() >= 4) {
-                state.seenCookieValues.add(cookie.value());
-            }
+            rememberCookieValue(state.seenCookieValues, cookie.value());
         }
         if (!loaded.isEmpty()) {
             state.loggedIn = true;
@@ -247,6 +249,20 @@ public final class SessionManager implements AutoCloseable {
         }
         state.client = null;
         state.cookies = null;
+    }
+
+    private static void rememberCookieValue(Set<String> seen, String value) {
+        if (value == null || value.length() < 4) {
+            return;
+        }
+        if (!seen.add(value)) {
+            return;
+        }
+        if (seen.size() > MAX_SEEN_COOKIE_VALUES) {
+            Iterator<String> oldest = seen.iterator();
+            oldest.next();
+            oldest.remove();
+        }
     }
 
     private static List<StoredCookie> dump(BasicCookieStore store) {
@@ -289,7 +305,7 @@ public final class SessionManager implements AutoCloseable {
 
     private static final class AccountState {
         final ReentrantLock lock = new ReentrantLock(true);
-        final List<String> seenCookieValues = new ArrayList<>();
+        final Set<String> seenCookieValues = new LinkedHashSet<>();
         CloseableHttpClient client;
         BasicCookieStore cookies;
         boolean loggedIn;

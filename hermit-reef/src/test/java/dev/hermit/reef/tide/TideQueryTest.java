@@ -87,7 +87,7 @@ class TideQueryTest {
                 List.of(new FailureReport("t1", "legacy_oa", "1.0.0", "list_todo", 2, "extract",
                         ErrorCode.RULE_MISMATCH, "状态码 302", occurred)),
                 List.of(new CountReport("legacy_oa", "1.0.0", "list_todo", DAY, 3, 1, 12, 40)),
-                List.of(new RollbackEvent("legacy_oa", "1.0.1", "1.0.0", "RULE_MISMATCH", occurred)));
+                List.of(new RollbackEvent("legacy_oa", "1.0.1", "1.0.0", "RULE_MISMATCH", occurred, "evt-posted")));
         mockMvc.perform(post("/agent/reports")
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
@@ -353,11 +353,14 @@ class TideQueryTest {
                 errorCode, summary, Timestamp.from(occurredAt));
     }
 
+    private int rollbackEvents;
+
     private void rollback(String shell, String reason, Instant occurredAt) {
         jdbc.update(
                 "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
-                        + "occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                Timestamp.from(occurredAt), INSTANCE, shell, "1.0.1", "1.0.0", reason, Timestamp.from(occurredAt));
+                        + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                Timestamp.from(occurredAt), INSTANCE, shell, "1.0.1", "1.0.0", reason, Timestamp.from(occurredAt),
+                "evt-" + (++rollbackEvents));
     }
 
     private static JsonNode point(JsonNode series, String shell, String action, String bucketStart) {

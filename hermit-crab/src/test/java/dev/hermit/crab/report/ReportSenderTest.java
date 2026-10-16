@@ -175,6 +175,31 @@ class ReportSenderTest {
     }
 
     @Test
+    void rollbackEventIdStaysStableWhenUnacked() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-06-01T00:00:00Z"));
+        try (FakeReef reef = new FakeReef(); CrabDatabase database = database()) {
+            reef.reportStatus(500);
+            ReportSettings settings = settings(reef, true, Optional.empty());
+            ReportQueue queue = new ReportQueue(settings, database.dataSource(), clock);
+            ReportSender sender = new ReportSender(settings, queue, clock);
+            queue.enqueueRollback(
+                    "legacy_oa", "1.0.1", "1.0.0", "RULE_MISMATCH", Instant.parse("2026-06-01T00:00:00Z"));
+
+            String eventId = sender.preview().batch().events().get(0).eventId();
+            assertThat(eventId).matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+            assertThat(sender.flushOnce().accepted()).isFalse();
+            assertThat(ReportJson.readBatch(reef.reportBodies().get(0)).events().get(0).eventId()).isEqualTo(eventId);
+            assertThat(sender.preview().batch().events().get(0).eventId()).isEqualTo(eventId);
+
+            clock.advance(Duration.ofSeconds(1));
+            assertThat(sender.flushOnce().status()).isEqualTo(500);
+            assertThat(ReportJson.readBatch(reef.reportBodies().get(1)).events().get(0).eventId()).isEqualTo(eventId);
+            assertThat(queuedEventId(database)).isEqualTo(eventId);
+            assertThat(count(database, "rollback_queue")).isEqualTo(1);
+        }
+    }
+
+    @Test
     void disabledReportingWritesNothing() throws Exception {
         try (FakeReef reef = new FakeReef(); CrabDatabase database = database()) {
             ReportSettings settings = settings(reef, false, Optional.empty());
@@ -236,6 +261,15 @@ class ReportSenderTest {
 
     private CrabDatabase database() {
         return new CrabDatabase(new CrabPaths(temp));
+    }
+
+    private static String queuedEventId(CrabDatabase database) throws Exception {
+        try (Connection connection = database.dataSource().getConnection();
+             Statement statement = connection.createStatement();
+             ResultSet resultSet = statement.executeQuery("SELECT event_id FROM rollback_queue")) {
+            assertThat(resultSet.next()).isTrue();
+            return resultSet.getString(1);
+        }
     }
 
     private static int count(CrabDatabase database, String table) throws Exception {

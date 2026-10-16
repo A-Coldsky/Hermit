@@ -7,6 +7,7 @@ import dev.hermit.common.report.RollbackEvent;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -96,15 +97,20 @@ public class ReportIngestService {
     }
 
     private void insertRollback(ReportBatch batch, RollbackEvent event, Instant receivedAt) {
-        jdbc.update(
-                "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
-                        + "occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                Timestamp.from(receivedAt),
-                batch.instanceId(),
-                event.shell(),
-                event.fromVersion(),
-                event.toVersion(),
-                event.reason(),
-                Timestamp.from(event.occurredAt()));
+        try {
+            jdbc.update(
+                    "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
+                            + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    Timestamp.from(receivedAt),
+                    batch.instanceId(),
+                    event.shell(),
+                    event.fromVersion(),
+                    event.toVersion(),
+                    event.reason(),
+                    Timestamp.from(event.occurredAt()),
+                    event.eventId());
+        } catch (DuplicateKeyException ignored) {
+            // 同一实例的 eventId 已存在时保留原行，本批其余写入继续提交。
+        }
     }
 }

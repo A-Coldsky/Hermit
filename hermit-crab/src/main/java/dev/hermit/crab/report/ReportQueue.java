@@ -92,18 +92,20 @@ public final class ReportQueue {
             throw new IllegalArgumentException("at is required");
         }
         String storedReason = reason.length() > 1024 ? reason.substring(0, 1024) : reason;
+        String eventId = UUID.randomUUID().toString();
         synchronized (lock) {
             Db.transaction(dataSource, connection -> {
                 makeRoom(connection, 1);
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        INSERT INTO rollback_queue (at, shell, from_version, to_version, reason)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO rollback_queue (at, shell, from_version, to_version, reason, event_id)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """)) {
                     Db.setInstant(statement, 1, at);
                     statement.setString(2, shell);
                     statement.setString(3, fromVersion);
                     statement.setString(4, toVersion);
                     statement.setString(5, storedReason);
+                    statement.setString(6, eventId);
                     statement.executeUpdate();
                 }
                 return null;
@@ -165,7 +167,7 @@ public final class ReportQueue {
         List<RollbackEvent> events = new ArrayList<>();
         List<Long> eventIds = new ArrayList<>();
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT id, shell, from_version, to_version, reason, at
+                SELECT id, shell, from_version, to_version, reason, at, event_id
                 FROM rollback_queue
                 ORDER BY at, id
                 LIMIT ?
@@ -179,7 +181,8 @@ public final class ReportQueue {
                             resultSet.getString("from_version"),
                             resultSet.getString("to_version"),
                             resultSet.getString("reason"),
-                            Db.instant(resultSet, "at")));
+                            Db.instant(resultSet, "at"),
+                            resultSet.getString("event_id")));
                 }
             }
         }

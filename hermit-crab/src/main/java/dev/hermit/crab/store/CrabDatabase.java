@@ -10,7 +10,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -18,6 +21,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@code schema_version}. Version 1 is the account store. Version 2 adds call logs, idempotency,
  * encrypted sessions, capability switches, and the debug flag. Version 3 is sync and report state.
  * Version 4 widens {@code sync_state.value} so a manifest snapshot can be stored beside the ETag.
+ * Version 5 adds {@code rollback_queue.event_id} and fills a unique id for rows already queued.
+ * Version 5 is applied when {@code MAX(version)} is below 5, the same way as version 4.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Do not rewrite an applied migration.
@@ -85,6 +90,10 @@ public final class CrabDatabase implements AutoCloseable {
             if (current < 4) {
                 applyV4(connection);
                 insertVersion(connection, 4);
+            }
+            if (current < 5) {
+                applyV5(connection);
+                insertVersion(connection, 5);
             }
             return null;
         });
@@ -351,6 +360,27 @@ public final class CrabDatabase implements AutoCloseable {
         execute(connection, """
                 ALTER TABLE sync_state ALTER COLUMN "value" SET DATA TYPE CLOB
                 """);
+    }
+
+    private static void applyV5(Connection connection) throws SQLException {
+        execute(connection, "ALTER TABLE rollback_queue ADD COLUMN event_id VARCHAR(64)");
+        List<Long> missing = new ArrayList<>();
+        try (PreparedStatement select = connection.prepareStatement(
+                "SELECT id FROM rollback_queue WHERE event_id IS NULL");
+             ResultSet resultSet = select.executeQuery()) {
+            while (resultSet.next()) {
+                missing.add(resultSet.getLong(1));
+            }
+        }
+        try (PreparedStatement update = connection.prepareStatement(
+                "UPDATE rollback_queue SET event_id = ? WHERE id = ?")) {
+            for (Long id : missing) {
+                update.setString(1, UUID.randomUUID().toString());
+                update.setLong(2, id);
+                update.executeUpdate();
+            }
+        }
+        execute(connection, "ALTER TABLE rollback_queue ALTER COLUMN event_id SET NOT NULL");
     }
 
     private static boolean applied(Connection connection, int version) throws SQLException {

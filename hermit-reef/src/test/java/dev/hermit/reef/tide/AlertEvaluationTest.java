@@ -224,9 +224,9 @@ class AlertEvaluationTest {
         jdbc.update("DELETE FROM audit_log");
         jdbc.update(
                 "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
-                        + "occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(clock.instant()), INSTANCE, SHELL, "1.2.0", "1.1.0", "back",
-                Timestamp.from(clock.instant()));
+                Timestamp.from(clock.instant()), "alert-rollback");
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
 

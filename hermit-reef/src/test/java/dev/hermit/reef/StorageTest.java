@@ -196,9 +196,9 @@ class StorageTest {
     private void insertRollback(Instant receivedAt, String reason) {
         jdbc.update(
                 "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
-                        + "occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "legacy_oa", "1.0.1",
-                "1.0.0", reason, Timestamp.from(receivedAt));
+                "1.0.0", reason, Timestamp.from(receivedAt), reason);
     }
 
     private List<String> summaries(String table) {

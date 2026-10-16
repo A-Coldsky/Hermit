@@ -9,6 +9,7 @@ import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.junit.jupiter.api.Test;
 
@@ -37,7 +38,8 @@ class ReportJsonTest {
                 "shell", "shellVersion", "action", "hourStart", "success", "failure", "avgMillis", "p95Millis");
         assertThat(count.get("hourStart").asText()).isEqualTo("2026-10-12T07:00:00Z");
         assertThat(names(node.get("events").get(0))).containsExactly(
-                "shell", "fromVersion", "toVersion", "reason", "occurredAt");
+                "shell", "fromVersion", "toVersion", "reason", "occurredAt", "eventId");
+        assertThat(node.get("events").get(0).get("eventId").asText()).isEqualTo("evt-1");
         assertThat(ReportJson.readBatch(json)).isEqualTo(batch);
     }
 
@@ -62,6 +64,20 @@ class ReportJsonTest {
     }
 
     @Test
+    void eventIdIsRequiredAndBoundedAfterStrippingWhitespace() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode tree = mapper.readTree(ReportJson.write(sample()));
+        ((ObjectNode) tree.get("events").get(0)).remove("eventId");
+        assertThatThrownBy(() -> ReportJson.readBatch(mapper.writeValueAsString(tree)))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> event("   ")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> event("a".repeat(65))).isInstanceOf(IllegalArgumentException.class);
+        assertThat(event("  evt-1  ").eventId()).isEqualTo("evt-1");
+        assertThat(event("a".repeat(64)).eventId()).hasSize(64);
+    }
+
+    @Test
     void rejectsUnknownJsonFields() {
         String json = ReportJson.write(sample()).replace(
                 "\"instanceId\"", "\"account\":\"bob\",\"instanceId\"");
@@ -79,9 +95,13 @@ class ReportJsonTest {
                 List.of(new CountReport(
                         "legacy_oa", "1.0.0", "list_todo",
                         Instant.parse("2026-10-12T07:00:00Z"), 3, 1, 12, 40)),
-                List.of(new RollbackEvent(
-                        "legacy_oa", "1.0.1", "1.0.0", "RULE_MISMATCH",
-                        Instant.parse("2026-10-12T08:00:00Z"))));
+                List.of(event("evt-1")));
+    }
+
+    private static RollbackEvent event(String eventId) {
+        return new RollbackEvent(
+                "legacy_oa", "1.0.1", "1.0.0", "RULE_MISMATCH",
+                Instant.parse("2026-10-12T08:00:00Z"), eventId);
     }
 
     private static List<String> names(JsonNode node) {

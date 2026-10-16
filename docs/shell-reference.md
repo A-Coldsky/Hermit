@@ -50,7 +50,7 @@ actions:
 
 兼容别名：`connector` → `shell`、`min_agent_version` → `min_crab_version`。新旧键同时出现且值不一致会拒绝。解析器对各已定义层的未知键较严格，步骤内部的完整语义则部分留到运行时校验，不能假定“可上传”就等于能正确执行。
 
-`credentials`/`config` 字段接受 `type`、`label`、`required`、`description`、`options`；config 额外支持 `default`。类型有 text/secret/select/url。**当前 config 的 secret 也明文保存且可能原样输出**，见审计 A02；密码、token 必须使用 credentials。配置值优先级为用户值 → 声明 default → 顶层 base_url（仅 base_url 字段）；引擎也可直接回退顶层 base_url。
+`credentials`/`config` 字段接受 `type`、`label`、`required`、`description`、`options`；config 额外支持 `default`。类型有 text/secret/select/url。校验会拒绝 `config` 的 `type: secret`，秘密必须放在 `credentials`。配置值优先级为用户值 → 声明 default → 顶层 base_url（仅 base_url 字段）；引擎也可直接回退顶层 base_url。
 
 Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。缺 examples 是校验错误；notes/related 等说明质量问题可能产生警告。示例中 related 指向不存在的能力产生警告，不代表那些能力已实现。
 

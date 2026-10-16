@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { Promotion, Refresh } from '@element-plus/icons-vue'
+import { Clock, Delete, Promotion, Refresh, RefreshLeft, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import StatCard from '@shared/components/StatCard.vue'
+import TraceId from '@shared/components/TraceId.vue'
 import { ApiError } from '@shared/http'
 import { errorCodeLabels, formatTime, millis, notifyError } from '@shared/format'
 import { api, type ReportBatch } from '../api'
 
-const loading = ref(false)
+const loading = ref(true)
 const sending = ref(false)
 const configured = ref(true)
 const batch = ref<ReportBatch | null>(null)
@@ -66,14 +67,17 @@ onMounted(load)
       <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!configured || empty" @click="send">立即上报</el-button>
     </PageHeader>
 
-    <el-empty v-if="!configured" description="没有启用上报。在 config.yml 里配置 reef.url 并设置 report.enabled: true 后重启 Crab。" />
+    <div v-if="!configured" class="hm-card off">
+      <strong>没有启用上报</strong>
+      <span class="hm-muted">在 config.yml 里配置 reef.url 并设置 report.enabled: true 后重启 Crab。</span>
+    </div>
 
     <template v-else-if="batch">
       <div class="hm-grid cols-4">
-        <StatCard label="小时计数" :value="batch.counts.length" :hint="`覆盖 ${callTotal} 次调用`" />
-        <StatCard label="失败样本" :value="batch.failures.length" :tone="batch.failures.length ? 'warn' : 'default'" />
-        <StatCard label="自动回退事件" :value="batch.events.length" :tone="batch.events.length ? 'danger' : 'default'" />
-        <StatCard label="已丢弃" :value="dropped" :tone="dropped ? 'warn' : 'default'" hint="队列满时丢弃的旧记录" />
+        <StatCard label="小时计数" :value="batch.counts.length" :hint="`覆盖 ${callTotal} 次调用`" :icon="Clock" />
+        <StatCard label="失败样本" :value="batch.failures.length" :tone="batch.failures.length ? 'warn' : 'default'" :icon="WarningFilled" />
+        <StatCard label="自动回退事件" :value="batch.events.length" :tone="batch.events.length ? 'danger' : 'default'" :icon="RefreshLeft" />
+        <StatCard label="已丢弃" :value="dropped" :tone="dropped ? 'warn' : 'default'" hint="队列满时丢弃的旧记录" :icon="Delete" />
       </div>
 
       <div class="hm-card">
@@ -118,12 +122,14 @@ onMounted(load)
             <template #default="{ row }"><span class="mono">{{ row.shell }}.{{ row.action }}</span></template>
           </el-table-column>
           <el-table-column label="错误" width="140">
-            <template #default="{ row }">{{ errorCodeLabels[row.errorCode] ?? row.errorCode }}</template>
+            <template #default="{ row }">
+              <el-tag type="danger" size="small" effect="light" round>{{ errorCodeLabels[row.errorCode] ?? row.errorCode }}</el-tag>
+            </template>
           </el-table-column>
           <el-table-column prop="summary" label="摘要" min-width="220" show-overflow-tooltip />
-          <el-table-column label="traceId" min-width="160">
+          <el-table-column label="traceId" width="150">
             <template #default="{ row }">
-              <router-link :to="{ path: '/calls', query: { trace: row.traceId } }" class="mono">{{ row.traceId }}</router-link>
+              <TraceId :value="row.traceId" :to="{ path: '/calls', query: { trace: row.traceId } }" />
             </template>
           </el-table-column>
         </el-table>
@@ -157,5 +163,14 @@ onMounted(load)
 
 .reports .hm-card + .hm-card {
   margin-top: 0;
+}
+
+.off {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 20px;
+  text-align: center;
 }
 </style>

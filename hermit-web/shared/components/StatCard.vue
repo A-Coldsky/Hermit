@@ -1,39 +1,77 @@
 <script setup lang="ts">
-defineProps<{ label: string; value: string | number; hint?: string; tone?: 'default' | 'warn' | 'danger' | 'ok' }>()
+import type { Component } from 'vue'
+import { RouterLink, type RouteLocationRaw } from 'vue-router'
+
+defineProps<{
+  label: string
+  value: string | number
+  hint?: string
+  tone?: 'default' | 'warn' | 'danger' | 'ok'
+  icon?: Component
+  to?: RouteLocationRaw
+}>()
 </script>
 
 <template>
-  <div class="stat hm-card" :class="tone ?? 'default'">
-    <div class="label">{{ label }}</div>
-    <div class="value">{{ value }}</div>
+  <component :is="to ? RouterLink : 'div'" :to="to" class="stat hm-card" :class="[tone ?? 'default', { clickable: to }]">
+    <div class="head">
+      <span class="label">{{ label }}</span>
+      <span class="chip">
+        <el-icon v-if="icon" :size="16"><component :is="icon" /></el-icon>
+        <span v-else class="dot" />
+      </span>
+    </div>
+    <div class="value num">{{ value }}</div>
     <div v-if="hint" class="hint">{{ hint }}</div>
-  </div>
+  </component>
 </template>
 
 <style scoped>
 .stat {
+  display: block;
+  color: inherit;
+  --tone: var(--el-color-primary);
+  --tone-soft: var(--hm-teal-soft);
   position: relative;
   overflow: hidden;
+  padding: 18px 20px;
 }
 
-.stat::before {
+.stat.ok {
+  --tone: var(--hm-success);
+  --tone-soft: var(--el-color-success-light-9);
+}
+
+.stat.warn {
+  --tone: var(--el-color-warning-dark-2);
+  --tone-soft: var(--el-color-warning-light-9);
+}
+
+.stat.danger {
+  --tone: var(--hm-danger);
+  --tone-soft: var(--el-color-danger-light-9);
+}
+
+.stat::after {
   content: '';
   position: absolute;
-  inset: 0 auto 0 0;
-  width: 4px;
-  background: var(--el-color-primary);
+  right: -28px;
+  top: -28px;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--tone-soft) 0%, transparent 70%);
+  opacity: 0.9;
+  pointer-events: none;
 }
 
-.stat.warn::before {
-  background: var(--hm-accent);
-}
-
-.stat.danger::before {
-  background: var(--hm-danger);
-}
-
-.stat.ok::before {
-  background: var(--hm-success);
+.head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .label {
@@ -41,14 +79,42 @@ defineProps<{ label: string; value: string | number; hint?: string; tone?: 'defa
   font-size: 13px;
 }
 
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--tone);
+  background: var(--hm-surface);
+  box-shadow: 0 0 0 1px var(--tone-soft), 0 2px 6px -2px rgba(16, 39, 43, 0.12);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone);
+}
+
 .value {
-  font-size: 28px;
+  position: relative;
+  z-index: 1;
+  font-size: 30px;
   font-weight: 700;
-  margin-top: 6px;
-  letter-spacing: -0.5px;
+  line-height: 1.15;
+  margin-top: 8px;
+  letter-spacing: -0.6px;
+}
+
+.stat.danger .value {
+  color: var(--hm-danger);
 }
 
 .hint {
+  position: relative;
+  z-index: 1;
   color: var(--hm-muted);
   font-size: 12px;
   margin-top: 4px;

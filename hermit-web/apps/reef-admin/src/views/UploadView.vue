@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { Promotion, UploadFilled } from '@element-plus/icons-vue'
+import { Loading, Promotion, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { ApiError } from '@shared/http'
@@ -16,6 +16,7 @@ const publishing = ref(false)
 const fileName = ref('')
 const result = ref<UploadResult | null>(null)
 const failure = ref<{ message: string; errors: ValidationIssue[]; warnings: ValidationIssue[] } | null>(null)
+const step = computed(() => (result.value ? 2 : uploading.value || failure.value ? 1 : 0))
 
 function issuesOf(data: unknown, key: 'errors' | 'warnings'): ValidationIssue[] {
   if (data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>)[key])) {
@@ -97,6 +98,13 @@ async function publish() {
       </template>
     </PageHeader>
 
+    <el-steps :active="step" finish-status="success" :process-status="failure ? 'error' : 'process'" align-center class="steps">
+      <el-step title="选择 YAML" description="拖入或点击选择文件" />
+      <el-step title="校验并签名" description="检查结构、能力和字段" />
+      <el-step title="待发布" description="确认差异和警告" />
+      <el-step title="发布" description="Crab 下次同步时切换" />
+    </el-steps>
+
     <div class="hm-card">
       <el-upload
         drag
@@ -112,7 +120,10 @@ async function publish() {
           <div class="el-upload__tip">支持 .yaml / .yml，单个文件不超过 1 MB</div>
         </template>
       </el-upload>
-      <div v-if="uploading" class="hm-muted status">正在校验 {{ fileName }}…</div>
+      <div v-if="uploading" class="status">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span class="hm-muted">正在校验 {{ fileName }}…</span>
+      </div>
     </div>
 
     <div v-if="failure" class="hm-card">
@@ -153,6 +164,33 @@ async function publish() {
 <style scoped>
 .status {
   margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--el-color-primary);
+}
+
+.steps {
+  margin: 4px 0 20px;
+}
+
+:deep(.el-upload-dragger) {
+  padding: 44px 20px;
+  border: 1.5px dashed #c9d6d9;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fbfdfd, var(--hm-subtle));
+  transition: border-color 0.15s, background 0.15s;
+}
+
+:deep(.el-upload-dragger:hover),
+:deep(.el-upload-dragger.is-dragover) {
+  border-color: var(--el-color-primary);
+  background: var(--hm-teal-soft);
+}
+
+:deep(.el-icon--upload) {
+  color: var(--el-color-primary-light-3);
+  font-size: 56px;
 }
 
 h4 {

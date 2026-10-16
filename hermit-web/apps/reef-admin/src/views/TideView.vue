@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Refresh } from '@element-plus/icons-vue'
+import { DataLine, Refresh, RefreshLeft, Warning, WarningFilled } from '@element-plus/icons-vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import BarChart from '@shared/components/BarChart.vue'
 import PageHeader from '@shared/components/PageHeader.vue'
@@ -68,10 +68,10 @@ watch([range, shell], load, { immediate: true })
     </PageHeader>
 
     <div class="hm-grid cols-4">
-      <StatCard label="调用次数" :value="sum.calls" />
-      <StatCard label="失败次数" :value="sum.failures" :tone="sum.failures ? 'warn' : 'ok'" />
-      <StatCard label="失败率" :value="percent(sum.rate)" :tone="sum.rate > 0.1 ? 'danger' : sum.rate > 0.02 ? 'warn' : 'ok'" />
-      <StatCard label="自动回退" :value="rollbacks.length" :tone="rollbacks.length ? 'danger' : 'default'" hint="Crab 因新版本异常切回旧版" />
+      <StatCard label="调用次数" :value="sum.calls" :icon="DataLine" />
+      <StatCard label="失败次数" :value="sum.failures" :tone="sum.failures ? 'warn' : 'ok'" :icon="WarningFilled" />
+      <StatCard label="失败率" :value="percent(sum.rate)" :tone="sum.rate > 0.1 ? 'danger' : sum.rate > 0.02 ? 'warn' : 'ok'" :icon="Warning" />
+      <StatCard label="自动回退" :value="rollbacks.length" :tone="rollbacks.length ? 'danger' : 'default'" hint="Crab 因新版本异常切回旧版" :icon="RefreshLeft" />
     </div>
 
     <div class="hm-card">

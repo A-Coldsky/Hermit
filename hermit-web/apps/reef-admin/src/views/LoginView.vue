@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Lock, User } from '@element-plus/icons-vue'
+import { Connection, DataLine, Lock, Stamp, User } from '@element-plus/icons-vue'
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { errorText } from '@shared/format'
@@ -43,10 +43,16 @@ async function submit() {
       </svg>
       <h1>Hermit Reef</h1>
       <p>把内网老系统包装成可调用的 OpenAPI 与 MCP 能力。在这里上传、发布和回滚 Shell，并查看各 Crab 回传的运行指标。</p>
+      <ul class="points">
+        <li><el-icon><Stamp /></el-icon><span><b>签名发布</b>每个 Shell 版本由 Reef 签名，Crab 验签后才安装</span></li>
+        <li><el-icon><Connection /></el-icon><span><b>分发到 Crab</b>各地 Crab 定时同步，新版本异常时自动切回旧版</span></li>
+        <li><el-icon><DataLine /></el-icon><span><b>Tide 指标</b>按小时汇总调用量、耗时和失败样本，不含请求内容</span></li>
+      </ul>
     </section>
     <section class="panel">
-      <el-form class="form" label-position="top" @submit.prevent="submit">
+      <el-form class="form" label-position="top" size="large" @submit.prevent="submit">
         <h2>登录管理端</h2>
+        <p class="lead">使用部署时配置的管理员账号登录</p>
         <el-form-item label="用户名">
           <el-input v-model="form.username" :prefix-icon="User" autocomplete="username" autofocus />
         </el-form-item>
@@ -68,13 +74,69 @@ async function submit() {
 }
 
 .brand {
-  background: radial-gradient(circle at 20% 20%, #134e4a, #0f172a 70%);
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(45, 212, 191, 0.28), transparent 45%),
+    radial-gradient(circle at 85% 90%, rgba(245, 158, 11, 0.14), transparent 40%),
+    linear-gradient(160deg, #0f2e2f, #0b1620 70%);
   color: #e2e8f0;
   padding: 72px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 12px;
+}
+
+.brand::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 22px 22px;
+  mask-image: linear-gradient(180deg, transparent, #000 30%, #000 70%, transparent);
+  pointer-events: none;
+}
+
+.brand > * {
+  position: relative;
+}
+
+.points {
+  list-style: none;
+  margin: 28px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 460px;
+}
+
+.points li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(4px);
+  font-size: 13px;
+  line-height: 1.6;
+  color: #9fb3bf;
+}
+
+.points .el-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  font-size: 18px;
+  color: #5eead4;
+}
+
+.points b {
+  display: block;
+  color: #e6f4f1;
+  font-weight: 600;
 }
 
 .brand h1 {
@@ -90,6 +152,9 @@ async function submit() {
 }
 
 .panel {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(15, 118, 110, 0.06), transparent 40%),
+    var(--hm-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -98,12 +163,23 @@ async function submit() {
 
 .form {
   width: 100%;
-  max-width: 360px;
+  max-width: 380px;
+  background: var(--hm-surface);
+  border: 1px solid var(--hm-border);
+  border-radius: 18px;
+  padding: 36px 32px 32px;
+  box-shadow: var(--hm-shadow-lg);
 }
 
 .form h2 {
-  margin: 0 0 24px;
+  margin: 0;
   font-size: 22px;
+}
+
+.lead {
+  margin: 6px 0 24px;
+  color: var(--hm-muted);
+  font-size: 13px;
 }
 
 .failure {
@@ -112,6 +188,7 @@ async function submit() {
 
 .submit {
   width: 100%;
+  margin-top: 4px;
 }
 
 @media (max-width: 860px) {
@@ -121,6 +198,10 @@ async function submit() {
 
   .brand {
     padding: 40px 32px;
+  }
+
+  .points {
+    display: none;
   }
 }
 </style>

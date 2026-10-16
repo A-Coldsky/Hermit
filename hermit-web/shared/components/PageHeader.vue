@@ -6,8 +6,13 @@ defineProps<{ title: string; description?: string }>()
   <div class="page-header">
     <div>
       <div class="crumbs"><slot name="crumbs" /></div>
-      <h1>{{ title }}</h1>
-      <p v-if="description" class="hm-muted">{{ description }}</p>
+      <div class="title-row">
+        <slot name="icon" />
+        <div>
+          <h1>{{ title }}<slot name="badge" /></h1>
+          <p v-if="description" class="hm-muted">{{ description }}</p>
+        </div>
+      </div>
     </div>
     <div class="actions"><slot /></div>
   </div>
@@ -27,6 +32,16 @@ h1 {
   margin: 0;
   font-size: 22px;
   font-weight: 650;
+  letter-spacing: -0.2px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 
 p {
@@ -38,7 +53,7 @@ p {
 }
 
 .crumbs {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   font-size: 13px;
 }
 

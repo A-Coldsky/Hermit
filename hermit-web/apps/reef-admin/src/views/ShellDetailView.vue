@@ -3,6 +3,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
+import ShellAvatar from '@shared/components/ShellAvatar.vue'
 import { ApiError } from '@shared/http'
 import { notifyError } from '@shared/format'
 import { api, type ShellDetail, type ShellVersion } from '../api'
@@ -24,6 +25,10 @@ const tab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'overvie
 const credentialCount = computed(() => Object.keys(detail.value?.credentials ?? {}).length)
 const configCount = computed(() => Object.keys(detail.value?.config ?? {}).length)
 const capabilityCount = computed(() => Object.keys(detail.value?.actions ?? {}).length)
+const unpublished = computed(() => {
+  const current = versions.value.find((v) => v.current)
+  return versions.value.filter((v) => !v.current && v.status !== 'PUBLISHED' && (!current || v.uploadedAt > current.uploadedAt))
+})
 
 watch(tab, (value) => void router.replace({ query: { ...route.query, tab: value } }))
 
@@ -66,6 +71,12 @@ watch(() => props.shell, load, { immediate: true })
         <router-link to="/shells">Shell 目录</router-link>
         <span class="hm-muted"> / {{ shell }}</span>
       </template>
+      <template #icon>
+        <ShellAvatar :name="shell" :title="detail?.title" :size="48" />
+      </template>
+      <template #badge>
+        <el-tag v-if="detail" type="success" effect="light" round class="mono">v{{ detail.version }}</el-tag>
+      </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
 
@@ -84,6 +95,20 @@ watch(() => props.shell, load, { immediate: true })
         title="这个 Shell 还没有发布版本，Crab 暂时拿不到它。在「版本」里发布一个已上传的版本。"
         class="notice"
       />
+
+      <el-alert
+        v-if="!loading && detail && unpublished.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="notice"
+      >
+        <template #title>
+          有 {{ unpublished.length }} 个新上传的版本还没发布：
+          <span class="mono">{{ unpublished.map((v) => `v${v.version}`).join('、') }}</span>
+          <el-button link type="primary" class="jump" @click="tab = 'versions'">去发布</el-button>
+        </template>
+      </el-alert>
 
       <el-tabs v-model="tab" class="tabs">
         <el-tab-pane label="概况" name="overview" :disabled="!detail">
@@ -160,6 +185,11 @@ watch(() => props.shell, load, { immediate: true })
 
 .tag {
   margin-right: 4px;
+}
+
+.jump {
+  margin-left: 8px;
+  vertical-align: baseline;
 }
 
 .changelog {

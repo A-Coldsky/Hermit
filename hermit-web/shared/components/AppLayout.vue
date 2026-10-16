@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { computed } from 'vue'
+import { Expand, Fold } from '@element-plus/icons-vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 export interface NavItem {
@@ -16,17 +17,30 @@ const props = defineProps<{
   items: NavItem[]
 }>()
 
+const COLLAPSE_KEY = 'hermit.sidebar.collapsed'
+
+function initialCollapsed(): boolean {
+  const stored = window.localStorage?.getItem(COLLAPSE_KEY)
+  if (stored !== null && stored !== undefined) {
+    return stored === '1'
+  }
+  return window.innerWidth < 1180
+}
+
+const collapsed = ref(initialCollapsed())
+watch(collapsed, (value) => window.localStorage?.setItem(COLLAPSE_KEY, value ? '1' : '0'))
+
 const route = useRoute()
-const active = computed(() => {
-  const match = [...props.items]
+const activeItem = computed(() =>
+  [...props.items]
     .sort((a, b) => b.to.length - a.to.length)
-    .find((item) => route.path === item.to || route.path.startsWith(item.to === '/' ? '/__none__' : `${item.to}/`))
-  return match?.to ?? '/'
-})
+    .find((item) => route.path === item.to || route.path.startsWith(item.to === '/' ? '/__none__' : `${item.to}/`)),
+)
+const active = computed(() => activeItem.value?.to ?? '/')
 </script>
 
 <template>
-  <div class="layout">
+  <div class="layout" :class="{ collapsed }">
     <aside class="sidebar">
       <div class="brand">
         <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
@@ -35,33 +49,49 @@ const active = computed(() => {
           <circle cx="22" cy="12" r="1.6" fill="#10272b" />
           <path d="M4 24h24" stroke="#f59e0b" stroke-width="2.4" stroke-linecap="round" />
         </svg>
-        <div>
+        <div class="brand-text">
           <div class="product">{{ product }}</div>
           <div class="subtitle">{{ subtitle }}</div>
         </div>
       </div>
       <nav>
-        <RouterLink
+        <el-tooltip
           v-for="item in items"
           :key="item.to"
-          :to="item.to"
-          class="nav-item"
-          :class="{ active: active === item.to }"
+          :content="item.label"
+          placement="right"
+          :disabled="!collapsed"
+          :show-after="200"
         >
-          <el-icon><component :is="item.icon" /></el-icon>
-          <span class="label">{{ item.label }}</span>
-          <span v-if="item.badge" class="badge">{{ item.badge > 99 ? '99+' : item.badge }}</span>
-        </RouterLink>
+          <RouterLink :to="item.to" class="nav-item" :class="{ active: active === item.to }">
+            <el-icon class="icon"><component :is="item.icon" /></el-icon>
+            <span class="label">{{ item.label }}</span>
+            <span v-if="item.badge" class="badge">{{ item.badge > 99 ? '99+' : item.badge }}</span>
+          </RouterLink>
+        </el-tooltip>
       </nav>
       <div class="sidebar-foot"><slot name="sidebar-foot" /></div>
     </aside>
     <div class="main">
       <header class="topbar">
+        <button
+          type="button"
+          class="collapse"
+          :aria-label="collapsed ? '展开侧栏' : '收起侧栏'"
+          :title="collapsed ? '展开侧栏' : '收起侧栏'"
+          @click="collapsed = !collapsed"
+        >
+          <el-icon :size="18"><component :is="collapsed ? Expand : Fold" /></el-icon>
+        </button>
+        <span class="section">{{ activeItem?.label }}</span>
+        <span class="spacer" />
         <slot name="topbar" />
       </header>
       <main class="content">
-        <RouterView v-slot="{ Component: view }">
-          <component :is="view" />
+        <RouterView v-slot="{ Component: view, route: current }">
+          <Transition name="hm-page" mode="out-in">
+            <component :is="view" :key="current.path" />
+          </Transition>
         </RouterView>
       </main>
     </div>
@@ -70,35 +100,56 @@ const active = computed(() => {
 
 <style scoped>
 .layout {
+  --sidebar-width: 232px;
   display: flex;
   min-height: 100%;
 }
 
+.layout.collapsed {
+  --sidebar-width: 68px;
+}
+
 .sidebar {
-  width: 228px;
+  width: var(--sidebar-width);
   flex-shrink: 0;
-  background: var(--hm-sidebar);
+  background:
+    radial-gradient(120% 60% at 0% 0%, rgba(20, 184, 166, 0.12), transparent 60%),
+    var(--hm-sidebar);
   color: var(--hm-sidebar-text);
   display: flex;
   flex-direction: column;
-  position: sticky;
-  top: 0;
-  height: 100vh;
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 20;
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  margin-left: var(--sidebar-width);
+  transition: margin-left 0.2s ease;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 20px 18px 18px;
+  padding: 18px 17px 16px;
+  white-space: nowrap;
 }
 
 .logo {
   width: 34px;
   height: 34px;
+  flex-shrink: 0;
   background: #e6fffb;
-  border-radius: 9px;
+  border-radius: 10px;
   padding: 3px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 6px 16px -6px rgba(20, 184, 166, 0.6);
 }
 
 .product {
@@ -110,37 +161,56 @@ const active = computed(() => {
 
 .subtitle {
   font-size: 12px;
-  opacity: 0.75;
+  opacity: 0.7;
 }
 
 nav {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 6px 10px;
+  padding: 8px 10px;
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-radius: 8px;
+  gap: 11px;
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 9px;
   color: var(--hm-sidebar-text);
+  white-space: nowrap;
   transition: background 0.15s, color 0.15s;
 }
 
+.nav-item .icon {
+  font-size: 17px;
+  flex-shrink: 0;
+}
+
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.06);
   color: #fff;
 }
 
 .nav-item.active {
-  background: var(--hm-sidebar-active);
+  background: linear-gradient(90deg, rgba(20, 184, 166, 0.22), rgba(20, 184, 166, 0.06));
   color: #fff;
-  box-shadow: inset 3px 0 0 #14b8a6;
+}
+
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #2dd4bf;
 }
 
 .label {
@@ -156,36 +226,80 @@ nav {
   padding: 1px 7px;
 }
 
+.collapsed .brand-text,
+.collapsed .label,
+.collapsed .sidebar-foot {
+  display: none;
+}
+
+.collapsed .brand {
+  padding-left: 17px;
+}
+
+.collapsed .badge {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  min-width: 8px;
+  height: 8px;
+  padding: 0;
+  font-size: 0;
+  box-shadow: 0 0 0 2px var(--hm-sidebar);
+}
+
 .sidebar-foot {
   padding: 14px 18px;
   font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.8;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
 }
 
 .topbar {
   height: 56px;
-  background: var(--hm-surface);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: saturate(1.6) blur(10px);
   border-bottom: 1px solid var(--hm-border);
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 12px;
-  padding: 0 24px;
+  padding: 0 24px 0 14px;
   position: sticky;
   top: 0;
   z-index: 10;
 }
 
+.collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  background: transparent;
+  color: var(--hm-muted);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.collapse:hover {
+  background: var(--el-fill-color-light);
+  color: var(--hm-text);
+}
+
+.section {
+  font-weight: 600;
+  color: var(--hm-text);
+}
+
+.spacer {
+  flex: 1;
+}
+
 .content {
-  padding: 24px;
-  max-width: 1440px;
+  padding: 24px 28px 40px;
+  max-width: 1480px;
   width: 100%;
 }
 </style>

@@ -15,6 +15,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,6 +27,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.core5.concurrent.Cancellable;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.HttpEntity;
@@ -41,6 +44,11 @@ final class HttpCalls {
 
     static final int MAX_BODY_BYTES = 5 * 1024 * 1024;
     private static final int MAX_REDIRECTS = 5;
+    /**
+     * 一条共享的定时线程。任务在 {@code once} 的 finally 里取消，并开启 remove-on-cancel，
+     * 避免每个请求留下线程或在队列里堆积已完成的超时任务。
+     */
+    private static final ScheduledThreadPoolExecutor DEADLINES = newDeadlineExecutor();
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Pattern CHARSET = Pattern.compile(
             "(?i)charset\\s*=\\s*['\"]?\\s*([A-Za-z0-9._+-]+)");
@@ -48,6 +56,16 @@ final class HttpCalls {
             "(?i)<meta[^>]*charset\\s*=\\s*['\"]?\\s*([A-Za-z0-9._+-]+)");
 
     private HttpCalls() {
+    }
+
+    private static ScheduledThreadPoolExecutor newDeadlineExecutor() {
+        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, runnable -> {
+            Thread thread = new Thread(runnable, "hermit-http-deadline");
+            thread.setDaemon(true);
+            return thread;
+        });
+        executor.setRemoveOnCancelPolicy(true);
+        return executor;
     }
 
     static HttpResult execute(
@@ -211,22 +229,37 @@ final class HttpCalls {
         }
         applyHeaders(request, headers, target, method);
         String path = pathOf(target);
+        // responseTimeout 只限制相邻读取的空闲。持续慢速输出不会触发它，到能力 deadline 时取消请求，
+        // 才能打断已经阻塞在 InputStream.read 上的线程。
+        Cancellable cancellable = request;
+        ScheduledFuture<?> cancellation = scheduleCancellation(cancellable, deadlineNanos);
         try {
-            return client.execute(request, response -> {
+            Exchange exchange = client.execute(request, response -> {
                 int status = response.getCode();
                 LinkedHashMap<String, String> headerMap = new LinkedHashMap<>();
                 for (Header header : response.getHeaders()) {
                     headerMap.putIfAbsent(header.getName().toLowerCase(Locale.ROOT), header.getValue());
                 }
-                byte[] bytes = readBody(response.getEntity(), method, path, status);
+                byte[] bytes = readBody(response.getEntity(), method, path, status, deadlineNanos, cancellable);
                 String location = headerMap.get("location");
                 String redirect = isRedirect(status) ? location : null;
                 String decoded = decode(bytes, headerMap.get("content-type"), stepEncoding);
                 return new Exchange(status, target.toString(), method, path, headerMap, decoded, redirect);
             });
+            if (System.nanoTime() >= deadlineNanos) {
+                cancellable.cancel();
+                throw new DeadlineExceeded(-1, "request", List.of());
+            }
+            return exchange;
+        } catch (DeadlineExceeded ex) {
+            throw ex;
         } catch (RuleProblem ex) {
             throw ex;
         } catch (IOException ex) {
+            if (System.nanoTime() >= deadlineNanos) {
+                cancellable.cancel();
+                throw new DeadlineExceeded(-1, "request", List.of());
+            }
             if (isTimeout(ex) && capabilityBound) {
                 throw new DeadlineExceeded(-1, "request", List.of());
             }
@@ -235,8 +268,17 @@ final class HttpCalls {
             }
             throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, "上游连接失败", method, path, null);
         } finally {
+            cancellation.cancel(false);
             afterExchange.run();
         }
+    }
+
+    private static ScheduledFuture<?> scheduleCancellation(Cancellable cancellable, long deadlineNanos) {
+        long delayNanos = deadlineNanos - System.nanoTime();
+        if (delayNanos < 0) {
+            delayNanos = 0;
+        }
+        return DEADLINES.schedule(() -> cancellable.cancel(), delayNanos, TimeUnit.NANOSECONDS);
     }
 
     private static void applyHeaders(HttpUriRequestBase request, Map<String, Object> headers, URI target, String method) {
@@ -296,8 +338,16 @@ final class HttpCalls {
         }
     }
 
-    private static byte[] readBody(HttpEntity entity, String method, String path, int status) throws IOException {
+    private static byte[] readBody(
+            HttpEntity entity,
+            String method,
+            String path,
+            int status,
+            long deadlineNanos,
+            Cancellable request
+    ) throws IOException {
         if (entity == null) {
+            ensureWithinDeadline(deadlineNanos, request);
             return new byte[0];
         }
         long declared = entity.getContentLength();
@@ -308,15 +358,40 @@ final class HttpCalls {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buffer = new byte[8192];
             int total = 0;
-            int read;
-            while ((read = in.read(buffer)) >= 0) {
+            while (true) {
+                ensureWithinDeadline(deadlineNanos, request);
+                int read;
+                try {
+                    read = in.read(buffer);
+                } catch (IOException ex) {
+                    if (System.nanoTime() >= deadlineNanos) {
+                        request.cancel();
+                        throw new DeadlineExceeded(-1, "request", List.of());
+                    }
+                    throw ex;
+                }
+                if (read < 0) {
+                    break;
+                }
+                if (System.nanoTime() >= deadlineNanos) {
+                    request.cancel();
+                    throw new DeadlineExceeded(-1, "request", List.of());
+                }
                 total += read;
                 if (total > MAX_BODY_BYTES) {
                     throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, "响应体超过 5MB", method, path, status);
                 }
                 out.write(buffer, 0, read);
             }
+            ensureWithinDeadline(deadlineNanos, request);
             return out.toByteArray();
+        }
+    }
+
+    private static void ensureWithinDeadline(long deadlineNanos, Cancellable request) {
+        if (System.nanoTime() >= deadlineNanos) {
+            request.cancel();
+            throw new DeadlineExceeded(-1, "request", List.of());
         }
     }
 

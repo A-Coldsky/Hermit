@@ -1,0 +1,89 @@
+# 开发与测试
+
+## 工具链
+
+使用 JDK 17 和仓库 Maven Wrapper。检查 `java -version` 与 `./mvnw -version`：系统、IDE、Homebrew Maven 可能选到不同 JDK。本次机器默认 java 为 8、系统 Maven 使用 26，显式选择 17 后构建通过。
+
+macOS/Homebrew 示例，其他系统替换为实际 JDK 17 路径：
+
+```bash
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+./mvnw -version
+./mvnw -B verify
+```
+
+Maven 前端插件固定 Node 22.14.0。本地前端开发可用 Node 22.14+，具体依赖约束以 lockfile 的 engines 为准。
+
+## 常用命令
+
+仓库根目录：
+
+```bash
+# 完整页面构建、Vitest、Java 测试及跨进程验收
+./mvnw -B verify
+
+# 公共模型
+./mvnw -B -pl hermit-common -am test
+
+# Crab / Reef 模块及其依赖
+./mvnw -B -pl hermit-crab -am test -Dhermit.web.skip=true
+./mvnw -B -pl hermit-reef -am test -Dhermit.web.skip=true
+
+# 定点测试，上游模块没有同名测试时不报错
+./mvnw -B -pl hermit-crab -am test -Dhermit.web.skip=true \
+  -Dtest=GatewayHttpTest -Dsurefire.failIfNoSpecifiedTests=false
+
+# Crab 运行 classpath：先把本项目依赖安装到本地仓库
+./mvnw -B -pl hermit-crab -am install -DskipTests
+./mvnw -q -pl hermit-crab dependency:build-classpath \
+  -DincludeScope=runtime -Dmdep.outputFile=target/classpath.txt
+```
+
+`hermit-it` 用 Surefire 执行，但依赖上游 package 阶段生成的 Reef 可执行 jar 和 Crab test-jar；干净仓库全量入口是 `verify`，不能以根目录 `test` 替代。
+
+`-DskipTests` 跳过 Java 测试执行，并通过 Maven profile 跳过前端测试，仍可能编译 Java 测试。`-Dhermit.web.skip=true` 跳过 npm/前端测试/页面资源复制，并清掉旧的 classpath 页面资源；缺页面时有占位页。仅跳过 Vitest 可用 `-Dhermit.web.skipTests=true`。完整发布验证不要带这些跳过参数。跳过前端不等于离线模式。
+
+## 前端开发
+
+```bash
+cd hermit-web
+npm ci
+npm run dev:reef
+# 另一终端可以 npm run dev:crab
+```
+
+| 应用 | 开发入口 | 代理环境变量 | 默认后端 |
+| --- | --- | --- | --- |
+| reef-admin | `http://localhost:5173/` | `REEF_URL` | `http://localhost:8080` |
+| crab-console | `http://localhost:5174/console/` | `CRAB_URL` | `http://127.0.0.1:7777` |
+
+`npm run build` 执行 vue-tsc 和两套 Vite 构建；`npm test` 执行 Vitest（Vue Test Utils + jsdom），并已接入 Maven test 阶段。前端测试覆盖加载/空态、文案、主题和版本警告详情。仍没有真实浏览器 E2E；Java UI 测试主要覆盖资源路由、缓存和 SPA 返回，不能等同于浏览器交互验收。
+
+## 测试地图
+
+| 层 | 主要测试 | 重点 |
+| --- | --- | --- |
+| common | `ShellParserTest`、`ShellValidatorTest`、`ShellDiffTest`、`ShellPackageTest`、`TemplateEngineTest` | 严格字段、引用、版本差异、签名、模板 |
+| Reef | `AdminApiTest`、`AgentToken*Test`、`ShellApiTest`、`ShellConcurrencyTest`、`SigningKeyStoreTest` | 鉴权、令牌缺失拒绝、发布回滚、并发、密钥 |
+| Tide | `ReportIngestTest`、`TideQueryTest`、`AlertEvaluationTest` | 上报校验、失败去重、聚合与告警 |
+| 执行 | `EngineUnitTest`、`LegacyOaEngineTest`、`ScriptStepTest` | 模拟 OA、登录隔离、编码/提取、脚本 |
+| 数据 | `SecretFlowTest`、`CredentialCipherTest`、`MasterKeyProviderTest`、`*StoreTest` | 加密、绑定、账户、主密钥、日志 |
+| 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等、本机限制、MCP 模式与 SSE |
+| 前端 | `loading-empty.test.ts`、`copy.test.ts`、`theme.test.ts`、`version-panel.test.ts` | 初始加载、说明文案、颜色映射和版本警告详情 |
+| 同步/上报 | `ShellSyncTest`、`InstalledShellsTest`、`RollbackGuardTest`、`ReportSenderTest`、`CrabWiringTest` | ETag、失败重试、验签、固定回滚、定时任务 |
+| 验收 | [Phase1AcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/Phase1AcceptanceTest.java) | 独立 Reef + Crab + 模拟 OA，发布调用、坏版本回滚、反馈与敏感数据检查 |
+
+Java 结果位于各模块 `target/surefire-reports/`。2026-10-16 同步到 `48daca7` 后完整 verify：common 41、Reef 97、Crab 170、验收 1，共 309 项 Java 测试，以及 4 个前端测试文件中的 18 项 Vitest 测试均通过，无失败或跳过。没有 JaCoCo 配置，测试条数不是行/分支覆盖率。
+
+## 维护方式
+
+- 使用 `@TempDir`、`LegacyOaFixture`、`FakeReef`、`MutableClock`，不要对真实数据执行验收。
+- 缺陷修复添加行为回归测试，特别关注权限、失败与并发交错。
+- DTO/Schema 修改检查双方；HTTP 响应修改同步两套前端 `api.ts`。
+- 涉及包格式/同步/发布/网关的改动，定点测试后再跑完整 verify。
+- 当前没有 CI workflow、覆盖率门槛和依赖漏洞扫描配置。
+
+## 审计探针
+
+完整 verify 后，使用 JDK 17 和 Python 3 运行 `python3 docs/audits/repro/run.py`。脚本从 Surefire XML 取依赖 classpath，使用临时数据及回环随机端口。它打印现有行为，退出 0 只表示探针完成，不表示缺陷修复；不纳入默认测试套件。观察值与修复验收标准见[审计报告](audits/2026-10-16.md)。

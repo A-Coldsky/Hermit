@@ -81,6 +81,7 @@ engine:
 | `spring.datasource.url` | 默认 `jdbc:h2:file:${hermit.reef.data-dir}/db/reef;MODE=REGULAR` |
 | `spring.datasource.username` / `password` | H2 默认 `sa` / 空密码；部署 MySQL 时覆盖 |
 | `server.port` | Spring Boot 默认 8080 |
+| `server.compression.*` | 默认开启，仅对 ≥ 2KB 的 HTML/CSS/JS/SVG 做 gzip，接口 JSON 不压缩；Compose 中 Nginx 另有 gzip。Crab 由 Javalin 默认 gzip（≥ 1500 字节） |
 
 Tide 配置位于 `hermit.reef.tide`：
 

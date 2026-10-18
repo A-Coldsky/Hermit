@@ -60,7 +60,13 @@ npm run dev:reef
 | reef-admin | `http://localhost:5173/` | `REEF_URL` | `http://localhost:8080` |
 | crab-console | `http://localhost:5174/console/` | `CRAB_URL` | `http://127.0.0.1:7777` |
 
-`npm run build` 执行 vue-tsc 和两套 Vite 构建；`npm test` 执行 Vitest（Vue Test Utils + jsdom），并已接入 Maven test 阶段。前端测试覆盖加载/空态、文案、主题和版本警告详情。仍没有真实浏览器 E2E；Java UI 测试主要覆盖资源路由、缓存和 SPA 返回，不能等同于浏览器交互验收。
+`npm run build` 执行 vue-tsc 和两套 Vite 构建；`npm test` 执行 Vitest（Vue Test Utils + jsdom），并已接入 Maven test 阶段。前端测试覆盖加载/空态、文案、主题、版本警告详情和图表刻度。仍没有真实浏览器 E2E；Java UI 测试主要覆盖资源路由、缓存和 SPA 返回，不能等同于浏览器交互验收。
+
+页面约定：
+
+- Element Plus 按需引入。两套 Vite 配置共用 [vite.shared.ts](../hermit-web/vite.shared.ts)，模板中的 `el-*` 组件和 `v-loading` 由 `unplugin-vue-components` 自动引入脚本与样式；`ElMessage`、`ElMessageBox` 这类函数式调用不经过模板，样式在 [shared/boot.ts](../hermit-web/shared/boot.ts) 中引入，新增其他函数式组件（如 `ElNotification`）时也在那里补样式。中文语言包通过 `provideGlobalConfig` 全局提供。
+- 颜色统一用 [theme.css](../hermit-web/shared/theme.css) 中的 `--hm-*` 与 `--el-*` token，不在组件中写死色值。浅色 token 位于 `html:root`，暗色位于 `html.dark`；Element 组件样式随页面分块按需加载，排在 `theme.css` 之后，覆盖 Element 类名的规则需加 `html` 前缀。明暗阶由 `theme.test.ts` 按 Element 算法校验。
+- 明暗模式默认跟随系统，顶栏可切换，选择记在浏览器 `localStorage` 的 `hermit.color-mode`；`index.html` 中的首帧脚本使用同一键，避免闪烁。侧栏折叠状态记在 `hermit.sidebar-collapsed`，窄屏（≤ 900px）下侧栏改为抽屉。
 
 ## 测试地图
 
@@ -72,7 +78,7 @@ npm run dev:reef
 | 执行 | `EngineUnitTest`、`LegacyOaEngineTest`、`ScriptStepTest` | 模拟 OA、登录隔离、编码/提取、脚本 |
 | 数据 | `SecretFlowTest`、`CredentialCipherTest`、`MasterKeyProviderTest`、`*StoreTest` | 加密、绑定、账户、主密钥、日志 |
 | 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等、本机限制、MCP 模式与 SSE |
-| 前端 | `loading-empty.test.ts`、`copy.test.ts`、`theme.test.ts`、`version-panel.test.ts` | 初始加载、说明文案、颜色映射和版本警告详情 |
+| 前端 | `loading-empty.test.ts`、`copy.test.ts`、`theme.test.ts`、`version-panel.test.ts`、`bar-chart.test.ts` | 初始加载、说明文案、浅色/暗色颜色映射、版本警告详情和图表刻度 |
 | 同步/上报 | `ShellSyncTest`、`InstalledShellsTest`、`RollbackGuardTest`、`ReportSenderTest`、`CrabWiringTest` | ETag、失败重试、验签、固定回滚、定时任务 |
 | 验收 | [Phase1AcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/Phase1AcceptanceTest.java) | 独立 Reef + Crab + 模拟 OA，发布调用、坏版本回滚、反馈与敏感数据检查 |
 

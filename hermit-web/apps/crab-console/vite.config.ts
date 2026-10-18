@@ -1,18 +1,17 @@
 import { fileURLToPath, URL } from 'node:url'
-import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
+import { sharedDir, webPlugins } from '../../vite.shared.ts'
 
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
   base: '/console/',
-  plugins: [vue()],
+  plugins: webPlugins(),
   resolve: {
-    alias: { '@shared': fileURLToPath(new URL('../../shared', import.meta.url)) },
+    alias: { '@shared': sharedDir },
   },
   build: {
     outDir: fileURLToPath(new URL('../../dist/crab-console', import.meta.url)),
     emptyOutDir: true,
-    chunkSizeWarningLimit: 1600,
   },
   server: {
     port: 5174,

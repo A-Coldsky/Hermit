@@ -219,8 +219,9 @@ onMounted(load)
   flex: 1;
   padding: 10px 12px;
   border-radius: 6px;
-  background: #0f172a;
+  background: var(--hm-code-bg);
   color: #a7f3d0;
+  border: 1px solid var(--hm-border);
   word-break: break-all;
 }
 </style>

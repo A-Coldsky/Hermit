@@ -43,6 +43,11 @@ async function submit() {
       </svg>
       <h1>Hermit Reef</h1>
       <p>把内网老系统包装成可调用的 OpenAPI 与 MCP 能力。在这里上传、发布和回滚 Shell，并查看各 Crab 回传的运行指标。</p>
+      <ul class="points">
+        <li>Ed25519 签名发布，Crab 验签后安装</li>
+        <li>新版本异常时 Crab 自动回退</li>
+        <li>按小时汇总调用量、耗时与失败样本</li>
+      </ul>
     </section>
     <section class="panel">
       <el-form class="form" label-position="top" @submit.prevent="submit">
@@ -65,16 +70,34 @@ async function submit() {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 1.1fr 1fr;
+  background: var(--hm-bg);
 }
 
 .brand {
-  background: radial-gradient(circle at 20% 20%, #134e4a, #0f172a 70%);
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(circle at 18% 18%, #134e4a, #0f172a 72%);
   color: #e2e8f0;
   padding: 72px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 12px;
+}
+
+/* 淡淡的点阵，只做质感，不影响阅读。 */
+.brand::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(94, 234, 212, 0.14) 1px, transparent 1px);
+  background-size: 22px 22px;
+  mask-image: linear-gradient(120deg, #000 10%, transparent 70%);
+  pointer-events: none;
+}
+
+.brand > * {
+  position: relative;
 }
 
 .brand h1 {
@@ -87,6 +110,32 @@ async function submit() {
   max-width: 440px;
   line-height: 1.7;
   color: #94a3b8;
+  margin: 0;
+}
+
+.points {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #cbd5e1;
+}
+
+.points li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.points li::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #5eead4;
+  box-shadow: 0 0 0 4px rgba(94, 234, 212, 0.15);
 }
 
 .panel {
@@ -98,7 +147,12 @@ async function submit() {
 
 .form {
   width: 100%;
-  max-width: 360px;
+  max-width: 380px;
+  background: var(--hm-surface);
+  border: 1px solid var(--hm-border);
+  border-radius: 16px;
+  box-shadow: var(--hm-shadow-raised);
+  padding: 32px;
 }
 
 .form h2 {
@@ -112,6 +166,7 @@ async function submit() {
 
 .submit {
   width: 100%;
+  height: 40px;
 }
 
 @media (max-width: 860px) {
@@ -121,6 +176,14 @@ async function submit() {
 
   .brand {
     padding: 40px 32px;
+  }
+
+  .points {
+    display: none;
+  }
+
+  .panel {
+    padding: 24px 16px 48px;
   }
 }
 </style>

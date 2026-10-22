@@ -48,3 +48,9 @@ server:
     include-stacktrace: never
     include-message: never
     include-binding-errors: never
+  # 原生运行时没有 Nginx 在前面压缩，页面脚本和样式由 Tomcat 自己 gzip。
+  # 只压缩静态资源类型，接口 JSON 不在列表里，避免带令牌的响应被压缩。
+  compression:
+    enabled: true
+    mime-types: text/html,text/css,text/javascript,application/javascript,image/svg+xml
+    min-response-size: 2KB

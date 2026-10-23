@@ -74,8 +74,6 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 | --- | --- |
 | INVALID_INPUT | 400（方法错误 405） |
 | AUTH_FAILED | 网关 Key 无效 401；上游登录失败 422 |
-
-缺必填、类型无法转换，或数值超出参数声明的 `minimum` / `maximum`，都返回 `INVALID_INPUT`。运行时不会把负页码或过大的 `pageSize` 夹进范围内再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。
 | FORBIDDEN | 403 |
 | NOT_FOUND / ACCOUNT_NOT_FOUND | 404 |
 | NOT_CONFIGURED | 409 |
@@ -83,6 +81,8 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 | UPSTREAM_ERROR | 502 |
 | TIMEOUT | 504 |
 | INTERNAL | 500 |
+
+缺必填、类型无法转换，或数值超出参数声明的 `minimum` / `maximum`，都返回 `INVALID_INPUT`。运行时不会把负页码或过大的 `pageSize` 夹进范围内再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。
 
 ## Crab 本机管理 API
 
@@ -152,7 +152,7 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。
 
-成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
+成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。直接工具的 `outputSchema` 只列 Shell `output` 的字段名和说明，不带类型约束，因为模板渲染不会把提取值转换成声明类型；目录工具的 `outputSchema` 带类型。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
 
 stdio 是对运行中 Crab 的桥接，不单独启动执行器。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr：
 

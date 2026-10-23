@@ -424,9 +424,11 @@ class McpHttpTest {
             Reply listed = server.post(server.apiKey.plaintext(), session, null, request(2, "tools/list", null));
             JsonNode todo = tool(listed.json().path("result").path("tools"), "legacy_oa__list_todo");
             assertThat(todo.path("outputSchema").path("type").asText()).isEqualTo("object");
-            assertThat(todo.path("outputSchema").path("properties").path("items").path("type").asText()).isEqualTo("array");
+            assertThat(todo.path("outputSchema").path("properties").has("items")).isTrue();
+            assertThat(todo.path("outputSchema").path("properties").path("items").has("type")).isFalse();
             JsonNode pageTool = tool(listed.json().path("result").path("tools"), "bounds_shell__page_items");
-            assertThat(pageTool.path("outputSchema").path("properties").path("seen").path("type").asText()).isEqualTo("boolean");
+            assertThat(pageTool.path("outputSchema").path("properties").has("seen")).isTrue();
+            assertThat(pageTool.path("outputSchema").path("properties").path("seen").has("type")).isFalse();
 
             Reply oldest = server.post(server.apiKey.plaintext(), null, null, initialize("2024-11-05", "{}"));
             String oldSession = oldest.header("Mcp-Session-Id");

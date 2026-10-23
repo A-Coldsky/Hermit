@@ -210,9 +210,27 @@ final class McpCatalog {
                 .description(toolDescription(action))
                 .annotations(hints(readOnly, action.idempotent()));
         if (outputSchema) {
-            builder.outputSchema(action.outputJsonSchema());
+            builder.outputSchema(looseOutputSchema(action));
         }
         return builder.build();
+    }
+
+    /**
+     * 字段名和说明来自 Shell 的 output，但不带类型约束：模板渲染不会把提取值转换成声明类型，
+     * 严格校验 structuredContent 的客户端会因类型不符拒绝整次结果。
+     */
+    private static Map<String, Object> looseOutputSchema(Action action) {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        if (action.outputJsonSchema().get("properties") instanceof Map<?, ?> declared) {
+            for (Map.Entry<?, ?> entry : declared.entrySet()) {
+                LinkedHashMap<String, Object> field = new LinkedHashMap<>();
+                if (entry.getValue() instanceof Map<?, ?> spec && spec.get("description") instanceof String description) {
+                    field.put("description", description);
+                }
+                properties.put(String.valueOf(entry.getKey()), field);
+            }
+        }
+        return objectSchema(properties);
     }
 
     private static McpSchema.Tool tool(

@@ -174,7 +174,7 @@ public final class McpStdio {
             HttpResponse<byte[]> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
             response.headers().firstValue("Mcp-Session-Id").ifPresent(session::set);
             if (response.statusCode() == 401) {
-                err.println("authentication failed");
+                err.println("authentication failed: " + rpcErrorMessage(response.body()));
                 exit.compareAndSet(0, 1);
                 return;
             }
@@ -292,5 +292,18 @@ public final class McpStdio {
             current = current.getCause();
         }
         return false;
+    }
+
+    /** 401 的 body 是 JSON-RPC 错误；读不出就只报状态，避免把未知内容写到终端。 */
+    private static String rpcErrorMessage(byte[] body) {
+        if (body == null || body.length == 0) {
+            return "HTTP 401";
+        }
+        try {
+            String message = McpJson.tree(body).path("error").path("message").asText("");
+            return message.isBlank() ? "HTTP 401" : message;
+        } catch (RuntimeException ex) {
+            return "HTTP 401";
+        }
     }
 }

@@ -23,11 +23,8 @@ import java.util.logging.Logger;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import dev.hermit.common.error.ErrorCode;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.gateway.RequestBodies;
-import dev.hermit.crab.runtime.ApiEnvelope;
-import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.store.ApiKeyPrincipal;
 import io.javalin.Javalin;
@@ -131,20 +128,19 @@ public final class McpEndpoint {
         sweep();
         Optional<ApiKeyPrincipal> principal = authenticate(ctx);
         if (principal.isEmpty()) {
-            writeAuth(ctx);
             return;
         }
         JsonNode message;
         try {
             message = McpJson.tree(RequestBodies.read(ctx.req()));
         } catch (RequestBodies.BodyTooLargeException ex) {
-            writeRpcError(ctx, null, 400, McpSchema.ErrorCodes.INVALID_REQUEST, "request body too large", null);
+            writeRpcError(ctx, null, McpErrors.requestTooLarge(), null);
             return;
         } catch (IllegalArgumentException ex) {
-            writeRpcError(ctx, null, 200, McpSchema.ErrorCodes.PARSE_ERROR, "parse error", null);
+            writeRpcError(ctx, null, McpErrors.parseError(), null);
             return;
         } catch (IOException ex) {
-            writeRpcError(ctx, null, 200, McpSchema.ErrorCodes.PARSE_ERROR, "parse error", null);
+            writeRpcError(ctx, null, McpErrors.parseError(), null);
             return;
         }
         try {
@@ -152,21 +148,21 @@ public final class McpEndpoint {
         } catch (RuntimeException ex) {
             LOG.warning("mcp request failed: " + ex.getClass().getName());
             if (!ctx.res().isCommitted()) {
-                writeRpcError(ctx, id(message), 200, McpSchema.ErrorCodes.INTERNAL_ERROR, "internal error", null);
+                writeRpcError(ctx, id(message), McpErrors.internalError(), null);
             }
         }
     }
 
     private void dispatch(Context ctx, ApiKeyPrincipal principal, JsonNode message) {
         if (!message.isObject() || !"2.0".equals(message.path("jsonrpc").asText())) {
-            writeRpcError(ctx, id(message), 200, McpSchema.ErrorCodes.INVALID_REQUEST, "invalid request", null);
+            writeRpcError(ctx, id(message), McpErrors.invalidRequest(), null);
             return;
         }
         boolean hasMethod = message.hasNonNull("method");
         JsonNode id = id(message);
         boolean hasId = id != null;
         if (!hasMethod && hasId && (message.has("result") || message.has("error"))) {
-            McpSession session = requireSession(ctx, principal);
+            McpSession session = requireSession(ctx, principal, id);
             if (session == null) {
                 return;
             }
@@ -175,12 +171,12 @@ public final class McpEndpoint {
             return;
         }
         if (!hasMethod) {
-            writeRpcError(ctx, id, 200, McpSchema.ErrorCodes.INVALID_REQUEST, "invalid request", null);
+            writeRpcError(ctx, id, McpErrors.invalidRequest(), null);
             return;
         }
         String method = message.path("method").asText();
         if (!hasId) {
-            McpSession session = requireSession(ctx, principal);
+            McpSession session = requireSession(ctx, principal, null);
             if (session == null) {
                 return;
             }
@@ -191,17 +187,18 @@ public final class McpEndpoint {
             initialize(ctx, principal, id, message.get("params"));
             return;
         }
-        McpSession session = requireSession(ctx, principal);
+        McpSession session = requireSession(ctx, principal, id);
         if (session == null) {
             return;
         }
         switch (method) {
             case "ping" -> writeResult(ctx, id, Map.of(), session);
-            case "tools/list" -> writeResult(ctx, id, McpSchema.ListToolsResult.builder(catalog.tools(principal)).build(), session);
-            case "tools/call" -> writeResult(ctx, id, calls.call(principal, session, headerAccount(ctx), message.get("params")), session);
+            case "tools/list" -> writeResult(ctx, id,
+                    McpSchema.ListToolsResult.builder(catalog.tools(principal, session.protocolVersion)).build(), session);
+            case "tools/call" -> callTool(ctx, principal, id, message.get("params"), session);
             case "resources/list" -> writeResult(ctx, id, McpSchema.ListResourcesResult.builder(catalog.resources(principal)).build(), session);
             case "resources/read" -> readResource(ctx, principal, id, message.get("params"), session);
-            default -> writeRpcError(ctx, id, 200, McpSchema.ErrorCodes.METHOD_NOT_FOUND, "method not found", session);
+            default -> writeRpcError(ctx, id, McpErrors.methodNotFound(), session);
         }
     }
 
@@ -210,13 +207,13 @@ public final class McpEndpoint {
         try {
             request = McpJson.convert(params, McpSchema.InitializeRequest.class);
         } catch (IllegalArgumentException ex) {
-            writeRpcError(ctx, id, 200, McpSchema.ErrorCodes.INVALID_PARAMS, "invalid params", null);
+            writeRpcError(ctx, id, McpErrors.invalidParams(), null);
             return;
         }
         String protocol = PROTOCOLS.contains(request.protocolVersion())
                 ? request.protocolVersion()
                 : ProtocolVersions.MCP_2025_11_25;
-        McpSession session = new McpSession(UUID.randomUUID().toString(), principal.id(), request.capabilities());
+        McpSession session = new McpSession(UUID.randomUUID().toString(), principal.id(), protocol, request.capabilities());
         synchronized (sessionLock) {
             reap(clock.millis());
             session.touch(clock.millis(), useSequence.incrementAndGet());
@@ -232,12 +229,12 @@ public final class McpEndpoint {
         try {
             request = McpJson.convert(params, McpSchema.ReadResourceRequest.class);
         } catch (IllegalArgumentException ex) {
-            writeRpcError(ctx, id, 200, McpSchema.ErrorCodes.INVALID_PARAMS, "invalid params", session);
+            writeRpcError(ctx, id, McpErrors.invalidParams(), session);
             return;
         }
         Optional<String> guide = catalog.guide(principal, request.uri());
         if (guide.isEmpty()) {
-            writeRpcError(ctx, id, 200, McpSchema.ErrorCodes.RESOURCE_NOT_FOUND, "not found", session);
+            writeRpcError(ctx, id, McpErrors.resourceNotFound(), session);
             return;
         }
         McpSchema.TextResourceContents contents = McpSchema.TextResourceContents.builder(request.uri(), guide.get())
@@ -253,10 +250,9 @@ public final class McpEndpoint {
         sweep();
         Optional<ApiKeyPrincipal> principal = authenticate(ctx);
         if (principal.isEmpty()) {
-            writeAuth(ctx);
             return;
         }
-        McpSession session = requireSession(ctx, principal.get());
+        McpSession session = requireSession(ctx, principal.get(), null);
         if (session == null) {
             return;
         }
@@ -295,10 +291,9 @@ public final class McpEndpoint {
         sweep();
         Optional<ApiKeyPrincipal> principal = authenticate(ctx);
         if (principal.isEmpty()) {
-            writeAuth(ctx);
             return;
         }
-        McpSession session = requireSession(ctx, principal.get());
+        McpSession session = requireSession(ctx, principal.get(), null);
         if (session == null) {
             return;
         }
@@ -310,24 +305,24 @@ public final class McpEndpoint {
         ctx.result("");
     }
 
-    private McpSession requireSession(Context ctx, ApiKeyPrincipal principal) {
+    private McpSession requireSession(Context ctx, ApiKeyPrincipal principal, JsonNode requestId) {
         String id = ctx.header(SESSION_HEADER);
         if (id == null || id.isBlank()) {
-            writeRpcError(ctx, null, 400, McpSchema.ErrorCodes.INVALID_REQUEST, "session required", null);
+            writeRpcError(ctx, requestId, McpErrors.sessionRequired(), null);
             return null;
         }
         McpSession session = sessions.get(id.trim());
         if (session == null || session.closed.get()) {
-            writeRpcError(ctx, null, 404, McpSchema.ErrorCodes.INVALID_REQUEST, "session not found", null);
+            writeRpcError(ctx, requestId, McpErrors.sessionNotFound(), null);
             return null;
         }
         if (!session.apiKeyId.equals(principal.id())) {
-            writeAuth(ctx);
+            writeAuthFailure(ctx, McpErrors.sessionMismatch());
             return null;
         }
         synchronized (sessionLock) {
             if (session.closed.get() || !sessions.containsKey(session.id)) {
-                writeRpcError(ctx, null, 404, McpSchema.ErrorCodes.INVALID_REQUEST, "session not found", null);
+                writeRpcError(ctx, requestId, McpErrors.sessionNotFound(), null);
                 return null;
             }
             session.touch(clock.millis(), useSequence.incrementAndGet());
@@ -381,9 +376,14 @@ public final class McpEndpoint {
     private Optional<ApiKeyPrincipal> authenticate(Context ctx) {
         String token = token(ctx);
         if (token == null) {
+            writeAuthFailure(ctx, McpErrors.authMissing());
             return Optional.empty();
         }
-        return runtime.apiKeys().authenticate(token);
+        Optional<ApiKeyPrincipal> principal = runtime.apiKeys().authenticate(token);
+        if (principal.isEmpty()) {
+            writeAuthFailure(ctx, McpErrors.authInvalid());
+        }
+        return principal;
     }
 
     private static Optional<String> headerAccount(Context ctx) {
@@ -410,12 +410,17 @@ public final class McpEndpoint {
         return value.isEmpty() ? null : value;
     }
 
-    private static void writeAuth(Context ctx) {
-        String traceId = UUID.randomUUID().toString();
-        ctx.status(401);
-        ctx.contentType("application/json; charset=utf-8");
-        ctx.header("X-Hermit-Trace", traceId);
-        ctx.result(ApiJson.bytes(ApiEnvelope.json(null, ErrorCode.AUTH_FAILED, "invalid api key", traceId)));
+    private void callTool(Context ctx, ApiKeyPrincipal principal, JsonNode id, JsonNode params, McpSession session) {
+        try {
+            writeResult(ctx, id, calls.call(principal, session, headerAccount(ctx), params), session);
+        } catch (McpProtocolException ex) {
+            writeRpcError(ctx, id, McpErrors.invalidParams(), session);
+        }
+    }
+
+    private static void writeAuthFailure(Context ctx, McpErrors.Failure failure) {
+        ctx.header("X-Hermit-Trace", UUID.randomUUID().toString());
+        writeRpcError(ctx, null, failure, null);
     }
 
     private static void writeResult(Context ctx, JsonNode id, Object result, McpSession session) {
@@ -430,7 +435,7 @@ public final class McpEndpoint {
         writeJson(ctx, 200, envelope, session);
     }
 
-    private static void writeRpcError(Context ctx, JsonNode id, int status, int code, String message, McpSession session) {
+    private static void writeRpcError(Context ctx, JsonNode id, McpErrors.Failure failure, McpSession session) {
         ObjectNode envelope = McpJson.mapper().createObjectNode();
         envelope.put("jsonrpc", "2.0");
         if (id == null) {
@@ -439,10 +444,14 @@ public final class McpEndpoint {
             envelope.set("id", id);
         }
         ObjectNode error = McpJson.mapper().createObjectNode();
-        error.put("code", code);
-        error.put("message", message);
+        error.put("code", failure.rpcCode());
+        error.put("message", failure.message());
+        ObjectNode data = McpJson.mapper().createObjectNode();
+        data.put("code", failure.code());
+        data.put("hint", failure.hint());
+        error.set("data", data);
         envelope.set("error", error);
-        writeJson(ctx, status, envelope, session);
+        writeJson(ctx, failure.status(), envelope, session);
     }
 
     private static void writeJson(Context ctx, int status, ObjectNode envelope, McpSession session) {

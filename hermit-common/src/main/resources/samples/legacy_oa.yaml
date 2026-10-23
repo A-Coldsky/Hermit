@@ -53,7 +53,7 @@ actions:
     title: 查询待办
     description: 查询当前账号在 OA 中待处理的审批。用户问“有什么待办”“要审批什么”时使用；查询已办请用 list_done。
     input:
-      page: { type: integer, default: 1, description: 页码，从 1 开始，每页 20 条 }
+      page: { type: integer, default: 1, minimum: 1, description: 页码，从 1 开始，每页 20 条 }
     steps:
       - request:
           method: GET

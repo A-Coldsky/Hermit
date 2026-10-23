@@ -78,6 +78,50 @@ class EngineUnitTest {
     }
 
     @Test
+    void rejectsOutOfRangeInputInsteadOfClamping() {
+        Action action = ShellParser.parse("""
+                shell: bounds_shell
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 分页
+                description: 说明
+                credentials: {}
+                actions:
+                  page_items:
+                    title: 分页
+                    description: 说明
+                    input:
+                      page: { type: integer, minimum: 1, maximum: 100, required: true, description: 页码 }
+                      pageSize: { type: integer, minimum: 1, maximum: 50, description: 每页条数 }
+                      label: { type: string, required: true, description: 标签 }
+                    output:
+                      seen: { type: boolean, description: 是否执行 }
+                    examples:
+                      - input: { page: 1, label: a }
+                        output: { seen: true }
+                    notes: 注意
+                    steps:
+                      - set: { seen: true }
+                """).actions().get("page_items");
+        InputPreparer preparer = new InputPreparer();
+        assertThat(assertInvalid(preparer, action, Map.of("page", -1, "pageSize", 20, "label", "a")).getMessage())
+                .contains("page");
+        assertThat(assertInvalid(preparer, action, Map.of("page", "-1", "pageSize", "20", "label", "a")).getMessage())
+                .contains("page").doesNotContain("-1");
+        assertThat(assertInvalid(preparer, action, Map.of("page", 1, "pageSize", 1000, "label", "a")).getMessage())
+                .contains("pageSize");
+        assertThat(assertInvalid(preparer, action, Map.of("page", 1, "pageSize", 20)).getMessage())
+                .contains("label");
+        assertThat(assertInvalid(preparer, action, Map.of("page", "no", "pageSize", 20, "label", "a")).getMessage())
+                .contains("page").doesNotContain("no");
+        assertThat(preparer.prepare(action, Map.of("page", 1, "pageSize", 50, "label", "a")))
+                .containsEntry("page", 1)
+                .containsEntry("pageSize", 50)
+                .containsEntry("label", "a");
+    }
+
+    @Test
     void filterChainDoesNotReparseTheValue() {
         Map<String, Object> vars = new LinkedHashMap<>();
         vars.put("credential", Map.of("password", EngineTestSupport.PASSWORD));

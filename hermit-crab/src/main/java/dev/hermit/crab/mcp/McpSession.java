@@ -20,6 +20,7 @@ final class McpSession {
 
     final String id;
     final String apiKeyId;
+    final String protocolVersion;
     final McpSchema.ClientCapabilities capabilities;
     final AtomicBoolean closed = new AtomicBoolean();
     private long lastUsed;
@@ -28,9 +29,10 @@ final class McpSession {
     private final ConcurrentHashMap<String, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
     private final AtomicInteger serverIds = new AtomicInteger();
 
-    McpSession(String id, String apiKeyId, McpSchema.ClientCapabilities capabilities) {
+    McpSession(String id, String apiKeyId, String protocolVersion, McpSchema.ClientCapabilities capabilities) {
         this.id = id;
         this.apiKeyId = apiKeyId;
+        this.protocolVersion = protocolVersion == null ? "" : protocolVersion;
         this.capabilities = capabilities == null
                 ? new McpSchema.ClientCapabilities(null, null, null, null)
                 : capabilities;

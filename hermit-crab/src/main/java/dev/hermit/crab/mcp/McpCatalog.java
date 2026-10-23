@@ -40,13 +40,14 @@ final class McpCatalog {
         return visible(principal).size() > DIRECT_LIMIT;
     }
 
-    List<McpSchema.Tool> tools(ApiKeyPrincipal principal) {
+    List<McpSchema.Tool> tools(ApiKeyPrincipal principal, String protocol) {
+        boolean outputSchema = McpErrors.outputSchemaSupported(protocol);
         if (directory(principal)) {
-            return directoryTools();
+            return directoryTools(outputSchema);
         }
         ArrayList<McpSchema.Tool> tools = new ArrayList<>();
         for (CapabilityRef ref : visible(principal)) {
-            tools.add(directTool(ref));
+            tools.add(directTool(ref, outputSchema));
         }
         return List.copyOf(tools);
     }
@@ -129,6 +130,7 @@ final class McpCatalog {
                 row.put("title", ref.action().title());
                 row.put("readOnly", CapabilityHttp.readOnly(ref.action()));
                 matches.add(row);
+                // Result window, not an input pageSize. Callers cannot pass page or pageSize.
                 if (matches.size() == 20) {
                     break;
                 }
@@ -188,29 +190,106 @@ final class McpCatalog {
         return found;
     }
 
-    private static List<McpSchema.Tool> directoryTools() {
+    private static List<McpSchema.Tool> directoryTools(boolean outputSchema) {
         return List.of(
-                tool(LIST_SYSTEMS, "列出当前可以调用的 Shell 及其能力数量。", objectSchema(Map.of()), true, true),
-                tool(SEARCH, "在标题、说明、备注和参数说明里搜索能力，最多返回 20 条。", searchSchema(), true, true),
-                tool(DESCRIBE, "查看一个能力的说明、参数、返回字段和示例。name 形如 shell__action。", nameSchema(), true, true),
-                tool(CALL, "调用一个能力。非只读能力需要用户确认。", callSchema(), false, false));
+                tool(LIST_SYSTEMS, "列出当前可以调用的 Shell 及其能力数量。", objectSchema(Map.of()),
+                        outputSchema ? systemsOutputSchema() : null, true, true),
+                tool(SEARCH, "在标题、说明、备注和参数说明里搜索能力，最多返回 20 条。", searchSchema(),
+                        outputSchema ? searchOutputSchema() : null, true, true),
+                tool(DESCRIBE, "查看一个能力的说明、参数、返回字段和示例。name 形如 shell__action。", nameSchema(),
+                        outputSchema ? describeOutputSchema() : null, true, true),
+                // call_capability returns whichever capability was named, so it has no single outputSchema.
+                tool(CALL, "调用一个能力。非只读能力需要用户确认。", callSchema(), null, false, false));
     }
 
-    private static McpSchema.Tool directTool(CapabilityRef ref) {
+    private static McpSchema.Tool directTool(CapabilityRef ref, boolean outputSchema) {
         Action action = ref.action();
         boolean readOnly = CapabilityHttp.readOnly(action);
-        return McpSchema.Tool.builder(ref.toolName(), withAccount(action))
+        McpSchema.Tool.Builder builder = McpSchema.Tool.builder(ref.toolName(), withAccount(action))
                 .title(action.title())
                 .description(toolDescription(action))
-                .annotations(hints(readOnly, action.idempotent()))
-                .build();
+                .annotations(hints(readOnly, action.idempotent()));
+        if (outputSchema) {
+            builder.outputSchema(looseOutputSchema(action));
+        }
+        return builder.build();
     }
 
-    private static McpSchema.Tool tool(String name, String description, Map<String, Object> schema, boolean readOnly, boolean idempotent) {
-        return McpSchema.Tool.builder(name, schema)
+    /**
+     * 字段名和说明来自 Shell 的 output，但不带类型约束：模板渲染不会把提取值转换成声明类型，
+     * 严格校验 structuredContent 的客户端会因类型不符拒绝整次结果。
+     */
+    private static Map<String, Object> looseOutputSchema(Action action) {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        if (action.outputJsonSchema().get("properties") instanceof Map<?, ?> declared) {
+            for (Map.Entry<?, ?> entry : declared.entrySet()) {
+                LinkedHashMap<String, Object> field = new LinkedHashMap<>();
+                if (entry.getValue() instanceof Map<?, ?> spec && spec.get("description") instanceof String description) {
+                    field.put("description", description);
+                }
+                properties.put(String.valueOf(entry.getKey()), field);
+            }
+        }
+        return objectSchema(properties);
+    }
+
+    private static McpSchema.Tool tool(
+            String name,
+            String description,
+            Map<String, Object> schema,
+            Map<String, Object> outputSchema,
+            boolean readOnly,
+            boolean idempotent
+    ) {
+        McpSchema.Tool.Builder builder = McpSchema.Tool.builder(name, schema)
                 .description(description)
-                .annotations(hints(readOnly, idempotent))
-                .build();
+                .annotations(hints(readOnly, idempotent));
+        if (outputSchema != null) {
+            builder.outputSchema(outputSchema);
+        }
+        return builder.build();
+    }
+
+    private static Map<String, Object> systemsOutputSchema() {
+        LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+        item.put("shell", Map.of("type", "string"));
+        item.put("title", Map.of());
+        item.put("description", Map.of());
+        item.put("capabilities", Map.of("type", "integer"));
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("systems", arraySchema(objectSchema(item)));
+        return objectSchema(properties);
+    }
+
+    private static Map<String, Object> searchOutputSchema() {
+        LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+        item.put("name", Map.of("type", "string"));
+        item.put("title", Map.of());
+        item.put("readOnly", Map.of("type", "boolean"));
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("matches", arraySchema(objectSchema(item)));
+        return objectSchema(properties);
+    }
+
+    private static Map<String, Object> describeOutputSchema() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("name", Map.of("type", "string"));
+        properties.put("title", Map.of());
+        properties.put("description", Map.of());
+        properties.put("notes", Map.of());
+        properties.put("readOnly", Map.of("type", "boolean"));
+        properties.put("idempotent", Map.of("type", "boolean"));
+        properties.put("inputSchema", Map.of("type", "object"));
+        properties.put("output", Map.of("type", "object"));
+        properties.put("examples", Map.of("type", "array"));
+        return objectSchema(properties);
+    }
+
+    private static Map<String, Object> arraySchema(Map<String, Object> items) {
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "array");
+        schema.put("items", items);
+        return schema;
     }
 
     private static McpSchema.ToolAnnotations hints(boolean readOnly, boolean idempotent) {

@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { Refresh, Warning } from '@element-plus/icons-vue'
+import { Box, CircleCheckFilled, Connection, List, Refresh, Setting, Warning, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import StatCard from '@shared/components/StatCard.vue'
+import TraceId from '@shared/components/TraceId.vue'
 import { ApiError } from '@shared/http'
-import { formatTime, notifyError, percent, relativeTime } from '@shared/format'
+import { errorCodeLabels, formatTime, notifyError, percent, relativeTime } from '@shared/format'
 import { api, type CallSummary, type CrabRelease, type DebugState, type ShellSummary, type SyncReport } from '../api'
 import { outcomeLabels } from '../labels'
 import { refreshPending } from '../status'
+
+const router = useRouter()
 
 const loading = ref(true)
 const syncing = ref(false)
@@ -112,14 +116,29 @@ onMounted(load)
     </el-alert>
 
     <div class="hm-grid cols-4">
-      <StatCard label="已安装 Shell" :value="shells.length" :hint="`${shells.reduce((n, s) => n + s.capabilityCount, 0)} 个能力`" />
-      <StatCard label="待配置" :value="pending.length" :tone="pending.length ? 'warn' : 'ok'" hint="缺凭证或配置项" />
-      <StatCard label="最近调用" :value="calls.length" hint="最多显示最近 200 次" />
+      <StatCard
+        label="已安装 Shell"
+        :value="shells.length"
+        :hint="`${shells.reduce((n, s) => n + s.capabilityCount, 0)} 个能力`"
+        :icon="Box"
+        to="/shells"
+      />
+      <StatCard
+        label="待配置"
+        :value="pending.length"
+        :tone="pending.length ? 'warn' : 'ok'"
+        hint="缺凭证或配置项"
+        :icon="Setting"
+        to="/shells"
+      />
+      <StatCard label="最近调用" :value="calls.length" hint="最多显示最近 200 次" :icon="List" to="/calls" />
       <StatCard
         label="其中失败"
         :value="failures"
         :hint="calls.length ? `失败率 ${percent(failures / calls.length)}` : '暂无调用'"
         :tone="failures ? 'danger' : 'ok'"
+        :icon="WarningFilled"
+        :to="{ path: '/calls', query: { failed: '1' } }"
       />
     </div>
 
@@ -130,7 +149,13 @@ onMounted(load)
           <span v-if="syncedAt" class="hm-muted small">{{ relativeTime(syncedAt) }}同步</span>
         </div>
         <template v-if="report">
-          <p v-if="report.notModified" class="hm-muted">上次同步时 Reef 没有变化。</p>
+          <div v-if="report.notModified" class="state ok">
+            <el-icon :size="22"><CircleCheckFilled /></el-icon>
+            <div>
+              <strong>已是最新</strong>
+              <div class="hm-muted">上次同步时 Reef 没有变化</div>
+            </div>
+          </div>
           <ul class="outcomes">
             <li v-for="item in changedShells" :key="item.shell">
               <el-tag :type="outcomeLabels[item.kind ?? '']?.tone ?? 'info'" size="small" effect="plain">
@@ -154,8 +179,20 @@ onMounted(load)
             class="notice"
           />
         </template>
-        <el-empty v-else-if="!loading && !syncConfigured" :image-size="60" description="没有配置 Reef，只使用本地 Shell。在 config.yml 设置 reef.url 和 reef.public_key 后重启 Crab。" />
-        <el-empty v-else-if="!loading" :image-size="60" description="本次启动后还没有同步过" />
+        <div v-else-if="!loading && !syncConfigured" class="state">
+          <el-icon :size="22"><Connection /></el-icon>
+          <div>
+            <strong>没有配置 Reef，只使用本地 Shell。</strong>
+            <div class="hm-muted">在 config.yml 设置 reef.url 和 reef.public_key 后重启 Crab。</div>
+          </div>
+        </div>
+        <div v-else-if="!loading" class="state">
+          <el-icon :size="22"><Connection /></el-icon>
+          <div>
+            <strong>本次启动后还没有同步过</strong>
+            <div class="hm-muted">点击右上角「立即同步」从 Reef 拉取最新 Shell</div>
+          </div>
+        </div>
       </div>
 
       <div class="hm-card">
@@ -179,7 +216,11 @@ onMounted(load)
         <span>最近失败</span>
         <router-link to="/calls" class="small">全部调用</router-link>
       </div>
-      <el-table :data="calls.filter((c) => !c.success).slice(0, 8)">
+      <el-table
+        :data="calls.filter((c) => !c.success).slice(0, 8)"
+        row-class-name="clickable"
+        @row-click="(row: CallSummary) => router.push({ path: '/calls', query: { trace: row.traceId } })"
+      >
         <template #empty>{{ loading ? '' : '最近没有失败的调用' }}</template>
         <el-table-column label="时间" width="120">
           <template #default="{ row }">{{ relativeTime(row.at) }}</template>
@@ -187,11 +228,16 @@ onMounted(load)
         <el-table-column label="能力" min-width="200">
           <template #default="{ row }"><span class="mono">{{ row.shell }}.{{ row.action }}</span></template>
         </el-table-column>
-        <el-table-column prop="errorCode" label="错误码" width="160" />
-        <el-table-column prop="errorMessage" label="信息" min-width="240" show-overflow-tooltip />
-        <el-table-column label="traceId" min-width="160">
+        <el-table-column label="错误" width="200">
           <template #default="{ row }">
-            <router-link :to="{ path: '/calls', query: { trace: row.traceId } }" class="mono">{{ row.traceId }}</router-link>
+            <el-tag type="danger" size="small" effect="light" round>{{ errorCodeLabels[row.errorCode ?? ''] ?? row.errorCode }}</el-tag>
+            <span class="mono code">{{ row.errorCode }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="errorMessage" label="信息" min-width="220" show-overflow-tooltip />
+        <el-table-column label="traceId" width="150">
+          <template #default="{ row }">
+            <TraceId :value="row.traceId" :to="{ path: '/calls', query: { trace: row.traceId } }" />
           </template>
         </el-table-column>
       </el-table>
@@ -234,6 +280,39 @@ onMounted(load)
   align-items: center;
   gap: 8px;
   padding: 6px 0;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--hm-subtle);
+  border: 1px solid var(--hm-border);
+  color: var(--hm-muted);
+  line-height: 1.6;
+}
+
+.state strong {
+  color: var(--hm-text);
+  font-weight: 600;
+}
+
+.state.ok {
+  background: var(--el-color-success-light-9);
+  border-color: var(--el-color-success-light-8);
+  color: var(--hm-success);
+}
+
+.code {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--hm-muted);
+}
+
+:deep(.clickable) {
+  cursor: pointer;
 }
 
 .debug p {

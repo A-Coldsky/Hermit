@@ -13,10 +13,23 @@ const router = useRouter()
 const loading = ref(true)
 const calls = ref<CallSummary[]>([])
 const shells = ref<ShellSummary[]>([])
-const filter = reactive({ shell: '', action: '', limit: 100, failedOnly: false })
+const filter = reactive({ shell: '', action: '', limit: 100, failedOnly: route.query.failed === '1' })
+const page = reactive({ current: 1, size: 20 })
 const drawer = reactive({ open: false, loading: false, call: null as CallDetail | null })
 
 const visible = computed(() => (filter.failedOnly ? calls.value.filter((c) => !c.success) : calls.value))
+const paged = computed(() => visible.value.slice((page.current - 1) * page.size, page.current * page.size))
+
+const summary = computed(() => {
+  const list = calls.value
+  const failed = list.filter((c) => !c.success).length
+  const durations = list.map((c) => c.durationMs).sort((a, b) => a - b)
+  const avg = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null
+  const p95 = durations.length ? durations[Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1)] : null
+  return { total: list.length, ok: list.length - failed, failed, avg, p95 }
+})
+
+const slowest = computed(() => Math.max(1, ...visible.value.map((c) => c.durationMs)))
 
 async function load() {
   loading.value = true
@@ -74,6 +87,7 @@ watch(
 )
 
 watch(() => [filter.shell, filter.limit], load)
+watch(() => [filter.failedOnly, calls.value], () => (page.current = 1))
 
 onMounted(async () => {
   void load()
@@ -103,14 +117,22 @@ onMounted(async () => {
         <el-checkbox v-model="filter.failedOnly">只看失败</el-checkbox>
       </div>
 
-      <el-table v-loading="loading" :data="visible" row-class-name="clickable" @row-click="onRow">
+      <div v-if="summary.total" class="summary">
+        <div><span class="hm-muted">共</span><b class="num">{{ summary.total }}</b><span class="hm-muted">次</span></div>
+        <div class="ok"><i />成功 <b class="num">{{ summary.ok }}</b></div>
+        <div class="bad"><i />失败 <b class="num">{{ summary.failed }}</b></div>
+        <div><span class="hm-muted">平均耗时</span><b class="num">{{ millis(summary.avg) }}</b></div>
+        <div><span class="hm-muted">P95</span><b class="num">{{ millis(summary.p95) }}</b></div>
+      </div>
+
+      <el-table v-loading="loading" :data="paged" row-class-name="clickable" @row-click="onRow">
         <template #empty>{{ loading ? '' : '没有调用记录' }}</template>
-        <el-table-column label="时间" width="170">
+        <el-table-column label="时间" width="186">
           <template #default="{ row }">{{ formatTime(row.at) }}</template>
         </el-table-column>
         <el-table-column label="结果" width="90">
           <template #default="{ row }">
-            <el-tag :type="row.success ? 'success' : 'danger'" size="small" effect="plain">{{ row.success ? '成功' : '失败' }}</el-tag>
+            <span class="result" :class="row.success ? 'ok' : 'bad'"><i />{{ row.success ? '成功' : '失败' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="能力" min-width="200">
@@ -122,8 +144,13 @@ onMounted(async () => {
         <el-table-column label="账号" width="120">
           <template #default="{ row }"><span class="mono">{{ row.account ?? '—' }}</span></template>
         </el-table-column>
-        <el-table-column label="耗时" width="90" align="right">
-          <template #default="{ row }">{{ millis(row.durationMs) }}</template>
+        <el-table-column label="耗时" width="150">
+          <template #default="{ row }">
+            <div class="dur">
+              <span class="bar"><span :class="{ slow: row.durationMs >= 1000 }" :style="{ width: `${(row.durationMs / slowest) * 100}%` }" /></span>
+              <span class="num">{{ millis(row.durationMs) }}</span>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="错误" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
@@ -134,6 +161,17 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
+      <div v-if="visible.length > page.size" class="pager">
+        <el-pagination
+          v-model:current-page="page.current"
+          v-model:page-size="page.size"
+          :total="visible.length"
+          :page-sizes="[20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          background
+          size="small"
+        />
+      </div>
     </div>
 
     <el-drawer v-model="drawer.open" size="560px" title="调用详情">
@@ -152,7 +190,7 @@ onMounted(async () => {
             <dt>traceId</dt>
             <dd>
               <code>{{ drawer.call.traceId }}</code>
-              <el-button link :icon="CopyDocument" @click="copyText(drawer.call.traceId, 'traceId 已复制')" />
+              <el-button link :icon="CopyDocument" aria-label="复制 traceId" @click="copyText(drawer.call.traceId, 'traceId 已复制')" />
             </dd>
             <dt>时间</dt>
             <dd>{{ formatTime(drawer.call.at) }}</dd>
@@ -224,5 +262,94 @@ h4 {
 
 :deep(.clickable) {
   cursor: pointer;
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: var(--hm-subtle);
+  border: 1px solid var(--hm-border);
+  font-size: 13px;
+}
+
+.summary > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.summary b {
+  font-weight: 650;
+}
+
+.summary i,
+.result i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.summary .ok i,
+.result.ok i {
+  background: var(--hm-success);
+}
+
+.summary .bad i,
+.result.bad i {
+  background: var(--hm-danger);
+}
+
+.result {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.result.bad {
+  color: var(--hm-danger);
+  font-weight: 500;
+}
+
+.dur {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dur .bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hm-bar-track);
+  overflow: hidden;
+}
+
+.dur .bar span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--hm-chart-ok);
+}
+
+.dur .bar span.slow {
+  background: var(--hm-accent);
+}
+
+.dur .num {
+  width: 56px;
+  text-align: right;
+  font-size: 12.5px;
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
 }
 </style>

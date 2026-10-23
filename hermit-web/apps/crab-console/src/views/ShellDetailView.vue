@@ -3,6 +3,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
+import ShellAvatar from '@shared/components/ShellAvatar.vue'
 import { ApiError } from '@shared/http'
 import { notifyError } from '@shared/format'
 import { api, type Account, type ConfigValue, type ShellDetail } from '../api'
@@ -19,6 +20,7 @@ const missing = ref(false)
 const detail = ref<ShellDetail | null>(null)
 const accounts = ref<Account[]>([])
 const config = ref<Record<string, ConfigValue>>({})
+const partsFailed = ref(false)
 
 const missingConfig = computed(() => Object.entries(config.value).filter(([, f]) => f.missing).map(([name]) => name))
 const incompleteAccounts = computed(() => accounts.value.filter((a) => a.needsConfiguration).map((a) => a.name))
@@ -30,33 +32,36 @@ async function loadParts() {
   const [a, c] = await Promise.all([api.accounts(props.shell), api.config(props.shell)])
   accounts.value = a.accounts
   config.value = c.fields
+  partsFailed.value = false
   void refreshPending()
-}
-
-async function load() {
-  loading.value = true
-  missing.value = false
-  try {
-    const shell = await api.shell(props.shell)
-    await loadParts()
-    detail.value = shell
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404) {
-      missing.value = true
-    } else {
-      notifyError(error)
-    }
-  } finally {
-    loading.value = false
-  }
 }
 
 async function reloadParts() {
   try {
     await loadParts()
   } catch (error) {
+    partsFailed.value = true
     notifyError(error)
   }
+}
+
+async function load() {
+  loading.value = true
+  missing.value = false
+  try {
+    detail.value = await api.shell(props.shell)
+  } catch (error) {
+    detail.value = null
+    if (error instanceof ApiError && error.status === 404) {
+      missing.value = true
+    } else {
+      notifyError(error)
+    }
+    loading.value = false
+    return
+  }
+  await reloadParts()
+  loading.value = false
 }
 
 watch(() => props.shell, load, { immediate: true })
@@ -68,7 +73,12 @@ watch(() => props.shell, load, { immediate: true })
       <template #crumbs>
         <router-link to="/shells">Shell 与账号</router-link>
         <span class="hm-muted"> / {{ shell }}</span>
-        <span v-if="detail" class="mono hm-muted"> v{{ detail.version }}</span>
+      </template>
+      <template #icon>
+        <ShellAvatar :name="shell" :title="detail?.title" :size="48" />
+      </template>
+      <template #badge>
+        <el-tag v-if="detail" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
@@ -80,7 +90,12 @@ watch(() => props.shell, load, { immediate: true })
     </el-result>
 
     <template v-else-if="detail">
-      <el-alert v-if="ready" type="success" show-icon :closable="false" title="配置完整，可以调用" />
+      <el-alert v-if="partsFailed" type="error" show-icon :closable="false" title="账号或配置没有加载出来，下面的状态可能不完整">
+        <template #default>
+          <el-button size="small" @click="reloadParts">重新加载</el-button>
+        </template>
+      </el-alert>
+      <el-alert v-else-if="ready" type="success" show-icon :closable="false" title="配置完整，可以调用" />
       <el-alert v-else type="warning" show-icon :closable="false" title="还不能调用，调用会返回「待配置」">
         <template #default>
           <div v-if="detail.credentials.length && !accounts.length">先新建一个账号并填写凭证。</div>

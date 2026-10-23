@@ -9,35 +9,9 @@ export interface BarPoint {
 
 const props = defineProps<{ points: BarPoint[]; height?: number; loading?: boolean }>()
 
-/** 底部留给坐标轴文字，顶部留给提示框不压住最高的柱子。 */
-const AXIS = 20
-const TOP = 8
-
 const hovered = ref<number | null>(null)
 const chartHeight = computed(() => props.height ?? 200)
-const plotHeight = computed(() => chartHeight.value - AXIS)
-const max = computed(() => niceMax(Math.max(1, ...props.points.map((p) => p.success + p.failure))))
-const barWidth = computed(() => (props.points.length ? 100 / props.points.length : 100))
-/** 刻度只标整数：最大值为 1 时中线没有意义，不画。 */
-const grid = computed(() => [1, 0.5].filter((f) => Number.isInteger(max.value * f)).map((f) => ({ f, value: max.value * f })))
-
-const ticks = computed(() => {
-  const n = props.points.length
-  if (!n) {
-    return []
-  }
-  const picks = n === 1 ? [0] : n < 5 ? [0, n - 1] : [0, Math.floor((n - 1) / 2), n - 1]
-  return picks.map((i) => props.points[i].label)
-})
-
-/** 提示框跟着柱子走，靠右半边时向左展开，避免溢出。 */
-const tipStyle = computed(() => {
-  if (hovered.value === null) {
-    return {}
-  }
-  const center = (hovered.value + 0.5) * barWidth.value
-  return center > 50 ? { right: `${100 - center}%` } : { left: `${center}%` }
-})
+const plotHeight = computed(() => chartHeight.value - 44)
 
 function niceMax(value: number): number {
   const step = 10 ** Math.floor(Math.log10(value))
@@ -49,53 +23,85 @@ function niceMax(value: number): number {
   return value
 }
 
-function heightOf(value: number): number {
-  return (value / max.value) * (plotHeight.value - TOP)
+const max = computed(() => niceMax(Math.max(1, ...props.points.map((p) => p.success + p.failure))))
+/** 刻度只标整数，非整数的分位线不画，避免小量程时出现重复的数字。 */
+const grid = computed(() =>
+  [1, 0.75, 0.5, 0.25].filter((f) => Number.isInteger(max.value * f)).map((f) => ({ f, value: max.value * f })),
+)
+
+const ticks = computed(() => {
+  const n = props.points.length
+  if (!n) {
+    return new Set<number>()
+  }
+  const every = Math.max(1, Math.ceil(n / 8))
+  const picks = new Set<number>()
+  for (let i = 0; i < n; i += every) {
+    picks.add(i)
+  }
+  picks.add(n - 1)
+  return picks
+})
+
+const totals = computed(() =>
+  props.points.reduce((acc, p) => ({ success: acc.success + p.success, failure: acc.failure + p.failure }), {
+    success: 0,
+    failure: 0,
+  }),
+)
+
+function pct(value: number): string {
+  return `${(value / max.value) * 100}%`
 }
 
-function lineY(fraction: number): number {
-  return plotHeight.value - fraction * (plotHeight.value - TOP)
-}
+const tipLeft = computed(() => {
+  if (hovered.value === null || !props.points.length) {
+    return '0%'
+  }
+  return `${((hovered.value + 0.5) / props.points.length) * 100}%`
+})
 </script>
 
 <template>
   <div class="chart" :style="{ height: `${chartHeight}px` }">
     <div v-if="!points.length" class="empty hm-muted">{{ loading ? '' : '所选范围内没有调用数据' }}</div>
     <template v-else>
+      <div class="legend">
+        <span><i class="sw ok" />成功 <b class="num">{{ totals.success }}</b></span>
+        <span><i class="sw bad" />失败 <b class="num">{{ totals.failure }}</b></span>
+      </div>
       <div class="plot" :style="{ height: `${plotHeight}px` }">
-        <div class="area">
-          <div v-for="line in grid" :key="line.f" class="grid" :style="{ top: `${lineY(line.f)}px` }">
-            <span class="hm-num">{{ line.value }}</span>
+        <div class="grid">
+          <div v-for="line in grid" :key="line.f" class="line" :style="{ bottom: `${line.f * 100}%` }">
+            <span class="y num">{{ line.value }}</span>
           </div>
-          <svg :viewBox="`0 0 100 ${plotHeight}`" preserveAspectRatio="none" class="svg" @mouseleave="hovered = null">
-            <line x1="0" x2="100" :y1="plotHeight - 0.5" :y2="plotHeight - 0.5" class="base" />
-            <g v-for="(point, index) in points" :key="point.label" @mouseenter="hovered = index">
-              <rect :x="index * barWidth" y="0" :width="barWidth" :height="plotHeight" :class="['hit', { on: hovered === index }]" />
-              <rect
-                :x="index * barWidth + barWidth * 0.2"
-                :y="plotHeight - heightOf(point.success + point.failure)"
-                :width="barWidth * 0.6"
-                :height="heightOf(point.success)"
-                :class="['ok', { dim: hovered !== null && hovered !== index }]"
-              />
-              <rect
-                :x="index * barWidth + barWidth * 0.2"
-                :y="plotHeight - heightOf(point.failure)"
-                :width="barWidth * 0.6"
-                :height="heightOf(point.failure)"
-                :class="['bad', { dim: hovered !== null && hovered !== index }]"
-              />
-            </g>
-          </svg>
-          <div v-if="hovered !== null && points[hovered]" class="tip" :style="tipStyle">
-            <strong>{{ points[hovered].label }}</strong>
-            <span><i class="key ok-key" />成功 {{ points[hovered].success }}</span>
-            <span class="fail"><i class="key bad-key" />失败 {{ points[hovered].failure }}</span>
+          <div class="line base" />
+        </div>
+        <div class="bars" @mouseleave="hovered = null">
+          <div
+            v-for="(point, index) in points"
+            :key="point.label"
+            class="col"
+            :class="{ dim: hovered !== null && hovered !== index, on: hovered === index }"
+            @mouseenter="hovered = index"
+          >
+            <div v-if="point.success + point.failure === 0" class="stub" />
+            <div v-else class="stack" :style="{ height: pct(point.success + point.failure) }">
+              <div class="seg bad" :style="{ flexGrow: point.failure }" />
+              <div class="seg ok" :style="{ flexGrow: point.success }" />
+            </div>
           </div>
+        </div>
+        <div v-if="hovered !== null && points[hovered]" class="tip" :style="{ left: tipLeft }">
+          <strong>{{ points[hovered].label }}</strong>
+          <span><i class="sw ok" />成功 <b class="num">{{ points[hovered].success }}</b></span>
+          <span><i class="sw bad" />失败 <b class="num">{{ points[hovered].failure }}</b></span>
         </div>
       </div>
       <div class="axis hm-muted">
-        <span v-for="tick in ticks" :key="tick">{{ tick }}</span>
+        <span v-for="(point, index) in points" :key="point.label" class="tick">
+          {{ ticks.has(index) ? point.label : '' }}
+        </span>
       </div>
     </template>
   </div>
@@ -104,117 +110,174 @@ function lineY(fraction: number): number {
 <style scoped>
 .chart {
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
-/* 左侧留出刻度数字的位置，柱子不被遮住。 */
+.legend {
+  display: flex;
+  gap: 16px;
+  justify-content: flex-end;
+  font-size: 12px;
+  color: var(--hm-muted);
+  height: 18px;
+  margin-bottom: 6px;
+}
+
+.legend b {
+  color: var(--hm-text);
+  font-weight: 600;
+  margin-left: 2px;
+}
+
+.sw {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: 0;
+}
+
+.sw.ok {
+  background: var(--hm-chart-ok);
+}
+
+.sw.bad {
+  background: var(--hm-chart-bad);
+}
+
 .plot {
-  padding-left: 36px;
-}
-
-.area {
   position: relative;
-  height: 100%;
-}
-
-.svg {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: block;
+  margin-left: 34px;
 }
 
 .grid {
   position: absolute;
-  left: 0;
-  right: 0;
-  border-top: 1px dashed var(--hm-chart-grid);
+  inset: 0;
   pointer-events: none;
 }
 
-.grid span {
+.line {
   position: absolute;
-  top: -9px;
-  right: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--hm-chart-grid);
+}
+
+.line.base {
+  bottom: 0;
+  border-top: 1px solid var(--hm-border);
+}
+
+.y {
+  position: absolute;
+  left: -34px;
+  width: 28px;
+  top: -8px;
+  text-align: right;
   font-size: 11px;
-  line-height: 16px;
   color: var(--hm-muted);
 }
 
-.base {
-  stroke: var(--hm-border);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-
-.hit {
-  fill: transparent;
-}
-
-.hit.on {
-  fill: var(--hm-surface-2);
-}
-
-.ok {
-  fill: var(--hm-chart-ok);
-  transition: opacity 0.12s;
-}
-
-.bad {
-  fill: var(--hm-chart-bad);
-  transition: opacity 0.12s;
-}
-
-.dim {
-  opacity: 0.35;
-}
-
-.axis {
-  padding-left: 36px;
+.bars {
+  position: absolute;
+  inset: 0;
   display: flex;
-  justify-content: space-between;
-  height: 20px;
   align-items: flex-end;
-  font-size: 12px;
+}
+
+.col {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 0;
+  transition: opacity 0.12s;
+}
+
+.col.on {
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--el-color-primary) 7%, transparent));
+  border-radius: 6px 6px 0 0;
+}
+
+.col.dim {
+  opacity: 0.45;
+}
+
+.stack {
+  width: 62%;
+  max-width: 44px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 5px 5px 2px 2px;
+  overflow: hidden;
+  min-height: 3px;
+}
+
+.seg {
+  flex-basis: 0;
+}
+
+.seg.ok {
+  background: linear-gradient(180deg, var(--hm-chart-ok-top), var(--hm-chart-ok));
+}
+
+.seg.bad {
+  background: linear-gradient(180deg, var(--hm-chart-bad-top), var(--hm-chart-bad));
+}
+
+.stub {
+  width: 62%;
+  max-width: 44px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--hm-chart-grid);
 }
 
 .tip {
   position: absolute;
-  top: 0;
+  top: -6px;
+  transform: translate(-50%, -100%);
   display: flex;
-  gap: 10px;
-  white-space: nowrap;
-  background: var(--el-bg-color-overlay, var(--hm-surface));
-  border: 1px solid var(--hm-border);
+  flex-direction: column;
+  gap: 3px;
+  background: var(--hm-tip-bg);
+  color: var(--hm-tip-text);
+  border: 1px solid var(--hm-tip-border);
   border-radius: 8px;
-  padding: 6px 10px;
+  padding: 8px 10px;
   font-size: 12px;
-  box-shadow: var(--hm-shadow-raised);
+  white-space: nowrap;
+  box-shadow: var(--hm-shadow-lg);
   pointer-events: none;
-  font-variant-numeric: tabular-nums;
+  z-index: 2;
 }
 
-.tip span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.tip strong {
+  color: var(--hm-tip-strong);
+  font-weight: 600;
 }
 
-.tip .fail {
-  color: var(--hm-danger);
+.tip b {
+  color: var(--hm-tip-strong);
 }
 
-.key {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+.axis {
+  display: flex;
+  margin-left: 34px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  height: 14px;
 }
 
-.ok-key {
-  background: var(--hm-chart-ok);
-}
-
-.bad-key {
-  background: var(--hm-chart-bad);
+.tick {
+  flex: 1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: visible;
+  min-width: 0;
 }
 
 .empty {

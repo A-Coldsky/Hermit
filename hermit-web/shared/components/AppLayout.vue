@@ -18,20 +18,34 @@ const props = defineProps<{
   items: NavItem[]
 }>()
 
-const COLLAPSED_KEY = 'hermit.sidebar-collapsed'
+const COLLAPSE_KEY = 'hermit.sidebar.collapsed'
+const DRAWER_QUERY = '(max-width: 900px)'
 
-function readCollapsed(): boolean {
+function initialCollapsed(): boolean {
   try {
-    return localStorage.getItem(COLLAPSED_KEY) === '1'
+    const stored = localStorage.getItem(COLLAPSE_KEY)
+    if (stored !== null) {
+      return stored === '1'
+    }
   } catch {
-    return false
+    // 读不到就按屏幕宽度决定
   }
+  return window.innerWidth < 1180
 }
 
 const route = useRoute()
-const collapsed = ref(readCollapsed())
+const collapsed = ref(initialCollapsed())
 /** 窄屏下侧栏是抽屉，和桌面端的折叠状态分开记。 */
 const drawerOpen = ref(false)
+
+watch(collapsed, (value) => {
+  try {
+    localStorage.setItem(COLLAPSE_KEY, value ? '1' : '0')
+  } catch {
+    // 写不进去只影响下次打开
+  }
+})
+watch(() => route.fullPath, () => (drawerOpen.value = false))
 
 const activeItem = computed(() =>
   [...props.items]
@@ -40,19 +54,12 @@ const activeItem = computed(() =>
 )
 const active = computed(() => activeItem.value?.to ?? '/')
 
-watch(() => route.fullPath, () => (drawerOpen.value = false))
-
 function toggleSidebar() {
-  if (window.matchMedia('(max-width: 900px)').matches) {
+  if (typeof matchMedia === 'function' && matchMedia(DRAWER_QUERY).matches) {
     drawerOpen.value = !drawerOpen.value
     return
   }
   collapsed.value = !collapsed.value
-  try {
-    localStorage.setItem(COLLAPSED_KEY, collapsed.value ? '1' : '0')
-  } catch {
-    // 写不进去只影响下次打开
-  }
 }
 </script>
 
@@ -72,25 +79,33 @@ function toggleSidebar() {
         </div>
       </div>
       <nav>
-        <RouterLink
+        <el-tooltip
           v-for="item in items"
           :key="item.to"
-          :to="item.to"
-          class="nav-item"
-          :class="{ active: active === item.to }"
-          :title="collapsed ? item.label : undefined"
+          :content="item.label"
+          placement="right"
+          :disabled="!collapsed || drawerOpen"
+          :show-after="200"
         >
-          <el-icon :size="17"><component :is="item.icon" /></el-icon>
-          <span class="label">{{ item.label }}</span>
-          <span v-if="item.badge" class="badge">{{ item.badge > 99 ? '99+' : item.badge }}</span>
-        </RouterLink>
+          <RouterLink :to="item.to" class="nav-item" :class="{ active: active === item.to }">
+            <el-icon class="icon"><component :is="item.icon" /></el-icon>
+            <span class="label">{{ item.label }}</span>
+            <span v-if="item.badge" class="badge">{{ item.badge > 99 ? '99+' : item.badge }}</span>
+          </RouterLink>
+        </el-tooltip>
       </nav>
       <div class="sidebar-foot"><slot name="sidebar-foot" /></div>
     </aside>
     <div class="scrim" @click="drawerOpen = false" />
     <div class="main">
       <header class="topbar">
-        <button type="button" class="icon-btn" :aria-label="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggleSidebar">
+        <button
+          type="button"
+          class="icon-btn"
+          :aria-label="collapsed ? '展开侧栏' : '收起侧栏'"
+          :title="collapsed ? '展开侧栏' : '收起侧栏'"
+          @click="toggleSidebar"
+        >
           <el-icon :size="18"><Expand v-if="collapsed" /><Fold v-else /></el-icon>
         </button>
         <span class="section">{{ activeItem?.label }}</span>
@@ -108,7 +123,7 @@ function toggleSidebar() {
       </header>
       <main class="content">
         <RouterView v-slot="{ Component: view, route: current }">
-          <Transition name="page" mode="out-in">
+          <Transition name="hm-page" mode="out-in">
             <component :is="view" :key="current.path" />
           </Transition>
         </RouterView>
@@ -131,24 +146,34 @@ function toggleSidebar() {
 .sidebar {
   width: var(--sidebar-width);
   flex-shrink: 0;
-  background: var(--hm-sidebar);
+  background:
+    radial-gradient(120% 60% at 0% 0%, rgba(20, 184, 166, 0.12), transparent 60%),
+    var(--hm-sidebar);
   color: var(--hm-sidebar-text);
   display: flex;
   flex-direction: column;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow: hidden;
-  transition: width 0.2s var(--hm-ease);
+  position: fixed;
+  inset: 0 auto 0 0;
   z-index: 30;
+  transition: width 0.2s var(--hm-ease);
+  overflow: hidden;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  margin-left: var(--sidebar-width);
+  transition: margin-left 0.2s var(--hm-ease);
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 18px 17px;
-  height: 72px;
+  padding: 18px 17px 16px;
+  white-space: nowrap;
 }
 
 .logo {
@@ -156,16 +181,9 @@ function toggleSidebar() {
   height: 34px;
   flex-shrink: 0;
   background: #e6fffb;
-  border-radius: 9px;
+  border-radius: 10px;
   padding: 3px;
-}
-
-.brand-text,
-.label,
-.badge,
-.sidebar-foot {
-  transition: opacity 0.15s;
-  white-space: nowrap;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 6px 16px -6px rgba(20, 184, 166, 0.6);
 }
 
 .product {
@@ -184,7 +202,7 @@ nav {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 6px 12px;
+  padding: 8px 10px;
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
@@ -194,12 +212,18 @@ nav {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 40px;
-  padding: 0 12px;
-  border-radius: 8px;
+  gap: 11px;
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 9px;
   color: var(--hm-sidebar-text);
+  white-space: nowrap;
   transition: background 0.15s, color 0.15s;
+}
+
+.nav-item .icon {
+  font-size: 17px;
+  flex-shrink: 0;
 }
 
 .nav-item:hover {
@@ -208,23 +232,23 @@ nav {
 }
 
 .nav-item.active {
-  background: var(--hm-sidebar-active);
+  background: linear-gradient(90deg, rgba(20, 184, 166, 0.22), rgba(20, 184, 166, 0.06));
   color: #fff;
+}
+
+.nav-item.active .icon {
+  color: #5eead4;
 }
 
 .nav-item.active::before {
   content: '';
   position: absolute;
-  left: -12px;
-  top: 10px;
-  bottom: 10px;
+  left: -10px;
+  top: 9px;
+  bottom: 9px;
   width: 3px;
   border-radius: 0 3px 3px 0;
-  background: var(--hm-brand);
-}
-
-.nav-item.active .el-icon {
-  color: #5eead4;
+  background: #2dd4bf;
 }
 
 .label {
@@ -236,70 +260,74 @@ nav {
   color: #1f1300;
   font-size: 11px;
   font-weight: 700;
-  line-height: 18px;
-  min-width: 18px;
-  text-align: center;
   border-radius: 999px;
-  padding: 0 6px;
+  padding: 1px 7px;
+}
+
+.collapsed .brand-text,
+.collapsed .label,
+.collapsed .sidebar-foot {
+  display: none;
+}
+
+.collapsed .badge {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  min-width: 8px;
+  height: 8px;
+  padding: 0;
+  font-size: 0;
+  box-shadow: 0 0 0 2px var(--hm-sidebar);
 }
 
 .sidebar-foot {
   padding: 14px 18px;
   font-size: 12px;
   line-height: 1.5;
-  white-space: normal;
-  border-top: 1px solid var(--hm-sidebar-line);
   opacity: 0.8;
+  border-top: 1px solid var(--hm-sidebar-line);
 }
 
 .sidebar-foot:empty {
   display: none;
 }
 
-.collapsed .brand-text,
-.collapsed .label,
-.collapsed .sidebar-foot {
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* 折叠后角标缩成图标右上角的小圆点。 */
-.collapsed .badge {
-  position: absolute;
-  top: 6px;
-  left: 26px;
-  min-width: 8px;
-  width: 8px;
-  height: 8px;
-  padding: 0;
-  font-size: 0;
-  line-height: 0;
-  box-shadow: 0 0 0 2px var(--hm-sidebar);
-}
-
 .scrim {
   display: none;
-}
-
-.main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
 }
 
 .topbar {
   height: 56px;
   background: var(--hm-topbar);
-  backdrop-filter: saturate(180%) blur(10px);
+  backdrop-filter: saturate(1.6) blur(10px);
   border-bottom: 1px solid var(--hm-border);
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 20px 0 12px;
+  padding: 0 20px 0 14px;
   position: sticky;
   top: 0;
   z-index: 20;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  background: transparent;
+  color: var(--hm-muted);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.icon-btn:hover {
+  background: var(--el-fill-color-light);
+  color: var(--hm-text);
 }
 
 .section {
@@ -311,43 +339,10 @@ nav {
   flex: 1;
 }
 
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--hm-muted);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.icon-btn:hover {
-  background: var(--hm-surface-2);
-  color: var(--hm-text);
-}
-
 .content {
-  padding: 24px;
-  max-width: 1440px;
+  padding: 24px 28px 40px;
+  max-width: 1480px;
   width: 100%;
-}
-
-.page-enter-active,
-.page-leave-active {
-  transition: opacity 0.14s var(--hm-ease), transform 0.14s var(--hm-ease);
-}
-
-.page-enter-from {
-  opacity: 0;
-  transform: translateY(4px);
-}
-
-.page-leave-to {
-  opacity: 0;
 }
 
 @media (max-width: 900px) {
@@ -357,28 +352,30 @@ nav {
   }
 
   .sidebar {
-    position: fixed;
-    left: 0;
     transform: translateX(-100%);
     transition: transform 0.22s var(--hm-ease);
     box-shadow: var(--hm-shadow-raised);
   }
 
+  .main {
+    margin-left: 0;
+  }
+
   .collapsed .brand-text,
-  .collapsed .label,
+  .collapsed .label {
+    display: block;
+  }
+
   .collapsed .sidebar-foot {
-    opacity: 1;
-    pointer-events: auto;
+    display: block;
   }
 
   .collapsed .badge {
     position: static;
-    width: auto;
+    min-width: 0;
     height: auto;
-    min-width: 18px;
-    padding: 0 6px;
+    padding: 1px 7px;
     font-size: 11px;
-    line-height: 18px;
     box-shadow: none;
   }
 

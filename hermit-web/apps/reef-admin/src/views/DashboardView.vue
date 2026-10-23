@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Refresh, Upload } from '@element-plus/icons-vue'
+import { Bell, Box, CircleCheckFilled, DataLine, Refresh, Upload, Warning } from '@element-plus/icons-vue'
 import { computed, onMounted, ref } from 'vue'
 import BarChart from '@shared/components/BarChart.vue'
 import PageHeader from '@shared/components/PageHeader.vue'
@@ -53,15 +53,24 @@ onMounted(load)
     </PageHeader>
 
     <div class="hm-grid cols-4">
-      <StatCard label="Shell 总数" :value="shells.length" :hint="`已发布 ${published} 个`" />
-      <StatCard label="7 天调用" :value="week.calls" hint="来自各 Crab 的汇总上报" tone="ok" />
+      <StatCard label="Shell 总数" :value="shells.length" :hint="`已发布 ${published} 个`" :icon="Box" to="/shells" />
+      <StatCard label="7 天调用" :value="week.calls" hint="来自各 Crab 的汇总上报" tone="ok" :icon="DataLine" to="/tide" />
       <StatCard
         label="7 天失败率"
         :value="percent(week.rate)"
         :hint="`失败 ${week.failures} 次`"
         :tone="week.rate > 0.1 ? 'danger' : week.rate > 0.02 ? 'warn' : 'ok'"
+        :icon="Warning"
+        to="/tide"
       />
-      <StatCard label="未处理告警" :value="alerts.length" :tone="alerts.length ? 'danger' : 'default'" hint="需要人工确认" />
+      <StatCard
+        label="未处理告警"
+        :value="alerts.length"
+        :tone="alerts.length ? 'danger' : 'default'"
+        hint="需要人工确认"
+        :icon="Bell"
+        to="/alerts"
+      />
     </div>
 
     <div class="hm-grid cols-2 row">
@@ -87,7 +96,11 @@ onMounted(load)
             <span class="hm-muted">{{ relativeTime(alert.createdAt) }}</span>
           </li>
         </ul>
-        <el-empty v-else-if="!loading" description="一切正常" :image-size="64" />
+        <div v-else-if="!loading" class="clear">
+          <el-icon :size="40" class="ok-icon"><CircleCheckFilled /></el-icon>
+          <strong>一切正常</strong>
+          <span class="hm-muted">没有需要处理的告警，新告警会在这里出现</span>
+        </div>
       </div>
     </div>
 
@@ -145,5 +158,21 @@ onMounted(load)
 
 .spacer {
   flex: 1;
+}
+
+.clear {
+  height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.ok-icon {
+  color: var(--hm-success);
+  margin-bottom: 4px;
+  filter: drop-shadow(0 6px 12px rgba(22, 163, 74, 0.25));
 }
 </style>

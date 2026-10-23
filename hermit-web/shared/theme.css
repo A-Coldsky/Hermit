@@ -1,4 +1,5 @@
-:root {
+/* 用 html:root 而不是 :root：Element 的基础变量可能随分块重复出现在后加载的样式里，提高优先级才不会被盖回默认蓝。 */
+html:root {
   --el-color-primary: #0f766e;
   --el-color-primary-light-3: #3f9a92;
   --el-color-primary-light-5: #6fb5ae;
@@ -9,18 +10,30 @@
   --el-border-radius-base: 8px;
   --el-font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
 
-  --hm-bg: #f5f7f8;
+  --hm-bg: #f3f5f6;
   --hm-surface: #ffffff;
-  --hm-border: #e5e9ec;
-  --hm-text: #1f2a30;
-  --hm-muted: #6b7a83;
-  --hm-sidebar: #10272b;
-  --hm-sidebar-text: #b8c9cc;
-  --hm-sidebar-active: #1d3f44;
+  --hm-surface-2: #f7f9fa;
+  --hm-border: #e3e8eb;
+  --hm-text: #1a2529;
+  --hm-muted: #66757d;
+  --hm-sidebar: #0f2629;
+  --hm-sidebar-text: #a9bec1;
+  --hm-sidebar-hover: rgba(255, 255, 255, 0.06);
+  --hm-sidebar-active: rgba(20, 184, 166, 0.16);
+  --hm-sidebar-line: rgba(255, 255, 255, 0.07);
+  --hm-brand: #14b8a6;
   --hm-accent: #f59e0b;
   --hm-warning: var(--hm-accent);
   --hm-danger: #dc2626;
   --hm-success: #16a34a;
+  --hm-topbar: rgba(255, 255, 255, 0.82);
+  --hm-code-bg: #0f1d20;
+  --hm-code-text: #d6e4e6;
+  --hm-chart-ok: #14b8a6;
+  --hm-chart-ok-top: #2dd4bf;
+  --hm-chart-bad: #ef4444;
+  --hm-chart-bad-top: #f87171;
+  --hm-chart-grid: #e7ecee;
 
   /* 明暗阶是对应 --hm-* 与白/黑按 Element 的比例混合，改主色时要一起重算。 */
   --el-color-success: var(--hm-success);
@@ -51,16 +64,103 @@
   --el-color-error-light-8: var(--el-color-danger-light-8);
   --el-color-error-light-9: var(--el-color-danger-light-9);
   --el-color-error-dark-2: var(--el-color-danger-dark-2);
+  --el-bg-color-page: var(--hm-bg);
+  --el-border-color-lighter: var(--hm-border);
+  --el-fill-color-light: #f4f7f8;
   --hm-shadow: 0 1px 2px rgba(16, 39, 43, 0.05), 0 2px 8px -2px rgba(16, 39, 43, 0.06);
+  --hm-shadow-raised: 0 4px 16px rgba(16, 39, 43, 0.08), 0 1px 3px rgba(16, 39, 43, 0.05);
   --hm-shadow-lg: 0 4px 10px -2px rgba(16, 39, 43, 0.08), 0 12px 28px -6px rgba(16, 39, 43, 0.12);
-  --hm-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
   --hm-subtle: #f8fafb;
   --hm-teal-soft: #e3f2f0;
   --hm-ring: 0 0 0 3px rgba(15, 118, 110, 0.18);
   --hm-radius: 14px;
+  --hm-hover-border: #d5dde1;
+  --hm-row-hover: #f3f8f7;
+  --hm-bar-track: #edf1f3;
+  --hm-scrollbar: #c7d0d4;
+  --hm-tip-bg: #10272b;
+  --hm-tip-text: #d9e6e8;
+  --hm-tip-strong: #ffffff;
+  --hm-tip-border: transparent;
+  --hm-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --hm-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* 暗色：明暗阶按 Element 暗色主题的算法，light-N 与 #141414 混合，dark-2 与白色混合。 */
+html.dark {
+  color-scheme: dark;
+  --el-color-primary: #14a394;
+  --el-color-primary-light-3: #14786e;
+  --el-color-primary-light-5: #145c54;
+  --el-color-primary-light-7: #143f3a;
+  --el-color-primary-light-8: #14312e;
+  --el-color-primary-light-9: #142221;
+  --el-color-primary-dark-2: #43b5a9;
+
+  --hm-bg: #0d1214;
+  --hm-surface: #151b1e;
+  --hm-surface-2: #1a2125;
+  --hm-border: #263034;
+  --hm-text: #e3eaec;
+  --hm-muted: #8f9ea4;
+  --hm-sidebar: #0a1719;
+  --hm-sidebar-active: rgba(20, 184, 166, 0.14);
+  --hm-sidebar-line: rgba(255, 255, 255, 0.05);
+  --hm-danger: #ef4444;
+  --hm-success: #22c55e;
+  --hm-topbar: rgba(21, 27, 30, 0.82);
+  --hm-code-bg: #0a1214;
+  --hm-chart-ok: #14a394;
+  --hm-chart-ok-top: #2dc2b0;
+  --hm-chart-bad: #e04646;
+  --hm-chart-bad-top: #f06a6a;
+  --hm-chart-grid: #222b2f;
+
+  --el-color-success-light-3: #1e9048;
+  --el-color-success-light-5: #1b6d39;
+  --el-color-success-light-7: #18492a;
+  --el-color-success-light-8: #173723;
+  --el-color-success-light-9: #15261b;
+  --el-color-success-dark-2: #4ed17e;
+  --el-color-warning-light-3: #b2750e;
+  --el-color-warning-light-5: #855910;
+  --el-color-warning-light-7: #583d11;
+  --el-color-warning-light-8: #413012;
+  --el-color-warning-light-9: #2a2213;
+  --el-color-warning-dark-2: #f7b13c;
+  --el-color-danger-light-3: #ad3636;
+  --el-color-danger-light-5: #822c2c;
+  --el-color-danger-light-7: #562222;
+  --el-color-danger-light-8: #401e1e;
+  --el-color-danger-light-9: #2a1919;
+  --el-color-danger-dark-2: #f26969;
+  --el-color-error: var(--el-color-danger);
+  --el-color-error-light-3: var(--el-color-danger-light-3);
+  --el-color-error-light-5: var(--el-color-danger-light-5);
+  --el-color-error-light-7: var(--el-color-danger-light-7);
+  --el-color-error-light-8: var(--el-color-danger-light-8);
+  --el-color-error-light-9: var(--el-color-danger-light-9);
+  --el-color-error-dark-2: var(--el-color-danger-dark-2);
+  --el-bg-color: var(--hm-surface);
   --el-bg-color-page: var(--hm-bg);
-  --el-border-color-lighter: #edf0f2;
-  --el-fill-color-light: #f4f7f8;
+  --el-bg-color-overlay: #1c2428;
+  --el-fill-color-blank: var(--hm-surface);
+  --el-border-color-lighter: var(--hm-border);
+  --el-fill-color-light: #1d2529;
+  --hm-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --hm-shadow-raised: 0 6px 20px rgba(0, 0, 0, 0.4);
+  --hm-shadow-lg: 0 8px 24px -6px rgba(0, 0, 0, 0.55);
+  --hm-subtle: #182024;
+  --hm-teal-soft: #143f3a;
+  --hm-ring: 0 0 0 3px rgba(20, 184, 166, 0.3);
+  --hm-hover-border: #34434a;
+  --hm-row-hover: #1b2427;
+  --hm-bar-track: #222b2f;
+  --hm-scrollbar: #3a474d;
+  --hm-tip-bg: #1f282c;
+  --hm-tip-text: #c3d0d3;
+  --hm-tip-strong: #f1f5f6;
+  --hm-tip-border: #2f3b40;
 }
 
 * {
@@ -79,12 +179,59 @@ body {
   color: var(--hm-text);
   font-family: var(--el-font-family);
   font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
 a {
   color: var(--el-color-primary);
   text-decoration: none;
+  transition: color 0.15s;
+}
+
+a:hover {
+  color: var(--el-color-primary-light-3);
+}
+
+html.dark a:hover {
+  color: var(--el-color-primary-dark-2);
+}
+
+a:focus-visible,
+button:not(.el-button):focus-visible,
+[role='link']:focus-visible {
+  outline: none;
+  box-shadow: var(--hm-ring);
+  border-radius: 6px;
+}
+
+::selection {
+  background: var(--el-color-primary-light-7);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hm-scrollbar) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--hm-muted) 35%, transparent);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--hm-muted) 60%, transparent);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 code,
@@ -111,7 +258,7 @@ a.hm-card,
 a.hm-card:hover,
 .hm-card.clickable:hover {
   box-shadow: var(--hm-shadow-lg);
-  border-color: #d5dde1;
+  border-color: var(--hm-hover-border);
   transform: translateY(-1px);
 }
 
@@ -132,6 +279,7 @@ a.hm-card:hover,
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .hm-grid {
@@ -144,7 +292,7 @@ a.hm-card:hover,
 }
 
 .hm-grid.cols-2 {
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
 }
 
 .hm-muted {
@@ -181,8 +329,9 @@ a.hm-card:hover,
 }
 
 .hm-pre {
-  background: #0f1d20;
-  color: #d6e4e6;
+  background: var(--hm-code-bg);
+  color: var(--hm-code-text);
+  border: 1px solid transparent;
   border-radius: 8px;
   padding: 14px 16px;
   overflow: auto;
@@ -191,72 +340,100 @@ a.hm-card:hover,
   line-height: 1.55;
 }
 
-.el-table .cell {
+html.dark .hm-pre {
+  border-color: var(--hm-border);
+}
+
+/* Element 组件样式随页面分块按需加载，排在本文件之后；覆盖规则加 html 前缀提高优先级。 */
+html .el-table {
+  --el-table-header-bg-color: var(--hm-subtle);
+  --el-table-row-hover-bg-color: var(--hm-row-hover);
+  --el-table-border-color: var(--hm-border);
+  --el-table-bg-color: var(--hm-surface);
+  --el-table-tr-bg-color: var(--hm-surface);
+  --el-table-expanded-cell-bg-color: var(--hm-surface);
+}
+
+html .el-table .cell {
   word-break: break-word;
 }
 
-.el-table th.el-table__cell {
-  background: var(--hm-subtle);
+html .el-table th.el-table__cell {
   color: var(--hm-muted);
   font-weight: 500;
   font-size: 12.5px;
 }
 
-.el-table {
-  --el-table-row-hover-bg-color: #f3f8f7;
-  font-variant-numeric: tabular-nums;
-}
-
-.el-table .el-table__row.clickable {
+html .el-table .el-table__row.clickable {
   cursor: pointer;
 }
 
+html .el-table__empty-block {
+  min-height: 120px;
+}
+
+html .el-table__empty-text {
+  color: var(--hm-muted);
+  line-height: 1.6;
+}
+
+html .el-button,
+html .el-tabs__item {
+  font-weight: 500;
+}
+
+html .el-empty__description p {
+  color: var(--hm-muted);
+}
+
+html .el-table .el-table__body td.el-table__cell {
+  transition: background-color 0.12s;
+}
+
+html .el-tag {
+  --el-tag-border-radius: 6px;
+}
+
+html .el-dialog {
+  --el-dialog-border-radius: 16px;
+  max-width: calc(100vw - 32px);
+  box-shadow: 0 24px 60px -12px rgba(16, 39, 43, 0.28);
+}
+
+html .el-drawer {
+  --el-dialog-border-radius: 16px;
+}
+
+/* 数字列和指标用等宽数字，刷新时不跳动。 */
+html .el-table,
+.hm-num,
 .num {
   font-variant-numeric: tabular-nums;
 }
 
-a:focus-visible,
-button:not(.el-button):focus-visible,
-[role='link']:focus-visible {
-  outline: none;
-  box-shadow: var(--hm-ring);
-  border-radius: 6px;
-}
+@media (max-width: 640px) {
+  .hm-card {
+    padding: 16px;
+  }
 
-::selection {
-  background: #b7ddd9;
-}
+  .hm-grid.cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: #c7d0d4 transparent;
-}
+  .hm-kv {
+    grid-template-columns: 1fr;
+    row-gap: 2px;
+  }
 
-.el-button {
-  font-weight: 500;
-}
-
-.el-tabs__item {
-  font-weight: 500;
-}
-
-.el-dialog,
-.el-drawer {
-  --el-dialog-border-radius: 16px;
-}
-
-.el-dialog {
-  border-radius: 16px;
-  box-shadow: 0 24px 60px -12px rgba(16, 39, 43, 0.28);
-}
-
-.el-empty__description p {
-  color: var(--hm-muted);
+  .hm-kv dd {
+    margin-bottom: 10px;
+  }
 }
 
 .hm-page-enter-active,
 .hm-page-leave-active {
-  transition: opacity 0.16s ease, transform 0.16s ease;
+  transition: opacity 0.16s var(--hm-ease), transform 0.16s var(--hm-ease);
 }
 
 .hm-page-enter-from {
@@ -269,19 +446,10 @@ button:not(.el-button):focus-visible,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hm-page-enter-active,
-  .hm-page-leave-active,
-  a.hm-card,
-  .hm-card.clickable {
-    transition: none;
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
-}
-
-.el-table__empty-block {
-  min-height: 120px;
-}
-
-.el-table__empty-text {
-  color: var(--hm-muted);
-  line-height: 1.6;
 }

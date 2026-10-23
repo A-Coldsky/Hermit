@@ -28,7 +28,7 @@ defineProps<{ issues: ValidationIssue[]; tone: 'error' | 'warning' }>()
 
 li {
   border-left: 3px solid var(--hm-accent);
-  background: #fffbeb;
+  background: var(--el-color-warning-light-9);
   padding: 8px 12px;
   border-radius: 0 6px 6px 0;
   font-size: 13px;
@@ -36,7 +36,7 @@ li {
 
 .error li {
   border-left-color: var(--hm-danger);
-  background: #fef2f2;
+  background: var(--el-color-danger-light-9);
 }
 
 .head {

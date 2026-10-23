@@ -14,16 +14,20 @@ const chartHeight = computed(() => props.height ?? 200)
 const plotHeight = computed(() => chartHeight.value - 44)
 
 function niceMax(value: number): number {
-  if (value <= 4) {
-    return 4
+  const step = 10 ** Math.floor(Math.log10(value))
+  for (const m of [1, 2, 2.5, 5, 10]) {
+    if (value <= m * step) {
+      return m * step
+    }
   }
-  const magnitude = 10 ** Math.floor(Math.log10(value))
-  const step = [1, 2, 2.5, 5, 10].find((s) => s * magnitude * 4 >= value) ?? 10
-  return step * magnitude * 4
+  return value
 }
 
-const max = computed(() => niceMax(Math.max(0, ...props.points.map((p) => p.success + p.failure))))
-const grid = computed(() => [1, 0.75, 0.5, 0.25, 0].map((f) => ({ f, value: Math.round(max.value * f) })))
+const max = computed(() => niceMax(Math.max(1, ...props.points.map((p) => p.success + p.failure))))
+/** 刻度只标整数，非整数的分位线不画，避免小量程时出现重复的数字。 */
+const grid = computed(() =>
+  [1, 0.75, 0.5, 0.25].filter((f) => Number.isInteger(max.value * f)).map((f) => ({ f, value: max.value * f })),
+)
 
 const ticks = computed(() => {
   const n = props.points.length
@@ -71,6 +75,7 @@ const tipLeft = computed(() => {
           <div v-for="line in grid" :key="line.f" class="line" :style="{ bottom: `${line.f * 100}%` }">
             <span class="y num">{{ line.value }}</span>
           </div>
+          <div class="line base" />
         </div>
         <div class="bars" @mouseleave="hovered = null">
           <div
@@ -135,11 +140,11 @@ const tipLeft = computed(() => {
 }
 
 .sw.ok {
-  background: #2dd4bf;
+  background: var(--hm-chart-ok);
 }
 
 .sw.bad {
-  background: #f87171;
+  background: var(--hm-chart-bad);
 }
 
 .plot {
@@ -157,12 +162,12 @@ const tipLeft = computed(() => {
   position: absolute;
   left: 0;
   right: 0;
-  border-top: 1px dashed #e7ecee;
+  border-top: 1px dashed var(--hm-chart-grid);
 }
 
-.line:last-child {
-  border-top-style: solid;
-  border-top-color: #dfe5e8;
+.line.base {
+  bottom: 0;
+  border-top: 1px solid var(--hm-border);
 }
 
 .y {
@@ -172,7 +177,7 @@ const tipLeft = computed(() => {
   top: -8px;
   text-align: right;
   font-size: 11px;
-  color: #9aa7ae;
+  color: var(--hm-muted);
 }
 
 .bars {
@@ -193,7 +198,7 @@ const tipLeft = computed(() => {
 }
 
 .col.on {
-  background: linear-gradient(180deg, transparent, rgba(15, 118, 110, 0.05));
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--el-color-primary) 7%, transparent));
   border-radius: 6px 6px 0 0;
 }
 
@@ -216,11 +221,11 @@ const tipLeft = computed(() => {
 }
 
 .seg.ok {
-  background: linear-gradient(180deg, #2dd4bf, #14b8a6);
+  background: linear-gradient(180deg, var(--hm-chart-ok-top), var(--hm-chart-ok));
 }
 
 .seg.bad {
-  background: linear-gradient(180deg, #f87171, #ef4444);
+  background: linear-gradient(180deg, var(--hm-chart-bad-top), var(--hm-chart-bad));
 }
 
 .stub {
@@ -228,7 +233,7 @@ const tipLeft = computed(() => {
   max-width: 44px;
   height: 3px;
   border-radius: 2px;
-  background: #e3e9eb;
+  background: var(--hm-chart-grid);
 }
 
 .tip {
@@ -238,8 +243,9 @@ const tipLeft = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  background: #10272b;
-  color: #d9e6e8;
+  background: var(--hm-tip-bg);
+  color: var(--hm-tip-text);
+  border: 1px solid var(--hm-tip-border);
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 12px;
@@ -250,12 +256,12 @@ const tipLeft = computed(() => {
 }
 
 .tip strong {
-  color: #fff;
+  color: var(--hm-tip-strong);
   font-weight: 600;
 }
 
 .tip b {
-  color: #fff;
+  color: var(--hm-tip-strong);
 }
 
 .axis {

@@ -21,7 +21,7 @@ defineProps<{
         <span v-else class="dot" />
       </span>
     </div>
-    <div class="value num">{{ value }}</div>
+    <div class="value hm-num">{{ value }}</div>
     <div v-if="hint" class="hint">{{ hint }}</div>
   </component>
 </template>
@@ -88,7 +88,7 @@ defineProps<{
   border-radius: 9px;
   color: var(--tone);
   background: var(--hm-surface);
-  box-shadow: 0 0 0 1px var(--tone-soft), 0 2px 6px -2px rgba(16, 39, 43, 0.12);
+  box-shadow: 0 0 0 1px var(--tone-soft), var(--hm-shadow);
 }
 
 .dot {

@@ -326,7 +326,7 @@ h4 {
   flex: 1;
   height: 4px;
   border-radius: 2px;
-  background: #edf1f3;
+  background: var(--hm-bar-track);
   overflow: hidden;
 }
 
@@ -334,7 +334,7 @@ h4 {
   display: block;
   height: 100%;
   border-radius: 2px;
-  background: #5eb8ad;
+  background: var(--hm-chart-ok);
 }
 
 .dur .bar span.slow {

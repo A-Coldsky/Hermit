@@ -188,6 +188,7 @@ async function submit() {
 
 .submit {
   width: 100%;
+  height: 40px;
   margin-top: 4px;
 }
 
@@ -202,6 +203,10 @@ async function submit() {
 
   .points {
     display: none;
+  }
+
+  .panel {
+    padding: 24px 16px 48px;
   }
 }
 </style>

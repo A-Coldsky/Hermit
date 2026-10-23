@@ -176,9 +176,9 @@ async function publish() {
 
 :deep(.el-upload-dragger) {
   padding: 44px 20px;
-  border: 1.5px dashed #c9d6d9;
+  border: 1.5px dashed var(--hm-hover-border);
   border-radius: 12px;
-  background: linear-gradient(180deg, #fbfdfd, var(--hm-subtle));
+  background: linear-gradient(180deg, var(--hm-surface), var(--hm-subtle));
   transition: border-color 0.15s, background 0.15s;
 }
 

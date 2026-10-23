@@ -38,9 +38,12 @@ final class McpCalls {
         try {
             request = McpJson.convert(params, McpSchema.CallToolRequest.class);
         } catch (IllegalArgumentException ex) {
-            return toolError("INVALID_INPUT", "invalid params");
+            throw new McpProtocolException();
         }
         String name = request.name() == null ? "" : request.name();
+        if (name.isBlank()) {
+            return toolError("INVALID_INPUT", "name is required");
+        }
         Map<String, Object> arguments = request.arguments() == null ? Map.of() : request.arguments();
         if (catalog.directory(principal)) {
             return directory(principal, session, headerAccount, name, arguments);
@@ -71,6 +74,9 @@ final class McpCalls {
     private McpSchema.CallToolResult search(ApiKeyPrincipal principal, Map<String, Object> arguments) {
         Object query = arguments.get("query");
         if (!(query instanceof String text) || text.isBlank()) {
+            if (query != null && !(query instanceof String)) {
+                return toolError("INVALID_INPUT", "query must be a string", "query");
+            }
             return toolError("INVALID_INPUT", "query is required");
         }
         Object shell = arguments.get("shell");
@@ -114,7 +120,7 @@ final class McpCalls {
         }
         Optional<String> account = account(headerAccount, arguments.get("account"));
         if (account == null) {
-            return toolError("INVALID_INPUT", "invalid account name");
+            return toolError("INVALID_INPUT", "invalid account name", "account");
         }
         if (!CapabilityHttp.readOnly(found.get().action())) {
             McpSchema.CallToolResult confirmed = confirm(session, found.get().action(), input, account);
@@ -136,7 +142,7 @@ final class McpCalls {
         Object rawAccount = input.remove(selector);
         Optional<String> account = account(headerAccount, rawAccount);
         if (account == null) {
-            return toolError("INVALID_INPUT", "invalid account name");
+            return toolError("INVALID_INPUT", "invalid account name", selector);
         }
         return invoke(principal, ref, input, account);
     }
@@ -265,11 +271,25 @@ final class McpCalls {
     }
 
     static McpSchema.CallToolResult toolError(String code, String message) {
-        LinkedHashMap<String, String> body = new LinkedHashMap<>();
-        body.put("code", code == null ? "INTERNAL" : code);
-        body.put("message", message == null ? "" : message);
+        return toolError(code, message, null);
+    }
+
+    static McpSchema.CallToolResult toolError(String code, String message, String field) {
+        String resolved = code == null || code.isBlank() ? "INTERNAL" : code;
+        String text = message == null ? "" : message;
+        LinkedHashMap<String, String> error = new LinkedHashMap<>();
+        error.put("code", resolved);
+        error.put("message", text);
+        error.put("hint", McpErrors.toolHint(resolved, text));
+        String named = field == null || field.isBlank() ? McpErrors.fieldOf(text) : field;
+        if (named != null && !named.isBlank()) {
+            error.put("field", named);
+        }
+        LinkedHashMap<String, Object> structured = new LinkedHashMap<>();
+        structured.put("error", error);
         return McpSchema.CallToolResult.builder()
-                .addTextContent(ApiJson.write(body))
+                .addTextContent(ApiJson.write(error))
+                .structuredContent(structured)
                 .isError(true)
                 .build();
     }

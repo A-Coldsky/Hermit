@@ -17,6 +17,7 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
+import dev.hermit.common.parse.ShellParser;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyScope;
@@ -33,6 +34,79 @@ class GatewayHttpTest {
 
     @TempDir
     Path temp;
+
+    @Test
+    void rejectsOutOfRangeInputInsteadOfClamping() throws Exception {
+        try (TestServer server = TestServer.open(temp.resolve("bounds"), PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
+            server.runtime.registry().put(ShellParser.parse("""
+                    shell: bounds_shell
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    base_url: "http://127.0.0.1:9"
+                    title: 分页边界
+                    description: 用来确认越界参数会被拒绝。
+                    credentials: {}
+                    actions:
+                      page_items:
+                        title: 分页
+                        description: 按页读取。
+                        input:
+                          page: { type: integer, minimum: 1, maximum: 100, required: true, description: 页码 }
+                          pageSize: { type: integer, minimum: 1, maximum: 50, description: 每页条数 }
+                          label: { type: string, required: true, description: 标签 }
+                        steps:
+                          - set:
+                              seen: true
+                        output:
+                          seen: { type: boolean, description: 是否执行 }
+                        examples:
+                          - input: { page: 1, label: a }
+                            output: { seen: true }
+                        notes: 越界必须拒绝
+                        idempotent: true
+                        mcp: { read_only: true }
+                    """));
+            server.runtime.admin().createAccount("bounds_shell", "main", Actors.CLI);
+
+            TestServer.Reply negative = server.call(
+                    "GET", "/api/bounds_shell/page_items?page=-1&pageSize=20&label=a",
+                    server.apiKey.plaintext(), null, null, null);
+            assertThat(negative.status()).isEqualTo(400);
+            assertThat(negative.json().path("success").asBoolean()).isFalse();
+            assertThat(negative.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(negative.json().path("error").path("message").asText()).contains("page");
+            assertThat(negative.json().path("data").isNull()).isTrue();
+
+            TestServer.Reply huge = server.call(
+                    "GET", "/api/bounds_shell/page_items?page=1&pageSize=1000&label=a",
+                    server.apiKey.plaintext(), null, null, null);
+            assertThat(huge.status()).isEqualTo(400);
+            assertThat(huge.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(huge.json().path("error").path("message").asText()).contains("pageSize");
+
+            TestServer.Reply missing = server.call(
+                    "GET", "/api/bounds_shell/page_items?page=1&pageSize=20",
+                    server.apiKey.plaintext(), null, null, null);
+            assertThat(missing.status()).isEqualTo(400);
+            assertThat(missing.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(missing.json().path("error").path("message").asText()).contains("label");
+
+            TestServer.Reply typed = server.call(
+                    "GET", "/api/bounds_shell/page_items?page=no&pageSize=20&label=a",
+                    server.apiKey.plaintext(), null, null, null);
+            assertThat(typed.status()).isEqualTo(400);
+            assertThat(typed.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(typed.json().path("error").path("message").asText()).contains("page").doesNotContain("no");
+
+            TestServer.Reply accepted = server.call(
+                    "GET", "/api/bounds_shell/page_items?page=1&pageSize=20&label=a",
+                    server.apiKey.plaintext(), null, null, null);
+            assertThat(accepted.status()).isEqualTo(200);
+            assertThat(accepted.json().path("success").asBoolean()).isTrue();
+            assertThat(accepted.json().path("data").path("seen").asBoolean()).isTrue();
+        }
+    }
 
     @Test
     void callsCapabilitiesAccountsIdempotencyAndRestoredSessions() throws Exception {

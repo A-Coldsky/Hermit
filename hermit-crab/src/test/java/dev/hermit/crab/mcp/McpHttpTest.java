@@ -70,7 +70,11 @@ class McpHttpTest {
 
             Reply missing = server.post(null, null, null, initialize("{}"));
             assertThat(missing.status()).isEqualTo(401);
-            assertThat(missing.json().path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
+            assertThat(missing.json().path("jsonrpc").asText()).isEqualTo("2.0");
+            assertThat(missing.json().path("error").path("code").asInt()).isEqualTo(McpErrors.AUTH_RPC);
+            assertThat(missing.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.AUTH_MISSING);
+            assertThat(missing.json().path("error").path("message").asText()).contains("Authorization").contains("X-Hermit-Key");
+            assertThat(missing.json().path("error").path("data").path("hint").asText()).contains("X-Hermit-Key");
             SecretChecks.absent(missing.body(), PASSWORD);
             SecretChecks.absent(missing.body(), server.apiKey.plaintext());
 
@@ -89,6 +93,7 @@ class McpHttpTest {
             JsonNode account = todo.path("inputSchema").path("properties").path("account");
             assertThat(account.path("type").asText()).isEqualTo("string");
             assertThat(account.path("pattern").asText()).isEqualTo("^[A-Za-z0-9_-]{1,64}$");
+            assertThat(todo.has("outputSchema")).isFalse();
             assertThat(todo.path("inputSchema").path("required").toString()).doesNotContain("account");
             assertThat(todo.path("annotations").path("readOnlyHint").asBoolean()).isTrue();
             assertThat(todo.path("annotations").path("destructiveHint").asBoolean()).isFalse();
@@ -126,6 +131,10 @@ class McpHttpTest {
                     Map.of("name", "legacy_oa__list_todo", "arguments", Map.of("account", "nobody"))));
             assertThat(toolError(unknown).path("code").asText()).isEqualTo("ACCOUNT_NOT_FOUND");
             assertThat(unknown.json().path("result").path("isError").asBoolean()).isTrue();
+            JsonNode accountError = unknown.json().path("result").path("structuredContent").path("error");
+            assertThat(accountError.path("code").asText()).isEqualTo("ACCOUNT_NOT_FOUND");
+            assertThat(accountError.path("message").asText()).isEqualTo(toolError(unknown).path("message").asText());
+            assertThat(accountError.path("hint").asText()).contains("账号");
             assertThat(unknown.body()).doesNotContain("Exception");
 
             CreatedApiKey narrow = server.runtime.admin().createApiKey(
@@ -150,7 +159,9 @@ class McpHttpTest {
             SecretChecks.absent(markdown, PASSWORD);
             Reply hiddenGuide = server.post(narrow.plaintext(), narrowSession, null, request(4, "resources/read",
                     Map.of("uri", "hermit://shells/legacy_oa/guide")));
-            assertThat(hiddenGuide.json().path("error").path("message").asText()).isEqualTo("not found");
+            assertThat(hiddenGuide.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.NOT_FOUND);
+            assertThat(hiddenGuide.json().path("error").path("message").asText()).contains("resources/list");
+            assertThat(hiddenGuide.json().path("error").path("data").path("hint").asText()).contains("resources/list");
 
             SecretChecks.absent(logs.text(), PASSWORD);
             SecretChecks.absent(logs.text(), server.apiKey.plaintext());
@@ -193,6 +204,16 @@ class McpHttpTest {
             Reply listed = server.post(scoped.plaintext(), session, null, request(2, "tools/list", null));
             assertThat(names(listed.json().path("result").path("tools")))
                     .containsExactlyInAnyOrder("list_systems", "search_capabilities", "describe_capability", "call_capability");
+            assertThat(tool(listed.json().path("result").path("tools"), "list_systems").has("outputSchema")).isFalse();
+
+            Reply modern = server.post(scoped.plaintext(), null, null, initialize("2025-06-18", "{}"));
+            String modernSession = modern.header("Mcp-Session-Id");
+            Reply modernTools = server.post(scoped.plaintext(), modernSession, null, request(3, "tools/list", null));
+            JsonNode modernList = modernTools.json().path("result").path("tools");
+            assertThat(tool(modernList, "list_systems").path("outputSchema").path("properties").path("systems").path("type").asText())
+                    .isEqualTo("array");
+            assertThat(tool(modernList, "search_capabilities").path("outputSchema").path("properties").has("matches")).isTrue();
+            assertThat(tool(modernList, "call_capability").has("outputSchema")).isFalse();
 
             Reply systems = call(server, scoped.plaintext(), session, "list_systems", Map.of());
             JsonNode rows = systems.json().path("result").path("structuredContent").path("systems");
@@ -209,6 +230,16 @@ class McpHttpTest {
             assertThat(capped.json().path("result").path("structuredContent").path("matches")).hasSize(20);
             Reply concealed = call(server, scoped.plaintext(), session, "search_capabilities", Map.of("query", "隐藏能力"));
             assertThat(concealed.json().path("result").path("structuredContent").path("matches")).isEmpty();
+            Reply badQuery = call(server, scoped.plaintext(), session, "search_capabilities", Map.of("query", (Object) 1));
+            JsonNode queryError = badQuery.json().path("result").path("structuredContent").path("error");
+            assertThat(badQuery.json().path("result").path("isError").asBoolean()).isTrue();
+            assertThat(queryError.path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(queryError.path("field").asText()).isEqualTo("query");
+            assertThat(queryError.path("hint").asText()).isNotBlank();
+            assertThat(queryError.path("code").asText()).isNotEqualTo(McpErrors.AUTH_MISSING);
+            Reply missingQuery = call(server, scoped.plaintext(), session, "search_capabilities", Map.of());
+            assertThat(missingQuery.json().path("result").path("structuredContent").path("error").path("field").asText())
+                    .isEqualTo("query");
 
             Reply described = call(server, scoped.plaintext(), session, "describe_capability",
                     Map.of("name", "bulk_shell__act_w"));
@@ -295,13 +326,16 @@ class McpHttpTest {
             clock.advance(Duration.ofHours(1));
             Reply expired = server.ping(key, kept);
             assertThat(expired.status()).isEqualTo(404);
-            assertThat(expired.json().path("error").path("message").asText()).isEqualTo("session not found");
+            assertThat(expired.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.SESSION_NOT_FOUND);
+            assertThat(expired.json().path("error").path("message").asText()).contains("initialize");
+            assertThat(expired.json().path("error").path("data").path("hint").asText()).contains("initialize");
 
             String oldest = server.initialize(key);
             String middle = server.initialize(key);
             String newest = server.initialize(key);
             assertThat(server.ping(key, oldest).status()).isEqualTo(404);
-            assertThat(server.ping(key, oldest).json().path("error").path("message").asText()).isEqualTo("session not found");
+            assertThat(server.ping(key, oldest).json().path("error").path("data").path("code").asText())
+                    .isEqualTo(McpErrors.SESSION_NOT_FOUND);
             assertThat(server.ping(key, middle).status()).isEqualTo(200);
             assertThat(server.ping(key, newest).status()).isEqualTo(200);
         }
@@ -355,6 +389,148 @@ class McpHttpTest {
         SecretChecks.absent(downErr.toString(StandardCharsets.UTF_8), "not-a-real-key");
     }
 
+    @Test
+    void structuredErrorsRejectBadInputAndDeclareOutputSchema() throws Exception {
+        assertThat(McpErrors.outputSchemaSupported("2025-06-18")).isTrue();
+        assertThat(McpErrors.outputSchemaSupported("2025-11-25")).isTrue();
+        assertThat(McpErrors.outputSchemaSupported("2025-03-26")).isFalse();
+        assertThat(McpErrors.outputSchemaSupported("2024-11-05")).isFalse();
+        try (Harness server = Harness.open(temp.resolve("structured"), PASSWORD)) {
+            server.configure("alice");
+            server.runtime.registry().put(ShellParser.parse(boundsYaml()));
+            server.runtime.admin().createAccount("bounds_shell", "main", Actors.CLI);
+
+            Reply badKey = server.post("not-a-real-key", null, null, initialize("2025-06-18", "{}"));
+            assertThat(badKey.status()).isEqualTo(401);
+            assertThat(badKey.json().path("jsonrpc").asText()).isEqualTo("2.0");
+            assertThat(badKey.json().path("error").path("code").asInt()).isEqualTo(McpErrors.AUTH_RPC);
+            assertThat(badKey.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.AUTH_INVALID);
+            assertThat(badKey.json().path("error").path("message").asText()).contains("无效或已吊销").contains("控制台").contains("apikey create");
+            assertThat(badKey.json().path("error").path("data").path("hint").asText())
+                    .contains("控制台").contains("apikey create").contains("Crab").contains("不是 Reef");
+            SecretChecks.absent(badKey.body(), "not-a-real-key");
+
+            CreatedApiKey revoked = server.runtime.admin().createApiKey(
+                    "revoked", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+            server.runtime.admin().revokeApiKey(revoked.id(), Actors.CLI);
+            Reply revokedReply = server.post(revoked.plaintext(), null, null, initialize("2025-06-18", "{}"));
+            assertThat(revokedReply.status()).isEqualTo(401);
+            assertThat(revokedReply.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.AUTH_INVALID);
+            SecretChecks.absent(revokedReply.body(), revoked.plaintext());
+
+            Reply initialized = server.post(server.apiKey.plaintext(), null, null, initialize("2025-06-18", "{}"));
+            assertThat(initialized.json().path("result").path("protocolVersion").asText()).isEqualTo("2025-06-18");
+            String session = initialized.header("Mcp-Session-Id");
+            Reply listed = server.post(server.apiKey.plaintext(), session, null, request(2, "tools/list", null));
+            JsonNode todo = tool(listed.json().path("result").path("tools"), "legacy_oa__list_todo");
+            assertThat(todo.path("outputSchema").path("type").asText()).isEqualTo("object");
+            assertThat(todo.path("outputSchema").path("properties").path("items").path("type").asText()).isEqualTo("array");
+            JsonNode pageTool = tool(listed.json().path("result").path("tools"), "bounds_shell__page_items");
+            assertThat(pageTool.path("outputSchema").path("properties").path("seen").path("type").asText()).isEqualTo("boolean");
+
+            Reply oldest = server.post(server.apiKey.plaintext(), null, null, initialize("2024-11-05", "{}"));
+            String oldSession = oldest.header("Mcp-Session-Id");
+            Reply oldTools = server.post(server.apiKey.plaintext(), oldSession, null, request(2, "tools/list", null));
+            assertThat(tool(oldTools.json().path("result").path("tools"), "legacy_oa__list_todo").has("outputSchema")).isFalse();
+
+            Reply newest = server.post(server.apiKey.plaintext(), null, null, initialize("2025-11-25", "{}"));
+            String newSession = newest.header("Mcp-Session-Id");
+            Reply newTools = server.post(server.apiKey.plaintext(), newSession, null, request(2, "tools/list", null));
+            assertThat(tool(newTools.json().path("result").path("tools"), "bounds_shell__page_items").has("outputSchema")).isTrue();
+
+            Reply unstarted = server.post(server.apiKey.plaintext(), null, null, request(4, "tools/list", null));
+            assertThat(unstarted.status()).isEqualTo(400);
+            assertThat(unstarted.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.SESSION_REQUIRED);
+            assertThat(unstarted.json().path("error").path("message").asText()).contains("initialize").contains("Mcp-Session-Id");
+            assertThat(unstarted.json().path("error").path("data").path("hint").asText()).contains("initialize");
+
+            CreatedApiKey other = server.runtime.admin().createApiKey(
+                    "other", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+            Reply mismatch = server.post(other.plaintext(), session, null, request(5, "tools/list", null));
+            assertThat(mismatch.status()).isEqualTo(401);
+            assertThat(mismatch.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.SESSION_MISMATCH);
+            assertThat(mismatch.json().path("error").path("message").asText()).contains("不匹配").contains("initialize");
+            SecretChecks.absent(mismatch.body(), other.plaintext());
+
+            Reply illegal = server.post(server.apiKey.plaintext(), session, null,
+                    "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":[]}");
+            assertThat(illegal.status()).isEqualTo(200);
+            assertThat(illegal.json().has("result")).isFalse();
+            assertThat(illegal.json().path("error").path("code").asInt()).isEqualTo(-32602);
+            assertThat(illegal.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.INVALID_PARAMS);
+            assertThat(illegal.json().path("error").path("data").path("hint").asText()).isNotBlank();
+
+            Reply negative = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+                    Map.of("page", -1, "pageSize", 20, "label", "a", "account", "main"));
+            JsonNode negativeError = negative.json().path("result").path("structuredContent").path("error");
+            assertThat(negative.json().path("result").path("isError").asBoolean()).isTrue();
+            assertThat(negativeError.path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(negativeError.path("field").asText()).isEqualTo("page");
+            assertThat(negativeError.path("hint").asText()).contains("minimum");
+            assertThat(negativeError.path("code").asText()).isNotEqualTo(McpErrors.AUTH_INVALID);
+            assertThat(negative.json().path("result").path("structuredContent").has("seen")).isFalse();
+
+            Reply huge = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+                    Map.of("page", 1, "pageSize", 1000, "label", "a", "account", "main"));
+            assertThat(huge.json().path("result").path("structuredContent").path("error").path("code").asText())
+                    .isEqualTo("INVALID_INPUT");
+            assertThat(huge.json().path("result").path("structuredContent").path("error").path("field").asText())
+                    .isEqualTo("pageSize");
+            assertThat(huge.json().path("result").path("isError").asBoolean()).isTrue();
+
+            Reply missingLabel = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+                    Map.of("page", 1, "pageSize", 20, "account", "main"));
+            assertThat(missingLabel.json().path("result").path("structuredContent").path("error").path("field").asText())
+                    .isEqualTo("label");
+
+            Reply wrongType = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+                    Map.of("page", "no", "pageSize", 20, "label", "a", "account", "main"));
+            assertThat(wrongType.json().path("result").path("structuredContent").path("error").path("code").asText())
+                    .isEqualTo("INVALID_INPUT");
+            assertThat(wrongType.json().path("result").path("structuredContent").path("error").path("field").asText())
+                    .isEqualTo("page");
+            assertThat(wrongType.body()).doesNotContain("\"no\"");
+
+            Reply accepted = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+                    Map.of("page", 1, "pageSize", 20, "label", "a", "account", "main"));
+            assertThat(accepted.json().path("result").path("isError").asBoolean(false)).isFalse();
+            assertThat(accepted.json().path("result").path("structuredContent").path("seen").asBoolean()).isTrue();
+            assertThat(accepted.json().path("result").path("content").get(0).path("text").asText()).contains("seen");
+        }
+    }
+
+    private static String boundsYaml() {
+        return """
+                shell: bounds_shell
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: "http://127.0.0.1:9"
+                title: 分页边界
+                description: 用来确认越界参数会被拒绝。
+                credentials: {}
+                actions:
+                  page_items:
+                    title: 分页
+                    description: 按页读取。
+                    input:
+                      page: { type: integer, minimum: 1, maximum: 100, required: true, description: 页码 }
+                      pageSize: { type: integer, minimum: 1, maximum: 50, description: 每页条数 }
+                      label: { type: string, required: true, description: 标签 }
+                    steps:
+                      - set:
+                          seen: true
+                    output:
+                      seen: { type: boolean, description: 是否执行 }
+                    examples:
+                      - input: { page: 1, label: a }
+                        output: { seen: true }
+                    notes: 越界必须拒绝
+                    idempotent: true
+                    mcp: { read_only: true }
+                """;
+    }
+
     private static Reply call(Harness server, String key, String session, String name, Map<String, Object> arguments) throws Exception {
         return server.post(key, session, null, request(9, "tools/call", Map.of("name", name, "arguments", arguments)));
     }
@@ -389,9 +565,13 @@ class McpHttpTest {
     }
 
     private static String initialize(String capabilitiesJson) {
+        return initialize("2025-03-26", capabilitiesJson);
+    }
+
+    private static String initialize(String protocol, String capabilitiesJson) {
         return """
-                {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":%s,"clientInfo":{"name":"test","version":"0"}}}
-                """.formatted(capabilitiesJson).trim();
+                {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"%s","capabilities":%s,"clientInfo":{"name":"test","version":"0"}}}
+                """.formatted(protocol, capabilitiesJson).trim();
     }
 
     private static String request(int id, String method, Object params) {

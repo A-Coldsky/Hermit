@@ -74,6 +74,8 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 | --- | --- |
 | INVALID_INPUT | 400（方法错误 405） |
 | AUTH_FAILED | 网关 Key 无效 401；上游登录失败 422 |
+
+缺必填、类型无法转换，或数值超出参数声明的 `minimum` / `maximum`，都返回 `INVALID_INPUT`。运行时不会把负页码或过大的 `pageSize` 夹进范围内再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。
 | FORBIDDEN | 403 |
 | NOT_FOUND / ACCOUNT_NOT_FOUND | 404 |
 | NOT_CONFIGURED | 409 |
@@ -136,6 +138,21 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 - guide resource 为 `hermit://shells/{shell}/guide`，由说明、参数、示例生成。
 - 规则更新/能力开关变化推送列表变更通知。
 - 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。
+
+协议级失败是 JSON-RPC error，不使用能力 API 的 success/error envelope。`error.code` 是 JSON-RPC 整数；`error.data.code` 是稳定字符串，`error.data.hint` 是下一步。HTTP 401 的 body 同样是这个 JSON-RPC 错误。
+
+| 场景 | HTTP | JSON-RPC `error.code` | `error.data.code` |
+| --- | ---: | ---: | --- |
+| 未带 API Key | 401 | -32001 | `AUTH_MISSING`。说明使用 `Authorization: Bearer <API Key>` 或 `X-Hermit-Key` |
+| Key 无效或已吊销 | 401 | -32001 | `AUTH_INVALID`。到 Crab 本机控制台 `/console/apikeys`，或 CLI `apikey create` 重新签发。Key 由 Crab 签发，不是 Reef |
+| Key 与会话不匹配 | 401 | -32001 | `SESSION_MISMATCH`。换创建该会话的 Key，或重新 `initialize` |
+| 尚未 `initialize` | 400 | -32600 | `SESSION_REQUIRED`。先调用 `initialize`，再带响应头 `Mcp-Session-Id` |
+| 会话不存在或过期 | 404 | -32600 | `SESSION_NOT_FOUND`。重新 `initialize` |
+| JSON-RPC 参数类型不合法 | 200 | -32602 | `INVALID_PARAMS` |
+
+工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。
+
+成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
 
 stdio 是对运行中 Crab 的桥接，不单独启动执行器。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr：
 

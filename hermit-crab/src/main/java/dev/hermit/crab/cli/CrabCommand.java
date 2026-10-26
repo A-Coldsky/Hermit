@@ -34,6 +34,7 @@ import dev.hermit.crab.sync.SyncReport;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.Actors;
+import dev.hermit.crab.store.AuditLog;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.ApiKeySummary;
 import dev.hermit.crab.store.CrabPaths;
@@ -56,6 +57,7 @@ public final class CrabCommand {
               crab config get <shell> [key]
               crab config set <shell> <key> <value>
               crab config unset <shell> <key>
+              crab audit list [--shell NAME] [--account NAME] [--limit N] [--page N]
               crab apikey create <name> [--shells a,b] [--actions shell.action] [--read-only]
               crab apikey list
               crab apikey revoke <id>
@@ -107,6 +109,7 @@ public final class CrabCommand {
             case "account" -> account(args, env, out, err);
             case "credential" -> credential(args, env, in, out, err);
             case "config" -> config(args, env, out, err);
+            case "audit" -> audit(args, env, out, err);
             case "apikey" -> apiKey(args, env, out, err);
             case "mcp-stdio" -> new McpStdio().run(args, env, in, out, err);
             default -> {
@@ -346,6 +349,109 @@ public final class CrabCommand {
                 yield 1;
             }
         };
+    }
+
+    private int audit(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length < 2 || !"list".equals(args[1])) {
+            err.print(USAGE);
+            return 1;
+        }
+        String shell = null;
+        String account = null;
+        Integer limit = null;
+        Integer page = null;
+        for (int i = 2; i < args.length; i++) {
+            String arg = args[i];
+            if (!"--shell".equals(arg) && !"--account".equals(arg) && !"--limit".equals(arg) && !"--page".equals(arg)) {
+                err.print(USAGE);
+                return 1;
+            }
+            if (i + 1 >= args.length || args[i + 1].startsWith("--")) {
+                err.println("option value is required");
+                return 1;
+            }
+            String value = args[++i];
+            switch (arg) {
+                case "--shell" -> {
+                    if (shell != null) {
+                        err.println("duplicate option");
+                        return 1;
+                    }
+                    shell = value;
+                }
+                case "--account" -> {
+                    if (account != null) {
+                        err.println("duplicate option");
+                        return 1;
+                    }
+                    account = value;
+                }
+                case "--limit" -> {
+                    if (limit != null) {
+                        err.println("duplicate option");
+                        return 1;
+                    }
+                    limit = optionInt(value, "limit", err);
+                    if (limit == null) {
+                        return 1;
+                    }
+                }
+                case "--page" -> {
+                    if (page != null) {
+                        err.println("duplicate option");
+                        return 1;
+                    }
+                    page = optionInt(value, "page", err);
+                    if (page == null) {
+                        return 1;
+                    }
+                }
+                default -> {
+                    err.print(USAGE);
+                    return 1;
+                }
+            }
+        }
+        int checkedLimit = limit == null ? AuditLog.DEFAULT_LIMIT : limit;
+        int checkedPage = page == null ? 1 : page;
+        String shellFilter = shell;
+        String accountFilter = account;
+        return withRuntime(env, runtime -> {
+            for (AuditLog.Entry entry : runtime.configAudit(shellFilter, accountFilter, checkedPage, checkedLimit).entries()) {
+                out.println(formatAudit(entry));
+            }
+            return 0;
+        });
+    }
+
+    private static Integer optionInt(String value, String label, PrintStream err) {
+        try {
+            int parsed = Integer.parseInt(value);
+            if (parsed < 1) {
+                err.println(label + " is out of range");
+                return null;
+            }
+            return parsed;
+        } catch (NumberFormatException ex) {
+            err.println(label + " is out of range");
+            return null;
+        }
+    }
+
+    private static String formatAudit(AuditLog.Entry entry) {
+        String fields = entry.fields().isEmpty() ? "-" : String.join(",", entry.fields());
+        return String.join(" ",
+                entry.at().toString(),
+                entry.actor(),
+                entry.action(),
+                dash(entry.origin()),
+                dash(entry.shell()),
+                dash(entry.account()),
+                fields);
+    }
+
+    private static String dash(String value) {
+        return value == null || value.isBlank() ? "-" : value;
     }
 
     private int apiKey(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {

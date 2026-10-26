@@ -28,6 +28,7 @@ import dev.hermit.crab.report.FlushResult;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.Actors;
+import dev.hermit.crab.store.AuditLog;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.ApiKeySummary;
 import dev.hermit.crab.store.CallLogStore;
@@ -69,6 +70,7 @@ final class ConsoleApi {
         delete(app, "/console/api/apikeys/{id}", ctx -> revokeApiKey(runtime, ctx));
         get(app, "/console/api/calls", ctx -> calls(runtime, ctx));
         get(app, "/console/api/calls/{traceId}", ctx -> call(runtime, ctx));
+        get(app, "/console/api/audit", ctx -> audit(runtime, ctx));
         get(app, "/console/api/debug", ctx -> debug(runtime, ctx));
         post(app, "/console/api/debug", ctx -> setDebug(runtime, ctx));
         post(app, "/console/api/sync", ctx -> sync(runtime, ctx));
@@ -318,6 +320,33 @@ final class ConsoleApi {
             steps.add(row);
         }
         body.put("steps", steps);
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void audit(CrabRuntime runtime, Context ctx) {
+        AuditLog.Page page = runtime.configAudit(
+                ctx.queryParam("shell"),
+                ctx.queryParam("account"),
+                pageNumber(ctx),
+                auditLimit(ctx));
+        ArrayList<Map<String, Object>> entries = new ArrayList<>();
+        for (AuditLog.Entry entry : page.entries()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("id", entry.id());
+            row.put("at", entry.at());
+            row.put("actor", entry.actor());
+            row.put("action", entry.action());
+            row.put("origin", entry.origin());
+            row.put("shell", entry.shell());
+            row.put("account", entry.account());
+            row.put("fields", entry.fields());
+            entries.add(row);
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("entries", entries);
+        body.put("page", page.page());
+        body.put("limit", page.limit());
+        body.put("total", page.total());
         GatewayResponses.writeData(ctx, body);
     }
 
@@ -638,6 +667,38 @@ final class ConsoleApi {
             values.add(item.textValue());
         }
         return Set.copyOf(values);
+    }
+
+    private static int pageNumber(Context ctx) {
+        return positive(ctx.queryParam("page"), 1, "page is out of range");
+    }
+
+    private static int auditLimit(Context ctx) {
+        String raw = ctx.queryParam("limit");
+        if (raw == null || raw.isBlank()) {
+            return AuditLog.DEFAULT_LIMIT;
+        }
+        int limit = positive(raw, -1, "limit is out of range");
+        if (limit < 1 || limit > AuditLog.MAX_LIMIT) {
+            throw new IllegalArgumentException("limit is out of range");
+        }
+        return limit;
+    }
+
+    private static int positive(String raw, int fallback, String message) {
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        int parsed;
+        try {
+            parsed = Integer.parseInt(raw);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException(message);
+        }
+        if (parsed < 1) {
+            throw new IllegalArgumentException(message);
+        }
+        return parsed;
     }
 
     private static int limit(Context ctx) {

@@ -91,7 +91,7 @@ sequenceDiagram
 | --- | --- |
 | Reef 管理员、版本元数据、审计、报告、告警 | H2 或 MySQL；[Flyway SQL](../hermit-reef/src/main/resources/db/migration) |
 | Reef YAML/包/签名密钥/JWT 密钥 | `data-dir/shells/`、`data-dir/keys/` |
-| Crab 账号、配置、API Key、日志、队列 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移 |
+| Crab 账号、配置、API Key、日志、队列、配置审计 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 shell/account 分页读取，响应不含凭证和配置值 |
 | Crab 凭证、Cookie 会话、幂等响应 | H2 中 AES-256-GCM 密文；主密钥在环境变量或本机文件 |
 | Crab 规则及当前版本 | `HERMIT_HOME/shells/<shell>/...` |
 | API Key | 创建时返回一次明文；后续前缀和哈希查验 |

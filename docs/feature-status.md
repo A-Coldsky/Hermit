@@ -26,7 +26,8 @@
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
 | 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest。确认后，创建时间起算的去重窗口剩余时间内不新建、不推送；窗口结束后条件仍在才新建。失败上涨不提前打破窗口。Webhook 含告警 id 与相对路径 `/alerts`（无对外基址配置），没有持久化重试队列。负阈值，以及必须为正的窗口写成 0，启动时拒绝 |
 | Reef 管理页面 | 已实现 | 登录、仪表盘、Shell/上传/版本及校验警告明细、Tide、告警、审计、设置说明 |
-| Crab 本机控制台 | 已实现 | 概览、Shell、账号/凭证/配置、能力、API Key、调用、上报。Shell 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密 |
+| Crab 本机控制台 | 已实现 | 概览、Shell、账号/凭证/配置、能力、API Key、调用、上报。Shell 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。「配置审计」页按 Shell/账号筛选分页查看变更记录 |
+| Crab 配置审计查询 | 已实现 | 控制台「配置审计」页、`GET /console/api/audit` 与 CLI `audit list`。可按 shell/account 分页，新的在前。只返回 id、时间、actor、action、origin、shell、account、字段名；不返回 detail 原文、配置值、凭证明文或密文。`config_audit` 仍无定期清理 |
 | Docker Reef + Nginx + MySQL / Crab | 已配置，运行未验收 | Crab 同机 client profile / 独立 Compose / Dockerfile 已提供；配置语法通过，尚未启动容器栈 |
 
 ## 部分实现与缺口
@@ -63,5 +64,7 @@
 hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过；Docker Compose 使用 `.env.example` 校验同机 `client` profile 与独立 Crab 配置通过，入口脚本 `sh -n` 通过。额外探针复现 6 项代码问题，详见[审计报告](audits/2026-10-16.md)。没有覆盖率百分比、真实老系统/真实 MCP 客户端验收、浏览器交互验收、MySQL 运行验证或生产压测结果。
 
 2026-10-26 上游错误映射以 JDK 17.0.20 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 100、hermit-crab 187、hermit-it 1，Vitest 30（6 个文件）。未覆盖真实老系统，以及除 HTTP 400/401/403 以外的 4xx。
+
+2026-10-26 配置审计读取以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 117、hermit-crab 205、hermit-it 1，Vitest 43（7 个文件）。这是当前整棵树的计数。本次新增 `ConfigAuditReadTest`、`ConsoleAuditTest` 和 CLI `audit list` 用例。配置审计页面随后合入，未在浏览器里点选；`config_audit` 仍无定期清理。未覆盖真实老系统。
 
 2026-10-26 错误日志、未知路由信封与保留任务以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 122、hermit-crab 202、hermit-it 1，Vitest 46（8 个文件）。未启动定时器到点执行，也未跑 MySQL/Compose。小时统计、审计和告警仍不在清理范围内。

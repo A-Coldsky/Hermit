@@ -31,7 +31,7 @@ class AdminUiMissingTest {
 
     @Test
     void missingIndexIsJsonNotFound() throws Exception {
-        for (String path : new String[] {"/", "/login", "/shells/legacy_oa", "/tide"}) {
+        for (String path : new String[] {"/", "/login", "/conches/legacy_oa", "/tide"}) {
             mockMvc.perform(get(path))
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.success").value(false))

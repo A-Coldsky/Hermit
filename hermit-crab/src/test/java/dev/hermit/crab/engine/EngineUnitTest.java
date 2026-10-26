@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
-import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
 import dev.hermit.crab.secure.Redactor;
@@ -30,8 +30,8 @@ class EngineUnitTest {
 
     @Test
     void preparesInputBeforeValidation() {
-        Action action = ShellParser.parse("""
-                shell: sample_shell
+        Action action = ConchParser.parse("""
+                conch: sample_conch
                 version: 1.0.0
                 driver: http
                 min_crab_version: 1.0.0
@@ -79,8 +79,8 @@ class EngineUnitTest {
 
     @Test
     void rejectsOutOfRangeInputInsteadOfClamping() {
-        Action action = ShellParser.parse("""
-                shell: bounds_shell
+        Action action = ConchParser.parse("""
+                conch: bounds_conch
                 version: 1.0.0
                 driver: http
                 min_crab_version: 1.0.0
@@ -256,16 +256,16 @@ class EngineUnitTest {
     }
 
     @Test
-    void unknownShellOrActionIsNotFound() {
-        ShellRegistry registry = new ShellRegistry();
+    void unknownConchOrActionIsNotFound() {
+        ConchRegistry registry = new ConchRegistry();
         try (SessionManager sessions = new SessionManager()) {
             RuleEngine engine = new RuleEngine(registry, sessions);
             AccountContext context = EngineTestSupport.account("alice", EngineTestSupport.PASSWORD, "http://127.0.0.1");
-            ExecutionResult missingShell = engine.execute(EngineTestSupport.request(
+            ExecutionResult missingConch = engine.execute(EngineTestSupport.request(
                     Origin.LOCAL, "missing", "list_todo", "alice", Map.of(), context));
-            assertThat(missingShell.success()).isFalse();
-            assertThat(missingShell.error().code()).isEqualTo(ErrorCode.NOT_FOUND);
-            assertThat(missingShell.error().message()).contains("shell");
+            assertThat(missingConch.success()).isFalse();
+            assertThat(missingConch.error().code()).isEqualTo(ErrorCode.NOT_FOUND);
+            assertThat(missingConch.error().message()).contains("conch");
 
             registry.put(EngineTestSupport.legacy());
             ExecutionResult missingAction = engine.execute(EngineTestSupport.request(

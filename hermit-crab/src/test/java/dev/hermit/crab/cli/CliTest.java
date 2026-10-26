@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.function.Function;
 
 import dev.hermit.common.pkg.Ed25519Keys;
-import dev.hermit.common.pkg.ShellPackage;
+import dev.hermit.common.pkg.ConchPackage;
 import dev.hermit.crab.CrabMain;
 import dev.hermit.crab.store.CrabDatabase;
 import dev.hermit.crab.store.CrabPaths;
@@ -149,7 +149,7 @@ class CliTest {
                 stdout(),
                 stderr(bareErr));
         assertThat(bare).isEqualTo(1);
-        assertThat(bareErr.toString(StandardCharsets.UTF_8)).contains("shell.action");
+        assertThat(bareErr.toString(StandardCharsets.UTF_8)).contains("conch.action");
 
         ByteArrayOutputStream missingErr = new ByteArrayOutputStream();
         int missing = new CrabCommand().run(
@@ -197,7 +197,7 @@ class CliTest {
         assertThat(run(env, InputStream.nullInputStream(), "config", "set", "legacy_oa", "base_url", configValue)).isZero();
 
         ByteArrayOutputStream listed = new ByteArrayOutputStream();
-        assertThat(run(env, InputStream.nullInputStream(), listed, "audit", "list", "--shell", "legacy_oa")).isZero();
+        assertThat(run(env, InputStream.nullInputStream(), listed, "audit", "list", "--conch", "legacy_oa")).isZero();
         String text = listed.toString(StandardCharsets.UTF_8);
         assertThat(text).contains("CREDENTIALS_WRITTEN").contains("password").contains("CONFIG_PUT").contains("base_url");
         assertThat(text).contains("alice").contains("OFFICIAL").contains("cli");
@@ -215,7 +215,7 @@ class CliTest {
 
         ByteArrayOutputStream older = new ByteArrayOutputStream();
         assertThat(run(env, InputStream.nullInputStream(), older,
-                "audit", "list", "--shell", "legacy_oa", "--limit", "1", "--page", "2")).isZero();
+                "audit", "list", "--conch", "legacy_oa", "--limit", "1", "--page", "2")).isZero();
         String second = older.toString(StandardCharsets.UTF_8).trim();
         assertThat(second.lines()).hasSize(1);
         assertThat(second).contains("CREDENTIALS_WRITTEN").contains("password").contains("alice");
@@ -223,14 +223,14 @@ class CliTest {
 
         ByteArrayOutputStream account = new ByteArrayOutputStream();
         assertThat(run(env, InputStream.nullInputStream(), account,
-                "audit", "list", "--shell", "legacy_oa", "--account", "alice")).isZero();
+                "audit", "list", "--conch", "legacy_oa", "--account", "alice")).isZero();
         String alice = account.toString(StandardCharsets.UTF_8);
         assertThat(alice).contains("CREDENTIALS_WRITTEN").contains("ACCOUNT_CREATED");
         assertThat(alice).doesNotContain("CONFIG_PUT");
         SecretChecks.absent(alice, PASSWORD);
 
         ByteArrayOutputStream other = new ByteArrayOutputStream();
-        assertThat(run(env, InputStream.nullInputStream(), other, "audit", "list", "--shell", "other_shell")).isZero();
+        assertThat(run(env, InputStream.nullInputStream(), other, "audit", "list", "--conch", "other_conch")).isZero();
         assertThat(other.toString(StandardCharsets.UTF_8)).isEmpty();
 
         ByteArrayOutputStream bad = new ByteArrayOutputStream();
@@ -282,11 +282,11 @@ class CliTest {
             yaml = in.readAllBytes();
         }
         KeyPair keys = Ed25519Keys.generate();
-        byte[] zip = ShellPackage.write(yaml, keys.getPrivate());
-        Path version = root.resolve("shells").resolve("legacy_oa").resolve("1.0.0");
+        byte[] zip = ConchPackage.write(yaml, keys.getPrivate());
+        Path version = root.resolve("conches").resolve("legacy_oa").resolve("1.0.0");
         Files.createDirectories(version);
         Files.write(version.resolve("package.zip"), zip);
-        Files.write(version.resolve("shell.yaml"), yaml);
+        Files.write(version.resolve("conch.yaml"), yaml);
         Files.writeString(version.getParent().resolve("current"), "1.0.0\n");
         Path pub = root.resolve("reef.pub");
         Files.writeString(pub, Ed25519Keys.writePublicPem(keys.getPublic()));

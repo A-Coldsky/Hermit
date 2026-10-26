@@ -7,7 +7,7 @@ import java.util.Objects;
 
 /**
  * Config audit. {@link #record} appends a row. {@link #page} reads it back as who/what/when:
- * actor, action, origin, shell, account, time, and field names. Secret values and the stored
+ * actor, action, origin, conch, account, time, and field names. Secret values and the stored
  * detail document are not part of the result.
  */
 public final class AuditLog {
@@ -30,12 +30,12 @@ public final class AuditLog {
     }
 
     /**
-     * Newest first ({@code at}, then {@code id}). Blank shell or account means no filter.
+     * Newest first ({@code at}, then {@code id}). Blank conch or account means no filter.
      * {@code page} is 1-based. {@code limit} is from 1 through {@link #MAX_LIMIT}.
      */
-    public static Page page(DataSource dataSource, String shell, String account, int page, int limit) {
+    public static Page page(DataSource dataSource, String conch, String account, int page, int limit) {
         Objects.requireNonNull(dataSource, "dataSource");
-        String shellFilter = shellFilter(shell);
+        String conchFilter = conchFilter(conch);
         String accountFilter = accountFilter(account);
         if (page < 1) {
             throw new IllegalArgumentException("page is out of range");
@@ -51,17 +51,17 @@ public final class AuditLog {
         }
         return Db.transaction(
                 dataSource,
-                connection -> ConfigAudit.page(connection, shellFilter, accountFilter, page, limit, offset));
+                connection -> ConfigAudit.page(connection, conchFilter, accountFilter, page, limit, offset));
     }
 
-    private static String shellFilter(String shell) {
-        if (shell == null || shell.isBlank()) {
+    private static String conchFilter(String conch) {
+        if (conch == null || conch.isBlank()) {
             return null;
         }
-        if (shell.length() > 256 || shell.indexOf('/') >= 0 || shell.indexOf('\\') >= 0 || hasControl(shell)) {
-            throw new IllegalArgumentException("shell is invalid");
+        if (conch.length() > 256 || conch.indexOf('/') >= 0 || conch.indexOf('\\') >= 0 || hasControl(conch)) {
+            throw new IllegalArgumentException("conch is invalid");
         }
-        return shell;
+        return conch;
     }
 
     private static String accountFilter(String account) {
@@ -87,7 +87,7 @@ public final class AuditLog {
             String actor,
             String action,
             String origin,
-            String shell,
+            String conch,
             String account,
             List<String> fields
     ) {

@@ -49,15 +49,15 @@ public class ReportIngestService {
             return;
         }
         jdbc.update(
-                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, shell, "
-                        + "shell_version, action, step_index, step_type, error_code, summary, occurred_at) "
+                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
+                        + "conch_version, action, step_index, step_type, error_code, summary, occurred_at) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(receivedAt),
                 batch.instanceId(),
                 batch.crabVersion(),
                 failure.traceId(),
-                failure.shell(),
-                failure.shellVersion(),
+                failure.conch(),
+                failure.conchVersion(),
                 failure.action(),
                 failure.stepIndex(),
                 failure.stepType(),
@@ -70,22 +70,22 @@ public class ReportIngestService {
         Timestamp hour = Timestamp.from(count.hourStart());
         int updated = jdbc.update(
                 "UPDATE hourly_counts SET success = ?, failure = ?, avg_millis = ?, p95_millis = ? "
-                        + "WHERE shell = ? AND shell_version = ? AND action = ? AND hour_start = ? AND instance_id = ?",
+                        + "WHERE conch = ? AND conch_version = ? AND action = ? AND hour_start = ? AND instance_id = ?",
                 count.success(),
                 count.failure(),
                 count.avgMillis(),
                 count.p95Millis(),
-                count.shell(),
-                count.shellVersion(),
+                count.conch(),
+                count.conchVersion(),
                 count.action(),
                 hour,
                 batch.instanceId());
         if (updated == 0) {
             jdbc.update(
-                    "INSERT INTO hourly_counts (shell, shell_version, action, hour_start, instance_id, success, "
+                    "INSERT INTO hourly_counts (conch, conch_version, action, hour_start, instance_id, success, "
                             + "failure, avg_millis, p95_millis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    count.shell(),
-                    count.shellVersion(),
+                    count.conch(),
+                    count.conchVersion(),
                     count.action(),
                     hour,
                     batch.instanceId(),
@@ -99,11 +99,11 @@ public class ReportIngestService {
     private void insertRollback(ReportBatch batch, RollbackEvent event, Instant receivedAt) {
         try {
             jdbc.update(
-                    "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
+                    "INSERT INTO rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
                             + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     Timestamp.from(receivedAt),
                     batch.instanceId(),
-                    event.shell(),
+                    event.conch(),
                     event.fromVersion(),
                     event.toVersion(),
                     event.reason(),

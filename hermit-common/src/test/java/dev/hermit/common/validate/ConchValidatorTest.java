@@ -1,0 +1,518 @@
+package dev.hermit.common.validate;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.Set;
+
+import org.junit.jupiter.api.Test;
+
+import dev.hermit.common.Fixtures;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.version.SemVer;
+
+class ConchValidatorTest {
+
+    @Test
+    void legacyOaHasNoErrorsAndWarnsOnUnknownRelated() {
+        ValidationResult result = Fixtures.validate("legacy_oa_valid.yaml");
+        assertThat(result.errors()).isEmpty();
+        assertThat(result.warnings()).extracting(ValidationIssue::code)
+                .containsExactly(ValidationCodes.UNKNOWN_RELATED, ValidationCodes.UNKNOWN_RELATED);
+        assertThat(result.warnings()).extracting(ValidationIssue::path)
+                .containsExactly("actions.list_todo.related[0]", "actions.list_todo.related[1]");
+    }
+
+    @Test
+    void rejectsTheIllegalFixtures() {
+        assertThat(codes(Fixtures.validate("missing_description.yaml")))
+                .containsExactly(ValidationCodes.MISSING_DESCRIPTION);
+        assertThat(Fixtures.validate("missing_description.yaml").errors().get(0).path())
+                .isEqualTo("actions.list_todo.description");
+
+        ValidationResult mapping = Fixtures.validate("mapping_output.yaml");
+        assertThat(codes(mapping)).containsExactly(ValidationCodes.MISSING_DESCRIPTION);
+        assertThat(mapping.errors().get(0).path()).isEqualTo("actions.list_todo.output.items");
+
+        ValidationResult plaintext = Fixtures.validate("plaintext_password.yaml");
+        assertThat(codes(plaintext)).containsExactly(ValidationCodes.PLAINTEXT_CREDENTIAL);
+        assertThat(plaintext.errors().get(0).path()).isEqualTo("auth.steps[2].form.password");
+
+        ValidationResult undeclared = Fixtures.validate("undeclared_credential.yaml");
+        assertThat(codes(undeclared)).containsExactly(ValidationCodes.UNDECLARED_CREDENTIAL);
+        assertThat(undeclared.errors().get(0).path()).isEqualTo("auth.steps[2].form.username");
+        assertThat(undeclared.errors().get(0).message()).contains("token");
+
+        ValidationResult unknown = Fixtures.validate("unknown_step.yaml");
+        assertThat(codes(unknown)).containsExactly(ValidationCodes.UNSUPPORTED_STEP);
+        assertThat(unknown.errors().get(0).path()).isEqualTo("actions.list_todo.steps[1]");
+    }
+
+    @Test
+    void section54MappingOutputCannotBePublished() {
+        ValidationResult result = ConchValidator.validate(ConchParser.parse("""
+                connector: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_agent_version: 1.0.0
+                base_url: "http://oa.intranet.local"
+                auth:
+                  steps:
+                    - request: { method: GET, path: /login.aspx }
+                actions:
+                  list_todo:
+                    description: 查询待办列表
+                    input:
+                      page: { type: integer, default: 1 }
+                    output:
+                      items: "{{items}}"
+                    idempotent: true
+                """), ConchValidator.Context.of(null));
+        assertThat(codes(result)).contains(
+                ValidationCodes.MISSING_TITLE,
+                ValidationCodes.MISSING_DESCRIPTION,
+                ValidationCodes.MISSING_CREDENTIALS,
+                ValidationCodes.MISSING_EXAMPLES);
+        assertThat(result.errors()).anyMatch(issue ->
+                issue.path().equals("actions.list_todo.output.items")
+                        && issue.code().equals(ValidationCodes.MISSING_DESCRIPTION));
+    }
+
+    @Test
+    void checksNamesDriverCredentialsVersionAndMetadata() {
+        ConchDoc doc = ConchParser.parse("""
+                conch: A
+                version: 2.0.0
+                driver: browser
+                min_crab_version: 1.2.0
+                credentials:
+                  username: { type: text, required: false }
+                actions:
+                  Bad:
+                    input:
+                      page: { type: integer }
+                    output: {}
+                    steps:
+                      - script: { source: "1" }
+                """);
+        ValidationResult result = ConchValidator.validate(doc, ConchValidator.Context.of(SemVer.parse("1.0.0")));
+        assertThat(codes(result)).contains(
+                ValidationCodes.CONCH_NAME,
+                ValidationCodes.DRIVER,
+                ValidationCodes.MISSING_TITLE,
+                ValidationCodes.MISSING_DESCRIPTION,
+                ValidationCodes.MIN_CRAB_VERSION,
+                ValidationCodes.ACTION_NAME,
+                ValidationCodes.MISSING_OUTPUT,
+                ValidationCodes.MISSING_EXAMPLES);
+        assertThat(result.warnings()).extracting(ValidationIssue::code)
+                .contains(ValidationCodes.MISSING_NOTES, ValidationCodes.MISSING_RELATED);
+        assertThat(result.errors()).anyMatch(issue -> issue.path().equals("actions.Bad.input.page"));
+
+        ValidationResult sameVersion = ConchValidator.validate(
+                withVersion(doc, "1.0.0"),
+                ConchValidator.Context.of(SemVer.parse("1.0.0")));
+        assertThat(codes(sameVersion)).doesNotContain(ValidationCodes.MIN_CRAB_VERSION);
+
+        ValidationResult skipped = ConchValidator.validate(doc, ConchValidator.Context.of(null));
+        assertThat(codes(skipped)).doesNotContain(ValidationCodes.MIN_CRAB_VERSION);
+
+        ValidationResult prerelease = ConchValidator.validate(
+                ConchParser.parse(minimal("conch: ab\ndriver: http\nmin_crab_version: 1.0.0")),
+                ConchValidator.Context.of(SemVer.parse("1.0.0-rc.1")));
+        assertThat(codes(prerelease)).contains(ValidationCodes.MIN_CRAB_VERSION);
+    }
+
+    @Test
+    void plaintextHeuristicSkipsTemplatesExtractNamesAndEmptyValues() {
+        ValidationResult result = ConchValidator.validate(ConchParser.parse("""
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: "{{credential.not_declared}}" }
+                        output: { items: x }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - extract:
+                          password: "variable-name-not-a-value"
+                          row:
+                            css: "td"
+                            token: "literal-token"
+                      - request:
+                          form:
+                            Password: "{{credential.password}}"
+                            api_key: ""
+                            apiKey: "{{input.token}}"
+                            secret: "literal-secret"
+                """), ConchValidator.Context.of(null));
+        assertThat(result.errors()).extracting(ValidationIssue::path).containsExactly(
+                "actions.list_todo.steps[0].row.token",
+                "actions.list_todo.steps[1].form.secret");
+        assertThat(result.errors()).extracting(ValidationIssue::code)
+                .containsOnly(ValidationCodes.PLAINTEXT_CREDENTIAL);
+    }
+
+    @Test
+    void plaintextCoversNumbersHeadersAndSkipsExtractSelectors() {
+        ValidationResult result = ConchValidator.validate(ConchParser.parse("""
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - request:
+                          headers:
+                            Authorization: "Basic xxx"
+                            Cookie: "sid=1"
+                          form:
+                            password: 123456
+                            token_enabled: true
+                      - extract:
+                          css: "div.password"
+                          attr: "data-token"
+                          row:
+                            css: "#id"
+                            attr: "href"
+                            authorization: "Bearer literal"
+                      - assert: { cookie_exists: ASP.NET_SessionId }
+                """), ConchValidator.Context.of(null));
+        assertThat(result.errors()).extracting(ValidationIssue::path).containsExactly(
+                "actions.list_todo.steps[0].headers.Authorization",
+                "actions.list_todo.steps[0].headers.Cookie",
+                "actions.list_todo.steps[0].form.password",
+                "actions.list_todo.steps[1].row.authorization");
+        assertThat(result.errors()).extracting(ValidationIssue::code)
+                .containsOnly(ValidationCodes.PLAINTEXT_CREDENTIAL);
+    }
+
+    @Test
+    void assertExistenceKeysAreNamesButCookiePrefixesElsewhereAreSecrets() {
+        ValidationResult result = ConchValidator.validate(ConchParser.parse(referencing("""
+                - assert:
+                    cookie_exists: ASP.NET_SessionId
+                    header_exists: X-Request-Id
+                - request:
+                    headers:
+                      cookie_value: "abc"
+                      authorization_token: "Bearer literal"
+                    form:
+                      cookie_exists: "not-a-name-here"
+                """)), ConchValidator.Context.of(null));
+        assertThat(result.errors()).extracting(ValidationIssue::path).containsExactly(
+                "actions.list_todo.steps[1].headers.cookie_value",
+                "actions.list_todo.steps[1].headers.authorization_token",
+                "actions.list_todo.steps[1].form.cookie_exists");
+        assertThat(result.errors()).extracting(ValidationIssue::code)
+                .containsOnly(ValidationCodes.PLAINTEXT_CREDENTIAL);
+    }
+
+    @Test
+    void outputTemplateMustNotReferenceCredentials() {
+        ValidationResult leaked = ConchValidator.validate(ConchParser.parse(conchWithOutput("""
+                      items:
+                        type: string
+                        description: 结果
+                        value: "{{credential.password}}"
+                """)), ConchValidator.Context.of(null));
+        assertThat(leaked.errors()).extracting(ValidationIssue::code)
+                .containsExactly(ValidationCodes.CREDENTIAL_IN_OUTPUT);
+        assertThat(leaked.errors().get(0).path()).isEqualTo("actions.list_todo.output.items");
+
+        ValidationResult viaDefault = ConchValidator.validate(ConchParser.parse(conchWithOutput("""
+                      token:
+                        type: string
+                        description: 令牌
+                        value: "id={{input.id | default(credential.password)}}"
+                """)), ConchValidator.Context.of(null));
+        assertThat(viaDefault.errors()).extracting(ValidationIssue::path)
+                .containsExactly("actions.list_todo.output.token");
+
+        ValidationResult allowed = ConchValidator.validate(ConchParser.parse(conchWithOutput("""
+                      items:
+                        type: string
+                        description: 结果
+                        value: "{{config.base_url}}"
+                """)), ConchValidator.Context.of(null));
+        assertThat(allowed.errors()).isEmpty();
+    }
+
+    @Test
+    void rejectsConfigSecretAndAllowsCredentialSecret() {
+        ValidationResult rejected = ConchValidator.validate(ConchParser.parse("""
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                config:
+                  access_value: { type: secret, label: Access value }
+                  page_size: { type: text, default: "20" }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - request: { path: "{{credential.password}}" }
+                """), ConchValidator.Context.of(null));
+        assertThat(rejected.errors())
+                .filteredOn(issue -> issue.code().equals(ValidationCodes.CONFIG_SECRET))
+                .singleElement()
+                .satisfies(issue -> {
+                    assertThat(issue.path()).isEqualTo("config.access_value.type");
+                    assertThat(issue.message()).isEqualTo("秘密要放在 credentials");
+                });
+        assertThat(rejected.warnings()).extracting(ValidationIssue::code)
+                .doesNotContain(ValidationCodes.CONFIG_SECRET);
+
+        ValidationResult credentialsOnly = ConchValidator.validate(ConchParser.parse("""
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                config:
+                  page_size: { type: text, default: "20" }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - request: { path: "{{credential.password}}" }
+                """), ConchValidator.Context.of(null));
+        assertThat(codes(credentialsOnly)).doesNotContain(ValidationCodes.CONFIG_SECRET);
+        assertThat(credentialsOnly.errors()).isEmpty();
+    }
+
+    @Test
+    void configBaseUrlIsAllowedWithoutADeclaration() {
+        ValidationResult allowed = ConchValidator.validate(ConchParser.parse(referencing("""
+                - request: { path: "{{config.base_url}}/home" }
+                """)), ConchValidator.Context.of(null));
+        assertThat(codes(allowed)).doesNotContain(ValidationCodes.UNDECLARED_CONFIG);
+
+        ValidationResult missing = ConchValidator.validate(ConchParser.parse(referencing("""
+                - request: { path: "{{config.page_size | default('20')}}" }
+                """)), ConchValidator.Context.of(null));
+        assertThat(missing.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.UNDECLARED_CONFIG) && issue.message().contains("page_size"));
+    }
+
+    @Test
+    void scriptCodeIsLiteralAndBounded() {
+        ValidationResult literal = ConchValidator.validate(ConchParser.parse(referencing("""
+                - script:
+                    code: |
+                      var raw = "{{credential.not_a_field}}";
+                      return { raw: raw };
+                    timeout_ms: 5000
+                """)), ConchValidator.Context.of(null));
+        assertThat(literal.errors()).isEmpty();
+
+        ValidationResult missing = ConchValidator.validate(ConchParser.parse(referencing("""
+                - script: { into: value }
+                """)), ConchValidator.Context.of(null));
+        assertThat(missing.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.SCRIPT_STEP) && issue.path().endsWith(".code"));
+
+        ValidationResult timeout = ConchValidator.validate(ConchParser.parse(referencing("""
+                - script: { code: "return { ok: 1 };", timeout_ms: 5001 }
+                """)), ConchValidator.Context.of(null));
+        assertThat(timeout.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.SCRIPT_STEP)
+                        && issue.path().endsWith(".timeout_ms")
+                        && !issue.message().contains("5001"));
+
+        String bulky = "a".repeat(64 * 1024 + 1);
+        ValidationResult oversized = ConchValidator.validate(ConchParser.parse(referencing("""
+                - script: { code: "%s" }
+                """.formatted(bulky))), ConchValidator.Context.of(null));
+        assertThat(oversized.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.SCRIPT_STEP)
+                        && issue.message().equals("脚本源码超过 64KB")
+                        && !issue.message().contains("aaa"));
+    }
+
+    @Test
+    void customStepTypesAndTemplateSyntax() {
+        ConchDoc doc = ConchParser.parse(referencing("""
+                - browse: { url: /x }
+                """));
+        ValidationResult custom = ConchValidator.validate(
+                doc, ConchValidator.Context.of(null, Set.of("browse")));
+        assertThat(codes(custom)).doesNotContain(ValidationCodes.UNSUPPORTED_STEP);
+
+        ValidationResult broken = ConchValidator.validate(ConchParser.parse(referencing("""
+                - request: { path: "{{input.page" }
+                """)), ConchValidator.Context.of(null));
+        assertThat(codes(broken)).contains(ValidationCodes.TEMPLATE_SYNTAX);
+    }
+
+    @Test
+    void nameLengthBoundaries() {
+        assertThat(codes(ConchValidator.validate(
+                ConchParser.parse(named("ab", "list_todo")), ConchValidator.Context.of(null))))
+                .doesNotContain(ValidationCodes.CONCH_NAME, ValidationCodes.ACTION_NAME);
+        String max = "a" + "b".repeat(63);
+        assertThat(max).hasSize(64);
+        assertThat(codes(ConchValidator.validate(
+                ConchParser.parse(named(max, max)), ConchValidator.Context.of(null))))
+                .doesNotContain(ValidationCodes.CONCH_NAME, ValidationCodes.ACTION_NAME);
+        assertThat(codes(ConchValidator.validate(
+                ConchParser.parse(named("a", "list-todo")), ConchValidator.Context.of(null))))
+                .contains(ValidationCodes.CONCH_NAME, ValidationCodes.ACTION_NAME);
+    }
+
+    private static ConchDoc withVersion(ConchDoc ignored, String min) {
+        return ConchParser.parse(minimal("min_crab_version: " + min + "\nconch: A\ndriver: browser"));
+    }
+
+    private static String minimal(String extra) {
+        return """
+                version: 1.0.0
+                credentials: {}
+                actions: {}
+                """ + extra + "\n";
+    }
+
+    private static String named(String conch, String action) {
+        return """
+                conch: %s
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  %s:
+                    title: 标题
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [%s]
+                """.formatted(conch, action, action);
+    }
+
+    private static String conchWithOutput(String output) {
+        String base = """
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - request: { path: "{{credential.password}}" }
+                    output:
+                """.stripIndent();
+        String indented = output.stripIndent().stripTrailing().replace("\n", "\n      ");
+        return base + "      " + indented + "\n";
+    }
+
+    private static String referencing(String steps) {
+        String base = """
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                """.stripIndent();
+        String indented = steps.stripIndent().stripTrailing().replace("\n", "\n      ");
+        return base + "      " + indented + "\n";
+    }
+
+    private static java.util.List<String> codes(ValidationResult result) {
+        return result.errors().stream().map(ValidationIssue::code).toList();
+    }
+}

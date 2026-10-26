@@ -35,7 +35,7 @@ export interface IssueHint {
 
 /** 校验码的说明。服务端 message 仍作为细节展示；未收录的码只显示 message。 */
 export const issueHints: Record<string, IssueHint> = {
-  SHELL_NAME: { title: 'Shell 名不合法', hint: '以小写字母开头，只含小写字母、数字和下划线，长 2 到 64 个字符。' },
+  CONCH_NAME: { title: '规则包名不合法', hint: '以小写字母开头，只含小写字母、数字和下划线，长 2 到 64 个字符。' },
   ACTION_NAME: { title: '能力名不合法', hint: '以小写字母开头，只含小写字母、数字和下划线，长 2 到 64 个字符。' },
   DRIVER: { title: '不支持的 driver', hint: '目前只支持 driver: http。' },
   MISSING_TITLE: { title: '缺少标题', hint: '补上 title，控制台和 MCP 工具列表会显示它。' },

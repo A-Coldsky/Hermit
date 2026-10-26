@@ -15,7 +15,7 @@ public record TideSummary(
             "p95Millis is the maximum of the per-row p95 values in the bucket and is approximate";
 
     public record TidePoint(
-            String shell,
+            String conch,
             String action,
             Instant bucketStart,
             long success,

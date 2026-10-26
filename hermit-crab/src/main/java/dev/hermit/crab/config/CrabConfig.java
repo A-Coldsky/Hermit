@@ -104,7 +104,7 @@ public record CrabConfig(
     public static void requireTarget(String target, String where) {
         int dot = target == null ? -1 : target.indexOf('.');
         if (target == null || dot <= 0 || dot != target.lastIndexOf('.') || dot == target.length() - 1) {
-            throw new IllegalArgumentException(where + " entries must be shell.action");
+            throw new IllegalArgumentException(where + " entries must be conch.action");
         }
     }
 

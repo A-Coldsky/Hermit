@@ -92,7 +92,7 @@ public class SecurityConfig {
                         .cacheControl(cache -> cache.disable())
                         .addHeaderWriter(cacheControlIfAbsent()))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.GET, "/", "/login", "/shells", "/shells/upload", "/shells/{shell}",
+                        .requestMatchers(HttpMethod.GET, "/", "/login", "/conches", "/conches/upload", "/conches/{conch}",
                                 "/tide", "/alerts", "/audit", "/settings", "/assets/**")
                         .permitAll()
                         .anyRequest().denyAll())

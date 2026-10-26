@@ -5,7 +5,7 @@ import java.util.Optional;
 
 public record SyncReport(
         boolean notModified,
-        List<ShellOutcome> shells,
+        List<ConchOutcome> conches,
         List<String> removed,
         List<CredentialDeclarationChange> credentialChanges,
         Optional<CrabRelease> latestCrab,
@@ -13,23 +13,23 @@ public record SyncReport(
 ) {
     public SyncReport(
             boolean notModified,
-            List<ShellOutcome> shells,
+            List<ConchOutcome> conches,
             List<String> removed,
             List<CredentialDeclarationChange> credentialChanges,
             Optional<CrabRelease> latestCrab
     ) {
-        this(notModified, shells, removed, credentialChanges, latestCrab, Optional.empty());
+        this(notModified, conches, removed, credentialChanges, latestCrab, Optional.empty());
     }
 
     public SyncReport {
-        shells = shells == null ? List.of() : List.copyOf(shells);
+        conches = conches == null ? List.of() : List.copyOf(conches);
         removed = removed == null ? List.of() : List.copyOf(removed);
         credentialChanges = credentialChanges == null ? List.of() : List.copyOf(credentialChanges);
         latestCrab = latestCrab == null ? Optional.empty() : latestCrab;
         error = error == null ? Optional.empty() : error;
     }
 
-    /** A completed attempt that could not reach Reef. Shell rows are empty so the previous success is not shown. */
+    /** A completed attempt that could not reach Reef. Conch rows are empty so the previous success is not shown. */
     public static SyncReport failed(SyncError error) {
         return new SyncReport(false, List.of(), List.of(), List.of(), Optional.empty(), Optional.of(error));
     }

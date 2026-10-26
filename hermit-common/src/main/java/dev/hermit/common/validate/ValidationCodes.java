@@ -2,7 +2,7 @@ package dev.hermit.common.validate;
 
 public final class ValidationCodes {
 
-    public static final String SHELL_NAME = "SHELL_NAME";
+    public static final String CONCH_NAME = "CONCH_NAME";
     public static final String ACTION_NAME = "ACTION_NAME";
     public static final String DRIVER = "DRIVER";
     public static final String MISSING_TITLE = "MISSING_TITLE";

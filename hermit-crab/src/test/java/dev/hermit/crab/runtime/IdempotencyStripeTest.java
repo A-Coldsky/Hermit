@@ -16,10 +16,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionManager;
-import dev.hermit.crab.engine.ShellRegistry;
+import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.secure.CredentialCipher;
 import dev.hermit.crab.secure.MasterKeyProvider;
 import dev.hermit.crab.store.AccountStore;
@@ -32,15 +32,15 @@ import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
-import dev.hermit.crab.store.ShellConfigStore;
+import dev.hermit.crab.store.ConchConfigStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 @Timeout(30)
 class IdempotencyStripeTest {
-    private static final String SHELL = """
-            shell: stripe_probe
+    private static final String CONCH = """
+            conch: stripe_probe
             version: 1.0.0
             driver: http
             min_crab_version: 1.0.0
@@ -79,19 +79,19 @@ class IdempotencyStripeTest {
                 Arrays.fill(masterKey, (byte) 0);
             }
             AccountStore accounts = new AccountStore(database.dataSource());
-            ShellRegistry registry = new ShellRegistry();
-            registry.put(ShellParser.parse(SHELL));
+            ConchRegistry registry = new ConchRegistry();
+            registry.put(ConchParser.parse(CONCH));
             accounts.create(Origin.OFFICIAL, "stripe_probe", "alice", Actors.CLI);
             Clock clock = Clock.systemUTC();
             Invoker invoker = new Invoker(
                     registry,
                     accounts,
                     new CredentialVault(database.dataSource(), cipher),
-                    new ShellConfigStore(database.dataSource()),
+                    new ConchConfigStore(database.dataSource()),
                     new RuleEngine(registry, sessions),
                     new CallLogStore(database.dataSource(), clock),
                     new IdempotencyStore(database.dataSource(), cipher, clock),
-                    (shell, action) -> false);
+                    (conch, action) -> false);
             assertThat(invoker.idempotencyStripes()).isEqualTo(64);
             assertThat(Integer.bitCount(invoker.idempotencyStripes())).isEqualTo(1);
             assertThat(Invoker.IDEMPOTENCY_STRIPES).isEqualTo(invoker.idempotencyStripes());

@@ -25,8 +25,8 @@ import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuil
 import org.apache.hc.core5.util.Timeout;
 
 /**
- * 每个 (origin, shell, account) 一把公平锁、一个客户端和一个 Cookie 存储。
- * 替换 Shell 版本不会清掉这里的会话。
+ * 每个 (origin, conch, account) 一把公平锁、一个客户端和一个 Cookie 存储。
+ * 替换 Conch 版本不会清掉这里的会话。
  */
 public final class SessionManager implements AutoCloseable {
 

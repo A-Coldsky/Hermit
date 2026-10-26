@@ -47,7 +47,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @Import(ReefTestConfig.class)
 class AlertEvaluationTest {
 
-    private static final String SHELL = "legacy_oa";
+    private static final String CONCH = "legacy_oa";
     private static final String INSTANCE = "123e4567-e89b-12d3-a456-426614174000";
     private static final Instant PUBLISHED = Instant.parse("2026-06-08T00:00:00Z");
     private static final String TOKEN = "tide-webhook-secret";
@@ -90,7 +90,7 @@ class AlertEvaluationTest {
         jdbc.update("DELETE FROM hourly_counts");
         jdbc.update("DELETE FROM rollback_events");
         jdbc.update("DELETE FROM audit_log");
-        jdbc.update("DELETE FROM shell_versions");
+        jdbc.update("DELETE FROM conch_versions");
         jdbc.update("DELETE FROM admin_users");
         jdbc.update(
                 "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
@@ -124,44 +124,44 @@ class AlertEvaluationTest {
 
     @Test
     void newVersionWithoutBaselineFiresOnCallCountAndStrictFailureRate() {
-        publish(SHELL, "1.1.0", PUBLISHED, true);
-        hour(SHELL, "1.1.0", PUBLISHED, 0, 19);
+        publish(CONCH, "1.1.0", PUBLISHED, true);
+        hour(CONCH, "1.1.0", PUBLISHED, 0, 19);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isZero();
 
         jdbc.update("DELETE FROM hourly_counts");
-        hour(SHELL, "1.1.0", PUBLISHED, 0, 20);
+        hour(CONCH, "1.1.0", PUBLISHED, 0, 20);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
 
         jdbc.update("DELETE FROM alerts");
         jdbc.update("DELETE FROM hourly_counts");
-        hour(SHELL, "1.1.0", PUBLISHED, 10, 10);
+        hour(CONCH, "1.1.0", PUBLISHED, 10, 10);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isZero();
 
         jdbc.update("DELETE FROM hourly_counts");
-        hour(SHELL, "1.1.0", PUBLISHED, 9, 11);
+        hour(CONCH, "1.1.0", PUBLISHED, 9, 11);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
     }
 
     @Test
     void regressionUsesThePreviousPublishedWindowAndIgnoresTrafficOutsideIt() {
-        publish(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofDays(7)), false);
-        publish(SHELL, "1.1.0", PUBLISHED, true);
-        hour(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofDays(8)), 0, 100);
-        hour(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofDays(1)), 20, 0);
-        hour(SHELL, "1.1.0", PUBLISHED.minus(Duration.ofHours(1)), 100, 0);
-        hour(SHELL, "1.1.0", PUBLISHED, 81, 19);
+        publish(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(7)), false);
+        publish(CONCH, "1.1.0", PUBLISHED, true);
+        hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(8)), 0, 100);
+        hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(1)), 20, 0);
+        hour(CONCH, "1.1.0", PUBLISHED.minus(Duration.ofHours(1)), 100, 0);
+        hour(CONCH, "1.1.0", PUBLISHED, 81, 19);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isZero();
 
         jdbc.update("DELETE FROM hourly_counts");
-        hour(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofDays(8)), 0, 100);
-        hour(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofDays(1)), 20, 0);
-        hour(SHELL, "1.1.0", PUBLISHED.minus(Duration.ofHours(1)), 100, 0);
-        hour(SHELL, "1.1.0", PUBLISHED, 80, 20);
+        hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(8)), 0, 100);
+        hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(1)), 20, 0);
+        hour(CONCH, "1.1.0", PUBLISHED.minus(Duration.ofHours(1)), 100, 0);
+        hour(CONCH, "1.1.0", PUBLISHED, 80, 20);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
         String detail = jdbc.queryForObject("SELECT detail_json FROM alerts", String.class);
@@ -173,65 +173,65 @@ class AlertEvaluationTest {
 
     @Test
     void previousVersionFollowsPublishTimeRatherThanSemver() {
-        publish(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofDays(2)), false);
-        publish(SHELL, "1.2.0", PUBLISHED.minus(Duration.ofDays(1)), false);
-        publish(SHELL, "1.1.0", PUBLISHED, true);
-        hour(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofHours(30)), 20, 0);
-        hour(SHELL, "1.2.0", PUBLISHED.minus(Duration.ofHours(20)), 0, 20);
-        hour(SHELL, "1.1.0", PUBLISHED, 0, 20);
+        publish(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(2)), false);
+        publish(CONCH, "1.2.0", PUBLISHED.minus(Duration.ofDays(1)), false);
+        publish(CONCH, "1.1.0", PUBLISHED, true);
+        hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofHours(30)), 20, 0);
+        hour(CONCH, "1.2.0", PUBLISHED.minus(Duration.ofHours(20)), 0, 20);
+        hour(CONCH, "1.1.0", PUBLISHED, 0, 20);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isZero();
     }
 
     @Test
     void shortBaselineDoesNotCountAsAZeroFailureBaseline() {
-        publish(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofDays(1)), false);
-        publish(SHELL, "1.1.0", PUBLISHED, true);
-        hour(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofHours(2)), 19, 0);
-        hour(SHELL, "1.1.0", PUBLISHED, 10, 10);
+        publish(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(1)), false);
+        publish(CONCH, "1.1.0", PUBLISHED, true);
+        hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofHours(2)), 19, 0);
+        hour(CONCH, "1.1.0", PUBLISHED, 10, 10);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isZero();
 
         jdbc.update("DELETE FROM hourly_counts");
         jdbc.update("DELETE FROM alerts");
-        hour(SHELL, "1.0.0", PUBLISHED.minus(Duration.ofHours(2)), 20, 0);
-        hour(SHELL, "1.1.0", PUBLISHED, 10, 10);
+        hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofHours(2)), 20, 0);
+        hour(CONCH, "1.1.0", PUBLISHED, 10, 10);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
     }
 
     @Test
-    void ruleMismatchSurgeFiresAtTenUnlessThisShellChangedWithinADay() {
-        failures(SHELL, "RULE_MISMATCH", 9, clock.instant());
+    void ruleMismatchSurgeFiresAtTenUnlessThisConchChangedWithinADay() {
+        failures(CONCH, "RULE_MISMATCH", 9, clock.instant());
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isZero();
 
-        failures(SHELL, "RULE_MISMATCH", 1, clock.instant());
+        failures(CONCH, "RULE_MISMATCH", 1, clock.instant());
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
 
         jdbc.update("DELETE FROM alerts");
-        publish(SHELL, "1.2.0", clock.instant().minus(Duration.ofHours(1)), true);
+        publish(CONCH, "1.2.0", clock.instant().minus(Duration.ofHours(1)), true);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isZero();
 
-        jdbc.update("DELETE FROM shell_versions");
-        audit("PUBLISH", SHELL, clock.instant().minus(Duration.ofHours(1)));
+        jdbc.update("DELETE FROM conch_versions");
+        audit("PUBLISH", CONCH, clock.instant().minus(Duration.ofHours(1)));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
 
         jdbc.update("DELETE FROM alerts");
         jdbc.update("DELETE FROM audit_log");
         jdbc.update(
-                "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
+                "INSERT INTO rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
                         + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                Timestamp.from(clock.instant()), INSTANCE, SHELL, "1.2.0", "1.1.0", "back",
+                Timestamp.from(clock.instant()), INSTANCE, CONCH, "1.2.0", "1.1.0", "back",
                 Timestamp.from(clock.instant()), "alert-rollback");
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
 
         jdbc.update("DELETE FROM alerts");
-        audit("ROLLBACK", SHELL, clock.instant().minus(Duration.ofHours(1)));
+        audit("ROLLBACK", CONCH, clock.instant().minus(Duration.ofHours(1)));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isZero();
 
@@ -243,43 +243,43 @@ class AlertEvaluationTest {
 
     @Test
     void quietWindowAndSurgeWindowAreInclusiveAtTheBoundary() {
-        failures(SHELL, "RULE_MISMATCH", 10, clock.instant().minus(Duration.ofMinutes(15)));
-        publish(SHELL, "1.2.0", clock.instant().minus(Duration.ofHours(24)), false);
+        failures(CONCH, "RULE_MISMATCH", 10, clock.instant().minus(Duration.ofMinutes(15)));
+        publish(CONCH, "1.2.0", clock.instant().minus(Duration.ofHours(24)), false);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isZero();
 
-        jdbc.update("UPDATE shell_versions SET published_at = ?",
+        jdbc.update("UPDATE conch_versions SET published_at = ?",
                 Timestamp.from(clock.instant().minus(Duration.ofHours(24)).minusSeconds(1)));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
 
         jdbc.update("DELETE FROM alerts");
         jdbc.update("DELETE FROM failure_reports");
-        failures(SHELL, "RULE_MISMATCH", 10, clock.instant().minus(Duration.ofMinutes(15)).minusSeconds(1));
+        failures(CONCH, "RULE_MISMATCH", 10, clock.instant().minus(Duration.ofMinutes(15)).minusSeconds(1));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isZero();
 
-        failures(SHELL, "UPSTREAM_ERROR", 10, clock.instant().minus(Duration.ofHours(1)));
+        failures(CONCH, "UPSTREAM_ERROR", 10, clock.instant().minus(Duration.ofHours(1)));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isZero();
     }
 
     @Test
     void upstreamSurgeFiresAtTenEvenAfterARecentPublish() {
-        failures(SHELL, "UPSTREAM_ERROR", 9, clock.instant());
+        failures(CONCH, "UPSTREAM_ERROR", 9, clock.instant());
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isZero();
 
-        failures(SHELL, "UPSTREAM_ERROR", 1, clock.instant());
-        publish(SHELL, "1.2.0", clock.instant().minus(Duration.ofMinutes(5)), true);
+        failures(CONCH, "UPSTREAM_ERROR", 1, clock.instant());
+        publish(CONCH, "1.2.0", clock.instant().minus(Duration.ofMinutes(5)), true);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT shell_version FROM alerts", String.class)).isNull();
+        assertThat(jdbc.queryForObject("SELECT conch_version FROM alerts", String.class)).isNull();
     }
 
     @Test
     void openAlertBlocksADuplicateForJustUnderSixHours() {
-        failures(SHELL, "UPSTREAM_ERROR", 10, clock.instant());
+        failures(CONCH, "UPSTREAM_ERROR", 10, clock.instant());
         alertService.evaluate();
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
@@ -297,7 +297,7 @@ class AlertEvaluationTest {
 
     @Test
     void ackRecordsTheAdminAndStaysSilentInsideTheDedupWindow() throws Exception {
-        failures(SHELL, "UPSTREAM_ERROR", 10, clock.instant());
+        failures(CONCH, "UPSTREAM_ERROR", 10, clock.instant());
         alertService.evaluate();
         long id = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
         String token = token();
@@ -347,7 +347,7 @@ class AlertEvaluationTest {
 
     @Test
     void webhookFailureDoesNotBlockTheAlertAndSuccessPostsTheNotice() throws Exception {
-        failures(SHELL, "UPSTREAM_ERROR", 10, clock.instant());
+        failures(CONCH, "UPSTREAM_ERROR", 10, clock.instant());
         int logStart = MemoryLogAppender.LINES.size();
         properties.setWebhookUrl("http://127.0.0.1:9/hook?token=" + TOKEN);
         alertService.evaluate();
@@ -387,7 +387,7 @@ class AlertEvaluationTest {
             long alertId = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
             assertThat(notice.get("id").asLong()).isEqualTo(alertId);
             assertThat(notice.get("kind").asText()).isEqualTo("UPSTREAM_ERROR_SURGE");
-            assertThat(notice.get("shell").asText()).isEqualTo(SHELL);
+            assertThat(notice.get("conch").asText()).isEqualTo(CONCH);
             assertThat(notice.get("version").isNull()).isTrue();
             assertThat(notice.get("detail").get("count").asLong()).isEqualTo(10);
             assertThat(notice.get("createdAt").asText()).isEqualTo(clock.instant().toString());
@@ -401,7 +401,7 @@ class AlertEvaluationTest {
 
     @Test
     void acknowledgedSurgeStaysSilentUntilTheDedupWindowEnds() throws Exception {
-        failures(SHELL, "UPSTREAM_ERROR", 10, clock.instant());
+        failures(CONCH, "UPSTREAM_ERROR", 10, clock.instant());
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<String> bodies = new CopyOnWriteArrayList<>();
         server.createContext("/hook", exchange -> {
@@ -423,7 +423,7 @@ class AlertEvaluationTest {
             assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
             assertThat(bodies).hasSize(1);
 
-            failures(SHELL, "UPSTREAM_ERROR", 20, clock.instant());
+            failures(CONCH, "UPSTREAM_ERROR", 20, clock.instant());
             alertService.evaluate();
             assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
             assertThat(bodies).hasSize(1);
@@ -461,8 +461,8 @@ class AlertEvaluationTest {
 
     @Test
     void acknowledgedRegressionStaysSilentUntilTheDedupWindowEnds() {
-        publish(SHELL, "1.1.0", PUBLISHED, true);
-        hour(SHELL, "1.1.0", PUBLISHED, 0, 20);
+        publish(CONCH, "1.1.0", PUBLISHED, true);
+        hour(CONCH, "1.1.0", PUBLISHED, 0, 20);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
         long id = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
@@ -482,16 +482,16 @@ class AlertEvaluationTest {
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(2);
     }
 
-    private void publish(String shell, String version, Instant publishedAt, boolean current) {
+    private void publish(String conch, String version, Instant publishedAt, boolean current) {
         jdbc.update(
-                "INSERT INTO shell_versions (shell, version, sha256, min_crab_version, package_path, status, "
+                "INSERT INTO conch_versions (conch, version, sha256, min_crab_version, package_path, status, "
                         + "uploaded_by, uploaded_at, published_by, published_at, is_current) "
                         + "VALUES (?, ?, ?, ?, ?, 'PUBLISHED', ?, ?, ?, ?, ?)",
-                shell,
+                conch,
                 version,
                 "ab".repeat(32),
                 "0.1.0",
-                "shells/" + shell + "-" + version + ".zip",
+                "conches/" + conch + "-" + version + ".zip",
                 TestSecrets.USERNAME,
                 Timestamp.from(publishedAt),
                 TestSecrets.USERNAME,
@@ -499,33 +499,33 @@ class AlertEvaluationTest {
                 current);
     }
 
-    private void hour(String shell, String version, Instant hour, long success, long failure) {
+    private void hour(String conch, String version, Instant hour, long success, long failure) {
         jdbc.update(
-                "INSERT INTO hourly_counts (shell, shell_version, action, hour_start, instance_id, success, failure, "
+                "INSERT INTO hourly_counts (conch, conch_version, action, hour_start, instance_id, success, failure, "
                         + "avg_millis, p95_millis) VALUES (?, ?, 'list_todo', ?, ?, ?, ?, 1, 1)",
-                shell, version, Timestamp.from(hour), INSTANCE, success, failure);
+                conch, version, Timestamp.from(hour), INSTANCE, success, failure);
     }
 
-    private void failures(String shell, String errorCode, int count, Instant occurredAt) {
+    private void failures(String conch, String errorCode, int count, Instant occurredAt) {
         for (int i = 0; i < count; i++) {
             traceSeq++;
             jdbc.update(
-                    "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, shell, "
-                            + "shell_version, action, step_index, step_type, error_code, summary, occurred_at) "
+                    "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
+                            + "conch_version, action, step_index, step_type, error_code, summary, occurred_at) "
                             + "VALUES (?, ?, '1.2.3', ?, ?, '1.0.0', 'list_todo', 1, 'extract', ?, 's', ?)",
                     Timestamp.from(clock.instant()),
                     INSTANCE,
                     errorCode + "-" + traceSeq,
-                    shell,
+                    conch,
                     errorCode,
                     Timestamp.from(occurredAt));
         }
     }
 
-    private void audit(String action, String shell, Instant at) {
+    private void audit(String action, String conch, Instant at) {
         jdbc.update(
-                "INSERT INTO audit_log (at, actor, action, shell, version, detail) VALUES (?, ?, ?, ?, ?, ?)",
-                Timestamp.from(at), TestSecrets.USERNAME, action, shell, "1.0.0", action.toLowerCase());
+                "INSERT INTO audit_log (at, actor, action, conch, version, detail) VALUES (?, ?, ?, ?, ?, ?)",
+                Timestamp.from(at), TestSecrets.USERNAME, action, conch, "1.0.0", action.toLowerCase());
     }
 
     private int alertCount(AlertKind kind) {

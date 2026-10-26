@@ -12,7 +12,7 @@ import dev.hermit.crab.gateway.CrabHttpServer;
 import dev.hermit.crab.store.CrabPaths;
 
 /**
- * Serve lifecycle. Installed shells are verified before HTTP listens. Sync and report loops start
+ * Serve lifecycle. Installed conches are verified before HTTP listens. Sync and report loops start
  * after the port is open, and the first sync does not block the caller. Shutdown stops report,
  * then sync, then HTTP, then the runtime.
  */
@@ -48,7 +48,7 @@ public final class CrabServer implements AutoCloseable {
     }
 
     public static CrabServer start(CrabRuntime runtime) {
-        runtime.loadInstalledShells();
+        runtime.loadInstalledConches();
         CrabHttpServer http = new CrabHttpServer(runtime);
         ScheduledExecutorService syncScheduler = null;
         ScheduledExecutorService reportScheduler = null;
@@ -57,9 +57,9 @@ public final class CrabServer implements AutoCloseable {
             http.start();
             started = true;
             runtime.startBackground();
-            if (runtime.shellSync() != null) {
+            if (runtime.conchSync() != null) {
                 syncScheduler = scheduler("hermit-crab-sync");
-                runtime.shellSync().start(syncScheduler);
+                runtime.conchSync().start(syncScheduler);
                 syncScheduler.execute(runtime::syncQuietly);
             }
             if (runtime.reportSender() != null) {

@@ -91,7 +91,7 @@ class ConfigAuditReadTest {
         AuditLog.Entry credentials = find(page, "CREDENTIALS_WRITTEN", "alice");
         assertThat(credentials.fields()).contains("password", "token");
         assertThat(credentials.origin()).isEqualTo("OFFICIAL");
-        assertThat(credentials.shell()).isEqualTo("oa");
+        assertThat(credentials.conch()).isEqualTo("oa");
         assertThat(credentials.actor()).isEqualTo(Actors.CLI);
 
         AuditLog.Entry poisoned = find(page, "CREDENTIALS_WRITTEN", "alice");
@@ -105,31 +105,31 @@ class ConfigAuditReadTest {
                 .filter(entry -> "CONFIG_PUT".equals(entry.action()) && entry.fields().isEmpty())
                 .findFirst()
                 .orElseThrow();
-        assertThat(raw.shell()).isEqualTo("oa");
+        assertThat(raw.conch()).isEqualTo("oa");
         assertThat(raw.account()).isNull();
 
         AuditLog.Entry declaration = find(page, "CREDENTIAL_DECLARATION", null);
         assertThat(declaration.origin()).isNull();
-        assertThat(declaration.shell()).isEqualTo("oa");
+        assertThat(declaration.conch()).isEqualTo("oa");
         assertThat(declaration.fields()).containsExactly("otp", "pin");
 
         AuditLog.Entry apiKey = find(page, "API_KEY_CREATED", null);
-        assertThat(apiKey.shell()).isNull();
+        assertThat(apiKey.conch()).isNull();
         assertThat(apiKey.account()).isNull();
         assertThat(apiKey.fields()).isEmpty();
 
         AuditLog.Entry capability = find(page, "CAPABILITY_DISABLED", null);
-        assertThat(capability.shell()).isEqualTo("oa");
+        assertThat(capability.conch()).isEqualTo("oa");
         assertThat(capability.account()).isNull();
         assertThat(capability.fields()).containsExactly("list_todo");
 
         assertThat(find(page, "DEBUG_CHANGED", null).fields()).isEmpty();
-        assertThat(find(page, "SYNC_REQUESTED", null).shell()).isNull();
+        assertThat(find(page, "SYNC_REQUESTED", null).conch()).isNull();
         assertThat(poisoned).isNotNull();
     }
 
     @Test
-    void filtersByShellAndAccountAndPagesNewestFirst() throws Exception {
+    void filtersByConchAndAccountAndPagesNewestFirst() throws Exception {
         Instant tie = Instant.parse("2024-01-01T00:00:00Z");
         insert(tie, Actors.CLI, "CONFIG_PUT", "OFFICIAL/oa", "{\"key\":\"first\"}");
         insert(tie, Actors.CLI, "CONFIG_PUT", "OFFICIAL/oa", "{\"key\":\"second\"}");
@@ -158,7 +158,7 @@ class ConfigAuditReadTest {
         assertThat(tied.entries().get(3).account()).isEqualTo("alice");
         assertThat(tied.entries().get(4).fields()).containsExactly("second");
         assertThat(tied.entries().get(5).fields()).containsExactly("first");
-        assertThat(tied.entries()).extracting(AuditLog.Entry::shell).containsOnly("oa");
+        assertThat(tied.entries()).extracting(AuditLog.Entry::conch).containsOnly("oa");
 
         AuditLog.Page alice = AuditLog.page(fixture.dataSource, "oa", "alice", 1, 50);
         assertThat(alice.total()).isEqualTo(1);
@@ -173,7 +173,7 @@ class ConfigAuditReadTest {
 
         AuditLog.Page extra = AuditLog.page(fixture.dataSource, "oa_extra", null, 1, 50);
         assertThat(extra.total()).isEqualTo(1);
-        assertThat(extra.entries().get(0).shell()).isEqualTo("oa_extra");
+        assertThat(extra.entries().get(0).conch()).isEqualTo("oa_extra");
 
         AuditLog.Page first = AuditLog.page(fixture.dataSource, "oa", null, 1, 2);
         AuditLog.Page second = AuditLog.page(fixture.dataSource, "oa", null, 2, 2);
@@ -196,7 +196,7 @@ class ConfigAuditReadTest {
                 .hasMessage("limit is out of range");
         assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, "oa/extra", null, 1, 10))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("shell is invalid");
+                .hasMessage("conch is invalid");
         assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, null, "bad name", 1, 10))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("account name");

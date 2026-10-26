@@ -9,7 +9,7 @@ import java.util.function.Function;
 
 /**
  * Local Crab directories. The root defaults to {@code ~/.hermit}; tests pass a temporary root.
- * {@code shells}, {@code local-shells}, {@code data}, and {@code logs} are created on first use.
+ * {@code conches}, {@code local-conches}, {@code data}, and {@code logs} are created on first use.
  */
 public final class CrabPaths {
     private final Path root;
@@ -44,12 +44,12 @@ public final class CrabPaths {
         return root;
     }
 
-    public Path shells() {
-        return directory("shells");
+    public Path conches() {
+        return directory("conches");
     }
 
-    public Path localShells() {
-        return directory("local-shells");
+    public Path localConches() {
+        return directory("local-conches");
     }
 
     public Path data() {

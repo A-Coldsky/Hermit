@@ -25,7 +25,7 @@ describe('Crab 配置审计', () => {
     expect(wrapper.text()).toContain('没有记录')
   })
 
-  it('显示操作名、来源、Shell/账号和字段名', async () => {
+  it('显示操作名、来源、规则包/账号和字段名', async () => {
     crab.audit.mockResolvedValue({
       entries: [
         {
@@ -34,7 +34,7 @@ describe('Crab 配置审计', () => {
           actor: 'console',
           action: 'CREDENTIALS_WRITTEN',
           origin: 'OFFICIAL',
-          shell: 'legacy_oa',
+          conch: 'legacy_oa',
           account: 'zhangsan',
           fields: ['password', 'username'],
         },
@@ -53,7 +53,7 @@ describe('Crab 配置审计', () => {
     expect(text).toContain('password, username')
   })
 
-  it('按 Shell 和账号筛选时从第一页查', async () => {
+  it('按规则包和账号筛选时从第一页查', async () => {
     crab.audit.mockResolvedValue({ entries: [], page: 1, limit: 50, total: 0 })
     const wrapper = await mountPage(AuditView)
     await flushPromises()
@@ -62,6 +62,6 @@ describe('Crab 配置审计', () => {
     await inputs[1].setValue('zhangsan')
     await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
     await flushPromises()
-    expect(crab.audit).toHaveBeenLastCalledWith({ shell: 'legacy_oa', account: 'zhangsan', page: 1, limit: 50 })
+    expect(crab.audit).toHaveBeenLastCalledWith({ conch: 'legacy_oa', account: 'zhangsan', page: 1, limit: 50 })
   })
 })

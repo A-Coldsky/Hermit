@@ -27,7 +27,7 @@ export interface ActionChange {
   mcp: boolean
 }
 
-export interface ShellDiff {
+export interface ConchDiff {
   addedActions: string[]
   removedActions: string[]
   changedActions: ActionChange[]
@@ -40,16 +40,16 @@ export interface ShellDiff {
   newRequiredCredentials: string[]
 }
 
-export interface ShellAvailability {
-  shell: string
+export interface ConchAvailability {
+  conch: string
   disabled: boolean
   disabledAt: string | null
   disabledBy: string | null
   disabledReason: string | null
 }
 
-export interface ShellSummary {
-  shell: string
+export interface ConchSummary {
+  conch: string
   version: string | null
   title: string
   description: string
@@ -85,8 +85,8 @@ export interface Capability {
   mcp: { expose: boolean; readOnly: boolean; destructive: boolean }
 }
 
-export interface ShellDetail {
-  shell: string
+export interface ConchDetail {
+  conch: string
   version: string
   driver: string
   minCrabVersion: string
@@ -105,7 +105,7 @@ export interface ShellDetail {
   disabledReason: string | null
 }
 
-export interface ShellVersion {
+export interface ConchVersion {
   version: string
   status: 'UPLOADED' | 'PUBLISHED' | string
   uploadedBy: string
@@ -118,14 +118,14 @@ export interface ShellVersion {
 }
 
 export interface UploadResult {
-  shell: string
+  conch: string
   version: string
   warnings: ValidationIssue[]
-  diff: Partial<ShellDiff>
+  diff: Partial<ConchDiff>
 }
 
 export interface TidePoint {
-  shell: string
+  conch: string
   action: string
   bucketStart: string
   success: number
@@ -144,8 +144,8 @@ export interface TideSummary {
 }
 
 export interface FailureGroup {
-  shell: string
-  shellVersion: string
+  conch: string
+  conchVersion: string
   action: string
   stepIndex: number | null
   stepType: string | null
@@ -164,7 +164,7 @@ export interface VersionStats {
 export interface RollbackEvent {
   id: number
   instanceId: string
-  shell: string
+  conch: string
   fromVersion: string
   toVersion: string
   reason: string
@@ -176,8 +176,8 @@ export interface Alert {
   id: number
   createdAt: string
   kind: string
-  shell: string
-  shellVersion: string | null
+  conch: string
+  conchVersion: string | null
   detail: Record<string, unknown> | null
   acknowledgedAt: string | null
   acknowledgedBy: string | null
@@ -188,7 +188,7 @@ export interface AuditEntry {
   at: string
   actor: string
   action: string
-  shell: string | null
+  conch: string | null
   version: string | null
   detail: string | null
 }
@@ -212,44 +212,44 @@ export const api = {
   me: () => http.get<{ username: string }>('/api/admin/me'),
   signingKey: () => http.get<{ publicKey: string }>('/api/admin/signing-key'),
 
-  shells: () => http.get<ShellSummary[]>('/api/admin/shells'),
-  shell: (shell: string) => http.get<ShellDetail>(`/api/admin/shells/${seg(shell)}`),
-  versions: (shell: string) => http.get<ShellVersion[]>(`/api/admin/shells/${seg(shell)}/versions`),
-  yaml: (shell: string, version: string) =>
-    http.text(`/api/admin/shells/${seg(shell)}/versions/${seg(version)}/yaml`),
-  diff: (shell: string, from?: string, to?: string) =>
-    http.get<ShellDiff>(`/api/admin/shells/${seg(shell)}/diff`, { from, to }),
+  conches: () => http.get<ConchSummary[]>('/api/admin/conches'),
+  conch: (conch: string) => http.get<ConchDetail>(`/api/admin/conches/${seg(conch)}`),
+  versions: (conch: string) => http.get<ConchVersion[]>(`/api/admin/conches/${seg(conch)}/versions`),
+  yaml: (conch: string, version: string) =>
+    http.text(`/api/admin/conches/${seg(conch)}/versions/${seg(version)}/yaml`),
+  diff: (conch: string, from?: string, to?: string) =>
+    http.get<ConchDiff>(`/api/admin/conches/${seg(conch)}/diff`, { from, to }),
   upload: (file: File) => {
     const form = new FormData()
     form.append('file', file)
-    return http.upload<UploadResult>('/api/admin/shells', form)
+    return http.upload<UploadResult>('/api/admin/conches', form)
   },
-  publish: (shell: string, version: string) =>
-    http.post<{ shell: string; version: string }>(
-      `/api/admin/shells/${seg(shell)}/versions/${seg(version)}/publish`,
+  publish: (conch: string, version: string) =>
+    http.post<{ conch: string; version: string }>(
+      `/api/admin/conches/${seg(conch)}/versions/${seg(version)}/publish`,
     ),
-  rollback: (shell: string, version: string) =>
-    http.post<{ shell: string; from: string | null; to: string }>(`/api/admin/shells/${seg(shell)}/rollback`, {
+  rollback: (conch: string, version: string) =>
+    http.post<{ conch: string; from: string | null; to: string }>(`/api/admin/conches/${seg(conch)}/rollback`, {
       version,
     }),
-  disableShell: (shell: string, reason: string) =>
-    http.post<ShellAvailability>(`/api/admin/shells/${seg(shell)}/disable`, { reason }),
-  enableShell: (shell: string, reason: string) =>
-    http.post<ShellAvailability>(`/api/admin/shells/${seg(shell)}/enable`, { reason }),
+  disableConch: (conch: string, reason: string) =>
+    http.post<ConchAvailability>(`/api/admin/conches/${seg(conch)}/disable`, { reason }),
+  enableConch: (conch: string, reason: string) =>
+    http.post<ConchAvailability>(`/api/admin/conches/${seg(conch)}/enable`, { reason }),
 
-  tideSummary: (query: { shell?: string; from?: string; to?: string; bucket?: string }) =>
+  tideSummary: (query: { conch?: string; from?: string; to?: string; bucket?: string }) =>
     http.get<TideSummary>('/api/admin/tide/summary', query),
-  tideFailures: (query: { shell?: string; version?: string; action?: string; from?: string; to?: string }) =>
+  tideFailures: (query: { conch?: string; version?: string; action?: string; from?: string; to?: string }) =>
     http.get<{ groups: FailureGroup[] }>('/api/admin/tide/failures', query),
-  tideCompare: (shell: string, versions?: string) =>
-    http.get<{ shell: string; versions: VersionStats[] }>('/api/admin/tide/compare', { shell, versions }),
-  tideRollbacks: (query: { shell?: string; from?: string; to?: string }) =>
+  tideCompare: (conch: string, versions?: string) =>
+    http.get<{ conch: string; versions: VersionStats[] }>('/api/admin/tide/compare', { conch, versions }),
+  tideRollbacks: (query: { conch?: string; from?: string; to?: string }) =>
     http.get<{ events: RollbackEvent[] }>('/api/admin/tide/rollbacks', query),
 
   alerts: (status?: 'open' | 'all') => http.get<{ alerts: Alert[] }>('/api/admin/alerts', { status }),
   ackAlert: (id: number) => http.post<Alert>(`/api/admin/alerts/${id}/ack`),
 
-  audit: (query: { shell?: string | undefined; page: number; size: number }) => http.get<AuditPage>('/api/admin/audit', query),
+  audit: (query: { conch?: string | undefined; page: number; size: number }) => http.get<AuditPage>('/api/admin/audit', query),
 
   purgeRetention: () => http.post<PurgeCounts>('/api/admin/retention/purge'),
 }

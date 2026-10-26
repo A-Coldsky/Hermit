@@ -10,7 +10,7 @@ import java.util.concurrent.TimeoutException;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.common.model.Action;
-import dev.hermit.crab.sync.DisabledShells;
+import dev.hermit.crab.sync.DisabledConches;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
@@ -81,11 +81,11 @@ final class McpCalls {
             }
             return toolError("INVALID_INPUT", "query is required");
         }
-        Object shell = arguments.get("shell");
-        if (shell != null && !(shell instanceof String)) {
-            return toolError("INVALID_INPUT", "invalid shell");
+        Object conch = arguments.get("conch");
+        if (conch != null && !(conch instanceof String)) {
+            return toolError("INVALID_INPUT", "invalid conch");
         }
-        return ok(catalog.search(principal, text, shell instanceof String name ? name : null));
+        return ok(catalog.search(principal, text, conch instanceof String name ? name : null));
     }
 
     private McpSchema.CallToolResult describe(ApiKeyPrincipal principal, Map<String, Object> arguments) {
@@ -191,31 +191,31 @@ final class McpCalls {
     }
 
     /**
-     * A tool name is {@code shell__action}. A disabled shell is reported as {@code SHELL_DISABLED}
-     * unless a longer loaded shell name owns that prefix.
+     * A tool name is {@code conch__action}. A disabled conch is reported as {@code CONCH_DISABLED}
+     * unless a longer loaded conch name owns that prefix.
      */
     private McpSchema.CallToolResult missingTool(String toolName) {
-        String disabled = longestShellPrefix(toolName, runtime.disabledShells().names());
+        String disabled = longestConchPrefix(toolName, runtime.disabledConches().names());
         if (disabled != null) {
-            String live = longestShellPrefix(toolName, runtime.registry().snapshot().keySet());
+            String live = longestConchPrefix(toolName, runtime.registry().snapshot().keySet());
             if (live == null || live.length() <= disabled.length()) {
-                return toolError("SHELL_DISABLED", DisabledShells.CALL_MESSAGE);
+                return toolError("CONCH_DISABLED", DisabledConches.CALL_MESSAGE);
             }
         }
         return toolError("NOT_FOUND", "not found");
     }
 
-    private static String longestShellPrefix(String toolName, Set<String> shells) {
-        if (toolName == null || shells == null) {
+    private static String longestConchPrefix(String toolName, Set<String> conches) {
+        if (toolName == null || conches == null) {
             return null;
         }
         String best = null;
-        for (String shell : shells) {
-            if (shell == null || shell.isEmpty()) {
+        for (String conch : conches) {
+            if (conch == null || conch.isEmpty()) {
                 continue;
             }
-            if (toolName.startsWith(shell + "__") && (best == null || shell.length() > best.length())) {
-                best = shell;
+            if (toolName.startsWith(conch + "__") && (best == null || conch.length() > best.length())) {
+                best = conch;
             }
         }
         return best;
@@ -232,7 +232,7 @@ final class McpCalls {
         try {
             outcome = runtime.invoker().invoke(
                     principal,
-                    ref.shell().shell(),
+                    ref.conch().conch(),
                     ref.action().name(),
                     input,
                     account,

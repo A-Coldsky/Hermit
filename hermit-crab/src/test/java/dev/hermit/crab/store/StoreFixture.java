@@ -13,7 +13,7 @@ final class StoreFixture implements AutoCloseable {
     final javax.sql.DataSource dataSource;
     final AccountStore accounts;
     final CredentialVault vault;
-    final ShellConfigStore config;
+    final ConchConfigStore config;
     final ApiKeyService apiKeys;
 
     private StoreFixture(
@@ -21,7 +21,7 @@ final class StoreFixture implements AutoCloseable {
             CrabDatabase database,
             AccountStore accounts,
             CredentialVault vault,
-            ShellConfigStore config,
+            ConchConfigStore config,
             ApiKeyService apiKeys
     ) {
         this.paths = paths;
@@ -45,7 +45,7 @@ final class StoreFixture implements AutoCloseable {
                         database,
                         new AccountStore(database.dataSource()),
                         new CredentialVault(database.dataSource(), cipher),
-                        new ShellConfigStore(database.dataSource()),
+                        new ConchConfigStore(database.dataSource()),
                         new ApiKeyService(database.dataSource()));
             } finally {
                 Arrays.fill(key, (byte) 0);

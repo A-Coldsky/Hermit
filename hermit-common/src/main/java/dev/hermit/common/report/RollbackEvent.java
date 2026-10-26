@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.Objects;
 
 public record RollbackEvent(
-        String shell,
+        String conch,
         String fromVersion,
         String toVersion,
         String reason,
@@ -12,7 +12,7 @@ public record RollbackEvent(
         String eventId
 ) {
     public RollbackEvent {
-        Objects.requireNonNull(shell, "shell");
+        Objects.requireNonNull(conch, "conch");
         Objects.requireNonNull(fromVersion, "fromVersion");
         Objects.requireNonNull(toVersion, "toVersion");
         Objects.requireNonNull(reason, "reason");

@@ -4,7 +4,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, errorCodeLabels, formatTime, millis, notifyError } from '@shared/format'
-import { api, type CallDetail, type CallSummary, type ShellSummary } from '../api'
+import { api, type CallDetail, type CallSummary, type ConchSummary } from '../api'
 import { originLabels, stepTypeLabels } from '../labels'
 
 const route = useRoute()
@@ -12,8 +12,8 @@ const router = useRouter()
 
 const loading = ref(true)
 const calls = ref<CallSummary[]>([])
-const shells = ref<ShellSummary[]>([])
-const filter = reactive({ shell: '', action: '', limit: 100, failedOnly: route.query.failed === '1' })
+const conches = ref<ConchSummary[]>([])
+const filter = reactive({ conch: '', action: '', limit: 100, failedOnly: route.query.failed === '1' })
 const page = reactive({ current: 1, size: 20 })
 const drawer = reactive({ open: false, loading: false, call: null as CallDetail | null })
 
@@ -35,7 +35,7 @@ async function load() {
   loading.value = true
   try {
     calls.value = (
-      await api.calls({ shell: filter.shell || undefined, action: filter.action.trim() || undefined, limit: filter.limit })
+      await api.calls({ conch: filter.conch || undefined, action: filter.action.trim() || undefined, limit: filter.limit })
     ).calls
   } catch (error) {
     notifyError(error)
@@ -86,13 +86,13 @@ watch(
   },
 )
 
-watch(() => [filter.shell, filter.limit], load)
+watch(() => [filter.conch, filter.limit], load)
 watch(() => [filter.failedOnly, calls.value], () => (page.current = 1))
 
 onMounted(async () => {
   void load()
   try {
-    shells.value = (await api.shells()).shells
+    conches.value = (await api.conches()).conches
   } catch {
     // 下拉选项缺失不影响列表
   }
@@ -107,8 +107,8 @@ onMounted(async () => {
 
     <div class="hm-card">
       <div class="hm-toolbar">
-        <el-select v-model="filter.shell" placeholder="全部 Shell" clearable class="pick">
-          <el-option v-for="s in shells" :key="s.shell" :label="s.shell" :value="s.shell" />
+        <el-select v-model="filter.conch" placeholder="全部规则包" clearable class="pick">
+          <el-option v-for="s in conches" :key="s.conch" :label="s.conch" :value="s.conch" />
         </el-select>
         <el-input v-model="filter.action" placeholder="能力名" clearable class="pick" @keyup.enter="load" @clear="load" />
         <el-select v-model="filter.limit" class="limit">
@@ -137,8 +137,8 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="能力" min-width="200">
           <template #default="{ row }">
-            <span class="mono">{{ row.shell }}.{{ row.action }}</span>
-            <span class="mono hm-muted"> v{{ row.shellVersion }}</span>
+            <span class="mono">{{ row.conch }}.{{ row.action }}</span>
+            <span class="mono hm-muted"> v{{ row.conchVersion }}</span>
           </template>
         </el-table-column>
         <el-table-column label="账号" width="120">
@@ -195,7 +195,7 @@ onMounted(async () => {
             <dt>时间</dt>
             <dd>{{ formatTime(drawer.call.at) }}</dd>
             <dt>能力</dt>
-            <dd class="mono">{{ drawer.call.shell }}.{{ drawer.call.action }} v{{ drawer.call.shellVersion }}</dd>
+            <dd class="mono">{{ drawer.call.conch }}.{{ drawer.call.action }} v{{ drawer.call.conchVersion }}</dd>
             <dt>来源</dt>
             <dd>{{ originLabels[drawer.call.origin] ?? drawer.call.origin }}</dd>
             <dt>账号</dt>

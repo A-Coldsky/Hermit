@@ -7,7 +7,7 @@ public record AuditEntry(
         Instant at,
         String actor,
         String action,
-        String shell,
+        String conch,
         String version,
         String detail) {
 }

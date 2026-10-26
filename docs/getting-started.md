@@ -48,11 +48,11 @@ TOKEN=$(jq -n '{username:env.HERMIT_REEF_ADMIN_USER,password:env.HERMIT_REEF_ADM
 curl -fsS "$REEF_URL/api/admin/signing-key" -H "Authorization: Bearer $TOKEN" \
   | jq -er '.data.publicKey' > "$HERMIT_HOME/reef.pub"
 
-curl -fsS -X POST "$REEF_URL/api/admin/shells" \
+curl -fsS -X POST "$REEF_URL/api/admin/conches" \
   -H "Authorization: Bearer $TOKEN" \
   -F 'file=@hermit-common/src/main/resources/samples/legacy_oa.yaml'
 
-curl -fsS -X POST "$REEF_URL/api/admin/shells/legacy_oa/versions/1.0.0/publish" \
+curl -fsS -X POST "$REEF_URL/api/admin/conches/legacy_oa/versions/1.0.0/publish" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -85,7 +85,7 @@ CP="hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT.jar:$(cat hermit-crab/target/c
 java -cp "$CP" dev.hermit.crab.CrabMain serve
 ```
 
-浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。Crab 启动时后台同步，可从本机控制台手动同步；同步失败不一定导致进程退出，应检查返回的各 Shell 结果。Reef 连不上时，手动同步返回 502 `UPSTREAM_ERROR`，并在同步状态里留下失败原因，而不是继续显示上次成功。
+浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。Crab 启动时后台同步，可从本机控制台手动同步；同步失败不一定导致进程退出，应检查返回的各 Conch 结果。Reef 连不上时，手动同步返回 502 `UPSTREAM_ERROR`，并在同步状态里留下失败原因，而不是继续显示上次成功。
 
 ## 5. 同步、创建账号/API Key、配置老系统
 
@@ -94,14 +94,14 @@ java -cp "$CP" dev.hermit.crab.CrabMain serve
 ```bash
 export CRAB_URL=http://127.0.0.1:7777
 curl -fsS -X POST "$CRAB_URL/console/api/sync" -H 'X-Hermit-Console: 1'
-curl -fsS "$CRAB_URL/console/api/shells" -H 'X-Hermit-Console: 1'
+curl -fsS "$CRAB_URL/console/api/conches" -H 'X-Hermit-Console: 1'
 
 API_KEY=$(curl -fsS -X POST "$CRAB_URL/console/api/apikeys" \
   -H 'X-Hermit-Console: 1' -H 'Content-Type: application/json' \
-  -d '{"name":"demo-read","shells":["legacy_oa"],"actions":["legacy_oa.list_todo"],"readOnly":true}' \
+  -d '{"name":"demo-read","conches":["legacy_oa"],"actions":["legacy_oa.list_todo"],"readOnly":true}' \
   | jq -er '.data.plaintext')
 
-curl -fsS -X POST "$CRAB_URL/console/api/shells/legacy_oa/accounts" \
+curl -fsS -X POST "$CRAB_URL/console/api/conches/legacy_oa/accounts" \
   -H 'X-Hermit-Console: 1' -H 'Content-Type: application/json' -d '{"name":"alice"}'
 
 # 此时缺凭证，应返回 HTTP 409 / NOT_CONFIGURED；因此这里不用 curl -f
@@ -117,11 +117,11 @@ read -r -s OA_PASSWORD
 export OA_PASSWORD
 
 jq -n '{base_url:env.OA_URL}' \
-  | curl -fsS -X PUT "$CRAB_URL/console/api/shells/legacy_oa/config" \
+  | curl -fsS -X PUT "$CRAB_URL/console/api/conches/legacy_oa/config" \
     -H 'X-Hermit-Console: 1' -H 'Content-Type: application/json' --data-binary @-
 
 jq -n '{username:env.OA_USER,password:env.OA_PASSWORD}' \
-  | curl -fsS -X PUT "$CRAB_URL/console/api/shells/legacy_oa/accounts/alice/credentials" \
+  | curl -fsS -X PUT "$CRAB_URL/console/api/conches/legacy_oa/accounts/alice/credentials" \
     -H 'X-Hermit-Console: 1' -H 'Content-Type: application/json' --data-binary @-
 unset OA_PASSWORD
 

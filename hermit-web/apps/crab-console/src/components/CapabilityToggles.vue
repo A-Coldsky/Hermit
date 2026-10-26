@@ -4,13 +4,13 @@ import { ref } from 'vue'
 import { notifyError } from '@shared/format'
 import { api, type CapabilityState } from '../api'
 
-const props = defineProps<{ shell: string; capabilities: CapabilityState[] }>()
+const props = defineProps<{ conch: string; capabilities: CapabilityState[] }>()
 const busy = ref<string | null>(null)
 
 async function toggle(cap: CapabilityState, enabled: string | number | boolean) {
   busy.value = cap.action
   try {
-    const result = await api.setCapability(props.shell, cap.action, Boolean(enabled))
+    const result = await api.setCapability(props.conch, cap.action, Boolean(enabled))
     cap.disabled = result.disabled
     ElMessage.success(result.disabled ? `已停用 ${cap.action}` : `已启用 ${cap.action}`)
   } catch (error) {
@@ -43,7 +43,7 @@ async function toggle(cap: CapabilityState, enabled: string | number | boolean) 
         <template #default="{ row }">{{ row.readOnly ? '只读' : '会修改' }}</template>
       </el-table-column>
       <el-table-column label="调用路径" min-width="220">
-        <template #default="{ row }"><code>/api/{{ shell }}/{{ row.action }}</code></template>
+        <template #default="{ row }"><code>/api/{{ conch }}/{{ row.action }}</code></template>
       </el-table-column>
       <el-table-column label="启用" width="90" align="right">
         <template #default="{ row }">

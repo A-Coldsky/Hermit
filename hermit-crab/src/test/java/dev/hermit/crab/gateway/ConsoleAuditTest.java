@@ -47,12 +47,12 @@ class ConsoleAuditTest {
             server.configureAccount("alice");
             TestServer.Reply configured = server.console(
                     "PUT",
-                    "/console/api/shells/legacy_oa/config",
+                    "/console/api/conches/legacy_oa/config",
                     "{\"base_url\":\"" + CONFIG_VALUE + "\"}",
                     true);
             assertThat(configured.status()).isEqualTo(200);
-            server.runtime.admin().createAccount(server.shell.shell(), "bob", Actors.CONSOLE);
-            server.runtime.admin().createAccount(server.shell.shell(), "carol", Actors.CONSOLE);
+            server.runtime.admin().createAccount(server.conch.conch(), "bob", Actors.CONSOLE);
+            server.runtime.admin().createAccount(server.conch.conch(), "carol", Actors.CONSOLE);
             baseUrl = server.fixture.baseUrl();
 
             TestServer.Reply all = server.console("GET", "/console/api/audit?limit=200", null, true);
@@ -74,7 +74,7 @@ class ConsoleAuditTest {
             List<String> names = new ArrayList<>();
             first.fieldNames().forEachRemaining(names::add);
             assertThat(names).containsExactlyInAnyOrder(
-                    "id", "at", "actor", "action", "origin", "shell", "account", "fields");
+                    "id", "at", "actor", "action", "origin", "conch", "account", "fields");
             assertThat(first.path("action").asText()).isEqualTo("ACCOUNT_CREATED");
             assertThat(first.path("account").asText()).isEqualTo("carol");
             assertThat(first.path("at").asText()).contains("T");
@@ -85,7 +85,7 @@ class ConsoleAuditTest {
                 if ("CONFIG_PUT".equals(entry.path("action").asText()) && entry.path("fields").isEmpty()) {
                     poisonedConfig = true;
                     assertThat(entry.path("account").isNull()).isTrue();
-                    assertThat(entry.path("shell").asText()).isEqualTo("legacy_oa");
+                    assertThat(entry.path("conch").asText()).isEqualTo("legacy_oa");
                 }
                 if ("CREDENTIALS_WRITTEN".equals(entry.path("action").asText())
                         && "alice".equals(entry.path("account").asText())
@@ -100,22 +100,22 @@ class ConsoleAuditTest {
             assertThat(realCredentials).isTrue();
 
             TestServer.Reply alice = server.console(
-                    "GET", "/console/api/audit?shell=legacy_oa&account=alice&limit=50", null, true);
+                    "GET", "/console/api/audit?conch=legacy_oa&account=alice&limit=50", null, true);
             assertThat(alice.status()).isEqualTo(200);
             SecretChecks.absent(alice.body(), PASSWORD);
             SecretChecks.absent(alice.body(), CONFIG_VALUE);
             for (JsonNode entry : alice.json().path("data").path("entries")) {
                 assertThat(entry.path("account").asText()).isEqualTo("alice");
-                assertThat(entry.path("shell").asText()).isEqualTo("legacy_oa");
+                assertThat(entry.path("conch").asText()).isEqualTo("legacy_oa");
                 assertThat(entry.path("action").asText()).isNotEqualTo("CONFIG_PUT");
                 assertThat(entry.path("action").asText()).isNotEqualTo("API_KEY_CREATED");
             }
             assertThat(alice.json().path("data").path("total").asLong()).isGreaterThanOrEqualTo(2);
 
             TestServer.Reply page1 = server.console(
-                    "GET", "/console/api/audit?shell=legacy_oa&limit=2&page=1", null, true);
+                    "GET", "/console/api/audit?conch=legacy_oa&limit=2&page=1", null, true);
             TestServer.Reply page2 = server.console(
-                    "GET", "/console/api/audit?shell=legacy_oa&limit=2&page=2", null, true);
+                    "GET", "/console/api/audit?conch=legacy_oa&limit=2&page=2", null, true);
             assertThat(page1.status()).isEqualTo(200);
             assertThat(page2.status()).isEqualTo(200);
             JsonNode newest = page1.json().path("data").path("entries");
@@ -131,7 +131,7 @@ class ConsoleAuditTest {
             assertThat(ids(newest)).doesNotContainAnyElementsOf(ids(older));
 
             TestServer.Reply empty = server.console(
-                    "GET", "/console/api/audit?shell=other_shell&limit=10&page=1", null, true);
+                    "GET", "/console/api/audit?conch=other_conch&limit=10&page=1", null, true);
             assertThat(empty.json().path("data").path("entries")).isEmpty();
             assertThat(empty.json().path("data").path("total").asLong()).isZero();
 

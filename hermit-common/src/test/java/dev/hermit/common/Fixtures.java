@@ -4,9 +4,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
-import dev.hermit.common.model.ShellDoc;
-import dev.hermit.common.parse.ShellParser;
-import dev.hermit.common.validate.ShellValidator;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationResult;
 
 public final class Fixtures {
@@ -15,7 +15,7 @@ public final class Fixtures {
     }
 
     public static String yaml(String name) {
-        String path = "shells/" + name;
+        String path = "conches/" + name;
         try (InputStream in = Fixtures.class.getClassLoader().getResourceAsStream(path)) {
             if (in == null) {
                 throw new IllegalStateException("missing fixture " + path);
@@ -26,11 +26,11 @@ public final class Fixtures {
         }
     }
 
-    public static ShellDoc parse(String name) {
-        return ShellParser.parse(yaml(name));
+    public static ConchDoc parse(String name) {
+        return ConchParser.parse(yaml(name));
     }
 
     public static ValidationResult validate(String name) {
-        return ShellValidator.validate(parse(name), ShellValidator.Context.of(null));
+        return ConchValidator.validate(parse(name), ConchValidator.Context.of(null));
     }
 }

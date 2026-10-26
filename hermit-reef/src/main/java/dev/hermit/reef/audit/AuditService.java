@@ -21,37 +21,37 @@ public class AuditService {
         this.clock = clock;
     }
 
-    public void record(String actor, AuditAction action, String shell, String version, String detail) {
+    public void record(String actor, AuditAction action, String conch, String version, String detail) {
         jdbc.update(
-                "INSERT INTO audit_log (at, actor, action, shell, version, detail) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO audit_log (at, actor, action, conch, version, detail) VALUES (?, ?, ?, ?, ?, ?)",
                 Timestamp.from(clock.instant()),
                 actor,
                 action.name(),
-                shell,
+                conch,
                 version,
                 detail);
     }
 
-    public AuditPage page(String shell, int page, int size) {
+    public AuditPage page(String conch, int page, int size) {
         int offset = (page - 1) * size;
         Long total = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM audit_log WHERE (? IS NULL OR shell = ?)",
+                "SELECT COUNT(*) FROM audit_log WHERE (? IS NULL OR conch = ?)",
                 Long.class,
-                shell,
-                shell);
+                conch,
+                conch);
         List<AuditEntry> items = jdbc.query(
-                "SELECT id, at, actor, action, shell, version, detail FROM audit_log "
-                        + "WHERE (? IS NULL OR shell = ?) ORDER BY at DESC, id DESC LIMIT ? OFFSET ?",
+                "SELECT id, at, actor, action, conch, version, detail FROM audit_log "
+                        + "WHERE (? IS NULL OR conch = ?) ORDER BY at DESC, id DESC LIMIT ? OFFSET ?",
                 (rs, rowNum) -> new AuditEntry(
                         rs.getLong("id"),
                         rs.getTimestamp("at").toInstant(),
                         rs.getString("actor"),
                         rs.getString("action"),
-                        rs.getString("shell"),
+                        rs.getString("conch"),
                         rs.getString("version"),
                         rs.getString("detail")),
-                shell,
-                shell,
+                conch,
+                conch,
                 size,
                 offset);
         return new AuditPage(items, page, size, total == null ? 0 : total);

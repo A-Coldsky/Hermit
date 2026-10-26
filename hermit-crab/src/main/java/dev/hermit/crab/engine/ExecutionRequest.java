@@ -10,7 +10,7 @@ import dev.hermit.crab.store.Origin;
 public record ExecutionRequest(
         String traceId,
         Origin origin,
-        String shell,
+        String conch,
         String action,
         Map<String, Object> rawInput,
         String account,
@@ -18,7 +18,7 @@ public record ExecutionRequest(
 ) {
     public ExecutionRequest {
         Objects.requireNonNull(origin, "origin");
-        Objects.requireNonNull(shell, "shell");
+        Objects.requireNonNull(conch, "conch");
         Objects.requireNonNull(action, "action");
         Objects.requireNonNull(account, "account");
         Objects.requireNonNull(accountContext, "accountContext");

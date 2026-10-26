@@ -8,7 +8,7 @@ public record ExecutionResult(
         ExecutionError error,
         long durationMillis,
         List<StepLog> stepLogs,
-        String shellVersion,
+        String conchVersion,
         String traceId
 ) {
     public ExecutionResult {

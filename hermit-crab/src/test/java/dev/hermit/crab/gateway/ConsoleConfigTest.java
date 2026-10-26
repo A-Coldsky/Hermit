@@ -26,9 +26,9 @@ class ConsoleConfigTest {
         CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
         try (TestServer server = TestServer.open(temp, PASSWORD, config)) {
             TestServer.Reply created = server.console(
-                    "POST", "/console/api/shells/legacy_oa/accounts", "{\"name\":\"carol\"}", true);
+                    "POST", "/console/api/conches/legacy_oa/accounts", "{\"name\":\"carol\"}", true);
             assertThat(created.status()).isEqualTo(200);
-            String path = "/console/api/shells/legacy_oa/accounts/carol/credentials";
+            String path = "/console/api/conches/legacy_oa/accounts/carol/credentials";
 
             TestServer.Reply empty = server.console("PUT", path, "{}", true);
             assertThat(empty.status()).isEqualTo(400);
@@ -66,7 +66,7 @@ class ConsoleConfigTest {
                     "POST", "/console/api/apikeys", "{\"name\":\"bare\",\"actions\":[\"list_todo\"]}", true);
             assertThat(bare.status()).isEqualTo(400);
             assertThat(bare.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
-            assertThat(bare.json().path("error").path("message").asText()).contains("shell.action");
+            assertThat(bare.json().path("error").path("message").asText()).contains("conch.action");
 
             TestServer.Reply missing = server.console(
                     "POST", "/console/api/apikeys", "{\"name\":\"ghost\",\"actions\":[\"legacy_oa.missing\"]}", true);
@@ -92,7 +92,7 @@ class ConsoleConfigTest {
         CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
         try (TestServer server = TestServer.open(temp, PASSWORD, config)) {
             server.configureAccount("alice");
-            JsonNode ready = shellRow(server);
+            JsonNode ready = conchRow(server);
             assertThat(ready.path("needsConfiguration").asBoolean()).isFalse();
             assertThat(ready.path("loginPaused").asBoolean()).isFalse();
             JsonNode account = account(server, "alice");
@@ -101,7 +101,7 @@ class ConsoleConfigTest {
             assertThat(account.path("loginPauseReason").isNull()).isTrue();
             assertThat(account.path("loginPauseRecovery").isNull()).isTrue();
 
-            server.runtime.admin().writeCredentials(server.shell, "alice", Map.of("password", WRONG), Actors.CLI);
+            server.runtime.admin().writeCredentials(server.conch, "alice", Map.of("password", WRONG), Actors.CLI);
             for (int i = 0; i < 3; i++) {
                 TestServer.Reply failed = server.call(
                         "GET", "/api/legacy_oa/list_todo", server.apiKey.plaintext(), "alice", null, null);
@@ -115,30 +115,30 @@ class ConsoleConfigTest {
             assertThat(paused.path("loginPauseRecovery").asText()).isEqualTo(LoginPause.RECOVERY);
             assertThat(paused.path("loginPauseRecovery").asText()).contains("测试登录");
             assertThat(paused.path("needsConfiguration").asBoolean()).isFalse();
-            JsonNode pending = shellRow(server);
+            JsonNode pending = conchRow(server);
             assertThat(pending.path("loginPaused").asBoolean()).isTrue();
             assertThat(pending.path("needsConfiguration").asBoolean()).isTrue();
-            TestServer.Reply detail = server.console("GET", "/console/api/shells/legacy_oa", null, true);
+            TestServer.Reply detail = server.console("GET", "/console/api/conches/legacy_oa", null, true);
             assertThat(detail.json().path("data").path("loginPaused").asBoolean()).isTrue();
 
-            server.runtime.admin().writeCredentials(server.shell, "alice", Map.of("password", PASSWORD), Actors.CLI);
+            server.runtime.admin().writeCredentials(server.conch, "alice", Map.of("password", PASSWORD), Actors.CLI);
             TestServer.Reply login = server.console(
-                    "POST", "/console/api/shells/legacy_oa/accounts/alice/test-login", "{}", true);
+                    "POST", "/console/api/conches/legacy_oa/accounts/alice/test-login", "{}", true);
             assertThat(login.status()).isEqualTo(200);
             assertThat(account(server, "alice").path("loginPaused").asBoolean()).isFalse();
-            assertThat(shellRow(server).path("needsConfiguration").asBoolean()).isFalse();
-            assertThat(shellRow(server).path("loginPaused").asBoolean()).isFalse();
+            assertThat(conchRow(server).path("needsConfiguration").asBoolean()).isFalse();
+            assertThat(conchRow(server).path("loginPaused").asBoolean()).isFalse();
         }
     }
 
-    private static JsonNode shellRow(TestServer server) throws Exception {
-        TestServer.Reply listed = server.console("GET", "/console/api/shells", null, true);
+    private static JsonNode conchRow(TestServer server) throws Exception {
+        TestServer.Reply listed = server.console("GET", "/console/api/conches", null, true);
         assertThat(listed.status()).as(listed.body()).isEqualTo(200);
-        return listed.json().path("data").path("shells").get(0);
+        return listed.json().path("data").path("conches").get(0);
     }
 
     private static JsonNode account(TestServer server, String name) throws Exception {
-        TestServer.Reply listed = server.console("GET", "/console/api/shells/legacy_oa/accounts", null, true);
+        TestServer.Reply listed = server.console("GET", "/console/api/conches/legacy_oa/accounts", null, true);
         assertThat(listed.status()).isEqualTo(200);
         for (JsonNode row : listed.json().path("data").path("accounts")) {
             if (name.equals(row.path("name").asText())) {

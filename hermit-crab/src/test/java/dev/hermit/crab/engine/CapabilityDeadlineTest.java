@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import dev.hermit.common.error.ErrorCode;
-import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.crab.store.Origin;
 
 class CapabilityDeadlineTest {
@@ -42,21 +42,21 @@ class CapabilityDeadlineTest {
             String base = "http://127.0.0.1:" + server.getAddress().getPort();
             EngineSettings settings = new EngineSettings(Duration.ofMillis(500), Duration.ofMinutes(10), 3);
             try (SessionManager sessions = new SessionManager(new NopSessionPersistence(), settings, Clock.systemUTC())) {
-                ShellRegistry registry = new ShellRegistry();
-                registry.put(ShellParser.parse(EngineTestSupport.actionShell("deadline_shell", "slow", """
+                ConchRegistry registry = new ConchRegistry();
+                registry.put(ConchParser.parse(EngineTestSupport.actionConch("deadline_conch", "slow", """
                         - request: { method: GET, path: /slow }
                         """, true)));
-                registry.put(ShellParser.parse(EngineTestSupport.actionShell("fast_shell", "fast", """
+                registry.put(ConchParser.parse(EngineTestSupport.actionConch("fast_conch", "fast", """
                         - request: { method: GET, path: /fast }
                         """, true)));
                 RuleEngine engine = new RuleEngine(registry, sessions, settings);
 
-                ExecutionResult slow = execute(engine, base, "deadline_shell", "slow");
+                ExecutionResult slow = execute(engine, base, "deadline_conch", "slow");
                 assertThat(slow.success()).isFalse();
                 assertThat(slow.error().code()).isEqualTo(ErrorCode.TIMEOUT);
                 assertThat(slow.durationMillis()).isLessThan(1_500);
 
-                ExecutionResult fast = execute(engine, base, "fast_shell", "fast");
+                ExecutionResult fast = execute(engine, base, "fast_conch", "fast");
                 assertThat(fast.success()).as(fast.error() == null ? "" : fast.error().message()).isTrue();
             }
         } finally {
@@ -89,10 +89,10 @@ class CapabilityDeadlineTest {
         }
     }
 
-    private static ExecutionResult execute(RuleEngine engine, String base, String shell, String action) {
+    private static ExecutionResult execute(RuleEngine engine, String base, String conch, String action) {
         return engine.execute(EngineTestSupport.request(
                 Origin.OFFICIAL,
-                shell,
+                conch,
                 action,
                 "alice",
                 Map.of(),

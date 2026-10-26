@@ -15,7 +15,7 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
-import dev.hermit.common.model.ShellDoc;
+import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.LoginPause;
 import dev.hermit.crab.runtime.ApiJson;
@@ -36,7 +36,7 @@ import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.sync.CrabRelease;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
-import dev.hermit.crab.sync.ShellOutcome;
+import dev.hermit.crab.sync.ConchOutcome;
 import dev.hermit.crab.sync.SyncError;
 import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
@@ -52,19 +52,19 @@ final class ConsoleApi {
     }
 
     static void register(io.javalin.Javalin app, CrabRuntime runtime) {
-        get(app, "/console/api/shells", ctx -> shells(runtime, ctx));
-        get(app, "/console/api/shells/{shell}", ctx -> shell(runtime, ctx));
-        get(app, "/console/api/shells/{shell}/accounts", ctx -> accounts(runtime, ctx));
-        post(app, "/console/api/shells/{shell}/accounts", ctx -> createAccount(runtime, ctx));
-        delete(app, "/console/api/shells/{shell}/accounts/{account}", ctx -> deleteAccount(runtime, ctx));
-        post(app, "/console/api/shells/{shell}/accounts/{account}/default", ctx -> defaultAccount(runtime, ctx));
-        get(app, "/console/api/shells/{shell}/accounts/{account}/credentials", ctx -> credentialNames(runtime, ctx));
-        put(app, "/console/api/shells/{shell}/accounts/{account}/credentials", ctx -> writeCredentials(runtime, ctx));
-        post(app, "/console/api/shells/{shell}/accounts/{account}/test-login", ctx -> testLogin(runtime, ctx));
-        get(app, "/console/api/shells/{shell}/config", ctx -> config(runtime, ctx));
-        put(app, "/console/api/shells/{shell}/config", ctx -> writeConfig(runtime, ctx));
-        post(app, "/console/api/capabilities/{shell}/{action}/enable", ctx -> toggle(runtime, ctx, false));
-        post(app, "/console/api/capabilities/{shell}/{action}/disable", ctx -> toggle(runtime, ctx, true));
+        get(app, "/console/api/conches", ctx -> conches(runtime, ctx));
+        get(app, "/console/api/conches/{conch}", ctx -> conch(runtime, ctx));
+        get(app, "/console/api/conches/{conch}/accounts", ctx -> accounts(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/accounts", ctx -> createAccount(runtime, ctx));
+        delete(app, "/console/api/conches/{conch}/accounts/{account}", ctx -> deleteAccount(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/accounts/{account}/default", ctx -> defaultAccount(runtime, ctx));
+        get(app, "/console/api/conches/{conch}/accounts/{account}/credentials", ctx -> credentialNames(runtime, ctx));
+        put(app, "/console/api/conches/{conch}/accounts/{account}/credentials", ctx -> writeCredentials(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/accounts/{account}/test-login", ctx -> testLogin(runtime, ctx));
+        get(app, "/console/api/conches/{conch}/config", ctx -> config(runtime, ctx));
+        put(app, "/console/api/conches/{conch}/config", ctx -> writeConfig(runtime, ctx));
+        post(app, "/console/api/capabilities/{conch}/{action}/enable", ctx -> toggle(runtime, ctx, false));
+        post(app, "/console/api/capabilities/{conch}/{action}/disable", ctx -> toggle(runtime, ctx, true));
         get(app, "/console/api/apikeys", ctx -> apiKeys(runtime, ctx));
         post(app, "/console/api/apikeys", ctx -> createApiKey(runtime, ctx));
         delete(app, "/console/api/apikeys/{id}", ctx -> revokeApiKey(runtime, ctx));
@@ -79,13 +79,13 @@ final class ConsoleApi {
         post(app, "/console/api/reports/send", ctx -> reportSend(runtime, ctx));
     }
 
-    private static void shells(CrabRuntime runtime, Context ctx) {
+    private static void conches(CrabRuntime runtime, Context ctx) {
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
-        for (ShellDoc doc : runtime.registry().snapshot().values()) {
-            List<Account> accounts = runtime.admin().listAccounts(doc.shell());
+        for (ConchDoc doc : runtime.registry().snapshot().values()) {
+            List<Account> accounts = runtime.admin().listAccounts(doc.conch());
             boolean loginPaused = loginPaused(runtime, doc, accounts);
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
-            row.put("shell", doc.shell());
+            row.put("conch", doc.conch());
             row.put("version", doc.version().toString());
             row.put("title", text(doc.title()));
             row.put("capabilityCount", doc.actions().size());
@@ -94,13 +94,13 @@ final class ConsoleApi {
             row.put("loginPaused", loginPaused);
             rows.add(row);
         }
-        GatewayResponses.writeData(ctx, Map.of("shells", rows));
+        GatewayResponses.writeData(ctx, Map.of("conches", rows));
     }
 
-    private static void shell(CrabRuntime runtime, Context ctx) {
-        ShellDoc doc = requireShell(runtime, ctx);
+    private static void conch(CrabRuntime runtime, Context ctx) {
+        ConchDoc doc = requireConch(runtime, ctx);
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
-        body.put("shell", doc.shell());
+        body.put("conch", doc.conch());
         body.put("version", doc.version().toString());
         body.put("title", text(doc.title()));
         body.put("description", text(doc.description()));
@@ -114,21 +114,21 @@ final class ConsoleApi {
             row.put("description", text(action.description()));
             row.put("method", CapabilityHttp.method(action).name());
             row.put("readOnly", CapabilityHttp.readOnly(action));
-            row.put("disabled", runtime.disabled(doc.shell(), action.name()));
+            row.put("disabled", runtime.disabled(doc.conch(), action.name()));
             capabilities.add(row);
         }
         body.put("capabilities", capabilities);
-        body.put("loginPaused", loginPaused(runtime, doc, runtime.admin().listAccounts(doc.shell())));
+        body.put("loginPaused", loginPaused(runtime, doc, runtime.admin().listAccounts(doc.conch())));
         GatewayResponses.writeData(ctx, body);
     }
 
     private static void accounts(CrabRuntime runtime, Context ctx) {
-        ShellDoc doc = requireShell(runtime, ctx);
+        ConchDoc doc = requireConch(runtime, ctx);
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
-        for (Account account : runtime.admin().listAccounts(doc.shell())) {
+        for (Account account : runtime.admin().listAccounts(doc.conch())) {
             List<String> missing = runtime.admin().missingCredentials(doc, account.account());
-            boolean unreadable = runtime.admin().credentialsUnreadable(doc.shell(), account.account());
-            boolean paused = runtime.admin().loginPaused(doc.shell(), account.account());
+            boolean unreadable = runtime.admin().credentialsUnreadable(doc.conch(), account.account());
+            boolean paused = runtime.admin().loginPaused(doc.conch(), account.account());
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("name", account.account());
             row.put("default", account.defaultAccount());
@@ -145,45 +145,45 @@ final class ConsoleApi {
     }
 
     private static void createAccount(CrabRuntime runtime, Context ctx) throws Exception {
-        ShellDoc doc = requireShell(runtime, ctx);
+        ConchDoc doc = requireConch(runtime, ctx);
         String name = requiredText(object(ctx), "name");
-        Account account = runtime.admin().createAccount(doc.shell(), name, Actors.CONSOLE);
+        Account account = runtime.admin().createAccount(doc.conch(), name, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("name", account.account(), "default", account.defaultAccount()));
     }
 
     private static void deleteAccount(CrabRuntime runtime, Context ctx) {
-        ShellDoc doc = requireShell(runtime, ctx);
-        runtime.admin().deleteAccount(doc.shell(), ctx.pathParam("account"), Actors.CONSOLE);
+        ConchDoc doc = requireConch(runtime, ctx);
+        runtime.admin().deleteAccount(doc.conch(), ctx.pathParam("account"), Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("deleted", true));
     }
 
     private static void defaultAccount(CrabRuntime runtime, Context ctx) {
-        ShellDoc doc = requireShell(runtime, ctx);
+        ConchDoc doc = requireConch(runtime, ctx);
         String name = ctx.pathParam("account");
-        runtime.admin().setDefault(doc.shell(), name, Actors.CONSOLE);
+        runtime.admin().setDefault(doc.conch(), name, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("name", name, "default", true));
     }
 
     private static void credentialNames(CrabRuntime runtime, Context ctx) {
-        ShellDoc doc = requireShell(runtime, ctx);
+        ConchDoc doc = requireConch(runtime, ctx);
         String account = ctx.pathParam("account");
-        runtime.admin().requireAccount(doc.shell(), account);
-        ArrayList<String> names = new ArrayList<>(runtime.admin().credentialNames(doc.shell(), account));
+        runtime.admin().requireAccount(doc.conch(), account);
+        ArrayList<String> names = new ArrayList<>(runtime.admin().credentialNames(doc.conch(), account));
         names.sort(String::compareTo);
         GatewayResponses.writeData(ctx, Map.of("fields", names));
     }
 
     private static void writeCredentials(CrabRuntime runtime, Context ctx) throws Exception {
-        ShellDoc doc = requireShell(runtime, ctx);
+        ConchDoc doc = requireConch(runtime, ctx);
         String account = ctx.pathParam("account");
-        runtime.admin().requireAccount(doc.shell(), account);
+        runtime.admin().requireAccount(doc.conch(), account);
         Map<String, String> fields = stringMap(object(ctx));
         if (fields.isEmpty()) {
             throw new IllegalArgumentException("credential fields are required");
         }
-        if (runtime.admin().credentialsUnreadable(doc.shell(), account)) {
+        if (runtime.admin().credentialsUnreadable(doc.conch(), account)) {
             ArrayList<String> pending = new ArrayList<>();
-            for (String name : new TreeSet<>(runtime.admin().credentialNames(doc.shell(), account))) {
+            for (String name : new TreeSet<>(runtime.admin().credentialNames(doc.conch(), account))) {
                 String value = fields.get(name);
                 if (value == null || value.isEmpty()) {
                     pending.add(name);
@@ -193,7 +193,7 @@ final class ConsoleApi {
                 throw new IllegalArgumentException(CredentialDecryptException.MESSAGE + ": " + String.join(", ", pending));
             }
         }
-        LinkedHashSet<String> present = new LinkedHashSet<>(runtime.admin().credentialNames(doc.shell(), account));
+        LinkedHashSet<String> present = new LinkedHashSet<>(runtime.admin().credentialNames(doc.conch(), account));
         for (Map.Entry<String, String> entry : fields.entrySet()) {
             if (entry.getValue().isEmpty()) {
                 present.remove(entry.getKey());
@@ -210,7 +210,7 @@ final class ConsoleApi {
     }
 
     private static void testLogin(CrabRuntime runtime, Context ctx) {
-        ShellDoc doc = requireShell(runtime, ctx);
+        ConchDoc doc = requireConch(runtime, ctx);
         ExecutionResult result = runtime.admin().testLogin(doc, ctx.pathParam("account"), GatewayResponses.trace(ctx), Actors.CONSOLE);
         if (result.success()) {
             GatewayResponses.writeData(ctx, result.data());
@@ -222,8 +222,8 @@ final class ConsoleApi {
     }
 
     private static void config(CrabRuntime runtime, Context ctx) {
-        ShellDoc doc = requireShell(runtime, ctx);
-        Map<String, String> stored = runtime.admin().storedConfig(doc.shell());
+        ConchDoc doc = requireConch(runtime, ctx);
+        Map<String, String> stored = runtime.admin().storedConfig(doc.conch());
         List<String> missing = DeclaredSettings.missingConfig(doc, stored);
         LinkedHashMap<String, Object> fields = new LinkedHashMap<>();
         for (Map.Entry<String, ConfigField> entry : doc.config().entrySet()) {
@@ -243,7 +243,7 @@ final class ConsoleApi {
     }
 
     private static void writeConfig(CrabRuntime runtime, Context ctx) throws Exception {
-        ShellDoc doc = requireShell(runtime, ctx);
+        ConchDoc doc = requireConch(runtime, ctx);
         for (Map.Entry<String, String> entry : stringMap(object(ctx)).entrySet()) {
             runtime.admin().putConfig(doc, entry.getKey(), entry.getValue(), Actors.CONSOLE);
         }
@@ -251,13 +251,13 @@ final class ConsoleApi {
     }
 
     private static void toggle(CrabRuntime runtime, Context ctx, boolean disabled) {
-        String shell = ctx.pathParam("shell");
+        String conch = ctx.pathParam("conch");
         String action = ctx.pathParam("action");
-        runtime.setCapabilityDisabled(shell, action, disabled, Actors.CONSOLE);
+        runtime.setCapabilityDisabled(conch, action, disabled, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of(
-                "shell", shell,
+                "conch", conch,
                 "action", action,
-                "disabled", runtime.disabled(shell, action)));
+                "disabled", runtime.disabled(conch, action)));
     }
 
     private static void apiKeys(CrabRuntime runtime, Context ctx) {
@@ -272,9 +272,9 @@ final class ConsoleApi {
         JsonNode body = object(ctx);
         String name = requiredText(body, "name");
         boolean readOnly = bool(body, "readOnly", false);
-        Set<String> shells = stringSet(body.get("shells"));
+        Set<String> conches = stringSet(body.get("conches"));
         Set<String> actions = stringSet(body.get("actions"));
-        CreatedApiKey created = runtime.admin().createApiKey(name, new ApiKeyScope(shells, actions, readOnly), Actors.CONSOLE);
+        CreatedApiKey created = runtime.admin().createApiKey(name, new ApiKeyScope(conches, actions, readOnly), Actors.CONSOLE);
         LinkedHashMap<String, Object> data = new LinkedHashMap<>();
         data.put("id", created.id());
         data.put("name", created.name());
@@ -292,7 +292,7 @@ final class ConsoleApi {
 
     private static void calls(CrabRuntime runtime, Context ctx) {
         int limit = limit(ctx);
-        List<CallLogStore.CallSummary> rows = runtime.callLogs().list(ctx.queryParam("shell"), ctx.queryParam("action"), limit);
+        List<CallLogStore.CallSummary> rows = runtime.callLogs().list(ctx.queryParam("conch"), ctx.queryParam("action"), limit);
         ArrayList<Map<String, Object>> calls = new ArrayList<>();
         for (CallLogStore.CallSummary row : rows) {
             calls.add(summary(row));
@@ -325,7 +325,7 @@ final class ConsoleApi {
 
     private static void audit(CrabRuntime runtime, Context ctx) {
         AuditLog.Page page = runtime.configAudit(
-                ctx.queryParam("shell"),
+                ctx.queryParam("conch"),
                 ctx.queryParam("account"),
                 pageNumber(ctx),
                 auditLimit(ctx));
@@ -337,7 +337,7 @@ final class ConsoleApi {
             row.put("actor", entry.actor());
             row.put("action", entry.action());
             row.put("origin", entry.origin());
-            row.put("shell", entry.shell());
+            row.put("conch", entry.conch());
             row.put("account", entry.account());
             row.put("fields", entry.fields());
             entries.add(row);
@@ -369,7 +369,7 @@ final class ConsoleApi {
                 GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "sync is not configured");
                 return;
             }
-            GatewayResponses.writeData(ctx, syncView(runtime.shellSync().visibleStatus(report.get())));
+            GatewayResponses.writeData(ctx, syncView(runtime.conchSync().visibleStatus(report.get())));
         } catch (SyncException ex) {
             SyncError error = ex.clientError().orElse(null);
             if (error == null) {
@@ -380,13 +380,13 @@ final class ConsoleApi {
     }
 
     private static void syncStatus(CrabRuntime runtime, Context ctx) {
-        if (runtime.shellSync() == null) {
+        if (runtime.conchSync() == null) {
             GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "sync is not configured");
             return;
         }
         SyncReport report = runtime.lastSync().orElse(null);
         if (report != null) {
-            report = runtime.shellSync().visibleStatus(report);
+            report = runtime.conchSync().visibleStatus(report);
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("report", report == null ? null : syncView(report));
@@ -416,26 +416,26 @@ final class ConsoleApi {
     }
 
     private static Map<String, Object> syncView(SyncReport report) {
-        ArrayList<Map<String, Object>> shells = new ArrayList<>();
-        for (ShellOutcome outcome : report.shells()) {
+        ArrayList<Map<String, Object>> conches = new ArrayList<>();
+        for (ConchOutcome outcome : report.conches()) {
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
-            row.put("shell", outcome.shell());
+            row.put("conch", outcome.conch());
             row.put("version", outcome.version());
             row.put("kind", outcome.kind() == null ? null : outcome.kind().name());
             row.put("reason", outcome.reason());
-            shells.add(row);
+            conches.add(row);
         }
         ArrayList<Map<String, Object>> changes = new ArrayList<>();
         for (CredentialDeclarationChange change : report.credentialChanges()) {
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
-            row.put("shell", change.shell());
+            row.put("conch", change.conch());
             row.put("addedRequired", change.addedRequired());
             row.put("removed", change.removed());
             changes.add(row);
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("notModified", report.notModified());
-        body.put("shells", shells);
+        body.put("conches", conches);
         body.put("removed", report.removed());
         body.put("credentialChanges", changes);
         body.put("latestCrab", crabView(report.latestCrab().orElse(null)));
@@ -491,7 +491,7 @@ final class ConsoleApi {
                 String message = ex.getMessage();
                 if ("capability not found".equals(message)
                         || "api key not found".equals(message)
-                        || "shell not found".equals(message)) {
+                        || "conch not found".equals(message)) {
                     GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, message);
                     return;
                 }
@@ -500,18 +500,18 @@ final class ConsoleApi {
         });
     }
 
-    private static ShellDoc requireShell(CrabRuntime runtime, Context ctx) {
-        String name = ctx.pathParam("shell");
-        ShellDoc doc = runtime.registry().find(name).orElse(null);
+    private static ConchDoc requireConch(CrabRuntime runtime, Context ctx) {
+        String name = ctx.pathParam("conch");
+        ConchDoc doc = runtime.registry().find(name).orElse(null);
         if (doc == null) {
-            throw new IllegalArgumentException("shell not found");
+            throw new IllegalArgumentException("conch not found");
         }
         return doc;
     }
 
-    private static boolean loginPaused(CrabRuntime runtime, ShellDoc doc, List<Account> accounts) {
+    private static boolean loginPaused(CrabRuntime runtime, ConchDoc doc, List<Account> accounts) {
         for (Account account : accounts) {
-            if (runtime.admin().loginPaused(doc.shell(), account.account())) {
+            if (runtime.admin().loginPaused(doc.conch(), account.account())) {
                 return true;
             }
         }
@@ -519,26 +519,26 @@ final class ConsoleApi {
     }
 
     /**
-     * Overview “待配置” counts a shell when required config or credentials are missing, stored
+     * Overview “待配置” counts a conch when required config or credentials are missing, stored
      * credentials cannot be decrypted, or any account has automatic login paused.
      */
-    private static boolean needsConfiguration(CrabRuntime runtime, ShellDoc doc, List<Account> accounts, boolean loginPaused) {
+    private static boolean needsConfiguration(CrabRuntime runtime, ConchDoc doc, List<Account> accounts, boolean loginPaused) {
         if (loginPaused) {
             return true;
         }
-        if (!DeclaredSettings.missingConfig(doc, runtime.admin().storedConfig(doc.shell())).isEmpty()) {
+        if (!DeclaredSettings.missingConfig(doc, runtime.admin().storedConfig(doc.conch())).isEmpty()) {
             return true;
         }
         for (Account account : accounts) {
             if (!runtime.admin().missingCredentials(doc, account.account()).isEmpty()
-                    || runtime.admin().credentialsUnreadable(doc.shell(), account.account())) {
+                    || runtime.admin().credentialsUnreadable(doc.conch(), account.account())) {
                 return true;
             }
         }
         return false;
     }
 
-    private static List<Map<String, Object>> credentialDecls(ShellDoc doc) {
+    private static List<Map<String, Object>> credentialDecls(ConchDoc doc) {
         if (doc.credentials() == null) {
             return List.of();
         }
@@ -557,7 +557,7 @@ final class ConsoleApi {
         return rows;
     }
 
-    private static List<Map<String, Object>> configDecls(ShellDoc doc) {
+    private static List<Map<String, Object>> configDecls(ConchDoc doc) {
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (Map.Entry<String, ConfigField> entry : doc.config().entrySet()) {
             ConfigField field = entry.getValue();
@@ -588,7 +588,7 @@ final class ConsoleApi {
 
     private static Map<String, Object> scope(ApiKeyScope scope) {
         LinkedHashMap<String, Object> row = new LinkedHashMap<>();
-        row.put("shells", scope.shells());
+        row.put("conches", scope.conches());
         row.put("actions", scope.actions());
         row.put("readOnly", scope.readOnlyOnly());
         return row;
@@ -599,10 +599,10 @@ final class ConsoleApi {
         body.put("traceId", row.traceId());
         body.put("at", row.at());
         body.put("origin", row.origin());
-        body.put("shell", row.shell());
+        body.put("conch", row.conch());
         body.put("action", row.action());
         body.put("account", row.account());
-        body.put("shellVersion", row.shellVersion());
+        body.put("conchVersion", row.conchVersion());
         body.put("success", row.success());
         body.put("errorCode", row.errorCode());
         body.put("errorMessage", row.errorMessage());

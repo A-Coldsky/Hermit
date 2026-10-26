@@ -16,8 +16,8 @@ import org.junit.jupiter.api.Test;
 
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.HttpMethod;
-import dev.hermit.common.model.ShellDoc;
-import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.version.SemVer;
 
 class LegacyOaFixtureTest {
@@ -29,8 +29,8 @@ class LegacyOaFixtureTest {
             assertThat(sample).isNotNull();
             assertThat(sample.readAllBytes()).containsExactly(fixture);
         }
-        ShellDoc doc = ShellParser.parse(new String(fixture, StandardCharsets.UTF_8));
-        assertThat(doc.shell()).isEqualTo("legacy_oa");
+        ConchDoc doc = ConchParser.parse(new String(fixture, StandardCharsets.UTF_8));
+        assertThat(doc.conch()).isEqualTo("legacy_oa");
         assertThat(doc.version()).isEqualTo(SemVer.parse("1.0.0"));
         assertThat(doc.driver()).isEqualTo("http");
         assertThat(doc.minCrabVersion()).isEqualTo(SemVer.parse("1.0.0"));
@@ -61,8 +61,8 @@ class LegacyOaFixtureTest {
 
     @Test
     void outputFormsAndEffectiveMethod() {
-        Action described = ShellParser.parse("""
-                shell: legacy_oa
+        Action described = ConchParser.parse("""
+                conch: legacy_oa
                 version: 1.0.0
                 min_crab_version: 1.0.0
                 actions:
@@ -83,8 +83,8 @@ class LegacyOaFixtureTest {
         assertThat(items).doesNotContainKey("value");
         assertThat(items).containsEntry("type", "array");
 
-        Action mapped = ShellParser.parse("""
-                shell: legacy_oa
+        Action mapped = ConchParser.parse("""
+                conch: legacy_oa
                 version: 1.0.0
                 min_crab_version: 1.0.0
                 actions:
@@ -113,7 +113,7 @@ class LegacyOaFixtureTest {
     }
 
     private static HttpMethod method(String explicit, boolean readOnly, boolean idempotent) {
-        String yaml = "shell: legacy_oa\n"
+        String yaml = "conch: legacy_oa\n"
                 + "version: 1.0.0\n"
                 + "min_crab_version: 1.0.0\n"
                 + "actions:\n"
@@ -121,7 +121,7 @@ class LegacyOaFixtureTest {
                 + "    idempotent: " + idempotent + "\n"
                 + (explicit == null ? "" : "    method: " + explicit + "\n")
                 + (readOnly ? "    mcp: { read_only: true }\n" : "");
-        return ShellParser.parse(yaml).actions().get("list_todo").effectiveMethod();
+        return ConchParser.parse(yaml).actions().get("list_todo").effectiveMethod();
     }
 
     private static Map<String, Object> expectedOutputSchema() {

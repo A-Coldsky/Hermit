@@ -20,19 +20,19 @@ class CrabPathsTest {
     void constructorOverridesTheRootAndDirectoriesAppearOnFirstUse() {
         CrabPaths paths = new CrabPaths(temp);
         assertThat(paths.root()).isEqualTo(temp.toAbsolutePath().normalize());
-        assertThat(temp.resolve("shells")).doesNotExist();
-        assertThat(temp.resolve("local-shells")).doesNotExist();
+        assertThat(temp.resolve("conches")).doesNotExist();
+        assertThat(temp.resolve("local-conches")).doesNotExist();
         assertThat(temp.resolve("data")).doesNotExist();
         assertThat(temp.resolve("logs")).doesNotExist();
 
-        assertThat(paths.shells()).isEqualTo(temp.resolve("shells").toAbsolutePath().normalize());
-        assertThat(temp.resolve("shells")).isDirectory();
+        assertThat(paths.conches()).isEqualTo(temp.resolve("conches").toAbsolutePath().normalize());
+        assertThat(temp.resolve("conches")).isDirectory();
         assertThat(temp.resolve("data")).doesNotExist();
 
-        paths.localShells();
+        paths.localConches();
         paths.data();
         paths.logs();
-        assertThat(temp.resolve("local-shells")).isDirectory();
+        assertThat(temp.resolve("local-conches")).isDirectory();
         assertThat(temp.resolve("data")).isDirectory();
         assertThat(temp.resolve("logs")).isDirectory();
         assertThat(paths.masterKeyFile()).isEqualTo(temp.resolve("data").resolve("master.key").toAbsolutePath().normalize());

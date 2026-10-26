@@ -13,15 +13,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.HttpMethod;
-import dev.hermit.common.model.ShellDoc;
+import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.engine.ExecutionRequest;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
-import dev.hermit.crab.engine.ShellRegistry;
+import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.secure.Redactor;
-import dev.hermit.crab.sync.DisabledShells;
+import dev.hermit.crab.sync.DisabledConches;
 import dev.hermit.crab.sync.RollbackGuard;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
@@ -31,7 +31,7 @@ import dev.hermit.crab.store.CallLogStore;
 import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
-import dev.hermit.crab.store.ShellConfigStore;
+import dev.hermit.crab.store.ConchConfigStore;
 
 public final class Invoker {
     private static final Logger LOG = Logger.getLogger(Invoker.class.getName());
@@ -39,43 +39,43 @@ public final class Invoker {
     /** Power of two. Distinct keys share a stripe; stripes are not removed after a request. */
     static final int IDEMPOTENCY_STRIPES = 64;
 
-    private final ShellRegistry registry;
+    private final ConchRegistry registry;
     private final AccountStore accounts;
     private final CredentialVault vault;
-    private final ShellConfigStore config;
+    private final ConchConfigStore config;
     private final RuleEngine engine;
     private final CallLogStore callLogs;
     private final IdempotencyStore idempotency;
     private final CapabilityGate disabled;
-    private final DisabledShells disabledShells;
+    private final DisabledConches disabledConches;
     private final List<CrabRuntime.ExecutionListener> listeners = new CopyOnWriteArrayList<>();
     private final Object[] idempotencyLocks = newIdempotencyLocks();
     private volatile ReportQueue reportQueue;
     private volatile RollbackGuard rollbackGuard;
 
     public Invoker(
-            ShellRegistry registry,
+            ConchRegistry registry,
             AccountStore accounts,
             CredentialVault vault,
-            ShellConfigStore config,
+            ConchConfigStore config,
             RuleEngine engine,
             CallLogStore callLogs,
             IdempotencyStore idempotency,
             CapabilityGate disabled
     ) {
-        this(registry, accounts, vault, config, engine, callLogs, idempotency, disabled, DisabledShells.none());
+        this(registry, accounts, vault, config, engine, callLogs, idempotency, disabled, DisabledConches.none());
     }
 
     public Invoker(
-            ShellRegistry registry,
+            ConchRegistry registry,
             AccountStore accounts,
             CredentialVault vault,
-            ShellConfigStore config,
+            ConchConfigStore config,
             RuleEngine engine,
             CallLogStore callLogs,
             IdempotencyStore idempotency,
             CapabilityGate disabled,
-            DisabledShells disabledShells
+            DisabledConches disabledConches
     ) {
         this.registry = registry;
         this.accounts = accounts;
@@ -85,7 +85,7 @@ public final class Invoker {
         this.callLogs = callLogs;
         this.idempotency = idempotency;
         this.disabled = disabled;
-        this.disabledShells = disabledShells == null ? DisabledShells.none() : disabledShells;
+        this.disabledConches = disabledConches == null ? DisabledConches.none() : disabledConches;
     }
 
     public void addListener(CrabRuntime.ExecutionListener listener) {
@@ -99,47 +99,47 @@ public final class Invoker {
 
     public InvokeOutcome invoke(
             ApiKeyPrincipal principal,
-            String shell,
+            String conch,
             String action,
             Map<String, Object> input,
             Optional<String> account,
             Optional<String> idempotencyKey,
             String traceId
     ) {
-        if (principal == null || shell == null || action == null || shell.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
+        if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
         }
         // 停用墓碑先于注册表。已经带着授权快照进入引擎的请求仍执行那份快照（审计 A01）；
         // 新请求在这里返回，不会在停用期间读到另一份版本。
-        if (disabledShells.contains(shell)) {
-            return done(traceId, ErrorCode.SHELL_DISABLED, DisabledShells.CALL_MESSAGE, null);
+        if (disabledConches.contains(conch)) {
+            return done(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE, null);
         }
-        ShellDoc doc = registry.find(shell).orElse(null);
+        ConchDoc doc = registry.find(conch).orElse(null);
         Action capability = doc == null ? null : doc.actions().get(action);
-        if (doc == null || capability == null || disabled.disabled(shell, action)) {
+        if (doc == null || capability == null || disabled.disabled(conch, action)) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
         }
-        if (!principal.permits(shell, action, CapabilityHttp.readOnly(capability))) {
+        if (!principal.permits(conch, action, CapabilityHttp.readOnly(capability))) {
             return done(traceId, ErrorCode.FORBIDDEN, "forbidden", null);
         }
         Account resolved;
         try {
-            resolved = accounts.resolve(Origin.OFFICIAL, shell, account == null ? Optional.empty() : account);
+            resolved = accounts.resolve(Origin.OFFICIAL, conch, account == null ? Optional.empty() : account);
         } catch (AccountNotFoundException ex) {
-            if (ex.account() == null && accounts.list(Origin.OFFICIAL, shell).isEmpty()) {
+            if (ex.account() == null && accounts.list(Origin.OFFICIAL, conch).isEmpty()) {
                 return done(traceId, ErrorCode.NOT_CONFIGURED, "no account configured", null);
             }
             return done(traceId, ErrorCode.ACCOUNT_NOT_FOUND, "account not found", null);
         } catch (IllegalArgumentException ex) {
             return done(traceId, ErrorCode.INVALID_INPUT, "invalid account name", null);
         }
-        Map<String, String> stored = config.all(Origin.OFFICIAL, shell);
+        Map<String, String> stored = config.all(Origin.OFFICIAL, conch);
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
         if (!missingConfig.isEmpty()) {
             return done(traceId, ErrorCode.NOT_CONFIGURED, "missing config: " + String.join(", ", missingConfig), null);
         }
         List<String> missingCredentials = DeclaredSettings.missingCredentials(
-                doc, vault.fieldNames(Origin.OFFICIAL, shell, resolved.account()));
+                doc, vault.fieldNames(Origin.OFFICIAL, conch, resolved.account()));
         if (!missingCredentials.isEmpty()) {
             return done(traceId, ErrorCode.NOT_CONFIGURED,
                     "missing credentials: " + String.join(", ", missingCredentials), null);
@@ -147,7 +147,7 @@ public final class Invoker {
         Map<String, String> merged = DeclaredSettings.mergedConfig(doc, stored);
         Map<String, String> secrets;
         try {
-            secrets = vault.decryptForExecution(Origin.OFFICIAL, shell, resolved.account());
+            secrets = vault.decryptForExecution(Origin.OFFICIAL, conch, resolved.account());
         } catch (CredentialDecryptException ex) {
             return done(traceId, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE, null);
         }
@@ -160,7 +160,7 @@ public final class Invoker {
 
     private InvokeOutcome replayOrExecute(
             ApiKeyPrincipal principal,
-            ShellDoc doc,
+            ConchDoc doc,
             String action,
             Map<String, Object> input,
             Account account,
@@ -169,16 +169,16 @@ public final class Invoker {
             String key,
             String traceId
     ) {
-        String lockId = Origin.OFFICIAL.name() + "\0" + doc.shell() + "\0" + account.account() + "\0" + action + "\0" + key;
+        String lockId = Origin.OFFICIAL.name() + "\0" + doc.conch() + "\0" + account.account() + "\0" + action + "\0" + key;
         Object lock = idempotencyLocks[stripe(lockId)];
         synchronized (lock) {
             Optional<String> stored = idempotency.findFresh(
-                    Origin.OFFICIAL, doc.shell(), account.account(), action, key);
+                    Origin.OFFICIAL, doc.conch(), account.account(), action, key);
             if (stored.isPresent()) {
                 return replay(stored.get());
             }
             InvokeOutcome outcome = execute(principal, doc, action, input, account, secrets, merged, Optional.of(key), traceId);
-            idempotency.save(Origin.OFFICIAL, doc.shell(), account.account(), action, key, new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8));
+            idempotency.save(Origin.OFFICIAL, doc.conch(), account.account(), action, key, new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8));
             return outcome;
         }
     }
@@ -194,7 +194,7 @@ public final class Invoker {
 
     private InvokeOutcome execute(
             ApiKeyPrincipal principal,
-            ShellDoc doc,
+            ConchDoc doc,
             String action,
             Map<String, Object> input,
             Account account,
@@ -206,7 +206,7 @@ public final class Invoker {
         ExecutionRequest request = new ExecutionRequest(
                 traceId,
                 Origin.OFFICIAL,
-                doc.shell(),
+                doc.conch(),
                 action,
                 input,
                 account.account(),
@@ -216,13 +216,13 @@ public final class Invoker {
                 traceId,
                 Origin.OFFICIAL,
                 principal,
-                doc.shell(),
+                doc.conch(),
                 action,
                 account.account(),
                 input,
                 idempotencyKey);
         publish(invocation, result);
-        log(principal, result, secrets, doc.shell(), action, account.account());
+        log(principal, result, secrets, doc.conch(), action, account.account());
         if (result.success()) {
             return done(traceId, null, null, result.data());
         }
@@ -237,11 +237,11 @@ public final class Invoker {
                 LOG.warning("execution listener failed: " + ex.getClass().getName());
             }
         }
-        String version = result.shellVersion() == null ? "" : result.shellVersion();
+        String version = result.conchVersion() == null ? "" : result.conchVersion();
         ReportQueue reports = reportQueue;
         if (reports != null) {
             try {
-                reports.record(invocation.shell(), version, invocation.action(), result);
+                reports.record(invocation.conch(), version, invocation.action(), result);
             } catch (RuntimeException ex) {
                 LOG.warning("report hook failed: " + ex.getClass().getName());
             }
@@ -249,7 +249,7 @@ public final class Invoker {
         RollbackGuard guard = rollbackGuard;
         if (guard != null) {
             try {
-                guard.onResult(invocation.shell(), version, result);
+                guard.onResult(invocation.conch(), version, result);
             } catch (RuntimeException ex) {
                 LOG.warning("rollback hook failed: " + ex.getClass().getName());
             }
@@ -260,7 +260,7 @@ public final class Invoker {
             ApiKeyPrincipal principal,
             ExecutionResult result,
             Map<String, String> secrets,
-            String shell,
+            String conch,
             String action,
             String account
     ) {
@@ -274,10 +274,10 @@ public final class Invoker {
             callLogs.append(new CallLogStore.NewCall(
                     result.traceId() == null ? "" : result.traceId(),
                     Origin.OFFICIAL,
-                    shell,
+                    conch,
                     action,
                     account,
-                    result.shellVersion(),
+                    result.conchVersion(),
                     result.success(),
                     code,
                     message,
@@ -327,6 +327,6 @@ public final class Invoker {
 
     /** Capability disable flags, config file union in-memory switches. */
     public interface CapabilityGate {
-        boolean disabled(String shell, String action);
+        boolean disabled(String conch, String action);
     }
 }

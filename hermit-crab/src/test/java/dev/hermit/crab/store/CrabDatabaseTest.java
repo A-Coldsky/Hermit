@@ -31,7 +31,7 @@ class CrabDatabaseTest {
             assertThat(tableNames(fixture)).contains(
                     "ACCOUNTS",
                     "CREDENTIALS",
-                    "SHELL_CONFIG",
+                    "CONCH_CONFIG",
                     "API_KEYS",
                     "CONFIG_AUDIT",
                     "SCHEMA_VERSION",
@@ -44,7 +44,7 @@ class CrabDatabaseTest {
                     "VERSION_SUCCESS",
                     "PINNED_ROLLBACKS",
                     "MISMATCH_STREAK",
-                    "SHELL_PREVIOUS",
+                    "CONCH_PREVIOUS",
                     "INSTALLED_VERSIONS",
                     "SYNC_STATE",
                     "REPORT_QUEUE",
@@ -52,7 +52,7 @@ class CrabDatabaseTest {
                     "HOURLY_COUNTS",
                     "REPORT_META",
                     "PENDING_CREDENTIAL_DELETES",
-                    "DISABLED_SHELLS");
+                    "DISABLED_CONCHES");
             assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6, 7);
             assertThat(indexNames(fixture)).contains("CONFIG_AUDIT_AT_IDX");
             assertThat(columnType(fixture, "CREDENTIALS", "CIPHERTEXT")).contains("BINARY");
@@ -153,24 +153,24 @@ class CrabDatabaseTest {
     }
 
     @Test
-    void versionSevenAddsDisabledShellsWithoutReapplyingVersionSix() throws Exception {
+    void versionSevenAddsDisabledConchesWithoutReapplyingVersionSix() throws Exception {
         StoreFixture fixture = StoreFixture.open(temp);
         try {
             try (Connection connection = fixture.dataSource.getConnection();
                  Statement statement = connection.createStatement()) {
-                statement.execute("DROP TABLE disabled_shells");
+                statement.execute("DROP TABLE disabled_conches");
                 statement.execute("DROP INDEX config_audit_at_idx");
                 statement.execute("DELETE FROM schema_version WHERE version = 7");
             }
             assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6);
-            assertThat(tableNames(fixture)).doesNotContain("DISABLED_SHELLS");
+            assertThat(tableNames(fixture)).doesNotContain("DISABLED_CONCHES");
         } finally {
             fixture.close();
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
             assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7);
-            assertThat(tableNames(reopened)).contains("DISABLED_SHELLS");
+            assertThat(tableNames(reopened)).contains("DISABLED_CONCHES");
             assertThat(indexNames(reopened)).doesNotContain("CONFIG_AUDIT_AT_IDX");
         }
     }
@@ -222,7 +222,7 @@ class CrabDatabaseTest {
 
     private static void insertQueuedRollback(Connection connection, Instant at, String reason) throws Exception {
         try (PreparedStatement insert = connection.prepareStatement("""
-                INSERT INTO rollback_queue (at, shell, from_version, to_version, reason)
+                INSERT INTO rollback_queue (at, conch, from_version, to_version, reason)
                 VALUES (?, ?, ?, ?, ?)
                 """)) {
             Db.setInstant(insert, 1, at);

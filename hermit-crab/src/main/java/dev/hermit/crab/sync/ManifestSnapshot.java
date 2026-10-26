@@ -10,7 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * JSON object {@code {shell: version}} stored beside the manifest ETag.
+ * JSON object {@code {conch: version}} stored beside the manifest ETag.
  * A document that is not that object is treated as missing so the next sync refetches.
  */
 final class ManifestSnapshot {

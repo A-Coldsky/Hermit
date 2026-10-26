@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ActionChange, ShellDiff } from '../api'
+import type { ActionChange, ConchDiff } from '../api'
 
-const props = defineProps<{ diff: Partial<ShellDiff> | null }>()
+const props = defineProps<{ diff: Partial<ConchDiff> | null }>()
 
 const changeParts: { key: keyof Omit<ActionChange, 'name'>; label: string }[] = [
   { key: 'input', label: '输入' },

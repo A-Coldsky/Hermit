@@ -20,24 +20,24 @@ public final class AccountStore {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
     }
 
-    public Account create(Origin origin, String shell, String account, String actor) {
+    public Account create(Origin origin, String conch, String account, String actor) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         String checkedAccount = Checks.account(account);
         String checkedActor = Checks.actor(actor);
-        synchronized (ShellLocks.of(dataSource, checkedOrigin, checkedShell)) {
+        synchronized (ConchLocks.of(dataSource, checkedOrigin, checkedConch)) {
             return Db.transaction(dataSource, connection -> {
-                if (find(connection, checkedOrigin, checkedShell, checkedAccount) != null) {
+                if (find(connection, checkedOrigin, checkedConch, checkedAccount) != null) {
                     throw new IllegalStateException("account already exists");
                 }
-                boolean first = count(connection, checkedOrigin, checkedShell) == 0;
+                boolean first = count(connection, checkedOrigin, checkedConch) == 0;
                 Instant now = Instant.now();
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        INSERT INTO accounts (origin, shell, account, is_default, created_at)
+                        INSERT INTO accounts (origin, conch, account, is_default, created_at)
                         VALUES (?, ?, ?, ?, ?)
                         """)) {
                     statement.setString(1, checkedOrigin.name());
-                    statement.setString(2, checkedShell);
+                    statement.setString(2, checkedConch);
                     statement.setString(3, checkedAccount);
                     statement.setBoolean(4, first);
                     Db.setInstant(statement, 5, now);
@@ -50,82 +50,82 @@ public final class AccountStore {
                         connection,
                         checkedActor,
                         AuditKind.ACCOUNT_CREATED,
-                        ConfigAudit.target(checkedOrigin, checkedShell, checkedAccount),
+                        ConfigAudit.target(checkedOrigin, checkedConch, checkedAccount),
                         Json.write(detail));
-                return new Account(checkedOrigin, checkedShell, checkedAccount, first, now);
+                return new Account(checkedOrigin, checkedConch, checkedAccount, first, now);
             });
         }
     }
 
-    public void setDefault(Origin origin, String shell, String account, String actor) {
+    public void setDefault(Origin origin, String conch, String account, String actor) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         String checkedAccount = Checks.account(account);
         String checkedActor = Checks.actor(actor);
-        synchronized (ShellLocks.of(dataSource, checkedOrigin, checkedShell)) {
+        synchronized (ConchLocks.of(dataSource, checkedOrigin, checkedConch)) {
             Db.transaction(dataSource, connection -> {
-                if (find(connection, checkedOrigin, checkedShell, checkedAccount) == null) {
-                    throw new AccountNotFoundException(checkedOrigin, checkedShell, checkedAccount);
+                if (find(connection, checkedOrigin, checkedConch, checkedAccount) == null) {
+                    throw new AccountNotFoundException(checkedOrigin, checkedConch, checkedAccount);
                 }
                 try (PreparedStatement clear = connection.prepareStatement("""
                         UPDATE accounts SET is_default = FALSE
-                        WHERE origin = ? AND shell = ? AND is_default = TRUE
+                        WHERE origin = ? AND conch = ? AND is_default = TRUE
                         """)) {
                     clear.setString(1, checkedOrigin.name());
-                    clear.setString(2, checkedShell);
+                    clear.setString(2, checkedConch);
                     clear.executeUpdate();
                 }
                 try (PreparedStatement set = connection.prepareStatement("""
                         UPDATE accounts SET is_default = TRUE
-                        WHERE origin = ? AND shell = ? AND account = ?
+                        WHERE origin = ? AND conch = ? AND account = ?
                         """)) {
                     set.setString(1, checkedOrigin.name());
-                    set.setString(2, checkedShell);
+                    set.setString(2, checkedConch);
                     set.setString(3, checkedAccount);
                     if (set.executeUpdate() != 1) {
-                        throw new AccountNotFoundException(checkedOrigin, checkedShell, checkedAccount);
+                        throw new AccountNotFoundException(checkedOrigin, checkedConch, checkedAccount);
                     }
                 }
                 ConfigAudit.append(
                         connection,
                         checkedActor,
                         AuditKind.DEFAULT_CHANGED,
-                        ConfigAudit.target(checkedOrigin, checkedShell, checkedAccount),
+                        ConfigAudit.target(checkedOrigin, checkedConch, checkedAccount),
                         Json.write(Map.of("account", checkedAccount)));
                 return null;
             });
         }
     }
 
-    public void delete(Origin origin, String shell, String account, String actor) {
+    public void delete(Origin origin, String conch, String account, String actor) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         String checkedAccount = Checks.account(account);
         String checkedActor = Checks.actor(actor);
-        synchronized (ShellLocks.of(dataSource, checkedOrigin, checkedShell)) {
+        synchronized (ConchLocks.of(dataSource, checkedOrigin, checkedConch)) {
             Db.transaction(dataSource, connection -> {
-                Account existing = find(connection, checkedOrigin, checkedShell, checkedAccount);
+                Account existing = find(connection, checkedOrigin, checkedConch, checkedAccount);
                 if (existing == null) {
-                    throw new AccountNotFoundException(checkedOrigin, checkedShell, checkedAccount);
+                    throw new AccountNotFoundException(checkedOrigin, checkedConch, checkedAccount);
                 }
-                int others = count(connection, checkedOrigin, checkedShell) - 1;
+                int others = count(connection, checkedOrigin, checkedConch) - 1;
                 if (existing.defaultAccount() && others > 0) {
                     throw new IllegalStateException(
                             "cannot delete the default account while other accounts exist; set a new default first");
                 }
                 try (PreparedStatement credentials = connection.prepareStatement("""
-                        DELETE FROM credentials WHERE origin = ? AND shell = ? AND account = ?
+                        DELETE FROM credentials WHERE origin = ? AND conch = ? AND account = ?
                         """)) {
                     credentials.setString(1, checkedOrigin.name());
-                    credentials.setString(2, checkedShell);
+                    credentials.setString(2, checkedConch);
                     credentials.setString(3, checkedAccount);
                     credentials.executeUpdate();
                 }
                 try (PreparedStatement accounts = connection.prepareStatement("""
-                        DELETE FROM accounts WHERE origin = ? AND shell = ? AND account = ?
+                        DELETE FROM accounts WHERE origin = ? AND conch = ? AND account = ?
                         """)) {
                     accounts.setString(1, checkedOrigin.name());
-                    accounts.setString(2, checkedShell);
+                    accounts.setString(2, checkedConch);
                     accounts.setString(3, checkedAccount);
                     accounts.executeUpdate();
                 }
@@ -133,48 +133,48 @@ public final class AccountStore {
                         connection,
                         checkedActor,
                         AuditKind.ACCOUNT_DELETED,
-                        ConfigAudit.target(checkedOrigin, checkedShell, checkedAccount),
+                        ConfigAudit.target(checkedOrigin, checkedConch, checkedAccount),
                         Json.write(Map.of("account", checkedAccount)));
                 return null;
             });
         }
     }
 
-    public Account resolve(Origin origin, String shell, Optional<String> account) {
+    public Account resolve(Origin origin, String conch, Optional<String> account) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         Objects.requireNonNull(account, "account");
         if (account.isPresent()) {
             String name = Checks.account(account.get());
-            Account found = Db.transaction(dataSource, connection -> find(connection, checkedOrigin, checkedShell, name));
+            Account found = Db.transaction(dataSource, connection -> find(connection, checkedOrigin, checkedConch, name));
             if (found == null) {
-                throw new AccountNotFoundException(checkedOrigin, checkedShell, name);
+                throw new AccountNotFoundException(checkedOrigin, checkedConch, name);
             }
             return found;
         }
         List<Account> defaults = Db.transaction(
-                dataSource, connection -> listDefaults(connection, checkedOrigin, checkedShell));
+                dataSource, connection -> listDefaults(connection, checkedOrigin, checkedConch));
         if (defaults.isEmpty()) {
-            throw AccountNotFoundException.noDefault(checkedOrigin, checkedShell);
+            throw AccountNotFoundException.noDefault(checkedOrigin, checkedConch);
         }
         if (defaults.size() > 1) {
-            throw new IllegalStateException("multiple default accounts for " + checkedOrigin + "/" + checkedShell);
+            throw new IllegalStateException("multiple default accounts for " + checkedOrigin + "/" + checkedConch);
         }
         return defaults.get(0);
     }
 
-    public List<Account> list(Origin origin, String shell) {
+    public List<Account> list(Origin origin, String conch) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT origin, shell, account, is_default, created_at
+                    SELECT origin, conch, account, is_default, created_at
                     FROM accounts
-                    WHERE origin = ? AND shell = ?
+                    WHERE origin = ? AND conch = ?
                     ORDER BY created_at, account
                     """)) {
                 statement.setString(1, checkedOrigin.name());
-                statement.setString(2, checkedShell);
+                statement.setString(2, checkedConch);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     List<Account> accounts = new ArrayList<>();
                     while (resultSet.next()) {
@@ -186,14 +186,14 @@ public final class AccountStore {
         });
     }
 
-    private static Account find(Connection connection, Origin origin, String shell, String account) throws SQLException {
+    private static Account find(Connection connection, Origin origin, String conch, String account) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT origin, shell, account, is_default, created_at
+                SELECT origin, conch, account, is_default, created_at
                 FROM accounts
-                WHERE origin = ? AND shell = ? AND account = ?
+                WHERE origin = ? AND conch = ? AND account = ?
                 """)) {
             statement.setString(1, origin.name());
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             statement.setString(3, account);
             try (ResultSet resultSet = statement.executeQuery()) {
                 return resultSet.next() ? read(resultSet) : null;
@@ -201,11 +201,11 @@ public final class AccountStore {
         }
     }
 
-    private static int count(Connection connection, Origin origin, String shell) throws SQLException {
+    private static int count(Connection connection, Origin origin, String conch) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
-                "SELECT COUNT(*) FROM accounts WHERE origin = ? AND shell = ?")) {
+                "SELECT COUNT(*) FROM accounts WHERE origin = ? AND conch = ?")) {
             statement.setString(1, origin.name());
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getInt(1);
@@ -213,15 +213,15 @@ public final class AccountStore {
         }
     }
 
-    private static List<Account> listDefaults(Connection connection, Origin origin, String shell) throws SQLException {
+    private static List<Account> listDefaults(Connection connection, Origin origin, String conch) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT origin, shell, account, is_default, created_at
+                SELECT origin, conch, account, is_default, created_at
                 FROM accounts
-                WHERE origin = ? AND shell = ? AND is_default = TRUE
+                WHERE origin = ? AND conch = ? AND is_default = TRUE
                 ORDER BY account
                 """)) {
             statement.setString(1, origin.name());
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             try (ResultSet resultSet = statement.executeQuery()) {
                 List<Account> defaults = new ArrayList<>();
                 while (resultSet.next()) {
@@ -235,7 +235,7 @@ public final class AccountStore {
     private static Account read(ResultSet resultSet) throws SQLException {
         return new Account(
                 Origin.valueOf(resultSet.getString("origin")),
-                resultSet.getString("shell"),
+                resultSet.getString("conch"),
                 resultSet.getString("account"),
                 resultSet.getBoolean("is_default"),
                 Db.instant(resultSet, "created_at"));

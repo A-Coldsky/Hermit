@@ -10,9 +10,9 @@ export const router = createRouter({
       component: () => import('./App.vue'),
       children: [
         { path: '', name: 'dashboard', component: () => import('./views/DashboardView.vue') },
-        { path: 'shells', name: 'shells', component: () => import('./views/ShellsView.vue') },
-        { path: 'shells/upload', name: 'upload', component: () => import('./views/UploadView.vue') },
-        { path: 'shells/:shell', name: 'shell', component: () => import('./views/ShellDetailView.vue'), props: true },
+        { path: 'conches', name: 'conches', component: () => import('./views/ConchesView.vue') },
+        { path: 'conches/upload', name: 'upload', component: () => import('./views/UploadView.vue') },
+        { path: 'conches/:conch', name: 'conch', component: () => import('./views/ConchDetailView.vue'), props: true },
         { path: 'tide', name: 'tide', component: () => import('./views/TideView.vue') },
         { path: 'alerts', name: 'alerts', component: () => import('./views/AlertsView.vue') },
         { path: 'audit', name: 'audit', component: () => import('./views/AuditView.vue') },

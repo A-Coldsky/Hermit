@@ -23,14 +23,14 @@ class ConsoleHttpTest {
                 .withListen("127.0.0.1", 0)
                 .withDisabled(List.of("legacy_oa.list_todo"));
         try (TestServer server = TestServer.open(temp, PASSWORD, config)) {
-            TestServer.Reply denied = server.console("GET", "/console/api/shells", null, false);
+            TestServer.Reply denied = server.console("GET", "/console/api/conches", null, false);
             assertThat(denied.status()).isEqualTo(403);
             assertThat(denied.json().path("error").path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(denied.json().path("error").path("message").asText()).isEqualTo("console access denied");
 
             server.configureAccount("alice");
             TestServer.Reply names = server.console(
-                    "GET", "/console/api/shells/legacy_oa/accounts/alice/credentials", null, true);
+                    "GET", "/console/api/conches/legacy_oa/accounts/alice/credentials", null, true);
             assertThat(names.status()).isEqualTo(200);
             assertThat(names.json().path("data").path("fields").toString()).contains("password");
             SecretChecks.absent(names.body(), PASSWORD);
@@ -73,7 +73,7 @@ class ConsoleHttpTest {
                     .isTrue();
 
             TestServer.Reply login = server.console(
-                    "POST", "/console/api/shells/legacy_oa/accounts/alice/test-login", "{}", true);
+                    "POST", "/console/api/conches/legacy_oa/accounts/alice/test-login", "{}", true);
             assertThat(login.status()).isEqualTo(200);
             assertThat(login.json().path("data").path("ok").asBoolean()).isTrue();
             SecretChecks.absent(login.body(), PASSWORD);
@@ -81,7 +81,7 @@ class ConsoleHttpTest {
     }
 
     @Test
-    void shellSwitchCanDisableACapability() throws Exception {
+    void conchSwitchCanDisableACapability() throws Exception {
         try (TestServer server = TestServer.open(temp.resolve("switch"), PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
             server.configureAccount("alice");
             server.runtime.setCapabilityDisabled("legacy_oa", "save_note", true, Actors.CONSOLE);

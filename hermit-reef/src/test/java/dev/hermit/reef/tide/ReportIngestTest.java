@@ -79,7 +79,7 @@ class ReportIngestTest {
     }
 
     @Test
-    void validBatchWritesAllThreeTablesAndAcceptsAnUnpublishedShell() throws Exception {
+    void validBatchWritesAllThreeTablesAndAcceptsAnUnpublishedConch() throws Exception {
         Integer versionTwo = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM \"flyway_schema_history\" WHERE \"version\" = '2' AND \"success\" = TRUE",
                 Integer.class);
@@ -112,7 +112,7 @@ class ReportIngestTest {
         assertThat(jdbc.queryForObject("SELECT error_code FROM failure_reports", String.class)).isEqualTo("RULE_MISMATCH");
         assertThat(jdbc.queryForObject("SELECT success FROM hourly_counts", Long.class)).isEqualTo(3L);
         assertThat(jdbc.queryForObject("SELECT reason FROM rollback_events", String.class)).isEqualTo("RULE_MISMATCH");
-        assertThat(count("shell_versions")).isZero();
+        assertThat(count("conch_versions")).isZero();
     }
 
     @Test
@@ -120,9 +120,9 @@ class ReportIngestTest {
         ObjectMapper mapper = new ObjectMapper();
         JsonNode valid = mapper.readTree(ReportJson.write(sample("1.2.3")));
         List<String> rejected = List.of(
-                with(mapper, valid, node -> ((ObjectNode) node.get("failures").get(0)).put("shell", "Bad")),
+                with(mapper, valid, node -> ((ObjectNode) node.get("failures").get(0)).put("conch", "Bad")),
                 with(mapper, valid, node -> ((ObjectNode) node.get("failures").get(0)).put("action", "a")),
-                with(mapper, valid, node -> ((ObjectNode) node.get("counts").get(0)).put("shellVersion", "1.0")),
+                with(mapper, valid, node -> ((ObjectNode) node.get("counts").get(0)).put("conchVersion", "1.0")),
                 with(mapper, valid, node -> ((ObjectNode) node.get("failures").get(0)).put("errorCode", "NOPE")),
                 with(mapper, valid, node -> ((ObjectNode) node.get("events").get(0)).put("fromVersion", "1.0.0+build")),
                 with(mapper, valid, node -> ((ObjectNode) node.get("events").get(0)).remove("eventId")),
@@ -240,10 +240,10 @@ class ReportIngestTest {
         ObjectMapper mapper = new ObjectMapper();
         ObjectNode node = (ObjectNode) mapper.readTree(ReportJson.write(sample("1.2.3")));
         ((ObjectNode) node.get("failures").get(0)).put("stepType", "Custom-Step");
-        ((ObjectNode) node.get("failures").get(0)).put("shellVersion", "1.0.0-rc.1");
+        ((ObjectNode) node.get("failures").get(0)).put("conchVersion", "1.0.0-rc.1");
         send(mapper.writeValueAsString(node), INSTANCE);
         assertThat(jdbc.queryForObject("SELECT step_type FROM failure_reports", String.class)).isEqualTo("Custom-Step");
-        assertThat(jdbc.queryForObject("SELECT shell_version FROM failure_reports", String.class)).isEqualTo("1.0.0-rc.1");
+        assertThat(jdbc.queryForObject("SELECT conch_version FROM failure_reports", String.class)).isEqualTo("1.0.0-rc.1");
     }
 
     @Test
@@ -319,7 +319,7 @@ class ReportIngestTest {
     void uniqueIndexRejectsASecondRawInsertOfTheSameTrace() throws Exception {
         send(ReportJson.write(sample("1.2.3")), INSTANCE);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update(
-                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, shell, shell_version, "
+                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, conch_version, "
                         + "action, error_code, summary, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 java.sql.Timestamp.from(SENT), INSTANCE, "1.2.3", "t1", "legacy_oa", "1.0.0", "list_todo",
                 "TIMEOUT", "dup", java.sql.Timestamp.from(SENT)))
@@ -366,8 +366,8 @@ class ReportIngestTest {
     private static ObjectNode failureNode(ObjectMapper mapper, String traceId, String summary) {
         ObjectNode node = mapper.createObjectNode();
         node.put("traceId", traceId);
-        node.put("shell", "legacy_oa");
-        node.put("shellVersion", "1.0.0");
+        node.put("conch", "legacy_oa");
+        node.put("conchVersion", "1.0.0");
         node.put("action", "list_todo");
         node.putNull("stepIndex");
         node.putNull("stepType");

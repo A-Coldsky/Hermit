@@ -61,7 +61,7 @@ public class AlertService {
         if (!filter.equals("open") && !filter.equals("all")) {
             throw TideErrors.unprocessable();
         }
-        String sql = "SELECT id, created_at, kind, shell, shell_version, detail_json, acknowledged_at, "
+        String sql = "SELECT id, created_at, kind, conch, conch_version, detail_json, acknowledged_at, "
                 + "acknowledged_by FROM alerts";
         if (filter.equals("open")) {
             sql += " WHERE acknowledged_at IS NULL";
@@ -95,16 +95,16 @@ public class AlertService {
     }
 
     private void considerRegression(CurrentVersion current, List<WebhookNotice> created, Instant now) {
-        Totals calls = totals(current.shell(), current.version(), current.publishedAt(), null);
+        Totals calls = totals(current.conch(), current.version(), current.publishedAt(), null);
         if (calls.calls() < properties.getNewVersionMinCalls()) {
             return;
         }
-        String previous = previousPublished(current.shell(), current.publishedAt());
+        String previous = previousPublished(current.conch(), current.publishedAt());
         Totals baseline = Totals.ZERO;
         String baselineVersion = null;
         if (previous != null) {
             Instant baselineFrom = current.publishedAt().minus(Duration.ofDays(properties.getBaselineWindowDays()));
-            Totals window = totals(current.shell(), previous, baselineFrom, current.publishedAt());
+            Totals window = totals(current.conch(), previous, baselineFrom, current.publishedAt());
             if (window.calls() >= properties.getNewVersionMinCalls()) {
                 baseline = window;
                 baselineVersion = previous;
@@ -113,7 +113,7 @@ public class AlertService {
         boolean fire = baselineVersion == null
                 ? rateAbove(calls.failure(), calls.calls(), properties.getNoBaselineFailureRate())
                 : deltaAtLeast(calls, baseline, properties.getRegressionDelta());
-        if (!fire || duplicateWithin(AlertKind.NEW_VERSION_REGRESSION, current.shell(), current.version(), now)) {
+        if (!fire || duplicateWithin(AlertKind.NEW_VERSION_REGRESSION, current.conch(), current.version(), now)) {
             return;
         }
         Map<String, Object> detail = new LinkedHashMap<>();
@@ -122,51 +122,51 @@ public class AlertService {
         detail.put("baselineVersion", baselineVersion);
         detail.put("baselineCalls", baseline.calls());
         detail.put("baselineFailures", baseline.failure());
-        created.add(insert(now, AlertKind.NEW_VERSION_REGRESSION, current.shell(), current.version(), detail));
+        created.add(insert(now, AlertKind.NEW_VERSION_REGRESSION, current.conch(), current.version(), detail));
     }
 
     private void considerSurge(ErrorCode errorCode, AlertKind kind, boolean requireQuiet, Instant now,
             List<WebhookNotice> created) {
         Instant from = now.minus(Duration.ofMinutes(properties.getSurgeWindowMinutes()));
         List<Surge> surges = jdbc.query(
-                "SELECT shell, COUNT(*) AS cnt FROM failure_reports "
+                "SELECT conch, COUNT(*) AS cnt FROM failure_reports "
                         + "WHERE error_code = ? AND occurred_at >= ? AND occurred_at <= ? "
-                        + "GROUP BY shell HAVING COUNT(*) >= ? ORDER BY shell",
-                (rs, rowNum) -> new Surge(rs.getString("shell"), rs.getLong("cnt")),
+                        + "GROUP BY conch HAVING COUNT(*) >= ? ORDER BY conch",
+                (rs, rowNum) -> new Surge(rs.getString("conch"), rs.getLong("cnt")),
                 errorCode.name(),
                 Timestamp.from(from),
                 Timestamp.from(now),
                 properties.getSurgeMinCount());
         for (Surge surge : surges) {
-            if (requireQuiet && recentlyChanged(surge.shell(), now)) {
+            if (requireQuiet && recentlyChanged(surge.conch(), now)) {
                 continue;
             }
-            if (duplicateWithin(kind, surge.shell(), null, now)) {
+            if (duplicateWithin(kind, surge.conch(), null, now)) {
                 continue;
             }
             Map<String, Object> detail = new LinkedHashMap<>();
             detail.put("errorCode", errorCode.name());
             detail.put("count", surge.count());
             detail.put("windowMinutes", properties.getSurgeWindowMinutes());
-            created.add(insert(now, kind, surge.shell(), null, detail));
+            created.add(insert(now, kind, surge.conch(), null, detail));
         }
     }
 
-    private boolean recentlyChanged(String shell, Instant now) {
+    private boolean recentlyChanged(String conch, Instant now) {
         Instant since = now.minus(Duration.ofHours(properties.getQuietHours()));
         Long publishes = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM shell_versions WHERE shell = ? AND published_at >= ? AND published_at <= ?",
+                "SELECT COUNT(*) FROM conch_versions WHERE conch = ? AND published_at >= ? AND published_at <= ?",
                 Long.class,
-                shell,
+                conch,
                 Timestamp.from(since),
                 Timestamp.from(now));
         if (publishes != null && publishes > 0) {
             return true;
         }
         Long rollbacks = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM audit_log WHERE shell = ? AND action = 'ROLLBACK' AND at >= ? AND at <= ?",
+                "SELECT COUNT(*) FROM audit_log WHERE conch = ? AND action = 'ROLLBACK' AND at >= ? AND at <= ?",
                 Long.class,
-                shell,
+                conch,
                 Timestamp.from(since),
                 Timestamp.from(now));
         return rollbacks != null && rollbacks > 0;
@@ -174,32 +174,32 @@ public class AlertService {
 
     // 窗口从 created_at 起算 dedup-hours。确认不重新计时，也不清掉剩余时间；失败次数上涨不提前打破。
     // created_at 早于或等于 now - dedup-hours 后，条件仍成立才新建。
-    private boolean duplicateWithin(AlertKind kind, String shell, String version, Instant now) {
+    private boolean duplicateWithin(AlertKind kind, String conch, String version, Instant now) {
         Instant since = now.minus(Duration.ofHours(properties.getDedupHours()));
         Long count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM alerts WHERE kind = ? AND shell = ? AND created_at > ? "
-                        + "AND ((? IS NULL AND shell_version IS NULL) OR shell_version = ?)",
+                "SELECT COUNT(*) FROM alerts WHERE kind = ? AND conch = ? AND created_at > ? "
+                        + "AND ((? IS NULL AND conch_version IS NULL) OR conch_version = ?)",
                 Long.class,
                 kind.name(),
-                shell,
+                conch,
                 Timestamp.from(since),
                 version,
                 version);
         return count != null && count > 0;
     }
 
-    private WebhookNotice insert(Instant createdAt, AlertKind kind, String shell, String version,
+    private WebhookNotice insert(Instant createdAt, AlertKind kind, String conch, String version,
             Map<String, Object> detail) {
         JsonNode node = objectMapper.valueToTree(detail);
         String json = node.toString();
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(
-                    "INSERT INTO alerts (created_at, kind, shell, shell_version, detail_json) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO alerts (created_at, kind, conch, conch_version, detail_json) VALUES (?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             statement.setTimestamp(1, Timestamp.from(createdAt));
             statement.setString(2, kind.name());
-            statement.setString(3, shell);
+            statement.setString(3, conch);
             if (version == null) {
                 statement.setNull(4, Types.VARCHAR);
             } else {
@@ -212,47 +212,47 @@ public class AlertService {
         if (id == null) {
             throw new IllegalStateException("alert id was not generated");
         }
-        return new WebhookNotice(id.longValue(), kind.name(), shell, version, node, createdAt,
+        return new WebhookNotice(id.longValue(), kind.name(), conch, version, node, createdAt,
                 TideWebhookClient.ADMIN_ALERTS_PATH);
     }
 
     private List<CurrentVersion> currentVersions() {
         return jdbc.query(
-                "SELECT shell, version, published_at FROM shell_versions "
+                "SELECT conch, version, published_at FROM conch_versions "
                         + "WHERE is_current = TRUE AND status = 'PUBLISHED' AND published_at IS NOT NULL "
-                        + "ORDER BY shell, version",
+                        + "ORDER BY conch, version",
                 (rs, rowNum) -> new CurrentVersion(
-                        rs.getString("shell"),
+                        rs.getString("conch"),
                         rs.getString("version"),
                         rs.getTimestamp("published_at").toInstant()));
     }
 
-    private String previousPublished(String shell, Instant publishedAt) {
+    private String previousPublished(String conch, Instant publishedAt) {
         List<String> versions = jdbc.query(
-                "SELECT version FROM shell_versions WHERE shell = ? AND status = 'PUBLISHED' AND published_at < ? "
+                "SELECT version FROM conch_versions WHERE conch = ? AND status = 'PUBLISHED' AND published_at < ? "
                         + "ORDER BY published_at DESC, id DESC LIMIT 1",
                 (rs, rowNum) -> rs.getString(1),
-                shell,
+                conch,
                 Timestamp.from(publishedAt));
         return versions.isEmpty() ? null : versions.get(0);
     }
 
-    private Totals totals(String shell, String version, Instant fromInclusive, Instant toExclusive) {
+    private Totals totals(String conch, String version, Instant fromInclusive, Instant toExclusive) {
         Totals totals;
         if (toExclusive == null) {
             totals = jdbc.queryForObject(
                     "SELECT COALESCE(SUM(success), 0), COALESCE(SUM(failure), 0) FROM hourly_counts "
-                            + "WHERE shell = ? AND shell_version = ? AND hour_start >= ?",
+                            + "WHERE conch = ? AND conch_version = ? AND hour_start >= ?",
                     (rs, rowNum) -> new Totals(rs.getLong(1), rs.getLong(2)),
-                    shell,
+                    conch,
                     version,
                     Timestamp.from(fromInclusive));
         } else {
             totals = jdbc.queryForObject(
                     "SELECT COALESCE(SUM(success), 0), COALESCE(SUM(failure), 0) FROM hourly_counts "
-                            + "WHERE shell = ? AND shell_version = ? AND hour_start >= ? AND hour_start < ?",
+                            + "WHERE conch = ? AND conch_version = ? AND hour_start >= ? AND hour_start < ?",
                     (rs, rowNum) -> new Totals(rs.getLong(1), rs.getLong(2)),
-                    shell,
+                    conch,
                     version,
                     Timestamp.from(fromInclusive),
                     Timestamp.from(toExclusive));
@@ -262,7 +262,7 @@ public class AlertService {
 
     private AlertItem find(long id) {
         List<AlertItem> items = jdbc.query(
-                "SELECT id, created_at, kind, shell, shell_version, detail_json, acknowledged_at, acknowledged_by "
+                "SELECT id, created_at, kind, conch, conch_version, detail_json, acknowledged_at, acknowledged_by "
                         + "FROM alerts WHERE id = ?",
                 (rs, rowNum) -> mapAlert(rs),
                 id);
@@ -284,8 +284,8 @@ public class AlertService {
                 rs.getLong("id"),
                 rs.getTimestamp("created_at").toInstant(),
                 rs.getString("kind"),
-                rs.getString("shell"),
-                rs.getString("shell_version"),
+                rs.getString("conch"),
+                rs.getString("conch_version"),
                 detail,
                 acknowledged == null ? null : acknowledged.toInstant(),
                 rs.getString("acknowledged_by"));
@@ -309,10 +309,10 @@ public class AlertService {
         return left.compareTo(right) >= 0;
     }
 
-    private record CurrentVersion(String shell, String version, Instant publishedAt) {
+    private record CurrentVersion(String conch, String version, Instant publishedAt) {
     }
 
-    private record Surge(String shell, long count) {
+    private record Surge(String conch, long count) {
     }
 
     record Totals(long success, long failure) {

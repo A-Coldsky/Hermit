@@ -93,26 +93,26 @@ class Phase1AcceptanceTest {
                 try (CrabServer crab = CrabServer.start(env)) {
                     String crabBase = "http://127.0.0.1:" + crab.port();
                     waitUntil(POLL, () -> synced(crabBase, "1.0.0"));
-                    assertThat(shellVersion(crabBase, "legacy_oa")).isEqualTo("1.0.0");
+                    assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.0.0");
 
                     String apiKey = createApiKey(crabBase);
                     secrets.add(apiKey);
                     assertCode(call(crabBase, apiKey, null), 409, "NOT_CONFIGURED");
 
-                    console(crabBase, "POST", "/console/api/shells/legacy_oa/accounts", "{\"name\":\"alice\"}");
+                    console(crabBase, "POST", "/console/api/conches/legacy_oa/accounts", "{\"name\":\"alice\"}");
                     assertCode(call(crabBase, apiKey, null), 409, "NOT_CONFIGURED");
 
-                    console(crabBase, "PUT", "/console/api/shells/legacy_oa/config",
+                    console(crabBase, "PUT", "/console/api/conches/legacy_oa/config",
                             "{\"base_url\":\"" + fixture.baseUrl() + "\"}");
-                    console(crabBase, "PUT", "/console/api/shells/legacy_oa/accounts/alice/credentials",
+                    console(crabBase, "PUT", "/console/api/conches/legacy_oa/accounts/alice/credentials",
                             "{\"username\":\"alice\",\"password\":\"" + OA_PASSWORD + "\"}");
                     JsonNode alice = call(crabBase, apiKey, null);
                     assertThat(alice.path("success").asBoolean()).isTrue();
                     assertThat(alice.path("data").path("items").get(0).path("title").asText()).isEqualTo("张三的请假申请");
                     assertCookieOwner(fixture, "alice", "bob");
 
-                    console(crabBase, "POST", "/console/api/shells/legacy_oa/accounts", "{\"name\":\"bob\"}");
-                    console(crabBase, "PUT", "/console/api/shells/legacy_oa/accounts/bob/credentials",
+                    console(crabBase, "POST", "/console/api/conches/legacy_oa/accounts", "{\"name\":\"bob\"}");
+                    console(crabBase, "PUT", "/console/api/conches/legacy_oa/accounts/bob/credentials",
                             "{\"username\":\"bob\",\"password\":\"" + OA_PASSWORD + "\"}");
                     JsonNode bob = call(crabBase, apiKey, "bob");
                     assertThat(bob.path("success").asBoolean()).isTrue();
@@ -128,7 +128,7 @@ class Phase1AcceptanceTest {
                     for (int i = 0; i < 5; i++) {
                         assertCode(call(crabBase, apiKey, null), 422, "RULE_MISMATCH");
                     }
-                    waitUntil(POLL, () -> "1.0.0".equals(shellVersion(crabBase, "legacy_oa")));
+                    waitUntil(POLL, () -> "1.0.0".equals(conchVersion(crabBase, "legacy_oa")));
                     JsonNode restored = call(crabBase, apiKey, null);
                     assertThat(restored.path("success").asBoolean()).isTrue();
                     assertThat(restored.path("data").path("items").get(0).path("title").asText()).isEqualTo("张三的请假申请");
@@ -143,19 +143,19 @@ class Phase1AcceptanceTest {
                     assertThat(rollbackReasons(reefBase, token)).contains("RULE_MISMATCH");
 
                     HttpResponse<String> disabled = post(
-                            reefBase, "/api/admin/shells/legacy_oa/disable", token, "{\"reason\":\"phase1 disable\"}");
+                            reefBase, "/api/admin/conches/legacy_oa/disable", token, "{\"reason\":\"phase1 disable\"}");
                     assertThat(disabled.statusCode()).as(safe(disabled.body())).isEqualTo(200);
                     assertThat(json(disabled).path("data").path("disabled").asBoolean()).isTrue();
                     HttpResponse<String> blocked = post(
-                            reefBase, "/api/admin/shells/legacy_oa/versions/1.0.0/publish", token, "");
+                            reefBase, "/api/admin/conches/legacy_oa/versions/1.0.0/publish", token, "");
                     assertThat(blocked.statusCode()).isEqualTo(409);
                     console(crabBase, "POST", "/console/api/sync", "{}");
-                    assertCode(get(crabBase, "/api/legacy_oa/list_todo", apiKey, null), 409, "SHELL_DISABLED");
+                    assertCode(get(crabBase, "/api/legacy_oa/list_todo", apiKey, null), 409, "CONCH_DISABLED");
                     JsonNode syncBody = console(crabBase, "GET", "/console/api/sync", null);
                     JsonNode report = syncBody.path("data").path("report");
                     boolean shownDisabled = false;
-                    for (JsonNode row : report.path("shells")) {
-                        if ("legacy_oa".equals(row.path("shell").asText())
+                    for (JsonNode row : report.path("conches")) {
+                        if ("legacy_oa".equals(row.path("conch").asText())
                                 && "DISABLED".equals(row.path("kind").asText())) {
                             shownDisabled = true;
                         }
@@ -163,7 +163,7 @@ class Phase1AcceptanceTest {
                     assertThat(shownDisabled).as(syncBody.toString()).isTrue();
                     assertThat(report.path("removed").toString()).contains("legacy_oa");
 
-                    String leaked = sample.replace("shell: legacy_oa", "shell: leaked_pw")
+                    String leaked = sample.replace("conch: legacy_oa", "conch: leaked_pw")
                             .replace("password: \"{{credential.password | md5}}\"",
                                     "password: \"" + LITERAL_PASSWORD + "\"");
                     HttpResponse<String> rejected = uploadRaw(
@@ -264,7 +264,7 @@ class Phase1AcceptanceTest {
         System.arraycopy(head, 0, payload, 0, head.length);
         System.arraycopy(body, 0, payload, head.length, body.length);
         System.arraycopy(tail, 0, payload, head.length + body.length, tail.length);
-        HttpRequest request = HttpRequest.newBuilder(URI.create(base + "/api/admin/shells"))
+        HttpRequest request = HttpRequest.newBuilder(URI.create(base + "/api/admin/conches"))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + token)
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
@@ -273,28 +273,28 @@ class Phase1AcceptanceTest {
         return http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     }
 
-    private void publish(String base, String token, String shell, String version) throws Exception {
-        HttpResponse<String> response = post(base, "/api/admin/shells/" + shell + "/versions/" + version + "/publish", token, "");
+    private void publish(String base, String token, String conch, String version) throws Exception {
+        HttpResponse<String> response = post(base, "/api/admin/conches/" + conch + "/versions/" + version + "/publish", token, "");
         assertThat(response.statusCode()).as(safe(response.body())).isEqualTo(200);
     }
 
     private boolean synced(String base, String version) {
         try {
             postConsole(base, "/console/api/sync", "{}");
-            return version.equals(shellVersion(base, "legacy_oa"));
+            return version.equals(conchVersion(base, "legacy_oa"));
         } catch (Exception ex) {
             return false;
         }
     }
 
-    private String shellVersion(String base, String shell) {
+    private String conchVersion(String base, String conch) {
         try {
-            HttpResponse<String> response = consoleRaw(base, "GET", "/console/api/shells", null);
+            HttpResponse<String> response = consoleRaw(base, "GET", "/console/api/conches", null);
             if (response.statusCode() != 200) {
                 return null;
             }
-            for (JsonNode row : json(response).path("data").path("shells")) {
-                if (shell.equals(row.path("shell").asText())) {
+            for (JsonNode row : json(response).path("data").path("conches")) {
+                if (conch.equals(row.path("conch").asText())) {
                     return row.path("version").asText();
                 }
             }
@@ -373,7 +373,7 @@ class Phase1AcceptanceTest {
 
     private List<String> rollbackReasons(String base, String token) {
         try {
-            HttpResponse<String> response = get(base, "/api/admin/tide/rollbacks?shell=legacy_oa", token);
+            HttpResponse<String> response = get(base, "/api/admin/tide/rollbacks?conch=legacy_oa", token);
             if (response.statusCode() != 200) {
                 return List.of();
             }

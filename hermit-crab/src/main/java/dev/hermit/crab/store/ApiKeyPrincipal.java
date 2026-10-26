@@ -9,17 +9,17 @@ public record ApiKeyPrincipal(String id, String name, ApiKeyScope scope) {
         Objects.requireNonNull(scope, "scope");
     }
 
-    public boolean permits(String shell, String action, boolean actionReadOnly) {
-        if (shell == null || shell.isBlank() || action == null || action.isBlank()) {
+    public boolean permits(String conch, String action, boolean actionReadOnly) {
+        if (conch == null || conch.isBlank() || action == null || action.isBlank()) {
             return false;
         }
         if (scope.readOnlyOnly() && !actionReadOnly) {
             return false;
         }
-        if (!scope.shells().isEmpty() && !scope.shells().contains(shell)) {
+        if (!scope.conches().isEmpty() && !scope.conches().contains(conch)) {
             return false;
         }
-        if (!scope.actions().isEmpty() && !scope.actions().contains(shell + "." + action)) {
+        if (!scope.actions().isEmpty() && !scope.actions().contains(conch + "." + action)) {
             return false;
         }
         return true;

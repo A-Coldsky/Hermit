@@ -8,14 +8,14 @@ import { actorLabels, configAuditLabels, originLabels } from '../labels'
 
 const loading = ref(true)
 const loaded = ref(false)
-const query = reactive({ shell: '', account: '', page: 1, limit: 50 })
+const query = reactive({ conch: '', account: '', page: 1, limit: 50 })
 const result = ref<ConfigAuditPage>({ entries: [], page: 1, limit: 50, total: 0 })
 
 async function load() {
   loading.value = true
   try {
     result.value = await api.audit({
-      shell: query.shell.trim() || undefined,
+      conch: query.conch.trim() || undefined,
       account: query.account.trim() || undefined,
       page: query.page,
       limit: query.limit,
@@ -56,7 +56,7 @@ onMounted(load)
 
     <div class="hm-card">
       <div class="hm-toolbar">
-        <el-input v-model="query.shell" placeholder="按 Shell 筛选" clearable class="search" @keyup.enter="search" @clear="search" />
+        <el-input v-model="query.conch" placeholder="按规则包筛选" clearable class="search" @keyup.enter="search" @clear="search" />
         <el-input v-model="query.account" placeholder="按账号筛选" clearable class="search" @keyup.enter="search" @clear="search" />
         <el-button :icon="Search" @click="search">查询</el-button>
       </div>
@@ -75,10 +75,10 @@ onMounted(load)
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Shell / 账号" min-width="200">
+        <el-table-column label="规则包 / 账号" min-width="200">
           <template #default="{ row }">
-            <template v-if="row.shell">
-              <router-link :to="`/shells/${encodeURIComponent(row.shell)}`" class="mono">{{ row.shell }}</router-link>
+            <template v-if="row.conch">
+              <router-link :to="`/conches/${encodeURIComponent(row.conch)}`" class="mono">{{ row.conch }}</router-link>
               <span v-if="row.account" class="mono hm-muted"> / {{ row.account }}</span>
               <el-tag v-if="row.origin && row.origin !== 'OFFICIAL'" size="small" effect="plain" class="origin">
                 {{ originLabels[row.origin] ?? row.origin }}

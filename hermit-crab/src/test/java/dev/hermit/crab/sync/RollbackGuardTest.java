@@ -20,7 +20,7 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.report.ReportJson;
 import dev.hermit.crab.engine.ExecutionError;
 import dev.hermit.crab.engine.ExecutionResult;
-import dev.hermit.crab.engine.ShellRegistry;
+import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.StepLog;
 import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.report.ReportSender;
@@ -38,8 +38,8 @@ class RollbackGuardTest {
     @Test
     void fiveMismatchesRollBackPinAndRefuseTheBadVersionUntilANewerOneArrives() throws Exception {
         try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
-            ShellRegistry registry = new ShellRegistry();
-            ShellSync sync = sync(reef, crab, registry);
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry);
             ReportSettings settings = new ReportSettings(true, reef.base(), Optional.empty(), INSTANCE, "1.0.0");
             ReportQueue queue = new ReportQueue(settings, crab.dataSource);
             RollbackGuard guard = guard(reef, crab, registry, queue);
@@ -66,7 +66,7 @@ class RollbackGuardTest {
             assertThat(current(crab)).isEqualTo("1.0.0");
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
 
-            reef.publish(ShellTexts.standard("legacy_oa", "1.0.2"));
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.2"));
             SyncReport upgraded = sync.syncOnce();
             assertThat(outcome(upgraded).kind()).isEqualTo(OutcomeKind.INSTALLED);
             assertThat(current(crab)).isEqualTo("1.0.2");
@@ -77,8 +77,8 @@ class RollbackGuardTest {
     @Test
     void upstreamRejectionAndSessionExpiryDoNotRollBackButRuleMismatchStillDoes() throws Exception {
         try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
-            ShellRegistry registry = new ShellRegistry();
-            ShellSync sync = sync(reef, crab, registry);
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry);
             RollbackGuard guard = guard(reef, crab, registry, queue(reef, crab, false));
             install(reef, sync, "1.0.0");
             guard.onResult("legacy_oa", "1.0.0", success("1.0.0"));
@@ -100,8 +100,8 @@ class RollbackGuardTest {
     @Test
     void doesNotRollBackWhenThePreviousVersionNeverSucceeded() throws Exception {
         try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
-            ShellRegistry registry = new ShellRegistry();
-            ShellSync sync = sync(reef, crab, registry);
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry);
             RollbackGuard guard = guard(reef, crab, registry, queue(reef, crab, true));
             install(reef, sync, "1.0.0");
             install(reef, sync, "1.0.1");
@@ -117,8 +117,8 @@ class RollbackGuardTest {
     @Test
     void otherErrorsDoNotResetTheMismatchStreakAndSuccessDoes() throws Exception {
         try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
-            ShellRegistry registry = new ShellRegistry();
-            ShellSync sync = sync(reef, crab, registry);
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry);
             RollbackGuard guard = guard(reef, crab, registry, queue(reef, crab, false));
             install(reef, sync, "1.0.0");
             guard.onResult("legacy_oa", "1.0.0", success("1.0.0"));
@@ -143,8 +143,8 @@ class RollbackGuardTest {
         }
     }
 
-    private static ShellSync sync(FakeReef reef, OpenCrab crab, ShellRegistry registry) {
-        return new ShellSync(
+    private static ConchSync sync(FakeReef reef, OpenCrab crab, ConchRegistry registry) {
+        return new ConchSync(
                 new SyncSettings(reef.base(), Optional.empty(), reef.keys().getPublic(), Duration.ofMinutes(5),
                         INSTANCE),
                 crab.paths,
@@ -158,22 +158,22 @@ class RollbackGuardTest {
                 crab.dataSource);
     }
 
-    private static RollbackGuard guard(FakeReef reef, OpenCrab crab, ShellRegistry registry, ReportQueue queue) {
+    private static RollbackGuard guard(FakeReef reef, OpenCrab crab, ConchRegistry registry, ReportQueue queue) {
         return new RollbackGuard(crab.paths, reef.keys().getPublic(), registry, crab.dataSource, queue);
     }
 
-    private static void install(FakeReef reef, ShellSync sync, String version) {
-        reef.publish(ShellTexts.standard("legacy_oa", version));
-        assertThat(sync.syncOnce().shells())
-                .anyMatch(item -> "legacy_oa".equals(item.shell()) && item.kind() == OutcomeKind.INSTALLED);
+    private static void install(FakeReef reef, ConchSync sync, String version) {
+        reef.publish(ConchTexts.standard("legacy_oa", version));
+        assertThat(sync.syncOnce().conches())
+                .anyMatch(item -> "legacy_oa".equals(item.conch()) && item.kind() == OutcomeKind.INSTALLED);
     }
 
-    private static ShellOutcome outcome(SyncReport report) {
-        return report.shells().stream().filter(item -> "legacy_oa".equals(item.shell())).findFirst().orElseThrow();
+    private static ConchOutcome outcome(SyncReport report) {
+        return report.conches().stream().filter(item -> "legacy_oa".equals(item.conch())).findFirst().orElseThrow();
     }
 
     private static String current(OpenCrab crab) throws Exception {
-        return Files.readString(crab.paths.shells().resolve("legacy_oa/current")).trim();
+        return Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim();
     }
 
     private static int pinCount(OpenCrab crab) throws Exception {

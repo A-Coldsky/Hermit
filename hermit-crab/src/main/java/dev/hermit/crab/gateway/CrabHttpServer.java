@@ -96,12 +96,12 @@ public final class CrabHttpServer implements AutoCloseable {
             byte[] body = OpenApiDocument.bytes(runtime, http.port());
             GatewayResponses.write(ctx, 200, body, GatewayResponses.trace(ctx), false);
         });
-        route(http, "/api/{shell}/{action}", ctx -> handleApi(ctx, ctx.pathParam("shell"), ctx.pathParam("action")));
+        route(http, "/api/{conch}/{action}", ctx -> handleApi(ctx, ctx.pathParam("conch"), ctx.pathParam("action")));
         for (Map.Entry<String, String> alias : runtime.config().aliases().entrySet()) {
             int dot = alias.getValue().indexOf('.');
-            String shell = alias.getValue().substring(0, dot);
+            String conch = alias.getValue().substring(0, dot);
             String action = alias.getValue().substring(dot + 1);
-            route(http, alias.getKey(), ctx -> handleApi(ctx, shell, action));
+            route(http, alias.getKey(), ctx -> handleApi(ctx, conch, action));
         }
         ConsoleApi.register(http, runtime);
         ConsoleUi.register(http);
@@ -125,8 +125,8 @@ public final class CrabHttpServer implements AutoCloseable {
         return http;
     }
 
-    private void handleApi(Context ctx, String shell, String action) throws IOException {
-        Optional<Action> enabled = runtime.enabledAction(shell, action);
+    private void handleApi(Context ctx, String conch, String action) throws IOException {
+        Optional<Action> enabled = runtime.enabledAction(conch, action);
         String token = token(ctx);
         if (token == null) {
             GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, "invalid api key");
@@ -169,7 +169,7 @@ public final class CrabHttpServer implements AutoCloseable {
         Optional<String> accountName = account == null || account.isBlank() ? Optional.empty() : Optional.of(account);
         InvokeOutcome outcome = runtime.invoker().invoke(
                 principal.get(),
-                shell,
+                conch,
                 action,
                 input,
                 accountName,

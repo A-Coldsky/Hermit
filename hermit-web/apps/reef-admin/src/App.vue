@@ -12,7 +12,7 @@ const timer = ref<number>()
 
 const items = computed<NavItem[]>(() => [
   { to: '/', label: '概览', icon: House },
-  { to: '/shells', label: 'Shell 目录', icon: Box },
+  { to: '/conches', label: '规则包目录', icon: Box },
   { to: '/tide', label: 'Tide 统计', icon: DataLine },
   { to: '/alerts', label: '告警', icon: Bell, badge: openAlerts.value },
   { to: '/audit', label: '审计日志', icon: Document },
@@ -45,7 +45,7 @@ function logout() {
       <el-button :icon="SwitchButton" text @click="logout">退出</el-button>
     </template>
     <template #sidebar-foot>
-      <span>发布签名 Shell · 回收运行指标</span>
+      <span>发布签名规则包 · 回收运行指标</span>
     </template>
   </AppLayout>
 </template>

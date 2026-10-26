@@ -5,14 +5,14 @@ import java.util.Optional;
 import java.util.TreeSet;
 
 import dev.hermit.common.model.CredentialField;
-import dev.hermit.common.model.ShellDoc;
+import dev.hermit.common.model.ConchDoc;
 
 final class CredentialChanges {
 
     private CredentialChanges() {
     }
 
-    static Optional<CredentialDeclarationChange> between(ShellDoc previous, ShellDoc next) {
+    static Optional<CredentialDeclarationChange> between(ConchDoc previous, ConchDoc next) {
         if (previous == null || next == null) {
             return Optional.empty();
         }
@@ -37,6 +37,6 @@ final class CredentialChanges {
         if (addedRequired.isEmpty() && removed.isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(new CredentialDeclarationChange(next.shell(), addedRequired, removed));
+        return Optional.of(new CredentialDeclarationChange(next.conch(), addedRequired, removed));
     }
 }

@@ -41,22 +41,22 @@ public final class CallLogStore {
         });
     }
 
-    public List<CallSummary> list(String shell, String action, int limit) {
+    public List<CallSummary> list(String conch, String action, int limit) {
         int capped = Math.min(LIST_LIMIT, Math.max(1, limit));
-        String shellFilter = blankToNull(shell);
+        String conchFilter = blankToNull(conch);
         String actionFilter = blankToNull(action);
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT id, trace_id, at, origin, shell, action, account, shell_version,
+                    SELECT id, trace_id, at, origin, conch, action, account, conch_version,
                            success, error_code, error_message, duration_ms, api_key_id
                     FROM call_logs
-                    WHERE (? IS NULL OR shell = ?)
+                    WHERE (? IS NULL OR conch = ?)
                       AND (? IS NULL OR action = ?)
                     ORDER BY at DESC, id DESC
                     LIMIT ?
                     """)) {
-                statement.setString(1, shellFilter);
-                statement.setString(2, shellFilter);
+                statement.setString(1, conchFilter);
+                statement.setString(2, conchFilter);
                 statement.setString(3, actionFilter);
                 statement.setString(4, actionFilter);
                 statement.setInt(5, capped);
@@ -78,7 +78,7 @@ public final class CallLogStore {
         return Db.transaction(dataSource, connection -> {
             CallSummary summary;
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT id, trace_id, at, origin, shell, action, account, shell_version,
+                    SELECT id, trace_id, at, origin, conch, action, account, conch_version,
                            success, error_code, error_message, duration_ms, api_key_id
                     FROM call_logs
                     WHERE trace_id = ?
@@ -116,17 +116,17 @@ public final class CallLogStore {
     private long insertCall(Connection connection, NewCall call) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO call_logs (
-                    trace_id, at, origin, shell, action, account, shell_version,
+                    trace_id, at, origin, conch, action, account, conch_version,
                     success, error_code, error_message, duration_ms, api_key_id
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, Statement.RETURN_GENERATED_KEYS)) {
             statement.setString(1, call.traceId());
             Db.setInstant(statement, 2, clock.instant());
             statement.setString(3, call.origin().name());
-            statement.setString(4, call.shell());
+            statement.setString(4, call.conch());
             statement.setString(5, call.action());
             statement.setString(6, call.account());
-            statement.setString(7, call.shellVersion());
+            statement.setString(7, call.conchVersion());
             statement.setBoolean(8, call.success());
             statement.setString(9, call.errorCode());
             statement.setString(10, truncate(call.errorMessage()));
@@ -208,10 +208,10 @@ public final class CallLogStore {
                 resultSet.getString("trace_id"),
                 Db.instant(resultSet, "at"),
                 resultSet.getString("origin"),
-                resultSet.getString("shell"),
+                resultSet.getString("conch"),
                 resultSet.getString("action"),
                 resultSet.getString("account"),
-                resultSet.getString("shell_version"),
+                resultSet.getString("conch_version"),
                 resultSet.getBoolean("success"),
                 resultSet.getString("error_code"),
                 resultSet.getString("error_message"),
@@ -241,10 +241,10 @@ public final class CallLogStore {
     public record NewCall(
             String traceId,
             Origin origin,
-            String shell,
+            String conch,
             String action,
             String account,
-            String shellVersion,
+            String conchVersion,
             boolean success,
             String errorCode,
             String errorMessage,
@@ -258,10 +258,10 @@ public final class CallLogStore {
             String traceId,
             Instant at,
             String origin,
-            String shell,
+            String conch,
             String action,
             String account,
-            String shellVersion,
+            String conchVersion,
             boolean success,
             String errorCode,
             String errorMessage,

@@ -21,8 +21,8 @@ import java.util.logging.Logger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-import dev.hermit.common.model.ShellDoc;
-import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
@@ -51,11 +51,11 @@ class CredentialRecoveryTest {
         CrabPaths paths = new CrabPaths(temp.resolve("lost"));
         CrabConfig config = CrabConfig.defaults();
         try (CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null)) {
-            ShellDoc shell = ShellParser.parse(TestServer.shellYaml());
-            runtime.registry().put(shell);
-            runtime.admin().createAccount(shell.shell(), "alice", Actors.CLI);
+            ConchDoc conch = ConchParser.parse(TestServer.conchYaml());
+            runtime.registry().put(conch);
+            runtime.admin().createAccount(conch.conch(), "alice", Actors.CLI);
             runtime.admin().writeCredentials(
-                    shell, "alice", Map.of("username", "alice", "password", PASSWORD), Actors.CLI);
+                    conch, "alice", Map.of("username", "alice", "password", PASSWORD), Actors.CLI);
         }
         Files.delete(paths.masterKeyFile());
 
@@ -98,11 +98,11 @@ class CredentialRecoveryTest {
         java.util.function.Function<String, String> env = name -> MasterKeyProvider.ENV.equals(name) ? encoded : null;
         try (CrabRuntime runtime = CrabRuntime.open(paths, config, env)) {
             assertThat(paths.masterKeyFile()).doesNotExist();
-            ShellDoc shell = ShellParser.parse(TestServer.shellYaml());
-            runtime.registry().put(shell);
-            runtime.admin().createAccount(shell.shell(), "alice", Actors.CLI);
+            ConchDoc conch = ConchParser.parse(TestServer.conchYaml());
+            runtime.registry().put(conch);
+            runtime.admin().createAccount(conch.conch(), "alice", Actors.CLI);
             runtime.admin().writeCredentials(
-                    shell, "alice", Map.of("username", "alice", "password", PASSWORD), Actors.CLI);
+                    conch, "alice", Map.of("username", "alice", "password", PASSWORD), Actors.CLI);
         }
         assertThat(paths.masterKeyFile()).doesNotExist();
 
@@ -120,13 +120,13 @@ class CredentialRecoveryTest {
     void replacedMasterKeyIsReportedInsteadOfInternalError() throws Exception {
         CrabPaths paths = new CrabPaths(temp.resolve("replaced"));
         CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
-        ShellDoc shell;
+        ConchDoc conch;
         try (CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null)) {
-            shell = ShellParser.parse(TestServer.shellYaml());
-            runtime.registry().put(shell);
-            runtime.admin().createAccount(shell.shell(), "alice", Actors.CLI);
+            conch = ConchParser.parse(TestServer.conchYaml());
+            runtime.registry().put(conch);
+            runtime.admin().createAccount(conch.conch(), "alice", Actors.CLI);
             runtime.admin().writeCredentials(
-                    shell, "alice", Map.of("username", "alice", "password", PASSWORD), Actors.CLI);
+                    conch, "alice", Map.of("username", "alice", "password", PASSWORD), Actors.CLI);
         }
         String replacement = encode((byte) 9);
         Files.writeString(paths.masterKeyFile(), replacement);
@@ -161,14 +161,14 @@ class CredentialRecoveryTest {
             SecretChecks.absent(logged, PASSWORD);
             SecretChecks.absent(logged, replacement);
 
-            runtime.registry().put(shell);
+            runtime.registry().put(conch);
             CreatedApiKey apiKey = runtime.admin().createApiKey(
                     "gateway", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
             server = new CrabHttpServer(runtime);
             server.start();
             String base = "http://127.0.0.1:" + server.port();
 
-            JsonNode accounts = console(base, "GET", "/console/api/shells/legacy_oa/accounts", null);
+            JsonNode accounts = console(base, "GET", "/console/api/conches/legacy_oa/accounts", null);
             assertThat(accounts.path("success").asBoolean()).as(accounts.toString()).isTrue();
             JsonNode alice = accounts.path("data").path("accounts").get(0);
             assertThat(alice.path("name").asText()).isEqualTo("alice");
@@ -177,8 +177,8 @@ class CredentialRecoveryTest {
             assertThat(alice.path("credentialMessage").asText()).isEqualTo(CredentialDecryptException.MESSAGE);
             assertThat(alice.path("missingFields")).isEmpty();
 
-            JsonNode shells = console(base, "GET", "/console/api/shells", null);
-            JsonNode row = shells.path("data").path("shells").get(0);
+            JsonNode conches = console(base, "GET", "/console/api/conches", null);
+            JsonNode row = conches.path("data").path("conches").get(0);
             assertThat(row.path("needsConfiguration").asBoolean()).isTrue();
 
             HttpResponse<String> called = request(base, "GET", "/api/legacy_oa/list_todo", null, apiKey.plaintext());
@@ -190,15 +190,15 @@ class CredentialRecoveryTest {
             assertThat(called.body()).doesNotContain("CredentialDecryptException");
             SecretChecks.absent(called.body(), PASSWORD);
 
-            JsonNode rejected = console(base, "PUT", "/console/api/shells/legacy_oa/accounts/alice/credentials",
+            JsonNode rejected = console(base, "PUT", "/console/api/conches/legacy_oa/accounts/alice/credentials",
                     "{\"username\":\"alice\"}");
             assertThat(rejected.path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(rejected.path("error").path("message").asText()).contains(CredentialDecryptException.MESSAGE);
 
-            JsonNode rewritten = console(base, "PUT", "/console/api/shells/legacy_oa/accounts/alice/credentials",
+            JsonNode rewritten = console(base, "PUT", "/console/api/conches/legacy_oa/accounts/alice/credentials",
                     "{\"username\":\"alice\",\"password\":\"replacement-value\"}");
             assertThat(rewritten.path("success").asBoolean()).isTrue();
-            JsonNode after = console(base, "GET", "/console/api/shells/legacy_oa/accounts", null);
+            JsonNode after = console(base, "GET", "/console/api/conches/legacy_oa/accounts", null);
             assertThat(after.path("data").path("accounts").get(0).path("credentialsUnreadable").asBoolean()).isFalse();
             assertThat(after.path("data").path("accounts").get(0).path("needsConfiguration").asBoolean()).isFalse();
             assertThat(after.path("data").path("accounts").get(0).path("credentialMessage").isNull()).isTrue();

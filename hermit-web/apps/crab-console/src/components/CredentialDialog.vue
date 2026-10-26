@@ -5,7 +5,7 @@ import { notifyError } from '@shared/format'
 import { api, type CredentialField } from '../api'
 import FieldInput from './FieldInput.vue'
 
-const props = defineProps<{ shell: string; account: string; fields: CredentialField[] }>()
+const props = defineProps<{ conch: string; account: string; fields: CredentialField[] }>()
 const emit = defineEmits<{ saved: [] }>()
 const open = defineModel<boolean>('open', { required: true })
 
@@ -37,7 +37,7 @@ watch(open, async (value) => {
   }
   loading.value = true
   try {
-    stored.value = (await api.credentialNames(props.shell, props.account)).fields
+    stored.value = (await api.credentialNames(props.conch, props.account)).fields
   } catch (error) {
     notifyError(error)
   } finally {
@@ -52,7 +52,7 @@ async function save() {
   }
   saving.value = true
   try {
-    await api.writeCredentials(props.shell, props.account, changes.value)
+    await api.writeCredentials(props.conch, props.account, changes.value)
     ElMessage.success('凭证已保存，已有会话会在下次调用时重新登录')
     open.value = false
     emit('saved')

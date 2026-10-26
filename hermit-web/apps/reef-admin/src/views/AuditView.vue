@@ -7,7 +7,7 @@ import { api, type AuditPage } from '../api'
 import { auditActionLabels } from '../labels'
 
 const loading = ref(true)
-const query = reactive({ shell: '', page: 1, size: 20 })
+const query = reactive({ conch: '', page: 1, size: 20 })
 const result = ref<AuditPage>({ items: [], page: 1, size: 20, total: 0 })
 
 const actionTone: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'primary'> = {
@@ -21,7 +21,7 @@ const actionTone: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'pr
 async function load() {
   loading.value = true
   try {
-    result.value = await api.audit({ shell: query.shell.trim() || undefined, page: query.page, size: query.size })
+    result.value = await api.audit({ conch: query.conch.trim() || undefined, page: query.page, size: query.size })
   } catch (error) {
     notifyError(error)
   } finally {
@@ -56,7 +56,7 @@ onMounted(load)
 
     <div class="hm-card">
       <div class="hm-toolbar">
-        <el-input v-model="query.shell" placeholder="按 Shell 名称筛选" clearable class="search" @keyup.enter="search" @clear="search">
+        <el-input v-model="query.conch" placeholder="按规则包名称筛选" clearable class="search" @keyup.enter="search" @clear="search">
           <template #append>
             <el-button :icon="Search" @click="search" />
           </template>
@@ -77,8 +77,8 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="对象" min-width="180">
           <template #default="{ row }">
-            <template v-if="row.shell">
-              <router-link :to="`/shells/${encodeURIComponent(row.shell)}`" class="mono">{{ row.shell }}</router-link>
+            <template v-if="row.conch">
+              <router-link :to="`/conches/${encodeURIComponent(row.conch)}`" class="mono">{{ row.conch }}</router-link>
               <span v-if="row.version" class="mono hm-muted"> v{{ row.version }}</span>
             </template>
             <span v-else class="hm-muted">—</span>

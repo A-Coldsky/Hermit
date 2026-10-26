@@ -33,35 +33,35 @@ public final class IdempotencyStore {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    public Optional<String> findFresh(Origin origin, String shell, String account, String action, String key) {
+    public Optional<String> findFresh(Origin origin, String conch, String account, String action, String key) {
         return Db.transaction(dataSource, connection -> {
-            Row row = select(connection, origin, shell, account, action, key);
+            Row row = select(connection, origin, conch, account, action, key);
             if (row == null) {
                 return Optional.empty();
             }
             if (!row.createdAt().isAfter(clock.instant().minus(TTL))) {
-                delete(connection, origin, shell, account, action, key);
+                delete(connection, origin, conch, account, action, key);
                 return Optional.empty();
             }
             try {
-                return Optional.of(cipher.decrypt(origin, shell, account, FIELD, row.ciphertext()));
+                return Optional.of(cipher.decrypt(origin, conch, account, FIELD, row.ciphertext()));
             } catch (CredentialDecryptException ex) {
-                delete(connection, origin, shell, account, action, key);
+                delete(connection, origin, conch, account, action, key);
                 return Optional.empty();
             }
         });
     }
 
-    public void save(Origin origin, String shell, String account, String action, String key, String envelopeJson) {
+    public void save(Origin origin, String conch, String account, String action, String key, String envelopeJson) {
         Objects.requireNonNull(envelopeJson, "envelopeJson");
-        byte[] ciphertext = cipher.encrypt(origin, shell, account, FIELD, envelopeJson);
+        byte[] ciphertext = cipher.encrypt(origin, conch, account, FIELD, envelopeJson);
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    INSERT INTO idempotency (origin, shell, account, action, "key", created_at, response_json)
+                    INSERT INTO idempotency (origin, conch, account, action, "key", created_at, response_json)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """)) {
                 statement.setString(1, origin.name());
-                statement.setString(2, shell);
+                statement.setString(2, conch);
                 statement.setString(3, account);
                 statement.setString(4, action);
                 statement.setString(5, key);
@@ -87,17 +87,17 @@ public final class IdempotencyStore {
     private static Row select(
             Connection connection,
             Origin origin,
-            String shell,
+            String conch,
             String account,
             String action,
             String key
     ) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT created_at, response_json FROM idempotency
-                WHERE origin = ? AND shell = ? AND account = ? AND action = ? AND "key" = ?
+                WHERE origin = ? AND conch = ? AND account = ? AND action = ? AND "key" = ?
                 """)) {
             statement.setString(1, origin.name());
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             statement.setString(3, account);
             statement.setString(4, action);
             statement.setString(5, key);
@@ -113,17 +113,17 @@ public final class IdempotencyStore {
     private static void delete(
             Connection connection,
             Origin origin,
-            String shell,
+            String conch,
             String account,
             String action,
             String key
     ) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 DELETE FROM idempotency
-                WHERE origin = ? AND shell = ? AND account = ? AND action = ? AND "key" = ?
+                WHERE origin = ? AND conch = ? AND account = ? AND action = ? AND "key" = ?
                 """)) {
             statement.setString(1, origin.name());
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             statement.setString(3, account);
             statement.setString(4, action);
             statement.setString(5, key);

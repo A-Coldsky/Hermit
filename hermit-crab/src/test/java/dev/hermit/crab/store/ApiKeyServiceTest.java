@@ -131,10 +131,10 @@ class ApiKeyServiceTest {
     }
 
     @Test
-    void shellActionAndReadOnlyScopesAllApply() {
-        ApiKeyPrincipal shell = principal(new ApiKeyScope(Set.of("oa"), Set.of(), false));
-        assertThat(shell.permits("oa", "delete", false)).isTrue();
-        assertThat(shell.permits("erp", "list", true)).isFalse();
+    void conchActionAndReadOnlyScopesAllApply() {
+        ApiKeyPrincipal conch = principal(new ApiKeyScope(Set.of("oa"), Set.of(), false));
+        assertThat(conch.permits("oa", "delete", false)).isTrue();
+        assertThat(conch.permits("erp", "list", true)).isFalse();
 
         ApiKeyPrincipal action = principal(new ApiKeyScope(Set.of(), Set.of("oa.list"), false));
         assertThat(action.permits("oa", "list", false)).isTrue();

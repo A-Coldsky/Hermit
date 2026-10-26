@@ -91,7 +91,7 @@ export const errorCodeLabels: Record<string, string> = {
   RULE_MISMATCH: '规则不匹配',
   TIMEOUT: '超时',
   NOT_CONFIGURED: '待配置',
-  SHELL_DISABLED: 'Shell 已停用',
+  CONCH_DISABLED: '规则包已停用',
   ACCOUNT_NOT_FOUND: '账号不存在',
   FORBIDDEN: '无权限',
   NOT_FOUND: '不存在',

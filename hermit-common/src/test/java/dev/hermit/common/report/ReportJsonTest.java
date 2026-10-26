@@ -28,17 +28,17 @@ class ReportJsonTest {
         assertThat(node.get("sentAt").asText()).isEqualTo("2026-10-12T08:00:00Z");
         JsonNode failure = node.get("failures").get(0);
         assertThat(names(failure)).containsExactly(
-                "traceId", "shell", "shellVersion", "action", "stepIndex", "stepType",
+                "traceId", "conch", "conchVersion", "action", "stepIndex", "stepType",
                 "errorCode", "summary", "occurredAt");
         assertThat(failure.get("errorCode").asText()).isEqualTo("RULE_MISMATCH");
         assertThat(failure.get("stepIndex").isNull()).isTrue();
         assertThat(failure.get("occurredAt").asText()).isEqualTo("2026-10-12T07:59:00Z");
         JsonNode count = node.get("counts").get(0);
         assertThat(names(count)).containsExactly(
-                "shell", "shellVersion", "action", "hourStart", "success", "failure", "avgMillis", "p95Millis");
+                "conch", "conchVersion", "action", "hourStart", "success", "failure", "avgMillis", "p95Millis");
         assertThat(count.get("hourStart").asText()).isEqualTo("2026-10-12T07:00:00Z");
         assertThat(names(node.get("events").get(0))).containsExactly(
-                "shell", "fromVersion", "toVersion", "reason", "occurredAt", "eventId");
+                "conch", "fromVersion", "toVersion", "reason", "occurredAt", "eventId");
         assertThat(node.get("events").get(0).get("eventId").asText()).isEqualTo("evt-1");
         assertThat(ReportJson.readBatch(json)).isEqualTo(batch);
     }

@@ -1,8 +1,8 @@
 # Hermit
 
-Hermit 用声明式 YAML（称为 **Shell**）描述老系统的登录、请求、数据提取和业务能力，再由部署在内网的 **Crab** 提供 HTTP API 与 MCP 接口。**Reef** 负责规则管理、签名发布、版本分发及运行反馈。
+Hermit 用声明式 YAML 规则包（Conch）描述老系统的登录、请求、数据提取和业务能力，再由部署在内网的 **Crab** 提供 HTTP API 与 MCP 接口。**Reef** 负责规则管理、签名发布、版本分发及运行反馈。
 
-这里的 Shell 是规则包，不是操作系统 shell 脚本。当前支持 HTTP 驱动，包含 Vue 管理页面、账号与凭证管理、自动同步、失配回滚、统计与告警。实现边界见[功能状态](docs/feature-status.md)。
+规则包（Conch）不是操作系统 shell 脚本。当前支持 HTTP 驱动，包含 Vue 管理页面、账号与凭证管理、自动同步、失配回滚、统计与告警。实现边界见[功能状态](docs/feature-status.md)。
 
 ## 从哪里开始
 
@@ -12,7 +12,7 @@ Hermit 用声明式 YAML（称为 **Shell**）描述老系统的登录、请求�
 | 本地启动并完成首次调用 | [快速开始](docs/getting-started.md) |
 | 构建、测试、定位修改点 | [开发与测试](docs/development.md) |
 | 查配置、部署、备份和排障 | [配置与运维](docs/configuration.md) |
-| 编写 YAML 规则 | [Shell 规则参考](docs/shell-reference.md) |
+| 编写 YAML 规则 | [规则包（Conch）参考](docs/conch-reference.md) |
 | 接入 HTTP、控制台或 MCP | [接口参考](docs/api.md) |
 | 了解已实现与未完成的能力 | [功能状态与测试证据](docs/feature-status.md) |
 | 查看当前风险和修复顺序 | [2026-10-16 项目审计](docs/audits/2026-10-16.md) |
@@ -32,7 +32,7 @@ Maven Wrapper 使用 Maven 3.9.16；前端插件会下载 Node 22.14.0，执行 
 ## 运行形态
 
 ```text
-管理员 → Reef 管理页面 → 上传/发布签名 Shell
+管理员 → Reef 管理页面 → 上传/发布签名规则包
                            ↓ 同步规则 ↑ 上报统计
 调用方 / AI → HTTP / MCP → Crab → 内网老系统
                            ↑

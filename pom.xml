@@ -10,7 +10,7 @@
   <packaging>pom</packaging>
 
   <name>Hermit</name>
-  <description>声明式 Shell 增强老系统。公共模型、Reef 与 Crab。</description>
+  <description>声明式规则包（Conch）增强老系统。公共模型、Reef 与 Crab。</description>
 
   <modules>
     <module>hermit-web</module>

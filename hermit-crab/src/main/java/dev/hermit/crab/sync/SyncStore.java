@@ -81,12 +81,12 @@ final class SyncStore {
         return etag != null && etag.length() <= 512;
     }
 
-    Optional<Pin> pin(String shell) {
+    Optional<Pin> pin(String conch) {
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT bad_version, rolled_back_to FROM pinned_rollbacks WHERE shell = ?
+                    SELECT bad_version, rolled_back_to FROM pinned_rollbacks WHERE conch = ?
                     """)) {
-                statement.setString(1, shell);
+                statement.setString(1, conch);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     if (!resultSet.next()) {
                         return Optional.empty();
@@ -97,26 +97,26 @@ final class SyncStore {
         });
     }
 
-    void pin(String shell, String badVersion, String rolledBackTo, Instant at) {
+    void pin(String conch, String badVersion, String rolledBackTo, Instant at) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement update = connection.prepareStatement("""
                     UPDATE pinned_rollbacks
                     SET bad_version = ?, rolled_back_to = ?, at = ?
-                    WHERE shell = ?
+                    WHERE conch = ?
                     """)) {
                 update.setString(1, badVersion);
                 update.setString(2, rolledBackTo);
                 Db.setInstant(update, 3, at);
-                update.setString(4, shell);
+                update.setString(4, conch);
                 if (update.executeUpdate() == 1) {
                     return null;
                 }
             }
             try (PreparedStatement insert = connection.prepareStatement("""
-                    INSERT INTO pinned_rollbacks (shell, bad_version, rolled_back_to, at)
+                    INSERT INTO pinned_rollbacks (conch, bad_version, rolled_back_to, at)
                     VALUES (?, ?, ?, ?)
                     """)) {
-                insert.setString(1, shell);
+                insert.setString(1, conch);
                 insert.setString(2, badVersion);
                 insert.setString(3, rolledBackTo);
                 Db.setInstant(insert, 4, at);
@@ -126,11 +126,11 @@ final class SyncStore {
         });
     }
 
-    /** Shell name order, so status projection locks one shell at a time without inverting lock order. */
+    /** Conch name order, so status projection locks one conch at a time without inverting lock order. */
     List<PinRow> pins() {
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT shell, bad_version, rolled_back_to FROM pinned_rollbacks ORDER BY shell
+                    SELECT conch, bad_version, rolled_back_to FROM pinned_rollbacks ORDER BY conch
                     """);
                  ResultSet resultSet = statement.executeQuery()) {
                 List<PinRow> rows = new ArrayList<>();
@@ -142,33 +142,33 @@ final class SyncStore {
         });
     }
 
-    void clearPin(String shell) {
+    void clearPin(String conch) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
-                    "DELETE FROM pinned_rollbacks WHERE shell = ?")) {
-                statement.setString(1, shell);
+                    "DELETE FROM pinned_rollbacks WHERE conch = ?")) {
+                statement.setString(1, conch);
                 statement.executeUpdate();
             }
             return null;
         });
     }
 
-    void recordSuccess(String shell, String version, Instant at) {
+    void recordSuccess(String conch, String version, Instant at) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement update = connection.prepareStatement("""
-                    UPDATE version_success SET last_success_at = ? WHERE shell = ? AND version = ?
+                    UPDATE version_success SET last_success_at = ? WHERE conch = ? AND version = ?
                     """)) {
                 Db.setInstant(update, 1, at);
-                update.setString(2, shell);
+                update.setString(2, conch);
                 update.setString(3, version);
                 if (update.executeUpdate() == 1) {
                     return null;
                 }
             }
             try (PreparedStatement insert = connection.prepareStatement("""
-                    INSERT INTO version_success (shell, version, last_success_at) VALUES (?, ?, ?)
+                    INSERT INTO version_success (conch, version, last_success_at) VALUES (?, ?, ?)
                     """)) {
-                insert.setString(1, shell);
+                insert.setString(1, conch);
                 insert.setString(2, version);
                 Db.setInstant(insert, 3, at);
                 insert.executeUpdate();
@@ -177,12 +177,12 @@ final class SyncStore {
         });
     }
 
-    boolean succeeded(String shell, String version) {
+    boolean succeeded(String conch, String version) {
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT 1 FROM version_success WHERE shell = ? AND version = ?
+                    SELECT 1 FROM version_success WHERE conch = ? AND version = ?
                     """)) {
-                statement.setString(1, shell);
+                statement.setString(1, conch);
                 statement.setString(2, version);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     return resultSet.next();
@@ -191,12 +191,12 @@ final class SyncStore {
         });
     }
 
-    Optional<String> latestSuccessExcept(String shell, String version) {
+    Optional<String> latestSuccessExcept(String conch, String version) {
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT version, last_success_at FROM version_success WHERE shell = ? AND version <> ?
+                    SELECT version, last_success_at FROM version_success WHERE conch = ? AND version <> ?
                     """)) {
-                statement.setString(1, shell);
+                statement.setString(1, conch);
                 statement.setString(2, version);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     String best = null;
@@ -214,24 +214,24 @@ final class SyncStore {
         });
     }
 
-    Optional<String> previous(String shell) {
+    Optional<String> previous(String conch) {
         return Db.transaction(dataSource, connection -> optionalString(connection,
-                "SELECT version FROM shell_previous WHERE shell = ?", shell));
+                "SELECT version FROM conch_previous WHERE conch = ?", conch));
     }
 
-    void setPrevious(String shell, String version) {
+    void setPrevious(String conch, String version) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement update = connection.prepareStatement(
-                    "UPDATE shell_previous SET version = ? WHERE shell = ?")) {
+                    "UPDATE conch_previous SET version = ? WHERE conch = ?")) {
                 update.setString(1, version);
-                update.setString(2, shell);
+                update.setString(2, conch);
                 if (update.executeUpdate() == 1) {
                     return null;
                 }
             }
             try (PreparedStatement insert = connection.prepareStatement(
-                    "INSERT INTO shell_previous (shell, version) VALUES (?, ?)")) {
-                insert.setString(1, shell);
+                    "INSERT INTO conch_previous (conch, version) VALUES (?, ?)")) {
+                insert.setString(1, conch);
                 insert.setString(2, version);
                 insert.executeUpdate();
             }
@@ -239,24 +239,24 @@ final class SyncStore {
         });
     }
 
-    void clearPrevious(String shell) {
+    void clearPrevious(String conch) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
-                    "DELETE FROM shell_previous WHERE shell = ?")) {
-                statement.setString(1, shell);
+                    "DELETE FROM conch_previous WHERE conch = ?")) {
+                statement.setString(1, conch);
                 statement.executeUpdate();
             }
             return null;
         });
     }
 
-    int recordMismatch(String shell, String version) {
+    int recordMismatch(String conch, String version) {
         return Db.transaction(dataSource, connection -> {
             String stored = null;
             int streak = 0;
             try (PreparedStatement statement = connection.prepareStatement(
-                    "SELECT version, streak FROM mismatch_streak WHERE shell = ?")) {
-                statement.setString(1, shell);
+                    "SELECT version, streak FROM mismatch_streak WHERE conch = ?")) {
+                statement.setString(1, conch);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     if (resultSet.next()) {
                         stored = resultSet.getString(1);
@@ -267,18 +267,18 @@ final class SyncStore {
             int next = version.equals(stored) ? streak + 1 : 1;
             if (stored == null) {
                 try (PreparedStatement insert = connection.prepareStatement(
-                        "INSERT INTO mismatch_streak (shell, version, streak) VALUES (?, ?, ?)")) {
-                    insert.setString(1, shell);
+                        "INSERT INTO mismatch_streak (conch, version, streak) VALUES (?, ?, ?)")) {
+                    insert.setString(1, conch);
                     insert.setString(2, version);
                     insert.setInt(3, next);
                     insert.executeUpdate();
                 }
             } else {
                 try (PreparedStatement update = connection.prepareStatement(
-                        "UPDATE mismatch_streak SET version = ?, streak = ? WHERE shell = ?")) {
+                        "UPDATE mismatch_streak SET version = ?, streak = ? WHERE conch = ?")) {
                     update.setString(1, version);
                     update.setInt(2, next);
-                    update.setString(3, shell);
+                    update.setString(3, conch);
                     update.executeUpdate();
                 }
             }
@@ -286,33 +286,33 @@ final class SyncStore {
         });
     }
 
-    void clearStreak(String shell) {
+    void clearStreak(String conch) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
-                    "DELETE FROM mismatch_streak WHERE shell = ?")) {
-                statement.setString(1, shell);
+                    "DELETE FROM mismatch_streak WHERE conch = ?")) {
+                statement.setString(1, conch);
                 statement.executeUpdate();
             }
             return null;
         });
     }
 
-    void recordInstalled(String shell, String version, Instant at) {
+    void recordInstalled(String conch, String version, Instant at) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement update = connection.prepareStatement("""
-                    UPDATE installed_versions SET installed_at = ? WHERE shell = ? AND version = ?
+                    UPDATE installed_versions SET installed_at = ? WHERE conch = ? AND version = ?
                     """)) {
                 Db.setInstant(update, 1, at);
-                update.setString(2, shell);
+                update.setString(2, conch);
                 update.setString(3, version);
                 if (update.executeUpdate() == 1) {
                     return null;
                 }
             }
             try (PreparedStatement insert = connection.prepareStatement("""
-                    INSERT INTO installed_versions (shell, version, installed_at) VALUES (?, ?, ?)
+                    INSERT INTO installed_versions (conch, version, installed_at) VALUES (?, ?, ?)
                     """)) {
-                insert.setString(1, shell);
+                insert.setString(1, conch);
                 insert.setString(2, version);
                 Db.setInstant(insert, 3, at);
                 insert.executeUpdate();
@@ -321,12 +321,12 @@ final class SyncStore {
         });
     }
 
-    List<Installed> installed(String shell) {
+    List<Installed> installed(String conch) {
         List<Installed> rows = Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT version, installed_at FROM installed_versions WHERE shell = ?
+                    SELECT version, installed_at FROM installed_versions WHERE conch = ?
                     """)) {
-                statement.setString(1, shell);
+                statement.setString(1, conch);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     List<Installed> found = new ArrayList<>();
                     while (resultSet.next()) {
@@ -340,11 +340,11 @@ final class SyncStore {
         return rows;
     }
 
-    Set<String> pendingCredentialFields(String shell) {
+    Set<String> pendingCredentialFields(String conch) {
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
-                    "SELECT field FROM pending_credential_deletes WHERE shell = ?")) {
-                statement.setString(1, shell);
+                    "SELECT field FROM pending_credential_deletes WHERE conch = ?")) {
+                statement.setString(1, conch);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     Set<String> fields = new TreeSet<>();
                     while (resultSet.next()) {
@@ -356,37 +356,37 @@ final class SyncStore {
         });
     }
 
-    List<String> shellsWithPendingCredentialDeletes() {
+    List<String> conchesWithPendingCredentialDeletes() {
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
-                    "SELECT DISTINCT shell FROM pending_credential_deletes");
+                    "SELECT DISTINCT conch FROM pending_credential_deletes");
                  ResultSet resultSet = statement.executeQuery()) {
-                List<String> shells = new ArrayList<>();
+                List<String> conches = new ArrayList<>();
                 while (resultSet.next()) {
-                    shells.add(resultSet.getString(1));
+                    conches.add(resultSet.getString(1));
                 }
-                return shells;
+                return conches;
             }
         });
     }
 
-    void replacePendingCredentialFields(String shell, Set<String> fields) {
+    void replacePendingCredentialFields(String conch, Set<String> fields) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement delete = connection.prepareStatement(
-                    "DELETE FROM pending_credential_deletes WHERE shell = ?")) {
-                delete.setString(1, shell);
+                    "DELETE FROM pending_credential_deletes WHERE conch = ?")) {
+                delete.setString(1, conch);
                 delete.executeUpdate();
             }
             if (fields == null || fields.isEmpty()) {
                 return null;
             }
             try (PreparedStatement insert = connection.prepareStatement(
-                    "INSERT INTO pending_credential_deletes (shell, field) VALUES (?, ?)")) {
+                    "INSERT INTO pending_credential_deletes (conch, field) VALUES (?, ?)")) {
                 for (String field : new LinkedHashSet<>(fields)) {
                     if (field == null || field.isBlank()) {
                         continue;
                     }
-                    insert.setString(1, shell);
+                    insert.setString(1, conch);
                     insert.setString(2, field);
                     insert.addBatch();
                 }
@@ -439,7 +439,7 @@ final class SyncStore {
     record Pin(String badVersion, String rolledBackTo) {
     }
 
-    record PinRow(String shell, String badVersion, String rolledBackTo) {
+    record PinRow(String conch, String badVersion, String rolledBackTo) {
     }
 
     record Installed(String version, Instant at) {

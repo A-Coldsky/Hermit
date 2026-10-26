@@ -8,7 +8,7 @@ import StatCard from '@shared/components/StatCard.vue'
 import TraceId from '@shared/components/TraceId.vue'
 import { ApiError } from '@shared/http'
 import { errorCodeLabels, formatTime, notifyError, percent, relativeTime } from '@shared/format'
-import { api, type CallSummary, type CrabRelease, type DebugState, type ShellSummary, type SyncReport } from '../api'
+import { api, type CallSummary, type CrabRelease, type DebugState, type ConchSummary, type SyncReport } from '../api'
 import { outcomeLabels } from '../labels'
 import { refreshPending } from '../status'
 
@@ -16,7 +16,7 @@ const router = useRouter()
 
 const loading = ref(true)
 const syncing = ref(false)
-const shells = ref<ShellSummary[]>([])
+const conches = ref<ConchSummary[]>([])
 const calls = ref<CallSummary[]>([])
 const debug = ref<DebugState>({ enabled: false, expiresAt: null })
 const syncConfigured = ref(true)
@@ -24,9 +24,9 @@ const report = ref<SyncReport | null>(null)
 const latestCrab = ref<CrabRelease | null>(null)
 const syncedAt = ref<string | null>(null)
 
-const pending = computed(() => shells.value.filter((s) => s.needsConfiguration))
+const pending = computed(() => conches.value.filter((s) => s.needsConfiguration))
 const failures = computed(() => calls.value.filter((c) => !c.success).length)
-const changedShells = computed(() => report.value?.shells.filter((s) => s.kind !== 'SKIPPED_SAME') ?? [])
+const changedConches = computed(() => report.value?.conches.filter((s) => s.kind !== 'SKIPPED_SAME') ?? [])
 
 async function loadSync() {
   try {
@@ -46,8 +46,8 @@ async function loadSync() {
 async function load() {
   loading.value = true
   try {
-    const [s, c, d] = await Promise.all([api.shells(), api.calls({ limit: 200 }), api.debug(), loadSync()])
-    shells.value = s.shells
+    const [s, c, d] = await Promise.all([api.conches(), api.calls({ limit: 200 }), api.debug(), loadSync()])
+    conches.value = s.conches
     calls.value = c.calls
     debug.value = d
   } catch (error) {
@@ -63,9 +63,9 @@ async function syncNow() {
     report.value = await api.sync()
     latestCrab.value = report.value.latestCrab
     syncedAt.value = new Date().toISOString()
-    const installed = report.value.shells.filter((s) => s.kind === 'INSTALLED').length
-    ElMessage.success(report.value.notModified ? 'Reef 上没有新版本' : `同步完成，安装了 ${installed} 个 Shell`)
-    shells.value = (await api.shells()).shells
+    const installed = report.value.conches.filter((s) => s.kind === 'INSTALLED').length
+    ElMessage.success(report.value.notModified ? 'Reef 上没有新版本' : `同步完成，安装了 ${installed} 个规则包`)
+    conches.value = (await api.conches()).conches
     void refreshPending()
   } catch (error) {
     notifyError(error)
@@ -93,7 +93,7 @@ onMounted(load)
 
 <template>
   <div v-loading="loading" class="overview">
-    <PageHeader title="概览" description="本机 Crab 的 Shell、账号与最近调用">
+    <PageHeader title="概览" description="本机 Crab 的规则包、账号与最近调用">
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-button type="primary" :loading="syncing" :disabled="!syncConfigured" @click="syncNow">立即同步</el-button>
     </PageHeader>
@@ -113,20 +113,20 @@ onMounted(load)
 
     <el-alert v-if="pending.length" type="warning" show-icon :closable="false" class="notice">
       <template #title>
-        {{ pending.length }} 个 Shell 还缺凭证或配置，调用会返回「待配置」：
-        <router-link v-for="s in pending" :key="s.shell" :to="`/shells/${encodeURIComponent(s.shell)}`" class="mono pending">
-          {{ s.shell }}
+        {{ pending.length }} 个规则包还缺凭证或配置，调用会返回「待配置」：
+        <router-link v-for="s in pending" :key="s.conch" :to="`/conches/${encodeURIComponent(s.conch)}`" class="mono pending">
+          {{ s.conch }}
         </router-link>
       </template>
     </el-alert>
 
     <div class="hm-grid cols-4">
       <StatCard
-        label="已安装 Shell"
-        :value="shells.length"
-        :hint="`${shells.reduce((n, s) => n + s.capabilityCount, 0)} 个能力`"
+        label="已安装规则包"
+        :value="conches.length"
+        :hint="`${conches.reduce((n, s) => n + s.capabilityCount, 0)} 个能力`"
         :icon="Box"
-        to="/shells"
+        to="/conches"
       />
       <StatCard
         label="待配置"
@@ -134,7 +134,7 @@ onMounted(load)
         :tone="pending.length ? 'warn' : 'ok'"
         hint="缺凭证或配置项"
         :icon="Setting"
-        to="/shells"
+        to="/conches"
       />
       <StatCard label="最近调用" :value="calls.length" hint="最多显示最近 200 次" :icon="List" to="/calls" />
       <StatCard
@@ -170,11 +170,11 @@ onMounted(load)
             </div>
           </div>
           <ul class="outcomes">
-            <li v-for="item in changedShells" :key="item.shell">
+            <li v-for="item in changedConches" :key="item.conch">
               <el-tag :type="outcomeLabels[item.kind ?? '']?.tone ?? 'info'" size="small" effect="plain">
                 {{ outcomeLabels[item.kind ?? '']?.text ?? item.kind }}
               </el-tag>
-              <span class="mono">{{ item.shell }} v{{ item.version }}</span>
+              <span class="mono">{{ item.conch }} v{{ item.version }}</span>
               <span v-if="item.reason" class="hm-muted">{{ item.reason }}</span>
             </li>
             <li v-for="name in report.removed" :key="`rm-${name}`">
@@ -184,18 +184,18 @@ onMounted(load)
           </ul>
           <el-alert
             v-for="change in report.credentialChanges.filter((c) => c.addedRequired.length)"
-            :key="change.shell"
+            :key="change.conch"
             type="warning"
             :closable="false"
             show-icon
-            :title="`${change.shell} 新增必填凭证：${change.addedRequired.join('、')}`"
+            :title="`${change.conch} 新增必填凭证：${change.addedRequired.join('、')}`"
             class="notice"
           />
         </template>
         <div v-else-if="!loading && !syncConfigured" class="state">
           <el-icon :size="22"><Connection /></el-icon>
           <div>
-            <strong>没有配置 Reef，只使用本地 Shell。</strong>
+            <strong>没有配置 Reef，只使用本地规则包。</strong>
             <div class="hm-muted">在 config.yml 设置 reef.url 和 reef.public_key 后重启 Crab。</div>
           </div>
         </div>
@@ -203,7 +203,7 @@ onMounted(load)
           <el-icon :size="22"><Connection /></el-icon>
           <div>
             <strong>本次启动后还没有同步过</strong>
-            <div class="hm-muted">点击右上角「立即同步」从 Reef 拉取最新 Shell</div>
+            <div class="hm-muted">点击右上角「立即同步」从 Reef 拉取最新规则包</div>
           </div>
         </div>
       </div>
@@ -239,7 +239,7 @@ onMounted(load)
           <template #default="{ row }">{{ relativeTime(row.at) }}</template>
         </el-table-column>
         <el-table-column label="能力" min-width="200">
-          <template #default="{ row }"><span class="mono">{{ row.shell }}.{{ row.action }}</span></template>
+          <template #default="{ row }"><span class="mono">{{ row.conch }}.{{ row.action }}</span></template>
         </el-table-column>
         <el-table-column label="错误" width="200">
           <template #default="{ row }">

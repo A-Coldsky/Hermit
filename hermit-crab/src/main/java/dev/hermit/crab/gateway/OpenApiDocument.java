@@ -9,7 +9,7 @@ import java.util.Set;
 
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.HttpMethod;
-import dev.hermit.common.model.ShellDoc;
+import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
@@ -30,14 +30,14 @@ public final class OpenApiDocument {
         LinkedHashMap<String, Object> paths = new LinkedHashMap<>();
         LinkedHashSet<String> operationIds = new LinkedHashSet<>();
         LinkedHashMap<String, String> listedAliases = new LinkedHashMap<>();
-        for (ShellDoc doc : runtime.registry().snapshot().values()) {
+        for (ConchDoc doc : runtime.registry().snapshot().values()) {
             for (Action action : doc.actions().values()) {
-                if (runtime.disabled(doc.shell(), action.name())) {
+                if (runtime.disabled(doc.conch(), action.name())) {
                     continue;
                 }
-                String operationId = doc.shell() + "__" + action.name();
+                String operationId = doc.conch() + "__" + action.name();
                 operationIds.add(operationId);
-                paths.put("/api/" + doc.shell() + "/" + action.name(), Map.of(
+                paths.put("/api/" + doc.conch() + "/" + action.name(), Map.of(
                         CapabilityHttp.method(action).name().toLowerCase(),
                         operation(action, operationId, false)));
             }
@@ -47,14 +47,14 @@ public final class OpenApiDocument {
             if (dot <= 0) {
                 continue;
             }
-            String shell = alias.getValue().substring(0, dot);
+            String conch = alias.getValue().substring(0, dot);
             String actionName = alias.getValue().substring(dot + 1);
-            ShellDoc doc = runtime.registry().find(shell).orElse(null);
+            ConchDoc doc = runtime.registry().find(conch).orElse(null);
             Action action = doc == null ? null : doc.actions().get(actionName);
-            if (action == null || runtime.disabled(shell, actionName)) {
+            if (action == null || runtime.disabled(conch, actionName)) {
                 continue;
             }
-            String operationId = unique(shell + "__" + actionName + "__alias", operationIds);
+            String operationId = unique(conch + "__" + actionName + "__alias", operationIds);
             paths.put(alias.getKey(), Map.of(
                     CapabilityHttp.method(action).name().toLowerCase(),
                     operation(action, operationId, true)));

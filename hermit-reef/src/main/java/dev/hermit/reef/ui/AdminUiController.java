@@ -35,9 +35,9 @@ public class AdminUiController {
     @GetMapping({
             "/",
             "/login",
-            "/shells",
-            "/shells/upload",
-            "/shells/{shell}",
+            "/conches",
+            "/conches/upload",
+            "/conches/{conch}",
             "/tide",
             "/alerts",
             "/audit",

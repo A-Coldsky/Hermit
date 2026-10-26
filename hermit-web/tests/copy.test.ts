@@ -5,7 +5,7 @@ import { mountPage } from './helpers'
 
 const reef = vi.hoisted(() => ({ login: vi.fn() }))
 const crab = vi.hoisted(() => ({
-  shells: vi.fn(),
+  conches: vi.fn(),
   calls: vi.fn(),
   call: vi.fn(),
   debug: vi.fn(),
@@ -28,7 +28,7 @@ afterEach(() => {
 
 describe('Crab 调试开关', () => {
   it('写明不影响调用记录，不再自称调试模式', async () => {
-    crab.shells.mockResolvedValue({ shells: [] })
+    crab.conches.mockResolvedValue({ conches: [] })
     crab.calls.mockResolvedValue({ calls: [] })
     crab.debug.mockResolvedValue({ enabled: false, expiresAt: null })
     crab.syncStatus.mockResolvedValue({ report: null, latestCrab: null })
@@ -43,13 +43,13 @@ describe('Crab 调试开关', () => {
   })
 
   it('回退后显示已安装版本，Reef 不可达时显示失败而不保留上次成功', async () => {
-    crab.shells.mockResolvedValue({ shells: [] })
+    crab.conches.mockResolvedValue({ conches: [] })
     crab.calls.mockResolvedValue({ calls: [] })
     crab.debug.mockResolvedValue({ enabled: false, expiresAt: null })
     crab.syncStatus.mockResolvedValue({
       report: {
         notModified: false,
-        shells: [{ shell: 'legacy_oa', version: '1.0.0', kind: 'ROLLED_BACK', reason: 'RULE_MISMATCH' }],
+        conches: [{ conch: 'legacy_oa', version: '1.0.0', kind: 'ROLLED_BACK', reason: 'RULE_MISMATCH' }],
         removed: [],
         credentialChanges: [],
         latestCrab: null,
@@ -67,7 +67,7 @@ describe('Crab 调试开关', () => {
     crab.syncStatus.mockResolvedValue({
       report: {
         notModified: false,
-        shells: [],
+        conches: [],
         removed: [],
         credentialChanges: [],
         latestCrab: null,
@@ -105,10 +105,10 @@ describe('Crab 调用详情标题', () => {
       traceId: 't-1',
       at: '2026-10-15T08:00:00Z',
       origin: 'API',
-      shell: 'legacy_oa',
+      conch: 'legacy_oa',
       action: 'list_todo',
       account: 'default',
-      shellVersion: '1.0.0',
+      conchVersion: '1.0.0',
       success: false,
       errorCode,
       errorMessage: '登录失败',
@@ -120,7 +120,7 @@ describe('Crab 调用详情标题', () => {
 
   async function openDetail(errorCode: string) {
     crab.calls.mockResolvedValue({ calls: [] })
-    crab.shells.mockResolvedValue({ shells: [] })
+    crab.conches.mockResolvedValue({ conches: [] })
     crab.call.mockResolvedValue(detail(errorCode))
     const wrapper = await mountPage(CallsView, { attach: true, path: '/calls?trace=t-1' })
     await flushPromises()

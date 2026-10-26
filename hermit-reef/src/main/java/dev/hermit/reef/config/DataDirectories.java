@@ -11,7 +11,7 @@ public final class DataDirectories {
 
     public static Path create(Path root) throws IOException {
         Files.createDirectories(root.resolve("db"));
-        Files.createDirectories(root.resolve("shells"));
+        Files.createDirectories(root.resolve("conches"));
         Files.createDirectories(root.resolve("keys"));
         return root;
     }

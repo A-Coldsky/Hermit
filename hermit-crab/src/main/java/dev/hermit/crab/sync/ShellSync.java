@@ -48,6 +48,7 @@ public final class ShellSync {
     private final ShellRegistry registry;
     private final CredentialVault vault;
     private final SyncStore store;
+    private final DisabledShells disabledShells;
     private final ReefClient reef;
     private final Clock clock;
     private final HttpClient client;
@@ -74,17 +75,50 @@ public final class ShellSync {
             DataSource dataSource,
             Clock clock
     ) {
+        this(settings, paths, registry, vault, dataSource, clock, new DisabledShells(dataSource), true);
+    }
+
+    public ShellSync(
+            SyncSettings settings,
+            CrabPaths paths,
+            ShellRegistry registry,
+            CredentialVault vault,
+            DataSource dataSource,
+            Clock clock,
+            DisabledShells disabledShells
+    ) {
+        this(settings, paths, registry, vault, dataSource, clock, disabledShells, false);
+    }
+
+    private ShellSync(
+            SyncSettings settings,
+            CrabPaths paths,
+            ShellRegistry registry,
+            CredentialVault vault,
+            DataSource dataSource,
+            Clock clock,
+            DisabledShells disabledShells,
+            boolean loadDisabled
+    ) {
         this.settings = settings;
         this.paths = paths;
         this.registry = registry;
         this.vault = vault;
         this.store = new SyncStore(dataSource);
+        this.disabledShells = disabledShells == null ? new DisabledShells(dataSource) : disabledShells;
+        if (loadDisabled || disabledShells == null) {
+            this.disabledShells.load();
+        }
         this.clock = clock;
         this.client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         this.reef = new ReefClient(settings, client);
+    }
+
+    public DisabledShells disabledShells() {
+        return disabledShells;
     }
 
     /**
@@ -100,6 +134,7 @@ public final class ShellSync {
         synchronized (this) {
             try {
                 retryPendingCredentialDeletes();
+                retryClearDisabledCurrents();
                 Optional<CrabRelease> latest = readLatest();
                 ReefClient.ManifestFetch manifest = reef.manifest(store.etag().orElse(null));
                 if (manifest.notModified()) {
@@ -137,6 +172,10 @@ public final class ShellSync {
         if (last == null) {
             return null;
         }
+        return projectDisabled(projectRollbacks(last));
+    }
+
+    private SyncReport projectRollbacks(SyncReport last) {
         LinkedHashMap<String, ShellOutcome> rows = new LinkedHashMap<>();
         for (ShellOutcome outcome : last.shells()) {
             if (outcome.shell() != null) {
@@ -157,6 +196,46 @@ public final class ShellSync {
         }
         return new SyncReport(false, List.copyOf(rows.values()), last.removed(), last.credentialChanges(),
                 last.latestCrab(), last.error());
+    }
+
+    /**
+     * A later 304 replaces the shell rows. Tombstones are reapplied here so the console still
+     * shows the shell as disabled, without touching the registry (audit A01).
+     */
+    private SyncReport projectDisabled(SyncReport last) {
+        List<String> names = new ArrayList<>(disabledShells.names());
+        names.sort(String::compareTo);
+        if (names.isEmpty()) {
+            return last;
+        }
+        LinkedHashMap<String, ShellOutcome> rows = new LinkedHashMap<>();
+        for (ShellOutcome outcome : last.shells()) {
+            if (outcome.shell() != null) {
+                rows.put(outcome.shell(), outcome);
+            }
+        }
+        LinkedHashSet<String> removed = new LinkedHashSet<>(last.removed());
+        boolean changed = false;
+        for (String shell : names) {
+            ShellOutcome current = rows.get(shell);
+            if (current != null && (current.kind() == OutcomeKind.INSTALLED || current.kind() == OutcomeKind.SKIPPED_SAME)) {
+                continue;
+            }
+            ShellOutcome projected = new ShellOutcome(shell, disabledShells.version(shell), OutcomeKind.DISABLED,
+                    SyncReasons.DISABLED);
+            if (!projected.equals(current)) {
+                rows.put(shell, projected);
+                changed = true;
+            }
+            if (removed.add(shell)) {
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return last;
+        }
+        return new SyncReport(last.notModified(), List.copyOf(rows.values()), List.copyOf(removed),
+                last.credentialChanges(), last.latestCrab(), last.error());
     }
 
     private ShellOutcome projectRollback(String shell, ShellOutcome outcome) {
@@ -205,8 +284,7 @@ public final class ShellSync {
         List<String> removed = new ArrayList<>();
         for (String shell : registry.snapshot().keySet()) {
             if (!present.contains(shell)) {
-                registry.remove(shell);
-                removed.add(shell);
+                deactivate(shell, shells, removed);
             }
         }
         if (shells.stream().anyMatch(SyncFailures::retryable)) {
@@ -326,10 +404,10 @@ public final class ShellSync {
         }
         Optional<String> current = ShellFiles.readCurrent(paths, entry.shell());
         if (current.isPresent() && current.get().equals(entry.version())) {
-            if (pin.isPresent()) {
-                store.clearPin(entry.shell());
+            InstallResult kept = keepCurrent(entry);
+            if (kept != null) {
+                return kept;
             }
-            return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION));
         }
         ReefClient.Download download = reef.download(entry.shell(), entry.version());
         if (download.tooLarge()) {
@@ -372,6 +450,10 @@ public final class ShellSync {
             }
             Optional<String> currentNow = ShellFiles.readCurrent(paths, shell);
             if (currentNow.isPresent() && currentNow.get().equals(version)) {
+                if (registry.find(shell).isEmpty() && !loadInstalled(shell, version)) {
+                    return InstallResult.of(rejected(entry, SyncReasons.PACKAGE_MISSING));
+                }
+                disabledShells.clear(shell);
                 if (pinNow.isPresent()) {
                     store.clearPin(shell);
                 }
@@ -419,7 +501,102 @@ public final class ShellSync {
             }
             Set<String> removed = change.map(CredentialDeclarationChange::removed).orElseGet(Set::of);
             deleteRemovedFields(shell, verified.shellDoc(), removed);
+            // Tombstone drops only after the new doc is in the registry, so a call cannot observe
+            // "enabled" against an empty registry. In-flight requests keep the snapshot they already
+            // authorized (audit A01) and are not switched onto this version.
+            disabledShells.clear(shell);
             return new InstallResult(outcome(entry, OutcomeKind.INSTALLED, null), change);
+        }
+    }
+
+    /**
+     * Reef left this shell out of the manifest. Record the tombstone before dropping the registry
+     * entry so new calls return {@code SHELL_DISABLED} instead of a bare not-found. The authorized
+     * snapshot of a request already inside the engine is left alone (audit A01); this path does
+     * not install a replacement version.
+     */
+    private void deactivate(String shell, List<ShellOutcome> shells, List<String> removed) {
+        if (!ShellFiles.safeSegment(shell)) {
+            disabledShells.mark(shell, null, clock.instant());
+            registry.remove(shell);
+            removed.add(shell);
+            shells.add(new ShellOutcome(shell, null, OutcomeKind.DISABLED, SyncReasons.DISABLED));
+            return;
+        }
+        synchronized (ShellFileLocks.of(shell)) {
+            String version = ShellFiles.readCurrent(paths, shell).orElse(null);
+            try {
+                disabledShells.mark(shell, version, clock.instant());
+            } catch (RuntimeException ex) {
+                LOG.log(Level.WARNING, "disable tombstone failed shell={0}", shell);
+                shells.add(new ShellOutcome(shell, version, OutcomeKind.REJECTED, SyncReasons.DISABLE_FAILED));
+                return;
+            }
+            registry.remove(shell);
+            try {
+                ShellFiles.clearCurrent(paths, shell);
+            } catch (RuntimeException ex) {
+                LOG.log(Level.WARNING, "clear current failed shell={0}", shell);
+            }
+            removed.add(shell);
+            shells.add(new ShellOutcome(shell, version, OutcomeKind.DISABLED, SyncReasons.DISABLED));
+        }
+    }
+
+    private InstallResult keepCurrent(ReefClient.CatalogEntry entry) {
+        String shell = entry.shell();
+        if (!ShellFiles.safeSegment(shell)) {
+            return InstallResult.of(rejected(entry, SyncReasons.PATH_UNSAFE));
+        }
+        synchronized (ShellFileLocks.of(shell)) {
+            Optional<String> currentNow = ShellFiles.readCurrent(paths, shell);
+            if (currentNow.isEmpty() || !currentNow.get().equals(entry.version())) {
+                return null;
+            }
+            if (registry.find(shell).isEmpty() && !loadInstalled(shell, entry.version())) {
+                return InstallResult.of(rejected(entry, SyncReasons.PACKAGE_MISSING));
+            }
+            disabledShells.clear(shell);
+            if (store.pin(shell).isPresent()) {
+                store.clearPin(shell);
+            }
+            return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION));
+        }
+    }
+
+    private boolean loadInstalled(String shell, String version) {
+        try {
+            java.nio.file.Path zip = ShellFiles.versionDir(paths, shell, version).resolve("package.zip");
+            if (!Files.isRegularFile(zip) || Files.isSymbolicLink(zip) || Files.size(zip) > ShellFiles.MAX_ZIP_BYTES) {
+                return false;
+            }
+            VerifiedShell verified = ShellPackage.readVerified(Files.readAllBytes(zip), settings.reefKey());
+            if (!shell.equals(verified.manifest().shell()) || !version.equals(verified.manifest().version())) {
+                return false;
+            }
+            registry.put(verified.shellDoc());
+            return true;
+        } catch (RuntimeException | IOException ex) {
+            registry.remove(shell);
+            return false;
+        }
+    }
+
+    private void retryClearDisabledCurrents() {
+        for (String shell : disabledShells.names()) {
+            if (!ShellFiles.safeSegment(shell)) {
+                continue;
+            }
+            synchronized (ShellFileLocks.of(shell)) {
+                if (!disabledShells.contains(shell)) {
+                    continue;
+                }
+                try {
+                    ShellFiles.clearCurrent(paths, shell);
+                } catch (RuntimeException ex) {
+                    LOG.log(Level.WARNING, "clear current failed shell={0}", shell);
+                }
+            }
         }
     }
 

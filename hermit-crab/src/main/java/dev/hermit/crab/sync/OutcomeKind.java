@@ -7,5 +7,7 @@ public enum OutcomeKind {
     SKIPPED_PINNED,
     REJECTED,
     /** Local status after {@link RollbackGuard} restored an older installed version. */
-    ROLLED_BACK
+    ROLLED_BACK,
+    /** Reef dropped the shell from the distribution manifest. Calls return SHELL_DISABLED. */
+    DISABLED
 }

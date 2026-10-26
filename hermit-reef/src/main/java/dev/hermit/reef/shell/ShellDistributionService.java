@@ -10,6 +10,7 @@ import dev.hermit.reef.web.ReefErrorCode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -20,14 +21,16 @@ public class ShellDistributionService {
     private static final Logger log = LoggerFactory.getLogger(ShellDistributionService.class);
 
     private final ShellRepository repository;
+    private final ShellAvailabilityRepository availability;
     private final ShellStorage storage;
     private final SigningKeyStore keys;
     private final PackageVerifier verifier;
     private final ObjectMapper objectMapper;
 
-    public ShellDistributionService(ShellRepository repository, ShellStorage storage, SigningKeyStore keys,
-            PackageVerifier verifier, ObjectMapper objectMapper) {
+    public ShellDistributionService(ShellRepository repository, ShellAvailabilityRepository availability,
+            ShellStorage storage, SigningKeyStore keys, PackageVerifier verifier, ObjectMapper objectMapper) {
         this.repository = repository;
+        this.availability = availability;
         this.storage = storage;
         this.keys = keys;
         this.verifier = verifier;
@@ -61,6 +64,9 @@ public class ShellDistributionService {
     }
 
     public byte[] publishedZip(String shell, String version) {
+        if (shell != null && availability.isDisabled(shell)) {
+            throw notFound();
+        }
         VersionRow row = publishedRow(shell, version);
         byte[] zip = storage.readZip(row.shell(), row.version());
         try {
@@ -91,7 +97,11 @@ public class ShellDistributionService {
         if (shells != currents.size()) {
             throw new ApiException(500, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message());
         }
-        return currents;
+        Set<String> disabled = availability.disabledNames();
+        if (disabled.isEmpty()) {
+            return currents;
+        }
+        return currents.stream().filter(row -> !disabled.contains(row.shell())).toList();
     }
 
     private VersionRow publishedRow(String shell, String version) {

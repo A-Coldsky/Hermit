@@ -142,6 +142,27 @@ class Phase1AcceptanceTest {
                     assertThat(alertKinds(reefBase, token)).contains("RULE_MISMATCH_SURGE");
                     assertThat(rollbackReasons(reefBase, token)).contains("RULE_MISMATCH");
 
+                    HttpResponse<String> disabled = post(
+                            reefBase, "/api/admin/shells/legacy_oa/disable", token, "{\"reason\":\"phase1 disable\"}");
+                    assertThat(disabled.statusCode()).as(safe(disabled.body())).isEqualTo(200);
+                    assertThat(json(disabled).path("data").path("disabled").asBoolean()).isTrue();
+                    HttpResponse<String> blocked = post(
+                            reefBase, "/api/admin/shells/legacy_oa/versions/1.0.0/publish", token, "");
+                    assertThat(blocked.statusCode()).isEqualTo(409);
+                    console(crabBase, "POST", "/console/api/sync", "{}");
+                    assertCode(get(crabBase, "/api/legacy_oa/list_todo", apiKey, null), 409, "SHELL_DISABLED");
+                    JsonNode syncBody = console(crabBase, "GET", "/console/api/sync", null);
+                    JsonNode report = syncBody.path("data").path("report");
+                    boolean shownDisabled = false;
+                    for (JsonNode row : report.path("shells")) {
+                        if ("legacy_oa".equals(row.path("shell").asText())
+                                && "DISABLED".equals(row.path("kind").asText())) {
+                            shownDisabled = true;
+                        }
+                    }
+                    assertThat(shownDisabled).as(syncBody.toString()).isTrue();
+                    assertThat(report.path("removed").toString()).contains("legacy_oa");
+
                     String leaked = sample.replace("shell: legacy_oa", "shell: leaked_pw")
                             .replace("password: \"{{credential.password | md5}}\"",
                                     "password: \"" + LITERAL_PASSWORD + "\"");

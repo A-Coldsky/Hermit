@@ -40,6 +40,14 @@ export interface ShellDiff {
   newRequiredCredentials: string[]
 }
 
+export interface ShellAvailability {
+  shell: string
+  disabled: boolean
+  disabledAt: string | null
+  disabledBy: string | null
+  disabledReason: string | null
+}
+
 export interface ShellSummary {
   shell: string
   version: string | null
@@ -49,6 +57,10 @@ export interface ShellSummary {
   tags: string[]
   capabilityCount: number
   publishedAt: string | null
+  disabled: boolean
+  disabledAt: string | null
+  disabledBy: string | null
+  disabledReason: string | null
 }
 
 export interface FieldDeclaration {
@@ -87,6 +99,10 @@ export interface ShellDetail {
   credentials: Record<string, FieldDeclaration>
   config: Record<string, FieldDeclaration>
   actions: Record<string, Capability>
+  disabled: boolean
+  disabledAt: string | null
+  disabledBy: string | null
+  disabledReason: string | null
 }
 
 export interface ShellVersion {
@@ -210,6 +226,10 @@ export const api = {
     http.post<{ shell: string; from: string | null; to: string }>(`/api/admin/shells/${seg(shell)}/rollback`, {
       version,
     }),
+  disableShell: (shell: string, reason: string) =>
+    http.post<ShellAvailability>(`/api/admin/shells/${seg(shell)}/disable`, { reason }),
+  enableShell: (shell: string, reason: string) =>
+    http.post<ShellAvailability>(`/api/admin/shells/${seg(shell)}/enable`, { reason }),
 
   tideSummary: (query: { shell?: string; from?: string; to?: string; bucket?: string }) =>
     http.get<TideSummary>('/api/admin/tide/summary', query),

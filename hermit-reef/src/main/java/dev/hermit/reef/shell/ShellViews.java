@@ -21,6 +21,14 @@ record PublishResponse(String shell, String version) {
 record RollbackResponse(String shell, String from, String to) {
 }
 
+record ShellAvailabilityView(
+        String shell,
+        boolean disabled,
+        Instant disabledAt,
+        String disabledBy,
+        String disabledReason) {
+}
+
 record SigningKeyResponse(String publicKey) {
 }
 
@@ -38,7 +46,11 @@ record ShellSummary(
         String owner,
         List<String> tags,
         int capabilityCount,
-        Instant publishedAt) {
+        Instant publishedAt,
+        boolean disabled,
+        Instant disabledAt,
+        String disabledBy,
+        String disabledReason) {
 }
 
 record ShellVersionItem(
@@ -133,9 +145,13 @@ record ShellDetail(
         String changelog,
         Map<String, CredentialDeclaration> credentials,
         Map<String, ConfigDeclaration> config,
-        Map<String, CapabilityView> actions) {
+        Map<String, CapabilityView> actions,
+        boolean disabled,
+        Instant disabledAt,
+        String disabledBy,
+        String disabledReason) {
 
-    static ShellDetail from(ShellDoc doc) {
+    static ShellDetail from(ShellDoc doc, AvailabilityRow availability) {
         Map<String, CredentialDeclaration> credentials = new java.util.LinkedHashMap<>();
         if (doc.credentials() != null) {
             doc.credentials().forEach((name, field) -> credentials.put(name, CredentialDeclaration.from(field)));
@@ -157,7 +173,11 @@ record ShellDetail(
                 doc.changelog(),
                 credentials,
                 config,
-                actions);
+                actions,
+                availability != null && availability.disabled(),
+                availability != null && availability.disabled() ? availability.disabledAt() : null,
+                availability != null && availability.disabled() ? availability.disabledBy() : null,
+                availability != null && availability.disabled() ? availability.disabledReason() : null);
     }
 }
 

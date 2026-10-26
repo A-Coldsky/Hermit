@@ -159,6 +159,7 @@ final class McpErrors {
                     ? "上游没有接受这次输入。请按该系统的要求修改参数后重试。"
                     : "按工具 inputSchema 修正参数后重试。缺必填、类型错误或超出 minimum/maximum 都会被拒绝，不会改成合法值。";
             case "NOT_FOUND" -> "确认能力名，或用 tools/list、search_capabilities 查看当前 Key 可见的能力。";
+            case "SHELL_DISABLED" -> "该 Shell 已在 Reef 停用。同步完成后不再提供调用；请管理员重新启用后再同步。";
             case "ACCOUNT_NOT_FOUND" -> "在 Crab 控制台或 CLI 为该 Shell 创建账号，或改用已有账号名。";
             case "NOT_CONFIGURED" -> "在 Crab 控制台补齐该 Shell 的配置和凭证。";
             case "AUTH_FAILED" -> "这是上游登录失败，不是 API Key 错误。请检查该账号的凭证，或在控制台执行 test-login。";

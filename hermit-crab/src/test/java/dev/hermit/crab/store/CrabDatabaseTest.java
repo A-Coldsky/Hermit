@@ -51,8 +51,9 @@ class CrabDatabaseTest {
                     "ROLLBACK_QUEUE",
                     "HOURLY_COUNTS",
                     "REPORT_META",
-                    "PENDING_CREDENTIAL_DELETES");
-            assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5);
+                    "PENDING_CREDENTIAL_DELETES",
+                    "DISABLED_SHELLS");
+            assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6);
             assertThat(columnType(fixture, "CREDENTIALS", "CIPHERTEXT")).contains("BINARY");
         } finally {
             fixture.close();
@@ -62,7 +63,7 @@ class CrabDatabaseTest {
             Account account = reopened.accounts.resolve(Origin.OFFICIAL, "oa", Optional.of("alice"));
             assertThat(account.account()).isEqualTo("alice");
             assertThat(account.defaultAccount()).isTrue();
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6);
         }
     }
 
@@ -72,7 +73,7 @@ class CrabDatabaseTest {
         try {
             try (Connection connection = fixture.dataSource.getConnection();
                  Statement statement = connection.createStatement()) {
-                statement.execute("DELETE FROM schema_version WHERE version IN (4, 5)");
+                statement.execute("DELETE FROM schema_version WHERE version IN (4, 5, 6)");
                 statement.execute("ALTER TABLE sync_state ALTER COLUMN \"value\" SET DATA TYPE VARCHAR(512)");
                 statement.execute("ALTER TABLE rollback_queue DROP COLUMN event_id");
             }
@@ -82,7 +83,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6);
             String value = "v".repeat(600);
             try (Connection connection = reopened.dataSource.getConnection();
                  PreparedStatement insert = connection.prepareStatement(
@@ -107,7 +108,7 @@ class CrabDatabaseTest {
         StoreFixture fixture = StoreFixture.open(temp);
         try {
             forgetVersionTwo(fixture);
-            assertThat(versions(fixture)).containsExactly(1, 3, 4, 5);
+            assertThat(versions(fixture)).containsExactly(1, 3, 4, 5, 6);
             assertThat(tableNames(fixture)).doesNotContain("CALL_LOGS", "SESSIONS", "IDEMPOTENCY");
             assertThat(tableNames(fixture)).contains("REPORT_QUEUE", "SYNC_STATE");
         } finally {
@@ -115,7 +116,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6);
             assertThat(tableNames(reopened)).contains(
                     "CALL_LOGS", "STEP_LOGS", "IDEMPOTENCY", "SESSIONS", "CAPABILITY_SWITCHES", "DEBUG_STATE",
                     "REPORT_QUEUE", "SYNC_STATE");
@@ -127,7 +128,7 @@ class CrabDatabaseTest {
         StoreFixture fixture = StoreFixture.open(temp);
         try (Connection connection = fixture.dataSource.getConnection();
              Statement statement = connection.createStatement()) {
-            statement.execute("DELETE FROM schema_version WHERE version = 5");
+            statement.execute("DELETE FROM schema_version WHERE version IN (5, 6)");
             statement.execute("ALTER TABLE rollback_queue DROP COLUMN event_id");
             insertQueuedRollback(connection, Instant.parse("2026-06-01T00:00:00Z"), "RULE_MISMATCH");
             insertQueuedRollback(connection, Instant.parse("2026-06-01T00:00:01Z"), "AGAIN");
@@ -137,7 +138,7 @@ class CrabDatabaseTest {
 
         List<String> first;
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6);
             first = eventIds(reopened);
             assertThat(first).hasSize(2);
             assertThat(first).doesNotHaveDuplicates();

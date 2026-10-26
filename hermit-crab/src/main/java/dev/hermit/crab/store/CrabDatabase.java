@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Version 4 widens {@code sync_state.value} so a manifest snapshot can be stored beside the ETag.
  * Version 5 adds {@code rollback_queue.event_id} and fills a unique id for rows already queued.
  * Version 5 is applied when {@code MAX(version)} is below 5, the same way as version 4.
+ * Version 6 adds {@code disabled_shells}, the tombstones for shells Reef withdrew from the manifest.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Do not rewrite an applied migration.
@@ -94,6 +95,10 @@ public final class CrabDatabase implements AutoCloseable {
             if (current < 5) {
                 applyV5(connection);
                 insertVersion(connection, 5);
+            }
+            if (current < 6) {
+                applyV6(connection);
+                insertVersion(connection, 6);
             }
             return null;
         });
@@ -381,6 +386,16 @@ public final class CrabDatabase implements AutoCloseable {
             }
         }
         execute(connection, "ALTER TABLE rollback_queue ALTER COLUMN event_id SET NOT NULL");
+    }
+
+    private static void applyV6(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS disabled_shells (
+                    shell VARCHAR(256) NOT NULL PRIMARY KEY,
+                    version VARCHAR(64),
+                    disabled_at TIMESTAMP WITH TIME ZONE NOT NULL
+                )
+                """);
     }
 
     private static boolean applied(Connection connection, int version) throws SQLException {

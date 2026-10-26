@@ -2,6 +2,7 @@ package dev.hermit.reef.shell;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.hermit.reef.web.ApiException;
 import dev.hermit.reef.testsupport.ReefTestConfig;
 import dev.hermit.reef.testsupport.TestDataDirs;
 import dev.hermit.reef.testsupport.TestSecrets;
@@ -45,6 +46,12 @@ class ShellConcurrencyTest {
     ShellPublishService publishService;
 
     @Autowired
+    ShellAvailabilityService availability;
+
+    @Autowired
+    ShellDistributionService distribution;
+
+    @Autowired
     JdbcTemplate jdbc;
 
     @Autowired
@@ -53,6 +60,7 @@ class ShellConcurrencyTest {
     @BeforeEach
     void reset() {
         jdbc.update("DELETE FROM shell_versions");
+        jdbc.update("DELETE FROM shell_availability");
         jdbc.update("DELETE FROM audit_log");
         jdbc.update("DELETE FROM admin_users");
         jdbc.update(
@@ -95,6 +103,33 @@ class ShellConcurrencyTest {
                     () -> publishService.rollback(TestSecrets.USERNAME, "legacy_oa", "1.1.0"));
             assertThat(count("SELECT COUNT(*) FROM shell_versions WHERE is_current = TRUE")).isEqualTo(1);
             assertThat(count("SELECT COUNT(*) FROM shell_versions WHERE status = 'PUBLISHED'")).isEqualTo(3);
+        }
+    }
+
+    @Test
+    void disableAndPublishLeaveTheShellOutOfTheManifest() throws Exception {
+        byte[] sample = sample();
+        for (int i = 0; i < 4; i++) {
+            jdbc.update("DELETE FROM shell_versions");
+            jdbc.update("DELETE FROM shell_availability");
+            jdbc.update("DELETE FROM audit_log");
+            uploads.upload(TestSecrets.USERNAME, sample);
+            uploads.upload(TestSecrets.USERNAME, withVersion(sample, "1.1.0"));
+            publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.0.0");
+            together(
+                    () -> {
+                        try {
+                            publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.1.0");
+                        } catch (ApiException ex) {
+                            if (ex.status() != 409 || !ShellAvailabilityService.DISABLED.equals(ex.getMessage())) {
+                                throw ex;
+                            }
+                        }
+                    },
+                    () -> availability.disable(TestSecrets.USERNAME, "legacy_oa", "并发停用"));
+            assertThat(availability.isDisabled("legacy_oa")).isTrue();
+            assertThat(distribution.manifest(null).entries()).isEmpty();
+            assertThat(count("SELECT COUNT(*) FROM shell_versions WHERE is_current = TRUE")).isEqualTo(1);
         }
     }
 

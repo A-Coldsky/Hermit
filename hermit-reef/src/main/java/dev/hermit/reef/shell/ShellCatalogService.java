@@ -23,22 +23,28 @@ import org.springframework.stereotype.Service;
 public class ShellCatalogService {
 
     private final ShellRepository repository;
+    private final ShellAvailabilityRepository availability;
     private final ShellStorage storage;
     private final ObjectMapper objectMapper;
 
-    public ShellCatalogService(ShellRepository repository, ShellStorage storage, ObjectMapper objectMapper) {
+    public ShellCatalogService(ShellRepository repository, ShellAvailabilityRepository availability,
+            ShellStorage storage, ObjectMapper objectMapper) {
         this.repository = repository;
+        this.availability = availability;
         this.storage = storage;
         this.objectMapper = objectMapper;
     }
 
     public List<ShellSummary> list() {
         Map<String, List<VersionRow>> grouped = group(repository.listAll());
+        Map<String, AvailabilityRow> flags = availability.all();
         List<ShellSummary> summaries = new ArrayList<>();
         for (List<VersionRow> rows : grouped.values()) {
             VersionRow current = singleCurrent(rows);
             VersionRow source = current != null ? current : highest(rows);
             ShellDoc doc = readDoc(source);
+            AvailabilityRow flag = flags.get(doc.shell());
+            boolean disabled = flag != null && flag.disabled();
             summaries.add(new ShellSummary(
                     doc.shell(),
                     current == null ? null : current.version(),
@@ -47,7 +53,11 @@ public class ShellCatalogService {
                     doc.owner(),
                     doc.tags(),
                     doc.actions().size(),
-                    latestPublishedAt(rows)));
+                    latestPublishedAt(rows),
+                    disabled,
+                    disabled ? flag.disabledAt() : null,
+                    disabled ? flag.disabledBy() : null,
+                    disabled ? flag.disabledReason() : null));
         }
         summaries.sort(Comparator.comparing(ShellSummary::shell));
         return summaries;
@@ -59,7 +69,7 @@ public class ShellCatalogService {
         if (current == null) {
             throw notFound();
         }
-        return ShellDetail.from(readDoc(current));
+        return ShellDetail.from(readDoc(current), availability.find(current.shell()));
     }
 
     public List<ShellVersionItem> versions(String shell) {

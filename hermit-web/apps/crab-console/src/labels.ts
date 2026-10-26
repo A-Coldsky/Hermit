@@ -5,6 +5,7 @@ export const outcomeLabels: Record<string, { text: string; tone: 'success' | 'in
   SKIPPED_PINNED: { text: '已固定版本', tone: 'info' },
   REJECTED: { text: '已拒绝', tone: 'danger' },
   ROLLED_BACK: { text: '已回退', tone: 'warning' },
+  DISABLED: { text: '已停用', tone: 'danger' },
 }
 
 export const originLabels: Record<string, string> = {

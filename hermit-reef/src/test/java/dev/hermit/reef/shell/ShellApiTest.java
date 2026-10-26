@@ -92,6 +92,7 @@ class ShellApiTest {
     void reset() throws Exception {
         privatePem = Files.readString(DATA.resolve("keys/signing.key"));
         jdbc.update("DELETE FROM shell_versions");
+        jdbc.update("DELETE FROM shell_availability");
         jdbc.update("DELETE FROM audit_log");
         jdbc.update("DELETE FROM admin_login_failures");
         jdbc.update("DELETE FROM admin_users");
@@ -184,7 +185,11 @@ class ShellApiTest {
                 .andExpect(jsonPath("$.data[0].title").value("协同办公 OA"))
                 .andExpect(jsonPath("$.data[0].owner").value("平台组"))
                 .andExpect(jsonPath("$.data[0].capabilityCount").value(1))
-                .andExpect(jsonPath("$.data[0].publishedAt").value(nullValue()));
+                .andExpect(jsonPath("$.data[0].publishedAt").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].disabled").value(false))
+                .andExpect(jsonPath("$.data[0].disabledAt").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].disabledBy").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].disabledReason").value(nullValue()));
         mockMvc.perform(get("/api/admin/shells/legacy_oa").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
@@ -259,6 +264,7 @@ class ShellApiTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.version").value("1.1.0"))
+                .andExpect(jsonPath("$.data.disabled").value(false))
                 .andExpect(jsonPath("$.data.actions.list_todo.effectiveMethod").value("GET"))
                 .andExpect(jsonPath("$.data.credentials.password.type").value("secret"))
                 .andExpect(jsonPath("$.data.credentials.password.required").value(true))
@@ -335,6 +341,122 @@ class ShellApiTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isNotFound());
         assertThat(versionCount()).isZero();
+    }
+
+    @Test
+    void disablingAShellDropsItFromTheManifestUntilItIsEnabled() throws Exception {
+        byte[] sample = sample();
+        upload(sample);
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+        String etag = manifestEtag("1.0.0");
+        byte[] zip = download("1.0.0");
+        Path stored = DATA.resolve("shells/legacy_oa/1.0.0/package.zip");
+        assertThat(Files.readAllBytes(stored)).isEqualTo(zip);
+
+        mockMvc.perform(post("/api/admin/shells/missing/disable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"missing\"}"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/disable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"  \"}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/disable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"" + "停".repeat(ShellAvailabilityService.MAX_REASON_LENGTH + 1) + "\"}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/disable"))
+                .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/disable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"  合同到期  \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.shell").value("legacy_oa"))
+                .andExpect(jsonPath("$.data.disabled").value(true))
+                .andExpect(jsonPath("$.data.disabledBy").value(TestSecrets.USERNAME))
+                .andExpect(jsonPath("$.data.disabledReason").value("合同到期"))
+                .andExpect(jsonPath("$.data.disabledAt").value("2026-06-01T00:00:00Z"));
+        mockMvc.perform(get("/api/admin/shells").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(jsonPath("$.data[0].disabled").value(true))
+                .andExpect(jsonPath("$.data[0].disabledReason").value("合同到期"))
+                .andExpect(jsonPath("$.data[0].version").value("1.0.0"));
+        mockMvc.perform(get("/api/admin/shells/legacy_oa").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(jsonPath("$.data.disabled").value(true))
+                .andExpect(jsonPath("$.data.version").value("1.0.0"))
+                .andExpect(jsonPath("$.data.disabledBy").value(TestSecrets.USERNAME));
+        String disableDetail = jdbc.queryForObject(
+                "SELECT detail FROM audit_log WHERE action = 'DISABLE'", String.class);
+        assertThat(objectMapper.readTree(disableDetail).get("reason").asText()).isEqualTo("合同到期");
+        assertThat(jdbc.queryForObject(
+                "SELECT version FROM audit_log WHERE action = 'DISABLE'", String.class)).isEqualTo("1.0.0");
+
+        mockMvc.perform(agent("/agent/shells/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+        mockMvc.perform(agent("/agent/shells/manifest").header(HttpHeaders.IF_NONE_MATCH, etag))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+        mockMvc.perform(agent("/agent/shells/legacy_oa/1.0.0"))
+                .andExpect(status().isNotFound());
+        assertThat(Files.readAllBytes(stored)).isEqualTo(zip);
+        PublicKey publicKey = Ed25519Keys.readPublicPem(Files.readString(DATA.resolve("keys/signing.pub")));
+        assertThat(ShellPackage.readVerified(Files.readAllBytes(stored), publicKey).manifest().sha256())
+                .isEqualTo(ShellPackage.readVerified(zip, publicKey).manifest().sha256());
+
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(ShellAvailabilityService.DISABLED));
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/rollback")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":\"1.0.0\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(ShellAvailabilityService.DISABLED));
+        assertThat(json(upload(withVersion(sample, "1.1.0"))).get("success").asBoolean()).isTrue();
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/versions/1.1.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(ShellAvailabilityService.DISABLED));
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/disable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"again\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(ShellAvailabilityService.ALREADY_DISABLED));
+
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/enable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"合同续签\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.disabled").value(false))
+                .andExpect(jsonPath("$.data.disabledAt").value(nullValue()))
+                .andExpect(jsonPath("$.data.disabledBy").value(nullValue()))
+                .andExpect(jsonPath("$.data.disabledReason").value(nullValue()));
+        assertThat(objectMapper.readTree(jdbc.queryForObject(
+                "SELECT detail FROM audit_log WHERE action = 'ENABLE'", String.class))
+                .get("reason").asText()).isEqualTo("合同续签");
+        String restored = manifestEtag("1.0.0");
+        assertThat(restored).isEqualTo(etag);
+        assertThat(download("1.0.0")).isEqualTo(zip);
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/versions/1.1.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.1.0"));
+        mockMvc.perform(post("/api/admin/shells/legacy_oa/enable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"not disabled\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(ShellAvailabilityService.NOT_DISABLED));
     }
 
     @Test

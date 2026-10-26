@@ -11,5 +11,7 @@ public enum ErrorCode {
     ACCOUNT_NOT_FOUND,
     FORBIDDEN,
     NOT_FOUND,
+    /** Reef 已停用该 Shell。Crab 同步后不再执行它。 */
+    SHELL_DISABLED,
     INTERNAL
 }

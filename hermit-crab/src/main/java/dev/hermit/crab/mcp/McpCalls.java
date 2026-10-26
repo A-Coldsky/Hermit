@@ -3,12 +3,14 @@ package dev.hermit.crab.mcp;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.common.model.Action;
+import dev.hermit.crab.sync.DisabledShells;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
@@ -50,7 +52,7 @@ final class McpCalls {
         }
         Optional<McpCatalog.CapabilityRef> found = catalog.find(principal, name);
         if (found.isEmpty()) {
-            return toolError("NOT_FOUND", "not found");
+            return missingTool(name);
         }
         return invokeDirect(principal, headerAccount, found.get(), arguments);
     }
@@ -108,7 +110,7 @@ final class McpCalls {
         }
         Optional<McpCatalog.CapabilityRef> found = catalog.find(principal, text);
         if (found.isEmpty()) {
-            return toolError("NOT_FOUND", "not found");
+            return missingTool(text);
         }
         Object rawArguments = arguments.get("arguments");
         Map<String, Object> input = copyObject(rawArguments);
@@ -186,6 +188,37 @@ final class McpCalls {
             return toolError("FORBIDDEN", REJECTED);
         }
         return null;
+    }
+
+    /**
+     * A tool name is {@code shell__action}. A disabled shell is reported as {@code SHELL_DISABLED}
+     * unless a longer loaded shell name owns that prefix.
+     */
+    private McpSchema.CallToolResult missingTool(String toolName) {
+        String disabled = longestShellPrefix(toolName, runtime.disabledShells().names());
+        if (disabled != null) {
+            String live = longestShellPrefix(toolName, runtime.registry().snapshot().keySet());
+            if (live == null || live.length() <= disabled.length()) {
+                return toolError("SHELL_DISABLED", DisabledShells.CALL_MESSAGE);
+            }
+        }
+        return toolError("NOT_FOUND", "not found");
+    }
+
+    private static String longestShellPrefix(String toolName, Set<String> shells) {
+        if (toolName == null || shells == null) {
+            return null;
+        }
+        String best = null;
+        for (String shell : shells) {
+            if (shell == null || shell.isEmpty()) {
+                continue;
+            }
+            if (toolName.startsWith(shell + "__") && (best == null || shell.length() > best.length())) {
+                best = shell;
+            }
+        }
+        return best;
     }
 
     private McpSchema.CallToolResult invoke(

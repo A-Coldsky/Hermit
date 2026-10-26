@@ -1,6 +1,7 @@
 package dev.hermit.reef.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -9,10 +10,19 @@ import ch.qos.logback.core.read.ListAppender;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 class ReefPropertiesTest {
 
     private static final String CONFIGURED = "configured-agent-token";
+
+    private final ApplicationContextRunner runner = new ApplicationContextRunner()
+            .withUserConfiguration(EnableReef.class);
+
+    @EnableConfigurationProperties(ReefProperties.class)
+    static class EnableReef {
+    }
 
     @Test
     void blankTokenWarnsWithoutWritingTheValue() {
@@ -39,6 +49,32 @@ class ReefPropertiesTest {
         ReefProperties configured = new ReefProperties();
         configured.setAgentToken(CONFIGURED);
         assertThat(configured.configuredAgentToken()).isEqualTo(CONFIGURED);
+    }
+
+    @Test
+    void retentionCronDefaultsToThreeUtcAndRejectsBlankOrInvalidExpressions() {
+        ReefProperties defaults = new ReefProperties();
+        defaults.validate();
+        assertThat(defaults.getRetentionCron()).isEqualTo("0 0 3 * * *");
+
+        assertThatThrownBy(() -> {
+            ReefProperties blank = new ReefProperties();
+            blank.setRetentionCron("   ");
+            blank.validate();
+        }).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("hermit.reef.retention-cron");
+
+        runner.withPropertyValues("hermit.reef.retention-cron=0 3 * * *").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure())
+                    .rootCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("hermit.reef.retention-cron");
+        });
+        runner.withPropertyValues("hermit.reef.retention-cron=0 30 4 * * *").run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(ReefProperties.class).getRetentionCron()).isEqualTo("0 30 4 * * *");
+        });
     }
 
     private static List<String> warningTexts(String token) {

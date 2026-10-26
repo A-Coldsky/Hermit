@@ -12,7 +12,7 @@ public class RetentionJob {
         this.retentionService = retentionService;
     }
 
-    @Scheduled(cron = "0 0 3 * * *", zone = "UTC")
+    @Scheduled(cron = "${hermit.reef.retention-cron:0 0 3 * * *}", zone = "UTC")
     public void purgeExpiredReports() {
         retentionService.purge();
     }

@@ -78,6 +78,8 @@ engine:
 | `hermit.reef.jwt-ttl` | `8h`，JWT 有 60 秒时钟容差 |
 | `hermit.reef.latest-crab-version` / `crab-download-url` | 默认空；提供版本提示，不自动下载/升级 Crab |
 | `hermit.reef.report-retention-days` | `90`，用于 failure_reports/rollback_events 的清理 |
+| `hermit.reef.retention-cron` / `HERMIT_REEF_RETENTION_CRON` | `0 0 3 * * *`。Spring 六段 cron（含秒），时区固定 UTC，默认每天 03:00。空白或无法解析的表达式拒绝启动。手动触发见 `POST /api/admin/retention/purge` |
+| `logging.pattern.level` | `%5p [%X{traceId}]`。请求处理期间 MDC 的 `traceId` 会出现在每条日志上，与响应里的值相同 |
 | `spring.datasource.url` | 默认 `jdbc:h2:file:${hermit.reef.data-dir}/db/reef;MODE=REGULAR` |
 | `spring.datasource.username` / `password` | H2 默认 `sa` / 空密码；部署 MySQL 时覆盖 |
 | `server.port` | Spring Boot 默认 8080 |

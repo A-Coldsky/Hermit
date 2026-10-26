@@ -22,6 +22,10 @@
 
 失败时 success=false、data 通常为 null、error 包含 code/message。YAML、ZIP、静态页、OpenAPI 原文、304 和 MCP JSON-RPC 不套此格式。上传校验失败可携带结构化 data，请同时保留 traceId。
 
+已登录访问不存在的 Reef `/api/admin/**` 返回 404 `NOT_FOUND` 信封，`traceId` 与请求头 `X-Trace-Id`（合法时）相同。未登录的 `/api/**` 仍是 401，已登录但路径不在 `/api/admin/**` 下仍是 403；这两类由安全链拒绝，响应同样是信封，不是框架默认 JSON。页面路由（`/`、`/login`、`/shells` 等）继续返回 `index.html`。Crab 在带控制台头的回环连接上，未匹配的 `/console/api/**` 返回 404 `NOT_FOUND` 信封；未匹配的网关路径（不是 `/api/{shell}/{action}` 或已登记别名）同样如此。`traceId` 同时出现在响应体和 `X-Hermit-Trace`。`/console/` 下已注册的页面仍返回 `index.html`。
+
+Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常，响应正文仍只有 `INTERNAL`。
+
 ## Reef 管理与分发
 
 以下管理路由前缀 `/api/admin`：
@@ -45,6 +49,7 @@
 | GET | `/alerts` | status |
 | POST | `/alerts/{id}/ack` | 确认告警 |
 | GET | `/audit` | 管理操作审计；参数见 AuditController |
+| POST | `/retention/purge` | 立即清理过期失败报告、回滚事件和锁定窗口外的登录失败。`data` 为 `{failureReports, rollbackEvents, loginFailures}`。写入审计 `RETENTION_PURGE`，detail 为同样的三个计数。需要管理员 JWT |
 
 Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。确认告警只记下确认人和时间，不结束去重窗口：同一 `(kind, shell, shell_version)` 自 `created_at` 起 `dedup-hours` 内不再新建。窗口过后条件仍成立才会再出现一条。失败次数上涨不会提前打破这个窗口。
 

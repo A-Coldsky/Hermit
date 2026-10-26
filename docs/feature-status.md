@@ -18,7 +18,7 @@
 | POST 幂等响应缓存 | 已实现，有缺陷 | 24h 密文缓存；无参数摘要/版本区分 |
 | MCP HTTP/SSE/工具/资源 | 已实现 | McpHttpTest；≤40 直接工具，>40 目录模式，确认行为不同。协议错误是 JSON-RPC `error.data.code`/`hint`（鉴权 HTTP 401 也是该 body）；工具失败为 `isError` + `structuredContent.error`。`outputSchema` 只在协商协议 `2025-06-18` 与 `2025-11-25` 声明。声明了 minimum/maximum 的入参越界会拒绝 |
 | MCP stdio 桥接 | 已实现 | McpStdio；需要已运行的 HTTP Crab，CLI/验收覆盖不足以代表所有真实客户端兼容 |
-| Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest；没有完整管理员生命周期管理 API |
+| Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest。4xx/5xx 服务端日志带与响应相同的 traceId，4xx 不记请求体。已登录的未知 `/api/admin/**` 为 404 `NOT_FOUND` 信封。没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ShellApiTest/ShellConcurrencyTest/ShellSelfCheckFailureTest |
 | Crab 定时/手动同步、ETag、验签 | 已实现 | ShellSyncTest/CrabWiringTest；可重试失败不记 ETag，304 核对 current。Reef 不可达时手动同步为 502 `UPSTREAM_ERROR`，状态改为这次失败；Reef 的 HTTP 错误仍保留上次成功 |
 | 本地规则失配回滚、坏版本固定 | 已实现 | RollbackGuardTest；要求前一版本成功，5 次 `RULE_MISMATCH`；上游 400 与会话失效不计数；不等于发布前健康检查。回滚后控制台同步状态显示已安装版本和 `ROLLED_BACK`，固定解除前保持 |
@@ -41,7 +41,7 @@
 | Crab 升级 | Reef 提供最新版本/下载地址，Crab 展示提示 | 无自动下载/升级器；继续手工升级或另行实现 |
 | 管理员生命周期 | 空库初始化 + 登录/me | 没有改密码/创建/禁用/注销令牌的完整管理 API |
 | 配置批量原子更新 | 控制台 PUT 逐字段调用 putConfig | 校验/写入失败可能部分生效；补事务行为测试 |
-| 数据保留 | 部分表定时清理 | 两端小时统计及部分审计/告警数据仍可持续增长 |
+| 数据保留 | failure_reports、rollback_events 按保留天数清理，登录失败按锁定窗口清理。定时默认每天 03:00 UTC，`hermit.reef.retention-cron` 可改；管理员 `POST /api/admin/retention/purge` 返回删除条数并写审计 | 两端小时统计及部分审计/告警数据仍可持续增长 |
 | 前端交互测试 | 类型检查、构建、后端静态资源测试和 Vitest/jsdom 组件测试 | 仍缺真实浏览器 E2E |
 | 交付工程化 | Maven 构建/Java/Vitest 测试和 Crab Docker 运行镜像已提供 | 无 CI workflow/覆盖率门槛/自动依赖扫描；原生 Crab 仍为普通 jar |
 
@@ -65,4 +65,6 @@ hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过；Docker
 
 2026-10-26 上游错误映射以 JDK 17.0.20 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 100、hermit-crab 187、hermit-it 1，Vitest 30（6 个文件）。未覆盖真实老系统，以及除 HTTP 400/401/403 以外的 4xx。
 
-2026-10-26 配置审计读取以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 117、hermit-crab 205、hermit-it 1，Vitest 43（7 个文件）。这是当前整棵树的计数。本次新增 `ConfigAuditReadTest`、`ConsoleAuditTest` 和 CLI `audit list` 用例。未做配置审计页面，也未在浏览器里点选；`config_audit` 仍无定期清理。未覆盖真实老系统。
+2026-10-26 配置审计读取以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 117、hermit-crab 205、hermit-it 1，Vitest 43（7 个文件）。这是当前整棵树的计数。本次新增 `ConfigAuditReadTest`、`ConsoleAuditTest` 和 CLI `audit list` 用例。配置审计页面随后合入，未在浏览器里点选；`config_audit` 仍无定期清理。未覆盖真实老系统。
+
+2026-10-26 错误日志、未知路由信封与保留任务以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 122、hermit-crab 202、hermit-it 1，Vitest 46（8 个文件）。未启动定时器到点执行，也未跑 MySQL/Compose。小时统计、审计和告警仍不在清理范围内。

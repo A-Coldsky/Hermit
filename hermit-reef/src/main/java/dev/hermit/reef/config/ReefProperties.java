@@ -6,6 +6,7 @@ import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.scheduling.support.CronExpression;
 
 @ConfigurationProperties(prefix = "hermit.reef")
 public class ReefProperties {
@@ -21,6 +22,7 @@ public class ReefProperties {
     private String latestCrabVersion = "";
     private String crabDownloadUrl = "";
     private int reportRetentionDays = 90;
+    private String retentionCron = "0 0 3 * * *";
 
     @PostConstruct
     void validate() {
@@ -32,6 +34,9 @@ public class ReefProperties {
         }
         if (reportRetentionDays < 1) {
             throw new IllegalStateException("hermit.reef.report-retention-days must be positive");
+        }
+        if (retentionCron == null || retentionCron.isBlank() || !CronExpression.isValidExpression(retentionCron)) {
+            throw new IllegalStateException("hermit.reef.retention-cron must be a valid cron expression");
         }
         if (configuredAgentToken() == null) {
             log.warn(BLANK_AGENT_TOKEN);
@@ -100,6 +105,14 @@ public class ReefProperties {
 
     public void setReportRetentionDays(int reportRetentionDays) {
         this.reportRetentionDays = reportRetentionDays;
+    }
+
+    public String getRetentionCron() {
+        return retentionCron;
+    }
+
+    public void setRetentionCron(String retentionCron) {
+        this.retentionCron = retentionCron;
     }
 
     private static String blankToNull(String value) {

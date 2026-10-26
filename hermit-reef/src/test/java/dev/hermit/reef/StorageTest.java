@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.hermit.reef.admin.LoginService;
+import dev.hermit.reef.config.ReefProperties;
 import dev.hermit.reef.retention.PurgeCounts;
 import dev.hermit.reef.retention.RetentionJob;
 import dev.hermit.reef.retention.RetentionService;
@@ -26,6 +27,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.config.CronTask;
+import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
@@ -52,6 +55,12 @@ class StorageTest {
 
     @Autowired
     RetentionJob retentionJob;
+
+    @Autowired
+    ReefProperties reefProperties;
+
+    @Autowired
+    List<ScheduledTaskHolder> scheduledTasks;
 
     @BeforeEach
     void resetRows() {
@@ -123,8 +132,10 @@ class StorageTest {
     @Test
     void retentionDeletesOnlyExpiredReportsAndRollbackEvents() throws Exception {
         Scheduled scheduled = RetentionJob.class.getMethod("purgeExpiredReports").getAnnotation(Scheduled.class);
-        assertThat(scheduled.cron()).isEqualTo("0 0 3 * * *");
+        assertThat(scheduled.cron()).isEqualTo("${hermit.reef.retention-cron:0 0 3 * * *}");
         assertThat(scheduled.zone()).isEqualTo("UTC");
+        assertThat(reefProperties.getRetentionCron()).isEqualTo("0 0 3 * * *");
+        assertThat(resolvedRetentionCron()).isEqualTo("0 0 3 * * *");
 
         Instant now = ReefTestConfig.START;
         clock.setInstant(now);
@@ -157,6 +168,18 @@ class StorageTest {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM admin_login_failures", Integer.class)).isEqualTo(2);
         Timestamp oldest = jdbc.queryForObject("SELECT MIN(failed_at) FROM admin_login_failures", Timestamp.class);
         assertThat(oldest.toInstant()).isEqualTo(windowStart);
+    }
+
+    private String resolvedRetentionCron() {
+        for (ScheduledTaskHolder holder : scheduledTasks) {
+            for (var scheduledTask : holder.getScheduledTasks()) {
+                if (scheduledTask.getTask() instanceof CronTask cron
+                        && cron.getRunnable().toString().contains("purgeExpiredReports")) {
+                    return cron.getExpression();
+                }
+            }
+        }
+        throw new AssertionError("retention cron task was not registered");
     }
 
     private void insertShellVersion(String shell, String version, String status) {

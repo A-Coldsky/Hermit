@@ -52,6 +52,8 @@ actions:
 
 `credentials`/`config` 字段接受 `type`、`label`、`required`、`description`、`options`；config 额外支持 `default`。类型有 text/secret/select/url。校验会拒绝 `config` 的 `type: secret`，秘密必须放在 `credentials`。配置值优先级为用户值 → 声明 default → 顶层 base_url（仅 base_url 字段）；引擎也可直接回退顶层 base_url。
 
+`description` 会原样显示在 Crab 控制台的账号凭证对话框里，是写给填表的人看的。只写要填什么，例如示例 `legacy_oa` 的密码写「填原始密码」；md5、加密、明文提交这类处理细节由步骤模板的过滤器负责，不写进说明。
+
 凭证、配置、账号和能力开关会在 Crab 的 `config_audit` 追加一条记录。记录里是字段名和动作，不是凭证明文、密文或配置值。本机 `GET /console/api/audit` 和 CLI `audit list` 按时间倒序读取，结果同样只有操作者、动作、origin、Conch、账号、时间和字段名。detail 里其它键不会被读出来。
 
 Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。缺 examples 是校验错误；notes/related 等说明质量问题可能产生警告。示例中 related 指向不存在的能力产生警告，不代表那些能力已实现。

@@ -38,7 +38,7 @@ class LegacyOaFixtureTest {
         assertThat(doc.title()).isEqualTo("协同办公 OA");
         assertThat(Fixtures.validate("legacy_oa_valid.yaml").errors()).isEmpty();
         assertThat(doc.credentials().get("password").description())
-                .isEqualTo("OA 登录密码")
+                .isEqualTo("填原始密码")
                 .doesNotContainIgnoringCase("md5");
         assertThat(new String(fixture, StandardCharsets.UTF_8)).contains("{{credential.password | md5}}");
 

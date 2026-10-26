@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Shell 模型/严格解析/语义校验/版本差异 | 已实现 | common parse/validate；对应测试齐全，部分步骤错误在运行时检查 |
 | 模板、内置过滤器、输入 Schema | 已实现 | TemplateEngine/InputPreparer；不提供完整最终输出 Schema 验证 |
-| HTTP 请求、登录、alive_check、Cookie 会话 | 已实现，有缺陷 | RuleEngine/HttpCalls/SessionManager |
+| HTTP 请求、登录、alive_check、Cookie 会话 | 已实现，有缺陷 | RuleEngine/HttpCalls/SessionManager。能力请求的上游 HTTP 400 为 `INVALID_INPUT`；401/403 与登录重定向为会话失效（幂等重放一次，否则 `SESSION_EXPIRED`），不计入回滚。选择器失配等仍是 `RULE_MISMATCH`。慢速响应的总 deadline 仍不可靠 |
 | CSS/XPath/JSONPath/regex 提取 | 已实现 | Extractors + EngineUnitTest/LegacyOaEngineTest |
 | assert/set/script | 已实现 | StepRunner/ScriptStep；脚本 Java 隔离和时间/结果限制有测试，无进程级内存隔离 |
 | 多账号/默认账号/凭证/配置 | 已实现 | ShellAdmin + store；credentials 加密只写 |
@@ -20,7 +20,7 @@
 | Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest；没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ShellApiTest/ShellConcurrencyTest/ShellSelfCheckFailureTest |
 | Crab 定时/手动同步、ETag、验签 | 已实现 | ShellSyncTest/CrabWiringTest；可重试失败不记 ETag，304 核对 current |
-| 本地规则失配回滚、坏版本固定 | 已实现 | RollbackGuardTest；要求前一版本成功，5 次失配；不等于发布前健康检查 |
+| 本地规则失配回滚、坏版本固定 | 已实现 | RollbackGuardTest；要求前一版本成功，5 次 `RULE_MISMATCH`；上游 400 与会话失效不计数；不等于发布前健康检查 |
 | 上报队列、聚合、退避、预览 | 已实现 | ReportSenderTest；失败/事件队列上限 10000，超限丢弃计数；小时统计单独存储 |
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
 | 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest；Webhook 没有持久化重试队列 |

@@ -1,6 +1,7 @@
 package dev.hermit.crab.store;
 
 import dev.hermit.crab.secure.CredentialCipher;
+import dev.hermit.crab.secure.CredentialDecryptException;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -32,6 +33,60 @@ public final class CredentialVault {
     public CredentialVault(DataSource dataSource, CredentialCipher cipher) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.cipher = Objects.requireNonNull(cipher, "cipher");
+    }
+
+    /** True when any credential ciphertext is stored. Used before generating a missing master key. */
+    public static boolean hasCiphertext(DataSource dataSource) {
+        Objects.requireNonNull(dataSource, "dataSource");
+        return Db.transaction(dataSource, connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("SELECT COUNT(*) FROM credentials");
+                 ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() && resultSet.getInt(1) > 0;
+            }
+        });
+    }
+
+    /**
+     * Whether every stored field for this account opens with the current key.
+     * An account with no ciphertext is readable. Plaintext is not returned.
+     */
+    public boolean readable(Origin origin, String shell, String account) {
+        try {
+            decryptForExecution(origin, shell, account);
+            return true;
+        } catch (CredentialDecryptException ex) {
+            return false;
+        }
+    }
+
+    /** True when any stored credential blob fails to open. Plaintext is not returned. */
+    public boolean anyUnreadable() {
+        return Db.transaction(dataSource, connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT origin, shell, account, field, ciphertext FROM credentials
+                    """);
+                 ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    Origin rowOrigin;
+                    try {
+                        rowOrigin = Origin.valueOf(resultSet.getString("origin"));
+                    } catch (IllegalArgumentException ex) {
+                        return true;
+                    }
+                    try {
+                        cipher.decrypt(
+                                rowOrigin,
+                                resultSet.getString("shell"),
+                                resultSet.getString("account"),
+                                resultSet.getString("field"),
+                                resultSet.getBytes("ciphertext"));
+                    } catch (CredentialDecryptException ex) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        });
     }
 
     public void write(Origin origin, String shell, String account, Map<String, String> fields, String actor) {

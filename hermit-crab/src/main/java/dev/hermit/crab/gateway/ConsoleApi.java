@@ -2,10 +2,12 @@ package dev.hermit.crab.gateway;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -15,11 +17,13 @@ import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ShellDoc;
 import dev.hermit.crab.engine.ExecutionResult;
+import dev.hermit.crab.engine.LoginPause;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.DeclaredSettings;
 import dev.hermit.crab.runtime.StatusCodes;
+import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.report.FlushResult;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
@@ -75,13 +79,16 @@ final class ConsoleApi {
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (ShellDoc doc : runtime.registry().snapshot().values()) {
             List<Account> accounts = runtime.admin().listAccounts(doc.shell());
-            rows.add(Map.of(
-                    "shell", doc.shell(),
-                    "version", doc.version().toString(),
-                    "title", text(doc.title()),
-                    "capabilityCount", doc.actions().size(),
-                    "accountCount", accounts.size(),
-                    "needsConfiguration", needsConfiguration(runtime, doc, accounts)));
+            boolean loginPaused = loginPaused(runtime, doc, accounts);
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("shell", doc.shell());
+            row.put("version", doc.version().toString());
+            row.put("title", text(doc.title()));
+            row.put("capabilityCount", doc.actions().size());
+            row.put("accountCount", accounts.size());
+            row.put("needsConfiguration", needsConfiguration(runtime, doc, accounts, loginPaused));
+            row.put("loginPaused", loginPaused);
+            rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("shells", rows));
     }
@@ -107,6 +114,7 @@ final class ConsoleApi {
             capabilities.add(row);
         }
         body.put("capabilities", capabilities);
+        body.put("loginPaused", loginPaused(runtime, doc, runtime.admin().listAccounts(doc.shell())));
         GatewayResponses.writeData(ctx, body);
     }
 
@@ -115,11 +123,18 @@ final class ConsoleApi {
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (Account account : runtime.admin().listAccounts(doc.shell())) {
             List<String> missing = runtime.admin().missingCredentials(doc, account.account());
+            boolean unreadable = runtime.admin().credentialsUnreadable(doc.shell(), account.account());
+            boolean paused = runtime.admin().loginPaused(doc.shell(), account.account());
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("name", account.account());
             row.put("default", account.defaultAccount());
-            row.put("needsConfiguration", !missing.isEmpty());
+            row.put("needsConfiguration", !missing.isEmpty() || unreadable);
             row.put("missingFields", missing);
+            row.put("credentialsUnreadable", unreadable);
+            row.put("credentialMessage", unreadable ? CredentialDecryptException.MESSAGE : null);
+            row.put("loginPaused", paused);
+            row.put("loginPauseReason", paused ? LoginPause.REASON : null);
+            row.put("loginPauseRecovery", paused ? LoginPause.RECOVERY : null);
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("accounts", rows));
@@ -156,7 +171,37 @@ final class ConsoleApi {
 
     private static void writeCredentials(CrabRuntime runtime, Context ctx) throws Exception {
         ShellDoc doc = requireShell(runtime, ctx);
-        runtime.admin().writeCredentials(doc, ctx.pathParam("account"), stringMap(object(ctx)), Actors.CONSOLE);
+        String account = ctx.pathParam("account");
+        runtime.admin().requireAccount(doc.shell(), account);
+        Map<String, String> fields = stringMap(object(ctx));
+        if (fields.isEmpty()) {
+            throw new IllegalArgumentException("credential fields are required");
+        }
+        if (runtime.admin().credentialsUnreadable(doc.shell(), account)) {
+            ArrayList<String> pending = new ArrayList<>();
+            for (String name : new TreeSet<>(runtime.admin().credentialNames(doc.shell(), account))) {
+                String value = fields.get(name);
+                if (value == null || value.isEmpty()) {
+                    pending.add(name);
+                }
+            }
+            if (!pending.isEmpty()) {
+                throw new IllegalArgumentException(CredentialDecryptException.MESSAGE + ": " + String.join(", ", pending));
+            }
+        }
+        LinkedHashSet<String> present = new LinkedHashSet<>(runtime.admin().credentialNames(doc.shell(), account));
+        for (Map.Entry<String, String> entry : fields.entrySet()) {
+            if (entry.getValue().isEmpty()) {
+                present.remove(entry.getKey());
+            } else {
+                present.add(entry.getKey());
+            }
+        }
+        List<String> missing = DeclaredSettings.missingCredentials(doc, present);
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException("missing required credentials: " + String.join(", ", missing));
+        }
+        runtime.admin().writeCredentials(doc, account, fields, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("updated", true));
     }
 
@@ -411,12 +456,29 @@ final class ConsoleApi {
         return doc;
     }
 
-    private static boolean needsConfiguration(CrabRuntime runtime, ShellDoc doc, List<Account> accounts) {
+    private static boolean loginPaused(CrabRuntime runtime, ShellDoc doc, List<Account> accounts) {
+        for (Account account : accounts) {
+            if (runtime.admin().loginPaused(doc.shell(), account.account())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Overview “待配置” counts a shell when required config or credentials are missing, stored
+     * credentials cannot be decrypted, or any account has automatic login paused.
+     */
+    private static boolean needsConfiguration(CrabRuntime runtime, ShellDoc doc, List<Account> accounts, boolean loginPaused) {
+        if (loginPaused) {
+            return true;
+        }
         if (!DeclaredSettings.missingConfig(doc, runtime.admin().storedConfig(doc.shell())).isEmpty()) {
             return true;
         }
         for (Account account : accounts) {
-            if (!runtime.admin().missingCredentials(doc, account.account()).isEmpty()) {
+            if (!runtime.admin().missingCredentials(doc, account.account()).isEmpty()
+                    || runtime.admin().credentialsUnreadable(doc.shell(), account.account())) {
                 return true;
             }
         }

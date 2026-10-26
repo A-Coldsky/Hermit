@@ -14,6 +14,7 @@ import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.engine.SessionManager;
+import dev.hermit.crab.engine.ShellRegistry;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountStore;
 import dev.hermit.crab.store.ApiKeyScope;
@@ -22,6 +23,7 @@ import dev.hermit.crab.store.ApiKeySummary;
 import dev.hermit.crab.store.AuditKind;
 import dev.hermit.crab.store.AuditLog;
 import dev.hermit.crab.store.CreatedApiKey;
+import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.store.ShellConfigStore;
@@ -36,6 +38,7 @@ public final class ShellAdmin {
     private final ApiKeyService apiKeys;
     private final SessionManager sessions;
     private final RuleEngine engine;
+    private final ShellRegistry registry;
 
     public ShellAdmin(
             DataSource dataSource,
@@ -44,7 +47,8 @@ public final class ShellAdmin {
             ShellConfigStore config,
             ApiKeyService apiKeys,
             SessionManager sessions,
-            RuleEngine engine
+            RuleEngine engine,
+            ShellRegistry registry
     ) {
         this.dataSource = dataSource;
         this.accounts = accounts;
@@ -53,6 +57,7 @@ public final class ShellAdmin {
         this.apiKeys = apiKeys;
         this.sessions = sessions;
         this.engine = engine;
+        this.registry = registry;
     }
 
     public Account createAccount(String shell, String name, String actor) {
@@ -82,6 +87,15 @@ public final class ShellAdmin {
 
     public Set<String> credentialNames(String shell, String account) {
         return vault.fieldNames(Origin.OFFICIAL, shell, account);
+    }
+
+    /** Stored ciphertext for this account cannot be opened with the current master key. */
+    public boolean credentialsUnreadable(String shell, String account) {
+        return !vault.readable(Origin.OFFICIAL, shell, account);
+    }
+
+    public boolean loginPaused(String shell, String account) {
+        return sessions.loginPaused(new SessionKey(Origin.OFFICIAL, shell, account));
     }
 
     public void writeCredentials(ShellDoc doc, String account, Map<String, String> fields, String actor) {
@@ -132,6 +146,12 @@ public final class ShellAdmin {
         if (!missingCredentials.isEmpty()) {
             return failed(doc, traceId, "missing credentials: " + String.join(", ", missingCredentials));
         }
+        Map<String, String> secrets;
+        try {
+            secrets = vault.decryptForExecution(Origin.OFFICIAL, doc.shell(), resolved.account());
+        } catch (CredentialDecryptException ex) {
+            return failed(doc, traceId, CredentialDecryptException.MESSAGE);
+        }
         ExecutionRequest request = new ExecutionRequest(
                 traceId,
                 Origin.OFFICIAL,
@@ -139,13 +159,12 @@ public final class ShellAdmin {
                 "test_login",
                 Map.of(),
                 resolved.account(),
-                new MappedAccount(
-                        vault.decryptForExecution(Origin.OFFICIAL, doc.shell(), resolved.account()),
-                        DeclaredSettings.mergedConfig(doc, stored)));
+                new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
         return engine.testLogin(request);
     }
 
     public CreatedApiKey createApiKey(String name, ApiKeyScope scope, String actor) {
+        ApiKeyScopes.requireInstalled(registry, scope);
         return apiKeys.create(name, scope, actor);
     }
 

@@ -19,6 +19,7 @@ import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.ShellRegistry;
 import dev.hermit.crab.report.ReportQueue;
+import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.sync.RollbackGuard;
 import dev.hermit.crab.store.Account;
@@ -122,7 +123,12 @@ public final class Invoker {
                     "missing credentials: " + String.join(", ", missingCredentials), null);
         }
         Map<String, String> merged = DeclaredSettings.mergedConfig(doc, stored);
-        Map<String, String> secrets = vault.decryptForExecution(Origin.OFFICIAL, shell, resolved.account());
+        Map<String, String> secrets;
+        try {
+            secrets = vault.decryptForExecution(Origin.OFFICIAL, shell, resolved.account());
+        } catch (CredentialDecryptException ex) {
+            return done(traceId, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE, null);
+        }
         Map<String, Object> rawInput = input == null ? Map.of() : input;
         if (CapabilityHttp.method(capability) == HttpMethod.POST && idempotencyKey != null && idempotencyKey.isPresent()) {
             return replayOrExecute(principal, doc, action, rawInput, resolved, secrets, merged, idempotencyKey.get(), traceId);

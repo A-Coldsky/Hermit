@@ -384,11 +384,14 @@ class AlertEvaluationTest {
             alertService.evaluate();
             assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
             JsonNode notice = objectMapper.readTree(bodies.get(bodies.size() - 1));
+            long alertId = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
+            assertThat(notice.get("id").asLong()).isEqualTo(alertId);
             assertThat(notice.get("kind").asText()).isEqualTo("UPSTREAM_ERROR_SURGE");
             assertThat(notice.get("shell").asText()).isEqualTo(SHELL);
             assertThat(notice.get("version").isNull()).isTrue();
             assertThat(notice.get("detail").get("count").asLong()).isEqualTo(10);
             assertThat(notice.get("createdAt").asText()).isEqualTo(clock.instant().toString());
+            assertThat(notice.get("adminUrl").asText()).isEqualTo("/alerts");
             assertThat(notice.toString()).doesNotContain(TOKEN);
         } finally {
             server.stop(0);
@@ -437,6 +440,16 @@ class AlertEvaluationTest {
             assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(2);
             assertThat(bodies).hasSize(2);
             assertThat(bodies).allSatisfy(body -> assertThat(body).doesNotContain(TOKEN));
+            JsonNode first = objectMapper.readTree(bodies.get(0));
+            JsonNode second = objectMapper.readTree(bodies.get(1));
+            assertThat(first.get("id").asLong()).isEqualTo(id);
+            assertThat(first.get("adminUrl").asText()).isEqualTo("/alerts");
+            Long openId = jdbc.queryForObject(
+                    "SELECT id FROM alerts WHERE acknowledged_at IS NULL", Long.class);
+            assertThat(second.get("id").asLong()).isEqualTo(openId);
+            assertThat(second.get("id").asLong()).isNotEqualTo(id);
+            assertThat(second.get("adminUrl").asText()).isEqualTo("/alerts");
+            assertThat(second.get("kind").asText()).isEqualTo("UPSTREAM_ERROR_SURGE");
             Long open = jdbc.queryForObject(
                     "SELECT COUNT(*) FROM alerts WHERE acknowledged_at IS NULL", Long.class);
             assertThat(open).isEqualTo(1L);

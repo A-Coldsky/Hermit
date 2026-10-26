@@ -212,7 +212,8 @@ public class AlertService {
         if (id == null) {
             throw new IllegalStateException("alert id was not generated");
         }
-        return new WebhookNotice(kind.name(), shell, version, node, createdAt);
+        return new WebhookNotice(id.longValue(), kind.name(), shell, version, node, createdAt,
+                TideWebhookClient.ADMIN_ALERTS_PATH);
     }
 
     private List<CurrentVersion> currentVersions() {

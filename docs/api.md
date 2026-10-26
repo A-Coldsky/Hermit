@@ -22,6 +22,10 @@
 
 失败时 success=false、data 通常为 null、error 包含 code/message。YAML、ZIP、静态页、OpenAPI 原文、304 和 MCP JSON-RPC 不套此格式。上传校验失败可携带结构化 data，请同时保留 traceId。
 
+已登录访问不存在的 Reef `/api/admin/**` 返回 404 `NOT_FOUND` 信封，`traceId` 与请求头 `X-Trace-Id`（合法时）相同。未登录的 `/api/**` 仍是 401，已登录但路径不在 `/api/admin/**` 下仍是 403；这两类由安全链拒绝，响应同样是信封，不是框架默认 JSON。页面路由（`/`、`/login`、`/shells` 等）继续返回 `index.html`。Crab 在带控制台头的回环连接上，未匹配的 `/console/api/**` 返回 404 `NOT_FOUND` 信封；未匹配的网关路径（不是 `/api/{shell}/{action}` 或已登记别名）同样如此。`traceId` 同时出现在响应体和 `X-Hermit-Trace`。`/console/` 下已注册的页面仍返回 `index.html`。
+
+Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常，响应正文仍只有 `INTERNAL`。
+
 ## Reef 管理与分发
 
 以下管理路由前缀 `/api/admin`：
@@ -47,6 +51,7 @@
 | GET | `/alerts` | status |
 | POST | `/alerts/{id}/ack` | 确认告警 |
 | GET | `/audit` | 管理操作审计；参数见 AuditController |
+| POST | `/retention/purge` | 立即清理过期失败报告、回滚事件和锁定窗口外的登录失败。`data` 为 `{failureReports, rollbackEvents, loginFailures}`。写入审计 `RETENTION_PURGE`，detail 为同样的三个计数。需要管理员 JWT |
 
 Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。确认告警只记下确认人和时间，不结束去重窗口：同一 `(kind, shell, shell_version)` 自 `created_at` 起 `dedup-hours` 内不再新建。窗口过后条件仍成立才会再出现一条。失败次数上涨不会提前打破这个窗口。
 
@@ -111,6 +116,7 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 | GET / POST | `/apikeys` | 列表 / `{name,shells,actions,readOnly}`；新 Key 仅返回一次 plaintext。`actions` 必须是已加载的 `shell.action`，裸名或不存在的能力拒绝创建 |
 | DELETE | `/apikeys/{id}` | 撤销 |
 | GET | `/calls`、`/calls/{traceId}` | shell/action/limit 查询及步骤摘要 |
+| GET | `/audit` | 配置审计，新的在前。参数 `shell`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
 | GET / POST | `/debug` | 读状态 / `{enabled}`；当前只存状态，24h 过期 |
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |
 | GET | `/reports/preview` | 待发送批次和丢弃数 |
@@ -132,6 +138,23 @@ Shell 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 测试登录会先清掉暂停再尝试登录。页面应读这些字段显示「已暂停」和恢复方法，不要只看 `needsConfiguration`。
 
+`GET /console/api/audit` 的 `data` 为 `{entries, page, limit, total}`。`entries` 按 `at`、`id` 从新到旧。空白的 `shell` 或 `account` 表示不过滤。`page` 小于 1，或 `limit` 不在 1 到 200，返回 `INVALID_INPUT`。
+
+每一行只有谁、做了什么、何时：
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 行 id |
+| `at` | 时间 |
+| `actor` | `cli`、`console` 或 `sync` |
+| `action` | 动作名，例如 `CREDENTIALS_WRITTEN`、`CONFIG_PUT`、`CAPABILITY_DISABLED` |
+| `origin` | `OFFICIAL` 或 `LOCAL`。API Key、debug、同步，以及凭证声明变更，为 JSON `null` |
+| `shell` | 相关 Shell；没有则为 `null` |
+| `account` | 账号类事件的账号。配置、能力开关、API Key、debug、同步和凭证声明变更为 `null` |
+| `fields` | 名字列表，按字典序。凭证写入包含写入和清除的字段；配置是 key；凭证声明变更是新增必填和移除的字段；能力开关是能力名 |
+
+响应不含 `detail` 原文、配置值、凭证明文、密文，也不含 API Key 明文、哈希、id 或 name。debug 的 `enabled` 同样不返回。历史行的 detail 里如果还有别的键，读取时丢弃。`config_audit` 没有定期清理。
+
 同步结果里每个 Shell 有 `shell`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`SKIPPED_PINNED`、`REJECTED`、`ROLLED_BACK`、`DISABLED` 之一。自动回滚尚未解除固定时，该 Shell 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 把已安装的 Shell 从清单去掉（停用）时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是卸下前的已安装版本，同时名字出现在 `removed`。随后的 304 不再带这行原始结果，控制台读取时仍按停用记录投影成 `DISABLED`，并放进 `removed`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
 
 重新启用后，Crab 重新下载并验签安装，停用记录清除，调用恢复。若本地仍把该版本固定为坏版本，且清单版本没有高于坏版本，则不会装回去，调用继续是 `SHELL_DISABLED`。账号、凭证和配置在停用期间不删除。
@@ -150,6 +173,7 @@ credential list <shell> <account>
 config get <shell> [key]
 config set <shell> <key> <value>
 config unset <shell> <key>
+audit list [--shell NAME] [--account NAME] [--limit N] [--page N]
 apikey create <name> [--shells a,b] [--actions shell.action] [--read-only]
 apikey list
 apikey revoke <id>
@@ -157,6 +181,8 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
 普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
+
+`audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。每一行是 `时间 actor action origin shell account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
 
 ## MCP
 

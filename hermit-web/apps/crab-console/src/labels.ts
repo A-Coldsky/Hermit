@@ -20,3 +20,26 @@ export const stepTypeLabels: Record<string, string> = {
   set: '赋值',
   script: '脚本',
 }
+
+export const configAuditLabels: Record<string, { text: string; tone: 'success' | 'info' | 'warning' | 'danger' | 'primary' }> = {
+  ACCOUNT_CREATED: { text: '新建账号', tone: 'success' },
+  ACCOUNT_DELETED: { text: '删除账号', tone: 'danger' },
+  DEFAULT_CHANGED: { text: '更换默认账号', tone: 'info' },
+  CREDENTIALS_WRITTEN: { text: '修改凭证', tone: 'primary' },
+  CONFIG_PUT: { text: '修改配置', tone: 'primary' },
+  CONFIG_DELETED: { text: '清除配置', tone: 'warning' },
+  API_KEY_CREATED: { text: '创建 API Key', tone: 'success' },
+  API_KEY_REVOKED: { text: '吊销 API Key', tone: 'danger' },
+  CAPABILITY_ENABLED: { text: '启用能力', tone: 'success' },
+  CAPABILITY_DISABLED: { text: '停用能力', tone: 'warning' },
+  DEBUG_CHANGED: { text: '切换调试', tone: 'info' },
+  TEST_LOGIN: { text: '测试登录', tone: 'info' },
+  SYNC_REQUESTED: { text: '手动同步', tone: 'info' },
+  CREDENTIAL_DECLARATION: { text: '凭证声明变更', tone: 'warning' },
+}
+
+export const actorLabels: Record<string, string> = {
+  cli: '命令行',
+  console: '控制台',
+  sync: '同步',
+}

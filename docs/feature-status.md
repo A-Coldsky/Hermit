@@ -18,7 +18,7 @@
 | POST 幂等响应缓存 | 已实现，有缺陷 | 24h 密文缓存；无参数摘要/版本区分 |
 | MCP HTTP/SSE/工具/资源 | 已实现 | McpHttpTest；≤40 直接工具，>40 目录模式，确认行为不同。协议错误是 JSON-RPC `error.data.code`/`hint`（鉴权 HTTP 401 也是该 body）；工具失败为 `isError` + `structuredContent.error`。`outputSchema` 只在协商协议 `2025-06-18` 与 `2025-11-25` 声明。声明了 minimum/maximum 的入参越界会拒绝 |
 | MCP stdio 桥接 | 已实现 | McpStdio；需要已运行的 HTTP Crab，CLI/验收覆盖不足以代表所有真实客户端兼容 |
-| Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest；没有完整管理员生命周期管理 API |
+| Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest。4xx/5xx 服务端日志带与响应相同的 traceId，4xx 不记请求体。已登录的未知 `/api/admin/**` 为 404 `NOT_FOUND` 信封。没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ShellApiTest/ShellConcurrencyTest/ShellSelfCheckFailureTest |
 | 停用 / 重新启用 Shell | 已实现 | 管理 API 记录 `DISABLE`/`ENABLE` 和原因。停用后清单不含该 Shell，Agent 下载 404，发布和回滚 409 `shell is disabled`，签名包字节不变。Crab 同步后卸下注册表、清 `current`、保留版本文件和账号；调用 409 `SHELL_DISABLED`；同步状态 `kind=DISABLED` 且出现在 `removed`。重新启用后重新验签安装。回滚固定未解除、且清单版本不高于坏版本时，重新启用不会把 Shell 装回去 |
 | Crab 定时/手动同步、ETag、验签 | 已实现 | ShellSyncTest/CrabWiringTest；可重试失败不记 ETag，304 核对 current。Reef 不可达时手动同步为 502 `UPSTREAM_ERROR`，状态改为这次失败；Reef 的 HTTP 错误仍保留上次成功 |
@@ -27,7 +27,8 @@
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
 | 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest。确认后，创建时间起算的去重窗口剩余时间内不新建、不推送；窗口结束后条件仍在才新建。失败上涨不提前打破窗口。Webhook 含告警 id 与相对路径 `/alerts`（无对外基址配置），没有持久化重试队列。负阈值，以及必须为正的窗口写成 0，启动时拒绝 |
 | Reef 管理页面 | 已实现 | 登录、仪表盘、Shell/上传/版本及校验警告明细、Tide、告警、审计、设置说明 |
-| Crab 本机控制台 | 已实现 | 概览、Shell、账号/凭证/配置、能力、API Key、调用、上报。Shell 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密 |
+| Crab 本机控制台 | 已实现 | 概览、Shell、账号/凭证/配置、能力、API Key、调用、上报。Shell 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。「配置审计」页按 Shell/账号筛选分页查看变更记录 |
+| Crab 配置审计查询 | 已实现 | 控制台「配置审计」页、`GET /console/api/audit` 与 CLI `audit list`。可按 shell/account 分页，新的在前。只返回 id、时间、actor、action、origin、shell、account、字段名；不返回 detail 原文、配置值、凭证明文或密文。`config_audit` 仍无定期清理 |
 | Docker Reef + Nginx + MySQL / Crab | 已配置，运行未验收 | Crab 同机 client profile / 独立 Compose / Dockerfile 已提供；配置语法通过，尚未启动容器栈 |
 
 ## 部分实现与缺口
@@ -41,7 +42,7 @@
 | Crab 升级 | Reef 提供最新版本/下载地址，Crab 展示提示 | 无自动下载/升级器；继续手工升级或另行实现 |
 | 管理员生命周期 | 空库初始化 + 登录/me | 没有改密码/创建/禁用/注销令牌的完整管理 API |
 | 配置批量原子更新 | 控制台 PUT 逐字段调用 putConfig | 校验/写入失败可能部分生效；补事务行为测试 |
-| 数据保留 | 部分表定时清理 | 两端小时统计及部分审计/告警数据仍可持续增长 |
+| 数据保留 | failure_reports、rollback_events 按保留天数清理，登录失败按锁定窗口清理。定时默认每天 03:00 UTC，`hermit.reef.retention-cron` 可改；管理员 `POST /api/admin/retention/purge` 返回删除条数并写审计 | 两端小时统计及部分审计/告警数据仍可持续增长 |
 | 前端交互测试 | 类型检查、构建、后端静态资源测试和 Vitest/jsdom 组件测试 | 仍缺真实浏览器 E2E |
 | 交付工程化 | Maven 构建/Java/Vitest 测试和 Crab Docker 运行镜像已提供 | 无 CI workflow/覆盖率门槛/自动依赖扫描；原生 Crab 仍为普通 jar |
 
@@ -66,3 +67,9 @@ hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过；Docker
 2026-10-26 上游错误映射以 JDK 17.0.20 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 100、hermit-crab 187、hermit-it 1，Vitest 30（6 个文件）。未覆盖真实老系统，以及除 HTTP 400/401/403 以外的 4xx。
 
 2026-10-26 Shell 停用以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 119、hermit-crab 203、hermit-it 1，Vitest 43（7 个文件）。停用覆盖 Reef H2 的停用/启用、清单排除、签名包不变、发布与回滚 409，以及和发布的并发；Crab 卸下注册表、304 后仍显示 `DISABLED`、重启不加载、调用 409 `SHELL_DISABLED`；hermit-it 在告警回滚后停用并核对调用与同步状态。未覆盖 MySQL、浏览器页面（未做 Vue 界面）、MCP HTTP 端到端、停用瞬间已经持有授权快照的在途请求、回滚固定挡住重新安装、告警仍按当前已发布版本评估。旧 Crab 会从清单消失路径清掉注册表，但若仍保留 `current`，重启后可能重新加载。
+
+2026-10-26 配置审计读取以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 117、hermit-crab 205、hermit-it 1，Vitest 43（7 个文件）。这是当前整棵树的计数。本次新增 `ConfigAuditReadTest`、`ConsoleAuditTest` 和 CLI `audit list` 用例。配置审计页面随后合入，未在浏览器里点选；`config_audit` 仍无定期清理。未覆盖真实老系统。
+
+2026-10-26 错误日志、未知路由信封与保留任务以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 122、hermit-crab 202、hermit-it 1，Vitest 46（8 个文件）。未启动定时器到点执行，也未跑 MySQL/Compose。小时统计、审计和告警仍不在清理范围内。
+
+2026-10-26 合入 main 后，`disabled_shells` 改为 Crab schema 7（版本 6 仍只建 `config_audit_at_idx`，已应用的版本 6 不重跑）。JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 124、hermit-crab 209、hermit-it 1，Vitest 49（9 个文件）。Reef Flyway 仍是 V1–V4，V4 为 `shell_availability`。未覆盖 MySQL，也未在浏览器点选停用或审计标签。

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Box, DataAnalysis, House, Key, List } from '@element-plus/icons-vue'
+import { Box, DataAnalysis, Document, House, Key, List } from '@element-plus/icons-vue'
 import { computed, onMounted } from 'vue'
 import AppLayout, { type NavItem } from '@shared/components/AppLayout.vue'
 import { pendingShells, refreshPending } from './status'
@@ -9,6 +9,7 @@ const items = computed<NavItem[]>(() => [
   { to: '/shells', label: 'Shell 与账号', icon: Box, badge: pendingShells.value },
   { to: '/apikeys', label: 'API Key', icon: Key },
   { to: '/calls', label: '调用记录', icon: List },
+  { to: '/audit', label: '配置审计', icon: Document },
   { to: '/reports', label: '上报预览', icon: DataAnalysis },
 ])
 

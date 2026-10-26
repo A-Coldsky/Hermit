@@ -217,6 +217,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         return callLogs;
     }
 
+    /** Newest-first config audit. The result has no secret values and no stored detail text. */
+    public AuditLog.Page configAudit(String shell, String account, int page, int limit) {
+        return AuditLog.page(database.dataSource(), shell, account, page, limit);
+    }
+
     public DebugStateStore debug() {
         return debug;
     }

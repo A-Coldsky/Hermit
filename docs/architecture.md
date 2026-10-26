@@ -58,9 +58,9 @@ flowchart LR
 5. `RollbackGuard` 对同版本累计到 5 次 `RULE_MISMATCH` 且前一版本有成功记录时尝试回滚。成功调用清零，其他错误（含上游 HTTP 400 的 `INVALID_INPUT` 和会话失效的 `SESSION_EXPIRED`）不清零也不计数；不是所有请求严格相邻的“连续失败”。回滚写入 `current` 和固定记录后，控制台 `GET /console/api/sync` 在该 Shell 的文件锁内读取固定记录和 `current`（不替换注册表），把这一行显示为实际安装版本、`kind=ROLLED_BACK`、`reason=RULE_MISMATCH`，不再把坏版本显示成 `INSTALLED`。固定解除前都按这条投影。
 6. 坏版本被固定后，相同或更低版本跳过，超过坏版本的新版本可解除固定。保留最近 3 版，并保护当前、前一和回滚相关版本。
 7. Reef 连接失败（拒绝连接、无法解析、超时、同步被中断）时，这次尝试写入最近同步状态并清掉上次成功的 Shell 列表；手动 `POST /sync` 返回 502 `UPSTREAM_ERROR`，`message` 说明原因和下一步。下一次成功同步覆盖该失败。Reef 已经返回 HTTP 状态时不替换上次成功，手动请求仍是 500 `INTERNAL`。
-8. 管理员停用 Shell 时，Reef 只写 `shell_availability` 和审计，不改已签名的 ZIP。分发清单去掉该 Shell，ETag 随之变化。Crab 下次同步把已加载的 Shell 记入 `disabled_shells`，从注册表移除并删除 `current`，版本目录和账号凭证保留。新调用在进入引擎前返回 `SHELL_DISABLED`。重新启用后清单恢复原来的当前版本，Crab 重新验签安装并清掉停用记录。停用期间不能发布或回滚，上传仍可以。
+8. 管理员停用 Shell 时，Reef 只写 `shell_availability`（Flyway V4）和审计，不改已签名的 ZIP。分发清单去掉该 Shell，ETag 随之变化。Crab 下次同步把已加载的 Shell 记入 `disabled_shells`（`CrabDatabase` 版本 7；版本 6 仍只是 `config_audit_at_idx`，已应用的版本 6 不改写），从注册表移除并删除 `current`，版本目录和账号凭证保留。新调用在进入引擎前返回 `SHELL_DISABLED`。重新启用后清单恢复原来的当前版本，Crab 重新验签安装并清掉停用记录。停用期间不能发布或回滚，上传仍可以。
 
-注册表用不可变 Map 原子替换。`Invoker` 把已经授权的 `ShellDoc` 交给引擎，执行使用这份快照，而不是中途再读注册表里的另一版本。停用先写墓碑再摘掉注册表项，不在这一步装上别的版本：新请求直接 `SHELL_DISABLED`，已经带着快照进来的请求仍执行那份快照。这是审计 A01 要求的同一快照边界，停用不再额外打开一个版本切换窗口。
+注册表用不可变 Map 原子替换，但一次请求仍可能跨版本读取；见审计 A01。`Invoker` 把已经授权的 `ShellDoc` 交给引擎，执行使用这份快照，而不是中途再读注册表里的另一版本。停用先写墓碑再摘掉注册表项，不在这一步装上别的版本：新请求直接 `SHELL_DISABLED`，已经带着快照进来的请求仍执行那份快照。停用不再额外打开一个版本切换窗口。
 
 ## 一次调用
 
@@ -92,7 +92,7 @@ sequenceDiagram
 | --- | --- |
 | Reef 管理员、版本元数据、审计、报告、告警 | H2 或 MySQL；[Flyway SQL](../hermit-reef/src/main/resources/db/migration) |
 | Reef YAML/包/签名密钥/JWT 密钥 | `data-dir/shells/`、`data-dir/keys/` |
-| Crab 账号、配置、API Key、日志、队列 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移 |
+| Crab 账号、配置、API Key、日志、队列、配置审计 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 shell/account 分页读取，响应不含凭证和配置值 |
 | Crab 凭证、Cookie 会话、幂等响应 | H2 中 AES-256-GCM 密文；主密钥在环境变量或本机文件 |
 | Crab 规则及当前版本 | `HERMIT_HOME/shells/<shell>/...` |
 | API Key | 创建时返回一次明文；后续前缀和哈希查验 |

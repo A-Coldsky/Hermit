@@ -2,7 +2,7 @@
     <appender name="MEMORY" class="dev.hermit.reef.testsupport.MemoryLogAppender"/>
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%X{traceId}] %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
     <logger name="dev.hermit.reef" level="DEBUG"/>

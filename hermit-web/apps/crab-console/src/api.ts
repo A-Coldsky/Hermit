@@ -100,6 +100,30 @@ export interface CreatedApiKey extends Omit<ApiKey, 'revokedAt' | 'lastUsedAt'> 
   plaintext: string
 }
 
+/** 配置审计一行。只有谁、做了什么、何时；没有凭证或配置的值。 */
+export interface ConfigAuditEntry {
+  id: number
+  at: string
+  actor: string
+  /** AuditKind 名称，例如 CREDENTIALS_WRITTEN、CONFIG_PUT、CAPABILITY_DISABLED。 */
+  action: string
+  origin: string | null
+  shell: string | null
+  account: string | null
+  /**
+   * 涉及的名字，按字典序。凭证写入含写入和清除的字段；配置是 key；
+   * 凭证声明变更是新增必填和移除的字段；能力开关是能力名。不含字段值。
+   */
+  fields: string[]
+}
+
+export interface ConfigAuditPage {
+  entries: ConfigAuditEntry[]
+  page: number
+  limit: number
+  total: number
+}
+
 export interface CallSummary {
   traceId: string
   at: string
@@ -229,6 +253,8 @@ export const api = {
 
   calls: (query: { shell?: string; action?: string; limit?: number }) =>
     http.get<{ calls: CallSummary[] }>(`${base}/calls`, query),
+  audit: (query: { shell?: string; account?: string; page?: number; limit?: number } = {}) =>
+    http.get<ConfigAuditPage>(`${base}/audit`, query),
   call: (traceId: string) => http.get<CallDetail>(`${base}/calls/${seg(traceId)}`),
 
   debug: () => http.get<DebugState>(`${base}/debug`),

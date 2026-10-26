@@ -13,6 +13,7 @@ export const router = createRouter({
         { path: 'shells/:shell', name: 'shell', component: () => import('./views/ShellDetailView.vue'), props: true },
         { path: 'apikeys', name: 'apikeys', component: () => import('./views/ApiKeysView.vue') },
         { path: 'calls', name: 'calls', component: () => import('./views/CallsView.vue') },
+        { path: 'audit', name: 'audit', component: () => import('./views/AuditView.vue') },
         { path: 'reports', name: 'reports', component: () => import('./views/ReportsView.vue') },
         { path: ':pathMatch(.*)*', redirect: '/' },
       ],

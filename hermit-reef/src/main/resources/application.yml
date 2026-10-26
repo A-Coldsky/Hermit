@@ -7,6 +7,8 @@ hermit:
     latest-crab-version: ""
     crab-download-url: ""
     report-retention-days: 90
+    # Spring 六段 cron（含秒），时区固定 UTC。默认每天 03:00。
+    retention-cron: "0 0 3 * * *"
     tide:
       new-version-min-calls: 20
       regression-delta: "0.20"
@@ -54,3 +56,8 @@ server:
     enabled: true
     mime-types: text/html,text/css,text/javascript,application/javascript,image/svg+xml
     min-response-size: 2KB
+
+logging:
+  pattern:
+    # 请求期间 MDC 里有 traceId。空的时候括号里是空的，启动日志也如此。
+    level: "%5p [%X{traceId}]"

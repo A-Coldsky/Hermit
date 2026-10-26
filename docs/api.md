@@ -66,7 +66,7 @@ GET  /api/{shell}/{action}?param=value
 POST /api/{shell}/{action}           JSON object body
 ```
 
-使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 shells/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Shell 下的账号。空 shells/actions 集合表示不限对应维度。
+使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 shells/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Shell 下的账号。空 shells/actions 集合表示不限对应维度。`actions` 里的每一项必须是当前已加载能力的 `shell.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。CLI `apikey create --actions` 使用同一规则。
 
 POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/key，有效期 24 小时，不包含 API Key 身份、请求体摘要或规则版本。相同键重放保存的响应（含旧 traceId），不同业务操作不要复用键；修复方向见审计待确认设计项。
 
@@ -90,21 +90,37 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 
 | 方法 | 路径 | 输入/用途 |
 | --- | --- | --- |
-| GET | `/shells`、`/shells/{shell}` | 已加载规则/字段声明/能力状态 |
-| GET / POST | `/shells/{shell}/accounts` | 列表 / `{name}` 创建 |
+| GET | `/shells`、`/shells/{shell}` | 已加载规则/字段声明/能力状态。列表项含 `needsConfiguration`、`loginPaused`；详情含 `loginPaused` |
+| GET / POST | `/shells/{shell}/accounts` | 列表 / `{name}` 创建。账号行见下方字段 |
 | DELETE | `/shells/{shell}/accounts/{account}` | 删除账号/凭证并使会话失效 |
 | POST | `/shells/{shell}/accounts/{account}/default` | 设默认账号 |
-| GET / PUT | `/shells/{shell}/accounts/{account}/credentials` | 仅字段名 / `{字段:字符串}` 写入；空字符串删除 |
+| GET / PUT | `/shells/{shell}/accounts/{account}/credentials` | 仅字段名 / `{字段:字符串}` 写入；空字符串表示删除。空 body、`{}`，或写入后仍缺必填字段，返回 `INVALID_INPUT`。已保存字段可以只改其中几项。凭证无法解密时，必须把已存字段都重新写成非空值 |
 | POST | `/shells/{shell}/accounts/{account}/test-login` | 重置登录暂停并测试登录 |
 | GET / PUT | `/shells/{shell}/config` | 配置声明/值 / `{字段:字符串}`；空字符串清除覆盖 |
 | POST | `/capabilities/{shell}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
-| GET / POST | `/apikeys` | 列表 / `{name,shells,actions,readOnly}`；新 Key 仅返回一次 plaintext |
+| GET / POST | `/apikeys` | 列表 / `{name,shells,actions,readOnly}`；新 Key 仅返回一次 plaintext。`actions` 必须是已加载的 `shell.action`，裸名或不存在的能力拒绝创建 |
 | DELETE | `/apikeys/{id}` | 撤销 |
 | GET | `/calls`、`/calls/{traceId}` | shell/action/limit 查询及步骤摘要 |
 | GET / POST | `/debug` | 读状态 / `{enabled}`；当前只存状态，24h 过期 |
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |
 | GET | `/reports/preview` | 待发送批次和丢弃数 |
 | POST | `/reports/send` | 手动发送，返回 attempted/accepted/status |
+
+Shell 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。概览待配置按它计数。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。
+
+账号列表每一行：
+
+| 字段 | 含义 |
+| --- | --- |
+| `needsConfiguration` | 缺必填凭证，或已存密文无法用当前主密钥解密。自动登录暂停不计入 |
+| `missingFields` | 尚未写入的必填凭证名 |
+| `credentialsUnreadable` | 已存密文无法解密 |
+| `credentialMessage` | 无法解密时为「凭证无法解密，需重新配置」，否则 JSON `null` |
+| `loginPaused` | 连续登录失败达到 `engine.max_login_failures` 后为 true |
+| `loginPauseReason` | 暂停时为原因，否则 `null` |
+| `loginPauseRecovery` | 暂停时说明恢复方法：修正凭证后对该账号执行测试登录。否则 `null` |
+
+测试登录会先清掉暂停再尝试登录。页面应读这些字段显示「已暂停」和恢复方法，不要只看 `needsConfiguration`。
 
 ## CLI
 
@@ -120,7 +136,7 @@ credential list <shell> <account>
 config get <shell> [key]
 config set <shell> <key> <value>
 config unset <shell> <key>
-apikey create <name> [--shells a,b] [--actions s.a] [--read-only]
+apikey create <name> [--shells a,b] [--actions shell.action] [--read-only]
 apikey list
 apikey revoke <id>
 mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]

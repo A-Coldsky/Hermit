@@ -11,8 +11,9 @@
 | HTTP 请求、登录、alive_check、Cookie 会话 | 已实现，有缺陷 | RuleEngine/HttpCalls/SessionManager |
 | CSS/XPath/JSONPath/regex 提取 | 已实现 | Extractors + EngineUnitTest/LegacyOaEngineTest |
 | assert/set/script | 已实现 | StepRunner/ScriptStep；脚本 Java 隔离和时间/结果限制有测试，无进程级内存隔离 |
-| 多账号/默认账号/凭证/配置 | 已实现 | ShellAdmin + store；credentials 加密只写 |
-| API Key 创建、撤销、scope | 已实现，有缺陷 | ApiKeyService/Principal；按 Shell/action/只读限制，未按账号限制 |
+| 多账号/默认账号/凭证/配置 | 已实现 | ShellAdmin + store；credentials 加密只写。主密钥文件缺失且已有密文时拒绝启动，不另造新密钥；密钥对不上时账号 `credentialsUnreadable`，调用 `NOT_CONFIGURED` |
+| API Key 创建、撤销、scope | 已实现，有缺陷 | ApiKeyService/Principal；按 Shell/action/只读限制，未按账号限制。创建时拒绝裸能力名和不存在的 `shell.action` |
+| 自动登录暂停状态 | 已实现 | 连续登录失败达上限后暂停。控制台账号行返回 `loginPaused`、`loginPauseReason`、`loginPauseRecovery`；Shell 列表 `needsConfiguration` 计入暂停，概览待配置因此计入 |
 | HTTP 网关/别名/OpenAPI | 已实现 | GatewayHttpTest；OpenAPI 无鉴权且仅描述能力接口 |
 | POST 幂等响应缓存 | 已实现，有缺陷 | 24h 密文缓存；无参数摘要/版本区分 |
 | MCP HTTP/SSE/工具/资源 | 已实现 | McpHttpTest；≤40 直接工具，>40 目录模式，确认行为不同。协议错误是 JSON-RPC `error.data.code`/`hint`（鉴权 HTTP 401 也是该 body）；工具失败为 `isError` + `structuredContent.error`。`outputSchema` 只在协商协议 `2025-06-18` 与 `2025-11-25` 声明。声明了 minimum/maximum 的入参越界会拒绝 |
@@ -25,7 +26,7 @@
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
 | 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest；Webhook 没有持久化重试队列 |
 | Reef 管理页面 | 已实现 | 登录、仪表盘、Shell/上传/版本及校验警告明细、Tide、告警、审计、设置说明 |
-| Crab 本机控制台 | 已实现 | 概览、Shell、账号/凭证/配置、能力、API Key、调用、上报 |
+| Crab 本机控制台 | 已实现 | 概览、Shell、账号/凭证/配置、能力、API Key、调用、上报。账号接口带自动登录暂停和凭证无法解密状态；页面展示由前端另接 |
 | Docker Reef + Nginx + MySQL / Crab | 已配置，运行未验收 | Crab 同机 client profile / 独立 Compose / Dockerfile 已提供；配置语法通过，尚未启动容器栈 |
 
 ## 部分实现与缺口

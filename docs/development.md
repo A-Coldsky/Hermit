@@ -79,7 +79,7 @@ npm run dev:reef
 | 数据 | `SecretFlowTest`、`CredentialCipherTest`、`MasterKeyProviderTest`、`*StoreTest` | 加密、绑定、账户、主密钥、日志 |
 | 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等、本机限制、MCP 模式与 SSE |
 | 前端 | `loading-empty.test.ts`、`copy.test.ts`、`theme.test.ts`、`version-panel.test.ts`、`bar-chart.test.ts` | 初始加载、说明文案、浅色/暗色颜色映射、版本警告详情和图表刻度 |
-| 同步/上报 | `ShellSyncTest`、`InstalledShellsTest`、`RollbackGuardTest`、`ReportSenderTest`、`CrabWiringTest` | ETag、失败重试、验签、固定回滚、定时任务 |
+| 同步/上报 | `ShellSyncTest`、`InstalledShellsTest`、`RollbackGuardTest`、`ReportSenderTest`、`CrabWiringTest`、`SyncExceptionTest` | ETag、失败重试、验签、固定回滚、回滚后的同步状态、Reef 不可达、定时任务 |
 | 验收 | [Phase1AcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/Phase1AcceptanceTest.java) | 独立 Reef + Crab + 模拟 OA，发布调用、坏版本回滚、反馈与敏感数据检查 |
 
 Java 结果位于各模块 `target/surefire-reports/`。2026-10-16 同步到 `48daca7` 后完整 verify：common 41、Reef 97、Crab 170、验收 1，共 309 项 Java 测试，以及 4 个前端测试文件中的 18 项 Vitest 测试均通过，无失败或跳过。没有 JaCoCo 配置，测试条数不是行/分支覆盖率。

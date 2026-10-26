@@ -126,6 +126,8 @@ Shell 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 测试登录会先清掉暂停再尝试登录。页面应读这些字段显示「已暂停」和恢复方法，不要只看 `needsConfiguration`。
 
+同步结果里每个 Shell 有 `shell`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。自动回滚尚未解除固定时，该 Shell 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
+
 ## CLI
 
 命令前缀为 `java -cp "$CP" dev.hermit.crab.CrabMain`，CP 准备见[快速开始](getting-started.md)。

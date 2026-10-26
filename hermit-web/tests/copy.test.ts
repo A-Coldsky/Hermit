@@ -41,6 +41,46 @@ describe('Crab 调试开关', () => {
     expect(wrapper.text()).not.toContain('调试模式')
     expect(wrapper.text()).not.toContain('调试日志')
   })
+
+  it('回退后显示已安装版本，Reef 不可达时显示失败而不保留上次成功', async () => {
+    crab.shells.mockResolvedValue({ shells: [] })
+    crab.calls.mockResolvedValue({ calls: [] })
+    crab.debug.mockResolvedValue({ enabled: false, expiresAt: null })
+    crab.syncStatus.mockResolvedValue({
+      report: {
+        notModified: false,
+        shells: [{ shell: 'legacy_oa', version: '1.0.0', kind: 'ROLLED_BACK', reason: 'RULE_MISMATCH' }],
+        removed: [],
+        credentialChanges: [],
+        latestCrab: null,
+        error: null,
+      },
+      latestCrab: null,
+    })
+    const rolled = await mountPage(OverviewView)
+    await flushPromises()
+    expect(rolled.text()).toContain('已回退')
+    expect(rolled.text()).toContain('legacy_oa v1.0.0')
+    expect(rolled.text()).not.toContain('INSTALLED')
+    rolled.unmount()
+
+    crab.syncStatus.mockResolvedValue({
+      report: {
+        notModified: false,
+        shells: [],
+        removed: [],
+        credentialChanges: [],
+        latestCrab: null,
+        error: { code: 'UPSTREAM_ERROR', message: '无法连接 Reef。请确认 Reef 已启动，然后再次同步。' },
+      },
+      latestCrab: null,
+    })
+    const failed = await mountPage(OverviewView)
+    await flushPromises()
+    expect(failed.text()).toContain('无法连接 Reef')
+    expect(failed.text()).toContain('再次同步')
+    expect(failed.text()).not.toContain('legacy_oa')
+  })
 })
 
 describe('Reef 登录失败', () => {

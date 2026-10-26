@@ -126,6 +126,22 @@ final class SyncStore {
         });
     }
 
+    /** Shell name order, so status projection locks one shell at a time without inverting lock order. */
+    List<PinRow> pins() {
+        return Db.transaction(dataSource, connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT shell, bad_version, rolled_back_to FROM pinned_rollbacks ORDER BY shell
+                    """);
+                 ResultSet resultSet = statement.executeQuery()) {
+                List<PinRow> rows = new ArrayList<>();
+                while (resultSet.next()) {
+                    rows.add(new PinRow(resultSet.getString(1), resultSet.getString(2), resultSet.getString(3)));
+                }
+                return rows;
+            }
+        });
+    }
+
     void clearPin(String shell) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
@@ -421,6 +437,9 @@ final class SyncStore {
     }
 
     record Pin(String badVersion, String rolledBackTo) {
+    }
+
+    record PinRow(String shell, String badVersion, String rolledBackTo) {
     }
 
     record Installed(String version, Instant at) {

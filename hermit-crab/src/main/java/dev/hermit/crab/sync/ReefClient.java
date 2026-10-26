@@ -109,7 +109,7 @@ final class ReefClient {
             Thread.currentThread().interrupt();
             throw new SyncException("reef request interrupted");
         } catch (IOException ex) {
-            throw new SyncException("reef request failed");
+            throw new SyncException("reef request failed", ex);
         }
     }
 

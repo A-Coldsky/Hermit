@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -97,25 +98,85 @@ public final class ShellSync {
 
     public SyncReport syncOnce() {
         synchronized (this) {
-            retryPendingCredentialDeletes();
-            Optional<CrabRelease> latest = readLatest();
-            ReefClient.ManifestFetch manifest = reef.manifest(store.etag().orElse(null));
-            if (manifest.notModified()) {
-                if (snapshotMatches()) {
-                    if (manifest.etag() != null) {
-                        store.saveEtag(manifest.etag());
-                    }
-                    return deliver(unchanged(latest));
-                }
-                // The stored tag no longer describes this disk. Drop it and read the full
-                // manifest once; a second 304 must not loop or be recorded.
-                store.clearEtagAndSnapshot();
-                manifest = reef.manifest(null);
+            try {
+                retryPendingCredentialDeletes();
+                Optional<CrabRelease> latest = readLatest();
+                ReefClient.ManifestFetch manifest = reef.manifest(store.etag().orElse(null));
                 if (manifest.notModified()) {
-                    return deliver(unchanged(latest));
+                    if (snapshotMatches()) {
+                        if (manifest.etag() != null) {
+                            store.saveEtag(manifest.etag());
+                        }
+                        return deliver(unchanged(latest));
+                    }
+                    // The stored tag no longer describes this disk. Drop it and read the full
+                    // manifest once; a second 304 must not loop or be recorded.
+                    store.clearEtagAndSnapshot();
+                    manifest = reef.manifest(null);
+                    if (manifest.notModified()) {
+                        return deliver(unchanged(latest));
+                    }
                 }
+                return deliver(install(manifest, latest));
+            } catch (SyncException ex) {
+                // Record before leaving the sync lock so a later success cannot be overwritten
+                // by this attempt, and this attempt cannot be overwritten by an older success.
+                ex.clientError().ifPresent(error -> deliver(SyncReport.failed(error)));
+                throw ex;
             }
-            return deliver(install(manifest, latest));
+        }
+    }
+
+    /**
+     * Console view of {@code last}. While a rollback pin matches the current pointer, that shell
+     * is shown as the installed version with {@link OutcomeKind#ROLLED_BACK}. Reads the pin and
+     * current file under {@link ShellFileLocks} and does not touch the registry, so it does not
+     * open another version-switch window beside audit A01.
+     */
+    public SyncReport visibleStatus(SyncReport last) {
+        if (last == null) {
+            return null;
+        }
+        LinkedHashMap<String, ShellOutcome> rows = new LinkedHashMap<>();
+        for (ShellOutcome outcome : last.shells()) {
+            if (outcome.shell() != null) {
+                rows.put(outcome.shell(), outcome);
+            }
+        }
+        boolean changed = false;
+        for (SyncStore.PinRow pin : store.pins()) {
+            ShellOutcome current = rows.get(pin.shell());
+            ShellOutcome projected = projectRollback(pin.shell(), current);
+            if (projected != current) {
+                changed = true;
+                rows.put(pin.shell(), projected);
+            }
+        }
+        if (!changed) {
+            return last;
+        }
+        return new SyncReport(false, List.copyOf(rows.values()), last.removed(), last.credentialChanges(),
+                last.latestCrab(), last.error());
+    }
+
+    private ShellOutcome projectRollback(String shell, ShellOutcome outcome) {
+        if (!ShellFiles.safeSegment(shell)) {
+            return outcome;
+        }
+        synchronized (ShellFileLocks.of(shell)) {
+            Optional<SyncStore.Pin> pin = store.pin(shell);
+            if (pin.isEmpty()) {
+                return outcome;
+            }
+            Optional<String> installed = ShellFiles.readCurrent(paths, shell);
+            if (installed.isEmpty() || !installed.get().equals(pin.get().rolledBackTo())) {
+                return outcome;
+            }
+            ShellOutcome rolled = new ShellOutcome(shell, installed.get(), OutcomeKind.ROLLED_BACK, RollbackGuard.REASON);
+            if (rolled.equals(outcome)) {
+                return outcome;
+            }
+            return rolled;
         }
     }
 

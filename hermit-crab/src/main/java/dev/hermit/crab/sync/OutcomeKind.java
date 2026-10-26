@@ -5,5 +5,7 @@ public enum OutcomeKind {
     SKIPPED_SAME,
     SKIPPED_MIN_VERSION,
     SKIPPED_PINNED,
-    REJECTED
+    REJECTED,
+    /** Local status after {@link RollbackGuard} restored an older installed version. */
+    ROLLED_BACK
 }

@@ -74,7 +74,7 @@ npm run dev:reef
 | --- | --- | --- |
 | common | `ShellParserTest`、`ShellValidatorTest`、`ShellDiffTest`、`ShellPackageTest`、`TemplateEngineTest` | 严格字段、引用、版本差异、签名、模板 |
 | Reef | `AdminApiTest`、`AgentToken*Test`、`ShellApiTest`、`ShellConcurrencyTest`、`SigningKeyStoreTest` | 鉴权、令牌缺失拒绝、发布回滚、并发、密钥 |
-| Tide | `ReportIngestTest`、`TideQueryTest`、`AlertEvaluationTest` | 上报校验、失败去重、聚合与告警 |
+| Tide | `ReportIngestTest`、`TideQueryTest`、`AlertEvaluationTest`、`TidePropertiesTest` | 上报校验、失败去重、聚合与告警、阈值负值拒绝 |
 | 执行 | `EngineUnitTest`、`LegacyOaEngineTest`、`ScriptStepTest` | 模拟 OA、登录隔离、编码/提取、脚本 |
 | 数据 | `SecretFlowTest`、`CredentialCipherTest`、`MasterKeyProviderTest`、`*StoreTest` | 加密、绑定、账户、主密钥、日志 |
 | 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等、本机限制、MCP 模式与 SSE |

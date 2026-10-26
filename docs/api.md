@@ -46,7 +46,9 @@
 | POST | `/alerts/{id}/ack` | 确认告警 |
 | GET | `/audit` | 管理操作审计；参数见 AuditController |
 
-Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。
+Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。确认告警只记下确认人和时间，不结束去重窗口：同一 `(kind, shell, shell_version)` 自 `created_at` 起 `dedup-hours` 内不再新建。窗口过后条件仍成立才会再出现一条。失败次数上涨不会提前打破这个窗口。
+
+配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`shell`、`version`、`detail`、`createdAt`、`adminUrl`。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 
 Agent 路由：
 

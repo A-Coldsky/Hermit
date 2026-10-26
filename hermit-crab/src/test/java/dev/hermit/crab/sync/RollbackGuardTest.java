@@ -75,6 +75,29 @@ class RollbackGuardTest {
     }
 
     @Test
+    void upstreamRejectionAndSessionExpiryDoNotRollBackButRuleMismatchStillDoes() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            ShellRegistry registry = new ShellRegistry();
+            ShellSync sync = sync(reef, crab, registry);
+            RollbackGuard guard = guard(reef, crab, registry, queue(reef, crab, false));
+            install(reef, sync, "1.0.0");
+            guard.onResult("legacy_oa", "1.0.0", success("1.0.0"));
+            install(reef, sync, "1.0.1");
+            for (int i = 0; i < RollbackGuard.MISMATCH_LIMIT; i++) {
+                guard.onResult("legacy_oa", "1.0.1", result(false, ErrorCode.INVALID_INPUT));
+                guard.onResult("legacy_oa", "1.0.1", result(false, ErrorCode.SESSION_EXPIRED));
+            }
+            assertThat(current(crab)).isEqualTo("1.0.1");
+            assertThat(pinCount(crab)).isZero();
+            for (int i = 0; i < RollbackGuard.MISMATCH_LIMIT; i++) {
+                guard.onResult("legacy_oa", "1.0.1", mismatch());
+            }
+            assertThat(current(crab)).isEqualTo("1.0.0");
+            assertThat(pinCount(crab)).isEqualTo(1);
+        }
+    }
+
+    @Test
     void doesNotRollBackWhenThePreviousVersionNeverSucceeded() throws Exception {
         try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
             ShellRegistry registry = new ShellRegistry();

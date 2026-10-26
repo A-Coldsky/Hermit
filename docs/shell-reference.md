@@ -61,7 +61,7 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 外部方法：显式 method 优先；否则 `mcp.read_only` 或 `idempotent` 为 true 时选 GET，其余 POST。方法枚举只支持 GET/POST，这与步骤内可配置的上游 HTTP method 不同。
 
 - 权限中的只读仅由 `mcp.read_only` 决定，不能因为 GET 或 idempotent 就推断只读。
-- `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
+- `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。会话失效包括重定向到 `alive_check.expect_not_redirect` 前缀，以及能力请求返回 HTTP 401/403。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
 - POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。
 - `mcp.expose` 默认 true，read_only/destructive 默认 false。当前 MCP destructiveHint 从“非只读且非幂等”计算，声明的 destructive 字段没有独立传入注解，见功能状态。
 
@@ -78,6 +78,8 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 | script | Rhino JavaScript，对 vars 运算并 return 结果；可指定 into |
 
 request 的 path 与 url 必须二选一，form 与 json 互斥。默认 GET、UTF-8、15,000ms、不跟随重定向；响应最多 5 MiB。解码优先 Content-Type charset，其次 HTML meta，再使用步骤 encoding。开启重定向最多 5 跳，只允许同源；Cookie 由账号客户端管理，规则不能自行覆盖 Cookie 头。
+
+能力请求返回 HTTP 400 时，引擎以 `INVALID_INPUT` 结束，不把响应交给后续 extract/assert，也不记入回滚。HTTP 401 与 403 视为会话失效，处理方式与重定向到登录页相同，因此读操作不会在会话失效时返回成功的空列表。登录步骤里的这些状态码仍交给 assert。`cookie_exists` 失败时，登录结果说明「登录未建立会话：上游没有发回会话 Cookie」，并提示核对用户名和密码；凭证正确时重新测试登录，或检查登录页是否已改版。其它未期望的状态（例如期望 200 实际 404）仍是 `RULE_MISMATCH`，连续达到 5 次且前一版本曾成功时仍会自动回滚。响应体不会写入错误文案。
 
 ```yaml
 steps:

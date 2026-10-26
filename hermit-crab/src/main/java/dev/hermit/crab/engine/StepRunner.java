@@ -16,6 +16,10 @@ import dev.hermit.common.template.TemplateEngine;
 
 final class StepRunner {
 
+    /** 登录路径会换成带下一步的说明；其它 cookie 断言也用这段，不再暴露 assert 键名。 */
+    static final String COOKIE_MISSING_SUMMARY =
+            "没有找到会话 Cookie。请核对账号和密码；若凭证无误，再确认上游是否仍会建立会话。";
+
     private final TemplateEngine templates;
     private final FilterRegistry filters;
     private final ScriptStep scripts = new ScriptStep();
@@ -159,7 +163,7 @@ final class StepRunner {
                 return;
             }
         }
-        fail("assert 未通过: cookie_exists");
+        fail(COOKIE_MISSING_SUMMARY);
     }
 
     private static void checkHeader(String name, Map<String, Object> headers) {

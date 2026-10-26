@@ -57,6 +57,13 @@ html:root {
   --el-color-danger-light-8: #f8d4d4;
   --el-color-danger-light-9: #fce9e9;
   --el-color-danger-dark-2: #b01e1e;
+  --el-color-info: var(--hm-muted);
+  --el-color-info-light-3: #949ea4;
+  --el-color-info-light-5: #b3babe;
+  --el-color-info-light-7: #d1d6d8;
+  --el-color-info-light-8: #e0e3e5;
+  --el-color-info-light-9: #f0f1f2;
+  --el-color-info-dark-2: #525e64;
   --el-color-error: var(--el-color-danger);
   --el-color-error-light-3: var(--el-color-danger-light-3);
   --el-color-error-light-5: var(--el-color-danger-light-5);
@@ -116,6 +123,17 @@ html.dark {
   --hm-chart-bad-top: #f06a6a;
   --hm-chart-grid: #222b2f;
 
+  /* Element 暗色样式也在 html.dark 里写了基础色，必须显式覆盖，不能只靠浅色块继承。 */
+  --el-color-success: var(--hm-success);
+  --el-color-warning: var(--hm-warning);
+  --el-color-danger: var(--hm-danger);
+  --el-color-info: var(--hm-muted);
+  --el-color-info-light-3: #6a7579;
+  --el-color-info-light-5: #52595c;
+  --el-color-info-light-7: #393d3f;
+  --el-color-info-light-8: #2d3031;
+  --el-color-info-light-9: #202222;
+  --el-color-info-dark-2: #a5b1b6;
   --el-color-success-light-3: #1e9048;
   --el-color-success-light-5: #1b6d39;
   --el-color-success-light-7: #18492a;

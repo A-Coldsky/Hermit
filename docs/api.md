@@ -46,7 +46,9 @@
 | POST | `/alerts/{id}/ack` | 确认告警 |
 | GET | `/audit` | 管理操作审计；参数见 AuditController |
 
-Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。
+Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。确认告警只记下确认人和时间，不结束去重窗口：同一 `(kind, shell, shell_version)` 自 `created_at` 起 `dedup-hours` 内不再新建。窗口过后条件仍成立才会再出现一条。失败次数上涨不会提前打破这个窗口。
+
+配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`shell`、`version`、`detail`、`createdAt`、`adminUrl`。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 
 Agent 路由：
 
@@ -83,6 +85,8 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 | INTERNAL | 500 |
 
 缺必填、类型无法转换，或数值超出参数声明的 `minimum` / `maximum`，都返回 `INVALID_INPUT`。运行时不会把负页码或过大的 `pageSize` 夹进范围内再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。
+
+能力请求已经发出后，上游 HTTP 400 也返回 `INVALID_INPUT`，文案为「上游拒绝了输入（HTTP 400）。请修改参数后重试。」，不再继续提取或断言。它和调用前的参数校验共用错误码，但 `failedStepType` 为 `request`。MCP 对这段文案的 hint 是按该系统的要求修改参数。上游 HTTP 401/403，以及重定向到登录页，都视为会话失效：幂等能力重新登录并重放一次，其它能力返回 `SESSION_EXPIRED` 且不重放。这两类都不会把响应体抽成空列表，也不计入 `RollbackGuard`。登录步骤不走这套映射，失败仍是 `AUTH_FAILED`；`cookie_exists` 未通过时说明登录未建立会话，并提示核对用户名和密码、重新测试登录，或检查登录页是否改版。期望状态与实际状态不一致（例如期望 200 实际 404）仍是 `RULE_MISMATCH`，累计 5 次且前一版本曾成功时仍会自动回滚。
 
 ## Crab 本机管理 API
 

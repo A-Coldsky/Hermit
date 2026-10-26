@@ -22,9 +22,7 @@ public class TideProperties {
 
     @PostConstruct
     void validate() {
-        if (newVersionMinCalls < 1) {
-            throw new IllegalStateException("hermit.reef.tide.new-version-min-calls must be positive");
-        }
+        requireAtLeast(newVersionMinCalls, 1, "hermit.reef.tide.new-version-min-calls must be positive");
         if (regressionDelta == null || regressionDelta.signum() < 0) {
             throw new IllegalStateException("hermit.reef.tide.regression-delta must be >= 0");
         }
@@ -34,8 +32,15 @@ public class TideProperties {
         if (quietHours < 0) {
             throw new IllegalStateException("hermit.reef.tide.quiet-hours must be >= 0");
         }
-        if (baselineWindowDays < 1 || surgeWindowMinutes < 1 || surgeMinCount < 1 || dedupHours < 1) {
-            throw new IllegalStateException("hermit.reef.tide windows and surge-min-count must be positive");
+        requireAtLeast(baselineWindowDays, 1, "hermit.reef.tide.baseline-window-days must be positive");
+        requireAtLeast(surgeWindowMinutes, 1, "hermit.reef.tide.surge-window-minutes must be positive");
+        requireAtLeast(surgeMinCount, 1, "hermit.reef.tide.surge-min-count must be positive");
+        requireAtLeast(dedupHours, 1, "hermit.reef.tide.dedup-hours must be positive");
+    }
+
+    private static void requireAtLeast(int value, int minimum, String message) {
+        if (value < minimum) {
+            throw new IllegalStateException(message);
         }
     }
 

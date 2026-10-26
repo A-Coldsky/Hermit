@@ -20,6 +20,9 @@ public class TideWebhookClient {
 
     static final Duration TIMEOUT = Duration.ofSeconds(5);
 
+    // Reef 没有管理端对外基址（Crab 的 reef.url 不会进入本进程）。负载里只放相对路径。
+    static final String ADMIN_ALERTS_PATH = "/alerts";
+
     private static final Logger log = LoggerFactory.getLogger(TideWebhookClient.class);
 
     private final TideProperties properties;
@@ -61,6 +64,13 @@ public class TideWebhookClient {
         }
     }
 
-    public record WebhookNotice(String kind, String shell, String version, JsonNode detail, Instant createdAt) {
+    public record WebhookNotice(
+            long id,
+            String kind,
+            String shell,
+            String version,
+            JsonNode detail,
+            Instant createdAt,
+            String adminUrl) {
     }
 }

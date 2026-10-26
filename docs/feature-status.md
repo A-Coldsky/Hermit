@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Shell 模型/严格解析/语义校验/版本差异 | 已实现 | common parse/validate；对应测试齐全，部分步骤错误在运行时检查 |
 | 模板、内置过滤器、输入 Schema | 已实现 | TemplateEngine/InputPreparer；不提供完整最终输出 Schema 验证 |
-| HTTP 请求、登录、alive_check、Cookie 会话 | 已实现，有缺陷 | RuleEngine/HttpCalls/SessionManager |
+| HTTP 请求、登录、alive_check、Cookie 会话 | 已实现，有缺陷 | RuleEngine/HttpCalls/SessionManager。能力请求的上游 HTTP 400 为 `INVALID_INPUT`；401/403 与登录重定向为会话失效（幂等重放一次，否则 `SESSION_EXPIRED`），不计入回滚。选择器失配等仍是 `RULE_MISMATCH`。慢速响应的总 deadline 仍不可靠 |
 | CSS/XPath/JSONPath/regex 提取 | 已实现 | Extractors + EngineUnitTest/LegacyOaEngineTest |
 | assert/set/script | 已实现 | StepRunner/ScriptStep；脚本 Java 隔离和时间/结果限制有测试，无进程级内存隔离 |
 | 多账号/默认账号/凭证/配置 | 已实现 | ShellAdmin + store；credentials 加密只写 |
@@ -20,10 +20,10 @@
 | Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest；没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ShellApiTest/ShellConcurrencyTest/ShellSelfCheckFailureTest |
 | Crab 定时/手动同步、ETag、验签 | 已实现 | ShellSyncTest/CrabWiringTest；可重试失败不记 ETag，304 核对 current。Reef 不可达时手动同步为 502 `UPSTREAM_ERROR`，状态改为这次失败；Reef 的 HTTP 错误仍保留上次成功 |
-| 本地规则失配回滚、坏版本固定 | 已实现 | RollbackGuardTest；要求前一版本成功，5 次失配；不等于发布前健康检查。回滚后控制台同步状态显示已安装版本和 `ROLLED_BACK`，固定解除前保持 |
+| 本地规则失配回滚、坏版本固定 | 已实现 | RollbackGuardTest；要求前一版本成功，5 次 `RULE_MISMATCH`；上游 400 与会话失效不计数；不等于发布前健康检查。回滚后控制台同步状态显示已安装版本和 `ROLLED_BACK`，固定解除前保持 |
 | 上报队列、聚合、退避、预览 | 已实现 | ReportSenderTest；失败/事件队列上限 10000，超限丢弃计数；小时统计单独存储 |
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
-| 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest；Webhook 没有持久化重试队列 |
+| 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest。确认后，创建时间起算的去重窗口剩余时间内不新建、不推送；窗口结束后条件仍在才新建。失败上涨不提前打破窗口。Webhook 含告警 id 与相对路径 `/alerts`（无对外基址配置），没有持久化重试队列。负阈值，以及必须为正的窗口写成 0，启动时拒绝 |
 | Reef 管理页面 | 已实现 | 登录、仪表盘、Shell/上传/版本及校验警告明细、Tide、告警、审计、设置说明 |
 | Crab 本机控制台 | 已实现 | 概览、Shell、账号/凭证/配置、能力、API Key、调用、上报 |
 | Docker Reef + Nginx + MySQL / Crab | 已配置，运行未验收 | Crab 同机 client profile / 独立 Compose / Dockerfile 已提供；配置语法通过，尚未启动容器栈 |
@@ -60,3 +60,5 @@
 | 合计 | **327** | **0 / 0 / 0** |
 
 hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过；Docker Compose 使用 `.env.example` 校验同机 `client` profile 与独立 Crab 配置通过，入口脚本 `sh -n` 通过。额外探针复现 6 项代码问题，详见[审计报告](audits/2026-10-16.md)。没有覆盖率百分比、真实老系统/真实 MCP 客户端验收、浏览器交互验收、MySQL 运行验证或生产压测结果。
+
+2026-10-26 上游错误映射以 JDK 17.0.20 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 100、hermit-crab 187、hermit-it 1，Vitest 30（6 个文件）。未覆盖真实老系统，以及除 HTTP 400/401/403 以外的 4xx。

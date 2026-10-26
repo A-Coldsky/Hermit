@@ -55,7 +55,7 @@ flowchart LR
 2. `ShellPublishService` 锁定 Shell 记录，生成签名包、验签自检，标记 `PUBLISHED` 并切换当前版本。这里自检包完整性，不访问老系统。
 3. Crab 用实例 UUID 和 Agent token 拉取带 ETag 的 manifest，下载 ZIP，检查签名、哈希、身份和最低版本后安装。
 4. `ShellSync` 更新版本目录、`current`、数据库状态与注册表，清理被删除的凭证声明。可重试失败不记清单 ETag；304 时核对本地 current 与清单快照。
-5. `RollbackGuard` 对同版本累计到 5 次 `RULE_MISMATCH` 且前一版本有成功记录时尝试回滚。成功调用清零，其他错误不清零；不是所有请求严格相邻的“连续失败”。回滚写入 `current` 和固定记录后，控制台 `GET /console/api/sync` 在该 Shell 的文件锁内读取固定记录和 `current`（不替换注册表），把这一行显示为实际安装版本、`kind=ROLLED_BACK`、`reason=RULE_MISMATCH`，不再把坏版本显示成 `INSTALLED`。固定解除前都按这条投影。
+5. `RollbackGuard` 对同版本累计到 5 次 `RULE_MISMATCH` 且前一版本有成功记录时尝试回滚。成功调用清零，其他错误（含上游 HTTP 400 的 `INVALID_INPUT` 和会话失效的 `SESSION_EXPIRED`）不清零也不计数；不是所有请求严格相邻的“连续失败”。回滚写入 `current` 和固定记录后，控制台 `GET /console/api/sync` 在该 Shell 的文件锁内读取固定记录和 `current`（不替换注册表），把这一行显示为实际安装版本、`kind=ROLLED_BACK`、`reason=RULE_MISMATCH`，不再把坏版本显示成 `INSTALLED`。固定解除前都按这条投影。
 6. 坏版本被固定后，相同或更低版本跳过，超过坏版本的新版本可解除固定。保留最近 3 版，并保护当前、前一和回滚相关版本。
 7. Reef 连接失败（拒绝连接、无法解析、超时、同步被中断）时，这次尝试写入最近同步状态并清掉上次成功的 Shell 列表；手动 `POST /sync` 返回 502 `UPSTREAM_ERROR`，`message` 说明原因和下一步。下一次成功同步覆盖该失败。Reef 已经返回 HTTP 状态时不替换上次成功，手动请求仍是 500 `INTERNAL`。
 
@@ -83,7 +83,7 @@ sequenceDiagram
   I-->>C: API envelope / MCP result
 ```
 
-同一 `(origin, shell, account)` 由公平锁串行执行；不同账号可并行。执行能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中检测到会话失效时，只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。
+同一 `(origin, shell, account)` 由公平锁串行执行；不同账号可并行。执行能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。
 
 ## 数据与信任
 

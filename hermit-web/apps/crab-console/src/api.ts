@@ -139,12 +139,18 @@ export interface CrabRelease {
   downloadUrl: string | null
 }
 
+export interface SyncError {
+  code: string
+  message: string
+}
+
 export interface SyncReport {
   notModified: boolean
   shells: { shell: string; version: string; kind: string | null; reason: string | null }[]
   removed: string[]
   credentialChanges: { shell: string; addedRequired: string[]; removed: string[] }[]
   latestCrab: CrabRelease | null
+  error: SyncError | null
 }
 
 export interface ReportBatch {

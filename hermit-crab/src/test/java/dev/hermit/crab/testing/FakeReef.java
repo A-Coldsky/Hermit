@@ -35,7 +35,9 @@ public final class FakeReef implements AutoCloseable {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private final HttpServer server;
+    private HttpServer server;
+    private final int port;
+    private volatile boolean listening = true;
     private final KeyPair keys = Ed25519Keys.generate();
     private final Object lock = new Object();
     private final List<Entry> entries = new ArrayList<>();
@@ -54,13 +56,50 @@ public final class FakeReef implements AutoCloseable {
 
     public FakeReef() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        port = server.getAddress().getPort();
         downloadUrl = base() + "/agent/crab.jar";
         server.createContext("/", this::handle);
         server.start();
     }
 
     public URI base() {
-        return URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/");
+        return URI.create("http://127.0.0.1:" + port + "/");
+    }
+
+    /** Stop accepting connections so clients fail immediately. {@link #listen()} binds the same URL again. */
+    public void disconnect() {
+        if (!listening) {
+            return;
+        }
+        listening = false;
+        server.stop(0);
+    }
+
+    /** Bind {@link #base()} again after {@link #disconnect()}. */
+    public void listen() throws IOException {
+        if (listening) {
+            return;
+        }
+        IOException last = null;
+        for (int attempt = 0; attempt < 20; attempt++) {
+            try {
+                HttpServer next = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+                next.createContext("/", this::handle);
+                next.start();
+                server = next;
+                listening = true;
+                return;
+            } catch (IOException ex) {
+                last = ex;
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw ex;
+                }
+            }
+        }
+        throw last;
     }
 
     public KeyPair keys() {
@@ -202,6 +241,10 @@ public final class FakeReef implements AutoCloseable {
 
     @Override
     public void close() {
+        if (!listening) {
+            return;
+        }
+        listening = false;
         server.stop(0);
     }
 

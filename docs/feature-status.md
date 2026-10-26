@@ -60,3 +60,5 @@
 | 合计 | **327** | **0 / 0 / 0** |
 
 hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过；Docker Compose 使用 `.env.example` 校验同机 `client` profile 与独立 Crab 配置通过，入口脚本 `sh -n` 通过。额外探针复现 6 项代码问题，详见[审计报告](audits/2026-10-16.md)。没有覆盖率百分比、真实老系统/真实 MCP 客户端验收、浏览器交互验收、MySQL 运行验证或生产压测结果。
+
+2026-10-26 上游错误映射以 JDK 17.0.20 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 100、hermit-crab 187、hermit-it 1，Vitest 30（6 个文件）。未覆盖真实老系统，以及除 HTTP 400/401/403 以外的 4xx。

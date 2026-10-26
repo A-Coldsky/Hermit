@@ -18,7 +18,7 @@ const detail = {
   version: '1.0.0',
   title: '协同办公 OA',
   description: '',
-  credentials: [{ name: 'password', description: 'OA 登录密码', required: true }],
+  credentials: [{ name: 'password', description: '填原始密码', required: true }],
   config: [],
   capabilities: [],
   loginPaused: true,

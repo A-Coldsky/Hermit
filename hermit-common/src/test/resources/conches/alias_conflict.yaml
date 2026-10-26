@@ -22,7 +22,7 @@ credentials:
     type: secret
     label: 密码
     required: true
-    description: OA 登录密码
+    description: 填原始密码
 
 config:
   base_url:

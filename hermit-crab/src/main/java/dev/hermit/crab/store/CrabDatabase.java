@@ -24,11 +24,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Version 5 adds {@code rollback_queue.event_id} and fills a unique id for rows already queued.
  * Version 5 is applied when {@code MAX(version)} is below 5, the same way as version 4.
  * Version 6 indexes {@code config_audit (at, id)} for newest-first reads and does not copy
- * {@code detail}. Version 7 adds {@code disabled_shells}, the tombstones for shells Reef withdrew
+ * {@code detail}. Version 7 adds {@code disabled_conches}, the tombstones for conches Reef withdrew
  * from the manifest. Version 6 is left as applied; do not fold the tombstones back into it.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
- * or create later tables. Do not rewrite an applied migration.
+ * or create later tables. Before the first official release these statements may be edited in
+ * place when there is no stored data. After release, add a new version instead of rewriting one.
  */
 public final class CrabDatabase implements AutoCloseable {
     /**
@@ -135,32 +136,32 @@ public final class CrabDatabase implements AutoCloseable {
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS accounts (
                     origin VARCHAR(16) NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     account VARCHAR(64) NOT NULL,
                     is_default BOOLEAN NOT NULL,
                     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    PRIMARY KEY (origin, shell, account)
+                    PRIMARY KEY (origin, conch, account)
                 )
                 """);
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS credentials (
                     origin VARCHAR(16) NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     account VARCHAR(64) NOT NULL,
                     field VARCHAR(256) NOT NULL,
                     ciphertext BLOB NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    PRIMARY KEY (origin, shell, account, field)
+                    PRIMARY KEY (origin, conch, account, field)
                 )
                 """);
         execute(connection, """
-                CREATE TABLE IF NOT EXISTS shell_config (
+                CREATE TABLE IF NOT EXISTS conch_config (
                     origin VARCHAR(16) NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     "key" VARCHAR(256) NOT NULL,
                     "value" CLOB NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    PRIMARY KEY (origin, shell, "key")
+                    PRIMARY KEY (origin, conch, "key")
                 )
                 """);
         execute(connection, """
@@ -196,10 +197,10 @@ public final class CrabDatabase implements AutoCloseable {
                     trace_id VARCHAR(64) NOT NULL,
                     at TIMESTAMP WITH TIME ZONE NOT NULL,
                     origin VARCHAR(16) NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     action VARCHAR(256) NOT NULL,
                     account VARCHAR(64) NOT NULL,
-                    shell_version VARCHAR(64),
+                    conch_version VARCHAR(64),
                     success BOOLEAN NOT NULL,
                     error_code VARCHAR(64),
                     error_message VARCHAR(500),
@@ -226,34 +227,34 @@ public final class CrabDatabase implements AutoCloseable {
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS idempotency (
                     origin VARCHAR(16) NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     account VARCHAR(64) NOT NULL,
                     action VARCHAR(256) NOT NULL,
                     "key" VARCHAR(128) NOT NULL,
                     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
                     response_json BLOB NOT NULL,
-                    PRIMARY KEY (origin, shell, account, action, "key")
+                    PRIMARY KEY (origin, conch, account, action, "key")
                 )
                 """);
         execute(connection, "CREATE INDEX IF NOT EXISTS idempotency_created_idx ON idempotency (created_at)");
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS sessions (
                     origin VARCHAR(16) NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     account VARCHAR(64) NOT NULL,
                     ciphertext BLOB NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    PRIMARY KEY (origin, shell, account)
+                    PRIMARY KEY (origin, conch, account)
                 )
                 """);
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS capability_switches (
                     origin VARCHAR(16) NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     action VARCHAR(256) NOT NULL,
                     disabled BOOLEAN NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    PRIMARY KEY (origin, shell, action)
+                    PRIMARY KEY (origin, conch, action)
                 )
                 """);
         execute(connection, """
@@ -268,15 +269,15 @@ public final class CrabDatabase implements AutoCloseable {
     private static void applyV3(Connection connection) throws SQLException {
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS version_success (
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     version VARCHAR(64) NOT NULL,
                     last_success_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    PRIMARY KEY (shell, version)
+                    PRIMARY KEY (conch, version)
                 )
                 """);
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS pinned_rollbacks (
-                    shell VARCHAR(256) NOT NULL PRIMARY KEY,
+                    conch VARCHAR(256) NOT NULL PRIMARY KEY,
                     bad_version VARCHAR(64) NOT NULL,
                     rolled_back_to VARCHAR(64) NOT NULL,
                     at TIMESTAMP WITH TIME ZONE NOT NULL
@@ -284,23 +285,23 @@ public final class CrabDatabase implements AutoCloseable {
                 """);
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS mismatch_streak (
-                    shell VARCHAR(256) NOT NULL PRIMARY KEY,
+                    conch VARCHAR(256) NOT NULL PRIMARY KEY,
                     version VARCHAR(64) NOT NULL,
                     streak INT NOT NULL
                 )
                 """);
         execute(connection, """
-                CREATE TABLE IF NOT EXISTS shell_previous (
-                    shell VARCHAR(256) NOT NULL PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS conch_previous (
+                    conch VARCHAR(256) NOT NULL PRIMARY KEY,
                     version VARCHAR(64) NOT NULL
                 )
                 """);
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS installed_versions (
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     version VARCHAR(64) NOT NULL,
                     installed_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    PRIMARY KEY (shell, version)
+                    PRIMARY KEY (conch, version)
                 )
                 """);
         execute(connection, """
@@ -314,7 +315,7 @@ public final class CrabDatabase implements AutoCloseable {
                     id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
                     trace_id VARCHAR(128) NOT NULL,
                     at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     version VARCHAR(64) NOT NULL,
                     action VARCHAR(256) NOT NULL,
                     error_code VARCHAR(64) NOT NULL,
@@ -328,7 +329,7 @@ public final class CrabDatabase implements AutoCloseable {
                 CREATE TABLE IF NOT EXISTS rollback_queue (
                     id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
                     at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     from_version VARCHAR(64) NOT NULL,
                     to_version VARCHAR(64) NOT NULL,
                     reason VARCHAR(1024) NOT NULL
@@ -338,7 +339,7 @@ public final class CrabDatabase implements AutoCloseable {
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS hourly_counts (
                     "hour" TIMESTAMP WITH TIME ZONE NOT NULL,
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     version VARCHAR(64) NOT NULL,
                     action VARCHAR(256) NOT NULL,
                     success_count BIGINT NOT NULL,
@@ -349,7 +350,7 @@ public final class CrabDatabase implements AutoCloseable {
                     sent_codes CLOB,
                     sent_sum_ms BIGINT,
                     sent_buckets CLOB,
-                    PRIMARY KEY ("hour", shell, version, action)
+                    PRIMARY KEY ("hour", conch, version, action)
                 )
                 """);
         execute(connection, """
@@ -360,9 +361,9 @@ public final class CrabDatabase implements AutoCloseable {
                 """);
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS pending_credential_deletes (
-                    shell VARCHAR(256) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
                     field VARCHAR(256) NOT NULL,
-                    PRIMARY KEY (shell, field)
+                    PRIMARY KEY (conch, field)
                 )
                 """);
     }
@@ -400,8 +401,8 @@ public final class CrabDatabase implements AutoCloseable {
 
     private static void applyV7(Connection connection) throws SQLException {
         execute(connection, """
-                CREATE TABLE IF NOT EXISTS disabled_shells (
-                    shell VARCHAR(256) NOT NULL PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS disabled_conches (
+                    conch VARCHAR(256) NOT NULL PRIMARY KEY,
                     version VARCHAR(64),
                     disabled_at TIMESTAMP WITH TIME ZONE NOT NULL
                 )

@@ -8,7 +8,7 @@ public final class SyncReasons {
     public static final String ZIP_TOO_LARGE = "ZIP_TOO_LARGE";
     public static final String MANIFEST_ENTRY_MISMATCH = "MANIFEST_ENTRY_MISMATCH";
     public static final String VERSION_INVALID = "VERSION_INVALID";
-    public static final String SHELL_NAME = "SHELL_NAME";
+    public static final String CONCH_NAME = "CONCH_NAME";
     public static final String PATH_UNSAFE = "PATH_UNSAFE";
     public static final String CURRENT_WRITE_FAILED = "CURRENT_WRITE_FAILED";
     public static final String REGISTRY_REJECTED = "REGISTRY_REJECTED";

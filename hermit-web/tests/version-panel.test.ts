@@ -1,13 +1,13 @@
 import { flushPromises } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ShellVersion } from '../apps/reef-admin/src/api'
+import type { ConchVersion } from '../apps/reef-admin/src/api'
 import { mountPage } from './helpers'
 
 vi.mock('../apps/reef-admin/src/api', () => ({ api: {} }))
 
 import VersionPanel from '../apps/reef-admin/src/components/VersionPanel.vue'
 
-function version(overrides: Partial<ShellVersion>): ShellVersion {
+function version(overrides: Partial<ConchVersion>): ConchVersion {
   return {
     version: '1.0.0',
     status: 'PUBLISHED',
@@ -31,7 +31,7 @@ describe('版本表警告列', () => {
     const wrapper = await mountPage(VersionPanel, {
       attach: true,
       props: {
-        shell: 'legacy_oa',
+        conch: 'legacy_oa',
         versions: [
           version({
             warningCount: 2,
@@ -56,14 +56,14 @@ describe('版本表警告列', () => {
   })
 
   it('没有警告时不可点', async () => {
-    const wrapper = await mountPage(VersionPanel, { props: { shell: 'legacy_oa', versions: [version({})] } })
+    const wrapper = await mountPage(VersionPanel, { props: { conch: 'legacy_oa', versions: [version({})] } })
     await flushPromises()
     expect(wrapper.text()).toContain('v1.0.0')
     expect(wrapper.find('button[aria-label*="条警告"]').exists()).toBe(false)
   })
 
   it('操作列不固定在右侧，不会盖住警告列', async () => {
-    const wrapper = await mountPage(VersionPanel, { props: { shell: 'legacy_oa', versions: [version({})] } })
+    const wrapper = await mountPage(VersionPanel, { props: { conch: 'legacy_oa', versions: [version({})] } })
     await flushPromises()
     expect(wrapper.text()).toContain('YAML')
     expect(wrapper.find('.el-table-fixed-column--right').exists()).toBe(false)

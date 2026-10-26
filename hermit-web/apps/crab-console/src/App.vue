@@ -2,11 +2,11 @@
 import { Box, DataAnalysis, Document, House, Key, List } from '@element-plus/icons-vue'
 import { computed, onMounted } from 'vue'
 import AppLayout, { type NavItem } from '@shared/components/AppLayout.vue'
-import { pendingShells, refreshPending } from './status'
+import { pendingConches, refreshPending } from './status'
 
 const items = computed<NavItem[]>(() => [
   { to: '/', label: '概览', icon: House },
-  { to: '/shells', label: 'Shell 与账号', icon: Box, badge: pendingShells.value },
+  { to: '/conches', label: '规则包与账号', icon: Box, badge: pendingConches.value },
   { to: '/apikeys', label: 'API Key', icon: Key },
   { to: '/calls', label: '调用记录', icon: List },
   { to: '/audit', label: '配置审计', icon: Document },

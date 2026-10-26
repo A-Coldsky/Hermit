@@ -16,18 +16,18 @@ import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.Function;
 
-import dev.hermit.common.model.ShellDoc;
-import dev.hermit.common.parse.ShellParseException;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.config.ConfigFileException;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.config.CrabConfigLoader;
-import dev.hermit.crab.engine.ShellRejectedException;
+import dev.hermit.crab.engine.ConchRejectedException;
 import dev.hermit.crab.mcp.McpStdio;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.CrabServer;
 import dev.hermit.crab.secure.MasterKeyException;
-import dev.hermit.crab.sync.ShellOutcome;
+import dev.hermit.crab.sync.ConchOutcome;
 import dev.hermit.crab.sync.SyncError;
 import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
@@ -50,15 +50,15 @@ public final class CrabCommand {
             usage:
               crab serve
               crab sync
-              crab account list <shell>
-              crab account add|remove|default <shell> <name>
-              crab credential set <shell> <account> <field> [--from-env VAR]
-              crab credential list <shell> <account>
-              crab config get <shell> [key]
-              crab config set <shell> <key> <value>
-              crab config unset <shell> <key>
-              crab audit list [--shell NAME] [--account NAME] [--limit N] [--page N]
-              crab apikey create <name> [--shells a,b] [--actions shell.action] [--read-only]
+              crab account list <conch>
+              crab account add|remove|default <conch> <name>
+              crab credential set <conch> <account> <field> [--from-env VAR]
+              crab credential list <conch> <account>
+              crab config get <conch> [key]
+              crab config set <conch> <key> <value>
+              crab config unset <conch> <key>
+              crab audit list [--conch NAME] [--account NAME] [--limit N] [--page N]
+              crab apikey create <name> [--conches a,b] [--actions conch.action] [--read-only]
               crab apikey list
               crab apikey revoke <id>
               crab mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
@@ -70,14 +70,14 @@ public final class CrabCommand {
         } catch (DatabaseInUseException ex) {
             err.println(DatabaseInUseException.MESSAGE);
             return 2;
-        } catch (ShellRejectedException ex) {
-            err.println("shell was rejected");
+        } catch (ConchRejectedException ex) {
+            err.println("conch was rejected");
             for (ValidationIssue issue : ex.issues()) {
                 err.println(issue.code() + " " + issue.path());
             }
             return 1;
-        } catch (ShellParseException ex) {
-            err.println("installed shell could not be parsed");
+        } catch (ConchParseException ex) {
+            err.println("installed conch could not be parsed");
             return 1;
         } catch (ConfigFileException ex) {
             err.println(ex.getMessage());
@@ -157,8 +157,8 @@ public final class CrabCommand {
             return 1;
         }
         try (CrabRuntime runtime = open(env)) {
-            runtime.loadInstalledShells();
-            if (runtime.shellSync() == null) {
+            runtime.loadInstalledConches();
+            if (runtime.conchSync() == null) {
                 err.println("reef.url is not configured");
                 return 1;
             }
@@ -166,8 +166,8 @@ public final class CrabCommand {
             if (report.notModified()) {
                 out.println("not modified");
             }
-            for (ShellOutcome outcome : report.shells()) {
-                out.println(outcome.shell() + " " + text(outcome.version()) + " " + outcome.kind());
+            for (ConchOutcome outcome : report.conches()) {
+                out.println(outcome.conch() + " " + text(outcome.version()) + " " + outcome.kind());
             }
             return 0;
         } catch (SyncException ex) {
@@ -182,7 +182,7 @@ public final class CrabCommand {
             return 1;
         }
         String verb = args[1];
-        String shell = args[2];
+        String conch = args[2];
         return switch (verb) {
             case "list" -> {
                 if (args.length != 3) {
@@ -190,7 +190,7 @@ public final class CrabCommand {
                     yield 1;
                 }
                 yield withRuntime(env, runtime -> {
-                    for (Account account : runtime.admin().listAccounts(shell)) {
+                    for (Account account : runtime.admin().listAccounts(conch)) {
                         out.println(account.defaultAccount() ? account.account() + " default" : account.account());
                     }
                     return 0;
@@ -204,9 +204,9 @@ public final class CrabCommand {
                 String name = args[3];
                 yield withRuntime(env, runtime -> {
                     switch (verb) {
-                        case "add" -> runtime.admin().createAccount(shell, name, Actors.CLI);
-                        case "remove" -> runtime.admin().deleteAccount(shell, name, Actors.CLI);
-                        default -> runtime.admin().setDefault(shell, name, Actors.CLI);
+                        case "add" -> runtime.admin().createAccount(conch, name, Actors.CLI);
+                        case "remove" -> runtime.admin().deleteAccount(conch, name, Actors.CLI);
+                        default -> runtime.admin().setDefault(conch, name, Actors.CLI);
                     }
                     out.println(name);
                     return 0;
@@ -231,15 +231,15 @@ public final class CrabCommand {
         }
         String verb = parsed.positionals.get(1);
         if ("list".equals(verb)) {
-            if (parsed.positionals.size() != 4 || parsed.fromEnv != null || parsed.readOnly || parsed.shells != null) {
+            if (parsed.positionals.size() != 4 || parsed.fromEnv != null || parsed.readOnly || parsed.conches != null) {
                 err.print(USAGE);
                 return 1;
             }
-            String shell = parsed.positionals.get(2);
+            String conch = parsed.positionals.get(2);
             String account = parsed.positionals.get(3);
             return withRuntime(env, runtime -> {
-                runtime.admin().requireAccount(shell, account);
-                for (String name : new TreeSet<>(runtime.admin().credentialNames(shell, account))) {
+                runtime.admin().requireAccount(conch, account);
+                for (String name : new TreeSet<>(runtime.admin().credentialNames(conch, account))) {
                     out.println(name);
                 }
                 return 0;
@@ -253,19 +253,19 @@ public final class CrabCommand {
             err.println("credential values must not be passed as arguments");
             return 1;
         }
-        if (parsed.positionals.size() != 5 || parsed.readOnly || parsed.shells != null || parsed.actions != null) {
+        if (parsed.positionals.size() != 5 || parsed.readOnly || parsed.conches != null || parsed.actions != null) {
             err.print(USAGE);
             return 1;
         }
-        String shell = parsed.positionals.get(2);
+        String conch = parsed.positionals.get(2);
         String account = parsed.positionals.get(3);
         String field = parsed.positionals.get(4);
         CrabRuntime runtime = open(env);
         try {
-            runtime.loadInstalledShells();
-            ShellDoc doc = runtime.registry().find(shell).orElse(null);
+            runtime.loadInstalledConches();
+            ConchDoc doc = runtime.registry().find(conch).orElse(null);
             if (doc == null) {
-                err.println("shell is not installed");
+                err.println("conch is not installed");
                 return 1;
             }
             if (doc.credentials() == null || !doc.credentials().containsKey(field)) {
@@ -298,7 +298,7 @@ public final class CrabCommand {
             return 1;
         }
         String verb = args[1];
-        String shell = args[2];
+        String conch = args[2];
         return switch (verb) {
             case "get" -> {
                 if (args.length != 3 && args.length != 4) {
@@ -307,7 +307,7 @@ public final class CrabCommand {
                 }
                 String key = args.length == 4 ? args[3] : null;
                 yield withRuntime(env, runtime -> {
-                    Map<String, String> stored = runtime.admin().storedConfig(shell);
+                    Map<String, String> stored = runtime.admin().storedConfig(conch);
                     if (key == null) {
                         for (String name : new TreeSet<>(stored.keySet())) {
                             out.println(name + "=" + stored.get(name));
@@ -327,7 +327,7 @@ public final class CrabCommand {
                     err.print(USAGE);
                     yield 1;
                 }
-                yield withDeclaration(env, shell, err, (runtime, doc) -> {
+                yield withDeclaration(env, conch, err, (runtime, doc) -> {
                     runtime.admin().putConfig(doc, args[3], args[4], Actors.CLI);
                     out.println(args[3]);
                     return 0;
@@ -338,7 +338,7 @@ public final class CrabCommand {
                     err.print(USAGE);
                     yield 1;
                 }
-                yield withDeclaration(env, shell, err, (runtime, doc) -> {
+                yield withDeclaration(env, conch, err, (runtime, doc) -> {
                     runtime.admin().deleteConfig(doc, args[3], Actors.CLI);
                     out.println(args[3]);
                     return 0;
@@ -356,13 +356,13 @@ public final class CrabCommand {
             err.print(USAGE);
             return 1;
         }
-        String shell = null;
+        String conch = null;
         String account = null;
         Integer limit = null;
         Integer page = null;
         for (int i = 2; i < args.length; i++) {
             String arg = args[i];
-            if (!"--shell".equals(arg) && !"--account".equals(arg) && !"--limit".equals(arg) && !"--page".equals(arg)) {
+            if (!"--conch".equals(arg) && !"--account".equals(arg) && !"--limit".equals(arg) && !"--page".equals(arg)) {
                 err.print(USAGE);
                 return 1;
             }
@@ -372,12 +372,12 @@ public final class CrabCommand {
             }
             String value = args[++i];
             switch (arg) {
-                case "--shell" -> {
-                    if (shell != null) {
+                case "--conch" -> {
+                    if (conch != null) {
                         err.println("duplicate option");
                         return 1;
                     }
-                    shell = value;
+                    conch = value;
                 }
                 case "--account" -> {
                     if (account != null) {
@@ -414,10 +414,10 @@ public final class CrabCommand {
         }
         int checkedLimit = limit == null ? AuditLog.DEFAULT_LIMIT : limit;
         int checkedPage = page == null ? 1 : page;
-        String shellFilter = shell;
+        String conchFilter = conch;
         String accountFilter = account;
         return withRuntime(env, runtime -> {
-            for (AuditLog.Entry entry : runtime.configAudit(shellFilter, accountFilter, checkedPage, checkedLimit).entries()) {
+            for (AuditLog.Entry entry : runtime.configAudit(conchFilter, accountFilter, checkedPage, checkedLimit).entries()) {
                 out.println(formatAudit(entry));
             }
             return 0;
@@ -445,7 +445,7 @@ public final class CrabCommand {
                 entry.actor(),
                 entry.action(),
                 dash(entry.origin()),
-                dash(entry.shell()),
+                dash(entry.conch()),
                 dash(entry.account()),
                 fields);
     }
@@ -466,7 +466,7 @@ public final class CrabCommand {
         String verb = parsed.positionals.get(1);
         return switch (verb) {
             case "list" -> {
-                if (parsed.positionals.size() != 2 || parsed.fromEnv != null || parsed.shells != null || parsed.actions != null || parsed.readOnly) {
+                if (parsed.positionals.size() != 2 || parsed.fromEnv != null || parsed.conches != null || parsed.actions != null || parsed.readOnly) {
                     err.print(USAGE);
                     yield 1;
                 }
@@ -479,7 +479,7 @@ public final class CrabCommand {
                 });
             }
             case "revoke" -> {
-                if (parsed.positionals.size() != 3 || parsed.fromEnv != null || parsed.shells != null || parsed.actions != null || parsed.readOnly) {
+                if (parsed.positionals.size() != 3 || parsed.fromEnv != null || parsed.conches != null || parsed.actions != null || parsed.readOnly) {
                     err.print(USAGE);
                     yield 1;
                 }
@@ -496,14 +496,14 @@ public final class CrabCommand {
                     yield 1;
                 }
                 String name = parsed.positionals.get(2);
-                Set<String> shells = parsed.shells == null ? Set.of() : parsed.shells;
+                Set<String> conches = parsed.conches == null ? Set.of() : parsed.conches;
                 Set<String> actions = parsed.actions == null ? Set.of() : parsed.actions;
                 yield withRuntime(env, runtime -> {
                     if (!actions.isEmpty()) {
-                        runtime.loadInstalledShells();
+                        runtime.loadInstalledConches();
                     }
                     CreatedApiKey created = runtime.admin().createApiKey(
-                            name, new ApiKeyScope(shells, actions, parsed.readOnly), Actors.CLI);
+                            name, new ApiKeyScope(conches, actions, parsed.readOnly), Actors.CLI);
                     out.println("id " + created.id());
                     out.println("prefix " + created.prefix());
                     out.println(created.plaintext());
@@ -556,12 +556,12 @@ public final class CrabCommand {
     private static Parsed parse(String[] args, PrintStream err) {
         ArrayList<String> positionals = new ArrayList<>();
         String fromEnv = null;
-        Set<String> shells = null;
+        Set<String> conches = null;
         Set<String> actions = null;
         boolean readOnly = false;
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
-            if ("--from-env".equals(arg) || "--shells".equals(arg) || "--actions".equals(arg)) {
+            if ("--from-env".equals(arg) || "--conches".equals(arg) || "--actions".equals(arg)) {
                 if (i + 1 >= args.length || args[i + 1].startsWith("--")) {
                     err.println("option value is required");
                     return null;
@@ -569,7 +569,7 @@ public final class CrabCommand {
                 String value = args[++i];
                 switch (arg) {
                     case "--from-env" -> fromEnv = value;
-                    case "--shells" -> shells = split(value);
+                    case "--conches" -> conches = split(value);
                     case "--actions" -> actions = split(value);
                     default -> {
                     }
@@ -586,7 +586,7 @@ public final class CrabCommand {
             }
             positionals.add(arg);
         }
-        return new Parsed(positionals, fromEnv, shells, actions, readOnly);
+        return new Parsed(positionals, fromEnv, conches, actions, readOnly);
     }
 
     private static Set<String> split(String value) {
@@ -609,12 +609,12 @@ public final class CrabCommand {
         }
     }
 
-    private int withDeclaration(Function<String, String> env, String shell, PrintStream err, DeclaredTask task) {
+    private int withDeclaration(Function<String, String> env, String conch, PrintStream err, DeclaredTask task) {
         return withRuntime(env, runtime -> {
-            runtime.loadInstalledShells();
-            ShellDoc doc = runtime.registry().find(shell).orElse(null);
+            runtime.loadInstalledConches();
+            ConchDoc doc = runtime.registry().find(conch).orElse(null);
             if (doc == null) {
-                err.println("shell is not installed");
+                err.println("conch is not installed");
                 return 1;
             }
             return task.run(runtime, doc);
@@ -642,7 +642,7 @@ public final class CrabCommand {
     private record Parsed(
             List<String> positionals,
             String fromEnv,
-            Set<String> shells,
+            Set<String> conches,
             Set<String> actions,
             boolean readOnly
     ) {
@@ -655,7 +655,7 @@ public final class CrabCommand {
 
     @FunctionalInterface
     private interface DeclaredTask {
-        int run(CrabRuntime runtime, ShellDoc doc);
+        int run(CrabRuntime runtime, ConchDoc doc);
     }
 
 }

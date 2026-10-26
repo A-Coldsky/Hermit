@@ -21,8 +21,8 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
-import dev.hermit.common.parse.ShellParser;
-import dev.hermit.common.model.ShellDoc;
+import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.testing.SecretChecks;
 
@@ -45,17 +45,17 @@ final class EngineTestSupport {
         }
     }
 
-    static ShellDoc legacy() {
-        return ShellParser.parse(legacyYaml());
+    static ConchDoc legacy() {
+        return ConchParser.parse(legacyYaml());
     }
 
-    static String actionShell(String name, String action, String steps, boolean constantOutput) {
+    static String actionConch(String name, String action, String steps, boolean constantOutput) {
         String output = constantOutput
                 ? "value: { type: string, description: 结果, value: ok }"
                 : "value: { type: string, description: 结果 }";
         String indented = steps.stripIndent().indent(6).stripTrailing();
         return """
-                shell: %s
+                conch: %s
                 version: 1.0.0
                 driver: http
                 min_crab_version: 1.0.0
@@ -87,13 +87,13 @@ final class EngineTestSupport {
 
     static ExecutionRequest request(
             Origin origin,
-            String shell,
+            String conch,
             String action,
             String account,
             Map<String, Object> input,
             AccountContext context
     ) {
-        return new ExecutionRequest("t-1", origin, shell, action, input, account, context);
+        return new ExecutionRequest("t-1", origin, conch, action, input, account, context);
     }
 
     static String flatten(Object value) {
@@ -105,7 +105,7 @@ final class EngineTestSupport {
     static String flatten(ExecutionResult result) {
         StringBuilder text = new StringBuilder();
         text.append(result.success()).append('\n');
-        text.append(result.shellVersion()).append('\n');
+        text.append(result.conchVersion()).append('\n');
         text.append(result.traceId()).append('\n');
         text.append(result.durationMillis()).append('\n');
         append(text, result.data());

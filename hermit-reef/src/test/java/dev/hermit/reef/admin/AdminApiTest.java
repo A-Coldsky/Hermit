@@ -219,7 +219,7 @@ class AdminApiTest {
                 .andExpect(jsonPath("$.data.items[2].action").value("UPLOAD"));
 
         mockMvc.perform(get("/api/admin/audit")
-                        .param("shell", "legacy_oa")
+                        .param("conch", "legacy_oa")
                         .param("page", "1")
                         .param("size", "1")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
@@ -229,13 +229,13 @@ class AdminApiTest {
                 .andExpect(jsonPath("$.data.items.length()").value(1));
 
         mockMvc.perform(get("/api/admin/audit")
-                        .param("shell", "legacy_oa")
+                        .param("conch", "legacy_oa")
                         .param("page", "2")
                         .param("size", "1")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(jsonPath("$.data.items[0].action").value("UPLOAD"));
 
-        mockMvc.perform(get("/api/admin/audit").param("shell", "  ").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+        mockMvc.perform(get("/api/admin/audit").param("conch", "  ").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(jsonPath("$.data.total").value(3));
         mockMvc.perform(get("/api/admin/audit").param("size", "201").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isBadRequest())
@@ -406,7 +406,7 @@ class AdminApiTest {
         insertLoginFailure(loginCutoff.minusSeconds(1));
         insertLoginFailure(loginCutoff.plusSeconds(1));
         jdbc.update(
-                "INSERT INTO hourly_counts (shell, shell_version, action, hour_start, instance_id, success, "
+                "INSERT INTO hourly_counts (conch, conch_version, action, hour_start, instance_id, success, "
                         + "failure, avg_millis, p95_millis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 "legacy_oa", "1.0.0", "list_todo", Timestamp.from(now),
                 "123e4567-e89b-12d3-a456-426614174000", 1L, 0L, 10L, 20L);
@@ -458,8 +458,8 @@ class AdminApiTest {
 
     private void insertFailure(Instant receivedAt, String summary) {
         jdbc.update(
-                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, shell, "
-                        + "shell_version, action, step_index, step_type, error_code, summary, occurred_at) "
+                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
+                        + "conch_version, action, step_index, step_type, error_code, summary, occurred_at) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "1.0.0", summary,
                 "legacy_oa", "1.0.0", "list_todo", 1, "request", "UPSTREAM_ERROR", summary,
@@ -468,7 +468,7 @@ class AdminApiTest {
 
     private void insertRollback(Instant receivedAt, String reason) {
         jdbc.update(
-                "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
+                "INSERT INTO rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
                         + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "legacy_oa", "1.0.1",
                 "1.0.0", reason, Timestamp.from(receivedAt), reason);

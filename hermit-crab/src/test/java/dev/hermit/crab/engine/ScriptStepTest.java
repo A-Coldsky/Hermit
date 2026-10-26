@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import dev.hermit.common.error.ErrorCode;
-import dev.hermit.common.parse.ShellParser;
-import dev.hermit.common.validate.ShellValidator;
+import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationCodes;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.store.Origin;
@@ -251,16 +251,16 @@ class ScriptStepTest {
         assertThat(huge.error().message().length()).isLessThan(80);
 
         String bulky = "a".repeat(ScriptStep.MAX_SOURCE_BYTES + 1);
-        assertThatThrownBy(() -> new ShellRegistry().put(ShellParser.parse(shell("""
+        assertThatThrownBy(() -> new ConchRegistry().put(ConchParser.parse(conch("""
                 - script:
                     code: "%s"
                     into: value
                 """.formatted(bulky), """
                 value: { type: string, description: 结果 }
                 """))))
-                .isInstanceOf(ShellRejectedException.class)
+                .isInstanceOf(ConchRejectedException.class)
                 .satisfies(error -> {
-                    ShellRejectedException rejected = (ShellRejectedException) error;
+                    ConchRejectedException rejected = (ConchRejectedException) error;
                     assertThat(rejected.issues()).anyMatch(issue ->
                             issue.code().equals(ValidationCodes.SCRIPT_STEP)
                                     && issue.message().equals("脚本源码超过 64KB")
@@ -334,22 +334,22 @@ class ScriptStepTest {
         assertThat(reserved.error().message()).isEqualTo("不能写入保留变量");
         assertThat(reserved.success()).isFalse();
 
-        assertThatThrownBy(() -> new ShellRegistry().put(ShellParser.parse(shell("""
+        assertThatThrownBy(() -> new ConchRegistry().put(ConchParser.parse(conch("""
                 - script:
                     code: "return 1;"
                     into: input
                 """, """
                 value: { type: string, description: 结果 }
                 """))))
-                .isInstanceOf(ShellRejectedException.class)
-                .satisfies(error -> assertThat(((ShellRejectedException) error).issues())
+                .isInstanceOf(ConchRejectedException.class)
+                .satisfies(error -> assertThat(((ConchRejectedException) error).issues())
                         .extracting(ValidationIssue::code)
                         .contains("RESERVED_VARIABLE"));
     }
 
     @Test
     void doesNotKeepBuiltinPrototypeChanges() throws Exception {
-        String yaml = shell("""
+        String yaml = conch("""
                 - script:
                     code: |
                       if (vars.input.sample === "first") {
@@ -365,8 +365,8 @@ class ScriptStepTest {
                 """);
         try (SessionManager sessions = new SessionManager(
                 new NopSessionPersistence(), EngineSettings.defaults(), Clock.systemUTC())) {
-            ShellRegistry registry = new ShellRegistry();
-            registry.put(ShellParser.parse(yaml));
+            ConchRegistry registry = new ConchRegistry();
+            registry.put(ConchParser.parse(yaml));
             RuleEngine engine = new RuleEngine(registry, sessions, EngineSettings.defaults());
             ExecutionResult first = execute(engine, "first");
             assertThat(first.success()).as(first.error() == null ? "" : first.error().message()).isTrue();
@@ -396,7 +396,7 @@ class ScriptStepTest {
 
     @Test
     void doesNotShareScopeAcrossCalls() throws Exception {
-        String yaml = shell("""
+        String yaml = conch("""
                 - script:
                     code: |
                       var mine = vars.input.sample;
@@ -409,8 +409,8 @@ class ScriptStepTest {
                 """);
         try (SessionManager sessions = new SessionManager(
                 new NopSessionPersistence(), EngineSettings.defaults(), Clock.systemUTC())) {
-            ShellRegistry registry = new ShellRegistry();
-            registry.put(ShellParser.parse(yaml));
+            ConchRegistry registry = new ConchRegistry();
+            registry.put(ConchParser.parse(yaml));
             RuleEngine engine = new RuleEngine(registry, sessions, EngineSettings.defaults());
             ExecutorService pool = Executors.newFixedThreadPool(2);
             try {
@@ -430,8 +430,8 @@ class ScriptStepTest {
 
     private static ExecutionResult run(String steps, String output, EngineSettings settings) {
         try (SessionManager sessions = new SessionManager(new NopSessionPersistence(), settings, Clock.systemUTC())) {
-            ShellRegistry registry = new ShellRegistry();
-            registry.put(ShellParser.parse(shell(steps, output)));
+            ConchRegistry registry = new ConchRegistry();
+            registry.put(ConchParser.parse(conch(steps, output)));
             RuleEngine engine = new RuleEngine(registry, sessions, settings);
             return execute(engine, SAMPLE);
         }
@@ -440,18 +440,18 @@ class ScriptStepTest {
     private static ExecutionResult execute(RuleEngine engine, String sample) {
         return engine.execute(EngineTestSupport.request(
                 Origin.OFFICIAL,
-                "sample_shell",
+                "sample_conch",
                 "run",
                 "alice",
                 Map.of("sample", sample),
                 EngineTestSupport.account("alice", EngineTestSupport.PASSWORD, "http://127.0.0.1")));
     }
 
-    private static String shell(String steps, String output) {
+    private static String conch(String steps, String output) {
         String indentedSteps = steps.stripIndent().indent(6).stripTrailing();
         String indentedOutput = output.stripIndent().indent(6).stripTrailing();
         return """
-                shell: sample_shell
+                conch: sample_conch
                 version: 1.0.0
                 driver: http
                 min_crab_version: 1.0.0

@@ -6,7 +6,7 @@
 2. `docs/architecture.md`：模块边界、核心流程与源码入口。
 3. `docs/feature-status.md`：已实现的能力与预留结构。
 4. `docs/audits/2026-10-16.md`：审计基线和未修复问题；历史观察需要结合后续代码重新判断。
-5. 按任务查 `docs/development.md`、`docs/configuration.md`、`docs/shell-reference.md`、`docs/api.md`。
+5. 按任务查 `docs/development.md`、`docs/configuration.md`、`docs/conch-reference.md`、`docs/api.md`。
 
 文档用中文，代码命名延续现有英文。文档与代码冲突时，以源码和可复现测试为准，同时更新文档。
 
@@ -20,7 +20,7 @@
 - 前端使用 Vitest + Vue Test Utils + jsdom，`npm test`，也接入 Maven test 阶段。
 - Crab 容器入口为 `deploy/crab-entrypoint.sh`；Compose `client` profile 用于同机部署，`docker-compose.crab.yml` 用于独立客户端。
 - Maven 制品版本 `0.1.0-SNAPSHOT` 与规则兼容版本 `CrabVersion.CURRENT = 1.0.0` 用途不同。
-- Shell 指 YAML 规则包；目前只支持 `driver: http`，不是操作系统命令脚本。
+- Conch 指 YAML 规则包；目前只支持 `driver: http`，不是操作系统命令脚本。
 
 ## 修改入口
 
@@ -28,9 +28,9 @@
 | --- | --- |
 | 规则字段/步骤 | common `model`、`parse`、`validate`；crab `engine`；MCP/OpenAPI 投影 |
 | 请求与权限 | `CrabHttpServer` → `Invoker` → `RuleEngine`；`ApiKeyPrincipal` |
-| 同步/回滚 | `ShellSync`、`InstalledShells`、`RollbackGuard`、`SyncStore` |
-| 凭证与账号 | `ShellAdmin`、`AccountStore`、`CredentialVault`、`CredentialCipher` |
-| Reef 发布 | `ShellUploadService`、`ShellPublishService`、`ShellDistributionService` |
+| 同步/回滚 | `ConchSync`、`InstalledConches`、`RollbackGuard`、`SyncStore` |
+| 凭证与账号 | `ConchAdmin`、`AccountStore`、`CredentialVault`、`CredentialCipher` |
+| Reef 发布 | `ConchUploadService`、`ConchPublishService`、`ConchDistributionService` |
 | 上报/告警 | Crab `report`、Reef `tide`、common `report` DTO |
 | 页面/API | `hermit-web/apps/*/src/api.ts` 及对应 Controller/ConsoleApi |
 
@@ -44,9 +44,9 @@
 - 不复制真实 `.env`、`~/.hermit`、`reef-data`、数据库、密钥或凭证到代码/文档/测试输出。测试用临时目录和模拟服务。
 - 秘密放 `credentials`；`config` 不允许 `type: secret`。
 - 保持验签、哈希、路径与大小限制；Reef 公钥是规则信任根。原生 Java 连接 Reef 或加载已安装正式规则时需预配公钥；容器首次运行可使用挂载公钥，或用管理员登录取得公钥，修改时保持这个初始化边界清晰。
-- 输出脱敏只替换已知凭证/Cookie 的字符串值及其 URL 编码形式，长度需至少 4 个字符；不能假定敏感字段名、短秘密或派生值会自动屏蔽，详见 Shell 参考。
-- 账号/会话按 `(origin, shell, account)` 隔离；HTTP/MCP 调用共用 `Invoker`，不得绕过权限和能力禁用检查。
+- 输出脱敏只替换已知凭证/Cookie 的字符串值及其 URL 编码形式，长度需至少 4 个字符；不能假定敏感字段名、短秘密或派生值会自动屏蔽，详见规则包（Conch）参考。
+- 账号/会话按 `(origin, conch, account)` 隔离；HTTP/MCP 调用共用 `Invoker`，不得绕过权限和能力禁用检查。
 - 规则快照/权限修改需检查审计 A01 的版本切换竞态。
-- Reef 数据库演进新增 Flyway 版本；Crab 建表与升级在 `CrabDatabase`，不使用 Flyway。
-- `health_check`、`local-shells`、debug 状态尚未接通完整执行链，不能标成完整可用功能。
+- 首次正式发布前，若用户确认没有存量数据，可以就地改写已有迁移；发布之后一律新增版本，不改已经生效的迁移。Reef 用 Flyway，Crab 建表与升级在 `CrabDatabase`，不使用 Flyway。
+- `health_check`、`local-conches`、debug 状态尚未接通完整执行链，不能标成完整可用功能。
 - 对外行为变化同步更新文档、前端 API 类型和功能状态，报告验证结果及未验证边界。

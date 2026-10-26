@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import dev.hermit.common.error.ErrorCode;
-import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.testing.LegacyOaFixture;
 import dev.hermit.crab.testing.SecretChecks;
@@ -30,7 +30,7 @@ class LegacyOaEngineTest {
             ExecutionResult result = running.list("alice", EngineTestSupport.PASSWORD, null);
             absent(result, logs, streams, EngineTestSupport.PASSWORD);
             assertThat(result.success()).isTrue();
-            assertThat(result.shellVersion()).isEqualTo("1.0.0");
+            assertThat(result.conchVersion()).isEqualTo("1.0.0");
             assertThat(result.traceId()).isEqualTo("t-1");
             assertThat(result.error()).isNull();
             Map<String, Object> item = item(result);
@@ -149,7 +149,7 @@ class LegacyOaEngineTest {
     @Test
     void nonIdempotentSessionLossDoesNotRetryUntilTheNextCall() throws Exception {
         try (Running running = Running.start()) {
-            running.registry.put(ShellParser.parse(
+            running.registry.put(ConchParser.parse(
                     EngineTestSupport.legacyYaml().replace("idempotent: true", "idempotent: false")));
             running.fixture.expireNextAuthenticated();
             ExecutionResult expired = running.list("alice", EngineTestSupport.PASSWORD, Map.of());
@@ -191,7 +191,7 @@ class LegacyOaEngineTest {
     @Test
     void upstreamHttp400IsInvalidInputAndDoesNotLookLikeSuccess() throws Exception {
         try (Running running = Running.start()) {
-            installTaskShell(running);
+            installTaskConch(running);
             ExecutionResult rejected = task(running, "create_task", Map.of("title", " "));
             assertThat(rejected.success()).isFalse();
             assertThat(rejected.data()).isNull();
@@ -218,7 +218,7 @@ class LegacyOaEngineTest {
     @Test
     void acceptedUpstreamTaskStillReturnsTheId() throws Exception {
         try (Running running = Running.start()) {
-            installTaskShell(running);
+            installTaskConch(running);
             ExecutionResult created = task(running, "create_task", Map.of("title", "周报"));
             assertThat(created.success()).isTrue();
             assertThat(data(created)).containsEntry("id", "T1");
@@ -229,7 +229,7 @@ class LegacyOaEngineTest {
     @Test
     void sessionHttp401And403OnWriteExpireWithoutRetry() throws Exception {
         try (Running running = Running.start()) {
-            installTaskShell(running);
+            installTaskConch(running);
             running.fixture.denyApi(401);
             ExecutionResult expired = task(running, "create_task", Map.of("title", "周报"));
             assertThat(expired.success()).isFalse();
@@ -241,7 +241,7 @@ class LegacyOaEngineTest {
             absent(expired, null, null, EngineTestSupport.PASSWORD);
         }
         try (Running running = Running.start()) {
-            installTaskShell(running);
+            installTaskConch(running);
             running.fixture.denyApi(403);
             ExecutionResult expired = task(running, "create_task", Map.of("title", "周报"));
             assertThat(expired.error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
@@ -253,7 +253,7 @@ class LegacyOaEngineTest {
     @Test
     void sessionHttp401OnReadRetriesOnceAndDoesNotReturnAnEmptyList() throws Exception {
         try (Running running = Running.start()) {
-            installTaskShell(running);
+            installTaskConch(running);
             running.fixture.denyNextApi(401);
             ExecutionResult recovered = task(running, "list_tasks", Map.of());
             assertThat(recovered.success()).isTrue();
@@ -262,7 +262,7 @@ class LegacyOaEngineTest {
             assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(2);
         }
         try (Running running = Running.start()) {
-            installTaskShell(running);
+            installTaskConch(running);
             running.fixture.denyApi(401);
             ExecutionResult expired = task(running, "list_tasks", Map.of());
             assertThat(expired.success()).isFalse();
@@ -278,11 +278,11 @@ class LegacyOaEngineTest {
     @Test
     void unexpected404RemainsRuleMismatch() throws Exception {
         try (Running running = Running.start()) {
-            running.registry.put(ShellParser.parse(EngineTestSupport.actionShell("status_shell", "missing", """
+            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("status_conch", "missing", """
                     - request: { method: GET, path: /missing-page }
                     - assert: { status: 200 }
                     """, true)));
-            ExecutionResult result = running.execute("status_shell", "missing", "alice");
+            ExecutionResult result = running.execute("status_conch", "missing", "alice");
             assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
             assertThat(result.error().summary()).contains("404");
             assertThat(result.error().failedStepType()).isEqualTo("assert");
@@ -382,14 +382,14 @@ class LegacyOaEngineTest {
     }
 
     @Test
-    void replacingTheShellKeepsTheSession() throws Exception {
+    void replacingTheConchKeepsTheSession() throws Exception {
         try (Running running = Running.start()) {
             assertThat(running.list("alice", EngineTestSupport.PASSWORD, Map.of()).success()).isTrue();
-            running.registry.put(ShellParser.parse(
+            running.registry.put(ConchParser.parse(
                     EngineTestSupport.legacyYaml().replaceFirst("version: 1\\.0\\.0", "version: 1.1.0")));
             ExecutionResult again = running.list("alice", EngineTestSupport.PASSWORD, Map.of());
             assertThat(again.success()).isTrue();
-            assertThat(again.shellVersion()).isEqualTo("1.1.0");
+            assertThat(again.conchVersion()).isEqualTo("1.1.0");
             assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
         }
     }
@@ -426,10 +426,10 @@ class LegacyOaEngineTest {
     @Test
     void rejectsCrossOriginTargetsBeforeConnecting() throws Exception {
         try (Running running = Running.start()) {
-            running.registry.put(ShellParser.parse(EngineTestSupport.actionShell("cross_shell", "steal", """
+            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("cross_conch", "steal", """
                     - request: { method: GET, url: "http://127.0.0.1:1/steal" }
                     """, true)));
-            ExecutionResult result = running.execute("cross_shell", "steal", "alice");
+            ExecutionResult result = running.execute("cross_conch", "steal", "alice");
             assertThat(result.error().code()).isEqualTo(ErrorCode.INTERNAL);
             assertThat(result.error().summary()).contains("不同源");
             assertThat(running.fixture.hits()).isEmpty();
@@ -440,11 +440,11 @@ class LegacyOaEngineTest {
     void doesNotFollowCrossOriginRedirects() throws Exception {
         EngineSettings settings = new EngineSettings(Duration.ofSeconds(2), Duration.ofMinutes(10), 3);
         try (Running running = Running.start(settings)) {
-            running.registry.put(ShellParser.parse(EngineTestSupport.actionShell("away_shell", "away", """
+            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("away_conch", "away", """
                     - request: { method: GET, path: /away, follow_redirects: true }
                     - assert: { status: 302 }
                     """, true)));
-            ExecutionResult result = running.execute("away_shell", "away", "alice");
+            ExecutionResult result = running.execute("away_conch", "away", "alice");
             assertThat(result.success()).isTrue();
             assertThat(running.fixture.count("GET", "/away")).isEqualTo(1);
             assertThat(result.durationMillis()).isLessThan(1_500);
@@ -454,19 +454,19 @@ class LegacyOaEngineTest {
     @Test
     void followsAtMostFiveSameOriginRedirects() throws Exception {
         try (Running running = Running.start()) {
-            running.registry.put(ShellParser.parse(EngineTestSupport.actionShell("loop_shell", "loop", """
+            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("loop_conch", "loop", """
                     - request: { method: GET, path: /loop, follow_redirects: true }
                     """, true)));
-            ExecutionResult result = running.execute("loop_shell", "loop", "alice");
+            ExecutionResult result = running.execute("loop_conch", "loop", "alice");
             assertThat(result.success()).isTrue();
             assertThat(running.fixture.count("GET", "/loop")).isEqualTo(6);
 
-            running.registry.put(ShellParser.parse(EngineTestSupport.actionShell("once_shell", "once", """
+            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("once_conch", "once", """
                     - request: { method: GET, path: /once, follow_redirects: true }
                     - extract:
                         value: { css: "#m" }
                     """, false)));
-            ExecutionResult once = running.execute("once_shell", "once", "alice");
+            ExecutionResult once = running.execute("once_conch", "once", "alice");
             assertThat(once.success()).isTrue();
             assertThat(data(once)).containsEntry("value", "ok");
         }
@@ -475,10 +475,10 @@ class LegacyOaEngineTest {
     @Test
     void rejectsBodiesOverFiveMegabytes() throws Exception {
         try (Running running = Running.start()) {
-            running.registry.put(ShellParser.parse(EngineTestSupport.actionShell("huge_shell", "huge", """
+            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("huge_conch", "huge", """
                     - request: { method: GET, path: /huge }
                     """, true)));
-            ExecutionResult result = running.execute("huge_shell", "huge", "alice");
+            ExecutionResult result = running.execute("huge_conch", "huge", "alice");
             assertThat(result.error().code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
             assertThat(result.error().summary()).contains("5MB");
         }
@@ -487,12 +487,12 @@ class LegacyOaEngineTest {
     @Test
     void decodesGbkFromMetaCharset() throws Exception {
         try (Running running = Running.start()) {
-            running.registry.put(ShellParser.parse(EngineTestSupport.actionShell("gbk_shell", "name", """
+            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("gbk_conch", "name", """
                     - request: { method: GET, path: /gbk/name.aspx }
                     - extract:
                         value: { css: "#name" }
                     """, false)));
-            ExecutionResult result = running.execute("gbk_shell", "name", "alice");
+            ExecutionResult result = running.execute("gbk_conch", "name", "alice");
             assertThat(result.success()).isTrue();
             assertThat(data(result)).containsEntry("value", "张三");
         }
@@ -502,12 +502,12 @@ class LegacyOaEngineTest {
     void doesNotRenderExtractedTextAsATemplate() throws Exception {
         try (Running running = Running.start();
                 EngineTestSupport.LogCapture logs = new EngineTestSupport.LogCapture()) {
-            running.registry.put(ShellParser.parse(EngineTestSupport.actionShell("echo_shell", "echo", """
+            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("echo_conch", "echo", """
                     - request: { method: GET, path: /echo.aspx }
                     - extract:
                         value: { css: "#v" }
                     """, false)));
-            ExecutionResult result = running.execute("echo_shell", "echo", "alice");
+            ExecutionResult result = running.execute("echo_conch", "echo", "alice");
             assertThat(result.success()).isTrue();
             assertThat(data(result)).containsEntry("value", "{{credential.password}}");
             absent(result, logs, null, EngineTestSupport.PASSWORD);
@@ -556,7 +556,7 @@ class LegacyOaEngineTest {
         try (Running running = Running.start();
                 EngineTestSupport.LogCapture logs = new EngineTestSupport.LogCapture();
                 EngineTestSupport.StreamCapture streams = new EngineTestSupport.StreamCapture()) {
-            running.registry.put(ShellParser.parse(
+            running.registry.put(ConchParser.parse(
                     EngineTestSupport.legacyYaml().replace("health_check:", action + "health_check:")));
             running.fixture.welcome("欢迎 alice，你的密码是 " + EngineTestSupport.PASSWORD);
             ExecutionResult result = running.engine.execute(EngineTestSupport.request(
@@ -638,7 +638,7 @@ class LegacyOaEngineTest {
         try (Running running = Running.start();
                 EngineTestSupport.LogCapture logs = new EngineTestSupport.LogCapture();
                 EngineTestSupport.StreamCapture streams = new EngineTestSupport.StreamCapture()) {
-            running.registry.put(ShellParser.parse(
+            running.registry.put(ConchParser.parse(
                     EngineTestSupport.legacyYaml().replace("health_check:", action + "health_check:")));
             ExecutionResult result = running.engine.execute(EngineTestSupport.request(
                     Origin.OFFICIAL,
@@ -658,7 +658,7 @@ class LegacyOaEngineTest {
         }
     }
 
-    private static void installTaskShell(Running running) {
+    private static void installTaskConch(Running running) {
         String actions = """
                 create_task:
                   title: 创建任务
@@ -699,7 +699,7 @@ class LegacyOaEngineTest {
                   idempotent: true
                   mcp: { read_only: true }
                 """.stripIndent().indent(2);
-        running.registry.put(ShellParser.parse(
+        running.registry.put(ConchParser.parse(
                 EngineTestSupport.legacyYaml().replace("health_check:", actions + "health_check:")));
     }
 
@@ -799,14 +799,14 @@ class LegacyOaEngineTest {
 
     private static final class Running implements AutoCloseable {
         final LegacyOaFixture fixture;
-        final ShellRegistry registry;
+        final ConchRegistry registry;
         final SessionManager sessions;
         final RuleEngine engine;
         final EngineTestSupport.MutableClock clock;
 
         private Running(
                 LegacyOaFixture fixture,
-                ShellRegistry registry,
+                ConchRegistry registry,
                 SessionManager sessions,
                 RuleEngine engine,
                 EngineTestSupport.MutableClock clock
@@ -825,7 +825,7 @@ class LegacyOaEngineTest {
         static Running start(EngineSettings settings) throws Exception {
             LegacyOaFixture fixture = new LegacyOaFixture(EngineTestSupport.PASSWORD);
             try {
-                ShellRegistry registry = new ShellRegistry();
+                ConchRegistry registry = new ConchRegistry();
                 registry.put(EngineTestSupport.legacy());
                 EngineTestSupport.MutableClock clock = new EngineTestSupport.MutableClock();
                 SessionManager sessions = new SessionManager(new NopSessionPersistence(), settings, clock);
@@ -847,10 +847,10 @@ class LegacyOaEngineTest {
                     EngineTestSupport.account(user, password, fixture.baseUrl())));
         }
 
-        ExecutionResult execute(String shell, String action, String user) {
+        ExecutionResult execute(String conch, String action, String user) {
             return engine.execute(EngineTestSupport.request(
                     Origin.OFFICIAL,
-                    shell,
+                    conch,
                     action,
                     user,
                     Map.of(),

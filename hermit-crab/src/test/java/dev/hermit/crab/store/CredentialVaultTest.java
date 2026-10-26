@@ -131,7 +131,7 @@ class CredentialVaultTest {
         try (Connection connection = fixture.dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement("""
                      SELECT ciphertext FROM credentials
-                     WHERE origin = ? AND shell = ? AND account = ? AND field = ?
+                     WHERE origin = ? AND conch = ? AND account = ? AND field = ?
                      """)) {
             statement.setString(1, "OFFICIAL");
             statement.setString(2, "oa");
@@ -148,7 +148,7 @@ class CredentialVaultTest {
         try (Connection connection = fixture.dataSource.getConnection();
              PreparedStatement update = connection.prepareStatement("""
                      UPDATE credentials SET ciphertext = ?
-                     WHERE origin = ? AND shell = ? AND account = ? AND field = ?
+                     WHERE origin = ? AND conch = ? AND account = ? AND field = ?
                      """)) {
             update.setBytes(1, ciphertext);
             update.setString(2, "OFFICIAL");
@@ -161,7 +161,7 @@ class CredentialVaultTest {
         }
         try (Connection connection = fixture.dataSource.getConnection();
              PreparedStatement insert = connection.prepareStatement("""
-                     INSERT INTO credentials (origin, shell, account, field, ciphertext, updated_at)
+                     INSERT INTO credentials (origin, conch, account, field, ciphertext, updated_at)
                      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                      """)) {
             insert.setString(1, "OFFICIAL");

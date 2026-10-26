@@ -3,26 +3,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { deferred, mountPage } from './helpers'
 
 const reef = vi.hoisted(() => ({
-  shells: vi.fn(),
+  conches: vi.fn(),
   tideSummary: vi.fn(),
   alerts: vi.fn(),
   ackAlert: vi.fn(),
   tideRollbacks: vi.fn(),
 }))
-const crab = vi.hoisted(() => ({ shells: vi.fn() }))
+const crab = vi.hoisted(() => ({ conches: vi.fn() }))
 
 vi.mock('../apps/reef-admin/src/api', () => ({ api: reef }))
 vi.mock('../apps/reef-admin/src/alerts', () => ({ refreshOpenAlerts: vi.fn() }))
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
 vi.mock('../apps/crab-console/src/status', () => ({ refreshPending: vi.fn() }))
 
-import ReefShellsView from '../apps/reef-admin/src/views/ShellsView.vue'
+import ReefConchesView from '../apps/reef-admin/src/views/ConchesView.vue'
 import DashboardView from '../apps/reef-admin/src/views/DashboardView.vue'
 import AlertsView from '../apps/reef-admin/src/views/AlertsView.vue'
-import CrabShellsView from '../apps/crab-console/src/views/ShellsView.vue'
+import CrabConchesView from '../apps/crab-console/src/views/ConchesView.vue'
 
-const reefShell = {
-  shell: 'legacy_oa',
+const reefConch = {
+  conch: 'legacy_oa',
   version: '1.0.0',
   title: '协同办公 OA',
   description: '',
@@ -36,34 +36,34 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('Reef Shell 目录', () => {
+describe('Reef 规则包目录', () => {
   it('请求返回前不显示空态', async () => {
     const pending = deferred<unknown[]>()
-    reef.shells.mockReturnValue(pending.promise)
-    const wrapper = await mountPage(ReefShellsView)
+    reef.conches.mockReturnValue(pending.promise)
+    const wrapper = await mountPage(ReefConchesView)
     await flushPromises()
 
-    expect(wrapper.text()).not.toContain('还没有 Shell')
+    expect(wrapper.text()).not.toContain('还没有规则包')
 
     pending.resolve([])
     await flushPromises()
-    expect(wrapper.text()).toContain('还没有 Shell，先上传一个 YAML')
+    expect(wrapper.text()).toContain('还没有规则包，先上传一个 YAML')
   })
 
   it('有数据时不显示空态', async () => {
-    reef.shells.mockResolvedValue([reefShell])
-    const wrapper = await mountPage(ReefShellsView)
+    reef.conches.mockResolvedValue([reefConch])
+    const wrapper = await mountPage(ReefConchesView)
     await flushPromises()
 
     expect(wrapper.text()).toContain('协同办公 OA')
-    expect(wrapper.text()).not.toContain('还没有 Shell')
+    expect(wrapper.text()).not.toContain('还没有规则包')
   })
 })
 
 describe('Reef 概览', () => {
   it('加载中不显示「一切正常」，加载完且没有告警才显示', async () => {
     const alerts = deferred<{ alerts: unknown[] }>()
-    reef.shells.mockResolvedValue([])
+    reef.conches.mockResolvedValue([])
     reef.tideSummary.mockResolvedValue({ bucket: 'day', from: '', to: '', p95Note: '', series: [] })
     reef.alerts.mockReturnValue(alerts.promise)
     reef.tideRollbacks.mockResolvedValue({ events: [] })
@@ -85,8 +85,8 @@ const openAlert = {
   id: 7,
   createdAt: '2026-10-20T00:00:00Z',
   kind: 'FAILURE_SURGE',
-  shell: 'legacy_oa',
-  shellVersion: '1.0.0',
+  conch: 'legacy_oa',
+  conchVersion: '1.0.0',
   detail: null,
   acknowledgedAt: null,
   acknowledgedBy: null,
@@ -119,17 +119,17 @@ describe('Reef 告警', () => {
   })
 })
 
-describe('Crab Shell 列表', () => {
+describe('Crab 规则包列表', () => {
   it('请求返回前不显示空态', async () => {
-    const pending = deferred<{ shells: unknown[] }>()
-    crab.shells.mockReturnValue(pending.promise)
-    const wrapper = await mountPage(CrabShellsView)
+    const pending = deferred<{ conches: unknown[] }>()
+    crab.conches.mockReturnValue(pending.promise)
+    const wrapper = await mountPage(CrabConchesView)
     await flushPromises()
 
-    expect(wrapper.text()).not.toContain('还没有 Shell')
+    expect(wrapper.text()).not.toContain('还没有规则包')
 
-    pending.resolve({ shells: [] })
+    pending.resolve({ conches: [] })
     await flushPromises()
-    expect(wrapper.text()).toContain('还没有 Shell。')
+    expect(wrapper.text()).toContain('还没有规则包。')
   })
 })

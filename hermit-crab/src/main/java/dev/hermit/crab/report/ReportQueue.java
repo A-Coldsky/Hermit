@@ -56,11 +56,11 @@ public final class ReportQueue {
         this.cap = cap;
     }
 
-    public void record(String shell, String version, String action, ExecutionResult result) {
+    public void record(String conch, String version, String action, ExecutionResult result) {
         if (!settings.enabled()) {
             return;
         }
-        requireText(shell, 256, "shell");
+        requireText(conch, 256, "conch");
         requireText(version, 64, "version");
         requireText(action, 256, "action");
         if (result == null) {
@@ -70,19 +70,19 @@ public final class ReportQueue {
             Db.transaction(dataSource, connection -> {
                 if (!result.success()) {
                     makeRoom(connection, 1);
-                    insertFailure(connection, shell, version, action, result);
+                    insertFailure(connection, conch, version, action, result);
                 }
-                bumpHour(connection, shell, version, action, result);
+                bumpHour(connection, conch, version, action, result);
                 return null;
             });
         }
     }
 
-    public void enqueueRollback(String shell, String fromVersion, String toVersion, String reason, Instant at) {
+    public void enqueueRollback(String conch, String fromVersion, String toVersion, String reason, Instant at) {
         if (!settings.enabled()) {
             return;
         }
-        requireText(shell, 256, "shell");
+        requireText(conch, 256, "conch");
         requireText(fromVersion, 64, "fromVersion");
         requireText(toVersion, 64, "toVersion");
         if (reason == null || reason.isBlank()) {
@@ -97,11 +97,11 @@ public final class ReportQueue {
             Db.transaction(dataSource, connection -> {
                 makeRoom(connection, 1);
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        INSERT INTO rollback_queue (at, shell, from_version, to_version, reason, event_id)
+                        INSERT INTO rollback_queue (at, conch, from_version, to_version, reason, event_id)
                         VALUES (?, ?, ?, ?, ?, ?)
                         """)) {
                     Db.setInstant(statement, 1, at);
-                    statement.setString(2, shell);
+                    statement.setString(2, conch);
                     statement.setString(3, fromVersion);
                     statement.setString(4, toVersion);
                     statement.setString(5, storedReason);
@@ -138,7 +138,7 @@ public final class ReportQueue {
                     try (PreparedStatement statement = connection.prepareStatement("""
                             UPDATE hourly_counts
                             SET sent_total = ?, sent_codes = ?, sent_sum_ms = ?, sent_buckets = ?
-                            WHERE "hour" = ? AND shell = ? AND version = ? AND action = ?
+                            WHERE "hour" = ? AND conch = ? AND version = ? AND action = ?
                               AND success_count = ? AND failure_count_by_code = ?
                               AND sum_ms = ? AND latency_buckets = ?
                             """)) {
@@ -147,7 +147,7 @@ public final class ReportQueue {
                         statement.setLong(3, count.sumMs());
                         statement.setString(4, count.bucketsJson());
                         Db.setInstant(statement, 5, count.hour());
-                        statement.setString(6, count.shell());
+                        statement.setString(6, count.conch());
                         statement.setString(7, count.version());
                         statement.setString(8, count.action());
                         statement.setLong(9, count.success());
@@ -167,7 +167,7 @@ public final class ReportQueue {
         List<RollbackEvent> events = new ArrayList<>();
         List<Long> eventIds = new ArrayList<>();
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT id, shell, from_version, to_version, reason, at, event_id
+                SELECT id, conch, from_version, to_version, reason, at, event_id
                 FROM rollback_queue
                 ORDER BY at, id
                 LIMIT ?
@@ -177,7 +177,7 @@ public final class ReportQueue {
                 while (resultSet.next()) {
                     eventIds.add(resultSet.getLong("id"));
                     events.add(new RollbackEvent(
-                            resultSet.getString("shell"),
+                            resultSet.getString("conch"),
                             resultSet.getString("from_version"),
                             resultSet.getString("to_version"),
                             resultSet.getString("reason"),
@@ -191,7 +191,7 @@ public final class ReportQueue {
         List<Long> failureIds = new ArrayList<>();
         if (failureRoom > 0) {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT id, trace_id, shell, version, action, error_code, step_index, step_type, at
+                    SELECT id, trace_id, conch, version, action, error_code, step_index, step_type, at
                     FROM report_queue
                     ORDER BY at, id
                     LIMIT ?
@@ -205,7 +205,7 @@ public final class ReportQueue {
                                 : resultSet.getInt("step_index");
                         failures.add(new FailureReport(
                                 resultSet.getString("trace_id"),
-                                resultSet.getString("shell"),
+                                resultSet.getString("conch"),
                                 resultSet.getString("version"),
                                 resultSet.getString("action"),
                                 stepIndex,
@@ -222,7 +222,7 @@ public final class ReportQueue {
         List<CountSnapshot> snapshots = new ArrayList<>();
         if (countRoom > 0) {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT "hour", shell, version, action, success_count, failure_count_by_code,
+                    SELECT "hour", conch, version, action, success_count, failure_count_by_code,
                            sum_ms, latency_buckets, sent_total, sent_codes, sent_sum_ms, sent_buckets
                     FROM hourly_counts
                     """);
@@ -243,12 +243,12 @@ public final class ReportQueue {
                         continue;
                     }
                     Instant hour = Db.instant(resultSet, "hour");
-                    String shell = resultSet.getString("shell");
+                    String conch = resultSet.getString("conch");
                     String version = resultSet.getString("version");
                     String action = resultSet.getString("action");
                     long[] buckets = LatencyHistogram.read(bucketsJson);
                     counts.add(new CountReport(
-                            shell,
+                            conch,
                             version,
                             action,
                             hour,
@@ -257,7 +257,7 @@ public final class ReportQueue {
                             LatencyHistogram.average(sumMs, calls),
                             LatencyHistogram.p95(buckets)));
                     snapshots.add(new CountSnapshot(
-                            hour, shell, version, action, success, failure, json, sumMs, bucketsJson));
+                            hour, conch, version, action, success, failure, json, sumMs, bucketsJson));
                 }
             }
         }
@@ -273,7 +273,7 @@ public final class ReportQueue {
 
     private void insertFailure(
             Connection connection,
-            String shell,
+            String conch,
             String version,
             String action,
             ExecutionResult result
@@ -284,12 +284,12 @@ public final class ReportQueue {
         String stepType = error == null || error.failedStepType() == null ? null : truncate(error.failedStepType(), 64);
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO report_queue (
-                    trace_id, at, shell, version, action, error_code, step_index, step_type, duration_millis
+                    trace_id, at, conch, version, action, error_code, step_index, step_type, duration_millis
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
             statement.setString(1, traceId(result.traceId()));
             Db.setInstant(statement, 2, clock.instant());
-            statement.setString(3, shell);
+            statement.setString(3, conch);
             statement.setString(4, version);
             statement.setString(5, action);
             statement.setString(6, code.name());
@@ -310,7 +310,7 @@ public final class ReportQueue {
 
     private void bumpHour(
             Connection connection,
-            String shell,
+            String conch,
             String version,
             String action,
             ExecutionResult result
@@ -324,10 +324,10 @@ public final class ReportQueue {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT success_count, failure_count_by_code, sum_ms, latency_buckets
                 FROM hourly_counts
-                WHERE "hour" = ? AND shell = ? AND version = ? AND action = ?
+                WHERE "hour" = ? AND conch = ? AND version = ? AND action = ?
                 """)) {
             Db.setInstant(statement, 1, hour);
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             statement.setString(3, version);
             statement.setString(4, action);
             try (ResultSet resultSet = statement.executeQuery()) {
@@ -358,14 +358,14 @@ public final class ReportQueue {
             try (PreparedStatement statement = connection.prepareStatement("""
                     UPDATE hourly_counts
                     SET success_count = ?, failure_count_by_code = ?, sum_ms = ?, latency_buckets = ?
-                    WHERE "hour" = ? AND shell = ? AND version = ? AND action = ?
+                    WHERE "hour" = ? AND conch = ? AND version = ? AND action = ?
                     """)) {
                 statement.setLong(1, success);
                 statement.setString(2, stored);
                 statement.setLong(3, sumMs);
                 statement.setString(4, bucketJson);
                 Db.setInstant(statement, 5, hour);
-                statement.setString(6, shell);
+                statement.setString(6, conch);
                 statement.setString(7, version);
                 statement.setString(8, action);
                 statement.executeUpdate();
@@ -374,11 +374,11 @@ public final class ReportQueue {
         }
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO hourly_counts (
-                    "hour", shell, version, action, success_count, failure_count_by_code, sum_ms, latency_buckets
+                    "hour", conch, version, action, success_count, failure_count_by_code, sum_ms, latency_buckets
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
             Db.setInstant(statement, 1, hour);
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             statement.setString(3, version);
             statement.setString(4, action);
             statement.setLong(5, success);
@@ -494,7 +494,7 @@ public final class ReportQueue {
 
     record CountSnapshot(
             Instant hour,
-            String shell,
+            String conch,
             String version,
             String action,
             long success,

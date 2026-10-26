@@ -27,7 +27,7 @@ class UnknownRouteTest {
         System.setProperty(ConsoleUi.ROOT_PROPERTY, "crab-ui-fixture");
         try (TestServer server = TestServer.open(temp, PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
             assertNotFound(server.console("GET", "/console/api/does-not-exist", null, true));
-            assertNotFound(server.console("POST", "/console/api/shells/legacy_oa/missing", "{}", true));
+            assertNotFound(server.console("POST", "/console/api/conches/legacy_oa/missing", "{}", true));
             assertNotFound(server.call("GET", "/api/not-a-route", null, null, null, null));
             assertNotFound(server.call("GET", "/api/a/b/c", null, null, null, null));
             assertNotFound(server.call("POST", "/no-such-gateway", null, null, null, "{\"secret\":\"not-logged\"}"));
@@ -39,7 +39,7 @@ class UnknownRouteTest {
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             assertNotFound(new TestServer.Reply(jsonAccept.statusCode(), jsonAccept.body(), jsonAccept.headers().map()));
 
-            TestServer.Reply page = server.console("GET", "/console/shells", null, false);
+            TestServer.Reply page = server.console("GET", "/console/conches", null, false);
             assertThat(page.status()).isEqualTo(200);
             assertThat(page.header("Content-Type")).isEqualTo("text/html;charset=UTF-8");
             assertThat(page.body()).contains("<div id=\"app\">");

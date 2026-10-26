@@ -17,7 +17,7 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
-import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyScope;
@@ -38,8 +38,8 @@ class GatewayHttpTest {
     @Test
     void rejectsOutOfRangeInputInsteadOfClamping() throws Exception {
         try (TestServer server = TestServer.open(temp.resolve("bounds"), PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
-            server.runtime.registry().put(ShellParser.parse("""
-                    shell: bounds_shell
+            server.runtime.registry().put(ConchParser.parse("""
+                    conch: bounds_conch
                     version: 1.0.0
                     driver: http
                     min_crab_version: 1.0.0
@@ -67,10 +67,10 @@ class GatewayHttpTest {
                         idempotent: true
                         mcp: { read_only: true }
                     """));
-            server.runtime.admin().createAccount("bounds_shell", "main", Actors.CLI);
+            server.runtime.admin().createAccount("bounds_conch", "main", Actors.CLI);
 
             TestServer.Reply negative = server.call(
-                    "GET", "/api/bounds_shell/page_items?page=-1&pageSize=20&label=a",
+                    "GET", "/api/bounds_conch/page_items?page=-1&pageSize=20&label=a",
                     server.apiKey.plaintext(), null, null, null);
             assertThat(negative.status()).isEqualTo(400);
             assertThat(negative.json().path("success").asBoolean()).isFalse();
@@ -79,28 +79,28 @@ class GatewayHttpTest {
             assertThat(negative.json().path("data").isNull()).isTrue();
 
             TestServer.Reply huge = server.call(
-                    "GET", "/api/bounds_shell/page_items?page=1&pageSize=1000&label=a",
+                    "GET", "/api/bounds_conch/page_items?page=1&pageSize=1000&label=a",
                     server.apiKey.plaintext(), null, null, null);
             assertThat(huge.status()).isEqualTo(400);
             assertThat(huge.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(huge.json().path("error").path("message").asText()).contains("pageSize");
 
             TestServer.Reply missing = server.call(
-                    "GET", "/api/bounds_shell/page_items?page=1&pageSize=20",
+                    "GET", "/api/bounds_conch/page_items?page=1&pageSize=20",
                     server.apiKey.plaintext(), null, null, null);
             assertThat(missing.status()).isEqualTo(400);
             assertThat(missing.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(missing.json().path("error").path("message").asText()).contains("label");
 
             TestServer.Reply typed = server.call(
-                    "GET", "/api/bounds_shell/page_items?page=no&pageSize=20&label=a",
+                    "GET", "/api/bounds_conch/page_items?page=no&pageSize=20&label=a",
                     server.apiKey.plaintext(), null, null, null);
             assertThat(typed.status()).isEqualTo(400);
             assertThat(typed.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(typed.json().path("error").path("message").asText()).contains("page").doesNotContain("no");
 
             TestServer.Reply accepted = server.call(
-                    "GET", "/api/bounds_shell/page_items?page=1&pageSize=20&label=a",
+                    "GET", "/api/bounds_conch/page_items?page=1&pageSize=20&label=a",
                     server.apiKey.plaintext(), null, null, null);
             assertThat(accepted.status()).isEqualTo(200);
             assertThat(accepted.json().path("success").asBoolean()).isTrue();
@@ -214,7 +214,7 @@ class GatewayHttpTest {
             server.server.close();
             server.runtime.close();
             try (var restarted = dev.hermit.crab.runtime.CrabRuntime.open(server.paths, config, name -> null)) {
-                restarted.registry().put(server.shell);
+                restarted.registry().put(server.conch);
                 try (CrabHttpServer again = new CrabHttpServer(restarted)) {
                     again.start();
                     java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder(

@@ -3,8 +3,8 @@ import { createClient, seg } from '@shared/http'
 const http = createClient({ headers: () => ({ 'X-Hermit-Console': '1' }) })
 const base = '/console/api'
 
-export interface ShellSummary {
-  shell: string
+export interface ConchSummary {
+  conch: string
   version: string
   title: string
   capabilityCount: number
@@ -40,8 +40,8 @@ export interface CapabilityState {
   disabled: boolean
 }
 
-export interface ShellDetail {
-  shell: string
+export interface ConchDetail {
+  conch: string
   version: string
   title: string
   description: string
@@ -81,7 +81,7 @@ export interface ConfigValue {
 }
 
 export interface ApiKeyScope {
-  shells: string[] | null
+  conches: string[] | null
   actions: string[] | null
   readOnly: boolean
 }
@@ -108,7 +108,7 @@ export interface ConfigAuditEntry {
   /** AuditKind 名称，例如 CREDENTIALS_WRITTEN、CONFIG_PUT、CAPABILITY_DISABLED。 */
   action: string
   origin: string | null
-  shell: string | null
+  conch: string | null
   account: string | null
   /**
    * 涉及的名字，按字典序。凭证写入含写入和清除的字段；配置是 key；
@@ -128,10 +128,10 @@ export interface CallSummary {
   traceId: string
   at: string
   origin: string
-  shell: string
+  conch: string
   action: string
   account: string | null
-  shellVersion: string
+  conchVersion: string
   success: boolean
   errorCode: string | null
   errorMessage: string | null
@@ -179,9 +179,9 @@ export type SyncOutcomeKind =
 
 export interface SyncReport {
   notModified: boolean
-  shells: { shell: string; version: string | null; kind: SyncOutcomeKind | null; reason: string | null }[]
+  conches: { conch: string; version: string | null; kind: SyncOutcomeKind | null; reason: string | null }[]
   removed: string[]
-  credentialChanges: { shell: string; addedRequired: string[]; removed: string[] }[]
+  credentialChanges: { conch: string; addedRequired: string[]; removed: string[] }[]
   latestCrab: CrabRelease | null
   error: SyncError | null
 }
@@ -192,8 +192,8 @@ export interface ReportBatch {
   sentAt: string
   failures: {
     traceId: string
-    shell: string
-    shellVersion: string
+    conch: string
+    conchVersion: string
     action: string
     stepIndex: number | null
     stepType: string | null
@@ -202,8 +202,8 @@ export interface ReportBatch {
     occurredAt: string
   }[]
   counts: {
-    shell: string
-    shellVersion: string
+    conch: string
+    conchVersion: string
     action: string
     hourStart: string
     success: number
@@ -212,7 +212,7 @@ export interface ReportBatch {
     p95Millis: number
   }[]
   events: {
-    shell: string
+    conch: string
     fromVersion: string
     toVersion: string
     reason: string
@@ -221,39 +221,39 @@ export interface ReportBatch {
   }[]
 }
 
-const shellPath = (shell: string) => `${base}/shells/${seg(shell)}`
-const accountPath = (shell: string, account: string) => `${shellPath(shell)}/accounts/${seg(account)}`
+const conchPath = (conch: string) => `${base}/conches/${seg(conch)}`
+const accountPath = (conch: string, account: string) => `${conchPath(conch)}/accounts/${seg(account)}`
 
 export const api = {
-  shells: () => http.get<{ shells: ShellSummary[] }>(`${base}/shells`),
-  shell: (shell: string) => http.get<ShellDetail>(shellPath(shell)),
+  conches: () => http.get<{ conches: ConchSummary[] }>(`${base}/conches`),
+  conch: (conch: string) => http.get<ConchDetail>(conchPath(conch)),
 
-  accounts: (shell: string) => http.get<{ accounts: Account[] }>(`${shellPath(shell)}/accounts`),
-  createAccount: (shell: string, name: string) =>
-    http.post<{ name: string; default: boolean }>(`${shellPath(shell)}/accounts`, { name }),
-  deleteAccount: (shell: string, account: string) => http.del<{ deleted: boolean }>(accountPath(shell, account)),
-  makeDefault: (shell: string, account: string) => http.post<{ name: string }>(`${accountPath(shell, account)}/default`),
-  credentialNames: (shell: string, account: string) =>
-    http.get<{ fields: string[] }>(`${accountPath(shell, account)}/credentials`),
-  writeCredentials: (shell: string, account: string, values: Record<string, string>) =>
-    http.put<{ updated: boolean }>(`${accountPath(shell, account)}/credentials`, values),
-  testLogin: (shell: string, account: string) => http.post<unknown>(`${accountPath(shell, account)}/test-login`),
+  accounts: (conch: string) => http.get<{ accounts: Account[] }>(`${conchPath(conch)}/accounts`),
+  createAccount: (conch: string, name: string) =>
+    http.post<{ name: string; default: boolean }>(`${conchPath(conch)}/accounts`, { name }),
+  deleteAccount: (conch: string, account: string) => http.del<{ deleted: boolean }>(accountPath(conch, account)),
+  makeDefault: (conch: string, account: string) => http.post<{ name: string }>(`${accountPath(conch, account)}/default`),
+  credentialNames: (conch: string, account: string) =>
+    http.get<{ fields: string[] }>(`${accountPath(conch, account)}/credentials`),
+  writeCredentials: (conch: string, account: string, values: Record<string, string>) =>
+    http.put<{ updated: boolean }>(`${accountPath(conch, account)}/credentials`, values),
+  testLogin: (conch: string, account: string) => http.post<unknown>(`${accountPath(conch, account)}/test-login`),
 
-  config: (shell: string) => http.get<{ fields: Record<string, ConfigValue> }>(`${shellPath(shell)}/config`),
-  writeConfig: (shell: string, values: Record<string, string>) =>
-    http.put<{ updated: boolean }>(`${shellPath(shell)}/config`, values),
+  config: (conch: string) => http.get<{ fields: Record<string, ConfigValue> }>(`${conchPath(conch)}/config`),
+  writeConfig: (conch: string, values: Record<string, string>) =>
+    http.put<{ updated: boolean }>(`${conchPath(conch)}/config`, values),
 
-  setCapability: (shell: string, action: string, enabled: boolean) =>
-    http.post<{ disabled: boolean }>(`${base}/capabilities/${seg(shell)}/${seg(action)}/${enabled ? 'enable' : 'disable'}`),
+  setCapability: (conch: string, action: string, enabled: boolean) =>
+    http.post<{ disabled: boolean }>(`${base}/capabilities/${seg(conch)}/${seg(action)}/${enabled ? 'enable' : 'disable'}`),
 
   apiKeys: () => http.get<{ apiKeys: ApiKey[] }>(`${base}/apikeys`),
-  createApiKey: (body: { name: string; readOnly: boolean; shells: string[]; actions: string[] }) =>
+  createApiKey: (body: { name: string; readOnly: boolean; conches: string[]; actions: string[] }) =>
     http.post<CreatedApiKey>(`${base}/apikeys`, body),
   revokeApiKey: (id: string) => http.del<{ revoked: boolean }>(`${base}/apikeys/${seg(id)}`),
 
-  calls: (query: { shell?: string; action?: string; limit?: number }) =>
+  calls: (query: { conch?: string; action?: string; limit?: number }) =>
     http.get<{ calls: CallSummary[] }>(`${base}/calls`, query),
-  audit: (query: { shell?: string; account?: string; page?: number; limit?: number } = {}) =>
+  audit: (query: { conch?: string; account?: string; page?: number; limit?: number } = {}) =>
     http.get<ConfigAuditPage>(`${base}/audit`, query),
   call: (traceId: string) => http.get<CallDetail>(`${base}/calls/${seg(traceId)}`),
 

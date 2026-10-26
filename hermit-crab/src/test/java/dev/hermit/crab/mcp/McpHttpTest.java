@@ -33,8 +33,8 @@ import java.util.logging.Logger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-import dev.hermit.common.model.ShellDoc;
-import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.crab.cli.CrabCommand;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.gateway.CrabHttpServer;
@@ -66,7 +66,7 @@ class McpHttpTest {
         try (Harness server = Harness.open(temp.resolve("direct"), PASSWORD)) {
             server.configure("alice");
             server.configure("bob");
-            server.runtime.admin().createAccount("account_shell", "bob", Actors.CLI);
+            server.runtime.admin().createAccount("account_conch", "bob", Actors.CLI);
 
             Reply missing = server.post(null, null, null, initialize("{}"));
             assertThat(missing.status()).isEqualTo(401);
@@ -102,11 +102,11 @@ class McpHttpTest {
             assertThat(save.path("annotations").path("readOnlyHint").asBoolean()).isFalse();
             assertThat(save.path("annotations").path("destructiveHint").asBoolean()).isTrue();
             assertThat(save.path("annotations").path("idempotentHint").asBoolean()).isFalse();
-            JsonNode lookup = tool(tools, "account_shell__lookup");
+            JsonNode lookup = tool(tools, "account_conch__lookup");
             assertThat(lookup.path("inputSchema").path("properties").has("account")).isTrue();
             assertThat(lookup.path("inputSchema").path("properties").has("_account")).isTrue();
             assertThat(lookup.path("inputSchema").path("required").toString()).contains("account").doesNotContain("_account");
-            assertThat(names(tools)).doesNotContain("account_shell__hidden");
+            assertThat(names(tools)).doesNotContain("account_conch__hidden");
             SecretChecks.absent(listed.body(), PASSWORD);
 
             Reply called = server.post(server.apiKey.plaintext(), session, "alice", request(3, "tools/call",
@@ -122,10 +122,10 @@ class McpHttpTest {
             SecretChecks.absent(called.body(), server.apiKey.plaintext());
 
             Reply echoed = server.post(server.apiKey.plaintext(), session, "alice", request(4, "tools/call",
-                    Map.of("name", "account_shell__lookup", "arguments", Map.of("account", "biz", "_account", "bob"))));
+                    Map.of("name", "account_conch__lookup", "arguments", Map.of("account", "biz", "_account", "bob"))));
             assertThat(echoed.json().path("result").path("isError").asBoolean(false)).isFalse();
             assertThat(echoed.json().path("result").path("structuredContent").path("seen").asText()).isEqualTo("biz");
-            assertThat(server.runtime.callLogs().list("account_shell", "lookup", 5).get(0).account()).isEqualTo("bob");
+            assertThat(server.runtime.callLogs().list("account_conch", "lookup", 5).get(0).account()).isEqualTo("bob");
 
             Reply unknown = server.post(server.apiKey.plaintext(), session, null, request(5, "tools/call",
                     Map.of("name", "legacy_oa__list_todo", "arguments", Map.of("account", "nobody"))));
@@ -138,7 +138,7 @@ class McpHttpTest {
             assertThat(unknown.body()).doesNotContain("Exception");
 
             CreatedApiKey narrow = server.runtime.admin().createApiKey(
-                    "narrow", new ApiKeyScope(Set.of("missing_shell"), Set.of(), false), Actors.CLI);
+                    "narrow", new ApiKeyScope(Set.of("missing_conch"), Set.of(), false), Actors.CLI);
             Reply narrowInit = server.post(narrow.plaintext(), null, null, initialize("{}"));
             String narrowSession = narrowInit.header("Mcp-Session-Id");
             Reply hidden = server.post(narrow.plaintext(), narrowSession, null, request(2, "tools/list", null));
@@ -149,16 +149,16 @@ class McpHttpTest {
             assertThat(denied.body()).doesNotContain("legacy_oa");
 
             Reply resources = server.post(server.apiKey.plaintext(), session, null, request(6, "resources/list", null));
-            assertThat(resources.body()).contains("hermit://shells/legacy_oa/guide");
-            assertThat(resources.body()).contains("hermit://shells/account_shell/guide");
+            assertThat(resources.body()).contains("hermit://conches/legacy_oa/guide");
+            assertThat(resources.body()).contains("hermit://conches/account_conch/guide");
             Reply guide = server.post(server.apiKey.plaintext(), session, null, request(7, "resources/read",
-                    Map.of("uri", "hermit://shells/legacy_oa/guide")));
+                    Map.of("uri", "hermit://conches/legacy_oa/guide")));
             String markdown = guide.json().path("result").path("contents").get(0).path("text").asText();
             assertThat(guide.json().path("result").path("contents").get(0).path("mimeType").asText()).isEqualTo("text/markdown");
             assertThat(markdown).contains("查询待办").contains("账号").contains("只读: 是");
             SecretChecks.absent(markdown, PASSWORD);
             Reply hiddenGuide = server.post(narrow.plaintext(), narrowSession, null, request(4, "resources/read",
-                    Map.of("uri", "hermit://shells/legacy_oa/guide")));
+                    Map.of("uri", "hermit://conches/legacy_oa/guide")));
             assertThat(hiddenGuide.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.NOT_FOUND);
             assertThat(hiddenGuide.json().path("error").path("message").asText()).contains("resources/list");
             assertThat(hiddenGuide.json().path("error").path("data").path("hint").asText()).contains("resources/list");
@@ -177,7 +177,7 @@ class McpHttpTest {
             String session = initialized.header("Mcp-Session-Id");
             try (Sse sse = Sse.open(server, session)) {
                 sse.awaitPrefix(": open");
-                server.runtime.registry().put(ShellParser.parse(readOnlyShell("extra_shell", "ping", "额外")));
+                server.runtime.registry().put(ConchParser.parse(readOnlyConch("extra_conch", "ping", "额外")));
                 JsonNode changed = sse.awaitMethod("notifications/tools/list_changed");
                 assertThat(changed.path("method").asText()).isEqualTo("notifications/tools/list_changed");
                 server.runtime.setCapabilityDisabled("legacy_oa", "list_todo", true, Actors.CLI);
@@ -191,13 +191,13 @@ class McpHttpTest {
     @Test
     void directoryModeConfirmsWrites() throws Exception {
         try (Harness server = Harness.open(temp.resolve("directory"), PASSWORD)) {
-            ShellDoc bulk = ShellParser.parse(bulkYaml());
-            ShellDoc secret = ShellParser.parse(readOnlyShell("secret_shell", "hidden", "隐藏能力"));
+            ConchDoc bulk = ConchParser.parse(bulkYaml());
+            ConchDoc secret = ConchParser.parse(readOnlyConch("secret_conch", "hidden", "隐藏能力"));
             server.runtime.registry().put(bulk);
             server.runtime.registry().put(secret);
-            server.runtime.admin().createAccount("bulk_shell", "main", Actors.CLI);
+            server.runtime.admin().createAccount("bulk_conch", "main", Actors.CLI);
             CreatedApiKey scoped = server.runtime.admin().createApiKey(
-                    "bulk", new ApiKeyScope(Set.of("bulk_shell"), Set.of(), false), Actors.CLI);
+                    "bulk", new ApiKeyScope(Set.of("bulk_conch"), Set.of(), false), Actors.CLI);
 
             Reply initialized = server.post(scoped.plaintext(), null, null, initialize("{}"));
             String session = initialized.header("Mcp-Session-Id");
@@ -218,14 +218,14 @@ class McpHttpTest {
             Reply systems = call(server, scoped.plaintext(), session, "list_systems", Map.of());
             JsonNode rows = systems.json().path("result").path("structuredContent").path("systems");
             assertThat(rows).hasSize(1);
-            assertThat(rows.get(0).path("shell").asText()).isEqualTo("bulk_shell");
+            assertThat(rows.get(0).path("conch").asText()).isEqualTo("bulk_conch");
             assertThat(rows.get(0).path("capabilities").asInt()).isEqualTo(41);
-            assertThat(systems.body()).doesNotContain("secret_shell");
+            assertThat(systems.body()).doesNotContain("secret_conch");
 
             Reply found = call(server, scoped.plaintext(), session, "search_capabilities", Map.of("query", "写入确认"));
             assertThat(found.json().path("result").path("structuredContent").path("matches")).hasSize(1);
             assertThat(found.json().path("result").path("structuredContent").path("matches").get(0).path("name").asText())
-                    .isEqualTo("bulk_shell__act_w");
+                    .isEqualTo("bulk_conch__act_w");
             Reply capped = call(server, scoped.plaintext(), session, "search_capabilities", Map.of("query", "只读项"));
             assertThat(capped.json().path("result").path("structuredContent").path("matches")).hasSize(20);
             Reply concealed = call(server, scoped.plaintext(), session, "search_capabilities", Map.of("query", "隐藏能力"));
@@ -242,26 +242,26 @@ class McpHttpTest {
                     .isEqualTo("query");
 
             Reply described = call(server, scoped.plaintext(), session, "describe_capability",
-                    Map.of("name", "bulk_shell__act_w"));
+                    Map.of("name", "bulk_conch__act_w"));
             JsonNode describedBody = described.json().path("result").path("structuredContent");
             assertThat(describedBody.path("inputSchema").path("properties").has("text")).isTrue();
             assertThat(describedBody.path("examples").get(0).path("input").path("text").asText()).isEqualTo("hi");
             assertThat(describedBody.path("output").toString()).contains("是否写入");
             Reply hidden = call(server, scoped.plaintext(), session, "describe_capability",
-                    Map.of("name", "secret_shell__hidden"));
+                    Map.of("name", "secret_conch__hidden"));
             assertThat(toolError(hidden).path("code").asText()).isEqualTo("NOT_FOUND");
 
             Reply read = call(server, scoped.plaintext(), session, "call_capability",
-                    Map.of("name", "bulk_shell__act_00", "arguments", Map.of("q", "a"), "account", "main"));
+                    Map.of("name", "bulk_conch__act_00", "arguments", Map.of("q", "a"), "account", "main"));
             assertThat(read.json().path("result").path("isError").asBoolean(false)).isFalse();
             assertThat(read.json().path("result").path("structuredContent").path("marker").asBoolean()).isTrue();
 
             Reply blocked = call(server, scoped.plaintext(), session, "call_capability",
-                    Map.of("name", "bulk_shell__act_w", "arguments", Map.of("text", "hello"), "account", "main"));
+                    Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "hello"), "account", "main"));
             assertThat(blocked.json().path("result").path("isError").asBoolean()).isTrue();
             assertThat(toolError(blocked).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolError(blocked).path("message").asText()).isEqualTo(McpCalls.NO_CONFIRM);
-            assertThat(server.runtime.callLogs().list("bulk_shell", "act_w", 5)).isEmpty();
+            assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).isEmpty();
 
             Reply confirmed = server.post(scoped.plaintext(), null, null, initialize("{\"elicitation\":{}}"));
             String confirming = confirmed.header("Mcp-Session-Id");
@@ -269,7 +269,7 @@ class McpHttpTest {
                 sse.awaitPrefix(": open");
                 AtomicReference<Reply> declined = new AtomicReference<>();
                 Thread decline = new Thread(() -> declined.set(callUnchecked(server, scoped.plaintext(), confirming,
-                        "call_capability", Map.of("name", "bulk_shell__act_w", "arguments", Map.of("text", "no"), "account", "main"))));
+                        "call_capability", Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "no"), "account", "main"))));
                 decline.start();
                 JsonNode question = sse.awaitMethod("elicitation/create");
                 assertThat(question.path("params").path("message").asText()).contains("确认执行 写入确认项？").contains("text=");
@@ -280,11 +280,11 @@ class McpHttpTest {
                 assertThat(declined.get().json().path("result").path("isError").asBoolean()).isTrue();
                 assertThat(toolError(declined.get()).path("code").asText()).isEqualTo("FORBIDDEN");
                 assertThat(toolError(declined.get()).path("message").asText()).isEqualTo(McpCalls.REJECTED);
-                assertThat(server.runtime.callLogs().list("bulk_shell", "act_w", 5)).isEmpty();
+                assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).isEmpty();
 
                 AtomicReference<Reply> unchecked = new AtomicReference<>();
                 Thread uncheck = new Thread(() -> unchecked.set(callUnchecked(server, scoped.plaintext(), confirming,
-                        "call_capability", Map.of("name", "bulk_shell__act_w", "arguments", Map.of("text", "nope"), "account", "main"))));
+                        "call_capability", Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "nope"), "account", "main"))));
                 uncheck.start();
                 JsonNode form = sse.awaitMethod("elicitation/create");
                 server.post(scoped.plaintext(), confirming, null, """
@@ -293,11 +293,11 @@ class McpHttpTest {
                 uncheck.join(15_000);
                 assertThat(unchecked.get().json().path("result").path("isError").asBoolean()).isTrue();
                 assertThat(toolError(unchecked.get()).path("code").asText()).isEqualTo("FORBIDDEN");
-                assertThat(server.runtime.callLogs().list("bulk_shell", "act_w", 5)).isEmpty();
+                assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).isEmpty();
 
                 AtomicReference<Reply> accepted = new AtomicReference<>();
                 Thread accept = new Thread(() -> accepted.set(callUnchecked(server, scoped.plaintext(), confirming,
-                        "call_capability", Map.of("name", "bulk_shell__act_w", "arguments", Map.of("text", "yes"), "account", "main"))));
+                        "call_capability", Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "yes"), "account", "main"))));
                 accept.start();
                 JsonNode again = sse.awaitMethod("elicitation/create");
                 server.post(scoped.plaintext(), confirming, null, """
@@ -306,7 +306,7 @@ class McpHttpTest {
                 accept.join(15_000);
                 assertThat(accepted.get().json().path("result").path("isError").asBoolean(false)).isFalse();
                 assertThat(accepted.get().json().path("result").path("structuredContent").path("saved").asBoolean()).isTrue();
-                assertThat(server.runtime.callLogs().list("bulk_shell", "act_w", 5)).hasSize(1);
+                assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).hasSize(1);
                 SecretChecks.absent(accepted.get().body(), PASSWORD);
             }
         }
@@ -397,8 +397,8 @@ class McpHttpTest {
         assertThat(McpErrors.outputSchemaSupported("2024-11-05")).isFalse();
         try (Harness server = Harness.open(temp.resolve("structured"), PASSWORD)) {
             server.configure("alice");
-            server.runtime.registry().put(ShellParser.parse(boundsYaml()));
-            server.runtime.admin().createAccount("bounds_shell", "main", Actors.CLI);
+            server.runtime.registry().put(ConchParser.parse(boundsYaml()));
+            server.runtime.admin().createAccount("bounds_conch", "main", Actors.CLI);
 
             Reply badKey = server.post("not-a-real-key", null, null, initialize("2025-06-18", "{}"));
             assertThat(badKey.status()).isEqualTo(401);
@@ -426,7 +426,7 @@ class McpHttpTest {
             assertThat(todo.path("outputSchema").path("type").asText()).isEqualTo("object");
             assertThat(todo.path("outputSchema").path("properties").has("items")).isTrue();
             assertThat(todo.path("outputSchema").path("properties").path("items").has("type")).isFalse();
-            JsonNode pageTool = tool(listed.json().path("result").path("tools"), "bounds_shell__page_items");
+            JsonNode pageTool = tool(listed.json().path("result").path("tools"), "bounds_conch__page_items");
             assertThat(pageTool.path("outputSchema").path("properties").has("seen")).isTrue();
             assertThat(pageTool.path("outputSchema").path("properties").path("seen").has("type")).isFalse();
 
@@ -438,7 +438,7 @@ class McpHttpTest {
             Reply newest = server.post(server.apiKey.plaintext(), null, null, initialize("2025-11-25", "{}"));
             String newSession = newest.header("Mcp-Session-Id");
             Reply newTools = server.post(server.apiKey.plaintext(), newSession, null, request(2, "tools/list", null));
-            assertThat(tool(newTools.json().path("result").path("tools"), "bounds_shell__page_items").has("outputSchema")).isTrue();
+            assertThat(tool(newTools.json().path("result").path("tools"), "bounds_conch__page_items").has("outputSchema")).isTrue();
 
             Reply unstarted = server.post(server.apiKey.plaintext(), null, null, request(4, "tools/list", null));
             assertThat(unstarted.status()).isEqualTo(400);
@@ -462,7 +462,7 @@ class McpHttpTest {
             assertThat(illegal.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.INVALID_PARAMS);
             assertThat(illegal.json().path("error").path("data").path("hint").asText()).isNotBlank();
 
-            Reply negative = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+            Reply negative = call(server, server.apiKey.plaintext(), session, "bounds_conch__page_items",
                     Map.of("page", -1, "pageSize", 20, "label", "a", "account", "main"));
             JsonNode negativeError = negative.json().path("result").path("structuredContent").path("error");
             assertThat(negative.json().path("result").path("isError").asBoolean()).isTrue();
@@ -472,7 +472,7 @@ class McpHttpTest {
             assertThat(negativeError.path("code").asText()).isNotEqualTo(McpErrors.AUTH_INVALID);
             assertThat(negative.json().path("result").path("structuredContent").has("seen")).isFalse();
 
-            Reply huge = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+            Reply huge = call(server, server.apiKey.plaintext(), session, "bounds_conch__page_items",
                     Map.of("page", 1, "pageSize", 1000, "label", "a", "account", "main"));
             assertThat(huge.json().path("result").path("structuredContent").path("error").path("code").asText())
                     .isEqualTo("INVALID_INPUT");
@@ -480,12 +480,12 @@ class McpHttpTest {
                     .isEqualTo("pageSize");
             assertThat(huge.json().path("result").path("isError").asBoolean()).isTrue();
 
-            Reply missingLabel = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+            Reply missingLabel = call(server, server.apiKey.plaintext(), session, "bounds_conch__page_items",
                     Map.of("page", 1, "pageSize", 20, "account", "main"));
             assertThat(missingLabel.json().path("result").path("structuredContent").path("error").path("field").asText())
                     .isEqualTo("label");
 
-            Reply wrongType = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+            Reply wrongType = call(server, server.apiKey.plaintext(), session, "bounds_conch__page_items",
                     Map.of("page", "no", "pageSize", 20, "label", "a", "account", "main"));
             assertThat(wrongType.json().path("result").path("structuredContent").path("error").path("code").asText())
                     .isEqualTo("INVALID_INPUT");
@@ -493,7 +493,7 @@ class McpHttpTest {
                     .isEqualTo("page");
             assertThat(wrongType.body()).doesNotContain("\"no\"");
 
-            Reply accepted = call(server, server.apiKey.plaintext(), session, "bounds_shell__page_items",
+            Reply accepted = call(server, server.apiKey.plaintext(), session, "bounds_conch__page_items",
                     Map.of("page", 1, "pageSize", 20, "label", "a", "account", "main"));
             assertThat(accepted.json().path("result").path("isError").asBoolean(false)).isFalse();
             assertThat(accepted.json().path("result").path("structuredContent").path("seen").asBoolean()).isTrue();
@@ -503,7 +503,7 @@ class McpHttpTest {
 
     private static String boundsYaml() {
         return """
-                shell: bounds_shell
+                conch: bounds_conch
                 version: 1.0.0
                 driver: http
                 min_crab_version: 1.0.0
@@ -583,14 +583,14 @@ class McpHttpTest {
         return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"" + method + "\",\"params\":" + ApiJson.write(params) + "}";
     }
 
-    private static String readOnlyShell(String shell, String action, String title) {
+    private static String readOnlyConch(String conch, String action, String title) {
         return """
-                shell: %s
+                conch: %s
                 version: 1.0.0
                 driver: http
                 min_crab_version: 1.0.0
                 title: %s
-                description: 测试 Shell
+                description: 测试规则包
                 credentials: {}
                 actions:
                   %s:
@@ -609,18 +609,18 @@ class McpHttpTest {
                     notes: 只读
                     idempotent: true
                     mcp: { read_only: true }
-                """.formatted(shell, title, action, title);
+                """.formatted(conch, title, action, title);
     }
 
     private static String bulkYaml() {
         StringBuilder yaml = new StringBuilder("""
-                shell: bulk_shell
+                conch: bulk_conch
                 version: 1.0.0
                 driver: http
                 min_crab_version: 1.0.0
                 base_url: "http://127.0.0.1:9"
                 title: 批量
-                description: 用于目录模式的测试 Shell。
+                description: 用于目录模式的测试规则包。
                 credentials: {}
                 actions:
                   act_w:
@@ -683,8 +683,8 @@ class McpHttpTest {
             LegacyOaFixture fixture = new LegacyOaFixture(password);
             CrabRuntime runtime = CrabRuntime.open(new CrabPaths(root), CrabConfig.defaults().withListen("127.0.0.1", 0), name -> null);
             try {
-                runtime.registry().put(ShellParser.parse(legacyYaml()));
-                runtime.registry().put(ShellParser.parse(accountShell()));
+                runtime.registry().put(ConchParser.parse(legacyYaml()));
+                runtime.registry().put(ConchParser.parse(accountConch()));
                 CreatedApiKey apiKey = runtime.admin().createApiKey(
                         "mcp", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
                 CrabHttpServer server = new CrabHttpServer(runtime);
@@ -701,9 +701,9 @@ class McpHttpTest {
             if (runtime.admin().listAccounts("legacy_oa").stream().noneMatch(account -> account.account().equals(name))) {
                 runtime.admin().createAccount("legacy_oa", name, Actors.CLI);
             }
-            ShellDoc shell = runtime.registry().find("legacy_oa").orElseThrow();
-            runtime.admin().putConfig(shell, "base_url", fixture.baseUrl(), Actors.CLI);
-            runtime.admin().writeCredentials(shell, name, Map.of("username", name, "password", PASSWORD), Actors.CLI);
+            ConchDoc conch = runtime.registry().find("legacy_oa").orElseThrow();
+            runtime.admin().putConfig(conch, "base_url", fixture.baseUrl(), Actors.CLI);
+            runtime.admin().writeCredentials(conch, name, Map.of("username", name, "password", PASSWORD), Actors.CLI);
         }
 
         Reply post(String key, String session, String account, String body) throws Exception {
@@ -767,9 +767,9 @@ class McpHttpTest {
         return sample.replace("health_check:", action + "health_check:");
     }
 
-    private static String accountShell() {
+    private static String accountConch() {
         return """
-                shell: account_shell
+                conch: account_conch
                 version: 1.0.0
                 driver: http
                 min_crab_version: 1.0.0

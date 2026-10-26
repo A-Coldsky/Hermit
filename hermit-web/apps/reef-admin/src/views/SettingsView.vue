@@ -33,7 +33,7 @@ onMounted(load)
 
 <template>
   <div>
-    <PageHeader title="签名公钥" description="Reef 用 Ed25519 私钥为每个发布的 Shell 签名，Crab 用这把公钥验签" />
+    <PageHeader title="签名公钥" description="Reef 用 Ed25519 私钥为每个发布的规则包签名，Crab 用这把公钥验签" />
 
     <div v-loading="loading" class="hm-card">
       <div class="hm-card-title">
@@ -51,7 +51,7 @@ onMounted(load)
       <ol class="steps">
         <li>把公钥保存到 Crab 机器的 <code>HERMIT_HOME</code> 下，例如 <code>~/.hermit/reef.pub</code>。公钥应走带外渠道分发，Crab 不会从 Reef 自动拉取。</li>
         <li>在 <code>~/.hermit/config.yml</code> 里设置 <code>reef.url</code> 和 <code>reef.public_key: reef.pub</code>（也可以直接写 PEM 文本）。</li>
-        <li>Crab 同步时会拒绝签名不匹配的 Shell，并继续使用本地已安装的版本。</li>
+        <li>Crab 同步时会拒绝签名不匹配的规则包，并继续使用本地已安装的版本。</li>
       </ol>
     </div>
   </div>

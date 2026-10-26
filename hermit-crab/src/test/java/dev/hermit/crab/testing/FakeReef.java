@@ -28,8 +28,8 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import dev.hermit.common.pkg.Ed25519Keys;
-import dev.hermit.common.pkg.ShellPackage;
-import dev.hermit.common.pkg.VerifiedShell;
+import dev.hermit.common.pkg.ConchPackage;
+import dev.hermit.common.pkg.VerifiedConch;
 
 public final class FakeReef implements AutoCloseable {
 
@@ -122,13 +122,13 @@ public final class FakeReef implements AutoCloseable {
         manifestStatus = status;
     }
 
-    /** Next downloads of {@code shell} return {@code status} and an empty body. 200 serves the package. */
-    public void downloadStatus(String shell, int status) {
+    /** Next downloads of {@code conch} return {@code status} and an empty body. 200 serves the package. */
+    public void downloadStatus(String conch, int status) {
         synchronized (lock) {
             if (status == 200) {
-                downloadStatuses.remove(shell);
+                downloadStatuses.remove(conch);
             } else {
-                downloadStatuses.put(shell, status);
+                downloadStatuses.put(conch, status);
             }
         }
     }
@@ -166,7 +166,7 @@ public final class FakeReef implements AutoCloseable {
     public int downloads() {
         int count = 0;
         for (String path : paths) {
-            if (path.startsWith("/agent/shells/") && !"/agent/shells/manifest".equals(path)) {
+            if (path.startsWith("/agent/conches/") && !"/agent/conches/manifest".equals(path)) {
                 count++;
             }
         }
@@ -174,68 +174,68 @@ public final class FakeReef implements AutoCloseable {
     }
 
     public void publish(String yaml) {
-        byte[] zip = ShellPackage.write(yaml.getBytes(StandardCharsets.UTF_8), keys.getPrivate());
-        VerifiedShell verified = ShellPackage.readVerified(zip, keys.getPublic());
+        byte[] zip = ConchPackage.write(yaml.getBytes(StandardCharsets.UTF_8), keys.getPrivate());
+        VerifiedConch verified = ConchPackage.readVerified(zip, keys.getPublic());
         put(new Entry(
-                verified.shellDoc().shell(),
+                verified.conchDoc().conch(),
                 verified.manifest().version(),
                 verified.manifest().sha256(),
                 verified.manifest().minCrabVersion(),
-                verified.shellDoc().title(),
+                verified.conchDoc().title(),
                 zip));
     }
 
     public void publishSignedBy(String yaml, PrivateKey privateKey, java.security.PublicKey publicKey) {
-        byte[] zip = ShellPackage.write(yaml.getBytes(StandardCharsets.UTF_8), privateKey);
-        VerifiedShell verified = ShellPackage.readVerified(zip, publicKey);
+        byte[] zip = ConchPackage.write(yaml.getBytes(StandardCharsets.UTF_8), privateKey);
+        VerifiedConch verified = ConchPackage.readVerified(zip, publicKey);
         put(new Entry(
-                verified.shellDoc().shell(),
+                verified.conchDoc().conch(),
                 verified.manifest().version(),
                 verified.manifest().sha256(),
                 verified.manifest().minCrabVersion(),
-                verified.shellDoc().title(),
+                verified.conchDoc().title(),
                 zip));
     }
 
     public void publishTamperedSignature(String yaml) {
-        byte[] zip = ShellPackage.write(yaml.getBytes(StandardCharsets.UTF_8), keys.getPrivate());
-        VerifiedShell verified = ShellPackage.readVerified(zip, keys.getPublic());
+        byte[] zip = ConchPackage.write(yaml.getBytes(StandardCharsets.UTF_8), keys.getPrivate());
+        VerifiedConch verified = ConchPackage.readVerified(zip, keys.getPublic());
         Map<String, byte[]> files = unzip(zip);
         byte[] signature = files.get("signature.sig");
         signature[0] ^= 0x01;
         put(new Entry(
-                verified.shellDoc().shell(),
+                verified.conchDoc().conch(),
                 verified.manifest().version(),
                 verified.manifest().sha256(),
                 verified.manifest().minCrabVersion(),
-                verified.shellDoc().title(),
+                verified.conchDoc().title(),
                 rezip(files)));
     }
 
     public void publishWrongSha(String yaml) {
-        byte[] zip = ShellPackage.write(yaml.getBytes(StandardCharsets.UTF_8), keys.getPrivate());
-        VerifiedShell verified = ShellPackage.readVerified(zip, keys.getPublic());
+        byte[] zip = ConchPackage.write(yaml.getBytes(StandardCharsets.UTF_8), keys.getPrivate());
+        VerifiedConch verified = ConchPackage.readVerified(zip, keys.getPublic());
         put(new Entry(
-                verified.shellDoc().shell(),
+                verified.conchDoc().conch(),
                 verified.manifest().version(),
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 verified.manifest().minCrabVersion(),
-                verified.shellDoc().title(),
+                verified.conchDoc().title(),
                 zip));
     }
 
-    public void catalog(String shell, String version) {
-        put(new Entry(shell, version, "abc", "1.0.0", "标题", new byte[0]));
+    public void catalog(String conch, String version) {
+        put(new Entry(conch, version, "abc", "1.0.0", "标题", new byte[0]));
     }
 
-    public void publishOversize(String shell) {
+    public void publishOversize(String conch) {
         byte[] body = new byte[1024 * 1024 + 1];
-        put(new Entry(shell, "1.0.0", "abc", "1.0.0", "标题", body));
+        put(new Entry(conch, "1.0.0", "abc", "1.0.0", "标题", body));
     }
 
-    public void remove(String shell) {
+    public void remove(String conch) {
         synchronized (lock) {
-            entries.removeIf(entry -> entry.shell.equals(shell));
+            entries.removeIf(entry -> entry.conch.equals(conch));
         }
     }
 
@@ -250,7 +250,7 @@ public final class FakeReef implements AutoCloseable {
 
     private void put(Entry entry) {
         synchronized (lock) {
-            entries.removeIf(existing -> existing.shell.equals(entry.shell));
+            entries.removeIf(existing -> existing.conch.equals(entry.conch));
             entries.add(entry);
         }
     }
@@ -263,7 +263,7 @@ public final class FakeReef implements AutoCloseable {
                 return;
             }
             String method = exchange.getRequestMethod();
-            if ("GET".equals(method) && "/agent/shells/manifest".equals(path)) {
+            if ("GET".equals(method) && "/agent/conches/manifest".equals(path)) {
                 manifest(exchange);
                 return;
             }
@@ -275,7 +275,7 @@ public final class FakeReef implements AutoCloseable {
                 reports(exchange);
                 return;
             }
-            if ("GET".equals(method) && path.startsWith("/agent/shells/")) {
+            if ("GET".equals(method) && path.startsWith("/agent/conches/")) {
                 download(exchange, path);
                 return;
             }
@@ -342,20 +342,20 @@ public final class FakeReef implements AutoCloseable {
     }
 
     private void download(HttpExchange exchange, String path) throws IOException {
-        String rest = path.substring("/agent/shells/".length());
+        String rest = path.substring("/agent/conches/".length());
         int slash = rest.indexOf('/');
         if (slash < 0) {
             send(exchange, 404, new byte[0], null, null);
             return;
         }
-        String shell = rest.substring(0, slash);
+        String conch = rest.substring(0, slash);
         String version = rest.substring(slash + 1);
         Integer forced;
         Entry match;
         synchronized (lock) {
-            forced = downloadStatuses.get(shell);
+            forced = downloadStatuses.get(conch);
             match = entries.stream()
-                    .filter(entry -> entry.shell.equals(shell) && entry.version.equals(version))
+                    .filter(entry -> entry.conch.equals(conch) && entry.version.equals(version))
                     .findFirst()
                     .orElse(null);
         }
@@ -372,9 +372,9 @@ public final class FakeReef implements AutoCloseable {
 
     private byte[] manifestBody() {
         ArrayNode data = JSON.createArrayNode();
-        entries.stream().sorted(Comparator.comparing(entry -> entry.shell)).forEach(entry -> {
+        entries.stream().sorted(Comparator.comparing(entry -> entry.conch)).forEach(entry -> {
             ObjectNode node = data.addObject();
-            node.put("shell", entry.shell);
+            node.put("conch", entry.conch);
             node.put("version", entry.version);
             node.put("sha256", entry.sha256);
             node.put("minCrabVersion", entry.minCrabVersion);
@@ -386,8 +386,8 @@ public final class FakeReef implements AutoCloseable {
     private String etag() {
         StringBuilder payload = new StringBuilder();
         entries.stream()
-                .sorted(Comparator.comparing(entry -> entry.shell))
-                .forEach(entry -> payload.append(entry.shell).append('|').append(entry.version).append('|')
+                .sorted(Comparator.comparing(entry -> entry.conch))
+                .forEach(entry -> payload.append(entry.conch).append('|').append(entry.version).append('|')
                         .append(entry.sha256).append('|').append(etagSalt).append('\n'));
         return "\"" + sha256(payload.toString().getBytes(StandardCharsets.UTF_8)) + "\"";
     }
@@ -445,7 +445,7 @@ public final class FakeReef implements AutoCloseable {
     private static byte[] rezip(Map<String, byte[]> files) {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(buffer)) {
-            for (String name : List.of("shell.yaml", "manifest.json", "signature.sig")) {
+            for (String name : List.of("conch.yaml", "manifest.json", "signature.sig")) {
                 zip.putNextEntry(new ZipEntry(name));
                 zip.write(files.get(name));
                 zip.closeEntry();
@@ -456,6 +456,6 @@ public final class FakeReef implements AutoCloseable {
         return buffer.toByteArray();
     }
 
-    private record Entry(String shell, String version, String sha256, String minCrabVersion, String title, byte[] body) {
+    private record Entry(String conch, String version, String sha256, String minCrabVersion, String title, byte[] body) {
     }
 }

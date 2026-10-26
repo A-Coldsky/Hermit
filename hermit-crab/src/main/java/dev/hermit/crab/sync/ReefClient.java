@@ -29,7 +29,7 @@ final class ReefClient {
     }
 
     ManifestFetch manifest(String ifNoneMatch) {
-        HttpRequest.Builder builder = get(endpoint("agent/shells/manifest"));
+        HttpRequest.Builder builder = get(endpoint("agent/conches/manifest"));
         if (ifNoneMatch != null && !ifNoneMatch.isBlank()) {
             builder.header("If-None-Match", ifNoneMatch);
         }
@@ -43,7 +43,7 @@ final class ReefClient {
             if (status != 200) {
                 throw new SyncException(SyncReasons.http(status));
             }
-            byte[] bytes = readLimited(body, ShellFiles.MAX_ZIP_BYTES);
+            byte[] bytes = readLimited(body, ConchFiles.MAX_ZIP_BYTES);
             if (bytes == null) {
                 throw new SyncException(SyncReasons.ZIP_TOO_LARGE);
             }
@@ -59,7 +59,7 @@ final class ReefClient {
             if (response.statusCode() != 200) {
                 return Optional.empty();
             }
-            byte[] bytes = readLimited(body, ShellFiles.MAX_ZIP_BYTES);
+            byte[] bytes = readLimited(body, ConchFiles.MAX_ZIP_BYTES);
             if (bytes == null) {
                 return Optional.empty();
             }
@@ -76,14 +76,14 @@ final class ReefClient {
         }
     }
 
-    Download download(String shell, String version) {
-        HttpResponse<InputStream> response = send(get(endpoint("agent/shells/" + shell + "/" + version)));
+    Download download(String conch, String version) {
+        HttpResponse<InputStream> response = send(get(endpoint("agent/conches/" + conch + "/" + version)));
         try (InputStream body = response.body()) {
             int status = response.statusCode();
             if (status != 200) {
                 return Download.failed(status);
             }
-            byte[] bytes = readLimited(body, ShellFiles.MAX_ZIP_BYTES);
+            byte[] bytes = readLimited(body, ConchFiles.MAX_ZIP_BYTES);
             if (bytes == null) {
                 return Download.oversize();
             }
@@ -134,7 +134,7 @@ final class ReefClient {
         List<CatalogEntry> entries = new ArrayList<>();
         for (JsonNode node : root.get("data")) {
             entries.add(new CatalogEntry(
-                    textOrNull(node, "shell"),
+                    textOrNull(node, "conch"),
                     textOrNull(node, "version"),
                     textOrNull(node, "sha256"),
                     textOrNull(node, "minCrabVersion"),
@@ -169,7 +169,7 @@ final class ReefClient {
         return out.toByteArray();
     }
 
-    record CatalogEntry(String shell, String version, String sha256, String minCrabVersion, String title) {
+    record CatalogEntry(String conch, String version, String sha256, String minCrabVersion, String title) {
     }
 
     record ManifestFetch(boolean notModified, String etag, List<CatalogEntry> entries) {

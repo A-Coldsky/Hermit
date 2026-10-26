@@ -14,8 +14,8 @@
 | `sync.interval_seconds` | `300` | 正整数，周期同步；启动另有一次异步同步 |
 | `report.enabled` | `true` | 是否记录/发送运行上报；关闭不影响本地调用日志 |
 | `report.interval_seconds` | `60` | 正整数；发送失败还有退避 |
-| `capabilities.disabled` | `[]` | `shell.action` 列表，与数据库禁用状态取并集 |
-| `aliases` | `{}` | URL 路径 → `shell.action`；不可占用 api/console/mcp/openapi 路径 |
+| `capabilities.disabled` | `[]` | `conch.action` 列表，与数据库禁用状态取并集 |
+| `aliases` | `{}` | URL 路径 → `conch.action`；不可占用 api/console/mcp/openapi 路径 |
 | `engine.capability_timeout_seconds` | `60` | 正整数；当前不能可靠限制慢速响应的总时间，见审计 A03 |
 | `engine.session_idle_minutes` | `10` | 空闲超过此阈值且配置 alive_check 时检测会话 |
 | `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；test-login 可重置 |
@@ -40,7 +40,7 @@ engine:
   max_login_failures: 3
 ```
 
-此例的 disabled 项是路径格式示意，示例 Shell 中不包含 submit_leave。别名仍使用相同的 API Key、账号和能力权限；重启后读取新别名。
+此例的 disabled 项是路径格式示意，示例 Conch 中不包含 submit_leave。别名仍使用相同的 API Key、账号和能力权限；重启后读取新别名。
 
 `HERMIT_MASTER_KEY` 优先于 `data/master.key`。值必须是 Base64，解码后恰好 32 字节。非法值在启动时报可读原因（不是合法 Base64，或长度不是 32 字节），不会改用文件里的密钥，也不会只打印异常类名。未设置环境变量、也没有 key-file 时：数据目录还没有凭证密文，才会创建 `data/master.key`（POSIX 0600）；已经有凭证但主密钥文件缺失，则拒绝启动并且不生成新密钥，避免旧密文变成无法打开的 500。恢复原来的 `data/master.key` 后重启即可。确认放弃旧凭证时，删除 `data` 目录中的数据库后再启动，这时才按全新安装生成主密钥，然后重新填写账号凭证。已有合法主密钥但解不开已存凭证时，进程仍会启动并在日志里提示；账号 `needsConfiguration` 为 true，`credentialsUnreadable` 为 true，调用返回 `NOT_CONFIGURED` 和「凭证无法解密，需重新配置」。把该账号的凭证字段重新写一遍后恢复。库内部支持 key-file 参数，但当前 CLI 没有暴露该选项；`HERMIT_MASTER_KEY_FILE` 是容器入口脚本的复制功能，不是 Java 配置项。不要更换密钥后期待旧凭证仍能解密。
 
@@ -100,9 +100,9 @@ Tide 配置位于 `hermit.reef.tide`：
 
 启动时校验这些数。`new-version-min-calls`、`baseline-window-days`、`surge-window-minutes`、`surge-min-count`、`dedup-hours` 必须 ≥ 1，写成 0 或负数会拒绝启动，异常信息带对应配置键。`regression-delta`、`no-baseline-failure-rate`、`quiet-hours` 必须 ≥ 0；负数拒绝，0 合法。`quiet-hours=0` 表示没有发布/回滚静默。
 
-具体阈值比较和发布静默以 `AlertService` 为准。去重按 `(kind, shell, shell_version)`，窗口从告警 `created_at` 起算 `dedup-hours`。窗口内已有告警（不论是否已确认）就不再新建，也不再发 webhook。确认不重新计时，也不把剩余时间清掉。失败次数在窗口内继续上涨不会提前再报。`created_at` 早于或等于 `now - dedup-hours` 之后，条件仍然成立才新建下一条并再次通知。未确认但已超出窗口的旧告警同样不再抑制。
+具体阈值比较和发布静默以 `AlertService` 为准。去重按 `(kind, conch, conch_version)`，窗口从告警 `created_at` 起算 `dedup-hours`。窗口内已有告警（不论是否已确认）就不再新建，也不再发 webhook。确认不重新计时，也不把剩余时间清掉。失败次数在窗口内继续上涨不会提前再报。`created_at` 早于或等于 `now - dedup-hours` 之后，条件仍然成立才新建下一条并再次通知。未确认但已超出窗口的旧告警同样不再抑制。
 
-Webhook 在新建告警并提交后 POST JSON，字段为 `id`、`kind`、`shell`、`version`、`detail`、`createdAt`、`adminUrl`。`id` 是 `alerts` 主键。`adminUrl` 是管理端告警页路径。Reef 自身没有对外源站配置：Crab 的 `reef.url` / `HERMIT_REEF_URL` 只存在于 Crab，不会传进 Reef，因此这里只写相对路径 `/alerts`。接收方按自己打开 Reef 的源站拼接，例如源站是 `https://reef.example` 时链接为 `https://reef.example/alerts`。超时 5 秒，失败只记日志，不重试，不影响告警落库。没有独立持久化重试队列。
+Webhook 在新建告警并提交后 POST JSON，字段为 `id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。`id` 是 `alerts` 主键。`adminUrl` 是管理端告警页路径。Reef 自身没有对外源站配置：Crab 的 `reef.url` / `HERMIT_REEF_URL` 只存在于 Crab，不会传进 Reef，因此这里只写相对路径 `/alerts`。接收方按自己打开 Reef 的源站拼接，例如源站是 `https://reef.example` 时链接为 `https://reef.example/alerts`。超时 5 秒，失败只记日志，不重试，不影响告警落库。没有独立持久化重试队列。
 
 ## 数据目录与备份
 
@@ -112,7 +112,7 @@ Reef data-dir/
   keys/signing.key       # Ed25519 私钥
   keys/signing.pub       # 对应公钥
   keys/jwt.secret        # JWT HMAC 密钥
-  shells/                # 上传 YAML 与发布包
+  conches/                # 上传 YAML 与发布包
 
 Crab HERMIT_HOME/
   config.yml
@@ -120,15 +120,15 @@ Crab HERMIT_HOME/
   data/crab.mv.db
   data/master.key        # 使用环境主密钥时需另行保管该密钥
   data/instance-id
-  shells/<shell>/current
-  shells/<shell>/<version>/
-  local-shells/          # 仅预留目录，当前无加载流程
+  conches/<conch>/current
+  conches/<conch>/<version>/
+  local-conches/          # 仅预留目录，当前无加载流程
   logs/                 # 预留目录；调用日志实际存 H2
 ```
 
-Reef 要一致备份数据库、shells、keys。Compose 的 `reef-mysql` 与 `reef-data` 分别保存 MySQL 与 `/data`，升级必须保留两个卷。容器 Crab 的 `crab-data` 保存整个实例目录；要同时备份外部主密钥（如有），不能只备份数据库。实际卷名通常带 Compose 项目前缀，切换部署目录/项目名时要核对卷，避免意外创建新实例。恢复主密钥、公钥和实例 ID 时保持对应关系。H2 文件复制前停止所属进程，MySQL 使用数据库一致性备份；恢复应先在隔离实例验证。本次审计未实际做生产备份恢复演练。
+Reef 要一致备份数据库、conches、keys。Compose 的 `reef-mysql` 与 `reef-data` 分别保存 MySQL 与 `/data`，升级必须保留两个卷。容器 Crab 的 `crab-data` 保存整个实例目录；要同时备份外部主密钥（如有），不能只备份数据库。实际卷名通常带 Compose 项目前缀，切换部署目录/项目名时要核对卷，避免意外创建新实例。恢复主密钥、公钥和实例 ID 时保持对应关系。H2 文件复制前停止所属进程，MySQL 使用数据库一致性备份；恢复应先在隔离实例验证。本次审计未实际做生产备份恢复演练。
 
-保留策略：Crab 调用/步骤日志 30 天、幂等响应 24 小时，启动及每小时清理；debug 状态 24 小时自动过期。Reef 每日 UTC 03:00（北京时间 11:00）清理过期失败报告、回滚事件及登录失败记录。两端小时统计以及部分审计/告警表没有全量定期保留策略，不应假定所有数据都会在 90 天删除。Crab 的 `config_audit` 可以由 `GET /console/api/audit` 和 CLI `audit list` 读取，内容限于操作者、动作、origin、Shell、账号、时间和字段名，不含凭证或配置值；这张表没有定期清理。
+保留策略：Crab 调用/步骤日志 30 天、幂等响应 24 小时，启动及每小时清理；debug 状态 24 小时自动过期。Reef 每日 UTC 03:00（北京时间 11:00）清理过期失败报告、回滚事件及登录失败记录。两端小时统计以及部分审计/告警表没有全量定期保留策略，不应假定所有数据都会在 90 天删除。Crab 的 `config_audit` 可以由 `GET /console/api/audit` 和 CLI `audit list` 读取，内容限于操作者、动作、origin、Conch、账号、时间和字段名，不含凭证或配置值；这张表没有定期清理。
 
 ## 部署边界
 
@@ -148,7 +148,7 @@ Reef 要一致备份数据库、shells、keys。Compose 的 `reef-mysql` 与 `re
 | 页面是占位页 | 是否使用 web.skip；不带该参数重新构建 |
 | Reef 登录成功但 Crab 同步 401 | Reef token 是否非空，Crab `reef.token` 是否匹配 |
 | Agent 请求 400 | 是否有合法 UUID 格式的 `X-Hermit-Instance` |
-| Crab 已监听但没有 Shell | 公钥、网络、同步报告；首次同步后台执行 |
+| Crab 已监听但没有 Conch | 公钥、网络、同步报告；首次同步后台执行 |
 | Crab 容器提示配置不一致 | 环境变量与持久化 config.yml 的 URL/token/host/port 行是否一致；入口按文本检查 |
 | Crab 容器首次获取公钥失败 | 可信 Reef 地址、管理员凭据/锁定、网络；或改用已挂载的可信 PEM 公钥 |
 | `NOT_CONFIGURED` | 默认账号、必填凭证和配置是否齐全；也包括主密钥对不上、凭证无法解密 |

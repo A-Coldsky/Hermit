@@ -18,9 +18,9 @@ CREATE TABLE admin_login_failures (
 CREATE INDEX idx_admin_login_failures_user_time
     ON admin_login_failures (username, failed_at);
 
-CREATE TABLE shell_versions (
+CREATE TABLE conch_versions (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    shell VARCHAR(128) NOT NULL,
+    conch VARCHAR(128) NOT NULL,
     version VARCHAR(64) NOT NULL,
     sha256 VARCHAR(64) NOT NULL,
     min_crab_version VARCHAR(64),
@@ -33,8 +33,8 @@ CREATE TABLE shell_versions (
     is_current BOOLEAN NOT NULL DEFAULT FALSE,
     validation_json TEXT,
     diff_json TEXT,
-    CONSTRAINT uk_shell_versions_shell_version UNIQUE (shell, version),
-    CONSTRAINT chk_shell_versions_status CHECK (status IN ('UPLOADED', 'PUBLISHED'))
+    CONSTRAINT uk_conch_versions_conch_version UNIQUE (conch, version),
+    CONSTRAINT chk_conch_versions_status CHECK (status IN ('UPLOADED', 'PUBLISHED'))
 );
 
 CREATE TABLE audit_log (
@@ -42,14 +42,14 @@ CREATE TABLE audit_log (
     at TIMESTAMP NOT NULL,
     actor VARCHAR(128) NOT NULL,
     action VARCHAR(64) NOT NULL,
-    shell VARCHAR(128),
+    conch VARCHAR(128),
     version VARCHAR(64),
     detail TEXT
 );
 
 CREATE INDEX idx_audit_log_at ON audit_log (at);
 
-CREATE INDEX idx_audit_log_shell_at ON audit_log (shell, at);
+CREATE INDEX idx_audit_log_conch_at ON audit_log (conch, at);
 
 CREATE TABLE failure_reports (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -57,8 +57,8 @@ CREATE TABLE failure_reports (
     instance_id VARCHAR(64) NOT NULL,
     crab_version VARCHAR(64),
     trace_id VARCHAR(128),
-    shell VARCHAR(128) NOT NULL,
-    shell_version VARCHAR(64),
+    conch VARCHAR(128) NOT NULL,
+    conch_version VARCHAR(64),
     action VARCHAR(128),
     step_index INTEGER,
     step_type VARCHAR(64),
@@ -67,15 +67,15 @@ CREATE TABLE failure_reports (
     occurred_at TIMESTAMP NOT NULL
 );
 
-CREATE INDEX idx_failure_reports_shell_version_occurred
-    ON failure_reports (shell, shell_version, occurred_at);
+CREATE INDEX idx_failure_reports_conch_version_occurred
+    ON failure_reports (conch, conch_version, occurred_at);
 
 CREATE INDEX idx_failure_reports_received_at
     ON failure_reports (received_at);
 
 CREATE TABLE hourly_counts (
-    shell VARCHAR(128) NOT NULL,
-    shell_version VARCHAR(64) NOT NULL,
+    conch VARCHAR(128) NOT NULL,
+    conch_version VARCHAR(64) NOT NULL,
     action VARCHAR(128) NOT NULL,
     hour_start TIMESTAMP NOT NULL,
     instance_id VARCHAR(64) NOT NULL,
@@ -83,17 +83,17 @@ CREATE TABLE hourly_counts (
     failure BIGINT NOT NULL,
     avg_millis BIGINT,
     p95_millis BIGINT,
-    PRIMARY KEY (shell, shell_version, action, hour_start, instance_id)
+    PRIMARY KEY (conch, conch_version, action, hour_start, instance_id)
 );
 
-CREATE INDEX idx_hourly_counts_shell_hour
-    ON hourly_counts (shell, hour_start);
+CREATE INDEX idx_hourly_counts_conch_hour
+    ON hourly_counts (conch, hour_start);
 
 CREATE TABLE rollback_events (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     received_at TIMESTAMP NOT NULL,
     instance_id VARCHAR(64) NOT NULL,
-    shell VARCHAR(128) NOT NULL,
+    conch VARCHAR(128) NOT NULL,
     from_version VARCHAR(64),
     to_version VARCHAR(64),
     reason VARCHAR(1024),
@@ -107,8 +107,8 @@ CREATE TABLE alerts (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     created_at TIMESTAMP NOT NULL,
     kind VARCHAR(64) NOT NULL,
-    shell VARCHAR(128),
-    shell_version VARCHAR(64),
+    conch VARCHAR(128),
+    conch_version VARCHAR(64),
     detail_json TEXT,
     acknowledged_at TIMESTAMP
 );

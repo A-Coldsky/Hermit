@@ -10,8 +10,8 @@ public record AlertList(List<AlertItem> alerts) {
             long id,
             Instant createdAt,
             String kind,
-            String shell,
-            String shellVersion,
+            String conch,
+            String conchVersion,
             JsonNode detail,
             Instant acknowledgedAt,
             String acknowledgedBy) {

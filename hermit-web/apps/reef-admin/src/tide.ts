@@ -2,7 +2,7 @@ import type { BarPoint } from '@shared/components/BarChart.vue'
 import type { TidePoint } from './api'
 
 export interface ActionTotals {
-  shell: string
+  conch: string
   action: string
   success: number
   failure: number
@@ -44,11 +44,11 @@ export function toBars(series: TidePoint[], bucket: string, from?: string, to?: 
 export function totalsByAction(series: TidePoint[]): ActionTotals[] {
   const map = new Map<string, ActionTotals & { weighted: number; weightedCalls: number }>()
   for (const point of series) {
-    const key = `${point.shell}\u0000${point.action}`
+    const key = `${point.conch}\u0000${point.action}`
     let row = map.get(key)
     if (!row) {
       row = {
-        shell: point.shell,
+        conch: point.conch,
         action: point.action,
         success: 0,
         failure: 0,

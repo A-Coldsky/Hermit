@@ -29,26 +29,26 @@ class CredentialCipherTest {
 
     @Test
     void unicodeRoundTripUsesUtf8Length() {
-        String shell = "壳";
+        String conch = "壳";
         String plaintext = "密码值-secret";
-        byte[] stored = cipher.encrypt(Origin.OFFICIAL, shell, "alice", "password", plaintext);
+        byte[] stored = cipher.encrypt(Origin.OFFICIAL, conch, "alice", "password", plaintext);
         assertThat(stored).hasSize(1 + 12 + plaintext.getBytes(StandardCharsets.UTF_8).length + 16);
-        assertThat(cipher.decrypt(Origin.OFFICIAL, shell, "alice", "password", stored)).isEqualTo(plaintext);
+        assertThat(cipher.decrypt(Origin.OFFICIAL, conch, "alice", "password", stored)).isEqualTo(plaintext);
     }
 
     @Test
     void tuplesThatDifferOnlyBySplitPositionCannotDecryptEachOther() {
         String account = "acct";
-        byte[] shellThenField = cipher.encrypt(Origin.OFFICIAL, "a", account, "b|c", PLAINTEXT);
-        byte[] fieldThenShell = cipher.encrypt(Origin.OFFICIAL, "a|b", account, "c", PLAINTEXT);
-        assertThat(cipher.decrypt(Origin.OFFICIAL, "a", account, "b|c", shellThenField)).isEqualTo(PLAINTEXT);
-        assertThat(cipher.decrypt(Origin.OFFICIAL, "a|b", account, "c", fieldThenShell)).isEqualTo(PLAINTEXT);
-        assertRejected(() -> cipher.decrypt(Origin.OFFICIAL, "a|b", account, "c", shellThenField));
-        assertRejected(() -> cipher.decrypt(Origin.OFFICIAL, "a", account, "b|c", fieldThenShell));
+        byte[] conchThenField = cipher.encrypt(Origin.OFFICIAL, "a", account, "b|c", PLAINTEXT);
+        byte[] fieldThenConch = cipher.encrypt(Origin.OFFICIAL, "a|b", account, "c", PLAINTEXT);
+        assertThat(cipher.decrypt(Origin.OFFICIAL, "a", account, "b|c", conchThenField)).isEqualTo(PLAINTEXT);
+        assertThat(cipher.decrypt(Origin.OFFICIAL, "a|b", account, "c", fieldThenConch)).isEqualTo(PLAINTEXT);
+        assertRejected(() -> cipher.decrypt(Origin.OFFICIAL, "a|b", account, "c", conchThenField));
+        assertRejected(() -> cipher.decrypt(Origin.OFFICIAL, "a", account, "b|c", fieldThenConch));
     }
 
     @Test
-    void movedToAnotherAccountFieldShellOrOriginFails() {
+    void movedToAnotherAccountFieldConchOrOriginFails() {
         byte[] stored = cipher.encrypt(Origin.OFFICIAL, "oa", "alice", "password", PLAINTEXT);
         assertRejected(() -> cipher.decrypt(Origin.OFFICIAL, "oa", "bob", "password", stored));
         assertRejected(() -> cipher.decrypt(Origin.OFFICIAL, "oa", "alice", "token", stored));

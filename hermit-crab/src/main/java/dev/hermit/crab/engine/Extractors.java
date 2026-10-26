@@ -49,7 +49,7 @@ final class Extractors {
     ) {
         int count = 0;
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
-            if (ShellRegistry.RESERVED.contains(entry.getKey())) {
+            if (ConchRegistry.RESERVED.contains(entry.getKey())) {
                 throw problem("不能写入保留变量");
             }
             Map<String, Object> child = Values.map(entry.getValue());

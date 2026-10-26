@@ -8,7 +8,7 @@ public record RollbackList(List<RollbackItem> events) {
     public record RollbackItem(
             long id,
             String instanceId,
-            String shell,
+            String conch,
             String fromVersion,
             String toVersion,
             String reason,

@@ -13,10 +13,10 @@ import javax.sql.DataSource;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.pkg.PackageVerificationException;
-import dev.hermit.common.pkg.ShellPackage;
-import dev.hermit.common.pkg.VerifiedShell;
+import dev.hermit.common.pkg.ConchPackage;
+import dev.hermit.common.pkg.VerifiedConch;
 import dev.hermit.crab.engine.ExecutionResult;
-import dev.hermit.crab.engine.ShellRegistry;
+import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.store.CrabPaths;
 
@@ -29,7 +29,7 @@ public final class RollbackGuard {
 
     private final CrabPaths paths;
     private final PublicKey reefKey;
-    private final ShellRegistry registry;
+    private final ConchRegistry registry;
     private final SyncStore store;
     private final ReportQueue reports;
     private final Clock clock;
@@ -37,7 +37,7 @@ public final class RollbackGuard {
     public RollbackGuard(
             CrabPaths paths,
             PublicKey reefKey,
-            ShellRegistry registry,
+            ConchRegistry registry,
             DataSource dataSource,
             ReportQueue reports
     ) {
@@ -47,7 +47,7 @@ public final class RollbackGuard {
     public RollbackGuard(
             CrabPaths paths,
             PublicKey reefKey,
-            ShellRegistry registry,
+            ConchRegistry registry,
             DataSource dataSource,
             ReportQueue reports,
             Clock clock
@@ -60,85 +60,85 @@ public final class RollbackGuard {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    public void onResult(String shell, String version, ExecutionResult result) {
-        if (shell == null || version == null || result == null) {
-            throw new IllegalArgumentException("shell, version, and result are required");
+    public void onResult(String conch, String version, ExecutionResult result) {
+        if (conch == null || version == null || result == null) {
+            throw new IllegalArgumentException("conch, version, and result are required");
         }
-        if (!ShellFiles.safeSegment(shell) || !ShellFiles.safeSegment(version)) {
+        if (!ConchFiles.safeSegment(conch) || !ConchFiles.safeSegment(version)) {
             return;
         }
         String rolledBackTo = null;
-        synchronized (ShellFileLocks.of(shell)) {
-            if (store.pin(shell).filter(pin -> version.equals(pin.badVersion())).isPresent()) {
+        synchronized (ConchFileLocks.of(conch)) {
+            if (store.pin(conch).filter(pin -> version.equals(pin.badVersion())).isPresent()) {
                 if (result.success()) {
-                    store.recordSuccess(shell, version, clock.instant());
-                    store.clearStreak(shell);
+                    store.recordSuccess(conch, version, clock.instant());
+                    store.clearStreak(conch);
                 }
                 return;
             }
             if (result.success()) {
-                store.recordSuccess(shell, version, clock.instant());
-                store.clearStreak(shell);
+                store.recordSuccess(conch, version, clock.instant());
+                store.clearStreak(conch);
                 return;
             }
             if (result.error() == null || result.error().code() != ErrorCode.RULE_MISMATCH) {
                 return;
             }
-            int streak = store.recordMismatch(shell, version);
+            int streak = store.recordMismatch(conch, version);
             if (streak >= MISMATCH_LIMIT) {
-                rolledBackTo = rollback(shell, version);
+                rolledBackTo = rollback(conch, version);
             }
         }
         if (rolledBackTo != null) {
             try {
-                reports.enqueueRollback(shell, version, rolledBackTo, REASON, clock.instant());
+                reports.enqueueRollback(conch, version, rolledBackTo, REASON, clock.instant());
             } catch (RuntimeException ex) {
-                LOG.log(Level.WARNING, "rollback report failed shell={0}", shell);
+                LOG.log(Level.WARNING, "rollback report failed conch={0}", conch);
             }
         }
     }
 
-    private String rollback(String shell, String version) {
-        Optional<String> previous = store.previous(shell);
-        if (previous.isEmpty() || !store.succeeded(shell, previous.get())) {
-            LOG.log(Level.WARNING, "rollback skipped shell={0} reason=previous_not_successful", shell);
+    private String rollback(String conch, String version) {
+        Optional<String> previous = store.previous(conch);
+        if (previous.isEmpty() || !store.succeeded(conch, previous.get())) {
+            LOG.log(Level.WARNING, "rollback skipped conch={0} reason=previous_not_successful", conch);
             return null;
         }
         String target = previous.get();
-        if (!ShellFiles.safeSegment(target)) {
+        if (!ConchFiles.safeSegment(target)) {
             return null;
         }
-        java.nio.file.Path zip = ShellFiles.versionDir(paths, shell, target).resolve("package.zip");
+        java.nio.file.Path zip = ConchFiles.versionDir(paths, conch, target).resolve("package.zip");
         if (!Files.isRegularFile(zip)) {
-            LOG.log(Level.WARNING, "rollback skipped shell={0} reason=package_missing", shell);
+            LOG.log(Level.WARNING, "rollback skipped conch={0} reason=package_missing", conch);
             return null;
         }
         try {
-            if (Files.size(zip) > ShellFiles.MAX_ZIP_BYTES) {
-                LOG.log(Level.WARNING, "rollback skipped shell={0} reason=package_too_large", shell);
+            if (Files.size(zip) > ConchFiles.MAX_ZIP_BYTES) {
+                LOG.log(Level.WARNING, "rollback skipped conch={0} reason=package_too_large", conch);
                 return null;
             }
-            VerifiedShell verified = ShellPackage.readVerified(Files.readAllBytes(zip), reefKey);
-            if (!shell.equals(verified.manifest().shell()) || !target.equals(verified.manifest().version())) {
-                LOG.log(Level.WARNING, "rollback skipped shell={0} reason=manifest_mismatch", shell);
+            VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), reefKey);
+            if (!conch.equals(verified.manifest().conch()) || !target.equals(verified.manifest().version())) {
+                LOG.log(Level.WARNING, "rollback skipped conch={0} reason=manifest_mismatch", conch);
                 return null;
             }
-            registry.put(verified.shellDoc());
-            ShellFiles.writeCurrent(paths, shell, target);
+            registry.put(verified.conchDoc());
+            ConchFiles.writeCurrent(paths, conch, target);
         } catch (PackageVerificationException ex) {
-            LOG.log(Level.WARNING, "rollback skipped shell={0} reason={1}",
-                    new Object[] {shell, ex.reason().name()});
+            LOG.log(Level.WARNING, "rollback skipped conch={0} reason={1}",
+                    new Object[] {conch, ex.reason().name()});
             return null;
         } catch (IOException ex) {
-            LOG.log(Level.WARNING, "rollback skipped shell={0} reason=unreadable", shell);
+            LOG.log(Level.WARNING, "rollback skipped conch={0} reason=unreadable", conch);
             return null;
         } catch (RuntimeException ex) {
-            LOG.log(Level.WARNING, "rollback skipped shell={0} reason=registry_rejected", shell);
+            LOG.log(Level.WARNING, "rollback skipped conch={0} reason=registry_rejected", conch);
             return null;
         }
-        store.pin(shell, version, target, clock.instant());
-        store.setPrevious(shell, version);
-        store.clearStreak(shell);
+        store.pin(conch, version, target, clock.instant());
+        store.setPrevious(conch, version);
+        store.clearStreak(conch);
         return target;
     }
 }

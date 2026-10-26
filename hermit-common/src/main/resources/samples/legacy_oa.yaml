@@ -1,12 +1,12 @@
 # 可发布示例：5.4 的步骤 + 5.7 的说明写法 output + 凭证/配置声明。
 # related 按 5.7 指向 approve、list_done，这两个能力不在本文件里，校验有警告、无错误。
-shell: legacy_oa
+conch: legacy_oa
 version: 1.0.0
 driver: http
 min_crab_version: 1.0.0
 base_url: "http://oa.intranet.local"
 title: 协同办公 OA
-description: 公司内部审批、公告、请假系统。本 Shell 覆盖待办审批和请假申请。
+description: 公司内部审批、公告、请假系统。本规则包覆盖待办审批和请假申请。
 owner: 平台组
 tags: [审批, 请假]
 changelog: 初始版本，提供待办查询。

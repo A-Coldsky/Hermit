@@ -3,25 +3,25 @@ import { CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, reactive, ref } from 'vue'
 import { copyText, formatTime, notifyError } from '@shared/format'
-import { api, type ShellDiff, type ShellVersion } from '../api'
+import { api, type ConchDiff, type ConchVersion } from '../api'
 import { versionStatusLabels } from '../labels'
 import DiffSummary from './DiffSummary.vue'
 import IssueList from './IssueList.vue'
 
-const props = defineProps<{ shell: string; versions: ShellVersion[]; loading?: boolean; disabled?: boolean }>()
+const props = defineProps<{ conch: string; versions: ConchVersion[]; loading?: boolean; disabled?: boolean }>()
 const emit = defineEmits<{ changed: [] }>()
 
 const busy = ref<string | null>(null)
 const current = computed(() => props.versions.find((v) => v.current) ?? null)
 
 const yamlDialog = reactive({ open: false, version: '', loading: false, text: '' })
-const warningDialog = reactive({ open: false, row: null as ShellVersion | null })
+const warningDialog = reactive({ open: false, row: null as ConchVersion | null })
 const diffDialog = reactive({
   open: false,
   from: '',
   to: '',
   loading: false,
-  result: null as ShellDiff | null,
+  result: null as ConchDiff | null,
 })
 
 async function confirm(message: string, title: string, button: string): Promise<boolean> {
@@ -33,7 +33,7 @@ async function confirm(message: string, title: string, button: string): Promise<
   }
 }
 
-async function publish(row: ShellVersion) {
+async function publish(row: ConchVersion) {
   const message = current.value
     ? `当前发布版本是 v${current.value.version}。发布后各 Crab 下次同步会切换到 v${row.version}。`
     : `发布后各 Crab 下次同步会安装 v${row.version}。`
@@ -42,7 +42,7 @@ async function publish(row: ShellVersion) {
   }
   busy.value = row.version
   try {
-    await api.publish(props.shell, row.version)
+    await api.publish(props.conch, row.version)
     ElMessage.success(`v${row.version} 已发布`)
     emit('changed')
   } catch (error) {
@@ -52,14 +52,14 @@ async function publish(row: ShellVersion) {
   }
 }
 
-async function rollback(row: ShellVersion) {
+async function rollback(row: ConchVersion) {
   const message = `把当前发布版本从 v${current.value?.version ?? '—'} 切回 v${row.version}。各 Crab 下次同步时生效。`
   if (!(await confirm(message, `回滚到 v${row.version}`, '回滚'))) {
     return
   }
   busy.value = row.version
   try {
-    const result = await api.rollback(props.shell, row.version)
+    const result = await api.rollback(props.conch, row.version)
     ElMessage.success(`已回滚：v${result.from ?? '—'} → v${result.to}`)
     emit('changed')
   } catch (error) {
@@ -69,15 +69,15 @@ async function rollback(row: ShellVersion) {
   }
 }
 
-function showWarnings(row: ShellVersion) {
+function showWarnings(row: ConchVersion) {
   warningDialog.row = row
   warningDialog.open = true
 }
 
-async function showYaml(row: ShellVersion) {
+async function showYaml(row: ConchVersion) {
   Object.assign(yamlDialog, { open: true, version: row.version, loading: true, text: '' })
   try {
-    yamlDialog.text = await api.yaml(props.shell, row.version)
+    yamlDialog.text = await api.yaml(props.conch, row.version)
   } catch (error) {
     notifyError(error)
   } finally {
@@ -85,7 +85,7 @@ async function showYaml(row: ShellVersion) {
   }
 }
 
-function openDiff(row: ShellVersion) {
+function openDiff(row: ConchVersion) {
   const index = props.versions.indexOf(row)
   const base = current.value && current.value.version !== row.version ? current.value : props.versions[index + 1]
   diffDialog.from = base?.version ?? row.version
@@ -101,7 +101,7 @@ async function runDiff() {
   }
   diffDialog.loading = true
   try {
-    diffDialog.result = await api.diff(props.shell, diffDialog.from, diffDialog.to)
+    diffDialog.result = await api.diff(props.conch, diffDialog.from, diffDialog.to)
   } catch (error) {
     diffDialog.result = null
     notifyError(error)
@@ -161,7 +161,7 @@ async function runDiff() {
         <template #default="{ row }">
           <el-button link type="primary" @click="showYaml(row)">YAML</el-button>
           <el-button link type="primary" :disabled="versions.length < 2" @click="openDiff(row)">对比</el-button>
-          <el-tooltip v-if="disabled && (row.status === 'UPLOADED' || !row.current)" content="Shell 已停用，先启用再发布或回滚">
+          <el-tooltip v-if="disabled && (row.status === 'UPLOADED' || !row.current)" content="规则包已停用，先启用再发布或回滚">
             <span class="off">{{ row.status === 'UPLOADED' ? '发布' : '回滚到此版本' }}</span>
           </el-tooltip>
           <el-button v-else-if="row.status === 'UPLOADED'" link type="primary" :loading="busy === row.version" @click="publish(row)">
@@ -181,7 +181,7 @@ async function runDiff() {
     </el-table>
   </div>
 
-  <el-dialog v-model="yamlDialog.open" :title="`${shell} v${yamlDialog.version}`" width="860px" top="6vh">
+  <el-dialog v-model="yamlDialog.open" :title="`${conch} v${yamlDialog.version}`" width="860px" top="6vh">
     <div v-loading="yamlDialog.loading">
       <pre class="hm-pre yaml">{{ yamlDialog.text }}</pre>
     </div>

@@ -3,7 +3,7 @@ import { CopyDocument } from '@element-plus/icons-vue'
 import { copyText, errorCodeLabels } from '@shared/format'
 import type { FailureGroup } from '../api'
 
-defineProps<{ groups: FailureGroup[]; showShell?: boolean; loading?: boolean }>()
+defineProps<{ groups: FailureGroup[]; showConch?: boolean; loading?: boolean }>()
 </script>
 
 <template>
@@ -21,13 +21,13 @@ defineProps<{ groups: FailureGroup[]; showShell?: boolean; loading?: boolean }>(
         <p class="hm-muted hint">在对应 Crab 的控制台「调用记录」里用 traceId 查看完整步骤。</p>
       </template>
     </el-table-column>
-    <el-table-column v-if="showShell" label="Shell" min-width="140">
+    <el-table-column v-if="showConch" label="Conch" min-width="140">
       <template #default="{ row }">
-        <router-link :to="`/shells/${encodeURIComponent(row.shell)}?tab=stats`" class="mono">{{ row.shell }}</router-link>
+        <router-link :to="`/conches/${encodeURIComponent(row.conch)}?tab=stats`" class="mono">{{ row.conch }}</router-link>
       </template>
     </el-table-column>
     <el-table-column label="版本" width="100">
-      <template #default="{ row }"><span class="mono">v{{ row.shellVersion }}</span></template>
+      <template #default="{ row }"><span class="mono">v{{ row.conchVersion }}</span></template>
     </el-table-column>
     <el-table-column label="能力" min-width="140">
       <template #default="{ row }"><span class="mono">{{ row.action }}</span></template>

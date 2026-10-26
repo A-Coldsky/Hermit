@@ -78,7 +78,7 @@ abstract class AgentRouteRejection {
     }
 
     private MockHttpServletRequestBuilder manifest() {
-        return get("/agent/shells/manifest").accept(MediaType.APPLICATION_JSON);
+        return get("/agent/conches/manifest").accept(MediaType.APPLICATION_JSON);
     }
 
     private MockHttpServletRequestBuilder reports() {

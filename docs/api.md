@@ -22,7 +22,7 @@
 
 失败时 success=false、data 通常为 null、error 包含 code/message。YAML、ZIP、静态页、OpenAPI 原文、304 和 MCP JSON-RPC 不套此格式。上传校验失败可携带结构化 data，请同时保留 traceId。
 
-已登录访问不存在的 Reef `/api/admin/**` 返回 404 `NOT_FOUND` 信封，`traceId` 与请求头 `X-Trace-Id`（合法时）相同。未登录的 `/api/**` 仍是 401，已登录但路径不在 `/api/admin/**` 下仍是 403；这两类由安全链拒绝，响应同样是信封，不是框架默认 JSON。页面路由（`/`、`/login`、`/shells` 等）继续返回 `index.html`。Crab 在带控制台头的回环连接上，未匹配的 `/console/api/**` 返回 404 `NOT_FOUND` 信封；未匹配的网关路径（不是 `/api/{shell}/{action}` 或已登记别名）同样如此。`traceId` 同时出现在响应体和 `X-Hermit-Trace`。`/console/` 下已注册的页面仍返回 `index.html`。
+已登录访问不存在的 Reef `/api/admin/**` 返回 404 `NOT_FOUND` 信封，`traceId` 与请求头 `X-Trace-Id`（合法时）相同。未登录的 `/api/**` 仍是 401，已登录但路径不在 `/api/admin/**` 下仍是 403；这两类由安全链拒绝，响应同样是信封，不是框架默认 JSON。页面路由（`/`、`/login`、`/conches` 等）继续返回 `index.html`。Crab 在带控制台头的回环连接上，未匹配的 `/console/api/**` 返回 404 `NOT_FOUND` 信封；未匹配的网关路径（不是 `/api/{conch}/{action}` 或已登记别名）同样如此。`traceId` 同时出现在响应体和 `X-Hermit-Trace`。`/console/` 下已注册的页面仍返回 `index.html`。
 
 Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常，响应正文仍只有 `INTERNAL`。
 
@@ -35,27 +35,27 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | POST | `/login` | `{username,password}`；失败锁定窗口 15 分钟，阈值 5 次 |
 | GET | `/me` | 当前身份 |
 | GET | `/signing-key` | `data.publicKey` PEM；不提供私钥 |
-| POST | `/shells` | multipart 字段 `file`，YAML 或仅含 shell.yaml 的 ZIP；上传及解包 YAML 限 1 MiB |
-| GET | `/shells`、`/shells/{shell}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null |
-| GET | `/shells/{shell}/versions` | 版本列表，每项含 `warningCount` 和 `warnings` 校验警告明细 |
-| GET | `/shells/{shell}/versions/{version}/yaml` | YAML 原文 |
-| GET | `/shells/{shell}/diff?from=...&to=...` | 版本差异 |
-| POST | `/shells/{shell}/versions/{version}/publish` | 发布已上传版本。Shell 已停用时 409，`message` 为 `shell is disabled` |
-| POST | `/shells/{shell}/disable` | `{reason}`。停用已有 Shell。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `shell is already disabled` |
-| POST | `/shells/{shell}/enable` | `{reason}`，规则与停用相同。未停用时 409，`message` 为 `shell is not disabled`。启用原因只写入审计 |
-| POST | `/shells/{shell}/rollback` | `{version}`，切回已发布且非当前版本。Shell 已停用时 409，`message` 为 `shell is disabled` |
-| GET | `/tide/summary` | shell/from/to/bucket |
-| GET | `/tide/failures` | shell/version/action/from/to |
-| GET | `/tide/compare` | shell/versions（逗号分隔版本） |
-| GET | `/tide/rollbacks` | shell/from/to |
+| POST | `/conches` | multipart 字段 `file`，YAML 或仅含 conch.yaml 的 ZIP；上传及解包 YAML 限 1 MiB |
+| GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null |
+| GET | `/conches/{conch}/versions` | 版本列表，每项含 `warningCount` 和 `warnings` 校验警告明细 |
+| GET | `/conches/{conch}/versions/{version}/yaml` | YAML 原文 |
+| GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异 |
+| POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。Conch 已停用时 409，`message` 为 `conch is disabled` |
+| POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `conch is already disabled` |
+| POST | `/conches/{conch}/enable` | `{reason}`，规则与停用相同。未停用时 409，`message` 为 `conch is not disabled`。启用原因只写入审计 |
+| POST | `/conches/{conch}/rollback` | `{version}`，切回已发布且非当前版本。Conch 已停用时 409，`message` 为 `conch is disabled` |
+| GET | `/tide/summary` | conch/from/to/bucket |
+| GET | `/tide/failures` | conch/version/action/from/to |
+| GET | `/tide/compare` | conch/versions（逗号分隔版本） |
+| GET | `/tide/rollbacks` | conch/from/to |
 | GET | `/alerts` | status |
 | POST | `/alerts/{id}/ack` | 确认告警 |
 | GET | `/audit` | 管理操作审计；参数见 AuditController |
 | POST | `/retention/purge` | 立即清理过期失败报告、回滚事件和锁定窗口外的登录失败。`data` 为 `{failureReports, rollbackEvents, loginFailures}`。写入审计 `RETENTION_PURGE`，detail 为同样的三个计数。需要管理员 JWT |
 
-Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。确认告警只记下确认人和时间，不结束去重窗口：同一 `(kind, shell, shell_version)` 自 `created_at` 起 `dedup-hours` 内不再新建。窗口过后条件仍成立才会再出现一条。失败次数上涨不会提前打破这个窗口。
+Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。确认告警只记下确认人和时间，不结束去重窗口：同一 `(kind, conch, conch_version)` 自 `created_at` 起 `dedup-hours` 内不再新建。窗口过后条件仍成立才会再出现一条。失败次数上涨不会提前打破这个窗口。
 
-配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`shell`、`version`、`detail`、`createdAt`、`adminUrl`。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
+配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 
 停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布，也不能回滚。
 
@@ -64,8 +64,8 @@ Agent 路由：
 | 方法 | 路径 | 返回 |
 | --- | --- | --- |
 | GET | `/agent/version` | Crab 最新版本与下载地址提示 |
-| GET | `/agent/shells/manifest` | 当前可分发规则清单与 ETag，支持 If-None-Match/304。已停用的 Shell 不在清单里 |
-| GET | `/agent/shells/{shell}/{version}` | 已发布 ZIP。Shell 已停用时 404，包文件仍留在 Reef |
+| GET | `/agent/conches/manifest` | 当前可分发规则清单与 ETag，支持 If-None-Match/304。已停用的 Conch 不在清单里 |
+| GET | `/agent/conches/{conch}/{version}` | 已发布 ZIP。Conch 已停用时 404，包文件仍留在 Reef |
 | POST | `/agent/reports` | ReportBatch；instanceId 须与请求头一致 |
 
 ReportBatch 包含 instanceId/crabVersion/sentAt/failures/counts/events，严格 DTO 在 [common/report](../hermit-common/src/main/java/dev/hermit/common/report)。失败按实例+trace 去重，小时统计按复合主键覆盖；回滚事件按实例和 eventId 去重。
@@ -73,13 +73,13 @@ ReportBatch 包含 instanceId/crabVersion/sentAt/failures/counts/events，严格
 ## Crab 能力 API
 
 ```text
-GET  /api/{shell}/{action}?param=value
-POST /api/{shell}/{action}           JSON object body
+GET  /api/{conch}/{action}?param=value
+POST /api/{conch}/{action}           JSON object body
 ```
 
-使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 shells/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Shell 下的账号。空 shells/actions 集合表示不限对应维度。`actions` 里的每一项必须是当前已加载能力的 `shell.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。CLI `apikey create --actions` 使用同一规则。
+使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。空 conches/actions 集合表示不限对应维度。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。CLI `apikey create --actions` 使用同一规则。
 
-POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/key，有效期 24 小时，不包含 API Key 身份、请求体摘要或规则版本。相同键重放保存的响应（含旧 traceId），不同业务操作不要复用键；修复方向见审计待确认设计项。
+POST 可带 `Idempotency-Key`，当前缓存键为 origin/conch/account/action/key，有效期 24 小时，不包含 API Key 身份、请求体摘要或规则版本。相同键重放保存的响应（含旧 traceId），不同业务操作不要复用键；修复方向见审计待确认设计项。
 
 | 错误码 | HTTP 状态 |
 | --- | --- |
@@ -87,7 +87,7 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 | AUTH_FAILED | 网关 Key 无效 401；上游登录失败 422 |
 | FORBIDDEN | 403 |
 | NOT_FOUND / ACCOUNT_NOT_FOUND | 404 |
-| NOT_CONFIGURED / SHELL_DISABLED | 409 |
+| NOT_CONFIGURED / CONCH_DISABLED | 409 |
 | SESSION_EXPIRED / RULE_MISMATCH | 422 |
 | UPSTREAM_ERROR | 502 |
 | TIMEOUT | 504 |
@@ -95,7 +95,7 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 
 缺必填、类型无法转换，或数值超出参数声明的 `minimum` / `maximum`，都返回 `INVALID_INPUT`。运行时不会把负页码或过大的 `pageSize` 夹进范围内再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。
 
-`SHELL_DISABLED` 的 `message` 是 `shell disabled`。Reef 把 Shell 从分发清单去掉之后，Crab 下次同步会卸下注册表并清掉 `current`，版本文件和账号凭证仍保留。此后 HTTP 调用返回 409 `SHELL_DISABLED`，而不是 404 `NOT_FOUND`。MCP 直接工具或 `call_capability` 在工具已不在目录里时，同样返回 `SHELL_DISABLED`，hint 说明需要管理员重新启用后再同步。已经拿着授权快照、正在执行的请求仍跑完那份快照，不会在中途换成另一个版本。控制台测试登录和 Shell 详情在注册表里已经没有这份规则时仍是 `NOT_FOUND`。
+`CONCH_DISABLED` 的 `message` 是 `conch disabled`。Reef 把 Conch 从分发清单去掉之后，Crab 下次同步会卸下注册表并清掉 `current`，版本文件和账号凭证仍保留。此后 HTTP 调用返回 409 `CONCH_DISABLED`，而不是 404 `NOT_FOUND`。MCP 直接工具或 `call_capability` 在工具已不在目录里时，同样返回 `CONCH_DISABLED`，hint 说明需要管理员重新启用后再同步。已经拿着授权快照、正在执行的请求仍跑完那份快照，不会在中途换成另一个版本。控制台测试登录和 Conch 详情在注册表里已经没有这份规则时仍是 `NOT_FOUND`。
 
 能力请求已经发出后，上游 HTTP 400 也返回 `INVALID_INPUT`，文案为「上游拒绝了输入（HTTP 400）。请修改参数后重试。」，不再继续提取或断言。它和调用前的参数校验共用错误码，但 `failedStepType` 为 `request`。MCP 对这段文案的 hint 是按该系统的要求修改参数。上游 HTTP 401/403，以及重定向到登录页，都视为会话失效：幂等能力重新登录并重放一次，其它能力返回 `SESSION_EXPIRED` 且不重放。这两类都不会把响应体抽成空列表，也不计入 `RollbackGuard`。登录步骤不走这套映射，失败仍是 `AUTH_FAILED`；`cookie_exists` 未通过时说明登录未建立会话，并提示核对用户名和密码、重新测试登录，或检查登录页是否改版。期望状态与实际状态不一致（例如期望 200 实际 404）仍是 `RULE_MISMATCH`，累计 5 次且前一版本曾成功时仍会自动回滚。
 
@@ -105,24 +105,24 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 
 | 方法 | 路径 | 输入/用途 |
 | --- | --- | --- |
-| GET | `/shells`、`/shells/{shell}` | 已加载规则/字段声明/能力状态。列表项含 `needsConfiguration`、`loginPaused`；详情含 `loginPaused` |
-| GET / POST | `/shells/{shell}/accounts` | 列表 / `{name}` 创建。账号行见下方字段 |
-| DELETE | `/shells/{shell}/accounts/{account}` | 删除账号/凭证并使会话失效 |
-| POST | `/shells/{shell}/accounts/{account}/default` | 设默认账号 |
-| GET / PUT | `/shells/{shell}/accounts/{account}/credentials` | 仅字段名 / `{字段:字符串}` 写入；空字符串表示删除。空 body、`{}`，或写入后仍缺必填字段，返回 `INVALID_INPUT`。已保存字段可以只改其中几项。凭证无法解密时，必须把已存字段都重新写成非空值 |
-| POST | `/shells/{shell}/accounts/{account}/test-login` | 重置登录暂停并测试登录 |
-| GET / PUT | `/shells/{shell}/config` | 配置声明/值 / `{字段:字符串}`；空字符串清除覆盖 |
-| POST | `/capabilities/{shell}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
-| GET / POST | `/apikeys` | 列表 / `{name,shells,actions,readOnly}`；新 Key 仅返回一次 plaintext。`actions` 必须是已加载的 `shell.action`，裸名或不存在的能力拒绝创建 |
+| GET | `/conches`、`/conches/{conch}` | 已加载规则/字段声明/能力状态。列表项含 `needsConfiguration`、`loginPaused`；详情含 `loginPaused` |
+| GET / POST | `/conches/{conch}/accounts` | 列表 / `{name}` 创建。账号行见下方字段 |
+| DELETE | `/conches/{conch}/accounts/{account}` | 删除账号/凭证并使会话失效 |
+| POST | `/conches/{conch}/accounts/{account}/default` | 设默认账号 |
+| GET / PUT | `/conches/{conch}/accounts/{account}/credentials` | 仅字段名 / `{字段:字符串}` 写入；空字符串表示删除。空 body、`{}`，或写入后仍缺必填字段，返回 `INVALID_INPUT`。已保存字段可以只改其中几项。凭证无法解密时，必须把已存字段都重新写成非空值 |
+| POST | `/conches/{conch}/accounts/{account}/test-login` | 重置登录暂停并测试登录 |
+| GET / PUT | `/conches/{conch}/config` | 配置声明/值 / `{字段:字符串}`；空字符串清除覆盖 |
+| POST | `/capabilities/{conch}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
+| GET / POST | `/apikeys` | 列表 / `{name,conches,actions,readOnly}`；新 Key 仅返回一次 plaintext。`actions` 必须是已加载的 `conch.action`，裸名或不存在的能力拒绝创建 |
 | DELETE | `/apikeys/{id}` | 撤销 |
-| GET | `/calls`、`/calls/{traceId}` | shell/action/limit 查询及步骤摘要 |
-| GET | `/audit` | 配置审计，新的在前。参数 `shell`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
+| GET | `/calls`、`/calls/{traceId}` | conch/action/limit 查询及步骤摘要 |
+| GET | `/audit` | 配置审计，新的在前。参数 `conch`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
 | GET / POST | `/debug` | 读状态 / `{enabled}`；当前只存状态，24h 过期 |
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |
 | GET | `/reports/preview` | 待发送批次和丢弃数 |
 | POST | `/reports/send` | 手动发送，返回 attempted/accepted/status |
 
-Shell 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。概览待配置按它计数。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。
+Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。概览待配置按它计数。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。
 
 账号列表每一行：
 
@@ -138,7 +138,7 @@ Shell 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 测试登录会先清掉暂停再尝试登录。页面应读这些字段显示「已暂停」和恢复方法，不要只看 `needsConfiguration`。
 
-`GET /console/api/audit` 的 `data` 为 `{entries, page, limit, total}`。`entries` 按 `at`、`id` 从新到旧。空白的 `shell` 或 `account` 表示不过滤。`page` 小于 1，或 `limit` 不在 1 到 200，返回 `INVALID_INPUT`。
+`GET /console/api/audit` 的 `data` 为 `{entries, page, limit, total}`。`entries` 按 `at`、`id` 从新到旧。空白的 `conch` 或 `account` 表示不过滤。`page` 小于 1，或 `limit` 不在 1 到 200，返回 `INVALID_INPUT`。
 
 每一行只有谁、做了什么、何时：
 
@@ -149,15 +149,15 @@ Shell 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 | `actor` | `cli`、`console` 或 `sync` |
 | `action` | 动作名，例如 `CREDENTIALS_WRITTEN`、`CONFIG_PUT`、`CAPABILITY_DISABLED` |
 | `origin` | `OFFICIAL` 或 `LOCAL`。API Key、debug、同步，以及凭证声明变更，为 JSON `null` |
-| `shell` | 相关 Shell；没有则为 `null` |
+| `conch` | 相关 Conch；没有则为 `null` |
 | `account` | 账号类事件的账号。配置、能力开关、API Key、debug、同步和凭证声明变更为 `null` |
 | `fields` | 名字列表，按字典序。凭证写入包含写入和清除的字段；配置是 key；凭证声明变更是新增必填和移除的字段；能力开关是能力名 |
 
 响应不含 `detail` 原文、配置值、凭证明文、密文，也不含 API Key 明文、哈希、id 或 name。debug 的 `enabled` 同样不返回。历史行的 detail 里如果还有别的键，读取时丢弃。`config_audit` 没有定期清理。
 
-同步结果里每个 Shell 有 `shell`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`SKIPPED_PINNED`、`REJECTED`、`ROLLED_BACK`、`DISABLED` 之一。自动回滚尚未解除固定时，该 Shell 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 把已安装的 Shell 从清单去掉（停用）时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是卸下前的已安装版本，同时名字出现在 `removed`。随后的 304 不再带这行原始结果，控制台读取时仍按停用记录投影成 `DISABLED`，并放进 `removed`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
+同步结果里每个 Conch 有 `conch`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`SKIPPED_PINNED`、`REJECTED`、`ROLLED_BACK`、`DISABLED` 之一。自动回滚尚未解除固定时，该 Conch 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 把已安装的 Conch 从清单去掉（停用）时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是卸下前的已安装版本，同时名字出现在 `removed`。随后的 304 不再带这行原始结果，控制台读取时仍按停用记录投影成 `DISABLED`，并放进 `removed`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
 
-重新启用后，Crab 重新下载并验签安装，停用记录清除，调用恢复。若本地仍把该版本固定为坏版本，且清单版本没有高于坏版本，则不会装回去，调用继续是 `SHELL_DISABLED`。账号、凭证和配置在停用期间不删除。
+重新启用后，Crab 重新下载并验签安装，停用记录清除，调用恢复。若本地仍把该版本固定为坏版本，且清单版本没有高于坏版本，则不会装回去，调用继续是 `CONCH_DISABLED`。账号、凭证和配置在停用期间不删除。
 
 ## CLI
 
@@ -166,15 +166,15 @@ Shell 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 ```text
 serve
 sync
-account list <shell>
-account add|remove|default <shell> <name>
-credential set <shell> <account> <field> [--from-env VAR]
-credential list <shell> <account>
-config get <shell> [key]
-config set <shell> <key> <value>
-config unset <shell> <key>
-audit list [--shell NAME] [--account NAME] [--limit N] [--page N]
-apikey create <name> [--shells a,b] [--actions shell.action] [--read-only]
+account list <conch>
+account add|remove|default <conch> <name>
+credential set <conch> <account> <field> [--from-env VAR]
+credential list <conch> <account>
+config get <conch> [key]
+config set <conch> <key> <value>
+config unset <conch> <key>
+audit list [--conch NAME] [--account NAME] [--limit N] [--page N]
+apikey create <name> [--conches a,b] [--actions conch.action] [--read-only]
 apikey list
 apikey revoke <id>
 mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
@@ -182,16 +182,16 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
 
-`audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。每一行是 `时间 actor action origin shell account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
+`audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。每一行是 `时间 actor action origin conch account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
 
 ## MCP
 
 `/mcp` 为 Streamable HTTP：POST JSON-RPC、GET SSE、DELETE 会话，使用 `Mcp-Session-Id`；每次仍校验 API Key，并将会话绑定 Key 身份。空闲 1 小时过期，最多 1000 会话。实现使用 SDK 的 Schema 类型和自有 Javalin 传输层，不直接使用 SDK Servlet transport。
 
-- 可见能力不超过 40 个时，直接工具名 `shell__action`。
+- 可见能力不超过 40 个时，直接工具名 `conch__action`。
 - 超过 40 个时，提供 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个目录工具。
 - 目录模式调用非只读能力需要支持 elicitation 且保持 SSE，明确确认后执行；直接模式没有同样的服务端确认步骤，客户端应依据工具注解交互。
-- guide resource 为 `hermit://shells/{shell}/guide`，由说明、参数、示例生成。
+- guide resource 为 `hermit://conches/{conch}/guide`，由说明、参数、示例生成。
 - 规则更新/能力开关变化推送列表变更通知。
 - 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。
 
@@ -208,7 +208,7 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。
 
-成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。直接工具的 `outputSchema` 只列 Shell `output` 的字段名和说明，不带类型约束，因为模板渲染不会把提取值转换成声明类型；目录工具的 `outputSchema` 带类型。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
+成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。直接工具的 `outputSchema` 只列 Conch `output` 的字段名和说明，不带类型约束，因为模板渲染不会把提取值转换成声明类型；目录工具的 `outputSchema` 带类型。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
 
 stdio 是对运行中 Crab 的桥接，不单独启动执行器。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr：
 

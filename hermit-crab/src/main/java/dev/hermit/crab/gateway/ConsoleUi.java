@@ -32,8 +32,8 @@ final class ConsoleUi {
             }
             ctx.redirect("/console/", HttpStatus.FOUND);
         });
-        http.get("/console/shells", ctx -> page(ctx));
-        http.get("/console/shells/{shell}", ctx -> page(ctx));
+        http.get("/console/conches", ctx -> page(ctx));
+        http.get("/console/conches/{conch}", ctx -> page(ctx));
         http.get("/console/apikeys", ctx -> page(ctx));
         http.get("/console/calls", ctx -> page(ctx));
         http.get("/console/reports", ctx -> page(ctx));

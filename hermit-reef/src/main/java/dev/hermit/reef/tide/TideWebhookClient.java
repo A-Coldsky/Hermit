@@ -52,14 +52,14 @@ public class TideWebhookClient {
                     .build();
             int status = httpClient.send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
             if (status < 200 || status >= 300) {
-                log.warn("tide webhook rejected kind={} shell={} status={}", notice.kind(), notice.shell(), status);
+                log.warn("tide webhook rejected kind={} conch={} status={}", notice.kind(), notice.conch(), status);
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            log.warn("tide webhook failed kind={} shell={} errorType={}", notice.kind(), notice.shell(),
+            log.warn("tide webhook failed kind={} conch={} errorType={}", notice.kind(), notice.conch(),
                     ex.getClass().getName());
         } catch (Exception ex) {
-            log.warn("tide webhook failed kind={} shell={} errorType={}", notice.kind(), notice.shell(),
+            log.warn("tide webhook failed kind={} conch={} errorType={}", notice.kind(), notice.conch(),
                     ex.getClass().getName());
         }
     }
@@ -67,7 +67,7 @@ public class TideWebhookClient {
     public record WebhookNotice(
             long id,
             String kind,
-            String shell,
+            String conch,
             String version,
             JsonNode detail,
             Instant createdAt,

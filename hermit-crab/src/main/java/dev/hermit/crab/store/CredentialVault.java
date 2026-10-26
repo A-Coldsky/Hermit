@@ -50,9 +50,9 @@ public final class CredentialVault {
      * Whether every stored field for this account opens with the current key.
      * An account with no ciphertext is readable. Plaintext is not returned.
      */
-    public boolean readable(Origin origin, String shell, String account) {
+    public boolean readable(Origin origin, String conch, String account) {
         try {
-            decryptForExecution(origin, shell, account);
+            decryptForExecution(origin, conch, account);
             return true;
         } catch (CredentialDecryptException ex) {
             return false;
@@ -63,7 +63,7 @@ public final class CredentialVault {
     public boolean anyUnreadable() {
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT origin, shell, account, field, ciphertext FROM credentials
+                    SELECT origin, conch, account, field, ciphertext FROM credentials
                     """);
                  ResultSet resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
@@ -76,7 +76,7 @@ public final class CredentialVault {
                     try {
                         cipher.decrypt(
                                 rowOrigin,
-                                resultSet.getString("shell"),
+                                resultSet.getString("conch"),
                                 resultSet.getString("account"),
                                 resultSet.getString("field"),
                                 resultSet.getBytes("ciphertext"));
@@ -89,9 +89,9 @@ public final class CredentialVault {
         });
     }
 
-    public void write(Origin origin, String shell, String account, Map<String, String> fields, String actor) {
+    public void write(Origin origin, String conch, String account, Map<String, String> fields, String actor) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         String checkedAccount = Checks.account(account);
         String checkedActor = Checks.actor(actor);
         if (fields == null) {
@@ -105,9 +105,9 @@ public final class CredentialVault {
             }
             snapshot.put(field, entry.getValue());
         }
-        synchronized (ShellLocks.of(dataSource, checkedOrigin, checkedShell)) {
+        synchronized (ConchLocks.of(dataSource, checkedOrigin, checkedConch)) {
             Db.transaction(dataSource, connection -> {
-                lockAccount(connection, checkedOrigin, checkedShell, checkedAccount);
+                lockAccount(connection, checkedOrigin, checkedConch, checkedAccount);
                 if (snapshot.isEmpty()) {
                     return null;
                 }
@@ -116,12 +116,12 @@ public final class CredentialVault {
                 Instant now = Instant.now();
                 for (Map.Entry<String, String> entry : snapshot.entrySet()) {
                     if (entry.getValue().isEmpty()) {
-                        deleteField(connection, checkedOrigin, checkedShell, checkedAccount, entry.getKey());
+                        deleteField(connection, checkedOrigin, checkedConch, checkedAccount, entry.getKey());
                         cleared.add(entry.getKey());
                     } else {
                         byte[] ciphertext = cipher.encrypt(
-                                checkedOrigin, checkedShell, checkedAccount, entry.getKey(), entry.getValue());
-                        upsert(connection, checkedOrigin, checkedShell, checkedAccount, entry.getKey(), ciphertext, now);
+                                checkedOrigin, checkedConch, checkedAccount, entry.getKey(), entry.getValue());
+                        upsert(connection, checkedOrigin, checkedConch, checkedAccount, entry.getKey(), ciphertext, now);
                         written.add(entry.getKey());
                     }
                 }
@@ -134,26 +134,26 @@ public final class CredentialVault {
                         connection,
                         checkedActor,
                         AuditKind.CREDENTIALS_WRITTEN,
-                        ConfigAudit.target(checkedOrigin, checkedShell, checkedAccount),
+                        ConfigAudit.target(checkedOrigin, checkedConch, checkedAccount),
                         Json.write(detail));
                 return null;
             });
         }
     }
 
-    public Set<String> fieldNames(Origin origin, String shell, String account) {
+    public Set<String> fieldNames(Origin origin, String conch, String account) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         String checkedAccount = Checks.account(account);
         return Db.transaction(dataSource, connection -> {
-            requireAccount(connection, checkedOrigin, checkedShell, checkedAccount);
+            requireAccount(connection, checkedOrigin, checkedConch, checkedAccount);
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT field FROM credentials
-                    WHERE origin = ? AND shell = ? AND account = ?
+                    WHERE origin = ? AND conch = ? AND account = ?
                     ORDER BY field
                     """)) {
                 statement.setString(1, checkedOrigin.name());
-                statement.setString(2, checkedShell);
+                statement.setString(2, checkedConch);
                 statement.setString(3, checkedAccount);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     Set<String> names = new LinkedHashSet<>();
@@ -166,26 +166,26 @@ public final class CredentialVault {
         });
     }
 
-    public Map<String, String> decryptForExecution(Origin origin, String shell, String account) {
+    public Map<String, String> decryptForExecution(Origin origin, String conch, String account) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         String checkedAccount = Checks.account(account);
         return Db.transaction(dataSource, connection -> {
-            requireAccount(connection, checkedOrigin, checkedShell, checkedAccount);
+            requireAccount(connection, checkedOrigin, checkedConch, checkedAccount);
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT field, ciphertext FROM credentials
-                    WHERE origin = ? AND shell = ? AND account = ?
+                    WHERE origin = ? AND conch = ? AND account = ?
                     ORDER BY field
                     """)) {
                 statement.setString(1, checkedOrigin.name());
-                statement.setString(2, checkedShell);
+                statement.setString(2, checkedConch);
                 statement.setString(3, checkedAccount);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     Map<String, String> fields = new LinkedHashMap<>();
                     while (resultSet.next()) {
                         String field = resultSet.getString("field");
                         byte[] ciphertext = resultSet.getBytes("ciphertext");
-                        fields.put(field, cipher.decrypt(checkedOrigin, checkedShell, checkedAccount, field, ciphertext));
+                        fields.put(field, cipher.decrypt(checkedOrigin, checkedConch, checkedAccount, field, ciphertext));
                     }
                     return Map.copyOf(fields);
                 }
@@ -193,23 +193,23 @@ public final class CredentialVault {
         });
     }
 
-    public Set<String> allSecretValues(Origin origin, String shell) {
+    public Set<String> allSecretValues(Origin origin, String conch) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT account, field, ciphertext FROM credentials
-                    WHERE origin = ? AND shell = ?
+                    WHERE origin = ? AND conch = ?
                     """)) {
                 statement.setString(1, checkedOrigin.name());
-                statement.setString(2, checkedShell);
+                statement.setString(2, checkedConch);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     Set<String> values = new LinkedHashSet<>();
                     while (resultSet.next()) {
                         String account = resultSet.getString("account");
                         String field = resultSet.getString("field");
                         byte[] ciphertext = resultSet.getBytes("ciphertext");
-                        values.add(cipher.decrypt(checkedOrigin, checkedShell, account, field, ciphertext));
+                        values.add(cipher.decrypt(checkedOrigin, checkedConch, account, field, ciphertext));
                     }
                     return Set.copyOf(values);
                 }
@@ -218,13 +218,13 @@ public final class CredentialVault {
     }
 
     /**
-     * Deletes a declaration that no longer exists, for every account of this shell.
+     * Deletes a declaration that no longer exists, for every account of this conch.
      * Plaintext is neither read nor written. No audit row is appended: the store only accepts
      * {@code cli} and {@code console} actors, and this call has no actor.
      */
-    public void deleteFields(Origin origin, String shell, Set<String> fields) {
+    public void deleteFields(Origin origin, String conch, Set<String> fields) {
         Origin checkedOrigin = Checks.origin(origin);
-        String checkedShell = Checks.shell(shell);
+        String checkedConch = Checks.conch(conch);
         if (fields == null) {
             throw new IllegalArgumentException("fields are required");
         }
@@ -235,15 +235,15 @@ public final class CredentialVault {
         if (checked.isEmpty()) {
             return;
         }
-        synchronized (ShellLocks.of(dataSource, checkedOrigin, checkedShell)) {
+        synchronized (ConchLocks.of(dataSource, checkedOrigin, checkedConch)) {
             Db.transaction(dataSource, connection -> {
                 for (String field : checked) {
                     try (PreparedStatement statement = connection.prepareStatement("""
                             DELETE FROM credentials
-                            WHERE origin = ? AND shell = ? AND field = ?
+                            WHERE origin = ? AND conch = ? AND field = ?
                             """)) {
                         statement.setString(1, checkedOrigin.name());
-                        statement.setString(2, checkedShell);
+                        statement.setString(2, checkedConch);
                         statement.setString(3, field);
                         statement.executeUpdate();
                     }
@@ -258,36 +258,36 @@ public final class CredentialVault {
         return "CredentialVault";
     }
 
-    private static void lockAccount(Connection connection, Origin origin, String shell, String account)
+    private static void lockAccount(Connection connection, Origin origin, String conch, String account)
             throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT account FROM accounts
-                WHERE origin = ? AND shell = ? AND account = ?
+                WHERE origin = ? AND conch = ? AND account = ?
                 FOR UPDATE
                 """)) {
             statement.setString(1, origin.name());
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             statement.setString(3, account);
             try (ResultSet resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
-                    throw new AccountNotFoundException(origin, shell, account);
+                    throw new AccountNotFoundException(origin, conch, account);
                 }
             }
         }
     }
 
-    private static void requireAccount(Connection connection, Origin origin, String shell, String account)
+    private static void requireAccount(Connection connection, Origin origin, String conch, String account)
             throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT account FROM accounts
-                WHERE origin = ? AND shell = ? AND account = ?
+                WHERE origin = ? AND conch = ? AND account = ?
                 """)) {
             statement.setString(1, origin.name());
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             statement.setString(3, account);
             try (ResultSet resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
-                    throw new AccountNotFoundException(origin, shell, account);
+                    throw new AccountNotFoundException(origin, conch, account);
                 }
             }
         }
@@ -296,16 +296,16 @@ public final class CredentialVault {
     private static void deleteField(
             Connection connection,
             Origin origin,
-            String shell,
+            String conch,
             String account,
             String field
     ) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 DELETE FROM credentials
-                WHERE origin = ? AND shell = ? AND account = ? AND field = ?
+                WHERE origin = ? AND conch = ? AND account = ? AND field = ?
                 """)) {
             statement.setString(1, origin.name());
-            statement.setString(2, shell);
+            statement.setString(2, conch);
             statement.setString(3, account);
             statement.setString(4, field);
             statement.executeUpdate();
@@ -315,7 +315,7 @@ public final class CredentialVault {
     private static void upsert(
             Connection connection,
             Origin origin,
-            String shell,
+            String conch,
             String account,
             String field,
             byte[] ciphertext,
@@ -324,12 +324,12 @@ public final class CredentialVault {
         try (PreparedStatement update = connection.prepareStatement("""
                 UPDATE credentials
                 SET ciphertext = ?, updated_at = ?
-                WHERE origin = ? AND shell = ? AND account = ? AND field = ?
+                WHERE origin = ? AND conch = ? AND account = ? AND field = ?
                 """)) {
             update.setBytes(1, ciphertext);
             Db.setInstant(update, 2, updatedAt);
             update.setString(3, origin.name());
-            update.setString(4, shell);
+            update.setString(4, conch);
             update.setString(5, account);
             update.setString(6, field);
             if (update.executeUpdate() == 1) {
@@ -337,11 +337,11 @@ public final class CredentialVault {
             }
         }
         try (PreparedStatement insert = connection.prepareStatement("""
-                INSERT INTO credentials (origin, shell, account, field, ciphertext, updated_at)
+                INSERT INTO credentials (origin, conch, account, field, ciphertext, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """)) {
             insert.setString(1, origin.name());
-            insert.setString(2, shell);
+            insert.setString(2, conch);
             insert.setString(3, account);
             insert.setString(4, field);
             insert.setBytes(5, ciphertext);

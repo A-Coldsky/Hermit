@@ -8,7 +8,7 @@ import dev.hermit.common.version.SemVer;
 import java.util.regex.Pattern;
 
 /**
- * shell / 能力名与 hermit-common 的 {@code ^[a-z][a-z0-9_]{1,63}$} 一致。
+ * conch / 能力名与 hermit-common 的 {@code ^[a-z][a-z0-9_]{1,63}$} 一致。
  * 超长 summary 在 {@link FailureReport} 构造时已按码点截到 200，这里不再拒绝。
  */
 final class ReportRules {
@@ -41,23 +41,23 @@ final class ReportRules {
             throw TideErrors.unprocessable();
         }
         for (FailureReport failure : batch.failures()) {
-            requireName(failure.shell());
+            requireName(failure.conch());
             requireName(failure.action());
-            requireVersion(failure.shellVersion());
+            requireVersion(failure.conchVersion());
             if (failure.traceId().length() > MAX_TRACE_ID || length(failure.stepType()) > MAX_STEP_TYPE) {
                 throw TideErrors.unprocessable();
             }
         }
         for (CountReport count : batch.counts()) {
-            requireName(count.shell());
+            requireName(count.conch());
             requireName(count.action());
-            requireVersion(count.shellVersion());
+            requireVersion(count.conchVersion());
             if (count.success() < 0 || count.failure() < 0 || count.avgMillis() < 0 || count.p95Millis() < 0) {
                 throw TideErrors.unprocessable();
             }
         }
         for (RollbackEvent event : batch.events()) {
-            requireName(event.shell());
+            requireName(event.conch());
             requireVersion(event.fromVersion());
             requireVersion(event.toVersion());
             if (event.reason().length() > MAX_REASON) {

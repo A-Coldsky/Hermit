@@ -27,14 +27,14 @@ import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 import dev.hermit.common.model.Action;
-import dev.hermit.common.model.ShellDoc;
+import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.EngineSettings;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionManager;
-import dev.hermit.crab.engine.ShellRegistry;
+import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.report.ReportSender;
 import dev.hermit.crab.report.ReportSettings;
@@ -56,18 +56,18 @@ import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
-import dev.hermit.crab.store.ShellConfigStore;
+import dev.hermit.crab.store.ConchConfigStore;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
-import dev.hermit.crab.sync.DisabledShells;
-import dev.hermit.crab.sync.InstalledShells;
+import dev.hermit.crab.sync.DisabledConches;
+import dev.hermit.crab.sync.InstalledConches;
 import dev.hermit.crab.sync.LoadReport;
 import dev.hermit.crab.sync.RollbackGuard;
-import dev.hermit.crab.sync.ShellSync;
+import dev.hermit.crab.sync.ConchSync;
 import dev.hermit.crab.sync.SyncReport;
 import dev.hermit.crab.sync.SyncSettings;
 
 /**
- * Composition root for one Crab process. {@link #loadInstalledShells()} verifies packages when a
+ * Composition root for one Crab process. {@link #loadInstalledConches()} verifies packages when a
  * Reef public key is configured and binds sync, rollback, and report hooks when {@code reef.url}
  * is set. Listeners run after every engine execution.
  */
@@ -82,9 +82,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final CredentialCipher cipher;
     private final AccountStore accounts;
     private final CredentialVault vault;
-    private final ShellConfigStore shellConfig;
+    private final ConchConfigStore conchConfig;
     private final ApiKeyService apiKeys;
-    private final ShellRegistry registry = new ShellRegistry();
+    private final ConchRegistry registry = new ConchRegistry();
     private final EngineSettings settings;
     private final SessionManager sessions;
     private final RuleEngine engine;
@@ -95,14 +95,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final Set<String> configDisabled;
     private final Set<String> switchDisabled;
     private final List<Runnable> catalogListeners = new CopyOnWriteArrayList<>();
-    private final DisabledShells disabledShells;
+    private final DisabledConches disabledConches;
     private final Invoker invoker;
-    private final ShellAdmin admin;
+    private final ConchAdmin admin;
     private final String instanceId;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean prepared = new AtomicBoolean();
     private PublicKey reefKey;
-    private ShellSync shellSync;
+    private ConchSync conchSync;
     private ReportQueue reportQueue;
     private ReportSender reportSender;
     /** Last completed sync, from startup, the timer, or a manual request. Sync threads write; HTTP threads read. */
@@ -135,7 +135,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (this.vault.anyUnreadable()) {
             LOG.warning(CredentialDecryptException.MESSAGE + "。主密钥与已保存的凭证不匹配，请重新配置账号凭证。");
         }
-        this.shellConfig = new ShellConfigStore(database.dataSource());
+        this.conchConfig = new ConchConfigStore(database.dataSource());
         this.apiKeys = new ApiKeyService(database.dataSource());
         this.settings = config.engineSettings();
         this.sessions = new SessionManager(new EncryptedSessionPersistence(database.dataSource(), cipher), settings, clock);
@@ -147,11 +147,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.configDisabled = Set.copyOf(config.disabledCapabilities());
         this.switchDisabled = ConcurrentHashMap.newKeySet();
         this.switchDisabled.addAll(switches.disabledKeys(Origin.OFFICIAL));
-        this.disabledShells = new DisabledShells(database.dataSource());
-        this.disabledShells.load();
+        this.disabledConches = new DisabledConches(database.dataSource());
+        this.disabledConches.load();
         this.invoker = new Invoker(
-                registry, accounts, vault, shellConfig, engine, callLogs, idempotency, this, disabledShells);
-        this.admin = new ShellAdmin(database.dataSource(), accounts, vault, shellConfig, apiKeys, sessions, engine, registry);
+                registry, accounts, vault, conchConfig, engine, callLogs, idempotency, this, disabledConches);
+        this.admin = new ConchAdmin(database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry);
         this.instanceId = InstanceIds.loadOrCreate(paths);
     }
 
@@ -193,19 +193,19 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         return instanceId;
     }
 
-    public ShellRegistry registry() {
+    public ConchRegistry registry() {
         return registry;
     }
 
-    public DisabledShells disabledShells() {
-        return disabledShells;
+    public DisabledConches disabledConches() {
+        return disabledConches;
     }
 
     public Invoker invoker() {
         return invoker;
     }
 
-    public ShellAdmin admin() {
+    public ConchAdmin admin() {
         return admin;
     }
 
@@ -218,8 +218,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     /** Newest-first config audit. The result has no secret values and no stored detail text. */
-    public AuditLog.Page configAudit(String shell, String account, int page, int limit) {
-        return AuditLog.page(database.dataSource(), shell, account, page, limit);
+    public AuditLog.Page configAudit(String conch, String account, int page, int limit) {
+        return AuditLog.page(database.dataSource(), conch, account, page, limit);
     }
 
     public DebugStateStore debug() {
@@ -250,10 +250,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         Optional<String> token = Optional.ofNullable(config.reefToken()).filter(value -> !value.isBlank());
         SyncSettings syncSettings = new SyncSettings(
                 reefUrl, token, reefKey, Duration.ofSeconds(config.syncIntervalSeconds()), instance);
-        ShellSync sync = new ShellSync(
-                syncSettings, paths, registry, vault, database.dataSource(), clock, disabledShells);
+        ConchSync sync = new ConchSync(
+                syncSettings, paths, registry, vault, database.dataSource(), clock, disabledConches);
         sync.onReport(this::rememberCompletedSync);
-        this.shellSync = sync;
+        this.conchSync = sync;
         ReportSettings reportSettings = new ReportSettings(
                 config.reportEnabled(), reefUrl, token, instance, CrabVersion.CURRENT.toString());
         this.reportQueue = new ReportQueue(reportSettings, database.dataSource(), clock);
@@ -265,24 +265,24 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
     }
 
-    public LoadReport loadInstalledShells() {
+    public LoadReport loadInstalledConches() {
         prepare();
         if (reefKey == null) {
             if (hasInstalledPointer()) {
-                throw new IllegalStateException("reef.public_key is required to verify installed shells");
+                throw new IllegalStateException("reef.public_key is required to verify installed conches");
             }
             return new LoadReport(List.of(), List.of());
         }
-        paths.shells();
-        return InstalledShells.loadAll(paths, reefKey, registry, disabledShells.names());
+        paths.conches();
+        return InstalledConches.loadAll(paths, reefKey, registry, disabledConches.names());
     }
 
     public javax.sql.DataSource dataSource() {
         return database.dataSource();
     }
 
-    public ShellSync shellSync() {
-        return shellSync;
+    public ConchSync conchSync() {
+        return conchSync;
     }
 
     public ReportSender reportSender() {
@@ -299,10 +299,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public Optional<SyncReport> syncOnce(String requestedBy) {
         prepare();
-        if (shellSync == null) {
+        if (conchSync == null) {
             return Optional.empty();
         }
-        SyncReport report = shellSync.syncOnce();
+        SyncReport report = conchSync.syncOnce();
         if (report == null) {
             return Optional.empty();
         }
@@ -317,7 +317,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         try {
             syncOnce(null);
         } catch (Exception ex) {
-            LOG.warning("shell sync failed: " + ex.getClass().getName());
+            LOG.warning("conch sync failed: " + ex.getClass().getName());
         }
     }
 
@@ -333,31 +333,31 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
     }
 
-    public Optional<Action> enabledAction(String shell, String action) {
-        ShellDoc doc = registry.find(shell).orElse(null);
+    public Optional<Action> enabledAction(String conch, String action) {
+        ConchDoc doc = registry.find(conch).orElse(null);
         if (doc == null) {
             return Optional.empty();
         }
         Action found = doc.actions().get(action);
-        if (found == null || disabled(shell, action)) {
+        if (found == null || disabled(conch, action)) {
             return Optional.empty();
         }
         return Optional.of(found);
     }
 
     @Override
-    public boolean disabled(String shell, String action) {
-        String key = shell + "." + action;
+    public boolean disabled(String conch, String action) {
+        String key = conch + "." + action;
         return configDisabled.contains(key) || switchDisabled.contains(key);
     }
 
-    public void setCapabilityDisabled(String shell, String action, boolean disabled, String actor) {
-        ShellDoc doc = registry.find(shell).orElse(null);
+    public void setCapabilityDisabled(String conch, String action, boolean disabled, String actor) {
+        ConchDoc doc = registry.find(conch).orElse(null);
         if (doc == null || !doc.actions().containsKey(action)) {
             throw new IllegalArgumentException("capability not found");
         }
-        switches.setDisabled(Origin.OFFICIAL, shell, action, disabled, actor);
-        String key = shell + "." + action;
+        switches.setDisabled(Origin.OFFICIAL, conch, action, disabled, actor);
+        String key = conch + "." + action;
         if (disabled) {
             switchDisabled.add(key);
         } else {
@@ -440,13 +440,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     database.dataSource(),
                     Actors.SYNC,
                     AuditKind.CREDENTIAL_DECLARATION,
-                    change.shell(),
+                    change.conch(),
                     ApiJson.write(detail));
         }
     }
 
     private boolean hasInstalledPointer() {
-        Path root = paths.shells();
+        Path root = paths.conches();
         if (!Files.isDirectory(root)) {
             return false;
         }
@@ -458,7 +458,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             }
             return false;
         } catch (IOException ex) {
-            throw new UncheckedIOException("cannot list installed shells", ex);
+            throw new UncheckedIOException("cannot list installed conches", ex);
         }
     }
 

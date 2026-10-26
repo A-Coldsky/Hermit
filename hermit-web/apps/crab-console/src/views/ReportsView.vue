@@ -97,8 +97,8 @@ onMounted(load)
           </el-table-column>
           <el-table-column label="能力" min-width="200">
             <template #default="{ row }">
-              <span class="mono">{{ row.shell }}.{{ row.action }}</span>
-              <span class="mono hm-muted"> v{{ row.shellVersion }}</span>
+              <span class="mono">{{ row.conch }}.{{ row.action }}</span>
+              <span class="mono hm-muted"> v{{ row.conchVersion }}</span>
             </template>
           </el-table-column>
           <el-table-column prop="success" label="成功" align="right" />
@@ -119,7 +119,7 @@ onMounted(load)
             <template #default="{ row }">{{ formatTime(row.occurredAt) }}</template>
           </el-table-column>
           <el-table-column label="能力" min-width="180">
-            <template #default="{ row }"><span class="mono">{{ row.shell }}.{{ row.action }}</span></template>
+            <template #default="{ row }"><span class="mono">{{ row.conch }}.{{ row.action }}</span></template>
           </el-table-column>
           <el-table-column label="错误" width="140">
             <template #default="{ row }">
@@ -141,8 +141,8 @@ onMounted(load)
           <el-table-column label="时间" width="170">
             <template #default="{ row }">{{ formatTime(row.occurredAt) }}</template>
           </el-table-column>
-          <el-table-column label="Shell" min-width="140">
-            <template #default="{ row }"><span class="mono">{{ row.shell }}</span></template>
+          <el-table-column label="Conch" min-width="140">
+            <template #default="{ row }"><span class="mono">{{ row.conch }}</span></template>
           </el-table-column>
           <el-table-column label="版本变化" min-width="140">
             <template #default="{ row }"><span class="mono">{{ row.fromVersion }} → {{ row.toVersion }}</span></template>

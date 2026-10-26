@@ -4,25 +4,25 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, formatTime, notifyError, relativeTime } from '@shared/format'
-import { api, type ApiKey, type CreatedApiKey, type ShellDetail } from '../api'
+import { api, type ApiKey, type CreatedApiKey, type ConchDetail } from '../api'
 
 const loading = ref(true)
 const keys = ref<ApiKey[]>([])
 const showRevoked = ref(false)
-const shellDetails = ref<ShellDetail[]>([])
+const conchDetails = ref<ConchDetail[]>([])
 
-const form = reactive({ open: false, saving: false, name: '', readOnly: true, shells: [] as string[], actions: [] as string[] })
+const form = reactive({ open: false, saving: false, name: '', readOnly: true, conches: [] as string[], actions: [] as string[] })
 const created = ref<CreatedApiKey | null>(null)
 
 const visible = computed(() => keys.value.filter((k) => showRevoked.value || !k.revokedAt))
 const actionOptions = computed(() =>
-  shellDetails.value
-    .filter((s) => !form.shells.length || form.shells.includes(s.shell))
+  conchDetails.value
+    .filter((s) => !form.conches.length || form.conches.includes(s.conch))
     .map((s) => ({
-      label: s.title || s.shell,
+      label: s.title || s.conch,
       options: s.capabilities
         .filter((c) => !form.readOnly || c.readOnly)
-        .map((c) => ({ value: `${s.shell}.${c.action}`, label: `${s.shell}.${c.action}`, title: c.title })),
+        .map((c) => ({ value: `${s.conch}.${c.action}`, label: `${s.conch}.${c.action}`, title: c.title })),
     }))
     .filter((group) => group.options.length),
 )
@@ -38,18 +38,18 @@ async function load() {
   }
 }
 
-async function loadShells() {
+async function loadConches() {
   try {
-    const list = (await api.shells()).shells
-    shellDetails.value = await Promise.all(list.map((s) => api.shell(s.shell)))
+    const list = (await api.conches()).conches
+    conchDetails.value = await Promise.all(list.map((s) => api.conch(s.conch)))
   } catch (error) {
     notifyError(error)
   }
 }
 
 function openCreate() {
-  Object.assign(form, { open: true, name: '', readOnly: true, shells: [], actions: [] })
-  void loadShells()
+  Object.assign(form, { open: true, name: '', readOnly: true, conches: [], actions: [] })
+  void loadConches()
 }
 
 async function create() {
@@ -63,7 +63,7 @@ async function create() {
     created.value = await api.createApiKey({
       name: form.name.trim(),
       readOnly: form.readOnly,
-      shells: form.shells,
+      conches: form.conches,
       actions: form.actions.filter((a) => validActions.has(a)),
     })
     form.open = false
@@ -125,7 +125,7 @@ onMounted(load)
           <template #default="{ row }">
             <div class="scope">
               <el-tag v-if="row.scope.readOnly" size="small" type="success" effect="plain">仅只读能力</el-tag>
-              <span><span class="hm-muted">Shell：</span><span class="mono">{{ scopeText(row.scope.shells, '全部') }}</span></span>
+              <span><span class="hm-muted">规则包：</span><span class="mono">{{ scopeText(row.scope.conches, '全部') }}</span></span>
               <span><span class="hm-muted">能力：</span><span class="mono">{{ scopeText(row.scope.actions, '全部') }}</span></span>
             </div>
           </template>
@@ -152,13 +152,13 @@ onMounted(load)
         <el-form-item>
           <el-checkbox v-model="form.readOnly">只允许调用只读能力</el-checkbox>
         </el-form-item>
-        <el-form-item label="允许的 Shell">
-          <el-select v-model="form.shells" multiple clearable placeholder="不选表示全部 Shell" class="full">
-            <el-option v-for="s in shellDetails" :key="s.shell" :label="s.title ? `${s.title}（${s.shell}）` : s.shell" :value="s.shell" />
+        <el-form-item label="允许的规则包">
+          <el-select v-model="form.conches" multiple clearable placeholder="不选表示全部规则包" class="full">
+            <el-option v-for="s in conchDetails" :key="s.conch" :label="s.title ? `${s.title}（${s.conch}）` : s.conch" :value="s.conch" />
           </el-select>
         </el-form-item>
         <el-form-item label="允许的能力">
-          <el-select v-model="form.actions" multiple clearable filterable placeholder="不选表示所选 Shell 的全部能力" class="full">
+          <el-select v-model="form.actions" multiple clearable filterable placeholder="不选表示所选规则包的全部能力" class="full">
             <el-option-group v-for="group in actionOptions" :key="group.label" :label="group.label">
               <el-option v-for="option in group.options" :key="option.value" :label="option.label" :value="option.value">
                 <span class="mono">{{ option.label }}</span>

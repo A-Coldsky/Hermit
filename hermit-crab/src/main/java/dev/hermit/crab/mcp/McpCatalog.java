@@ -11,8 +11,8 @@ import java.util.function.BiPredicate;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.Example;
 import dev.hermit.common.model.ParamSpec;
-import dev.hermit.common.model.ShellDoc;
-import dev.hermit.crab.engine.ShellRegistry;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.store.ApiKeyPrincipal;
@@ -25,13 +25,13 @@ final class McpCatalog {
     static final String SEARCH = "search_capabilities";
     static final String DESCRIBE = "describe_capability";
     static final String CALL = "call_capability";
-    private static final String GUIDE_PREFIX = "hermit://shells/";
+    private static final String GUIDE_PREFIX = "hermit://conches/";
     private static final String GUIDE_SUFFIX = "/guide";
 
-    private final ShellRegistry registry;
+    private final ConchRegistry registry;
     private final BiPredicate<String, String> disabled;
 
-    McpCatalog(ShellRegistry registry, BiPredicate<String, String> disabled) {
+    McpCatalog(ConchRegistry registry, BiPredicate<String, String> disabled) {
         this.registry = registry;
         this.disabled = disabled;
     }
@@ -66,9 +66,9 @@ final class McpCatalog {
 
     List<McpSchema.Resource> resources(ApiKeyPrincipal principal) {
         ArrayList<McpSchema.Resource> resources = new ArrayList<>();
-        for (ShellDoc shell : shells(principal)) {
-            resources.add(McpSchema.Resource.builder(guideUri(shell.shell()), shell.shell())
-                    .title(shell.title())
+        for (ConchDoc conch : conches(principal)) {
+            resources.add(McpSchema.Resource.builder(guideUri(conch.conch()), conch.conch())
+                    .title(conch.title())
                     .description("由元数据生成的使用指南")
                     .mimeType("text/markdown")
                     .build());
@@ -77,49 +77,49 @@ final class McpCatalog {
     }
 
     Optional<String> guide(ApiKeyPrincipal principal, String uri) {
-        String shellName = shellFromGuide(uri);
-        if (shellName == null) {
+        String conchName = conchFromGuide(uri);
+        if (conchName == null) {
             return Optional.empty();
         }
-        ShellDoc shell = null;
+        ConchDoc conch = null;
         ArrayList<CapabilityRef> actions = new ArrayList<>();
         for (CapabilityRef ref : visible(principal)) {
-            if (ref.shell().shell().equals(shellName)) {
-                shell = ref.shell();
+            if (ref.conch().conch().equals(conchName)) {
+                conch = ref.conch();
                 actions.add(ref);
             }
         }
-        if (shell == null) {
+        if (conch == null) {
             return Optional.empty();
         }
-        return Optional.of(markdown(shell, actions));
+        return Optional.of(markdown(conch, actions));
     }
 
     Map<String, Object> listSystems(ApiKeyPrincipal principal) {
         ArrayList<Map<String, Object>> systems = new ArrayList<>();
-        for (ShellDoc shell : shells(principal)) {
+        for (ConchDoc conch : conches(principal)) {
             int count = 0;
             for (CapabilityRef ref : visible(principal)) {
-                if (ref.shell().shell().equals(shell.shell())) {
+                if (ref.conch().conch().equals(conch.conch())) {
                     count++;
                 }
             }
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
-            row.put("shell", shell.shell());
-            row.put("title", shell.title());
-            row.put("description", shell.description());
+            row.put("conch", conch.conch());
+            row.put("title", conch.title());
+            row.put("description", conch.description());
             row.put("capabilities", count);
             systems.add(row);
         }
         return Map.of("systems", systems);
     }
 
-    Map<String, Object> search(ApiKeyPrincipal principal, String query, String shell) {
+    Map<String, Object> search(ApiKeyPrincipal principal, String query, String conch) {
         String needle = query == null ? "" : query.toLowerCase(Locale.ROOT);
         ArrayList<Map<String, Object>> matches = new ArrayList<>();
         if (!needle.isBlank()) {
             for (CapabilityRef ref : visible(principal)) {
-                if (shell != null && !shell.isBlank() && !ref.shell().shell().equals(shell)) {
+                if (conch != null && !conch.isBlank() && !ref.conch().conch().equals(conch)) {
                     continue;
                 }
                 if (!haystack(ref.action()).contains(needle)) {
@@ -166,25 +166,25 @@ final class McpCatalog {
         return Optional.of(body);
     }
 
-    private List<ShellDoc> shells(ApiKeyPrincipal principal) {
-        LinkedHashMap<String, ShellDoc> shells = new LinkedHashMap<>();
+    private List<ConchDoc> conches(ApiKeyPrincipal principal) {
+        LinkedHashMap<String, ConchDoc> conches = new LinkedHashMap<>();
         for (CapabilityRef ref : visible(principal)) {
-            shells.putIfAbsent(ref.shell().shell(), ref.shell());
+            conches.putIfAbsent(ref.conch().conch(), ref.conch());
         }
-        return List.copyOf(shells.values());
+        return List.copyOf(conches.values());
     }
 
     private List<CapabilityRef> visible(ApiKeyPrincipal principal) {
         ArrayList<CapabilityRef> found = new ArrayList<>();
-        for (ShellDoc shell : registry.snapshot().values()) {
-            for (Action action : shell.actions().values()) {
-                if (!action.mcp().expose() || disabled.test(shell.shell(), action.name())) {
+        for (ConchDoc conch : registry.snapshot().values()) {
+            for (Action action : conch.actions().values()) {
+                if (!action.mcp().expose() || disabled.test(conch.conch(), action.name())) {
                     continue;
                 }
-                if (!principal.permits(shell.shell(), action.name(), CapabilityHttp.readOnly(action))) {
+                if (!principal.permits(conch.conch(), action.name(), CapabilityHttp.readOnly(action))) {
                     continue;
                 }
-                found.add(new CapabilityRef(shell, action));
+                found.add(new CapabilityRef(conch, action));
             }
         }
         return found;
@@ -192,11 +192,11 @@ final class McpCatalog {
 
     private static List<McpSchema.Tool> directoryTools(boolean outputSchema) {
         return List.of(
-                tool(LIST_SYSTEMS, "列出当前可以调用的 Shell 及其能力数量。", objectSchema(Map.of()),
+                tool(LIST_SYSTEMS, "列出当前可以调用的规则包（Conch）及其能力数量。", objectSchema(Map.of()),
                         outputSchema ? systemsOutputSchema() : null, true, true),
                 tool(SEARCH, "在标题、说明、备注和参数说明里搜索能力，最多返回 20 条。", searchSchema(),
                         outputSchema ? searchOutputSchema() : null, true, true),
-                tool(DESCRIBE, "查看一个能力的说明、参数、返回字段和示例。name 形如 shell__action。", nameSchema(),
+                tool(DESCRIBE, "查看一个能力的说明、参数、返回字段和示例。name 形如 conch__action。", nameSchema(),
                         outputSchema ? describeOutputSchema() : null, true, true),
                 // call_capability returns whichever capability was named, so it has no single outputSchema.
                 tool(CALL, "调用一个能力。非只读能力需要用户确认。", callSchema(), null, false, false));
@@ -216,7 +216,7 @@ final class McpCatalog {
     }
 
     /**
-     * 字段名和说明来自 Shell 的 output，但不带类型约束：模板渲染不会把提取值转换成声明类型，
+     * 字段名和说明来自 Conch 的 output，但不带类型约束：模板渲染不会把提取值转换成声明类型，
      * 严格校验 structuredContent 的客户端会因类型不符拒绝整次结果。
      */
     private static Map<String, Object> looseOutputSchema(Action action) {
@@ -252,7 +252,7 @@ final class McpCatalog {
 
     private static Map<String, Object> systemsOutputSchema() {
         LinkedHashMap<String, Object> item = new LinkedHashMap<>();
-        item.put("shell", Map.of("type", "string"));
+        item.put("conch", Map.of("type", "string"));
         item.put("title", Map.of());
         item.put("description", Map.of());
         item.put("capabilities", Map.of("type", "integer"));
@@ -317,7 +317,7 @@ final class McpCatalog {
             }
         }
         properties.put(properties.containsKey("account") ? "_account" : "account", accountSchema(
-                "可选。选择该 Shell 的命名账号，覆盖请求头 X-Hermit-Account。"));
+                "可选。选择该规则包的命名账号，覆盖请求头 X-Hermit-Account。"));
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", properties);
@@ -346,7 +346,7 @@ final class McpCatalog {
     private static Map<String, Object> searchSchema() {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("query", Map.of("type", "string", "description", "匹配标题、说明、备注和参数说明"));
-        properties.put("shell", Map.of("type", "string", "description", "可选。只搜索这个 Shell"));
+        properties.put("conch", Map.of("type", "string", "description", "可选。只搜索这个规则包"));
         LinkedHashMap<String, Object> schema = objectSchema(properties);
         schema.put("required", List.of("query"));
         return schema;
@@ -354,14 +354,14 @@ final class McpCatalog {
 
     private static Map<String, Object> nameSchema() {
         LinkedHashMap<String, Object> schema = objectSchema(Map.of(
-                "name", Map.of("type", "string", "description", "能力名，形如 shell__action")));
+                "name", Map.of("type", "string", "description", "能力名，形如 conch__action")));
         schema.put("required", List.of("name"));
         return schema;
     }
 
     private static Map<String, Object> callSchema() {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
-        properties.put("name", Map.of("type", "string", "description", "能力名，形如 shell__action"));
+        properties.put("name", Map.of("type", "string", "description", "能力名，形如 conch__action"));
         properties.put("arguments", Map.of("type", "object", "description", "能力参数。不包含凭证。"));
         properties.put("account", accountSchema("可选。覆盖请求头 X-Hermit-Account。"));
         LinkedHashMap<String, Object> schema = objectSchema(properties);
@@ -380,16 +380,16 @@ final class McpCatalog {
         return text.toString().toLowerCase(Locale.ROOT);
     }
 
-    private static String markdown(ShellDoc shell, List<CapabilityRef> actions) {
+    private static String markdown(ConchDoc conch, List<CapabilityRef> actions) {
         StringBuilder text = new StringBuilder();
-        text.append("# ").append(blank(shell.title()) ? shell.shell() : shell.title()).append("\n\n");
-        if (!blank(shell.description())) {
-            text.append(shell.description()).append("\n\n");
+        text.append("# ").append(blank(conch.title()) ? conch.conch() : conch.title()).append("\n\n");
+        if (!blank(conch.description())) {
+            text.append(conch.description()).append("\n\n");
         }
-        text.append("Shell: `").append(shell.shell()).append("`\n\n");
+        text.append("规则包：`").append(conch.conch()).append("`\n\n");
         text.append("## 账号\n\n");
         text.append("用工具参数 `account`（若能力参数已占用该名字，则用 `_account`）或请求头 `X-Hermit-Account` 选择命名账号。");
-        text.append("参数优先于请求头；都不传则使用该 Shell 的默认账号。账号名匹配 `")
+        text.append("参数优先于请求头；都不传则使用该规则包的默认账号。账号名匹配 `")
                 .append(ACCOUNT_PATTERN)
                 .append("`。\n\n");
         text.append("## 能力\n\n");
@@ -460,7 +460,7 @@ final class McpCatalog {
         text.append(indent).append("- `").append(name).append("`\n");
     }
 
-    private static String shellFromGuide(String uri) {
+    private static String conchFromGuide(String uri) {
         if (uri == null || !uri.startsWith(GUIDE_PREFIX) || !uri.endsWith(GUIDE_SUFFIX)) {
             return null;
         }
@@ -471,8 +471,8 @@ final class McpCatalog {
         return name;
     }
 
-    static String guideUri(String shell) {
-        return GUIDE_PREFIX + shell + GUIDE_SUFFIX;
+    static String guideUri(String conch) {
+        return GUIDE_PREFIX + conch + GUIDE_SUFFIX;
     }
 
     private static void append(StringBuilder text, String part) {
@@ -489,9 +489,9 @@ final class McpCatalog {
         return value == null || value.isBlank();
     }
 
-    record CapabilityRef(ShellDoc shell, Action action) {
+    record CapabilityRef(ConchDoc conch, Action action) {
         String toolName() {
-            return shell.shell() + "__" + action.name();
+            return conch.conch() + "__" + action.name();
         }
     }
 }

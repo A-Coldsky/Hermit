@@ -14,8 +14,8 @@ import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-import dev.hermit.common.model.ShellDoc;
-import dev.hermit.common.parse.ShellParser;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
@@ -30,7 +30,7 @@ final class TestServer implements AutoCloseable {
     final CrabPaths paths;
     final CrabRuntime runtime;
     final CrabHttpServer server;
-    final ShellDoc shell;
+    final ConchDoc conch;
     final String password;
     final CreatedApiKey apiKey;
     final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -41,7 +41,7 @@ final class TestServer implements AutoCloseable {
             CrabPaths paths,
             CrabRuntime runtime,
             CrabHttpServer server,
-            ShellDoc shell,
+            ConchDoc conch,
             String password,
             CreatedApiKey apiKey
     ) {
@@ -49,7 +49,7 @@ final class TestServer implements AutoCloseable {
         this.paths = paths;
         this.runtime = runtime;
         this.server = server;
-        this.shell = shell;
+        this.conch = conch;
         this.password = password;
         this.apiKey = apiKey;
         this.base = "http://127.0.0.1:" + server.port();
@@ -60,13 +60,13 @@ final class TestServer implements AutoCloseable {
         CrabPaths paths = new CrabPaths(root);
         CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null);
         try {
-            ShellDoc shell = ShellParser.parse(shellYaml());
-            runtime.registry().put(shell);
+            ConchDoc conch = ConchParser.parse(conchYaml());
+            runtime.registry().put(conch);
             CreatedApiKey apiKey = runtime.admin().createApiKey(
                     "gateway", new ApiKeyScope(java.util.Set.of(), java.util.Set.of(), false), Actors.CLI);
             CrabHttpServer server = new CrabHttpServer(runtime);
             server.start();
-            return new TestServer(fixture, paths, runtime, server, shell, password, apiKey);
+            return new TestServer(fixture, paths, runtime, server, conch, password, apiKey);
         } catch (RuntimeException ex) {
             runtime.close();
             fixture.close();
@@ -79,12 +79,12 @@ final class TestServer implements AutoCloseable {
     }
 
     void configureAccount(String name) {
-        if (runtime.admin().listAccounts(shell.shell()).stream().noneMatch(account -> account.account().equals(name))) {
-            runtime.admin().createAccount(shell.shell(), name, Actors.CLI);
+        if (runtime.admin().listAccounts(conch.conch()).stream().noneMatch(account -> account.account().equals(name))) {
+            runtime.admin().createAccount(conch.conch(), name, Actors.CLI);
         }
-        runtime.admin().putConfig(shell, "base_url", fixture.baseUrl(), Actors.CLI);
+        runtime.admin().putConfig(conch, "base_url", fixture.baseUrl(), Actors.CLI);
         runtime.admin().writeCredentials(
-                shell, name, Map.of("username", name, "password", password), Actors.CLI);
+                conch, name, Map.of("username", name, "password", password), Actors.CLI);
     }
 
     Reply call(String method, String path, String key, String account, String idempotency, String body) throws Exception {
@@ -121,7 +121,7 @@ final class TestServer implements AutoCloseable {
         return new Reply(response.statusCode(), response.body(), response.headers().map());
     }
 
-    static String shellYaml() throws IOException {
+    static String conchYaml() throws IOException {
         String sample;
         try (InputStream in = TestServer.class.getClassLoader().getResourceAsStream("samples/legacy_oa.yaml")) {
             if (in == null) {

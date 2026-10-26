@@ -28,9 +28,9 @@ class AdminUiTest {
     private static final String[] PAGES = {
             "/",
             "/login",
-            "/shells",
-            "/shells/upload",
-            "/shells/legacy_oa",
+            "/conches",
+            "/conches/upload",
+            "/conches/legacy_oa",
             "/tide",
             "/alerts",
             "/audit",

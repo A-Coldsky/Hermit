@@ -26,7 +26,7 @@ spring:
     name: hermit-reef
   servlet:
     multipart:
-      # Shell 上传上限。容器先拒绝，服务里再查一次字节长度。
+      # Conch 上传上限。容器先拒绝，服务里再查一次字节长度。
       max-file-size: 1MB
       max-request-size: 1MB
   datasource:

@@ -8,6 +8,6 @@ public enum OutcomeKind {
     REJECTED,
     /** Local status after {@link RollbackGuard} restored an older installed version. */
     ROLLED_BACK,
-    /** Reef dropped the shell from the distribution manifest. Calls return SHELL_DISABLED. */
+    /** Reef dropped the conch from the distribution manifest. Calls return CONCH_DISABLED. */
     DISABLED
 }

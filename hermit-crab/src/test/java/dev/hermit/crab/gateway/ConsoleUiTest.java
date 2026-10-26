@@ -18,8 +18,8 @@ class ConsoleUiTest {
     private static final Pattern ASSET = Pattern.compile("/console/assets/([A-Za-z0-9._-]+)");
     private static final String[] PAGES = {
             "/console/",
-            "/console/shells",
-            "/console/shells/legacy_oa",
+            "/console/conches",
+            "/console/conches/legacy_oa",
             "/console/apikeys",
             "/console/calls",
             "/console/reports"
@@ -57,7 +57,7 @@ class ConsoleUiTest {
             assertThat(dotted.status()).isEqualTo(404);
             assertThat(dotted.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
 
-            TestServer.Reply api = server.console("GET", "/console/api/shells", null, false);
+            TestServer.Reply api = server.console("GET", "/console/api/conches", null, false);
             assertThat(api.status()).isEqualTo(403);
             assertThat(api.json().path("error").path("code").asText()).isEqualTo("FORBIDDEN");
 

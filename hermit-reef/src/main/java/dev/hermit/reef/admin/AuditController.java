@@ -23,7 +23,7 @@ public class AuditController {
 
     @GetMapping("/audit")
     public ApiResponse<AuditPage> audit(
-            @RequestParam(name = "shell", required = false) String shell,
+            @RequestParam(name = "conch", required = false) String conch,
             @RequestParam(name = "page", defaultValue = "" + AuditService.DEFAULT_PAGE) int page,
             @RequestParam(name = "size", defaultValue = "" + AuditService.DEFAULT_SIZE) int size,
             HttpServletRequest request) {
@@ -34,7 +34,7 @@ public class AuditController {
         if (offset > Integer.MAX_VALUE) {
             throw ApiException.invalidInput();
         }
-        String shellFilter = shell == null || shell.isBlank() ? null : shell;
-        return ApiResponse.ok(auditService.page(shellFilter, page, size), TraceIds.current(request));
+        String conchFilter = conch == null || conch.isBlank() ? null : conch;
+        return ApiResponse.ok(auditService.page(conchFilter, page, size), TraceIds.current(request));
     }
 }

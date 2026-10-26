@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
-  shell: vi.fn(),
+  conch: vi.fn(),
   accounts: vi.fn(),
   config: vi.fn(),
 }))
@@ -11,10 +11,10 @@ const crab = vi.hoisted(() => ({
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
 vi.mock('../apps/crab-console/src/status', () => ({ refreshPending: vi.fn() }))
 
-import ShellDetailView from '../apps/crab-console/src/views/ShellDetailView.vue'
+import ConchDetailView from '../apps/crab-console/src/views/ConchDetailView.vue'
 
 const detail = {
-  shell: 'legacy_oa',
+  conch: 'legacy_oa',
   version: '1.0.0',
   title: '协同办公 OA',
   description: '',
@@ -41,16 +41,16 @@ function account(overrides: Record<string, unknown>) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  crab.shell.mockResolvedValue(detail)
+  crab.conch.mockResolvedValue(detail)
   crab.config.mockResolvedValue({ fields: {} })
 })
 
-describe('Crab Shell 详情：账号状态', () => {
+describe('Crab 规则包详情：账号状态', () => {
   it('自动登录暂停时不显示「可以调用」，给出原因和恢复方法', async () => {
     crab.accounts.mockResolvedValue({
       accounts: [account({ loginPaused: true, loginPauseReason: '连续登录失败已达上限，自动登录已暂停' })],
     })
-    const wrapper = await mountPage(ShellDetailView, { props: { shell: 'legacy_oa' } })
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
     await flushPromises()
 
     const text = wrapper.text()
@@ -66,7 +66,7 @@ describe('Crab Shell 详情：账号状态', () => {
     crab.accounts.mockResolvedValue({
       accounts: [account({ needsConfiguration: true, credentialsUnreadable: true, credentialMessage: '凭证无法解密，需重新配置' })],
     })
-    const wrapper = await mountPage(ShellDetailView, { props: { shell: 'legacy_oa' } })
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
     await flushPromises()
 
     const text = wrapper.text()
@@ -77,9 +77,9 @@ describe('Crab Shell 详情：账号状态', () => {
   })
 
   it('一切正常时显示可以调用', async () => {
-    crab.shell.mockResolvedValue({ ...detail, loginPaused: false })
+    crab.conch.mockResolvedValue({ ...detail, loginPaused: false })
     crab.accounts.mockResolvedValue({ accounts: [account({})] })
-    const wrapper = await mountPage(ShellDetailView, { props: { shell: 'legacy_oa' } })
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
     await flushPromises()
 
     expect(wrapper.text()).toContain('配置完整，可以调用')

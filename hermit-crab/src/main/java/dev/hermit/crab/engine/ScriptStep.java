@@ -280,7 +280,7 @@ final class ScriptStep {
             throw mismatch("脚本返回值类型无效");
         }
         for (String key : map.keySet()) {
-            if (ShellRegistry.RESERVED.contains(key)) {
+            if (ConchRegistry.RESERVED.contains(key)) {
                 throw mismatch("不能写入保留变量");
             }
         }
@@ -312,7 +312,7 @@ final class ScriptStep {
         if (!(value instanceof String text) || text.isBlank()) {
             throw mismatch("script into 无效");
         }
-        if (ShellRegistry.RESERVED.contains(text)) {
+        if (ConchRegistry.RESERVED.contains(text)) {
             throw mismatch("不能写入保留变量");
         }
         return text;

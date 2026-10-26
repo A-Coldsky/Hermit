@@ -43,7 +43,7 @@ async function onChange(file: UploadFile) {
   uploading.value = true
   try {
     result.value = await api.upload(file.raw)
-    ElMessage.success(`已上传 ${result.value.shell} v${result.value.version}`)
+    ElMessage.success(`已上传 ${result.value.conch} v${result.value.version}`)
   } catch (error) {
     if (error instanceof ApiError && error.status === 422) {
       failure.value = {
@@ -66,9 +66,9 @@ async function publish() {
   if (!result.value) {
     return
   }
-  const { shell, version } = result.value
+  const { conch, version } = result.value
   try {
-    await ElMessageBox.confirm(`发布后所有 Crab 下次同步时都会切换到 ${shell} v${version}。`, '确认发布', {
+    await ElMessageBox.confirm(`发布后所有 Crab 下次同步时都会切换到 ${conch} v${version}。`, '确认发布', {
       confirmButtonText: '发布',
       cancelButtonText: '取消',
       type: 'warning',
@@ -78,9 +78,9 @@ async function publish() {
   }
   publishing.value = true
   try {
-    await api.publish(shell, version)
-    ElMessage.success(`${shell} v${version} 已发布`)
-    await router.push(`/shells/${encodeURIComponent(shell)}`)
+    await api.publish(conch, version)
+    ElMessage.success(`${conch} v${version} 已发布`)
+    await router.push(`/conches/${encodeURIComponent(conch)}`)
   } catch (error) {
     notifyError(error)
   } finally {
@@ -91,9 +91,9 @@ async function publish() {
 
 <template>
   <div>
-    <PageHeader title="上传 Shell" description="上传 YAML 后 Reef 会校验、签名并保存为待发布版本；版本号必须是比已有版本更大的 semver">
+    <PageHeader title="上传规则包" description="上传 YAML 后 Reef 会校验、签名并保存为待发布版本；版本号必须是比已有版本更大的 semver">
       <template #crumbs>
-        <router-link to="/shells">Shell 目录</router-link>
+        <router-link to="/conches">规则包目录</router-link>
         <span class="hm-muted"> / 上传</span>
       </template>
     </PageHeader>
@@ -115,7 +115,7 @@ async function publish() {
         :on-change="onChange"
       >
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-        <div class="el-upload__text">把 Shell YAML 拖到这里，或 <em>点击选择文件</em></div>
+        <div class="el-upload__text">把规则包 YAML 拖到这里，或 <em>点击选择文件</em></div>
         <template #tip>
           <div class="el-upload__tip">支持 .yaml / .yml，单个文件不超过 1 MB</div>
         </template>
@@ -142,12 +142,12 @@ async function publish() {
     <div v-if="result" class="hm-card">
       <div class="hm-card-title">
         <span>
-          已保存 <span class="mono">{{ result.shell }}</span>
+          已保存 <span class="mono">{{ result.conch }}</span>
           <el-tag effect="plain" class="mono">v{{ result.version }}</el-tag>
           <el-tag type="info" effect="plain">待发布</el-tag>
         </span>
         <div>
-          <el-button @click="router.push(`/shells/${encodeURIComponent(result.shell)}`)">查看 Shell</el-button>
+          <el-button @click="router.push(`/conches/${encodeURIComponent(result.conch)}`)">查看规则包</el-button>
           <el-button type="primary" :icon="Promotion" :loading="publishing" @click="publish">发布此版本</el-button>
         </div>
       </div>

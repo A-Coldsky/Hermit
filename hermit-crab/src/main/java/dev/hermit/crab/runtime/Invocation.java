@@ -10,7 +10,7 @@ public record Invocation(
         String traceId,
         Origin origin,
         ApiKeyPrincipal principal,
-        String shell,
+        String conch,
         String action,
         String account,
         Map<String, Object> input,
@@ -18,6 +18,6 @@ public record Invocation(
 ) {
     @Override
     public String toString() {
-        return "Invocation[traceId=" + traceId + ", shell=" + shell + ", action=" + action + ", account=" + account + "]";
+        return "Invocation[traceId=" + traceId + ", conch=" + conch + ", action=" + action + ", account=" + account + "]";
     }
 }

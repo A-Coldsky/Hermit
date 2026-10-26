@@ -8,7 +8,7 @@ import { errorCodeLabels, errorText, notifyError } from '@shared/format'
 import { api, type Account, type CredentialField } from '../api'
 import CredentialDialog from './CredentialDialog.vue'
 
-const props = defineProps<{ shell: string; accounts: Account[]; credentials: CredentialField[] }>()
+const props = defineProps<{ conch: string; accounts: Account[]; credentials: CredentialField[] }>()
 const emit = defineEmits<{ changed: [] }>()
 
 const creating = reactive({ open: false, name: '', saving: false })
@@ -34,7 +34,7 @@ async function createAccount() {
   }
   creating.saving = true
   try {
-    const result = await api.createAccount(props.shell, name)
+    const result = await api.createAccount(props.conch, name)
     ElMessage.success(result.default ? `已创建 ${name}，并设为默认账号` : `已创建 ${name}`)
     creating.open = false
     creating.name = ''
@@ -53,7 +53,7 @@ async function createAccount() {
 async function makeDefault(account: Account) {
   busy.value = account.name
   try {
-    await api.makeDefault(props.shell, account.name)
+    await api.makeDefault(props.conch, account.name)
     ElMessage.success(`${account.name} 已设为默认账号`)
     emit('changed')
   } catch (error) {
@@ -75,7 +75,7 @@ async function remove(account: Account) {
   }
   busy.value = account.name
   try {
-    await api.deleteAccount(props.shell, account.name)
+    await api.deleteAccount(props.conch, account.name)
     ElMessage.success(`已删除 ${account.name}`)
     emit('changed')
   } catch (error) {
@@ -88,7 +88,7 @@ async function remove(account: Account) {
 async function testLogin(account: Account) {
   busy.value = account.name
   try {
-    const data = await api.testLogin(props.shell, account.name)
+    const data = await api.testLogin(props.conch, account.name)
     Object.assign(testResult, { open: true, account: account.name, success: true, data, message: '', code: '', traceId: null })
   } catch (error) {
     Object.assign(testResult, {
@@ -177,7 +177,7 @@ function editCredentials(account: Account) {
     </template>
   </el-dialog>
 
-  <CredentialDialog v-model:open="editing.open" :shell="shell" :account="editing.account" :fields="credentials" @saved="emit('changed')" />
+  <CredentialDialog v-model:open="editing.open" :conch="conch" :account="editing.account" :fields="credentials" @saved="emit('changed')" />
 
   <el-dialog v-model="testResult.open" :title="`测试登录 · ${testResult.account}`" width="560px">
     <el-result v-if="testResult.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存">

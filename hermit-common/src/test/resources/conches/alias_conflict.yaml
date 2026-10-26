@@ -1,0 +1,94 @@
+# 可发布示例：5.4 的步骤 + 5.7 的说明写法 output + 凭证/配置声明。
+# related 按 5.7 指向 approve、list_done，这两个能力不在本文件里，校验有警告、无错误。
+conch: legacy_oa
+connector: other_oa
+version: 1.0.0
+driver: http
+min_crab_version: 1.0.0
+base_url: "http://oa.intranet.local"
+title: 协同办公 OA
+description: 公司内部审批、公告、请假系统。本规则包覆盖待办审批和请假申请。
+owner: 平台组
+tags: [审批, 请假]
+changelog: 初始版本，提供待办查询。
+
+credentials:
+  username:
+    type: text
+    label: 用户名
+    required: true
+    description: OA 登录账号
+  password:
+    type: secret
+    label: 密码
+    required: true
+    description: OA 登录密码
+
+config:
+  base_url:
+    type: url
+    label: 老系统地址
+    required: false
+    description: OA 根地址。用户未填写时使用这里的默认值，再回退到顶层 base_url
+    default: "http://oa.intranet.local"
+
+auth:
+  steps:
+    - request: { method: GET, path: /login.aspx }
+    - extract:
+        viewstate: { css: "#__VIEWSTATE", attr: value }
+    - request:
+        method: POST
+        path: /login.aspx
+        form:
+          __VIEWSTATE: "{{viewstate}}"
+          username: "{{credential.username}}"
+          password: "{{credential.password | md5}}"
+    - assert: { cookie_exists: ASP.NET_SessionId }
+  alive_check:
+    request: { method: GET, path: /home.aspx }
+    expect_not_redirect: /login.aspx
+
+actions:
+  list_todo:
+    title: 查询待办
+    description: 查询当前账号在 OA 中待处理的审批。用户问“有什么待办”“要审批什么”时使用；查询已办请用 list_done。
+    input:
+      page: { type: integer, default: 1, description: 页码，从 1 开始，每页 20 条 }
+    steps:
+      - request:
+          method: GET
+          path: /todo/list.aspx
+          query: { p: "{{input.page}}" }
+      - extract:
+          items:
+            css: "table#todo tr:not(:first-child)"
+            each:
+              id: { css: "td:nth-child(1)" }
+              title: { css: "td:nth-child(2) a" }
+              applicant: { css: "td:nth-child(3)" }
+              date: { css: "td:nth-child(4)", filter: "date('yyyy-MM-dd')" }
+    output:
+      items:
+        type: array
+        description: 待办列表
+        items:
+          id: { type: string, description: 审批单号，approve 等能力需要它 }
+          title: { type: string, description: 审批标题 }
+          applicant: { type: string, description: 申请人姓名 }
+          date: { type: string, description: 提交日期，yyyy-MM-dd }
+    examples:
+      - input: { page: 1 }
+        output:
+          items:
+            - id: "A1024"
+              title: 张三的请假申请
+              applicant: 张三
+              date: "2026-10-12"
+    notes: 结果按提交时间倒序；返回空列表表示没有待办。
+    related: [approve, list_done]
+    idempotent: true
+    mcp: { read_only: true }
+
+health_check:
+  - action: list_todo

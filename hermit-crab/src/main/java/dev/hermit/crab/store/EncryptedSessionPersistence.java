@@ -51,7 +51,7 @@ public final class EncryptedSessionPersistence implements SessionPersistence {
         } catch (JacksonException ex) {
             throw new IllegalStateException("session encoding failed");
         }
-        byte[] ciphertext = cipher.encrypt(key.origin(), key.shell(), key.account(), FIELD, json);
+        byte[] ciphertext = cipher.encrypt(key.origin(), key.conch(), key.account(), FIELD, json);
         Db.transaction(dataSource, connection -> {
             upsert(connection, key, ciphertext, Instant.now());
             return null;
@@ -66,7 +66,7 @@ public final class EncryptedSessionPersistence implements SessionPersistence {
             return List.of();
         }
         try {
-            String json = cipher.decrypt(key.origin(), key.shell(), key.account(), FIELD, ciphertext);
+            String json = cipher.decrypt(key.origin(), key.conch(), key.account(), FIELD, ciphertext);
             List<StoredCookie> cookies = JSON.readValue(json, COOKIES);
             return cookies == null ? List.of() : List.copyOf(cookies);
         } catch (CredentialDecryptException | JacksonException ex) {
@@ -80,7 +80,7 @@ public final class EncryptedSessionPersistence implements SessionPersistence {
         Objects.requireNonNull(key, "key");
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    DELETE FROM sessions WHERE origin = ? AND shell = ? AND account = ?
+                    DELETE FROM sessions WHERE origin = ? AND conch = ? AND account = ?
                     """)) {
                 bind(statement, key);
                 statement.executeUpdate();
@@ -91,7 +91,7 @@ public final class EncryptedSessionPersistence implements SessionPersistence {
 
     private static byte[] select(Connection connection, SessionKey key) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT ciphertext FROM sessions WHERE origin = ? AND shell = ? AND account = ?
+                SELECT ciphertext FROM sessions WHERE origin = ? AND conch = ? AND account = ?
                 """)) {
             bind(statement, key);
             try (ResultSet resultSet = statement.executeQuery()) {
@@ -104,23 +104,23 @@ public final class EncryptedSessionPersistence implements SessionPersistence {
             throws SQLException {
         try (PreparedStatement update = connection.prepareStatement("""
                 UPDATE sessions SET ciphertext = ?, updated_at = ?
-                WHERE origin = ? AND shell = ? AND account = ?
+                WHERE origin = ? AND conch = ? AND account = ?
                 """)) {
             update.setBytes(1, ciphertext);
             Db.setInstant(update, 2, updatedAt);
             update.setString(3, key.origin().name());
-            update.setString(4, key.shell());
+            update.setString(4, key.conch());
             update.setString(5, key.account());
             if (update.executeUpdate() == 1) {
                 return;
             }
         }
         try (PreparedStatement insert = connection.prepareStatement("""
-                INSERT INTO sessions (origin, shell, account, ciphertext, updated_at)
+                INSERT INTO sessions (origin, conch, account, ciphertext, updated_at)
                 VALUES (?, ?, ?, ?, ?)
                 """)) {
             insert.setString(1, key.origin().name());
-            insert.setString(2, key.shell());
+            insert.setString(2, key.conch());
             insert.setString(3, key.account());
             insert.setBytes(4, ciphertext);
             Db.setInstant(insert, 5, updatedAt);
@@ -130,7 +130,7 @@ public final class EncryptedSessionPersistence implements SessionPersistence {
 
     private static void bind(PreparedStatement statement, SessionKey key) throws SQLException {
         statement.setString(1, key.origin().name());
-        statement.setString(2, key.shell());
+        statement.setString(2, key.conch());
         statement.setString(3, key.account());
     }
 }

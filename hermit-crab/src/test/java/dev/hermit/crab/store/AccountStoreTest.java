@@ -168,12 +168,12 @@ class AccountStoreTest {
     }
 
     @Test
-    void aShellWithTwoDefaultsFailsClosed() throws Exception {
+    void aConchWithTwoDefaultsFailsClosed() throws Exception {
         fixture.accounts.create(Origin.OFFICIAL, "oa", "alice", "cli");
         fixture.accounts.create(Origin.OFFICIAL, "oa", "bob", "cli");
         try (Connection connection = fixture.dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement("""
-                     UPDATE accounts SET is_default = TRUE WHERE origin = ? AND shell = ? AND account = ?
+                     UPDATE accounts SET is_default = TRUE WHERE origin = ? AND conch = ? AND account = ?
                      """)) {
             statement.setString(1, "OFFICIAL");
             statement.setString(2, "oa");
@@ -191,14 +191,14 @@ class AccountStoreTest {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             for (int i = 0; i < 20; i++) {
-                String shell = "s" + i;
+                String conch = "s" + i;
                 CountDownLatch start = new CountDownLatch(1);
-                Future<?> alice = pool.submit(createAfter(start, shell, "alice"));
-                Future<?> bob = pool.submit(createAfter(start, shell, "bob"));
+                Future<?> alice = pool.submit(createAfter(start, conch, "alice"));
+                Future<?> bob = pool.submit(createAfter(start, conch, "bob"));
                 start.countDown();
                 alice.get(10, TimeUnit.SECONDS);
                 bob.get(10, TimeUnit.SECONDS);
-                assertThat(fixture.accounts.list(Origin.OFFICIAL, shell))
+                assertThat(fixture.accounts.list(Origin.OFFICIAL, conch))
                         .filteredOn(Account::defaultAccount)
                         .hasSize(1);
             }
@@ -207,11 +207,11 @@ class AccountStoreTest {
         }
     }
 
-    private Runnable createAfter(CountDownLatch start, String shell, String account) {
+    private Runnable createAfter(CountDownLatch start, String conch, String account) {
         return () -> {
             try {
                 start.await();
-                fixture.accounts.create(Origin.OFFICIAL, shell, account, "cli");
+                fixture.accounts.create(Origin.OFFICIAL, conch, account, "cli");
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("interrupted");

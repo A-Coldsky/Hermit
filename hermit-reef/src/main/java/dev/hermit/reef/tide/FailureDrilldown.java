@@ -5,8 +5,8 @@ import java.util.List;
 public record FailureDrilldown(List<FailureGroup> groups) {
 
     public record FailureGroup(
-            String shell,
-            String shellVersion,
+            String conch,
+            String conchVersion,
             String action,
             Integer stepIndex,
             String stepType,

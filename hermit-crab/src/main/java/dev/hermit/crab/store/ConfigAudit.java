@@ -18,7 +18,7 @@ import java.util.TreeSet;
  */
 final class ConfigAudit {
     /**
-     * Underscore is a LIKE wildcard, and shell names may contain it. Filters use equality and
+     * Underscore is a LIKE wildcard, and conch names may contain it. Filters use equality and
      * {@code LEFT}/{@code RIGHT} so {@code oa} does not match {@code oa_extra}.
      */
     private static final String FILTER = """
@@ -63,17 +63,17 @@ final class ConfigAudit {
         }
     }
 
-    static String target(Origin origin, String shell, String account) {
-        return origin.name() + "/" + shell + "/" + account;
+    static String target(Origin origin, String conch, String account) {
+        return origin.name() + "/" + conch + "/" + account;
     }
 
-    static String target(Origin origin, String shell) {
-        return origin.name() + "/" + shell;
+    static String target(Origin origin, String conch) {
+        return origin.name() + "/" + conch;
     }
 
-    static AuditLog.Page page(Connection connection, String shell, String account, int page, int limit, int offset)
+    static AuditLog.Page page(Connection connection, String conch, String account, int page, int limit, int offset)
             throws SQLException {
-        long total = count(connection, shell, account);
+        long total = count(connection, conch, account);
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT id, at, actor, kind, target, detail
                 FROM config_audit
@@ -81,7 +81,7 @@ final class ConfigAudit {
                 ORDER BY at DESC, id DESC
                 LIMIT ? OFFSET ?
                 """)) {
-            int index = bindFilter(statement, shell, account);
+            int index = bindFilter(statement, conch, account);
             statement.setInt(index, limit);
             statement.setInt(index + 1, offset);
             try (ResultSet resultSet = statement.executeQuery()) {
@@ -94,10 +94,10 @@ final class ConfigAudit {
         }
     }
 
-    private static long count(Connection connection, String shell, String account) throws SQLException {
+    private static long count(Connection connection, String conch, String account) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT COUNT(*) FROM config_audit " + FILTER)) {
-            bindFilter(statement, shell, account);
+            bindFilter(statement, conch, account);
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getLong(1);
@@ -105,10 +105,10 @@ final class ConfigAudit {
         }
     }
 
-    private static int bindFilter(PreparedStatement statement, String shell, String account) throws SQLException {
+    private static int bindFilter(PreparedStatement statement, String conch, String account) throws SQLException {
         int index = 1;
         for (int i = 0; i < 8; i++) {
-            statement.setString(index++, shell);
+            statement.setString(index++, conch);
         }
         for (int i = 0; i < 3; i++) {
             statement.setString(index++, account);
@@ -126,7 +126,7 @@ final class ConfigAudit {
                 resultSet.getString("actor"),
                 kind,
                 view.origin(),
-                view.shell(),
+                view.conch(),
                 view.account(),
                 fieldNames(resultSet.getString("detail"), view.capability()));
     }
@@ -209,15 +209,15 @@ final class ConfigAudit {
         if (second == 0 || second == rest.length() - 1 || rest.indexOf('/', second + 1) >= 0) {
             return new TargetView(origin, second == 0 ? null : rest.substring(0, second), null, null);
         }
-        String shell = rest.substring(0, second);
+        String conch = rest.substring(0, second);
         String tail = rest.substring(second + 1);
         if (accountKind(kind)) {
-            return new TargetView(origin, shell, tail, null);
+            return new TargetView(origin, conch, tail, null);
         }
         if (capabilityKind(kind)) {
-            return new TargetView(origin, shell, null, tail);
+            return new TargetView(origin, conch, null, tail);
         }
-        return new TargetView(origin, shell, null, null);
+        return new TargetView(origin, conch, null, null);
     }
 
     private static boolean accountKind(String kind) {
@@ -233,6 +233,6 @@ final class ConfigAudit {
                 || AuditKind.CAPABILITY_DISABLED.name().equals(kind);
     }
 
-    private record TargetView(String origin, String shell, String account, String capability) {
+    private record TargetView(String origin, String conch, String account, String capability) {
     }
 }

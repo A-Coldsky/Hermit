@@ -111,7 +111,7 @@ class TideQueryTest {
                 .param("from", DAY.toString())
                 .param("to", "2026-06-02T00:00:00Z"));
         JsonNode group = failures.get("data").get("groups").get(0);
-        assertThat(group.get("shellVersion").asText()).isEqualTo("1.0.0");
+        assertThat(group.get("conchVersion").asText()).isEqualTo("1.0.0");
         assertThat(group.get("action").asText()).isEqualTo("list_todo");
         assertThat(group.get("stepIndex").asInt()).isEqualTo(2);
         assertThat(group.get("stepType").asText()).isEqualTo("extract");
@@ -138,7 +138,7 @@ class TideQueryTest {
         hour("other_app", "1.0.0", "list_todo", DAY, "a", 7, 0, 3, 4);
 
         JsonNode day = admin(get("/api/admin/tide/summary")
-                .param("shell", "legacy_oa")
+                .param("conch", "legacy_oa")
                 .param("from", DAY.toString())
                 .param("to", "2026-06-02T00:00:00Z")
                 .param("bucket", "day"));
@@ -184,7 +184,7 @@ class TideQueryTest {
         failure("other_app", "1.0.0", "list_todo", 1, "extract", "RULE_MISMATCH", "other", "other-1", DAY);
 
         JsonNode groups = admin(get("/api/admin/tide/failures")
-                .param("shell", "legacy_oa")
+                .param("conch", "legacy_oa")
                 .param("from", DAY.toString())
                 .param("to", "2026-06-02T00:00:00Z"))
                 .get("data").get("groups");
@@ -195,17 +195,17 @@ class TideQueryTest {
         assertThat(texts(groups.get(0).get("recent"), "summary")).containsExactly("s5", "s4", "s3", "s2", "s1");
         assertThat(texts(groups.get(0).get("recent"), "traceId")).containsExactly("up-5", "up-4", "up-3", "up-2", "up-1");
         assertThat(groups.get(1).get("count").asLong()).isEqualTo(2);
-        assertThat(groups.get(1).get("shell").asText()).isEqualTo("legacy_oa");
+        assertThat(groups.get(1).get("conch").asText()).isEqualTo("legacy_oa");
 
         JsonNode filtered = admin(get("/api/admin/tide/failures")
                 .param("version", "1.0.0")
                 .param("action", "list_todo")
-                .param("shell", "other_app")
+                .param("conch", "other_app")
                 .param("from", DAY.toString())
                 .param("to", "2026-06-02T00:00:00Z"))
                 .get("data").get("groups");
         assertThat(filtered).hasSize(1);
-        assertThat(filtered.get(0).get("shell").asText()).isEqualTo("other_app");
+        assertThat(filtered.get(0).get("conch").asText()).isEqualTo("other_app");
     }
 
     @Test
@@ -216,7 +216,7 @@ class TideQueryTest {
         hour("other_app", "1.0.0", "list_todo", DAY, "a", 9, 9, 1, 1);
 
         JsonNode versions = admin(get("/api/admin/tide/compare")
-                .param("shell", "legacy_oa")
+                .param("conch", "legacy_oa")
                 .param("versions", "1.1.0,1.0.0,9.9.9"))
                 .get("data").get("versions");
         assertThat(versions).hasSize(3);
@@ -233,14 +233,14 @@ class TideQueryTest {
     }
 
     @Test
-    void rollbacksAreNewestFirstAndHonorShellAndTime() throws Exception {
+    void rollbacksAreNewestFirstAndHonorConchAndTime() throws Exception {
         rollback("legacy_oa", "old", DAY);
         rollback("legacy_oa", "new", DAY.plusSeconds(10));
         rollback("other_app", "other", DAY.plusSeconds(20));
         rollback("legacy_oa", "outside", DAY.minusSeconds(1));
 
         JsonNode events = admin(get("/api/admin/tide/rollbacks")
-                .param("shell", "legacy_oa")
+                .param("conch", "legacy_oa")
                 .param("from", DAY.toString())
                 .param("to", "2026-06-02T00:00:00Z"))
                 .get("data").get("events");
@@ -298,7 +298,7 @@ class TideQueryTest {
         mockMvc.perform(get("/api/admin/tide/compare").param("versions", "1.0.0")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token()))
                 .andExpect(status().isUnprocessableEntity());
-        mockMvc.perform(get("/api/admin/tide/compare").param("shell", "legacy_oa").param("versions", "1.0,1.1.0")
+        mockMvc.perform(get("/api/admin/tide/compare").param("conch", "legacy_oa").param("versions", "1.0,1.1.0")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token()))
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/api/admin/tide/summary")).andExpect(status().isUnauthorized());
@@ -335,43 +335,43 @@ class TideQueryTest {
         return objectMapper.readTree(response).get("data").get("token").asText();
     }
 
-    private void hour(String shell, String version, String action, Instant hour, String instance, long success,
+    private void hour(String conch, String version, String action, Instant hour, String instance, long success,
             long failure, long avg, long p95) {
         jdbc.update(
-                "INSERT INTO hourly_counts (shell, shell_version, action, hour_start, instance_id, success, failure, "
+                "INSERT INTO hourly_counts (conch, conch_version, action, hour_start, instance_id, success, failure, "
                         + "avg_millis, p95_millis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                shell, version, action, Timestamp.from(hour), instance, success, failure, avg, p95);
+                conch, version, action, Timestamp.from(hour), instance, success, failure, avg, p95);
     }
 
-    private void failure(String shell, String version, String action, Integer stepIndex, String stepType,
+    private void failure(String conch, String version, String action, Integer stepIndex, String stepType,
             String errorCode, String summary, String traceId, Instant occurredAt) {
         jdbc.update(
-                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, shell, shell_version, "
+                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, conch_version, "
                         + "action, step_index, step_type, error_code, summary, occurred_at) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                Timestamp.from(occurredAt), INSTANCE, "1.2.3", traceId, shell, version, action, stepIndex, stepType,
+                Timestamp.from(occurredAt), INSTANCE, "1.2.3", traceId, conch, version, action, stepIndex, stepType,
                 errorCode, summary, Timestamp.from(occurredAt));
     }
 
     private int rollbackEvents;
 
-    private void rollback(String shell, String reason, Instant occurredAt) {
+    private void rollback(String conch, String reason, Instant occurredAt) {
         jdbc.update(
-                "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
+                "INSERT INTO rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
                         + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                Timestamp.from(occurredAt), INSTANCE, shell, "1.0.1", "1.0.0", reason, Timestamp.from(occurredAt),
+                Timestamp.from(occurredAt), INSTANCE, conch, "1.0.1", "1.0.0", reason, Timestamp.from(occurredAt),
                 "evt-" + (++rollbackEvents));
     }
 
-    private static JsonNode point(JsonNode series, String shell, String action, String bucketStart) {
+    private static JsonNode point(JsonNode series, String conch, String action, String bucketStart) {
         for (JsonNode node : series) {
-            if (shell.equals(node.get("shell").asText())
+            if (conch.equals(node.get("conch").asText())
                     && action.equals(node.get("action").asText())
                     && bucketStart.equals(node.get("bucketStart").asText())) {
                 return node;
             }
         }
-        throw new AssertionError("missing " + shell + " " + action + " " + bucketStart);
+        throw new AssertionError("missing " + conch + " " + action + " " + bucketStart);
     }
 
     private static List<String> texts(JsonNode array, String field) {

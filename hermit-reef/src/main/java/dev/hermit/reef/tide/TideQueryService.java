@@ -40,18 +40,18 @@ public class TideQueryService {
         this.clock = clock;
     }
 
-    public TideSummary summary(String shell, String from, String to, String bucket) {
+    public TideSummary summary(String conch, String from, String to, String bucket) {
         String unit = bucket == null || bucket.isBlank() ? "day" : bucket;
         if (!unit.equals("hour") && !unit.equals("day")) {
             throw TideErrors.unprocessable();
         }
         TimeRange range = range(from, to);
-        String shellFilter = blankToNull(shell);
+        String conchFilter = blankToNull(conch);
         List<CountRow> rows = jdbc.query(
-                "SELECT shell, action, hour_start, success, failure, avg_millis, p95_millis FROM hourly_counts "
-                        + "WHERE hour_start >= ? AND hour_start < ? AND (? IS NULL OR shell = ?)",
+                "SELECT conch, action, hour_start, success, failure, avg_millis, p95_millis FROM hourly_counts "
+                        + "WHERE hour_start >= ? AND hour_start < ? AND (? IS NULL OR conch = ?)",
                 (rs, rowNum) -> new CountRow(
-                        rs.getString("shell"),
+                        rs.getString("conch"),
                         rs.getString("action"),
                         rs.getTimestamp("hour_start").toInstant(),
                         rs.getLong("success"),
@@ -60,40 +60,40 @@ public class TideQueryService {
                         asLong(rs.getObject("p95_millis"))),
                 Timestamp.from(range.from()),
                 Timestamp.from(range.to()),
-                shellFilter,
-                shellFilter);
+                conchFilter,
+                conchFilter);
         Map<BucketKey, Accumulator> grouped = new LinkedHashMap<>();
         for (CountRow row : rows) {
             Instant bucketStart = "hour".equals(unit)
                     ? row.hourStart()
                     : row.hourStart().truncatedTo(ChronoUnit.DAYS);
-            grouped.computeIfAbsent(new BucketKey(row.shell(), row.action(), bucketStart), key -> new Accumulator())
+            grouped.computeIfAbsent(new BucketKey(row.conch(), row.action(), bucketStart), key -> new Accumulator())
                     .add(row);
         }
         List<TidePoint> series = new ArrayList<>();
         for (Map.Entry<BucketKey, Accumulator> entry : grouped.entrySet()) {
             BucketKey key = entry.getKey();
-            series.add(entry.getValue().toPoint(key.shell(), key.action(), key.bucketStart()));
+            series.add(entry.getValue().toPoint(key.conch(), key.action(), key.bucketStart()));
         }
         series.sort(Comparator.comparing(TidePoint::bucketStart)
-                .thenComparing(TidePoint::shell)
+                .thenComparing(TidePoint::conch)
                 .thenComparing(TidePoint::action));
         return new TideSummary(unit, range.from(), range.to(), TideSummary.P95_NOTE, List.copyOf(series));
     }
 
-    public FailureDrilldown failures(String shell, String version, String action, String from, String to) {
+    public FailureDrilldown failures(String conch, String version, String action, String from, String to) {
         TimeRange range = range(from, to);
-        String shellFilter = blankToNull(shell);
+        String conchFilter = blankToNull(conch);
         String versionFilter = blankToNull(version);
         String actionFilter = blankToNull(action);
         List<FailureRow> rows = jdbc.query(
-                "SELECT id, shell, shell_version, action, step_index, step_type, error_code, summary, trace_id "
+                "SELECT id, conch, conch_version, action, step_index, step_type, error_code, summary, trace_id "
                         + "FROM failure_reports WHERE occurred_at >= ? AND occurred_at < ? "
-                        + "AND (? IS NULL OR shell = ?) AND (? IS NULL OR shell_version = ?) "
+                        + "AND (? IS NULL OR conch = ?) AND (? IS NULL OR conch_version = ?) "
                         + "AND (? IS NULL OR action = ?) ORDER BY occurred_at DESC, id DESC",
                 (rs, rowNum) -> new FailureRow(
-                        rs.getString("shell"),
-                        rs.getString("shell_version"),
+                        rs.getString("conch"),
+                        rs.getString("conch_version"),
                         rs.getString("action"),
                         (Integer) rs.getObject("step_index"),
                         rs.getString("step_type"),
@@ -102,8 +102,8 @@ public class TideQueryService {
                         rs.getString("trace_id")),
                 Timestamp.from(range.from()),
                 Timestamp.from(range.to()),
-                shellFilter,
-                shellFilter,
+                conchFilter,
+                conchFilter,
                 versionFilter,
                 versionFilter,
                 actionFilter,
@@ -111,7 +111,7 @@ public class TideQueryService {
         Map<FailureKey, FailureAccum> grouped = new LinkedHashMap<>();
         for (FailureRow row : rows) {
             FailureAccum accum = grouped.computeIfAbsent(
-                    new FailureKey(row.shell(), row.shellVersion(), row.action(), row.stepIndex(), row.stepType(),
+                    new FailureKey(row.conch(), row.conchVersion(), row.action(), row.stepIndex(), row.stepType(),
                             row.errorCode()),
                     key -> new FailureAccum());
             accum.count++;
@@ -124,8 +124,8 @@ public class TideQueryService {
             FailureKey key = entry.getKey();
             FailureAccum accum = entry.getValue();
             groups.add(new FailureGroup(
-                    key.shell(),
-                    key.shellVersion(),
+                    key.conch(),
+                    key.conchVersion(),
                     key.action(),
                     key.stepIndex(),
                     key.stepType(),
@@ -134,15 +134,15 @@ public class TideQueryService {
                     List.copyOf(accum.recent)));
         }
         groups.sort(Comparator.comparingLong(FailureGroup::count).reversed()
-                .thenComparing(FailureGroup::shell, Comparator.nullsFirst(Comparator.naturalOrder()))
-                .thenComparing(FailureGroup::shellVersion, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparing(FailureGroup::conch, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparing(FailureGroup::conchVersion, Comparator.nullsFirst(Comparator.naturalOrder()))
                 .thenComparing(FailureGroup::action, Comparator.nullsFirst(Comparator.naturalOrder()))
                 .thenComparing(FailureGroup::errorCode, Comparator.nullsFirst(Comparator.naturalOrder())));
         return new FailureDrilldown(List.copyOf(groups));
     }
 
-    public VersionCompare compare(String shell, String versions) {
-        if (shell == null || shell.isBlank() || versions == null || versions.isBlank()) {
+    public VersionCompare compare(String conch, String versions) {
+        if (conch == null || conch.isBlank() || versions == null || versions.isBlank()) {
             throw TideErrors.unprocessable();
         }
         List<String> requested = new ArrayList<>();
@@ -155,29 +155,29 @@ public class TideQueryService {
         for (String version : requested) {
             long[] totals = jdbc.queryForObject(
                     "SELECT COALESCE(SUM(success), 0), COALESCE(SUM(failure), 0) FROM hourly_counts "
-                            + "WHERE shell = ? AND shell_version = ?",
+                            + "WHERE conch = ? AND conch_version = ?",
                     (rs, rowNum) -> new long[] {rs.getLong(1), rs.getLong(2)},
-                    shell,
+                    conch,
                     version);
             long success = totals == null ? 0 : totals[0];
             long failure = totals == null ? 0 : totals[1];
             long calls = success + failure;
             stats.add(new VersionStats(version, calls, failure, rate(failure, calls)));
         }
-        return new VersionCompare(shell, List.copyOf(stats));
+        return new VersionCompare(conch, List.copyOf(stats));
     }
 
-    public RollbackList rollbacks(String shell, String from, String to) {
+    public RollbackList rollbacks(String conch, String from, String to) {
         TimeRange range = range(from, to);
-        String shellFilter = blankToNull(shell);
+        String conchFilter = blankToNull(conch);
         List<RollbackItem> events = jdbc.query(
-                "SELECT id, instance_id, shell, from_version, to_version, reason, occurred_at, received_at "
+                "SELECT id, instance_id, conch, from_version, to_version, reason, occurred_at, received_at "
                         + "FROM rollback_events WHERE occurred_at >= ? AND occurred_at < ? "
-                        + "AND (? IS NULL OR shell = ?) ORDER BY occurred_at DESC, id DESC",
+                        + "AND (? IS NULL OR conch = ?) ORDER BY occurred_at DESC, id DESC",
                 (rs, rowNum) -> new RollbackItem(
                         rs.getLong("id"),
                         rs.getString("instance_id"),
-                        rs.getString("shell"),
+                        rs.getString("conch"),
                         rs.getString("from_version"),
                         rs.getString("to_version"),
                         rs.getString("reason"),
@@ -185,8 +185,8 @@ public class TideQueryService {
                         rs.getTimestamp("received_at").toInstant()),
                 Timestamp.from(range.from()),
                 Timestamp.from(range.to()),
-                shellFilter,
-                shellFilter);
+                conchFilter,
+                conchFilter);
         return new RollbackList(List.copyOf(events));
     }
 
@@ -253,7 +253,7 @@ public class TideQueryService {
     }
 
     private record CountRow(
-            String shell,
+            String conch,
             String action,
             Instant hourStart,
             long success,
@@ -262,7 +262,7 @@ public class TideQueryService {
             Long p95Millis) {
     }
 
-    private record BucketKey(String shell, String action, Instant bucketStart) {
+    private record BucketKey(String conch, String action, Instant bucketStart) {
     }
 
     private static final class Accumulator {
@@ -285,18 +285,18 @@ public class TideQueryService {
             }
         }
 
-        TidePoint toPoint(String shell, String action, Instant bucketStart) {
+        TidePoint toPoint(String conch, String action, Instant bucketStart) {
             long calls = success + failure;
             BigDecimal avg = weight == 0
                     ? null
                     : weighted.divide(BigDecimal.valueOf(weight), AVG_SCALE, RoundingMode.HALF_UP);
-            return new TidePoint(shell, action, bucketStart, success, failure, rate(failure, calls), avg, p95);
+            return new TidePoint(conch, action, bucketStart, success, failure, rate(failure, calls), avg, p95);
         }
     }
 
     private record FailureRow(
-            String shell,
-            String shellVersion,
+            String conch,
+            String conchVersion,
             String action,
             Integer stepIndex,
             String stepType,
@@ -306,8 +306,8 @@ public class TideQueryService {
     }
 
     private record FailureKey(
-            String shell,
-            String shellVersion,
+            String conch,
+            String conchVersion,
             String action,
             Integer stepIndex,
             String stepType,

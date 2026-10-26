@@ -94,7 +94,7 @@ final class StepRunner {
 
     private Outcome set(Map<String, Object> spec, Map<String, Object> vars) {
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
-            if (ShellRegistry.RESERVED.contains(entry.getKey())) {
+            if (ConchRegistry.RESERVED.contains(entry.getKey())) {
                 throw new RuleProblem(ErrorCode.RULE_MISMATCH, "不能写入保留变量", null, null, null);
             }
             vars.put(entry.getKey(), entry.getValue());

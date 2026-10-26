@@ -13,11 +13,11 @@ final class Checks {
         return Objects.requireNonNull(origin, "origin");
     }
 
-    static String shell(String shell) {
-        if (shell == null || shell.isBlank()) {
-            throw new IllegalArgumentException("shell is required");
+    static String conch(String conch) {
+        if (conch == null || conch.isBlank()) {
+            throw new IllegalArgumentException("conch is required");
         }
-        return shell;
+        return conch;
     }
 
     static String account(String account) {

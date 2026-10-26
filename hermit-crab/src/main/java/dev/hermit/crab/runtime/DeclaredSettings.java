@@ -10,13 +10,13 @@ import java.util.Set;
 
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
-import dev.hermit.common.model.ShellDoc;
+import dev.hermit.common.model.ConchDoc;
 
 public final class DeclaredSettings {
     private DeclaredSettings() {
     }
 
-    public static List<String> missingConfig(ShellDoc doc, Map<String, String> stored) {
+    public static List<String> missingConfig(ConchDoc doc, Map<String, String> stored) {
         ArrayList<String> missing = new ArrayList<>();
         for (Map.Entry<String, ConfigField> entry : doc.config().entrySet()) {
             if (entry.getValue().required() && choose(doc, entry.getKey(), entry.getValue(), stored) == null) {
@@ -27,7 +27,7 @@ public final class DeclaredSettings {
         return List.copyOf(missing);
     }
 
-    public static List<String> missingCredentials(ShellDoc doc, Set<String> present) {
+    public static List<String> missingCredentials(ConchDoc doc, Set<String> present) {
         if (doc.credentials() == null) {
             return List.of();
         }
@@ -41,7 +41,7 @@ public final class DeclaredSettings {
         return List.copyOf(missing);
     }
 
-    public static Map<String, String> mergedConfig(ShellDoc doc, Map<String, String> stored) {
+    public static Map<String, String> mergedConfig(ConchDoc doc, Map<String, String> stored) {
         LinkedHashMap<String, String> values = new LinkedHashMap<>();
         for (Map.Entry<String, ConfigField> entry : doc.config().entrySet()) {
             String chosen = choose(doc, entry.getKey(), entry.getValue(), stored);
@@ -52,12 +52,12 @@ public final class DeclaredSettings {
         return Map.copyOf(values);
     }
 
-    public static void checkCredentialFields(ShellDoc doc, Map<String, String> fields) {
+    public static void checkCredentialFields(ConchDoc doc, Map<String, String> fields) {
         if (fields == null) {
             throw new IllegalArgumentException("credential fields are required");
         }
         if (doc.credentials() == null) {
-            throw new IllegalArgumentException("shell declares no credentials");
+            throw new IllegalArgumentException("conch declares no credentials");
         }
         for (Map.Entry<String, String> entry : fields.entrySet()) {
             CredentialField declared = doc.credentials().get(entry.getKey());
@@ -117,7 +117,7 @@ public final class DeclaredSettings {
         }
     }
 
-    private static String choose(ShellDoc doc, String key, ConfigField field, Map<String, String> stored) {
+    private static String choose(ConchDoc doc, String key, ConfigField field, Map<String, String> stored) {
         String user = stored == null ? null : stored.get(key);
         if (user != null && !user.isBlank()) {
             return user;

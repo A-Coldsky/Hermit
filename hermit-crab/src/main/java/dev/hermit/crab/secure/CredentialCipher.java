@@ -17,7 +17,7 @@ import java.util.Objects;
  * AES-256-GCM for one credential field.
  *
  * <p>Stored bytes are {@code 0x01 || nonce || ciphertext+tag}. The nonce is 12 bytes and the
- * tag is 128 bits. AAD is the UTF-8 of {@code hermit:cred:v1}, then origin, shell, account, and
+ * tag is 128 bits. AAD is the UTF-8 of {@code hermit:cred:v1}, then origin, conch, account, and
  * field as a 4-byte big-endian length plus UTF-8 bytes. Origin uses {@link Origin#name()}.
  * A blob decrypted with any other tuple fails the tag check.
  */
@@ -43,11 +43,11 @@ public final class CredentialCipher {
         this.random = Objects.requireNonNull(random, "random");
     }
 
-    public byte[] encrypt(Origin origin, String shell, String account, String field, String plaintext) {
+    public byte[] encrypt(Origin origin, String conch, String account, String field, String plaintext) {
         if (plaintext == null) {
             throw new IllegalArgumentException("plaintext is required");
         }
-        byte[] associated = associatedData(origin, shell, account, field);
+        byte[] associated = associatedData(origin, conch, account, field);
         byte[] nonce = new byte[NONCE_LENGTH];
         random.nextBytes(nonce);
         byte[] plainBytes = plaintext.getBytes(StandardCharsets.UTF_8);
@@ -66,7 +66,7 @@ public final class CredentialCipher {
         }
     }
 
-    public String decrypt(Origin origin, String shell, String account, String field, byte[] stored) {
+    public String decrypt(Origin origin, String conch, String account, String field, byte[] stored) {
         if (stored == null || stored.length < 1 + NONCE_LENGTH + TAG_LENGTH || (stored[0] & 0xFF) != VERSION) {
             throw new CredentialDecryptException();
         }
@@ -74,7 +74,7 @@ public final class CredentialCipher {
         byte[] body = Arrays.copyOfRange(stored, 1 + NONCE_LENGTH, stored.length);
         byte[] plainBytes;
         try {
-            plainBytes = transform(Cipher.DECRYPT_MODE, nonce, associatedData(origin, shell, account, field), body);
+            plainBytes = transform(Cipher.DECRYPT_MODE, nonce, associatedData(origin, conch, account, field), body);
         } catch (GeneralSecurityException ex) {
             throw new CredentialDecryptException();
         }
@@ -97,25 +97,25 @@ public final class CredentialCipher {
         return cipher.doFinal(input);
     }
 
-    private static byte[] associatedData(Origin origin, String shell, String account, String field) {
+    private static byte[] associatedData(Origin origin, String conch, String account, String field) {
         Objects.requireNonNull(origin, "origin");
-        Objects.requireNonNull(shell, "shell");
+        Objects.requireNonNull(conch, "conch");
         Objects.requireNonNull(account, "account");
         Objects.requireNonNull(field, "field");
         byte[] prefix = "hermit:cred:v1".getBytes(StandardCharsets.UTF_8);
         byte[] originBytes = origin.name().getBytes(StandardCharsets.UTF_8);
-        byte[] shellBytes = shell.getBytes(StandardCharsets.UTF_8);
+        byte[] conchBytes = conch.getBytes(StandardCharsets.UTF_8);
         byte[] accountBytes = account.getBytes(StandardCharsets.UTF_8);
         byte[] fieldBytes = field.getBytes(StandardCharsets.UTF_8);
         long total = (long) prefix.length + 16L
-                + originBytes.length + shellBytes.length + accountBytes.length + fieldBytes.length;
+                + originBytes.length + conchBytes.length + accountBytes.length + fieldBytes.length;
         if (total > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("credential binding data is too large");
         }
         ByteBuffer buffer = ByteBuffer.allocate((int) total).order(ByteOrder.BIG_ENDIAN);
         buffer.put(prefix);
         putUtf8(buffer, originBytes);
-        putUtf8(buffer, shellBytes);
+        putUtf8(buffer, conchBytes);
         putUtf8(buffer, accountBytes);
         putUtf8(buffer, fieldBytes);
         return buffer.array();

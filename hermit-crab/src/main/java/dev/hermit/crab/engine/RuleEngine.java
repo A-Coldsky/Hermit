@@ -19,7 +19,7 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
-import dev.hermit.common.model.ShellDoc;
+import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.Step;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
@@ -37,7 +37,7 @@ public final class RuleEngine {
     private static final String LOGIN_COOKIE_MISSING =
             "登录未建立会话：上游没有发回会话 Cookie。请核对用户名和密码；若凭证正确，请重新测试登录，或检查登录页是否已改版。";
 
-    private final ShellRegistry registry;
+    private final ConchRegistry registry;
     private final SessionManager sessions;
     private final EngineSettings settings;
     private final TemplateEngine templates;
@@ -45,11 +45,11 @@ public final class RuleEngine {
     private final InputPreparer inputs = new InputPreparer();
     private final StepRunner steps;
 
-    public RuleEngine(ShellRegistry registry, SessionManager sessions) {
+    public RuleEngine(ConchRegistry registry, SessionManager sessions) {
         this(registry, sessions, EngineSettings.defaults());
     }
 
-    public RuleEngine(ShellRegistry registry, SessionManager sessions, EngineSettings settings) {
+    public RuleEngine(ConchRegistry registry, SessionManager sessions, EngineSettings settings) {
         this.registry = registry;
         this.sessions = sessions;
         this.settings = settings;
@@ -64,24 +64,24 @@ public final class RuleEngine {
 
     /**
      * Runs {@code request} against {@code authorized} when that snapshot is non-null.
-     * The shell name must equal {@code request.shell()}; otherwise the shell is missing.
+     * The conch name must equal {@code request.conch()}; otherwise the conch is missing.
      * Actions come only from the snapshot, even when the action is absent.
-     * A null snapshot looks the shell up in the registry, matching {@link #execute(ExecutionRequest)}.
+     * A null snapshot looks the conch up in the registry, matching {@link #execute(ExecutionRequest)}.
      */
-    public ExecutionResult execute(ExecutionRequest request, ShellDoc authorized) {
+    public ExecutionResult execute(ExecutionRequest request, ConchDoc authorized) {
         long start = System.nanoTime();
         long deadline = Math.addExact(start, settings.capabilityTimeout().toNanos());
         Map<String, String> credentials = copyStrings(request.accountContext().credentials());
         Map<String, String> config = copyStrings(request.accountContext().config());
         String version = null;
         try {
-            ShellDoc shell = authorizedShell(request, authorized);
-            if (shell == null) {
-                return finish(false, null, ErrorCode.NOT_FOUND, "shell 不存在", null, null, "shell 不存在",
+            ConchDoc conch = authorizedConch(request, authorized);
+            if (conch == null) {
+                return finish(false, null, ErrorCode.NOT_FOUND, "conch 不存在", null, null, "conch 不存在",
                         List.of(), version, request, credentials, List.of(), start);
             }
-            version = shell.version().toString();
-            Action action = shell.actions().get(request.action());
+            version = conch.version().toString();
+            Action action = conch.actions().get(request.action());
             if (action == null) {
                 return finish(false, null, ErrorCode.NOT_FOUND, "能力不存在", null, null, "能力不存在",
                         List.of(), version, request, credentials, List.of(), start);
@@ -93,7 +93,7 @@ public final class RuleEngine {
                 return finish(false, null, ErrorCode.INVALID_INPUT, ex.getMessage(), null, null, ex.getMessage(),
                         List.of(), version, request, credentials, List.of(), start);
             }
-            SessionKey key = new SessionKey(request.origin(), request.shell(), request.account());
+            SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
             boolean locked;
             try {
                 // 等锁时间算进能力总超时。
@@ -107,7 +107,7 @@ public final class RuleEngine {
                         List.of(), version, request, credentials, List.of(), start);
             }
             try {
-                return locked(request, shell, action, input, credentials, config, key, version, start, deadline);
+                return locked(request, conch, action, input, credentials, config, key, version, start, deadline);
             } finally {
                 sessions.unlock(key);
             }
@@ -116,11 +116,11 @@ public final class RuleEngine {
         }
     }
 
-    private ShellDoc authorizedShell(ExecutionRequest request, ShellDoc authorized) {
+    private ConchDoc authorizedConch(ExecutionRequest request, ConchDoc authorized) {
         if (authorized == null) {
-            return registry.find(request.shell()).orElse(null);
+            return registry.find(request.conch()).orElse(null);
         }
-        if (!authorized.shell().equals(request.shell())) {
+        if (!authorized.conch().equals(request.conch())) {
             return null;
         }
         return authorized;
@@ -137,13 +137,13 @@ public final class RuleEngine {
         Map<String, String> config = copyStrings(request.accountContext().config());
         String version = null;
         try {
-            ShellDoc shell = registry.find(request.shell()).orElse(null);
-            if (shell == null) {
-                return finish(false, null, ErrorCode.NOT_FOUND, "shell 不存在", null, null, "shell 不存在",
+            ConchDoc conch = registry.find(request.conch()).orElse(null);
+            if (conch == null) {
+                return finish(false, null, ErrorCode.NOT_FOUND, "conch 不存在", null, null, "conch 不存在",
                         List.of(), version, request, credentials, List.of(), start);
             }
-            version = shell.version().toString();
-            SessionKey key = new SessionKey(request.origin(), request.shell(), request.account());
+            version = conch.version().toString();
+            SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
             boolean locked;
             try {
                 locked = sessions.tryLock(key, deadline);
@@ -156,8 +156,8 @@ public final class RuleEngine {
                         List.of(), version, request, credentials, List.of(), start);
             }
             try {
-                URI base = baseUri(shell, config);
-                login(shell, request.rawInput(), credentials, config, key, base, deadline);
+                URI base = baseUri(conch, config);
+                login(conch, request.rawInput(), credentials, config, key, base, deadline);
                 return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
                         credentials, sessions.seenCookieValues(key), start);
             } catch (StepFailure ex) {
@@ -183,7 +183,7 @@ public final class RuleEngine {
 
     private ExecutionResult locked(
             ExecutionRequest request,
-            ShellDoc shell,
+            ConchDoc conch,
             Action action,
             Map<String, Object> input,
             Map<String, String> credentials,
@@ -199,16 +199,16 @@ public final class RuleEngine {
                         "该账号已暂停自动登录", List.of(), version, request, credentials,
                         sessions.seenCookieValues(key), start);
             }
-            URI base = baseUri(shell, config);
-            ensureSession(shell, input, credentials, config, key, base, deadline);
-            Attempt attempt = runAction(shell, action, input, credentials, config, key, base, deadline);
+            URI base = baseUri(conch, config);
+            ensureSession(conch, input, credentials, config, key, base, deadline);
+            Attempt attempt = runAction(conch, action, input, credentials, config, key, base, deadline);
             if (attempt.lost) {
                 sessions.markLoggedOut(key);
                 if (!action.idempotent()) {
                     return expired(attempt.logs, version, request, credentials, key, start);
                 }
-                ensureSession(shell, input, credentials, config, key, base, deadline);
-                attempt = runAction(shell, action, input, credentials, config, key, base, deadline);
+                ensureSession(conch, input, credentials, config, key, base, deadline);
+                attempt = runAction(conch, action, input, credentials, config, key, base, deadline);
                 if (attempt.lost) {
                     sessions.markLoggedOut(key);
                     return expired(attempt.logs, version, request, credentials, key, start);
@@ -247,7 +247,7 @@ public final class RuleEngine {
     }
 
     private void ensureSession(
-            ShellDoc shell,
+            ConchDoc conch,
             Map<String, Object> input,
             Map<String, String> credentials,
             Map<String, String> config,
@@ -256,10 +256,10 @@ public final class RuleEngine {
             long deadline
     ) {
         if (!sessions.loggedIn(key)) {
-            login(shell, input, credentials, config, key, base, deadline);
+            login(conch, input, credentials, config, key, base, deadline);
             return;
         }
-        Auth auth = shell.auth();
+        Auth auth = conch.auth();
         AliveCheck alive = auth == null ? null : auth.aliveCheck();
         if (!sessions.idle(key) || alive == null) {
             return;
@@ -284,14 +284,14 @@ public final class RuleEngine {
                 deadline);
         if (result.sessionLost() || result.status() == 401 || result.status() == 403) {
             sessions.markLoggedOut(key);
-            login(shell, input, credentials, config, key, base, deadline);
+            login(conch, input, credentials, config, key, base, deadline);
             return;
         }
         sessions.touch(key);
     }
 
     private void login(
-            ShellDoc shell,
+            ConchDoc conch,
             Map<String, Object> input,
             Map<String, String> credentials,
             Map<String, String> config,
@@ -299,7 +299,7 @@ public final class RuleEngine {
             URI base,
             long deadline
     ) {
-        Auth auth = shell.auth();
+        Auth auth = conch.auth();
         if (auth == null || auth.steps().isEmpty()) {
             sessions.markLoggedIn(key);
             sessions.recordAuthSuccess(key);
@@ -322,7 +322,7 @@ public final class RuleEngine {
     }
 
     private Attempt runAction(
-            ShellDoc shell,
+            ConchDoc conch,
             Action action,
             Map<String, Object> input,
             Map<String, String> credentials,
@@ -334,7 +334,7 @@ public final class RuleEngine {
         ArrayList<StepLog> logs = new ArrayList<>();
         Map<String, Object> vars = baseVars(input, credentials, config);
         try {
-            runSteps(action.steps(), vars, false, expectPrefix(shell), logs, key, base, deadline);
+            runSteps(action.steps(), vars, false, expectPrefix(conch), logs, key, base, deadline);
             return Attempt.ok(vars, logs);
         } catch (SessionLost ex) {
             return Attempt.lost(logs);
@@ -525,9 +525,9 @@ public final class RuleEngine {
         return vars;
     }
 
-    private static URI baseUri(ShellDoc shell, Map<String, String> config) {
+    private static URI baseUri(ConchDoc conch, Map<String, String> config) {
         String configured = config.get("base_url");
-        String raw = configured == null || configured.isBlank() ? shell.baseUrl() : configured;
+        String raw = configured == null || configured.isBlank() ? conch.baseUrl() : configured;
         if (raw == null || raw.isBlank()) {
             throw new RuleProblem(ErrorCode.INTERNAL, "缺少 base_url", null, null, null);
         }
@@ -551,11 +551,11 @@ public final class RuleEngine {
         return status != null && (status == 401 || status == 403);
     }
 
-    private static String expectPrefix(ShellDoc shell) {
-        if (shell.auth() == null || shell.auth().aliveCheck() == null) {
+    private static String expectPrefix(ConchDoc conch) {
+        if (conch.auth() == null || conch.auth().aliveCheck() == null) {
             return null;
         }
-        return shell.auth().aliveCheck().expectNotRedirect();
+        return conch.auth().aliveCheck().expectNotRedirect();
     }
 
     private static Map<String, String> copyStrings(Map<String, String> source) {

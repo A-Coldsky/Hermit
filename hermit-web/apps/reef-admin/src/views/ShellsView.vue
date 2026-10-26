@@ -71,6 +71,7 @@ onMounted(load)
               <strong>{{ row.title || row.shell }}</strong>
               <span class="mono hm-muted">{{ row.shell }}</span>
             </div>
+            <el-tag v-if="row.disabled" type="danger" effect="light" round>已停用</el-tag>
             <el-tag v-if="row.version" type="success" effect="light" round class="mono">v{{ row.version }}</el-tag>
             <el-tag v-else type="info" effect="light" round>未发布</el-tag>
           </div>
@@ -110,10 +111,11 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="当前版本" width="130">
+        <el-table-column label="当前版本" width="190">
           <template #default="{ row }">
             <el-tag v-if="row.version" type="success" effect="plain" class="mono">v{{ row.version }}</el-tag>
             <el-tag v-else type="info" effect="plain">未发布</el-tag>
+            <el-tag v-if="row.disabled" type="danger" effect="plain" class="off">已停用</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="capabilityCount" label="能力数" width="90" align="right" />
@@ -246,5 +248,9 @@ onMounted(load)
 
 :deep(.clickable) {
   cursor: pointer;
+}
+
+.off {
+  margin-left: 6px;
 }
 </style>

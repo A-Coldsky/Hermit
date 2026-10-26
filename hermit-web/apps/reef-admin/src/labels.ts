@@ -10,6 +10,8 @@ export const auditActionLabels: Record<string, string> = {
   UPLOAD: '上传',
   PUBLISH: '发布',
   ROLLBACK: '回滚',
+  DISABLE: '停用',
+  ENABLE: '启用',
   RETENTION_PURGE: '清理过期数据',
 }
 

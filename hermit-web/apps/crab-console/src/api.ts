@@ -168,9 +168,18 @@ export interface SyncError {
   message: string
 }
 
+export type SyncOutcomeKind =
+  | 'INSTALLED'
+  | 'SKIPPED_SAME'
+  | 'SKIPPED_MIN_VERSION'
+  | 'SKIPPED_PINNED'
+  | 'REJECTED'
+  | 'ROLLED_BACK'
+  | 'DISABLED'
+
 export interface SyncReport {
   notModified: boolean
-  shells: { shell: string; version: string; kind: string | null; reason: string | null }[]
+  shells: { shell: string; version: string | null; kind: SyncOutcomeKind | null; reason: string | null }[]
   removed: string[]
   credentialChanges: { shell: string; addedRequired: string[]; removed: string[] }[]
   latestCrab: CrabRelease | null

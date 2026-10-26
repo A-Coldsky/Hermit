@@ -24,9 +24,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Version 5 adds {@code rollback_queue.event_id} and fills a unique id for rows already queued.
  * Version 5 is applied when {@code MAX(version)} is below 5, the same way as version 4.
  * Version 6 indexes {@code config_audit (at, id)} for newest-first reads and does not copy
- * {@code detail}. Version 2 is applied when its own row is missing, not when {@code MAX(version)}
- * is below 2: a database that already recorded version 3 still receives version 2. Version 2
- * does not read or create later tables. Do not rewrite an applied migration.
+ * {@code detail}. Version 7 adds {@code disabled_shells}, the tombstones for shells Reef withdrew
+ * from the manifest. Version 6 is left as applied; do not fold the tombstones back into it.
+ * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
+ * a database that already recorded version 3 still receives version 2. Version 2 does not read
+ * or create later tables. Do not rewrite an applied migration.
  */
 public final class CrabDatabase implements AutoCloseable {
     /**
@@ -99,6 +101,10 @@ public final class CrabDatabase implements AutoCloseable {
             if (current < 6) {
                 applyV6(connection);
                 insertVersion(connection, 6);
+            }
+            if (current < 7) {
+                applyV7(connection);
+                insertVersion(connection, 7);
             }
             return null;
         });
@@ -390,6 +396,16 @@ public final class CrabDatabase implements AutoCloseable {
 
     private static void applyV6(Connection connection) throws SQLException {
         execute(connection, "CREATE INDEX IF NOT EXISTS config_audit_at_idx ON config_audit (at, id)");
+    }
+
+    private static void applyV7(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS disabled_shells (
+                    shell VARCHAR(256) NOT NULL PRIMARY KEY,
+                    version VARCHAR(64),
+                    disabled_at TIMESTAMP WITH TIME ZONE NOT NULL
+                )
+                """);
     }
 
     private static boolean applied(Connection connection, int version) throws SQLException {

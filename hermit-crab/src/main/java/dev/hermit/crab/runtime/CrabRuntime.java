@@ -58,6 +58,7 @@ import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.store.ShellConfigStore;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
+import dev.hermit.crab.sync.DisabledShells;
 import dev.hermit.crab.sync.InstalledShells;
 import dev.hermit.crab.sync.LoadReport;
 import dev.hermit.crab.sync.RollbackGuard;
@@ -94,6 +95,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final Set<String> configDisabled;
     private final Set<String> switchDisabled;
     private final List<Runnable> catalogListeners = new CopyOnWriteArrayList<>();
+    private final DisabledShells disabledShells;
     private final Invoker invoker;
     private final ShellAdmin admin;
     private final String instanceId;
@@ -145,7 +147,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.configDisabled = Set.copyOf(config.disabledCapabilities());
         this.switchDisabled = ConcurrentHashMap.newKeySet();
         this.switchDisabled.addAll(switches.disabledKeys(Origin.OFFICIAL));
-        this.invoker = new Invoker(registry, accounts, vault, shellConfig, engine, callLogs, idempotency, this);
+        this.disabledShells = new DisabledShells(database.dataSource());
+        this.disabledShells.load();
+        this.invoker = new Invoker(
+                registry, accounts, vault, shellConfig, engine, callLogs, idempotency, this, disabledShells);
         this.admin = new ShellAdmin(database.dataSource(), accounts, vault, shellConfig, apiKeys, sessions, engine, registry);
         this.instanceId = InstanceIds.loadOrCreate(paths);
     }
@@ -190,6 +195,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public ShellRegistry registry() {
         return registry;
+    }
+
+    public DisabledShells disabledShells() {
+        return disabledShells;
     }
 
     public Invoker invoker() {
@@ -241,7 +250,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         Optional<String> token = Optional.ofNullable(config.reefToken()).filter(value -> !value.isBlank());
         SyncSettings syncSettings = new SyncSettings(
                 reefUrl, token, reefKey, Duration.ofSeconds(config.syncIntervalSeconds()), instance);
-        ShellSync sync = new ShellSync(syncSettings, paths, registry, vault, database.dataSource(), clock);
+        ShellSync sync = new ShellSync(
+                syncSettings, paths, registry, vault, database.dataSource(), clock, disabledShells);
         sync.onReport(this::rememberCompletedSync);
         this.shellSync = sync;
         ReportSettings reportSettings = new ReportSettings(
@@ -264,7 +274,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return new LoadReport(List.of(), List.of());
         }
         paths.shells();
-        return InstalledShells.loadAll(paths, reefKey, registry);
+        return InstalledShells.loadAll(paths, reefKey, registry, disabledShells.names());
     }
 
     public javax.sql.DataSource dataSource() {

@@ -14,6 +14,8 @@ public final class SyncReasons {
     public static final String REGISTRY_REJECTED = "REGISTRY_REJECTED";
     public static final String CREDENTIAL_DELETE_FAILED = "CREDENTIAL_DELETE_FAILED";
     public static final String PACKAGE_MISSING = "PACKAGE_MISSING";
+    public static final String DISABLED = "DISABLED";
+    public static final String DISABLE_FAILED = "DISABLE_FAILED";
 
     private SyncReasons() {
     }

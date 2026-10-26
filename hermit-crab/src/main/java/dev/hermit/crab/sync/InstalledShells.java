@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
@@ -26,9 +27,18 @@ public final class InstalledShells {
     }
 
     public static LoadReport loadAll(CrabPaths paths, PublicKey key, ShellRegistry registry) {
+        return loadAll(paths, key, registry, Set.of());
+    }
+
+    /**
+     * Shells in {@code disabled} are left unloaded even when {@code current} still points at a
+     * package. That keeps a Reef disable in force across restart.
+     */
+    public static LoadReport loadAll(CrabPaths paths, PublicKey key, ShellRegistry registry, Set<String> disabled) {
         if (paths == null || key == null || registry == null) {
             throw new IllegalArgumentException("paths, key, and registry are required");
         }
+        Set<String> skipped = disabled == null ? Set.of() : disabled;
         List<String> loaded = new ArrayList<>();
         List<ShellOutcome> failures = new ArrayList<>();
         try (Stream<Path> children = Files.list(paths.shells())) {
@@ -36,6 +46,9 @@ public final class InstalledShells {
                 String shell = child.getFileName().toString();
                 if (!ShellFiles.safeSegment(shell)) {
                     failures.add(new ShellOutcome(shell, null, OutcomeKind.REJECTED, SyncReasons.PATH_UNSAFE));
+                    continue;
+                }
+                if (skipped.contains(shell)) {
                     continue;
                 }
                 synchronized (ShellFileLocks.of(shell)) {

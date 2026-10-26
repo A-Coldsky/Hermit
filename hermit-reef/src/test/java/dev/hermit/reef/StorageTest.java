@@ -82,7 +82,8 @@ class StorageTest {
                 "FAILURE_REPORTS",
                 "HOURLY_COUNTS",
                 "ROLLBACK_EVENTS",
-                "ALERTS");
+                "ALERTS",
+                "SHELL_AVAILABILITY");
         Integer applied = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM \"flyway_schema_history\" WHERE \"version\" = '1' AND \"success\" = TRUE",
                 Integer.class);

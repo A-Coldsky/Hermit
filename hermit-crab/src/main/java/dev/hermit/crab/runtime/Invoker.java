@@ -21,6 +21,7 @@ import dev.hermit.crab.engine.ShellRegistry;
 import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.secure.Redactor;
+import dev.hermit.crab.sync.DisabledShells;
 import dev.hermit.crab.sync.RollbackGuard;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
@@ -46,6 +47,7 @@ public final class Invoker {
     private final CallLogStore callLogs;
     private final IdempotencyStore idempotency;
     private final CapabilityGate disabled;
+    private final DisabledShells disabledShells;
     private final List<CrabRuntime.ExecutionListener> listeners = new CopyOnWriteArrayList<>();
     private final Object[] idempotencyLocks = newIdempotencyLocks();
     private volatile ReportQueue reportQueue;
@@ -61,6 +63,20 @@ public final class Invoker {
             IdempotencyStore idempotency,
             CapabilityGate disabled
     ) {
+        this(registry, accounts, vault, config, engine, callLogs, idempotency, disabled, DisabledShells.none());
+    }
+
+    public Invoker(
+            ShellRegistry registry,
+            AccountStore accounts,
+            CredentialVault vault,
+            ShellConfigStore config,
+            RuleEngine engine,
+            CallLogStore callLogs,
+            IdempotencyStore idempotency,
+            CapabilityGate disabled,
+            DisabledShells disabledShells
+    ) {
         this.registry = registry;
         this.accounts = accounts;
         this.vault = vault;
@@ -69,6 +85,7 @@ public final class Invoker {
         this.callLogs = callLogs;
         this.idempotency = idempotency;
         this.disabled = disabled;
+        this.disabledShells = disabledShells == null ? DisabledShells.none() : disabledShells;
     }
 
     public void addListener(CrabRuntime.ExecutionListener listener) {
@@ -91,6 +108,11 @@ public final class Invoker {
     ) {
         if (principal == null || shell == null || action == null || shell.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
+        }
+        // 停用墓碑先于注册表。已经带着授权快照进入引擎的请求仍执行那份快照（审计 A01）；
+        // 新请求在这里返回，不会在停用期间读到另一份版本。
+        if (disabledShells.contains(shell)) {
+            return done(traceId, ErrorCode.SHELL_DISABLED, DisabledShells.CALL_MESSAGE, null);
         }
         ShellDoc doc = registry.find(shell).orElse(null);
         Action capability = doc == null ? null : doc.actions().get(action);

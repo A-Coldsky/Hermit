@@ -20,6 +20,7 @@
 | MCP stdio 桥接 | 已实现 | McpStdio；需要已运行的 HTTP Crab，CLI/验收覆盖不足以代表所有真实客户端兼容 |
 | Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest。4xx/5xx 服务端日志带与响应相同的 traceId，4xx 不记请求体。已登录的未知 `/api/admin/**` 为 404 `NOT_FOUND` 信封。没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ShellApiTest/ShellConcurrencyTest/ShellSelfCheckFailureTest |
+| 停用 / 重新启用 Shell | 已实现 | 管理 API 记录 `DISABLE`/`ENABLE` 和原因。停用后清单不含该 Shell，Agent 下载 404，发布和回滚 409 `shell is disabled`，签名包字节不变。Crab 同步后卸下注册表、清 `current`、保留版本文件和账号；调用 409 `SHELL_DISABLED`；同步状态 `kind=DISABLED` 且出现在 `removed`。重新启用后重新验签安装。回滚固定未解除、且清单版本不高于坏版本时，重新启用不会把 Shell 装回去 |
 | Crab 定时/手动同步、ETag、验签 | 已实现 | ShellSyncTest/CrabWiringTest；可重试失败不记 ETag，304 核对 current。Reef 不可达时手动同步为 502 `UPSTREAM_ERROR`，状态改为这次失败；Reef 的 HTTP 错误仍保留上次成功 |
 | 本地规则失配回滚、坏版本固定 | 已实现 | RollbackGuardTest；要求前一版本成功，5 次 `RULE_MISMATCH`；上游 400 与会话失效不计数；不等于发布前健康检查。回滚后控制台同步状态显示已安装版本和 `ROLLED_BACK`，固定解除前保持 |
 | 上报队列、聚合、退避、预览 | 已实现 | ReportSenderTest；失败/事件队列上限 10000，超限丢弃计数；小时统计单独存储 |
@@ -65,6 +66,10 @@ hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过；Docker
 
 2026-10-26 上游错误映射以 JDK 17.0.20 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 100、hermit-crab 187、hermit-it 1，Vitest 30（6 个文件）。未覆盖真实老系统，以及除 HTTP 400/401/403 以外的 4xx。
 
+2026-10-26 Shell 停用以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 119、hermit-crab 203、hermit-it 1，Vitest 43（7 个文件）。停用覆盖 Reef H2 的停用/启用、清单排除、签名包不变、发布与回滚 409，以及和发布的并发；Crab 卸下注册表、304 后仍显示 `DISABLED`、重启不加载、调用 409 `SHELL_DISABLED`；hermit-it 在告警回滚后停用并核对调用与同步状态。未覆盖 MySQL、浏览器页面（未做 Vue 界面）、MCP HTTP 端到端、停用瞬间已经持有授权快照的在途请求、回滚固定挡住重新安装、告警仍按当前已发布版本评估。旧 Crab 会从清单消失路径清掉注册表，但若仍保留 `current`，重启后可能重新加载。
+
 2026-10-26 配置审计读取以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 117、hermit-crab 205、hermit-it 1，Vitest 43（7 个文件）。这是当前整棵树的计数。本次新增 `ConfigAuditReadTest`、`ConsoleAuditTest` 和 CLI `audit list` 用例。配置审计页面随后合入，未在浏览器里点选；`config_audit` 仍无定期清理。未覆盖真实老系统。
 
 2026-10-26 错误日志、未知路由信封与保留任务以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 122、hermit-crab 202、hermit-it 1，Vitest 46（8 个文件）。未启动定时器到点执行，也未跑 MySQL/Compose。小时统计、审计和告警仍不在清理范围内。
+
+2026-10-26 合入 main 后，`disabled_shells` 改为 Crab schema 7（版本 6 仍只建 `config_audit_at_idx`，已应用的版本 6 不重跑）。JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 124、hermit-crab 209、hermit-it 1，Vitest 49（9 个文件）。Reef Flyway 仍是 V1–V4，V4 为 `shell_availability`。未覆盖 MySQL，也未在浏览器点选停用或审计标签。

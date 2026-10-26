@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -33,8 +34,17 @@ import org.junit.jupiter.api.io.TempDir;
 import dev.hermit.common.pkg.Ed25519Keys;
 import dev.hermit.common.pkg.PackageReason;
 import dev.hermit.common.pkg.ShellPackage;
+import dev.hermit.crab.engine.RuleEngine;
+import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.engine.ShellRegistry;
+import dev.hermit.crab.runtime.Invoker;
+import dev.hermit.crab.secure.CredentialCipher;
+import dev.hermit.crab.store.ApiKeyPrincipal;
+import dev.hermit.crab.store.ApiKeyScope;
+import dev.hermit.crab.store.CallLogStore;
+import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
+import dev.hermit.crab.store.ShellConfigStore;
 import dev.hermit.crab.testing.FakeReef;
 
 class ShellSyncTest {
@@ -75,6 +85,7 @@ class ShellSyncTest {
                 .isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_PINNED, SyncReasons.PINNED))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.ROLLED_BACK, RollbackGuard.REASON))).isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.DISABLED, SyncReasons.DISABLED))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.INSTALLED, "HTTP_500"))).isFalse();
     }
 
@@ -346,9 +357,71 @@ class ShellSyncTest {
             SyncReport report = sync.syncOnce();
 
             assertThat(report.removed()).containsExactly("other_sys");
+            assertThat(outcome(report, "other_sys").kind()).isEqualTo(OutcomeKind.DISABLED);
+            assertThat(outcome(report, "other_sys").version()).isEqualTo("1.0.0");
+            assertThat(outcome(report, "other_sys").reason()).isEqualTo(SyncReasons.DISABLED);
             assertThat(registry.find("other_sys")).isEmpty();
             assertThat(registry.find("legacy_oa")).isPresent();
             assertThat(Files.exists(crab.paths.shells().resolve("other_sys/1.0.0/package.zip"))).isTrue();
+            assertThat(Files.exists(crab.paths.shells().resolve("other_sys/current"))).isFalse();
+            assertThat(sync.disabledShells().contains("other_sys")).isTrue();
+        }
+    }
+
+    @Test
+    void aWithdrawnShellStaysDisabledAcross304AndRestartsUntilItReturns() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp);
+                SessionManager sessions = new SessionManager()) {
+            reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+            reef.publish(ShellTexts.standard("other_sys", "1.0.0"));
+            ShellRegistry registry = new ShellRegistry();
+            ShellSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            reef.remove("other_sys");
+            sync.syncOnce();
+
+            SyncReport unchanged = sync.syncOnce();
+            assertThat(unchanged.notModified()).isTrue();
+            SyncReport shown = sync.visibleStatus(unchanged);
+            assertThat(outcome(shown, "other_sys").kind()).isEqualTo(OutcomeKind.DISABLED);
+            assertThat(shown.removed()).contains("other_sys");
+            assertThat(shown.notModified()).isTrue();
+
+            ShellRegistry restarted = new ShellRegistry();
+            InstalledShells.loadAll(crab.paths, reef.keys().getPublic(), restarted, sync.disabledShells().names());
+            assertThat(restarted.find("other_sys")).isEmpty();
+            assertThat(restarted.find("legacy_oa")).isPresent();
+
+            Invoker invoker = new Invoker(
+                    registry,
+                    crab.accounts,
+                    crab.vault,
+                    new ShellConfigStore(crab.dataSource),
+                    new RuleEngine(registry, sessions),
+                    new CallLogStore(crab.dataSource, Clock.systemUTC()),
+                    new IdempotencyStore(crab.dataSource, new CredentialCipher(new byte[32]), Clock.systemUTC()),
+                    (shell, action) -> false,
+                    sync.disabledShells());
+            ApiKeyPrincipal principal = new ApiKeyPrincipal("key", "key", new ApiKeyScope(java.util.Set.of(), java.util.Set.of(), false));
+            String disabledBody = new String(invoker.invoke(
+                    principal, "other_sys", "list_todo", Map.of(), Optional.empty(), Optional.empty(), "trace-disabled")
+                    .body(), StandardCharsets.UTF_8);
+            assertThat(disabledBody).contains("SHELL_DISABLED");
+            assertThat(registry.find("other_sys")).isEmpty();
+
+            reef.publish(ShellTexts.standard("other_sys", "1.0.0"));
+            SyncReport restored = sync.syncOnce();
+            assertThat(outcome(restored, "other_sys").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(sync.disabledShells().contains("other_sys")).isFalse();
+            assertThat(registry.find("other_sys")).isPresent();
+            assertThat(Files.readString(crab.paths.shells().resolve("other_sys/current")).trim()).isEqualTo("1.0.0");
+            assertThat(ShellPackage.readVerified(
+                    Files.readAllBytes(crab.paths.shells().resolve("other_sys/1.0.0/package.zip")),
+                    reef.keys().getPublic()).manifest().shell()).isEqualTo("other_sys");
+            String resumed = new String(invoker.invoke(
+                    principal, "other_sys", "list_todo", Map.of(), Optional.empty(), Optional.empty(), "trace-back")
+                    .body(), StandardCharsets.UTF_8);
+            assertThat(resumed).doesNotContain("SHELL_DISABLED");
         }
     }
 

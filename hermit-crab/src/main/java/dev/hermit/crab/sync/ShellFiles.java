@@ -71,6 +71,21 @@ final class ShellFiles {
         }
     }
 
+    static void clearCurrent(CrabPaths paths, String shell) {
+        if (!safeSegment(shell)) {
+            throw new IllegalArgumentException("shell");
+        }
+        Path current = shellDir(paths, shell).resolve("current");
+        if (Files.isSymbolicLink(current)) {
+            throw new IllegalStateException("current is a symlink");
+        }
+        try {
+            Files.deleteIfExists(current);
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
+
     static void writeCurrent(CrabPaths paths, String shell, String version) {
         Path dir = shellDir(paths, shell);
         try {

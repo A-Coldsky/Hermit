@@ -32,16 +32,19 @@ public class ShellPublishService {
     private final ShellStorage storage;
     private final SigningKeyStore keys;
     private final PackageVerifier verifier;
+    private final ShellAvailabilityRepository availability;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
     public ShellPublishService(ShellRepository repository, ShellStorage storage, SigningKeyStore keys,
-            PackageVerifier verifier, AuditService auditService, ObjectMapper objectMapper, Clock clock) {
+            PackageVerifier verifier, ShellAvailabilityRepository availability, AuditService auditService,
+            ObjectMapper objectMapper, Clock clock) {
         this.repository = repository;
         this.storage = storage;
         this.keys = keys;
         this.verifier = verifier;
+        this.availability = availability;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
         this.clock = clock;
@@ -51,6 +54,7 @@ public class ShellPublishService {
     public PublishResponse publish(String actor, String shell, String version) {
         requireActor(actor);
         VersionRow target = requireRow(shell, version);
+        rejectIfDisabled(target.shell());
         if (!"UPLOADED".equals(target.status())) {
             throw conflict(PUBLISH_NOT_UPLOADED);
         }
@@ -98,6 +102,7 @@ public class ShellPublishService {
         if (target == null) {
             throw notFound();
         }
+        rejectIfDisabled(target.shell());
         if (!"PUBLISHED".equals(target.status()) || target.current()) {
             throw conflict(ROLLBACK_REJECTED);
         }
@@ -124,6 +129,13 @@ public class ShellPublishService {
                 .filter(row -> row.version().equals(parsed.toString()))
                 .findFirst()
                 .orElseThrow(ShellPublishService::notFound);
+    }
+
+    private void rejectIfDisabled(String shell) {
+        AvailabilityRow row = availability.lock(shell);
+        if (row != null && row.disabled()) {
+            throw conflict(ShellAvailabilityService.DISABLED);
+        }
     }
 
     private String detail(String from, String to) {

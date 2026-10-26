@@ -6,5 +6,7 @@ public enum AuditAction {
     UPLOAD,
     PUBLISH,
     ROLLBACK,
+    DISABLE,
+    ENABLE,
     RETENTION_PURGE
 }

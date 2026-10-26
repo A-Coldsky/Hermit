@@ -28,13 +28,15 @@ public class ShellAdminController {
     private final SigningKeyStore signingKeys;
     private final ShellUploadService uploads;
     private final ShellPublishService publishService;
+    private final ShellAvailabilityService availability;
     private final ShellCatalogService catalog;
 
     public ShellAdminController(SigningKeyStore signingKeys, ShellUploadService uploads,
-            ShellPublishService publishService, ShellCatalogService catalog) {
+            ShellPublishService publishService, ShellAvailabilityService availability, ShellCatalogService catalog) {
         this.signingKeys = signingKeys;
         this.uploads = uploads;
         this.publishService = publishService;
+        this.availability = availability;
         this.catalog = catalog;
     }
 
@@ -93,6 +95,20 @@ public class ShellAdminController {
         return ApiResponse.ok(publishService.publish(actor(), shell, version), TraceIds.current(request));
     }
 
+    @PostMapping("/shells/{shell}/disable")
+    public ApiResponse<ShellAvailabilityView> disable(@PathVariable("shell") String shell,
+            @RequestBody(required = false) ReasonBody body, HttpServletRequest request) {
+        String reason = body == null ? null : body.reason();
+        return ApiResponse.ok(availability.disable(actor(), shell, reason), TraceIds.current(request));
+    }
+
+    @PostMapping("/shells/{shell}/enable")
+    public ApiResponse<ShellAvailabilityView> enable(@PathVariable("shell") String shell,
+            @RequestBody(required = false) ReasonBody body, HttpServletRequest request) {
+        String reason = body == null ? null : body.reason();
+        return ApiResponse.ok(availability.enable(actor(), shell, reason), TraceIds.current(request));
+    }
+
     @PostMapping("/shells/{shell}/rollback")
     public ApiResponse<RollbackResponse> rollback(@PathVariable("shell") String shell,
             @RequestBody(required = false) RollbackBody body, HttpServletRequest request) {
@@ -109,5 +125,8 @@ public class ShellAdminController {
     }
 
     public record RollbackBody(String version) {
+    }
+
+    public record ReasonBody(String reason) {
     }
 }

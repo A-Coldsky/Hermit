@@ -8,6 +8,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.function.Function;
 
 import dev.hermit.common.pkg.Ed25519Keys;
@@ -172,6 +179,77 @@ class CliTest {
     }
 
     @Test
+    void auditListPrintsNamesWithoutSecretsAndPages() throws Exception {
+        Path root = temp.resolve("audit");
+        installLegacy(root);
+        Function<String, String> env = env(root);
+        String configValue = "http://oa.example/only-this-config-value";
+        assertThat(run(env, InputStream.nullInputStream(), "account", "add", "legacy_oa", "alice")).isZero();
+        ByteArrayInputStream in = new ByteArrayInputStream((PASSWORD + "\n").getBytes(StandardCharsets.UTF_8));
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int wrote = new CrabCommand().run(
+                new String[] {"credential", "set", "legacy_oa", "alice", "password"},
+                env,
+                in,
+                stdout(),
+                stderr(err));
+        assertThat(wrote).isZero();
+        assertThat(run(env, InputStream.nullInputStream(), "config", "set", "legacy_oa", "base_url", configValue)).isZero();
+
+        ByteArrayOutputStream listed = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), listed, "audit", "list", "--shell", "legacy_oa")).isZero();
+        String text = listed.toString(StandardCharsets.UTF_8);
+        assertThat(text).contains("CREDENTIALS_WRITTEN").contains("password").contains("CONFIG_PUT").contains("base_url");
+        assertThat(text).contains("alice").contains("OFFICIAL").contains("cli");
+        assertThat(text).doesNotContain("{").doesNotContain("detail");
+        SecretChecks.absent(text, PASSWORD);
+        SecretChecks.absent(text, configValue);
+        assertThat(text.indexOf("CONFIG_PUT")).isLessThan(text.indexOf("CREDENTIALS_WRITTEN"));
+
+        ByteArrayOutputStream newest = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), newest, "audit", "list", "--limit", "1")).isZero();
+        String first = newest.toString(StandardCharsets.UTF_8).trim();
+        assertThat(first.lines()).hasSize(1);
+        assertThat(first).contains("CONFIG_PUT").contains("base_url").doesNotContain("CREDENTIALS_WRITTEN");
+        SecretChecks.absent(first, configValue);
+
+        ByteArrayOutputStream older = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), older,
+                "audit", "list", "--shell", "legacy_oa", "--limit", "1", "--page", "2")).isZero();
+        String second = older.toString(StandardCharsets.UTF_8).trim();
+        assertThat(second.lines()).hasSize(1);
+        assertThat(second).contains("CREDENTIALS_WRITTEN").contains("password").contains("alice");
+        SecretChecks.absent(second, PASSWORD);
+
+        ByteArrayOutputStream account = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), account,
+                "audit", "list", "--shell", "legacy_oa", "--account", "alice")).isZero();
+        String alice = account.toString(StandardCharsets.UTF_8);
+        assertThat(alice).contains("CREDENTIALS_WRITTEN").contains("ACCOUNT_CREATED");
+        assertThat(alice).doesNotContain("CONFIG_PUT");
+        SecretChecks.absent(alice, PASSWORD);
+
+        ByteArrayOutputStream other = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), other, "audit", "list", "--shell", "other_shell")).isZero();
+        assertThat(other.toString(StandardCharsets.UTF_8)).isEmpty();
+
+        ByteArrayOutputStream bad = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {"audit", "list", "--limit", "0"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(bad));
+        assertThat(code).isEqualTo(1);
+        assertThat(bad.toString(StandardCharsets.UTF_8)).contains("limit is out of range");
+
+        for (byte[] blob : ciphertexts(root)) {
+            SecretChecks.absent(text, Base64.getEncoder().encodeToString(blob));
+            SecretChecks.absent(text, HexFormat.of().formatHex(blob));
+        }
+    }
+
+    @Test
     void syncWithoutReefUrlExits() {
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = new CrabCommand().run(
@@ -182,6 +260,20 @@ class CliTest {
                 stderr(err));
         assertThat(code).isEqualTo(1);
         assertThat(err.toString(StandardCharsets.UTF_8)).contains("reef.url is not configured");
+    }
+
+    private static List<byte[]> ciphertexts(Path root) throws Exception {
+        try (CrabDatabase database = new CrabDatabase(new CrabPaths(root));
+             Connection connection = database.dataSource().getConnection();
+             PreparedStatement statement = connection.prepareStatement("SELECT ciphertext FROM credentials");
+             ResultSet resultSet = statement.executeQuery()) {
+            List<byte[]> blobs = new ArrayList<>();
+            while (resultSet.next()) {
+                blobs.add(resultSet.getBytes(1));
+            }
+            assertThat(blobs).isNotEmpty();
+            return blobs;
+        }
     }
 
     private static void installLegacy(Path root) throws Exception {

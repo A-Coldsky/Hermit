@@ -184,6 +184,12 @@ export interface AuditPage {
   total: number
 }
 
+export interface PurgeCounts {
+  failureReports: number
+  rollbackEvents: number
+  loginFailures: number
+}
+
 export const api = {
   login: (username: string, password: string) =>
     http.post<{ token: string; expiresAt: string }>('/api/admin/login', { username, password }),
@@ -224,4 +230,6 @@ export const api = {
   ackAlert: (id: number) => http.post<Alert>(`/api/admin/alerts/${id}/ack`),
 
   audit: (query: { shell?: string | undefined; page: number; size: number }) => http.get<AuditPage>('/api/admin/audit', query),
+
+  purgeRetention: () => http.post<PurgeCounts>('/api/admin/retention/purge'),
 }

@@ -5,5 +5,6 @@ public enum AuditAction {
     LOGIN_FAILURE,
     UPLOAD,
     PUBLISH,
-    ROLLBACK
+    ROLLBACK,
+    RETENTION_PURGE
 }

@@ -18,6 +18,8 @@ import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
 import dev.hermit.reef.audit.AuditAction;
 import dev.hermit.reef.audit.AuditService;
+import dev.hermit.reef.retention.PurgeCounts;
+import dev.hermit.reef.retention.RetentionController;
 import dev.hermit.reef.testsupport.AdjustableClock;
 import dev.hermit.reef.testsupport.MemoryLogAppender;
 import dev.hermit.reef.testsupport.ReefTestConfig;
@@ -34,6 +36,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -81,6 +84,9 @@ class AdminApiTest {
 
     @Autowired
     AuditService auditService;
+
+    @Autowired
+    Environment environment;
 
     @BeforeEach
     void reset() {
@@ -326,6 +332,153 @@ class AdminApiTest {
                 .andExpect(jsonPath("$.traceId").value(TRACE))
                 .andExpect(content().string(not(org.hamcrest.Matchers.containsString("boom-internal-sentinel"))))
                 .andExpect(content().string(not(org.hamcrest.Matchers.containsString("IllegalStateException"))));
+    }
+
+    @Test
+    void errorLogsCarryTheResponseTraceIdAndOmitTheBody() throws Exception {
+        assertThat(environment.getProperty("logging.pattern.level")).contains("%X{traceId}");
+        String secret = "request-body-secret-4c1e";
+        int before = MemoryLogAppender.LINES.size();
+        mockMvc.perform(post("/api/admin/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(TraceIds.HEADER, TRACE)
+                        .content("{\"username\":\"reef-admin\",\"password\":\"" + secret))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.traceId").value(TRACE))
+                .andExpect(content().string(not(org.hamcrest.Matchers.containsString(secret))));
+        assertThat(linesSince(before))
+                .anyMatch(line -> line.contains("status=400") && line.contains("traceId=" + TRACE));
+        assertThat(linesSince(before)).noneMatch(line -> line.contains(secret));
+
+        before = MemoryLogAppender.LINES.size();
+        mockMvc.perform(get("/api/admin/boom")
+                        .header(TraceIds.HEADER, TRACE)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error.code").value("INTERNAL"))
+                .andExpect(jsonPath("$.traceId").value(TRACE))
+                .andExpect(content().string(not(org.hamcrest.Matchers.containsString("boom-internal-sentinel"))))
+                .andExpect(content().string(not(org.hamcrest.Matchers.containsString("IllegalStateException"))));
+        assertThat(linesSince(before))
+                .anyMatch(line -> line.contains("status=500") && line.contains("traceId=" + TRACE));
+        assertThat(linesSince(before)).anyMatch(line -> line.contains("traceId=" + TRACE)
+                && line.contains("boom-internal-sentinel"));
+        assertThat(linesSince(before)).noneMatch(line -> line.contains(secret));
+    }
+
+    @Test
+    void authenticatedUnknownAdminRouteUsesTheNotFoundEnvelope() throws Exception {
+        int before = MemoryLogAppender.LINES.size();
+        mockMvc.perform(get("/api/admin/does-not-exist")
+                        .header(TraceIds.HEADER, TRACE)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.data").value(nullValue()))
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.error.message").value("not found"))
+                .andExpect(jsonPath("$.traceId").value(TRACE))
+                .andExpect(jsonPath("$.timestamp").doesNotExist())
+                .andExpect(jsonPath("$.path").doesNotExist())
+                .andExpect(content().string(not(org.hamcrest.Matchers.containsString("NoHandlerFound"))))
+                .andExpect(content().string(not(org.hamcrest.Matchers.containsString("Exception"))));
+        assertThat(linesSince(before))
+                .anyMatch(line -> line.contains("status=404") && line.contains("traceId=" + TRACE));
+    }
+
+    @Test
+    void adminCanPurgeRetentionAndTheRunIsAudited() throws Exception {
+        String token = loginToken();
+        jdbc.update("DELETE FROM audit_log");
+        jdbc.update("DELETE FROM failure_reports");
+        jdbc.update("DELETE FROM rollback_events");
+        jdbc.update("DELETE FROM admin_login_failures");
+        jdbc.update("DELETE FROM hourly_counts");
+        Instant now = ReefTestConfig.START;
+        clock.setInstant(now);
+        Instant reportCutoff = now.minus(Duration.ofDays(90));
+        insertFailure(reportCutoff.minusSeconds(1), "old-failure");
+        insertFailure(reportCutoff.plusSeconds(1), "new-failure");
+        insertRollback(reportCutoff.minusSeconds(1), "old-rollback");
+        insertRollback(now, "new-rollback");
+        Instant loginCutoff = now.minus(LoginService.LOCK_WINDOW);
+        insertLoginFailure(loginCutoff.minusSeconds(1));
+        insertLoginFailure(loginCutoff.plusSeconds(1));
+        jdbc.update(
+                "INSERT INTO hourly_counts (shell, shell_version, action, hour_start, instance_id, success, "
+                        + "failure, avg_millis, p95_millis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "legacy_oa", "1.0.0", "list_todo", Timestamp.from(now),
+                "123e4567-e89b-12d3-a456-426614174000", 1L, 0L, 10L, 20L);
+
+        mockMvc.perform(get("/api/admin/retention/purge").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+        mockMvc.perform(post("/api/admin/retention/purge").header(TraceIds.HEADER, TRACE))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM failure_reports", Integer.class)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM audit_log WHERE action = 'RETENTION_PURGE'", Integer.class))
+                .isZero();
+
+        mockMvc.perform(post("/api/admin/retention/purge")
+                        .header(TraceIds.HEADER, TRACE)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.traceId").value(TRACE))
+                .andExpect(jsonPath("$.data.failureReports").value(1))
+                .andExpect(jsonPath("$.data.rollbackEvents").value(1))
+                .andExpect(jsonPath("$.data.loginFailures").value(1));
+        assertThat(jdbc.queryForList("SELECT summary FROM failure_reports", String.class)).containsExactly("new-failure");
+        assertThat(jdbc.queryForList("SELECT reason FROM rollback_events", String.class)).containsExactly("new-rollback");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM admin_login_failures", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hourly_counts", Integer.class)).isEqualTo(1);
+        String detail = RetentionController.auditDetail(new PurgeCounts(1, 1, 1));
+        assertThat(jdbc.queryForObject(
+                "SELECT actor FROM audit_log WHERE action = 'RETENTION_PURGE'", String.class))
+                .isEqualTo(TestSecrets.USERNAME);
+        assertThat(jdbc.queryForObject(
+                "SELECT detail FROM audit_log WHERE action = 'RETENTION_PURGE'", String.class))
+                .isEqualTo(detail);
+
+        mockMvc.perform(post("/api/admin/retention/purge")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.failureReports").value(0))
+                .andExpect(jsonPath("$.data.rollbackEvents").value(0))
+                .andExpect(jsonPath("$.data.loginFailures").value(0));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM audit_log WHERE action = 'RETENTION_PURGE'", Integer.class))
+                .isEqualTo(2);
+    }
+
+    private static java.util.List<String> linesSince(int before) {
+        return MemoryLogAppender.LINES.subList(before, MemoryLogAppender.LINES.size());
+    }
+
+    private void insertFailure(Instant receivedAt, String summary) {
+        jdbc.update(
+                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, shell, "
+                        + "shell_version, action, step_index, step_type, error_code, summary, occurred_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "1.0.0", summary,
+                "legacy_oa", "1.0.0", "list_todo", 1, "request", "UPSTREAM_ERROR", summary,
+                Timestamp.from(receivedAt));
+    }
+
+    private void insertRollback(Instant receivedAt, String reason) {
+        jdbc.update(
+                "INSERT INTO rollback_events (received_at, instance_id, shell, from_version, to_version, reason, "
+                        + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "legacy_oa", "1.0.1",
+                "1.0.0", reason, Timestamp.from(receivedAt), reason);
+    }
+
+    private void insertLoginFailure(Instant failedAt) {
+        jdbc.update(
+                "INSERT INTO admin_login_failures (username, failed_at) VALUES (?, ?)",
+                "guessed-user",
+                Timestamp.from(failedAt));
     }
 
     private String failureBody(String username, String password) throws Exception {

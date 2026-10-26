@@ -102,6 +102,9 @@ async function testLogin(account: Account) {
     })
   } finally {
     busy.value = null
+    if (account.loginPaused) {
+      emit('changed')
+    }
   }
 }
 
@@ -129,11 +132,25 @@ function editCredentials(account: Account) {
       </el-table-column>
       <el-table-column label="凭证" min-width="220">
         <template #default="{ row }">
-          <el-tag v-if="!row.needsConfiguration" type="success" effect="plain" size="small">已填写</el-tag>
+          <template v-if="row.credentialsUnreadable">
+            <el-tag type="danger" effect="plain" size="small">无法解密</el-tag>
+            <span class="note">{{ row.credentialMessage ?? '凭证无法解密，需重新配置' }}</span>
+          </template>
+          <el-tag v-else-if="!row.needsConfiguration" type="success" effect="plain" size="small">已填写</el-tag>
           <template v-else>
             <el-tag type="warning" effect="plain" size="small">缺少</el-tag>
             <span class="mono missing">{{ row.missingFields.join(', ') }}</span>
           </template>
+        </template>
+      </el-table-column>
+      <el-table-column label="自动登录" min-width="220">
+        <template #default="{ row }">
+          <template v-if="row.loginPaused">
+            <el-tag type="danger" effect="plain" size="small">已暂停</el-tag>
+            <div v-if="row.loginPauseReason" class="note">{{ row.loginPauseReason }}</div>
+            <div class="hm-muted note">修正凭证后点「测试登录」，登录成功即恢复。</div>
+          </template>
+          <span v-else class="hm-muted">正常</span>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="330" align="right">
@@ -199,6 +216,17 @@ function editCredentials(account: Account) {
 .missing {
   margin-left: 6px;
   color: var(--hm-accent);
+}
+
+.note {
+  margin-left: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+div.note {
+  margin-left: 0;
+  margin-top: 4px;
 }
 
 .data {

@@ -15,7 +15,7 @@ import { refreshPending } from '../status'
 const props = defineProps<{ shell: string }>()
 const router = useRouter()
 
-const loading = ref(false)
+const loading = ref(true)
 const missing = ref(false)
 const detail = ref<ShellDetail | null>(null)
 const accounts = ref<Account[]>([])
@@ -23,9 +23,18 @@ const config = ref<Record<string, ConfigValue>>({})
 const partsFailed = ref(false)
 
 const missingConfig = computed(() => Object.entries(config.value).filter(([, f]) => f.missing).map(([name]) => name))
-const incompleteAccounts = computed(() => accounts.value.filter((a) => a.needsConfiguration).map((a) => a.name))
+const incompleteAccounts = computed(() =>
+  accounts.value.filter((a) => a.needsConfiguration && !a.credentialsUnreadable).map((a) => a.name),
+)
+const unreadableAccounts = computed(() => accounts.value.filter((a) => a.credentialsUnreadable).map((a) => a.name))
+const pausedAccounts = computed(() => accounts.value.filter((a) => a.loginPaused))
 const ready = computed(
-  () => !missingConfig.value.length && !incompleteAccounts.value.length && (accounts.value.length > 0 || !detail.value?.credentials.length),
+  () =>
+    !missingConfig.value.length &&
+    !incompleteAccounts.value.length &&
+    !unreadableAccounts.value.length &&
+    !pausedAccounts.value.length &&
+    (accounts.value.length > 0 || !detail.value?.credentials.length),
 )
 
 async function loadParts() {
@@ -96,9 +105,21 @@ watch(() => props.shell, load, { immediate: true })
         </template>
       </el-alert>
       <el-alert v-else-if="ready" type="success" show-icon :closable="false" title="配置完整，可以调用" />
-      <el-alert v-else type="warning" show-icon :closable="false" title="还不能调用，调用会返回「待配置」">
+      <el-alert
+        v-else
+        type="warning"
+        show-icon
+        :closable="false"
+        :title="pausedAccounts.length && pausedAccounts.length === accounts.length && !missingConfig.length ? '自动登录已暂停，修正后才能调用' : '还不能调用，调用会返回「待配置」'"
+      >
         <template #default>
           <div v-if="detail.credentials.length && !accounts.length">先新建一个账号并填写凭证。</div>
+          <div v-for="a in pausedAccounts" :key="a.name">
+            账号 <span class="mono">{{ a.name }}</span> 已暂停自动登录<template v-if="a.loginPauseReason">：{{ a.loginPauseReason }}</template>。修正凭证后在下方账号列表点「测试登录」，登录成功即恢复。
+          </div>
+          <div v-if="unreadableAccounts.length">
+            凭证无法解密，需重新填写：<span class="mono">{{ unreadableAccounts.join(', ') }}</span>
+          </div>
           <div v-if="incompleteAccounts.length">账号缺少凭证：<span class="mono">{{ incompleteAccounts.join(', ') }}</span></div>
           <div v-if="missingConfig.length">缺少必填配置：<span class="mono">{{ missingConfig.join(', ') }}</span></div>
         </template>

@@ -60,7 +60,8 @@ onMounted(load)
         </div>
         <div class="status" :class="row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
           <el-icon><component :is="row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
-          <span v-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>
+          <span v-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
+          <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>
           <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
           <span v-else>可用：可以通过 OpenAPI 和 MCP 调用</span>
         </div>

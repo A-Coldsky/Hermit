@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { Refresh } from '@element-plus/icons-vue'
-import { computed, ref, watch } from 'vue'
+import { CircleClose, Refresh, VideoPlay } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ShellAvatar from '@shared/components/ShellAvatar.vue'
 import { ApiError } from '@shared/http'
-import { notifyError } from '@shared/format'
+import { formatTime, notifyError } from '@shared/format'
 import { api, type ShellDetail, type ShellVersion } from '../api'
 import FieldTable from '../components/FieldTable.vue'
 import CapabilityList from '../components/CapabilityList.vue'
@@ -16,7 +17,7 @@ const props = defineProps<{ shell: string }>()
 const route = useRoute()
 const router = useRouter()
 
-const loading = ref(false)
+const loading = ref(true)
 const detail = ref<ShellDetail | null>(null)
 const versions = ref<ShellVersion[]>([])
 const missing = ref(false)
@@ -61,6 +62,38 @@ async function load() {
   }
 }
 
+const availability = reactive({ open: false, reason: '', saving: false })
+
+function openAvailability() {
+  availability.reason = ''
+  availability.open = true
+}
+
+async function saveAvailability() {
+  const reason = availability.reason.trim()
+  if (!reason) {
+    ElMessage.warning('请填写原因，会记入审计日志')
+    return
+  }
+  const disabling = !detail.value?.disabled
+  availability.saving = true
+  try {
+    if (disabling) {
+      await api.disableShell(props.shell, reason)
+      ElMessage.success('已停用，各 Crab 下次同步时卸下这个 Shell')
+    } else {
+      await api.enableShell(props.shell, reason)
+      ElMessage.success('已启用，各 Crab 下次同步时重新安装当前版本')
+    }
+    availability.open = false
+    await load()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    availability.saving = false
+  }
+}
+
 watch(() => props.shell, load, { immediate: true })
 </script>
 
@@ -76,8 +109,13 @@ watch(() => props.shell, load, { immediate: true })
       </template>
       <template #badge>
         <el-tag v-if="detail" type="success" effect="light" round class="mono">v{{ detail.version }}</el-tag>
+        <el-tag v-if="detail?.disabled" type="danger" effect="light" round class="off">已停用</el-tag>
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
+      <template v-if="detail">
+        <el-button v-if="detail.disabled" type="primary" plain :icon="VideoPlay" @click="openAvailability">启用</el-button>
+        <el-button v-else type="danger" plain :icon="CircleClose" @click="openAvailability">停用</el-button>
+      </template>
     </PageHeader>
 
     <el-result v-if="missing" icon="warning" title="Shell 不存在" :sub-title="`没有找到名为 ${shell} 的 Shell`">
@@ -87,6 +125,16 @@ watch(() => props.shell, load, { immediate: true })
     </el-result>
 
     <template v-else>
+      <el-alert v-if="detail?.disabled" type="error" :closable="false" show-icon class="notice" title="这个 Shell 已停用">
+        <template #default>
+          <div>各 Crab 同步后会卸下它，调用返回「Shell 已停用」（SHELL_DISABLED）。停用期间可以上传新版本，但不能发布或回滚。</div>
+          <div class="hm-muted">
+            <template v-if="detail.disabledReason">原因：{{ detail.disabledReason }} · </template>
+            {{ detail.disabledBy ?? '—' }} 于 {{ formatTime(detail.disabledAt) }} 停用
+          </div>
+        </template>
+      </el-alert>
+
       <el-alert
         v-if="!loading && !detail && versions.length"
         type="info"
@@ -167,7 +215,7 @@ watch(() => props.shell, load, { immediate: true })
         </el-tab-pane>
 
         <el-tab-pane :label="`版本（${versions.length}）`" name="versions">
-          <VersionPanel :shell="shell" :versions="versions" :loading="loading" @changed="load" />
+          <VersionPanel :shell="shell" :versions="versions" :loading="loading" :disabled="detail?.disabled" @changed="load" />
         </el-tab-pane>
 
         <el-tab-pane label="运行统计" name="stats" lazy>
@@ -175,10 +223,35 @@ watch(() => props.shell, load, { immediate: true })
         </el-tab-pane>
       </el-tabs>
     </template>
+
+    <el-dialog v-model="availability.open" :title="detail?.disabled ? `启用 ${shell}` : `停用 ${shell}`" width="480px">
+      <p v-if="detail?.disabled" class="hm-muted">启用后，各 Crab 下次同步时重新验签并安装当前发布版本 v{{ detail.version }}。</p>
+      <p v-else class="hm-muted">
+        停用后，各 Crab 下次同步时卸下这个 Shell，调用会返回「Shell 已停用」。账号和凭证保留在 Crab 本地，启用后可继续使用。
+      </p>
+      <el-input
+        v-model="availability.reason"
+        type="textarea"
+        :rows="3"
+        maxlength="500"
+        show-word-limit
+        placeholder="原因，会记入审计日志"
+      />
+      <template #footer>
+        <el-button @click="availability.open = false">取消</el-button>
+        <el-button :type="detail?.disabled ? 'primary' : 'danger'" :loading="availability.saving" @click="saveAvailability">
+          {{ detail?.disabled ? '启用' : '停用' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.off {
+  margin-left: 6px;
+}
+
 .notice {
   margin-bottom: 12px;
 }

@@ -8,7 +8,7 @@ import { versionStatusLabels } from '../labels'
 import DiffSummary from './DiffSummary.vue'
 import IssueList from './IssueList.vue'
 
-const props = defineProps<{ shell: string; versions: ShellVersion[]; loading?: boolean }>()
+const props = defineProps<{ shell: string; versions: ShellVersion[]; loading?: boolean; disabled?: boolean }>()
 const emit = defineEmits<{ changed: [] }>()
 
 const busy = ref<string | null>(null)
@@ -161,7 +161,10 @@ async function runDiff() {
         <template #default="{ row }">
           <el-button link type="primary" @click="showYaml(row)">YAML</el-button>
           <el-button link type="primary" :disabled="versions.length < 2" @click="openDiff(row)">对比</el-button>
-          <el-button v-if="row.status === 'UPLOADED'" link type="primary" :loading="busy === row.version" @click="publish(row)">
+          <el-tooltip v-if="disabled && (row.status === 'UPLOADED' || !row.current)" content="Shell 已停用，先启用再发布或回滚">
+            <span class="off">{{ row.status === 'UPLOADED' ? '发布' : '回滚到此版本' }}</span>
+          </el-tooltip>
+          <el-button v-else-if="row.status === 'UPLOADED'" link type="primary" :loading="busy === row.version" @click="publish(row)">
             发布
           </el-button>
           <el-button
@@ -243,5 +246,12 @@ async function runDiff() {
 .diff-body {
   min-height: 80px;
   margin-top: 8px;
+}
+
+.off {
+  margin-left: 12px;
+  font-size: 14px;
+  color: var(--el-text-color-disabled);
+  cursor: not-allowed;
 }
 </style>

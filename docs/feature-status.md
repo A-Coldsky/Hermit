@@ -20,7 +20,7 @@
 | MCP stdio 桥接 | 已实现 | McpStdio；需要已运行的 HTTP Crab，CLI/验收覆盖不足以代表所有真实客户端兼容 |
 | Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest。4xx/5xx 服务端日志带与响应相同的 traceId，4xx 不记请求体。已登录的未知 `/api/admin/**` 为 404 `NOT_FOUND` 信封。没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ShellApiTest/ShellConcurrencyTest/ShellSelfCheckFailureTest |
-| 停用 / 重新启用 Shell | 已实现 | 管理 API 记录 `DISABLE`/`ENABLE` 和原因。停用后清单不含该 Shell，Agent 下载 404，发布和回滚 409 `shell is disabled`，签名包字节不变。Crab 同步后卸下注册表、清 `current`、保留版本文件和账号；调用 409 `SHELL_DISABLED`；同步状态 `kind=DISABLED` 且出现在 `removed`。重新启用后重新验签安装。回滚固定未解除、且清单版本不高于坏版本时，重新启用不会把 Shell 装回去 |
+| 停用 / 重新启用 Shell | 已实现 | Reef 管理端 Shell 详情页提供停用/启用（需填原因），停用后显示原因与操作人、版本表的发布和回滚不可点，目录标「已停用」。管理 API 记录 `DISABLE`/`ENABLE` 和原因。停用后清单不含该 Shell，Agent 下载 404，发布和回滚 409 `shell is disabled`，签名包字节不变。Crab 同步后卸下注册表、清 `current`、保留版本文件和账号；调用 409 `SHELL_DISABLED`；同步状态 `kind=DISABLED` 且出现在 `removed`。重新启用后重新验签安装。回滚固定未解除、且清单版本不高于坏版本时，重新启用不会把 Shell 装回去 |
 | Crab 定时/手动同步、ETag、验签 | 已实现 | ShellSyncTest/CrabWiringTest；可重试失败不记 ETag，304 核对 current。Reef 不可达时手动同步为 502 `UPSTREAM_ERROR`，状态改为这次失败；Reef 的 HTTP 错误仍保留上次成功 |
 | 本地规则失配回滚、坏版本固定 | 已实现 | RollbackGuardTest；要求前一版本成功，5 次 `RULE_MISMATCH`；上游 400 与会话失效不计数；不等于发布前健康检查。回滚后控制台同步状态显示已安装版本和 `ROLLED_BACK`，固定解除前保持 |
 | 上报队列、聚合、退避、预览 | 已实现 | ReportSenderTest；失败/事件队列上限 10000，超限丢弃计数；小时统计单独存储 |

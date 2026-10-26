@@ -11,26 +11,44 @@ import { alertKindLabels } from '../labels'
 
 const status = ref<'open' | 'all'>('open')
 const loading = ref(true)
+/** 只有最近一次加载成功时才说「没有告警」，失败时列表为空不代表没有告警。 */
+const loaded = ref(false)
 const alerts = ref<Alert[]>([])
 const acking = ref<number | null>(null)
 
-async function load() {
-  loading.value = true
+async function load(quiet = false) {
+  if (!quiet) {
+    loading.value = true
+  }
+  const wanted = status.value
   try {
-    alerts.value = (await api.alerts(status.value)).alerts
+    const result = (await api.alerts(wanted)).alerts
+    if (wanted === status.value) {
+      alerts.value = result
+      loaded.value = true
+    }
   } catch (error) {
+    if (!quiet) {
+      loaded.value = false
+    }
     notifyError(error)
   } finally {
-    loading.value = false
+    if (wanted === status.value) {
+      loading.value = false
+    }
   }
 }
 
 async function ack(alert: Alert) {
   acking.value = alert.id
   try {
-    await api.ackAlert(alert.id)
+    const updated = await api.ackAlert(alert.id)
     ElMessage.success('已确认')
-    await Promise.all([load(), refreshOpenAlerts()])
+    alerts.value =
+      status.value === 'open'
+        ? alerts.value.filter((a) => a.id !== alert.id)
+        : alerts.value.map((a) => (a.id === alert.id ? { ...a, ...updated } : a))
+    await Promise.all([load(true), refreshOpenAlerts()])
   } catch (error) {
     notifyError(error)
   } finally {
@@ -38,8 +56,8 @@ async function ack(alert: Alert) {
   }
 }
 
-watch(status, load)
-onMounted(load)
+watch(status, () => load())
+onMounted(() => load())
 </script>
 
 <template>
@@ -49,12 +67,12 @@ onMounted(load)
         <el-radio-button value="open">未处理</el-radio-button>
         <el-radio-button value="all">全部</el-radio-button>
       </el-radio-group>
-      <el-button :icon="Refresh" @click="load">刷新</el-button>
+      <el-button :icon="Refresh" @click="load()">刷新</el-button>
     </PageHeader>
 
     <div class="hm-card">
       <el-table v-loading="loading" :data="alerts">
-        <template #empty>{{ loading ? '' : status === 'open' ? '没有未处理的告警' : '还没有告警' }}</template>
+        <template #empty>{{ loading || !loaded ? '' : status === 'open' ? '没有未处理的告警' : '还没有告警' }}</template>
         <el-table-column type="expand">
           <template #default="{ row }">
             <div class="detail">

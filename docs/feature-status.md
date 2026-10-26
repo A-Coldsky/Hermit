@@ -26,8 +26,8 @@
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
 | 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest。确认后，创建时间起算的去重窗口剩余时间内不新建、不推送；窗口结束后条件仍在才新建。失败上涨不提前打破窗口。Webhook 含告警 id 与相对路径 `/alerts`（无对外基址配置），没有持久化重试队列。负阈值，以及必须为正的窗口写成 0，启动时拒绝 |
 | Reef 管理页面 | 已实现 | 登录、仪表盘、Shell/上传/版本及校验警告明细、Tide、告警、审计、设置说明 |
-| Crab 本机控制台 | 已实现 | 概览、Shell、账号/凭证/配置、能力、API Key、调用、上报。Shell 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。配置审计页面尚未做 |
-| Crab 配置审计查询 | 已实现（无页面） | `GET /console/api/audit` 与 CLI `audit list`。可按 shell/account 分页，新的在前。只返回 id、时间、actor、action、origin、shell、account、字段名；不返回 detail 原文、配置值、凭证明文或密文。`config_audit` 仍无定期清理 |
+| Crab 本机控制台 | 已实现 | 概览、Shell、账号/凭证/配置、能力、API Key、调用、上报。Shell 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。「配置审计」页按 Shell/账号筛选分页查看变更记录 |
+| Crab 配置审计查询 | 已实现 | 控制台「配置审计」页、`GET /console/api/audit` 与 CLI `audit list`。可按 shell/account 分页，新的在前。只返回 id、时间、actor、action、origin、shell、account、字段名；不返回 detail 原文、配置值、凭证明文或密文。`config_audit` 仍无定期清理 |
 | Docker Reef + Nginx + MySQL / Crab | 已配置，运行未验收 | Crab 同机 client profile / 独立 Compose / Dockerfile 已提供；配置语法通过，尚未启动容器栈 |
 
 ## 部分实现与缺口

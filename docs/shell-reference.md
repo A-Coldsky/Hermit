@@ -52,6 +52,8 @@ actions:
 
 `credentials`/`config` 字段接受 `type`、`label`、`required`、`description`、`options`；config 额外支持 `default`。类型有 text/secret/select/url。校验会拒绝 `config` 的 `type: secret`，秘密必须放在 `credentials`。配置值优先级为用户值 → 声明 default → 顶层 base_url（仅 base_url 字段）；引擎也可直接回退顶层 base_url。
 
+凭证、配置、账号和能力开关会在 Crab 的 `config_audit` 追加一条记录。记录里是字段名和动作，不是凭证明文、密文或配置值。本机 `GET /console/api/audit` 和 CLI `audit list` 按时间倒序读取，结果同样只有操作者、动作、origin、Shell、账号、时间和字段名。detail 里其它键不会被读出来。
+
 Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。缺 examples 是校验错误；notes/related 等说明质量问题可能产生警告。示例中 related 指向不存在的能力产生警告，不代表那些能力已实现。
 
 输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由 `InputPreparer` 转换并按生成的 JSON Schema 校验。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换，以及小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`）都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内再当成功。HTTP 网关和 MCP 都经过 `Invoker` 与 `RuleEngine`，所以这条校验两边相同。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`，能定位到单个字段时还有 `field`。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；示例 `legacy_oa` 的 `page` 声明了 `minimum: 1`。

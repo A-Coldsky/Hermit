@@ -105,6 +105,7 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 | GET / POST | `/apikeys` | 列表 / `{name,shells,actions,readOnly}`；新 Key 仅返回一次 plaintext。`actions` 必须是已加载的 `shell.action`，裸名或不存在的能力拒绝创建 |
 | DELETE | `/apikeys/{id}` | 撤销 |
 | GET | `/calls`、`/calls/{traceId}` | shell/action/limit 查询及步骤摘要 |
+| GET | `/audit` | 配置审计，新的在前。参数 `shell`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
 | GET / POST | `/debug` | 读状态 / `{enabled}`；当前只存状态，24h 过期 |
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |
 | GET | `/reports/preview` | 待发送批次和丢弃数 |
@@ -126,6 +127,23 @@ Shell 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 测试登录会先清掉暂停再尝试登录。页面应读这些字段显示「已暂停」和恢复方法，不要只看 `needsConfiguration`。
 
+`GET /console/api/audit` 的 `data` 为 `{entries, page, limit, total}`。`entries` 按 `at`、`id` 从新到旧。空白的 `shell` 或 `account` 表示不过滤。`page` 小于 1，或 `limit` 不在 1 到 200，返回 `INVALID_INPUT`。
+
+每一行只有谁、做了什么、何时：
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 行 id |
+| `at` | 时间 |
+| `actor` | `cli`、`console` 或 `sync` |
+| `action` | 动作名，例如 `CREDENTIALS_WRITTEN`、`CONFIG_PUT`、`CAPABILITY_DISABLED` |
+| `origin` | `OFFICIAL` 或 `LOCAL`。API Key、debug、同步，以及凭证声明变更，为 JSON `null` |
+| `shell` | 相关 Shell；没有则为 `null` |
+| `account` | 账号类事件的账号。配置、能力开关、API Key、debug、同步和凭证声明变更为 `null` |
+| `fields` | 名字列表，按字典序。凭证写入包含写入和清除的字段；配置是 key；凭证声明变更是新增必填和移除的字段；能力开关是能力名 |
+
+响应不含 `detail` 原文、配置值、凭证明文、密文，也不含 API Key 明文、哈希、id 或 name。debug 的 `enabled` 同样不返回。历史行的 detail 里如果还有别的键，读取时丢弃。`config_audit` 没有定期清理。
+
 同步结果里每个 Shell 有 `shell`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。自动回滚尚未解除固定时，该 Shell 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
 
 ## CLI
@@ -142,6 +160,7 @@ credential list <shell> <account>
 config get <shell> [key]
 config set <shell> <key> <value>
 config unset <shell> <key>
+audit list [--shell NAME] [--account NAME] [--limit N] [--page N]
 apikey create <name> [--shells a,b] [--actions shell.action] [--read-only]
 apikey list
 apikey revoke <id>
@@ -149,6 +168,8 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
 普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
+
+`audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。每一行是 `时间 actor action origin shell account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
 
 ## MCP
 

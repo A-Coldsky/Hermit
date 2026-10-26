@@ -96,7 +96,9 @@ Tide 配置位于 `hermit.reef.tide`：
 | `webhook-url` | 空，设置后发送告警通知 |
 | `evaluate-cron` | `0 */5 * * * *`，每 5 分钟评估 |
 
-具体阈值比较、发布静默和去重逻辑以 `AlertService` 为准。Webhook 是当前评估后的发送行为，没有独立持久化重试队列。
+具体阈值比较和发布静默以 `AlertService` 为准。去重按 `(kind, shell, shell_version)`，窗口从告警 `created_at` 起算 `dedup-hours`。窗口内已有告警（不论是否已确认）就不再新建，也不再发 webhook。确认不重新计时，也不把剩余时间清掉。失败次数在窗口内继续上涨不会提前再报。`created_at` 早于或等于 `now - dedup-hours` 之后，条件仍然成立才新建下一条并再次通知。未确认但已超出窗口的旧告警同样不再抑制。
+
+Webhook 是当前评估后的发送行为，没有独立持久化重试队列。
 
 ## 数据目录与备份
 

@@ -113,7 +113,7 @@ public class AlertService {
         boolean fire = baselineVersion == null
                 ? rateAbove(calls.failure(), calls.calls(), properties.getNoBaselineFailureRate())
                 : deltaAtLeast(calls, baseline, properties.getRegressionDelta());
-        if (!fire || openWithin(AlertKind.NEW_VERSION_REGRESSION, current.shell(), current.version(), now)) {
+        if (!fire || duplicateWithin(AlertKind.NEW_VERSION_REGRESSION, current.shell(), current.version(), now)) {
             return;
         }
         Map<String, Object> detail = new LinkedHashMap<>();
@@ -141,7 +141,7 @@ public class AlertService {
             if (requireQuiet && recentlyChanged(surge.shell(), now)) {
                 continue;
             }
-            if (openWithin(kind, surge.shell(), null, now)) {
+            if (duplicateWithin(kind, surge.shell(), null, now)) {
                 continue;
             }
             Map<String, Object> detail = new LinkedHashMap<>();
@@ -172,11 +172,13 @@ public class AlertService {
         return rollbacks != null && rollbacks > 0;
     }
 
-    private boolean openWithin(AlertKind kind, String shell, String version, Instant now) {
+    // 窗口从 created_at 起算 dedup-hours。确认不重新计时，也不清掉剩余时间；失败次数上涨不提前打破。
+    // created_at 早于或等于 now - dedup-hours 后，条件仍成立才新建。
+    private boolean duplicateWithin(AlertKind kind, String shell, String version, Instant now) {
         Instant since = now.minus(Duration.ofHours(properties.getDedupHours()));
         Long count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM alerts WHERE kind = ? AND shell = ? AND acknowledged_at IS NULL "
-                        + "AND created_at > ? AND ((? IS NULL AND shell_version IS NULL) OR shell_version = ?)",
+                "SELECT COUNT(*) FROM alerts WHERE kind = ? AND shell = ? AND created_at > ? "
+                        + "AND ((? IS NULL AND shell_version IS NULL) OR shell_version = ?)",
                 Long.class,
                 kind.name(),
                 shell,

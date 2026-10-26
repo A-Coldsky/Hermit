@@ -296,7 +296,7 @@ class AlertEvaluationTest {
     }
 
     @Test
-    void ackRecordsTheAdminAndAllowsANewAlert() throws Exception {
+    void ackRecordsTheAdminAndStaysSilentInsideTheDedupWindow() throws Exception {
         failures(SHELL, "UPSTREAM_ERROR", 10, clock.instant());
         alertService.evaluate();
         long id = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
@@ -319,6 +319,16 @@ class AlertEvaluationTest {
                 .andExpect(jsonPath("$.data.acknowledgedAt").value(ackedAt.toString()));
         clock.setInstant(ackedAt);
 
+        alertService.evaluate();
+        assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
+        mockMvc.perform(get("/api/admin/alerts").header(HttpHeaders.AUTHORIZATION, "Bearer " + token()))
+                .andExpect(jsonPath("$.data.alerts.length()").value(0));
+        mockMvc.perform(get("/api/admin/alerts").param("status", "all")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token()))
+                .andExpect(jsonPath("$.data.alerts.length()").value(1));
+
+        jdbc.update("UPDATE alerts SET created_at = ?",
+                Timestamp.from(ackedAt.minus(Duration.ofHours(6))));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(2);
         mockMvc.perform(get("/api/admin/alerts").header(HttpHeaders.AUTHORIZATION, "Bearer " + token()))
@@ -384,6 +394,79 @@ class AlertEvaluationTest {
             server.stop(0);
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void acknowledgedSurgeStaysSilentUntilTheDedupWindowEnds() throws Exception {
+        failures(SHELL, "UPSTREAM_ERROR", 10, clock.instant());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        List<String> bodies = new CopyOnWriteArrayList<>();
+        server.createContext("/hook", exchange -> {
+            bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = new byte[0];
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(response);
+            }
+        });
+        ExecutorService executor = Executors.newCachedThreadPool();
+        server.setExecutor(executor);
+        server.start();
+        try {
+            properties.setWebhookUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/hook?token=" + TOKEN);
+            alertService.evaluate();
+            long id = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
+            alertService.ack(id, "ada");
+            assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
+            assertThat(bodies).hasSize(1);
+
+            failures(SHELL, "UPSTREAM_ERROR", 20, clock.instant());
+            alertService.evaluate();
+            assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
+            assertThat(bodies).hasSize(1);
+
+            jdbc.update("UPDATE alerts SET created_at = ?",
+                    Timestamp.from(clock.instant().minus(Duration.ofHours(6)).plusSeconds(1)));
+            alertService.evaluate();
+            assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
+            assertThat(bodies).hasSize(1);
+
+            jdbc.update("UPDATE alerts SET created_at = ?",
+                    Timestamp.from(clock.instant().minus(Duration.ofHours(6))));
+            alertService.evaluate();
+            assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(2);
+            assertThat(bodies).hasSize(2);
+            assertThat(bodies).allSatisfy(body -> assertThat(body).doesNotContain(TOKEN));
+            Long open = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM alerts WHERE acknowledged_at IS NULL", Long.class);
+            assertThat(open).isEqualTo(1L);
+        } finally {
+            server.stop(0);
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void acknowledgedRegressionStaysSilentUntilTheDedupWindowEnds() {
+        publish(SHELL, "1.1.0", PUBLISHED, true);
+        hour(SHELL, "1.1.0", PUBLISHED, 0, 20);
+        alertService.evaluate();
+        assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
+        long id = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
+        alertService.ack(id, "ada");
+
+        alertService.evaluate();
+        assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
+
+        jdbc.update("UPDATE alerts SET created_at = ?",
+                Timestamp.from(clock.instant().minus(Duration.ofHours(6)).plusSeconds(1)));
+        alertService.evaluate();
+        assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
+
+        jdbc.update("UPDATE alerts SET created_at = ?",
+                Timestamp.from(clock.instant().minus(Duration.ofHours(6))));
+        alertService.evaluate();
+        assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(2);
     }
 
     private void publish(String shell, String version, Instant publishedAt, boolean current) {

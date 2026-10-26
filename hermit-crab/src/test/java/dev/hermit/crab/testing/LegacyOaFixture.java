@@ -44,6 +44,11 @@ public final class LegacyOaFixture implements AutoCloseable {
     private volatile boolean brokenTable;
     private volatile int todoStatus = 200;
     private volatile int homeStatus = 200;
+    /** 非 0 时，/api/tasks 固定回这个状态，用来复现上游 400。 */
+    private volatile int apiFixedStatus;
+    private volatile boolean apiDeny;
+    private volatile int apiDenyStatus = 401;
+    private final AtomicInteger apiDenyOnce = new AtomicInteger();
     private volatile long delayMillis;
     private volatile String todoTitle = "张三的请假申请";
     private volatile String welcome = "欢迎回来";
@@ -76,6 +81,23 @@ public final class LegacyOaFixture implements AutoCloseable {
 
     public void homeStatus(int status) {
         this.homeStatus = status;
+    }
+
+    /** /api/tasks 一律返回该状态。400 的响应用于确认错误文案不会带上响应体。 */
+    public void apiStatus(int status) {
+        this.apiFixedStatus = status;
+    }
+
+    /** 之后每次 /api/tasks 都返回 401 或 403，body 为 {"items":[]}。 */
+    public void denyApi(int status) {
+        this.apiDenyStatus = status;
+        this.apiDeny = true;
+    }
+
+    /** 下一次 /api/tasks 返回 401 或 403，随后恢复。 */
+    public void denyNextApi(int status) {
+        this.apiDenyStatus = status;
+        this.apiDenyOnce.incrementAndGet();
     }
 
     public void todoDelay(Duration delay) {
@@ -199,7 +221,64 @@ public final class LegacyOaFixture implements AutoCloseable {
             huge(exchange);
             return;
         }
+        if ("/api/tasks".equals(path)) {
+            apiTasks(exchange, method, cookie, rawBody);
+            return;
+        }
         html(exchange, 404, "missing");
+    }
+
+    private void apiTasks(HttpExchange exchange, String method, String cookie, byte[] rawBody) throws IOException {
+        if (apiFixedStatus > 0) {
+            json(exchange, apiFixedStatus, "{\"error\":\"reject-token-9\"}");
+            return;
+        }
+        boolean deny = apiDeny || apiDenyOnce.getAndUpdate(value -> value > 0 ? value - 1 : 0) > 0;
+        if (deny || !hasSession(cookie)) {
+            int status = deny ? apiDenyStatus : 401;
+            json(exchange, status, "{\"items\":[]}");
+            return;
+        }
+        if ("POST".equals(method)) {
+            String title = jsonStringField(new String(rawBody, StandardCharsets.UTF_8), "title");
+            if (title == null || title.isBlank()) {
+                json(exchange, 400, "{\"error\":\"reject-token-9\"}");
+                return;
+            }
+            json(exchange, 201, "{\"id\":\"T1\"}");
+            return;
+        }
+        json(exchange, 200, "{\"items\":[{\"id\":\"T1\",\"title\":\"周报\"}]}");
+    }
+
+    private boolean hasSession(String cookie) {
+        String id = sessionId(cookie);
+        return id != null && validSessions.contains(id);
+    }
+
+    private static String jsonStringField(String body, String field) {
+        String needle = "\"" + field + "\"";
+        int key = body.indexOf(needle);
+        if (key < 0) {
+            return null;
+        }
+        int colon = body.indexOf(':', key + needle.length());
+        if (colon < 0) {
+            return null;
+        }
+        int start = body.indexOf('"', colon + 1);
+        if (start < 0) {
+            return null;
+        }
+        int end = body.indexOf('"', start + 1);
+        if (end < 0) {
+            return null;
+        }
+        return body.substring(start + 1, end);
+    }
+
+    private static void json(HttpExchange exchange, int status, String body) throws IOException {
+        bytes(exchange, status, body.getBytes(StandardCharsets.UTF_8), "application/json; charset=utf-8");
     }
 
     private void postLogin(HttpExchange exchange, byte[] rawBody) throws IOException {

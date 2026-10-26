@@ -151,5 +151,6 @@ Reef 要一致备份数据库、shells、keys。Compose 的 `reef-mysql` 与 `re
 | 新版本一直跳过 | min_crab_version、固定回滚状态、相同版本不可覆盖 |
 | CLI 报数据库占用 | serve 已持有 H2；使用本机控制台 API 或停止 serve 后操作 |
 | `RULE_MISMATCH` | 通过 traceId 查步骤信息，核对页面选择器/输出；可能触发回滚 |
+| 上游 HTTP 400，或会话 401/403 | 分别是 `INVALID_INPUT` 与 `SESSION_EXPIRED`，不触发自动回滚。核对参数或凭证；页面结构变化才是 `RULE_MISMATCH` |
 
 Reef 日志：`docker compose logs -f reef` 或 Java 进程输出。Crab 日志查看进程输出与控制台调用详情；同机容器用 `docker compose --profile client logs -f crab`，独立容器用 `docker compose -f docker-compose.crab.yml logs -f crab`。不要把敏感配置直接附入问题报告。

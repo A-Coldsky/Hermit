@@ -84,6 +84,8 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 
 缺必填、类型无法转换，或数值超出参数声明的 `minimum` / `maximum`，都返回 `INVALID_INPUT`。运行时不会把负页码或过大的 `pageSize` 夹进范围内再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。
 
+能力请求已经发出后，上游 HTTP 400 也返回 `INVALID_INPUT`，文案为「上游拒绝了输入（HTTP 400）。请修改参数后重试。」，不再继续提取或断言。它和调用前的参数校验共用错误码，但 `failedStepType` 为 `request`。MCP 对这段文案的 hint 是按该系统的要求修改参数。上游 HTTP 401/403，以及重定向到登录页，都视为会话失效：幂等能力重新登录并重放一次，其它能力返回 `SESSION_EXPIRED` 且不重放。这两类都不会把响应体抽成空列表，也不计入 `RollbackGuard`。登录步骤不走这套映射，失败仍是 `AUTH_FAILED`；`cookie_exists` 未通过时说明登录未建立会话，并提示核对用户名和密码、重新测试登录，或检查登录页是否改版。期望状态与实际状态不一致（例如期望 200 实际 404）仍是 `RULE_MISMATCH`，累计 5 次且前一版本曾成功时仍会自动回滚。
+
 ## Crab 本机管理 API
 
 下列路由前缀 `/console/api`，全部需要回环连接和控制台头：

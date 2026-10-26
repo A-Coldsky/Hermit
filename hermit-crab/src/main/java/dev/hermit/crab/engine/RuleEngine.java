@@ -30,6 +30,13 @@ public final class RuleEngine {
 
     private static final Logger LOG = Logger.getLogger(RuleEngine.class.getName());
 
+    /** 能力请求被上游以 HTTP 400 拒绝。不是规则失配，不计入回滚。 */
+    static final String UPSTREAM_INPUT_REJECTED = "上游拒绝了输入（HTTP 400）。请修改参数后重试。";
+
+    /** 登录 assert cookie 失败时给调用方的说明：原因，以及下一步。 */
+    private static final String LOGIN_COOKIE_MISSING =
+            "登录未建立会话：上游没有发回会话 Cookie。请核对用户名和密码；若凭证正确，请重新测试登录，或检查登录页是否已改版。";
+
     private final ShellRegistry registry;
     private final SessionManager sessions;
     private final EngineSettings settings;
@@ -372,16 +379,25 @@ public final class RuleEngine {
                         outcome.path(),
                         outcome.status(),
                         outcome.extractCount()));
-                if (!auth && outcome.sessionLost()) {
+                // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
+                if (!auth && lostSession(outcome)) {
                     throw new SessionLost();
+                }
+                if (!auth && outcome.status() != null && outcome.status() == 400) {
+                    throw new StepFailure(
+                            ErrorCode.INVALID_INPUT, UPSTREAM_INPUT_REJECTED, i, step.type(), logs);
                 }
             } catch (RuleProblem ex) {
                 ErrorCode code = ex.code;
+                String summary = ex.summary;
                 if (auth && code == ErrorCode.RULE_MISMATCH && step.type().equals("assert")) {
                     code = ErrorCode.AUTH_FAILED;
+                    if (StepRunner.COOKIE_MISSING_SUMMARY.equals(summary)) {
+                        summary = LOGIN_COOKIE_MISSING;
+                    }
                 }
                 logs.add(new StepLog(i, step.type(), elapsed(started), ex.method, ex.path, ex.status, null));
-                throw new StepFailure(code, ex.summary, i, step.type(), logs);
+                throw new StepFailure(code, summary, i, step.type(), logs);
             } catch (TemplateException ex) {
                 logs.add(new StepLog(i, step.type(), elapsed(started), null, null, null, null));
                 ErrorCode code = auth ? ErrorCode.AUTH_FAILED : ErrorCode.RULE_MISMATCH;
@@ -524,6 +540,15 @@ public final class RuleEngine {
         } catch (IllegalArgumentException ex) {
             throw new RuleProblem(ErrorCode.INTERNAL, "base_url 无效", null, null, null);
         }
+    }
+
+    /** 重定向到登录页，或上游直接返回 401/403，都是会话失效。 */
+    private static boolean lostSession(Outcome outcome) {
+        if (outcome.sessionLost()) {
+            return true;
+        }
+        Integer status = outcome.status();
+        return status != null && (status == 401 || status == 403);
     }
 
     private static String expectPrefix(ShellDoc shell) {

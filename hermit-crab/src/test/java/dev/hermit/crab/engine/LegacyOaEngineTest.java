@@ -90,8 +90,24 @@ class LegacyOaEngineTest {
             assertThat(result.error().failedStepType()).isEqualTo("assert");
             assertThat(result.error().failedStepIndex()).isEqualTo(3);
             assertThat(result.error().message()).doesNotContain("暂停");
+            assertThat(result.error().message())
+                    .contains("登录未建立会话")
+                    .contains("核对用户名和密码")
+                    .contains("重新测试登录")
+                    .doesNotContain("cookie_exists")
+                    .doesNotContain("assert 未通过");
+            ExecutionResult login = running.engine.testLogin(EngineTestSupport.request(
+                    Origin.OFFICIAL,
+                    "legacy_oa",
+                    "test_login",
+                    "alice",
+                    Map.of(),
+                    EngineTestSupport.account("alice", EngineTestSupport.WRONG_PASSWORD, running.fixture.baseUrl())));
+            assertThat(login.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            assertThat(login.error().message()).isEqualTo(result.error().message());
+            absent(login, logs, streams, EngineTestSupport.WRONG_PASSWORD);
             assertThat(result.stepLogs()).hasSize(4);
-            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(2);
         }
     }
 
@@ -169,6 +185,107 @@ class LegacyOaEngineTest {
             assertThat(result.error().code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
             assertThat(result.error().summary()).contains("500");
             assertThat(result.error().failedStepType()).isEqualTo("request");
+        }
+    }
+
+    @Test
+    void upstreamHttp400IsInvalidInputAndDoesNotLookLikeSuccess() throws Exception {
+        try (Running running = Running.start()) {
+            installTaskShell(running);
+            ExecutionResult rejected = task(running, "create_task", Map.of("title", " "));
+            assertThat(rejected.success()).isFalse();
+            assertThat(rejected.data()).isNull();
+            assertThat(rejected.error().code()).isEqualTo(ErrorCode.INVALID_INPUT);
+            assertThat(rejected.error().message()).isEqualTo(RuleEngine.UPSTREAM_INPUT_REJECTED);
+            assertThat(rejected.error().message()).doesNotContain("reject-token-9").doesNotContain("RULE_MISMATCH");
+            assertThat(rejected.error().failedStepType()).isEqualTo("request");
+            assertThat(rejected.stepLogs()).hasSize(1);
+            assertThat(rejected.stepLogs().get(0).status()).isEqualTo(400);
+            assertThat(running.fixture.count("POST", "/api/tasks")).isEqualTo(1);
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
+            absent(rejected, null, null, EngineTestSupport.PASSWORD);
+
+            running.fixture.apiStatus(400);
+            ExecutionResult listed = task(running, "list_tasks", Map.of());
+            assertThat(listed.success()).isFalse();
+            assertThat(listed.data()).isNull();
+            assertThat(listed.error().code()).isEqualTo(ErrorCode.INVALID_INPUT);
+            assertThat(listed.error().message()).doesNotContain("reject-token-9");
+            assertThat(running.fixture.count("GET", "/api/tasks")).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void acceptedUpstreamTaskStillReturnsTheId() throws Exception {
+        try (Running running = Running.start()) {
+            installTaskShell(running);
+            ExecutionResult created = task(running, "create_task", Map.of("title", "周报"));
+            assertThat(created.success()).isTrue();
+            assertThat(data(created)).containsEntry("id", "T1");
+            assertThat(created.error()).isNull();
+        }
+    }
+
+    @Test
+    void sessionHttp401And403OnWriteExpireWithoutRetry() throws Exception {
+        try (Running running = Running.start()) {
+            installTaskShell(running);
+            running.fixture.denyApi(401);
+            ExecutionResult expired = task(running, "create_task", Map.of("title", "周报"));
+            assertThat(expired.success()).isFalse();
+            assertThat(expired.data()).isNull();
+            assertThat(expired.error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(expired.error().failedStepType()).isEqualTo("request");
+            assertThat(running.fixture.count("POST", "/api/tasks")).isEqualTo(1);
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
+            absent(expired, null, null, EngineTestSupport.PASSWORD);
+        }
+        try (Running running = Running.start()) {
+            installTaskShell(running);
+            running.fixture.denyApi(403);
+            ExecutionResult expired = task(running, "create_task", Map.of("title", "周报"));
+            assertThat(expired.error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(running.fixture.count("POST", "/api/tasks")).isEqualTo(1);
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void sessionHttp401OnReadRetriesOnceAndDoesNotReturnAnEmptyList() throws Exception {
+        try (Running running = Running.start()) {
+            installTaskShell(running);
+            running.fixture.denyNextApi(401);
+            ExecutionResult recovered = task(running, "list_tasks", Map.of());
+            assertThat(recovered.success()).isTrue();
+            assertThat(items(recovered)).isNotEmpty();
+            assertThat(running.fixture.count("GET", "/api/tasks")).isEqualTo(2);
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(2);
+        }
+        try (Running running = Running.start()) {
+            installTaskShell(running);
+            running.fixture.denyApi(401);
+            ExecutionResult expired = task(running, "list_tasks", Map.of());
+            assertThat(expired.success()).isFalse();
+            assertThat(expired.data()).isNull();
+            assertThat(expired.error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(expired.stepLogs()).extracting(StepLog::type).containsExactly("request");
+            assertThat(running.fixture.count("GET", "/api/tasks")).isEqualTo(2);
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(2);
+            absent(expired, null, null, EngineTestSupport.PASSWORD);
+        }
+    }
+
+    @Test
+    void unexpected404RemainsRuleMismatch() throws Exception {
+        try (Running running = Running.start()) {
+            running.registry.put(ShellParser.parse(EngineTestSupport.actionShell("status_shell", "missing", """
+                    - request: { method: GET, path: /missing-page }
+                    - assert: { status: 200 }
+                    """, true)));
+            ExecutionResult result = running.execute("status_shell", "missing", "alice");
+            assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(result.error().summary()).contains("404");
+            assertThat(result.error().failedStepType()).isEqualTo("assert");
         }
     }
 
@@ -539,6 +656,70 @@ class LegacyOaEngineTest {
             assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
             assertThat(running.fixture.count("GET", "/todo/list.aspx")).isEqualTo(1);
         }
+    }
+
+    private static void installTaskShell(Running running) {
+        String actions = """
+                create_task:
+                  title: 创建任务
+                  description: 在上游创建一个任务。
+                  input:
+                    title: { type: string, required: true, description: 标题 }
+                  steps:
+                    - request:
+                        method: POST
+                        path: /api/tasks
+                        json: { title: "{{input.title}}" }
+                    - assert: { status: 201 }
+                    - extract:
+                        id: { jsonpath: "$.id" }
+                  output:
+                    id: { type: string, description: 任务编号 }
+                  examples:
+                    - input: { title: 周报 }
+                      output: { id: T1 }
+                  notes: 标题不能为空白。
+                  idempotent: false
+                list_tasks:
+                  title: 查询任务
+                  description: 查询当前账号的任务。
+                  steps:
+                    - request: { method: GET, path: /api/tasks }
+                    - extract:
+                        items: { jsonpath: "$.items" }
+                  output:
+                    items:
+                      type: array
+                      description: 任务列表
+                  examples:
+                    - input: {}
+                      output:
+                        items: []
+                  notes: 会话失效时不能把空列表当成成功。
+                  idempotent: true
+                  mcp: { read_only: true }
+                """.stripIndent().indent(2);
+        running.registry.put(ShellParser.parse(
+                EngineTestSupport.legacyYaml().replace("health_check:", actions + "health_check:")));
+    }
+
+    private static ExecutionResult task(Running running, String action, Map<String, Object> input) {
+        return running.engine.execute(EngineTestSupport.request(
+                Origin.OFFICIAL,
+                "legacy_oa",
+                action,
+                "alice",
+                input,
+                EngineTestSupport.account("alice", EngineTestSupport.PASSWORD, running.fixture.baseUrl())));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Object> items(ExecutionResult result) {
+        Object items = data(result).get("items");
+        if (!(items instanceof List<?> list)) {
+            throw new AssertionError("items was not a list");
+        }
+        return (List<Object>) list;
     }
 
     private static void absent(

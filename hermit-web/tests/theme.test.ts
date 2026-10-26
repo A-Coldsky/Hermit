@@ -31,6 +31,7 @@ const semantic = [
   ['success', '--hm-success'],
   ['warning', '--hm-warning'],
   ['danger', '--hm-danger'],
+  ['info', '--hm-muted'],
 ] as const
 
 describe('Element 语义色', () => {
@@ -54,6 +55,11 @@ describe('Element 语义色', () => {
 })
 
 describe('暗色语义色', () => {
+  const darkOwn = block('html.dark')
+  it.each(semantic)('暗色块显式声明 %s，避免被 Element 暗色样式盖回默认色', (name, token) => {
+    expect(darkOwn.get(`--el-color-${name}`)).toBe(`var(${token})`)
+  })
+
   const names: [string, string][] = ['primary', ...semantic.map(([n]) => n)].map((n) => [n, `--el-color-${n}`])
   it.each(names)(
     '%s 的明暗阶按 Element 暗色算法与底色 #141414 混合',

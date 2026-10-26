@@ -6,6 +6,7 @@ const reef = vi.hoisted(() => ({
   shells: vi.fn(),
   tideSummary: vi.fn(),
   alerts: vi.fn(),
+  ackAlert: vi.fn(),
   tideRollbacks: vi.fn(),
 }))
 const crab = vi.hoisted(() => ({ shells: vi.fn() }))
@@ -17,6 +18,7 @@ vi.mock('../apps/crab-console/src/status', () => ({ refreshPending: vi.fn() }))
 
 import ReefShellsView from '../apps/reef-admin/src/views/ShellsView.vue'
 import DashboardView from '../apps/reef-admin/src/views/DashboardView.vue'
+import AlertsView from '../apps/reef-admin/src/views/AlertsView.vue'
 import CrabShellsView from '../apps/crab-console/src/views/ShellsView.vue'
 
 const reefShell = {
@@ -76,6 +78,44 @@ describe('Reef 概览', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('一切正常')
     expect(wrapper.text()).toContain('7 天内没有 Crab 发生自动回退')
+  })
+})
+
+const openAlert = {
+  id: 7,
+  createdAt: '2026-10-20T00:00:00Z',
+  kind: 'FAILURE_SURGE',
+  shell: 'legacy_oa',
+  shellVersion: '1.0.0',
+  detail: null,
+  acknowledgedAt: null,
+  acknowledgedBy: null,
+}
+
+describe('Reef 告警', () => {
+  it('确认最后一条后直接显示空态，重新拉取期间不进入加载态', async () => {
+    reef.alerts.mockResolvedValueOnce({ alerts: [openAlert] })
+    const refetch = deferred<{ alerts: unknown[] }>()
+    reef.alerts.mockReturnValueOnce(refetch.promise)
+    reef.ackAlert.mockResolvedValue({ ...openAlert, acknowledgedAt: '2026-10-20T01:00:00Z', acknowledgedBy: 'admin' })
+    const wrapper = await mountPage(AlertsView)
+    await flushPromises()
+    expect(wrapper.text()).toContain('legacy_oa')
+
+    await wrapper.findAll('button').find((b) => b.text() === '确认')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('没有未处理的告警')
+
+    refetch.resolve({ alerts: [] })
+    await flushPromises()
+    expect(wrapper.text()).toContain('没有未处理的告警')
+  })
+
+  it('加载失败时不声称没有告警', async () => {
+    reef.alerts.mockRejectedValue(new Error('network'))
+    const wrapper = await mountPage(AlertsView)
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('没有未处理的告警')
   })
 })
 

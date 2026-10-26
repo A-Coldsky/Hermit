@@ -5,7 +5,7 @@ import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, notifyError } from '@shared/format'
 import { api } from '../api'
 
-const loading = ref(false)
+const loading = ref(true)
 const publicKey = ref('')
 
 async function load() {

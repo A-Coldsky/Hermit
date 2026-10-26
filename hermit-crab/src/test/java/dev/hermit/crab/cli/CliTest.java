@@ -110,6 +110,68 @@ class CliTest {
     }
 
     @Test
+    void invalidMasterKeyPrintsTheReason() {
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {"account", "list", "legacy_oa"},
+                name -> switch (name) {
+                    case "HERMIT_HOME" -> temp.resolve("bad-key").toString();
+                    case "HERMIT_MASTER_KEY" -> "not-a-key";
+                    default -> null;
+                },
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(err));
+        String text = err.toString(StandardCharsets.UTF_8);
+        assertThat(code).isEqualTo(1);
+        assertThat(text).contains("HERMIT_MASTER_KEY");
+        assertThat(text).doesNotContain("MasterKeyException");
+        assertThat(text).doesNotContain("not-a-key");
+    }
+
+    @Test
+    void apiKeyCreateRejectsBareAndUnknownActions() throws Exception {
+        Path root = temp.resolve("keys");
+        installLegacy(root);
+        Function<String, String> env = env(root);
+        ByteArrayOutputStream bareErr = new ByteArrayOutputStream();
+        int bare = new CrabCommand().run(
+                new String[] {"apikey", "create", "bare", "--actions", "list_todo"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(bareErr));
+        assertThat(bare).isEqualTo(1);
+        assertThat(bareErr.toString(StandardCharsets.UTF_8)).contains("shell.action");
+
+        ByteArrayOutputStream missingErr = new ByteArrayOutputStream();
+        int missing = new CrabCommand().run(
+                new String[] {"apikey", "create", "ghost", "--actions", "legacy_oa.missing"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(missingErr));
+        assertThat(missing).isEqualTo(1);
+        assertThat(missingErr.toString(StandardCharsets.UTF_8)).contains("能力不存在");
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        int created = new CrabCommand().run(
+                new String[] {"apikey", "create", "reader", "--actions", "legacy_oa.list_todo"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(out),
+                stderr(new ByteArrayOutputStream()));
+        assertThat(created).isZero();
+        assertThat(out.toString(StandardCharsets.UTF_8)).contains("id ");
+
+        ByteArrayOutputStream listed = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), listed, "apikey", "list")).isZero();
+        String keys = listed.toString(StandardCharsets.UTF_8);
+        assertThat(keys).contains("reader");
+        assertThat(keys).doesNotContain("bare").doesNotContain("ghost");
+    }
+
+    @Test
     void syncWithoutReefUrlExits() {
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = new CrabCommand().run(

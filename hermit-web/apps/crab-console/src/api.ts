@@ -9,7 +9,13 @@ export interface ShellSummary {
   title: string
   capabilityCount: number
   accountCount: number
+  /**
+   * 缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停。
+   * 概览「待配置」按这个字段计数。
+   */
   needsConfiguration: boolean
+  /** 任一账号自动登录已暂停。原因和恢复方法在账号行。 */
+  loginPaused: boolean
 }
 
 export interface CredentialField {
@@ -42,13 +48,25 @@ export interface ShellDetail {
   credentials: CredentialField[]
   config: ConfigDeclaration[]
   capabilities: CapabilityState[]
+  /** 任一账号自动登录已暂停。账号行带原因和恢复方法。 */
+  loginPaused: boolean
 }
 
 export interface Account {
   name: string
   default: boolean
+  /** 缺必填凭证，或已存凭证无法用当前主密钥解密。自动登录暂停不计入这里。 */
   needsConfiguration: boolean
   missingFields: string[]
+  /** 已保存的密文无法解密。为 true 时 needsConfiguration 也为 true。 */
+  credentialsUnreadable: boolean
+  /** 无法解密时为「凭证无法解密，需重新配置」，否则 null。 */
+  credentialMessage: string | null
+  loginPaused: boolean
+  /** 暂停时为原因，否则 null。 */
+  loginPauseReason: string | null
+  /** 暂停时为恢复方法（修正凭证后执行测试登录），否则 null。 */
+  loginPauseRecovery: string | null
 }
 
 export interface ConfigValue {

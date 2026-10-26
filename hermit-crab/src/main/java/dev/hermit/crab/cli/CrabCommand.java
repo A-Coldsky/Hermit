@@ -26,6 +26,7 @@ import dev.hermit.crab.engine.ShellRejectedException;
 import dev.hermit.crab.mcp.McpStdio;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.CrabServer;
+import dev.hermit.crab.secure.MasterKeyException;
 import dev.hermit.crab.sync.ShellOutcome;
 import dev.hermit.crab.sync.SyncReport;
 import dev.hermit.crab.store.Account;
@@ -53,7 +54,7 @@ public final class CrabCommand {
               crab config get <shell> [key]
               crab config set <shell> <key> <value>
               crab config unset <shell> <key>
-              crab apikey create <name> [--shells a,b] [--actions s.a] [--read-only]
+              crab apikey create <name> [--shells a,b] [--actions shell.action] [--read-only]
               crab apikey list
               crab apikey revoke <id>
               crab mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
@@ -79,6 +80,9 @@ public final class CrabCommand {
             return 1;
         } catch (AccountNotFoundException ex) {
             err.println(ex.account() == null ? "no default account" : "account not found");
+            return 1;
+        } catch (MasterKeyException ex) {
+            err.println(clientMessage(ex));
             return 1;
         } catch (IllegalArgumentException | IllegalStateException ex) {
             err.println(clientMessage(ex));
@@ -384,6 +388,9 @@ public final class CrabCommand {
                 Set<String> shells = parsed.shells == null ? Set.of() : parsed.shells;
                 Set<String> actions = parsed.actions == null ? Set.of() : parsed.actions;
                 yield withRuntime(env, runtime -> {
+                    if (!actions.isEmpty()) {
+                        runtime.loadInstalledShells();
+                    }
                     CreatedApiKey created = runtime.admin().createApiKey(
                             name, new ApiKeyScope(shells, actions, parsed.readOnly), Actors.CLI);
                     out.println("id " + created.id());

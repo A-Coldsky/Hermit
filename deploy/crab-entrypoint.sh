@@ -184,7 +184,12 @@ elif [ -n "${HERMIT_MASTER_KEY_FILE:-}" ]; then
     fi
     echo "credential master key: $dest"
 else
-    echo "credential master key: ${home}/data/master.key"
+    # Java 只在数据目录还没有凭证时生成 data/master.key。已有凭证但文件缺失时拒绝启动，避免静默换钥。
+    if [ -f "${home}/data/master.key" ]; then
+        echo "credential master key: ${home}/data/master.key"
+    else
+        echo "credential master key: ${home}/data/master.key（尚未存在；仅当数据目录没有凭证时才会自动生成）"
+    fi
 fi
 
 if [ ! -f "$home/config.yml" ]; then

@@ -42,7 +42,7 @@ engine:
 
 此例的 disabled 项是路径格式示意，示例 Shell 中不包含 submit_leave。别名仍使用相同的 API Key、账号和能力权限；重启后读取新别名。
 
-`HERMIT_MASTER_KEY` 可覆盖默认主密钥，要求 Base64 解码后恰好 32 字节；否则默认创建 `data/master.key`，POSIX 文件权限为 0600。库内部支持 key-file 参数，但当前 CLI 没有暴露该选项；`HERMIT_MASTER_KEY_FILE` 是容器入口脚本的复制功能，不是 Java 配置项。不要更换密钥后期待旧凭证仍能解密。
+`HERMIT_MASTER_KEY` 优先于 `data/master.key`。值必须是 Base64，解码后恰好 32 字节。非法值在启动时报可读原因（不是合法 Base64，或长度不是 32 字节），不会改用文件里的密钥，也不会只打印异常类名。未设置环境变量、也没有 key-file 时：数据目录还没有凭证密文，才会创建 `data/master.key`（POSIX 0600）；已经有凭证但主密钥文件缺失，则拒绝启动并且不生成新密钥，避免旧密文变成无法打开的 500。恢复原来的 `data/master.key` 后重启即可。确认放弃旧凭证时，删除 `data` 目录中的数据库后再启动，这时才按全新安装生成主密钥，然后重新填写账号凭证。已有合法主密钥但解不开已存凭证时，进程仍会启动并在日志里提示；账号 `needsConfiguration` 为 true，`credentialsUnreadable` 为 true，调用返回 `NOT_CONFIGURED` 和「凭证无法解密，需重新配置」。把该账号的凭证字段重新写一遍后恢复。库内部支持 key-file 参数，但当前 CLI 没有暴露该选项；`HERMIT_MASTER_KEY_FILE` 是容器入口脚本的复制功能，不是 Java 配置项。不要更换密钥后期待旧凭证仍能解密。
 
 ## Crab 容器配置
 
@@ -57,8 +57,8 @@ engine:
 | `HERMIT_REEF_PUBLIC_KEY_FILE` | 可选，容器内 PEM 文件路径；独立 Compose 传入此变量，同机 profile 需额外 override |
 | `HERMIT_CRAB_PORT` | 默认 7777，容器入口要求 1–65535 |
 | `HERMIT_CRAB_INSTANCE_ID` | 可选 UUID；已有实例 ID 不同则拒绝覆盖 |
-| `HERMIT_MASTER_KEY` | 非空时优先使用环境主密钥；容器入口将空白值视为未配置 |
-| `HERMIT_MASTER_KEY_FILE` | 未使用环境主密钥时，将挂载文件复制到 `data/master.key`；已有内容不同则拒绝覆盖 |
+| `HERMIT_MASTER_KEY` | 非空时优先使用环境主密钥，Java 不再读取或生成 `data/master.key`；容器入口将空白值视为未配置。非法值由 Java 拒绝并说明原因 |
+| `HERMIT_MASTER_KEY_FILE` | 未使用环境主密钥时，将挂载文件复制到 `data/master.key`；已有内容不同则拒绝覆盖。目标文件不存在且卷里已有凭证时，Java 不会另造一把新密钥 |
 
 路径变量不会自动挂载文件，需要 Compose override 的只读 bind mount 或 `docker run --mount`。主密钥文件格式沿用 `data/master.key` 的 Base64 文本，不能填原始二进制密钥。
 
@@ -149,7 +149,8 @@ Reef 要一致备份数据库、shells、keys。Compose 的 `reef-mysql` 与 `re
 | Crab 已监听但没有 Shell | 公钥、网络、同步报告；首次同步后台执行 |
 | Crab 容器提示配置不一致 | 环境变量与持久化 config.yml 的 URL/token/host/port 行是否一致；入口按文本检查 |
 | Crab 容器首次获取公钥失败 | 可信 Reef 地址、管理员凭据/锁定、网络；或改用已挂载的可信 PEM 公钥 |
-| `NOT_CONFIGURED` | 默认账号、必填凭证和配置是否齐全 |
+| `NOT_CONFIGURED` | 默认账号、必填凭证和配置是否齐全；也包括主密钥对不上、凭证无法解密 |
+| 启动提示主密钥文件缺失 / 凭证无法解密 | 恢复原来的 `data/master.key` 或原来的 `HERMIT_MASTER_KEY`。确认放弃旧凭证时删除 `data` 里的数据库后再启动，全新安装才会重新生成主密钥 |
 | `ACCOUNT_NOT_FOUND` | 请求点名账号是否存在，是否有默认账号 |
 | `AUTH_FAILED` / 暂停登录 | 老系统凭证、验证码等变化；修正后 test-login |
 | 新版本一直跳过 | min_crab_version、固定回滚状态、相同版本不可覆盖 |

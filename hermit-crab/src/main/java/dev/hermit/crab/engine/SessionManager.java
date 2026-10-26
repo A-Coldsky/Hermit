@@ -98,8 +98,22 @@ public final class SessionManager implements AutoCloseable {
         }
     }
 
-    boolean loginPaused(SessionKey key) {
-        return state(key).loginPaused;
+    /**
+     * Whether automatic login is paused. Absent session state means the account has not failed
+     * login in this process, so it is not paused. The read takes the account lock; callers that
+     * already hold it re-enter safely.
+     */
+    public boolean loginPaused(SessionKey key) {
+        AccountState state = states.get(key);
+        if (state == null) {
+            return false;
+        }
+        state.lock.lock();
+        try {
+            return state.loginPaused;
+        } finally {
+            state.lock.unlock();
+        }
     }
 
     boolean loggedIn(SessionKey key) {

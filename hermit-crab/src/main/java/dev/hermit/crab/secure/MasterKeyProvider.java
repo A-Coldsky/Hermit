@@ -26,8 +26,11 @@ import java.util.function.Function;
  * An invalid value from either of the first two sources aborts; it is not replaced by a later
  * source. An existing default file that cannot be decoded is left untouched, so previously
  * encrypted credentials are not orphaned by generating a new key over it. A missing default
- * file is written to a temporary file in the same directory, then published with a hard link
- * so an existing destination fails atomically and is read instead. File systems without hard
+ * file is created only when the caller asks. {@code CrabRuntime} does not ask when credential
+ * ciphertext already exists and neither {@code HERMIT_MASTER_KEY} nor a key file is set; a fresh
+ * install with no ciphertext still generates one. The new file is written to a temporary file in
+ * the same directory, then published with a hard link so an existing destination fails atomically
+ * and is read instead. File systems without hard
  * links fall back to a move that does not replace the destination. A failed write deletes
  * the temporary file and does not leave {@code master.key} behind.
  */

@@ -39,6 +39,8 @@ import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.report.ReportSender;
 import dev.hermit.crab.report.ReportSettings;
 import dev.hermit.crab.secure.CredentialCipher;
+import dev.hermit.crab.secure.CredentialDecryptException;
+import dev.hermit.crab.secure.MasterKeyException;
 import dev.hermit.crab.secure.MasterKeyProvider;
 import dev.hermit.crab.store.AccountStore;
 import dev.hermit.crab.store.Actors;
@@ -114,7 +116,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.config = config;
         this.clock = clock;
         this.database = new CrabDatabase(paths);
-        byte[] masterKey = MasterKeyProvider.load(paths, Optional.empty(), environment);
+        byte[] masterKey;
+        try {
+            masterKey = loadMasterKey(paths, environment, database);
+        } catch (RuntimeException ex) {
+            this.database.close();
+            throw ex;
+        }
         try {
             this.cipher = new CredentialCipher(masterKey);
         } finally {
@@ -122,6 +130,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
         this.accounts = new AccountStore(database.dataSource());
         this.vault = new CredentialVault(database.dataSource(), cipher);
+        if (this.vault.anyUnreadable()) {
+            LOG.warning(CredentialDecryptException.MESSAGE + "。主密钥与已保存的凭证不匹配，请重新配置账号凭证。");
+        }
         this.shellConfig = new ShellConfigStore(database.dataSource());
         this.apiKeys = new ApiKeyService(database.dataSource());
         this.settings = config.engineSettings();
@@ -135,7 +146,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.switchDisabled = ConcurrentHashMap.newKeySet();
         this.switchDisabled.addAll(switches.disabledKeys(Origin.OFFICIAL));
         this.invoker = new Invoker(registry, accounts, vault, shellConfig, engine, callLogs, idempotency, this);
-        this.admin = new ShellAdmin(database.dataSource(), accounts, vault, shellConfig, apiKeys, sessions, engine);
+        this.admin = new ShellAdmin(database.dataSource(), accounts, vault, shellConfig, apiKeys, sessions, engine, registry);
         this.instanceId = InstanceIds.loadOrCreate(paths);
     }
 
@@ -149,6 +160,20 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public static CrabRuntime open(CrabPaths paths, CrabConfig config, Function<String, String> environment, Clock clock) {
         return new CrabRuntime(paths, config, environment, clock);
+    }
+
+    /**
+     * {@code HERMIT_MASTER_KEY} wins. Otherwise an existing {@code data/master.key} is used.
+     * A missing file is generated only when no credential ciphertext is stored. Generating a new
+     * key over existing rows would make those credentials permanently undecryptable.
+     */
+    private static byte[] loadMasterKey(CrabPaths paths, Function<String, String> environment, CrabDatabase database) {
+        if (environment.apply(MasterKeyProvider.ENV) == null
+                && !Files.isRegularFile(paths.masterKeyFile())
+                && CredentialVault.hasCiphertext(database.dataSource())) {
+            throw new MasterKeyException(MasterKeyException.MISSING_WITH_CREDENTIALS);
+        }
+        return MasterKeyProvider.load(paths, Optional.empty(), environment);
     }
 
     public CrabPaths paths() {

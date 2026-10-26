@@ -106,6 +106,8 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/shell/account/action/k
 | GET | `/reports/preview` | 待发送批次和丢弃数 |
 | POST | `/reports/send` | 手动发送，返回 attempted/accepted/status |
 
+同步结果里每个 Shell 有 `shell`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。自动回滚尚未解除固定时，该 Shell 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
+
 ## CLI
 
 命令前缀为 `java -cp "$CP" dev.hermit.crab.CrabMain`，CP 准备见[快速开始](getting-started.md)。

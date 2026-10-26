@@ -69,6 +69,11 @@ async function syncNow() {
     void refreshPending()
   } catch (error) {
     notifyError(error)
+    try {
+      await loadSync()
+    } catch (statusError) {
+      notifyError(statusError)
+    }
   } finally {
     syncing.value = false
   }
@@ -149,7 +154,15 @@ onMounted(load)
           <span v-if="syncedAt" class="hm-muted small">{{ relativeTime(syncedAt) }}同步</span>
         </div>
         <template v-if="report">
-          <div v-if="report.notModified" class="state ok">
+          <el-alert
+            v-if="report.error"
+            type="error"
+            show-icon
+            :closable="false"
+            :title="report.error.message"
+            class="notice"
+          />
+          <div v-if="report.notModified && !report.error" class="state ok">
             <el-icon :size="22"><CircleCheckFilled /></el-icon>
             <div>
               <strong>已是最新</strong>

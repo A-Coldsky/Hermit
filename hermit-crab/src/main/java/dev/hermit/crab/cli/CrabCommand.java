@@ -27,6 +27,8 @@ import dev.hermit.crab.mcp.McpStdio;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.CrabServer;
 import dev.hermit.crab.sync.ShellOutcome;
+import dev.hermit.crab.sync.SyncError;
+import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
@@ -161,6 +163,9 @@ public final class CrabCommand {
                 out.println(outcome.shell() + " " + text(outcome.version()) + " " + outcome.kind());
             }
             return 0;
+        } catch (SyncException ex) {
+            err.println(ex.clientError().map(SyncError::message).orElse(text(ex.getMessage())));
+            return 1;
         }
     }
 

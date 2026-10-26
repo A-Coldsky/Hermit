@@ -85,7 +85,7 @@ CP="hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT.jar:$(cat hermit-crab/target/c
 java -cp "$CP" dev.hermit.crab.CrabMain serve
 ```
 
-浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。Crab 启动时后台同步，可从本机控制台手动同步；同步失败不一定导致进程退出，应检查返回的各 Shell 结果。
+浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。Crab 启动时后台同步，可从本机控制台手动同步；同步失败不一定导致进程退出，应检查返回的各 Shell 结果。Reef 连不上时，手动同步返回 502 `UPSTREAM_ERROR`，并在同步状态里留下失败原因，而不是继续显示上次成功。
 
 ## 5. 同步、创建账号/API Key、配置老系统
 

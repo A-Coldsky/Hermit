@@ -13,15 +13,22 @@ import java.sql.ResultSet;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import javax.sql.DataSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.pkg.Ed25519Keys;
 import dev.hermit.crab.config.CrabConfig;
+import dev.hermit.crab.engine.ExecutionError;
+import dev.hermit.crab.engine.ExecutionResult;
+import dev.hermit.crab.report.ReportQueue;
+import dev.hermit.crab.report.ReportSettings;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.CrabServer;
@@ -145,6 +152,92 @@ class CrabWiringTest {
         }
     }
 
+    @Test
+    void consoleStatusShowsTheInstalledVersionAfterAutomaticRollback() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            CrabConfig config = config(reef.base().toString(), Ed25519Keys.writePublicPem(reef.keys().getPublic()), false)
+                    .withListen("127.0.0.1", 0);
+            CrabPaths paths = new CrabPaths(temp.resolve("rollback-status"));
+            CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null);
+            try (CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+                awaitSyncReport(http, server.port());
+
+                reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+                runtime.shellSync().runScheduled();
+                guard(reef, runtime).onResult("legacy_oa", "1.0.0", execution(true, "1.0.0", null));
+
+                reef.publish(ShellTexts.standard("legacy_oa", "1.0.1"));
+                runtime.shellSync().runScheduled();
+                JsonNode installed = syncData(http, server.port()).path("report").path("shells");
+                assertThat(installed.size()).isEqualTo(1);
+                assertThat(installed.get(0).path("version").asText()).isEqualTo("1.0.1");
+                assertThat(installed.get(0).path("kind").asText()).isEqualTo("INSTALLED");
+
+                RollbackGuard guard = guard(reef, runtime);
+                for (int i = 0; i < RollbackGuard.MISMATCH_LIMIT; i++) {
+                    guard.onResult("legacy_oa", "1.0.1", execution(false, "1.0.1", ErrorCode.RULE_MISMATCH));
+                }
+
+                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+                assertThat(pinned(runtime)).containsExactly("1.0.1", "1.0.0");
+
+                JsonNode status = syncData(http, server.port());
+                JsonNode shells = status.path("report").path("shells");
+                assertThat(shells.size()).isEqualTo(1);
+                assertThat(shells.get(0).path("shell").asText()).isEqualTo("legacy_oa");
+                assertThat(shells.get(0).path("version").asText()).isEqualTo("1.0.0");
+                assertThat(shells.get(0).path("kind").asText()).isEqualTo("ROLLED_BACK");
+                assertThat(shells.get(0).path("reason").asText()).isEqualTo(RollbackGuard.REASON);
+                assertThat(shells.toString()).doesNotContain("INSTALLED");
+                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+                assertThat(pinned(runtime)).containsExactly("1.0.1", "1.0.0");
+            }
+        }
+    }
+
+    @Test
+    void manualSyncWhenReefIsUnreachableReturnsUpstreamErrorAndRecordsTheFailure() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            CrabConfig config = config(reef.base().toString(), Ed25519Keys.writePublicPem(reef.keys().getPublic()), false)
+                    .withListen("127.0.0.1", 0);
+            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("reef-down")), config, name -> null);
+            try (CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+                awaitSyncReport(http, server.port());
+                reef.publish(ShellTexts.standard("legacy_oa", "1.0.0"));
+                runtime.shellSync().runScheduled();
+                JsonNode installed = syncData(http, server.port());
+                assertThat(installed.path("report").path("shells").get(0).path("kind").asText()).isEqualTo("INSTALLED");
+
+                reef.disconnect();
+                HttpResponse<String> sync = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                JsonNode body = JSON.readTree(sync.body());
+                assertThat(sync.statusCode()).as(sync.body()).isEqualTo(502);
+                assertThat(body.path("success").asBoolean()).isFalse();
+                assertThat(body.path("error").path("code").asText()).isEqualTo("UPSTREAM_ERROR");
+                String message = body.path("error").path("message").asText();
+                assertThat(message).contains("无法连接 Reef").contains("再次同步");
+                assertThat(message).doesNotContain("Exception").doesNotContain("reef request failed");
+                assertThat(sync.body()).doesNotContain("INTERNAL");
+
+                JsonNode status = syncData(http, server.port());
+                assertThat(status.path("report").path("error").path("code").asText()).isEqualTo("UPSTREAM_ERROR");
+                assertThat(status.path("report").path("error").path("message").asText()).isEqualTo(message);
+                assertThat(status.path("report").path("shells").size()).isZero();
+                assertThat(status.path("report").toString()).doesNotContain("INSTALLED");
+                assertThat(status.path("latestCrab").isNull()).isTrue();
+
+                reef.listen();
+                HttpResponse<String> again = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(again.statusCode()).as(again.body()).isEqualTo(200);
+                JsonNode recovered = syncData(http, server.port());
+                assertThat(recovered.path("report").path("error").isNull()).isTrue();
+                assertThat(recovered.path("report").path("shells").toString()).doesNotContain("UPSTREAM_ERROR");
+            }
+        }
+    }
+
     private static JsonNode awaitSyncReport(HttpClient http, int port) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         JsonNode last = null;
@@ -183,6 +276,42 @@ class CrabWiringTest {
 
     private static DataSource runtimeDataSource(CrabRuntime runtime) {
         return runtime.dataSource();
+    }
+
+    private static RollbackGuard guard(FakeReef reef, CrabRuntime runtime) {
+        ReportSettings settings = new ReportSettings(
+                false, reef.base(), Optional.empty(), UUID.randomUUID(), "1.0.0");
+        return new RollbackGuard(
+                runtime.paths(),
+                reef.keys().getPublic(),
+                runtime.registry(),
+                runtime.dataSource(),
+                new ReportQueue(settings, runtime.dataSource()));
+    }
+
+    private static ExecutionResult execution(boolean success, String version, ErrorCode code) {
+        return new ExecutionResult(
+                success,
+                null,
+                success ? null : new ExecutionError(code, "mismatch", 0, "assert", "mismatch"),
+                1,
+                List.of(),
+                version,
+                "trace-rollback");
+    }
+
+    private static List<String> pinned(CrabRuntime runtime) throws Exception {
+        try (Connection connection = runtime.dataSource().getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT bad_version, rolled_back_to FROM pinned_rollbacks WHERE shell = ?")) {
+            statement.setString(1, "legacy_oa");
+            try (ResultSet rows = statement.executeQuery()) {
+                assertThat(rows.next()).isTrue();
+                List<String> pin = List.of(rows.getString(1), rows.getString(2));
+                assertThat(rows.next()).isFalse();
+                return pin;
+            }
+        }
     }
 
     private static String auditDetail(DataSource dataSource) throws Exception {

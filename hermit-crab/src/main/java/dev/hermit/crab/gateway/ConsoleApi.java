@@ -32,6 +32,8 @@ import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.sync.CrabRelease;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
 import dev.hermit.crab.sync.ShellOutcome;
+import dev.hermit.crab.sync.SyncError;
+import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
 import io.javalin.http.Context;
 import io.javalin.http.HandlerType;
@@ -287,12 +289,20 @@ final class ConsoleApi {
     }
 
     private static void sync(CrabRuntime runtime, Context ctx) {
-        Optional<SyncReport> report = runtime.syncOnce(Actors.CONSOLE);
-        if (report.isEmpty()) {
-            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "sync is not configured");
-            return;
+        try {
+            Optional<SyncReport> report = runtime.syncOnce(Actors.CONSOLE);
+            if (report.isEmpty()) {
+                GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "sync is not configured");
+                return;
+            }
+            GatewayResponses.writeData(ctx, syncView(runtime.shellSync().visibleStatus(report.get())));
+        } catch (SyncException ex) {
+            SyncError error = ex.clientError().orElse(null);
+            if (error == null) {
+                throw ex;
+            }
+            GatewayResponses.writeError(ctx, StatusCodes.of(error.code()), error.code(), error.message());
         }
-        GatewayResponses.writeData(ctx, syncView(report.get()));
     }
 
     private static void syncStatus(CrabRuntime runtime, Context ctx) {
@@ -301,6 +311,9 @@ final class ConsoleApi {
             return;
         }
         SyncReport report = runtime.lastSync().orElse(null);
+        if (report != null) {
+            report = runtime.shellSync().visibleStatus(report);
+        }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("report", report == null ? null : syncView(report));
         body.put("latestCrab", report == null ? null : crabView(report.latestCrab().orElse(null)));
@@ -352,6 +365,17 @@ final class ConsoleApi {
         body.put("removed", report.removed());
         body.put("credentialChanges", changes);
         body.put("latestCrab", crabView(report.latestCrab().orElse(null)));
+        body.put("error", errorView(report.error().orElse(null)));
+        return body;
+    }
+
+    private static Map<String, Object> errorView(SyncError error) {
+        if (error == null) {
+            return null;
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("code", error.code().name());
+        body.put("message", error.message());
         return body;
     }
 

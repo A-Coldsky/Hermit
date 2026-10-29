@@ -51,4 +51,4 @@ docker compose up -d --build
 
 Linux 同机部署 Crab 可用 `docker compose --profile client up -d --build`；单独部署 Crab 可用 `docker compose -f docker-compose.crab.yml up -d --build`。Crab 使用 host 网络并监听回环地址，需部署在能访问老系统的机器上。
 
-Reef 默认访问 `http://localhost/`。升级保留 `reef-mysql`、`reef-data`，以及运行 Crab 时的 `crab-data` 卷；首次公钥引导、共享 Agent token、独立部署变量及平台边界见[快速开始](docs/getting-started.md)和[配置与运维](docs/configuration.md)。
+Reef 默认访问 `http://localhost/`。Reef 表名已改为 `hermit_` 前缀，并就地改写了 Flyway V1–V4；已有 `reef-data` 中的 H2 和 MySQL 库必须重建，密钥与已发布包的取舍见[配置与运维](docs/configuration.md)。之后的升级保留 `reef-mysql`、`reef-data`，以及运行 Crab 时的 `crab-data` 卷。首次公钥引导、共享 Agent token、独立部署变量及平台边界见[快速开始](docs/getting-started.md)和[配置与运维](docs/configuration.md)。

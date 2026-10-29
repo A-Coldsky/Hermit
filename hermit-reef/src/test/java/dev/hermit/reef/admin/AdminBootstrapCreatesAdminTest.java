@@ -40,10 +40,10 @@ class AdminBootstrapCreatesAdminTest {
 
     @Test
     void createsOneAdministratorAndDoesNotLogThePassword() throws Exception {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM admin_users", Integer.class);
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM hermit_admin_users", Integer.class);
         assertThat(count).isEqualTo(1);
         String hash = jdbc.queryForObject(
-                "SELECT password_hash FROM admin_users WHERE username = ?",
+                "SELECT password_hash FROM hermit_admin_users WHERE username = ?",
                 String.class,
                 TestSecrets.USERNAME);
         assertThat(hash).isNotEqualTo(TestSecrets.PASSWORD);
@@ -53,8 +53,8 @@ class AdminBootstrapCreatesAdminTest {
 
         String before = hash;
         adminBootstrap.run(null);
-        Integer after = jdbc.queryForObject("SELECT COUNT(*) FROM admin_users", Integer.class);
-        String hashAfter = jdbc.queryForObject("SELECT password_hash FROM admin_users WHERE username = ?",
+        Integer after = jdbc.queryForObject("SELECT COUNT(*) FROM hermit_admin_users", Integer.class);
+        String hashAfter = jdbc.queryForObject("SELECT password_hash FROM hermit_admin_users WHERE username = ?",
                 String.class, TestSecrets.USERNAME);
         assertThat(after).isEqualTo(1);
         assertThat(hashAfter).isEqualTo(before);

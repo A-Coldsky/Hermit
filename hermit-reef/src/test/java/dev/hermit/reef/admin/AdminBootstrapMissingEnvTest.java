@@ -29,7 +29,7 @@ class AdminBootstrapMissingEnvTest {
     void leavesTheTableEmptyAndWarnsWhenEnvironmentVariablesAreUnset() {
         assertThat(System.getenv(EnvironmentAdminSecretSource.USER_ENV)).isNull();
         assertThat(System.getenv(EnvironmentAdminSecretSource.PASSWORD_ENV)).isNull();
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM admin_users", Integer.class);
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM hermit_admin_users", Integer.class);
         assertThat(count).isZero();
         assertThat(MemoryLogAppender.LINES).anyMatch(line -> line.contains(AdminBootstrap.WARN_NONE));
     }

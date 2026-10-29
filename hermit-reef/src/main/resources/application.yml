@@ -35,6 +35,8 @@ spring:
     password: ""
   flyway:
     placeholder-replacement: false
+    # 历史表与业务表同一前缀。已有 H2 文件和 MySQL 库要重建后才能对上这张表。
+    table: hermit_flyway_schema_history
   jackson:
     serialization:
       write-dates-as-timestamps: false

@@ -52,7 +52,7 @@ public class LoginService {
             // 锁定期间再记失败会把窗口往前推，锁就永远不会结束。
             if (!locked) {
                 jdbc.update(
-                        "INSERT INTO admin_login_failures (username, failed_at) VALUES (?, ?)",
+                        "INSERT INTO hermit_admin_login_failures (username, failed_at) VALUES (?, ?)",
                         username,
                         Timestamp.from(now));
             }
@@ -66,7 +66,7 @@ public class LoginService {
 
     private AdminUser find(String username) {
         return jdbc.query(
-                "SELECT password_hash, disabled FROM admin_users WHERE username = ?",
+                "SELECT password_hash, disabled FROM hermit_admin_users WHERE username = ?",
                 rs -> {
                     if (!rs.next()) {
                         return null;
@@ -79,7 +79,7 @@ public class LoginService {
     private int failureCount(String username, Instant now) {
         Instant cutoff = now.minus(LOCK_WINDOW);
         Integer count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM admin_login_failures WHERE username = ? AND failed_at > ?",
+                "SELECT COUNT(*) FROM hermit_admin_login_failures WHERE username = ? AND failed_at > ?",
                 Integer.class,
                 username,
                 Timestamp.from(cutoff));

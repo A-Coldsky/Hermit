@@ -59,12 +59,12 @@ class ConchConcurrencyTest {
 
     @BeforeEach
     void reset() {
-        jdbc.update("DELETE FROM conch_versions");
-        jdbc.update("DELETE FROM conch_availability");
-        jdbc.update("DELETE FROM audit_log");
-        jdbc.update("DELETE FROM admin_users");
+        jdbc.update("DELETE FROM hermit_conch_versions");
+        jdbc.update("DELETE FROM hermit_conch_availability");
+        jdbc.update("DELETE FROM hermit_audit_log");
+        jdbc.update("DELETE FROM hermit_admin_users");
         jdbc.update(
-                "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
                 TestSecrets.USERNAME,
                 passwordEncoder.encode(TestSecrets.PASSWORD),
                 Timestamp.from(ReefTestConfig.START));
@@ -74,15 +74,15 @@ class ConchConcurrencyTest {
     void concurrentPublishesLeaveExactlyOneCurrentVersion() throws Exception {
         byte[] sample = sample();
         for (int i = 0; i < 8; i++) {
-            jdbc.update("DELETE FROM conch_versions");
-            jdbc.update("DELETE FROM audit_log");
+            jdbc.update("DELETE FROM hermit_conch_versions");
+            jdbc.update("DELETE FROM hermit_audit_log");
             uploads.upload(TestSecrets.USERNAME, sample);
             uploads.upload(TestSecrets.USERNAME, withVersion(sample, "1.1.0"));
             together(
                     () -> publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.0.0"),
                     () -> publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.1.0"));
-            assertThat(count("SELECT COUNT(*) FROM conch_versions WHERE is_current = TRUE")).isEqualTo(1);
-            assertThat(count("SELECT COUNT(*) FROM conch_versions WHERE status = 'PUBLISHED'")).isEqualTo(2);
+            assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE is_current = TRUE")).isEqualTo(1);
+            assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE status = 'PUBLISHED'")).isEqualTo(2);
         }
     }
 
@@ -90,8 +90,8 @@ class ConchConcurrencyTest {
     void concurrentRollbacksLeaveExactlyOneCurrentVersion() throws Exception {
         byte[] sample = sample();
         for (int i = 0; i < 8; i++) {
-            jdbc.update("DELETE FROM conch_versions");
-            jdbc.update("DELETE FROM audit_log");
+            jdbc.update("DELETE FROM hermit_conch_versions");
+            jdbc.update("DELETE FROM hermit_audit_log");
             uploads.upload(TestSecrets.USERNAME, sample);
             uploads.upload(TestSecrets.USERNAME, withVersion(sample, "1.1.0"));
             uploads.upload(TestSecrets.USERNAME, withVersion(sample, "1.2.0"));
@@ -101,8 +101,8 @@ class ConchConcurrencyTest {
             together(
                     () -> publishService.rollback(TestSecrets.USERNAME, "legacy_oa", "1.0.0"),
                     () -> publishService.rollback(TestSecrets.USERNAME, "legacy_oa", "1.1.0"));
-            assertThat(count("SELECT COUNT(*) FROM conch_versions WHERE is_current = TRUE")).isEqualTo(1);
-            assertThat(count("SELECT COUNT(*) FROM conch_versions WHERE status = 'PUBLISHED'")).isEqualTo(3);
+            assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE is_current = TRUE")).isEqualTo(1);
+            assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE status = 'PUBLISHED'")).isEqualTo(3);
         }
     }
 
@@ -110,9 +110,9 @@ class ConchConcurrencyTest {
     void disableAndPublishLeaveTheConchOutOfTheManifest() throws Exception {
         byte[] sample = sample();
         for (int i = 0; i < 4; i++) {
-            jdbc.update("DELETE FROM conch_versions");
-            jdbc.update("DELETE FROM conch_availability");
-            jdbc.update("DELETE FROM audit_log");
+            jdbc.update("DELETE FROM hermit_conch_versions");
+            jdbc.update("DELETE FROM hermit_conch_availability");
+            jdbc.update("DELETE FROM hermit_audit_log");
             uploads.upload(TestSecrets.USERNAME, sample);
             uploads.upload(TestSecrets.USERNAME, withVersion(sample, "1.1.0"));
             publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.0.0");
@@ -129,7 +129,7 @@ class ConchConcurrencyTest {
                     () -> availability.disable(TestSecrets.USERNAME, "legacy_oa", "并发停用"));
             assertThat(availability.isDisabled("legacy_oa")).isTrue();
             assertThat(distribution.manifest(null).entries()).isEmpty();
-            assertThat(count("SELECT COUNT(*) FROM conch_versions WHERE is_current = TRUE")).isEqualTo(1);
+            assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE is_current = TRUE")).isEqualTo(1);
         }
     }
 

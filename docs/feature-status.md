@@ -42,7 +42,7 @@
 | Crab 升级 | Reef 提供最新版本/下载地址，Crab 展示提示 | 无自动下载/升级器；继续手工升级或另行实现 |
 | 管理员生命周期 | 空库初始化 + 登录/me | 没有改密码/创建/禁用/注销令牌的完整管理 API |
 | 配置批量原子更新 | 控制台 PUT 逐字段调用 putConfig | 校验/写入失败可能部分生效；补事务行为测试 |
-| 数据保留 | failure_reports、rollback_events 按保留天数清理，登录失败按锁定窗口清理。定时默认每天 03:00 UTC，`hermit.reef.retention-cron` 可改；管理员 `POST /api/admin/retention/purge` 返回删除条数并写审计 | 两端小时统计及部分审计/告警数据仍可持续增长 |
+| 数据保留 | `hermit_failure_reports`、`hermit_rollback_events` 按保留天数清理，登录失败按锁定窗口清理。定时默认每天 03:00 UTC，`hermit.reef.retention-cron` 可改；管理员 `POST /api/admin/retention/purge` 返回删除条数并写审计 | 两端小时统计及部分审计/告警数据仍可持续增长 |
 | 前端交互测试 | 类型检查、构建、后端静态资源测试和 Vitest/jsdom 组件测试 | 仍缺真实浏览器 E2E |
 | 交付工程化 | Maven 构建/Java/Vitest 测试和 Crab Docker 运行镜像已提供 | 无 CI workflow/覆盖率门槛/自动依赖扫描；原生 Crab 仍为普通 jar |
 
@@ -72,4 +72,8 @@ hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过；Docker
 
 2026-10-26 错误日志、未知路由信封与保留任务以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 122、hermit-crab 202、hermit-it 1，Vitest 46（8 个文件）。未启动定时器到点执行，也未跑 MySQL/Compose。小时统计、审计和告警仍不在清理范围内。
 
-2026-10-26 合入 main 后，`disabled_conches` 改为 Crab schema 7（版本 6 仍只建 `config_audit_at_idx`，已应用的版本 6 不重跑）。JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 124、hermit-crab 209、hermit-it 1，Vitest 49（9 个文件）。Reef Flyway 仍是 V1–V4，V4 为 `conch_availability`。未覆盖 MySQL，也未在浏览器点选停用或审计标签。
+2026-10-26 合入 main 后，`disabled_conches` 改为 Crab schema 7（版本 6 仍只建 `config_audit_at_idx`，已应用的版本 6 不重跑）。JDK 17.0.20.1 执行 `./mvnw -B verify` 通过：hermit-common 43、hermit-reef 124、hermit-crab 209、hermit-it 1，Vitest 49（9 个文件）。当时 Reef Flyway 仍是 V1–V4，V4 为 `conch_availability`。未覆盖 MySQL，也未在浏览器点选停用或审计标签。
+
+Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 历史表为 `hermit_flyway_schema_history`，V4 表为 `hermit_conch_availability`。V1–V4 就地改写，没有数据迁移。已有 `reef-data` 中的 H2 和 Compose MySQL 库必须重建。Crab 本地表名不变。
+
+2026-10-29 表前缀以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 125、hermit-crab 209、hermit-it 1，失败/错误/跳过均为 0；Vitest 51（10 个文件）。同一 JDK 先跑 `./mvnw -B -pl hermit-reef -am test -Dhermit.web.skip=true`：hermit-common 43、hermit-reef 125（打包页面测试 1 项因跳过前端资源而跳过），失败 0。未启动 MySQL 或 Compose。

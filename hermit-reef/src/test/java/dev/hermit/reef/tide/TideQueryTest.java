@@ -69,12 +69,12 @@ class TideQueryTest {
     @BeforeEach
     void reset() {
         clock.setInstant(ReefTestConfig.START);
-        jdbc.update("DELETE FROM failure_reports");
-        jdbc.update("DELETE FROM hourly_counts");
-        jdbc.update("DELETE FROM rollback_events");
-        jdbc.update("DELETE FROM admin_users");
+        jdbc.update("DELETE FROM hermit_failure_reports");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
+        jdbc.update("DELETE FROM hermit_rollback_events");
+        jdbc.update("DELETE FROM hermit_admin_users");
         jdbc.update(
-                "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
                 TestSecrets.USERNAME,
                 passwordEncoder.encode(TestSecrets.PASSWORD),
                 Timestamp.from(clock.instant()));
@@ -338,7 +338,7 @@ class TideQueryTest {
     private void hour(String conch, String version, String action, Instant hour, String instance, long success,
             long failure, long avg, long p95) {
         jdbc.update(
-                "INSERT INTO hourly_counts (conch, conch_version, action, hour_start, instance_id, success, failure, "
+                "INSERT INTO hermit_hourly_counts (conch, conch_version, action, hour_start, instance_id, success, failure, "
                         + "avg_millis, p95_millis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 conch, version, action, Timestamp.from(hour), instance, success, failure, avg, p95);
     }
@@ -346,7 +346,7 @@ class TideQueryTest {
     private void failure(String conch, String version, String action, Integer stepIndex, String stepType,
             String errorCode, String summary, String traceId, Instant occurredAt) {
         jdbc.update(
-                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, conch_version, "
+                "INSERT INTO hermit_failure_reports (received_at, instance_id, crab_version, trace_id, conch, conch_version, "
                         + "action, step_index, step_type, error_code, summary, occurred_at) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(occurredAt), INSTANCE, "1.2.3", traceId, conch, version, action, stepIndex, stepType,
@@ -357,7 +357,7 @@ class TideQueryTest {
 
     private void rollback(String conch, String reason, Instant occurredAt) {
         jdbc.update(
-                "INSERT INTO rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
+                "INSERT INTO hermit_rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
                         + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(occurredAt), INSTANCE, conch, "1.0.1", "1.0.0", reason, Timestamp.from(occurredAt),
                 "evt-" + (++rollbackEvents));

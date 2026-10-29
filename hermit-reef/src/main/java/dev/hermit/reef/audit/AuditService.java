@@ -23,7 +23,7 @@ public class AuditService {
 
     public void record(String actor, AuditAction action, String conch, String version, String detail) {
         jdbc.update(
-                "INSERT INTO audit_log (at, actor, action, conch, version, detail) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO hermit_audit_log (at, actor, action, conch, version, detail) VALUES (?, ?, ?, ?, ?, ?)",
                 Timestamp.from(clock.instant()),
                 actor,
                 action.name(),
@@ -35,12 +35,12 @@ public class AuditService {
     public AuditPage page(String conch, int page, int size) {
         int offset = (page - 1) * size;
         Long total = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM audit_log WHERE (? IS NULL OR conch = ?)",
+                "SELECT COUNT(*) FROM hermit_audit_log WHERE (? IS NULL OR conch = ?)",
                 Long.class,
                 conch,
                 conch);
         List<AuditEntry> items = jdbc.query(
-                "SELECT id, at, actor, action, conch, version, detail FROM audit_log "
+                "SELECT id, at, actor, action, conch, version, detail FROM hermit_audit_log "
                         + "WHERE (? IS NULL OR conch = ?) ORDER BY at DESC, id DESC LIMIT ? OFFSET ?",
                 (rs, rowNum) -> new AuditEntry(
                         rs.getLong("id"),

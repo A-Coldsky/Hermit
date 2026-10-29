@@ -73,21 +73,21 @@ class ReportIngestTest {
     @BeforeEach
     void reset() {
         clock.setInstant(ReefTestConfig.START);
-        jdbc.update("DELETE FROM failure_reports");
-        jdbc.update("DELETE FROM hourly_counts");
-        jdbc.update("DELETE FROM rollback_events");
+        jdbc.update("DELETE FROM hermit_failure_reports");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
+        jdbc.update("DELETE FROM hermit_rollback_events");
     }
 
     @Test
     void validBatchWritesAllThreeTablesAndAcceptsAnUnpublishedConch() throws Exception {
         Integer versionTwo = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM \"flyway_schema_history\" WHERE \"version\" = '2' AND \"success\" = TRUE",
+                "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '2' AND \"success\" = TRUE",
                 Integer.class);
         assertThat(versionTwo).isEqualTo(1);
-        assertThat(indexNames()).contains("uk_failure_reports_instance_trace");
+        assertThat(indexNames()).contains("uk_hermit_failure_reports_instance_trace");
         Integer ackColumn = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'PUBLIC' "
-                        + "AND TABLE_NAME = 'ALERTS' AND UPPER(COLUMN_NAME) = 'ACKNOWLEDGED_BY'",
+                        + "AND TABLE_NAME = 'HERMIT_ALERTS' AND UPPER(COLUMN_NAME) = 'ACKNOWLEDGED_BY'",
                 Integer.class);
         assertThat(ackColumn).isEqualTo(1);
 
@@ -103,16 +103,16 @@ class ReportIngestTest {
                 .andExpect(jsonPath("$.data.accepted.counts").value(1))
                 .andExpect(jsonPath("$.data.accepted.events").value(1));
 
-        assertThat(count("failure_reports")).isEqualTo(1);
-        assertThat(count("hourly_counts")).isEqualTo(1);
-        assertThat(count("rollback_events")).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT crab_version FROM failure_reports", String.class)).isEqualTo("not-semver");
-        assertThat(jdbc.queryForObject("SELECT received_at FROM failure_reports", java.sql.Timestamp.class).toInstant())
+        assertThat(count("hermit_failure_reports")).isEqualTo(1);
+        assertThat(count("hermit_hourly_counts")).isEqualTo(1);
+        assertThat(count("hermit_rollback_events")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT crab_version FROM hermit_failure_reports", String.class)).isEqualTo("not-semver");
+        assertThat(jdbc.queryForObject("SELECT received_at FROM hermit_failure_reports", java.sql.Timestamp.class).toInstant())
                 .isEqualTo(ReefTestConfig.START);
-        assertThat(jdbc.queryForObject("SELECT error_code FROM failure_reports", String.class)).isEqualTo("RULE_MISMATCH");
-        assertThat(jdbc.queryForObject("SELECT success FROM hourly_counts", Long.class)).isEqualTo(3L);
-        assertThat(jdbc.queryForObject("SELECT reason FROM rollback_events", String.class)).isEqualTo("RULE_MISMATCH");
-        assertThat(count("conch_versions")).isZero();
+        assertThat(jdbc.queryForObject("SELECT error_code FROM hermit_failure_reports", String.class)).isEqualTo("RULE_MISMATCH");
+        assertThat(jdbc.queryForObject("SELECT success FROM hermit_hourly_counts", Long.class)).isEqualTo(3L);
+        assertThat(jdbc.queryForObject("SELECT reason FROM hermit_rollback_events", String.class)).isEqualTo("RULE_MISMATCH");
+        assertThat(count("hermit_conch_versions")).isZero();
     }
 
     @Test
@@ -176,25 +176,25 @@ class ReportIngestTest {
                         .content(mapper.writeValueAsString(again)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.accepted.failures").value(1));
-        assertThat(count("failure_reports")).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT summary FROM failure_reports", String.class)).isEqualTo("状态码 302");
+        assertThat(count("hermit_failure_reports")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT summary FROM hermit_failure_reports", String.class)).isEqualTo("状态码 302");
 
         ObjectNode pair = again.deepCopy();
         pair.set("failures", mapper.createArrayNode()
                 .add(failureNode(mapper, "same-trace", "first"))
                 .add(failureNode(mapper, "same-trace", "second")));
-        jdbc.update("DELETE FROM failure_reports");
+        jdbc.update("DELETE FROM hermit_failure_reports");
         mockMvc.perform(agent(post("/agent/reports"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
                         .content(mapper.writeValueAsString(pair)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.accepted.failures").value(2));
-        assertThat(jdbc.queryForList("SELECT summary FROM failure_reports", String.class)).containsExactly("first");
+        assertThat(jdbc.queryForList("SELECT summary FROM hermit_failure_reports", String.class)).containsExactly("first");
 
         send(ReportJson.write(new ReportBatch(OTHER, "1.2.3", SENT, List.of(failure("same-trace", "other")),
                 List.of(), List.of())), OTHER);
-        assertThat(count("failure_reports")).isEqualTo(2);
+        assertThat(count("hermit_failure_reports")).isEqualTo(2);
     }
 
     @Test
@@ -203,23 +203,23 @@ class ReportIngestTest {
                 List.of(count(1, 0, 10, 20)), List.of())), INSTANCE);
         send(ReportJson.write(new ReportBatch(INSTANCE, "1.2.3", SENT, List.of(),
                 List.of(count(5, 4, 30, 70)), List.of())), INSTANCE);
-        assertThat(count("hourly_counts")).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT success FROM hourly_counts", Long.class)).isEqualTo(5L);
-        assertThat(jdbc.queryForObject("SELECT failure FROM hourly_counts", Long.class)).isEqualTo(4L);
-        assertThat(jdbc.queryForObject("SELECT avg_millis FROM hourly_counts", Long.class)).isEqualTo(30L);
-        assertThat(jdbc.queryForObject("SELECT p95_millis FROM hourly_counts", Long.class)).isEqualTo(70L);
+        assertThat(count("hermit_hourly_counts")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT success FROM hermit_hourly_counts", Long.class)).isEqualTo(5L);
+        assertThat(jdbc.queryForObject("SELECT failure FROM hermit_hourly_counts", Long.class)).isEqualTo(4L);
+        assertThat(jdbc.queryForObject("SELECT avg_millis FROM hermit_hourly_counts", Long.class)).isEqualTo(30L);
+        assertThat(jdbc.queryForObject("SELECT p95_millis FROM hermit_hourly_counts", Long.class)).isEqualTo(70L);
 
         ObjectMapper mapper = new ObjectMapper();
         ObjectNode batch = (ObjectNode) mapper.readTree(ReportJson.write(new ReportBatch(
                 INSTANCE, "1.2.3", SENT, List.of(), List.of(count(1, 1, 1, 1), count(9, 8, 7, 6)), List.of())));
-        jdbc.update("DELETE FROM hourly_counts");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
         send(mapper.writeValueAsString(batch), INSTANCE);
-        assertThat(jdbc.queryForObject("SELECT success FROM hourly_counts", Long.class)).isEqualTo(9L);
-        assertThat(jdbc.queryForObject("SELECT failure FROM hourly_counts", Long.class)).isEqualTo(8L);
+        assertThat(jdbc.queryForObject("SELECT success FROM hermit_hourly_counts", Long.class)).isEqualTo(9L);
+        assertThat(jdbc.queryForObject("SELECT failure FROM hermit_hourly_counts", Long.class)).isEqualTo(8L);
 
         send(ReportJson.write(new ReportBatch(OTHER, "1.2.3", SENT, List.of(),
                 List.of(count(2, 2, 2, 2)), List.of())), OTHER);
-        assertThat(count("hourly_counts")).isEqualTo(2);
+        assertThat(count("hermit_hourly_counts")).isEqualTo(2);
     }
 
     @Test
@@ -230,7 +230,7 @@ class ReportIngestTest {
         ObjectNode node = (ObjectNode) mapper.readTree(ReportJson.write(sample("1.2.3")));
         ((ObjectNode) node.get("failures").get(0)).put("summary", raw);
         send(mapper.writeValueAsString(node), INSTANCE);
-        String stored = jdbc.queryForObject("SELECT summary FROM failure_reports", String.class);
+        String stored = jdbc.queryForObject("SELECT summary FROM hermit_failure_reports", String.class);
         assertThat(stored).isEqualTo("a".repeat(199) + emoji);
         assertThat(stored.codePointCount(0, stored.length())).isEqualTo(200);
     }
@@ -242,8 +242,8 @@ class ReportIngestTest {
         ((ObjectNode) node.get("failures").get(0)).put("stepType", "Custom-Step");
         ((ObjectNode) node.get("failures").get(0)).put("conchVersion", "1.0.0-rc.1");
         send(mapper.writeValueAsString(node), INSTANCE);
-        assertThat(jdbc.queryForObject("SELECT step_type FROM failure_reports", String.class)).isEqualTo("Custom-Step");
-        assertThat(jdbc.queryForObject("SELECT conch_version FROM failure_reports", String.class)).isEqualTo("1.0.0-rc.1");
+        assertThat(jdbc.queryForObject("SELECT step_type FROM hermit_failure_reports", String.class)).isEqualTo("Custom-Step");
+        assertThat(jdbc.queryForObject("SELECT conch_version FROM hermit_failure_reports", String.class)).isEqualTo("1.0.0-rc.1");
     }
 
     @Test
@@ -263,13 +263,13 @@ class ReportIngestTest {
         assertThat(storedRows()).isZero();
 
         expectStatus(batch(failures(ReportRules.MAX_FAILURES), List.of(), List.of()), 200);
-        assertThat(count("failure_reports")).isEqualTo(ReportRules.MAX_FAILURES);
-        jdbc.update("DELETE FROM failure_reports");
+        assertThat(count("hermit_failure_reports")).isEqualTo(ReportRules.MAX_FAILURES);
+        jdbc.update("DELETE FROM hermit_failure_reports");
         expectStatus(batch(List.of(), counts(ReportRules.MAX_COUNTS), List.of()), 200);
-        assertThat(count("hourly_counts")).isEqualTo(ReportRules.MAX_COUNTS);
-        jdbc.update("DELETE FROM hourly_counts");
+        assertThat(count("hermit_hourly_counts")).isEqualTo(ReportRules.MAX_COUNTS);
+        jdbc.update("DELETE FROM hermit_hourly_counts");
         expectStatus(batch(List.of(), List.of(), events(ReportRules.MAX_EVENTS)), 200);
-        assertThat(count("rollback_events")).isEqualTo(ReportRules.MAX_EVENTS);
+        assertThat(count("hermit_rollback_events")).isEqualTo(ReportRules.MAX_EVENTS);
     }
 
     @Test
@@ -277,16 +277,16 @@ class ReportIngestTest {
         String shared = "11111111-1111-4111-8111-111111111111";
         expectStatus(batch(List.of(), List.of(), List.of(event(shared, "first"))), 200);
         expectStatus(batch(List.of(failure("trace-kept", "kept")), List.of(), List.of(event(shared, "second"))), 200);
-        assertThat(count("rollback_events")).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT event_id FROM rollback_events", String.class)).isEqualTo(shared);
-        assertThat(jdbc.queryForObject("SELECT reason FROM rollback_events", String.class)).isEqualTo("first");
-        assertThat(jdbc.queryForObject("SELECT summary FROM failure_reports", String.class)).isEqualTo("kept");
+        assertThat(count("hermit_rollback_events")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT event_id FROM hermit_rollback_events", String.class)).isEqualTo(shared);
+        assertThat(jdbc.queryForObject("SELECT reason FROM hermit_rollback_events", String.class)).isEqualTo("first");
+        assertThat(jdbc.queryForObject("SELECT summary FROM hermit_failure_reports", String.class)).isEqualTo("kept");
 
         expectStatus(batch(List.of(), List.of(), List.of(event(
                 "22222222-2222-4222-8222-222222222222", "other"))), 200);
-        assertThat(count("rollback_events")).isEqualTo(2);
+        assertThat(count("hermit_rollback_events")).isEqualTo(2);
 
-        jdbc.update("DELETE FROM rollback_events");
+        jdbc.update("DELETE FROM hermit_rollback_events");
         String concurrentId = "33333333-3333-4333-8333-333333333333";
         String json = ReportJson.write(batch(List.of(), List.of(), List.of(event(concurrentId, "race"))));
         ExecutorService pool = Executors.newFixedThreadPool(2);
@@ -311,20 +311,20 @@ class ReportIngestTest {
         } finally {
             pool.shutdownNow();
         }
-        assertThat(count("rollback_events")).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT event_id FROM rollback_events", String.class)).isEqualTo(concurrentId);
+        assertThat(count("hermit_rollback_events")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT event_id FROM hermit_rollback_events", String.class)).isEqualTo(concurrentId);
     }
 
     @Test
     void uniqueIndexRejectsASecondRawInsertOfTheSameTrace() throws Exception {
         send(ReportJson.write(sample("1.2.3")), INSTANCE);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update(
-                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, conch_version, "
+                "INSERT INTO hermit_failure_reports (received_at, instance_id, crab_version, trace_id, conch, conch_version, "
                         + "action, error_code, summary, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 java.sql.Timestamp.from(SENT), INSTANCE, "1.2.3", "t1", "legacy_oa", "1.0.0", "list_todo",
                 "TIMEOUT", "dup", java.sql.Timestamp.from(SENT)))
                 .isInstanceOf(DataAccessException.class);
-        assertThat(count("failure_reports")).isEqualTo(1);
+        assertThat(count("hermit_failure_reports")).isEqualTo(1);
     }
 
     private static MockHttpServletRequestBuilder agent(MockHttpServletRequestBuilder request) {
@@ -434,7 +434,7 @@ class ReportIngestTest {
     }
 
     private int storedRows() {
-        return count("failure_reports") + count("hourly_counts") + count("rollback_events");
+        return count("hermit_failure_reports") + count("hermit_hourly_counts") + count("hermit_rollback_events");
     }
 
     private List<String> indexNames() {

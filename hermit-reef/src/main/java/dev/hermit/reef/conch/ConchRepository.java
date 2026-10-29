@@ -36,7 +36,7 @@ class ConchRepository {
         return jdbc.query(
                 "SELECT id, conch, version, sha256, min_crab_version, package_path, status, uploaded_by, uploaded_at, "
                         + "published_by, published_at, is_current, validation_json, diff_json "
-                        + "FROM conch_versions ORDER BY conch, id",
+                        + "FROM hermit_conch_versions ORDER BY conch, id",
                 ROWS);
     }
 
@@ -50,14 +50,14 @@ class ConchRepository {
         return jdbc.query(
                 "SELECT id, conch, version, sha256, min_crab_version, package_path, status, uploaded_by, uploaded_at, "
                         + "published_by, published_at, is_current, validation_json, diff_json "
-                        + "FROM conch_versions WHERE conch = ? ORDER BY id FOR UPDATE",
+                        + "FROM hermit_conch_versions WHERE conch = ? ORDER BY id FOR UPDATE",
                 ROWS,
                 conch);
     }
 
     void insertUploaded(VersionRow row, String packagePath, String validationJson, String diffJson) {
         jdbc.update(
-                "INSERT INTO conch_versions (conch, version, sha256, min_crab_version, package_path, status, "
+                "INSERT INTO hermit_conch_versions (conch, version, sha256, min_crab_version, package_path, status, "
                         + "uploaded_by, uploaded_at, published_by, published_at, is_current, validation_json, diff_json) "
                         + "VALUES (?, ?, ?, ?, ?, 'UPLOADED', ?, ?, NULL, NULL, FALSE, ?, ?)",
                 row.conch(),
@@ -72,9 +72,9 @@ class ConchRepository {
     }
 
     int markPublished(String conch, String version, String actor, Instant publishedAt) {
-        jdbc.update("UPDATE conch_versions SET is_current = FALSE WHERE conch = ?", conch);
+        jdbc.update("UPDATE hermit_conch_versions SET is_current = FALSE WHERE conch = ?", conch);
         return jdbc.update(
-                "UPDATE conch_versions SET status = 'PUBLISHED', is_current = TRUE, published_by = ?, published_at = ? "
+                "UPDATE hermit_conch_versions SET status = 'PUBLISHED', is_current = TRUE, published_by = ?, published_at = ? "
                         + "WHERE conch = ? AND version = ? AND status = 'UPLOADED'",
                 actor,
                 Timestamp.from(publishedAt),
@@ -83,9 +83,9 @@ class ConchRepository {
     }
 
     int switchCurrent(String conch, String version) {
-        jdbc.update("UPDATE conch_versions SET is_current = FALSE WHERE conch = ?", conch);
+        jdbc.update("UPDATE hermit_conch_versions SET is_current = FALSE WHERE conch = ?", conch);
         return jdbc.update(
-                "UPDATE conch_versions SET is_current = TRUE WHERE conch = ? AND version = ? AND status = 'PUBLISHED'",
+                "UPDATE hermit_conch_versions SET is_current = TRUE WHERE conch = ? AND version = ? AND status = 'PUBLISHED'",
                 conch,
                 version);
     }

@@ -91,11 +91,11 @@ class AdminApiTest {
     @BeforeEach
     void reset() {
         clock.setInstant(ReefTestConfig.START);
-        jdbc.update("DELETE FROM admin_login_failures");
-        jdbc.update("DELETE FROM audit_log");
-        jdbc.update("DELETE FROM admin_users");
+        jdbc.update("DELETE FROM hermit_admin_login_failures");
+        jdbc.update("DELETE FROM hermit_audit_log");
+        jdbc.update("DELETE FROM hermit_admin_users");
         jdbc.update(
-                "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
                 TestSecrets.USERNAME,
                 passwordEncoder.encode(TestSecrets.PASSWORD),
                 Timestamp.from(ReefTestConfig.START));
@@ -150,7 +150,7 @@ class AdminApiTest {
         assertThat(objectMapper.readTree(locked).get("error").get("message").asText())
                 .isEqualTo(LoginService.FAILURE_MESSAGE);
         Integer failures = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM admin_login_failures WHERE username = ?",
+                "SELECT COUNT(*) FROM hermit_admin_login_failures WHERE username = ?",
                 Integer.class,
                 TestSecrets.USERNAME);
         assertThat(failures).isEqualTo(LoginService.MAX_FAILURES);
@@ -175,7 +175,7 @@ class AdminApiTest {
     @Test
     void disabledUserGetsTheSameFailureBody() throws Exception {
         jdbc.update(
-                "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, TRUE)",
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, TRUE)",
                 "disabled-admin",
                 passwordEncoder.encode(TestSecrets.PASSWORD),
                 Timestamp.from(ReefTestConfig.START));
@@ -201,7 +201,7 @@ class AdminApiTest {
     @Test
     void loginWritesAuditAndTheFeedIsNewestFirst() throws Exception {
         String token = loginToken();
-        jdbc.update("DELETE FROM audit_log");
+        jdbc.update("DELETE FROM hermit_audit_log");
         clock.setInstant(ReefTestConfig.START);
         auditService.record(TestSecrets.USERNAME, AuditAction.UPLOAD, "legacy_oa", "1.0.0", "uploaded");
         clock.setInstant(ReefTestConfig.START.plusSeconds(1));
@@ -390,11 +390,11 @@ class AdminApiTest {
     @Test
     void adminCanPurgeRetentionAndTheRunIsAudited() throws Exception {
         String token = loginToken();
-        jdbc.update("DELETE FROM audit_log");
-        jdbc.update("DELETE FROM failure_reports");
-        jdbc.update("DELETE FROM rollback_events");
-        jdbc.update("DELETE FROM admin_login_failures");
-        jdbc.update("DELETE FROM hourly_counts");
+        jdbc.update("DELETE FROM hermit_audit_log");
+        jdbc.update("DELETE FROM hermit_failure_reports");
+        jdbc.update("DELETE FROM hermit_rollback_events");
+        jdbc.update("DELETE FROM hermit_admin_login_failures");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
         Instant now = ReefTestConfig.START;
         clock.setInstant(now);
         Instant reportCutoff = now.minus(Duration.ofDays(90));
@@ -406,7 +406,7 @@ class AdminApiTest {
         insertLoginFailure(loginCutoff.minusSeconds(1));
         insertLoginFailure(loginCutoff.plusSeconds(1));
         jdbc.update(
-                "INSERT INTO hourly_counts (conch, conch_version, action, hour_start, instance_id, success, "
+                "INSERT INTO hermit_hourly_counts (conch, conch_version, action, hour_start, instance_id, success, "
                         + "failure, avg_millis, p95_millis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 "legacy_oa", "1.0.0", "list_todo", Timestamp.from(now),
                 "123e4567-e89b-12d3-a456-426614174000", 1L, 0L, 10L, 20L);
@@ -417,8 +417,8 @@ class AdminApiTest {
         mockMvc.perform(post("/api/admin/retention/purge").header(TraceIds.HEADER, TRACE))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM failure_reports", Integer.class)).isEqualTo(2);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM audit_log WHERE action = 'RETENTION_PURGE'", Integer.class))
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_failure_reports", Integer.class)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_audit_log WHERE action = 'RETENTION_PURGE'", Integer.class))
                 .isZero();
 
         mockMvc.perform(post("/api/admin/retention/purge")
@@ -430,16 +430,16 @@ class AdminApiTest {
                 .andExpect(jsonPath("$.data.failureReports").value(1))
                 .andExpect(jsonPath("$.data.rollbackEvents").value(1))
                 .andExpect(jsonPath("$.data.loginFailures").value(1));
-        assertThat(jdbc.queryForList("SELECT summary FROM failure_reports", String.class)).containsExactly("new-failure");
-        assertThat(jdbc.queryForList("SELECT reason FROM rollback_events", String.class)).containsExactly("new-rollback");
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM admin_login_failures", Integer.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hourly_counts", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForList("SELECT summary FROM hermit_failure_reports", String.class)).containsExactly("new-failure");
+        assertThat(jdbc.queryForList("SELECT reason FROM hermit_rollback_events", String.class)).containsExactly("new-rollback");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_admin_login_failures", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_hourly_counts", Integer.class)).isEqualTo(1);
         String detail = RetentionController.auditDetail(new PurgeCounts(1, 1, 1));
         assertThat(jdbc.queryForObject(
-                "SELECT actor FROM audit_log WHERE action = 'RETENTION_PURGE'", String.class))
+                "SELECT actor FROM hermit_audit_log WHERE action = 'RETENTION_PURGE'", String.class))
                 .isEqualTo(TestSecrets.USERNAME);
         assertThat(jdbc.queryForObject(
-                "SELECT detail FROM audit_log WHERE action = 'RETENTION_PURGE'", String.class))
+                "SELECT detail FROM hermit_audit_log WHERE action = 'RETENTION_PURGE'", String.class))
                 .isEqualTo(detail);
 
         mockMvc.perform(post("/api/admin/retention/purge")
@@ -448,7 +448,7 @@ class AdminApiTest {
                 .andExpect(jsonPath("$.data.failureReports").value(0))
                 .andExpect(jsonPath("$.data.rollbackEvents").value(0))
                 .andExpect(jsonPath("$.data.loginFailures").value(0));
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM audit_log WHERE action = 'RETENTION_PURGE'", Integer.class))
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_audit_log WHERE action = 'RETENTION_PURGE'", Integer.class))
                 .isEqualTo(2);
     }
 
@@ -458,7 +458,7 @@ class AdminApiTest {
 
     private void insertFailure(Instant receivedAt, String summary) {
         jdbc.update(
-                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
+                "INSERT INTO hermit_failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
                         + "conch_version, action, step_index, step_type, error_code, summary, occurred_at) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "1.0.0", summary,
@@ -468,7 +468,7 @@ class AdminApiTest {
 
     private void insertRollback(Instant receivedAt, String reason) {
         jdbc.update(
-                "INSERT INTO rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
+                "INSERT INTO hermit_rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
                         + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "legacy_oa", "1.0.1",
                 "1.0.0", reason, Timestamp.from(receivedAt), reason);
@@ -476,7 +476,7 @@ class AdminApiTest {
 
     private void insertLoginFailure(Instant failedAt) {
         jdbc.update(
-                "INSERT INTO admin_login_failures (username, failed_at) VALUES (?, ?)",
+                "INSERT INTO hermit_admin_login_failures (username, failed_at) VALUES (?, ?)",
                 "guessed-user",
                 Timestamp.from(failedAt));
     }

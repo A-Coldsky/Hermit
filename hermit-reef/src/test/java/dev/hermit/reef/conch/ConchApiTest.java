@@ -91,13 +91,13 @@ class ConchApiTest {
     @BeforeEach
     void reset() throws Exception {
         privatePem = Files.readString(DATA.resolve("keys/signing.key"));
-        jdbc.update("DELETE FROM conch_versions");
-        jdbc.update("DELETE FROM conch_availability");
-        jdbc.update("DELETE FROM audit_log");
-        jdbc.update("DELETE FROM admin_login_failures");
-        jdbc.update("DELETE FROM admin_users");
+        jdbc.update("DELETE FROM hermit_conch_versions");
+        jdbc.update("DELETE FROM hermit_conch_availability");
+        jdbc.update("DELETE FROM hermit_audit_log");
+        jdbc.update("DELETE FROM hermit_admin_login_failures");
+        jdbc.update("DELETE FROM hermit_admin_users");
         jdbc.update(
-                "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
                 TestSecrets.USERNAME,
                 passwordEncoder.encode(TestSecrets.PASSWORD),
                 Timestamp.from(ReefTestConfig.START));
@@ -308,15 +308,15 @@ class ConchApiTest {
                 .andExpect(status().isConflict());
 
         String rollbackDetail = jdbc.queryForObject(
-                "SELECT detail FROM audit_log WHERE action = 'ROLLBACK'", String.class);
+                "SELECT detail FROM hermit_audit_log WHERE action = 'ROLLBACK'", String.class);
         JsonNode rollback = objectMapper.readTree(rollbackDetail);
         assertThat(rollback.get("from").asText()).isEqualTo("1.1.0");
         assertThat(rollback.get("to").asText()).isEqualTo("1.0.0");
         Integer publishes = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM audit_log WHERE action = 'PUBLISH'", Integer.class);
+                "SELECT COUNT(*) FROM hermit_audit_log WHERE action = 'PUBLISH'", Integer.class);
         assertThat(publishes).isEqualTo(2);
         Integer currents = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM conch_versions WHERE is_current = TRUE", Integer.class);
+                "SELECT COUNT(*) FROM hermit_conch_versions WHERE is_current = TRUE", Integer.class);
         assertThat(currents).isEqualTo(1);
     }
 
@@ -392,10 +392,10 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data.version").value("1.0.0"))
                 .andExpect(jsonPath("$.data.disabledBy").value(TestSecrets.USERNAME));
         String disableDetail = jdbc.queryForObject(
-                "SELECT detail FROM audit_log WHERE action = 'DISABLE'", String.class);
+                "SELECT detail FROM hermit_audit_log WHERE action = 'DISABLE'", String.class);
         assertThat(objectMapper.readTree(disableDetail).get("reason").asText()).isEqualTo("合同到期");
         assertThat(jdbc.queryForObject(
-                "SELECT version FROM audit_log WHERE action = 'DISABLE'", String.class)).isEqualTo("1.0.0");
+                "SELECT version FROM hermit_audit_log WHERE action = 'DISABLE'", String.class)).isEqualTo("1.0.0");
 
         mockMvc.perform(agent("/agent/conches/manifest"))
                 .andExpect(status().isOk())
@@ -442,7 +442,7 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data.disabledBy").value(nullValue()))
                 .andExpect(jsonPath("$.data.disabledReason").value(nullValue()));
         assertThat(objectMapper.readTree(jdbc.queryForObject(
-                "SELECT detail FROM audit_log WHERE action = 'ENABLE'", String.class))
+                "SELECT detail FROM hermit_audit_log WHERE action = 'ENABLE'", String.class))
                 .get("reason").asText()).isEqualTo("合同续签");
         String restored = manifestEtag("1.0.0");
         assertThat(restored).isEqualTo(etag);
@@ -561,7 +561,7 @@ class ConchApiTest {
     }
 
     private int versionCount() {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM conch_versions", Integer.class);
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM hermit_conch_versions", Integer.class);
         return count == null ? 0 : count;
     }
 

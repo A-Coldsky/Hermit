@@ -29,7 +29,7 @@ class ConchAvailabilityRepository {
     AvailabilityRow lock(String conch) {
         List<AvailabilityRow> rows = jdbc.query(
                 "SELECT conch, disabled, disabled_at, disabled_by, disabled_reason "
-                        + "FROM conch_availability WHERE conch = ? FOR UPDATE",
+                        + "FROM hermit_conch_availability WHERE conch = ? FOR UPDATE",
                 ROWS,
                 conch);
         return rows.isEmpty() ? null : rows.get(0);
@@ -38,7 +38,7 @@ class ConchAvailabilityRepository {
     AvailabilityRow find(String conch) {
         List<AvailabilityRow> rows = jdbc.query(
                 "SELECT conch, disabled, disabled_at, disabled_by, disabled_reason "
-                        + "FROM conch_availability WHERE conch = ?",
+                        + "FROM hermit_conch_availability WHERE conch = ?",
                 ROWS,
                 conch);
         return rows.isEmpty() ? null : rows.get(0);
@@ -47,7 +47,7 @@ class ConchAvailabilityRepository {
     Map<String, AvailabilityRow> all() {
         Map<String, AvailabilityRow> rows = new LinkedHashMap<>();
         for (AvailabilityRow row : jdbc.query(
-                "SELECT conch, disabled, disabled_at, disabled_by, disabled_reason FROM conch_availability",
+                "SELECT conch, disabled, disabled_at, disabled_by, disabled_reason FROM hermit_conch_availability",
                 ROWS)) {
             rows.put(row.conch(), row);
         }
@@ -56,13 +56,13 @@ class ConchAvailabilityRepository {
 
     Set<String> disabledNames() {
         return Set.copyOf(jdbc.query(
-                "SELECT conch FROM conch_availability WHERE disabled = TRUE",
+                "SELECT conch FROM hermit_conch_availability WHERE disabled = TRUE",
                 (rs, rowNum) -> rs.getString(1)));
     }
 
     boolean isDisabled(String conch) {
         Boolean disabled = jdbc.query(
-                "SELECT disabled FROM conch_availability WHERE conch = ?",
+                "SELECT disabled FROM hermit_conch_availability WHERE conch = ?",
                 rs -> rs.next() ? rs.getBoolean(1) : null,
                 conch);
         return Boolean.TRUE.equals(disabled);
@@ -70,7 +70,7 @@ class ConchAvailabilityRepository {
 
     void insertDisabled(String conch, Instant at, String actor, String reason) {
         jdbc.update(
-                "INSERT INTO conch_availability (conch, disabled, disabled_at, disabled_by, disabled_reason) "
+                "INSERT INTO hermit_conch_availability (conch, disabled, disabled_at, disabled_by, disabled_reason) "
                         + "VALUES (?, TRUE, ?, ?, ?)",
                 conch,
                 Timestamp.from(at),
@@ -80,7 +80,7 @@ class ConchAvailabilityRepository {
 
     int updateDisabled(String conch, Instant at, String actor, String reason) {
         return jdbc.update(
-                "UPDATE conch_availability SET disabled = TRUE, disabled_at = ?, disabled_by = ?, disabled_reason = ? "
+                "UPDATE hermit_conch_availability SET disabled = TRUE, disabled_at = ?, disabled_by = ?, disabled_reason = ? "
                         + "WHERE conch = ? AND disabled = FALSE",
                 Timestamp.from(at),
                 actor,
@@ -90,7 +90,7 @@ class ConchAvailabilityRepository {
 
     int clearDisabled(String conch) {
         return jdbc.update(
-                "UPDATE conch_availability SET disabled = FALSE, disabled_at = NULL, disabled_by = NULL, "
+                "UPDATE hermit_conch_availability SET disabled = FALSE, disabled_at = NULL, disabled_by = NULL, "
                         + "disabled_reason = NULL WHERE conch = ? AND disabled = TRUE",
                 conch);
     }

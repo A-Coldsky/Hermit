@@ -70,11 +70,11 @@ class ConchSelfCheckFailureTest {
     @BeforeEach
     void reset() throws Exception {
         privatePem = Files.readString(DATA.resolve("keys/signing.key"));
-        jdbc.update("DELETE FROM conch_versions");
-        jdbc.update("DELETE FROM audit_log");
-        jdbc.update("DELETE FROM admin_users");
+        jdbc.update("DELETE FROM hermit_conch_versions");
+        jdbc.update("DELETE FROM hermit_audit_log");
+        jdbc.update("DELETE FROM hermit_admin_users");
         jdbc.update(
-                "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
                 TestSecrets.USERNAME,
                 passwordEncoder.encode(TestSecrets.PASSWORD),
                 Timestamp.from(ReefTestConfig.START));
@@ -121,12 +121,12 @@ class ConchSelfCheckFailureTest {
                 .getContentAsString();
         assertThat(body).doesNotContain(MARKER);
         assertThat(body).doesNotContain("BEGIN PRIVATE KEY");
-        assertThat(jdbc.queryForObject("SELECT status FROM conch_versions WHERE conch = 'legacy_oa'", String.class))
+        assertThat(jdbc.queryForObject("SELECT status FROM hermit_conch_versions WHERE conch = 'legacy_oa'", String.class))
                 .isEqualTo("UPLOADED");
         assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM conch_versions WHERE is_current = TRUE", Integer.class)).isZero();
+                "SELECT COUNT(*) FROM hermit_conch_versions WHERE is_current = TRUE", Integer.class)).isZero();
         assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM audit_log WHERE action = 'PUBLISH'", Integer.class)).isZero();
+                "SELECT COUNT(*) FROM hermit_audit_log WHERE action = 'PUBLISH'", Integer.class)).isZero();
         assertThat(Files.exists(DATA.resolve("conches/legacy_oa/1.0.0/conch.yaml"))).isTrue();
         assertThat(Files.exists(DATA.resolve("conches/legacy_oa/1.0.0/package.zip"))).isFalse();
     }

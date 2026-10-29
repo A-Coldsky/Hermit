@@ -85,15 +85,15 @@ class AlertEvaluationTest {
         clock.setInstant(PUBLISHED.plus(Duration.ofHours(2)));
         traceSeq = 0;
         properties.setWebhookUrl("");
-        jdbc.update("DELETE FROM alerts");
-        jdbc.update("DELETE FROM failure_reports");
-        jdbc.update("DELETE FROM hourly_counts");
-        jdbc.update("DELETE FROM rollback_events");
-        jdbc.update("DELETE FROM audit_log");
-        jdbc.update("DELETE FROM conch_versions");
-        jdbc.update("DELETE FROM admin_users");
+        jdbc.update("DELETE FROM hermit_alerts");
+        jdbc.update("DELETE FROM hermit_failure_reports");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
+        jdbc.update("DELETE FROM hermit_rollback_events");
+        jdbc.update("DELETE FROM hermit_audit_log");
+        jdbc.update("DELETE FROM hermit_conch_versions");
+        jdbc.update("DELETE FROM hermit_admin_users");
         jdbc.update(
-                "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
                 TestSecrets.USERNAME,
                 passwordEncoder.encode(TestSecrets.PASSWORD),
                 Timestamp.from(clock.instant()));
@@ -129,18 +129,18 @@ class AlertEvaluationTest {
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isZero();
 
-        jdbc.update("DELETE FROM hourly_counts");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
         hour(CONCH, "1.1.0", PUBLISHED, 0, 20);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
 
-        jdbc.update("DELETE FROM alerts");
-        jdbc.update("DELETE FROM hourly_counts");
+        jdbc.update("DELETE FROM hermit_alerts");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
         hour(CONCH, "1.1.0", PUBLISHED, 10, 10);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isZero();
 
-        jdbc.update("DELETE FROM hourly_counts");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
         hour(CONCH, "1.1.0", PUBLISHED, 9, 11);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
@@ -157,14 +157,14 @@ class AlertEvaluationTest {
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isZero();
 
-        jdbc.update("DELETE FROM hourly_counts");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
         hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(8)), 0, 100);
         hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(1)), 20, 0);
         hour(CONCH, "1.1.0", PUBLISHED.minus(Duration.ofHours(1)), 100, 0);
         hour(CONCH, "1.1.0", PUBLISHED, 80, 20);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
-        String detail = jdbc.queryForObject("SELECT detail_json FROM alerts", String.class);
+        String detail = jdbc.queryForObject("SELECT detail_json FROM hermit_alerts", String.class);
         assertThat(detail).contains("\"baselineVersion\":\"1.0.0\"");
         assertThat(detail).contains("\"currentCalls\":100");
         assertThat(detail).contains("\"currentFailures\":20");
@@ -192,8 +192,8 @@ class AlertEvaluationTest {
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isZero();
 
-        jdbc.update("DELETE FROM hourly_counts");
-        jdbc.update("DELETE FROM alerts");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
+        jdbc.update("DELETE FROM hermit_alerts");
         hour(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofHours(2)), 20, 0);
         hour(CONCH, "1.1.0", PUBLISHED, 10, 10);
         alertService.evaluate();
@@ -210,32 +210,32 @@ class AlertEvaluationTest {
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
 
-        jdbc.update("DELETE FROM alerts");
+        jdbc.update("DELETE FROM hermit_alerts");
         publish(CONCH, "1.2.0", clock.instant().minus(Duration.ofHours(1)), true);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isZero();
 
-        jdbc.update("DELETE FROM conch_versions");
+        jdbc.update("DELETE FROM hermit_conch_versions");
         audit("PUBLISH", CONCH, clock.instant().minus(Duration.ofHours(1)));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
 
-        jdbc.update("DELETE FROM alerts");
-        jdbc.update("DELETE FROM audit_log");
+        jdbc.update("DELETE FROM hermit_alerts");
+        jdbc.update("DELETE FROM hermit_audit_log");
         jdbc.update(
-                "INSERT INTO rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
+                "INSERT INTO hermit_rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
                         + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(clock.instant()), INSTANCE, CONCH, "1.2.0", "1.1.0", "back",
                 Timestamp.from(clock.instant()), "alert-rollback");
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
 
-        jdbc.update("DELETE FROM alerts");
+        jdbc.update("DELETE FROM hermit_alerts");
         audit("ROLLBACK", CONCH, clock.instant().minus(Duration.ofHours(1)));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isZero();
 
-        jdbc.update("DELETE FROM audit_log");
+        jdbc.update("DELETE FROM hermit_audit_log");
         publish("other_app", "9.0.0", clock.instant().minus(Duration.ofHours(1)), true);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
@@ -248,13 +248,13 @@ class AlertEvaluationTest {
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isZero();
 
-        jdbc.update("UPDATE conch_versions SET published_at = ?",
+        jdbc.update("UPDATE hermit_conch_versions SET published_at = ?",
                 Timestamp.from(clock.instant().minus(Duration.ofHours(24)).minusSeconds(1)));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isEqualTo(1);
 
-        jdbc.update("DELETE FROM alerts");
-        jdbc.update("DELETE FROM failure_reports");
+        jdbc.update("DELETE FROM hermit_alerts");
+        jdbc.update("DELETE FROM hermit_failure_reports");
         failures(CONCH, "RULE_MISMATCH", 10, clock.instant().minus(Duration.ofMinutes(15)).minusSeconds(1));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.RULE_MISMATCH_SURGE)).isZero();
@@ -274,7 +274,7 @@ class AlertEvaluationTest {
         publish(CONCH, "1.2.0", clock.instant().minus(Duration.ofMinutes(5)), true);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT conch_version FROM alerts", String.class)).isNull();
+        assertThat(jdbc.queryForObject("SELECT conch_version FROM hermit_alerts", String.class)).isNull();
     }
 
     @Test
@@ -284,12 +284,12 @@ class AlertEvaluationTest {
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
 
-        jdbc.update("UPDATE alerts SET created_at = ?",
+        jdbc.update("UPDATE hermit_alerts SET created_at = ?",
                 Timestamp.from(clock.instant().minus(Duration.ofHours(6)).plusSeconds(1)));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
 
-        jdbc.update("UPDATE alerts SET created_at = ?",
+        jdbc.update("UPDATE hermit_alerts SET created_at = ?",
                 Timestamp.from(clock.instant().minus(Duration.ofHours(6))));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(2);
@@ -299,7 +299,7 @@ class AlertEvaluationTest {
     void ackRecordsTheAdminAndStaysSilentInsideTheDedupWindow() throws Exception {
         failures(CONCH, "UPSTREAM_ERROR", 10, clock.instant());
         alertService.evaluate();
-        long id = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
+        long id = jdbc.queryForObject("SELECT id FROM hermit_alerts", Long.class);
         String token = token();
         Instant ackedAt = clock.instant();
         mockMvc.perform(get("/api/admin/alerts").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
@@ -327,7 +327,7 @@ class AlertEvaluationTest {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token()))
                 .andExpect(jsonPath("$.data.alerts.length()").value(1));
 
-        jdbc.update("UPDATE alerts SET created_at = ?",
+        jdbc.update("UPDATE hermit_alerts SET created_at = ?",
                 Timestamp.from(ackedAt.minus(Duration.ofHours(6))));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(2);
@@ -356,7 +356,7 @@ class AlertEvaluationTest {
             assertThat(line).doesNotContain(TOKEN);
         }
 
-        jdbc.update("DELETE FROM alerts");
+        jdbc.update("DELETE FROM hermit_alerts");
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<String> bodies = new CopyOnWriteArrayList<>();
         AtomicInteger status = new AtomicInteger(500);
@@ -379,12 +379,12 @@ class AlertEvaluationTest {
             alertService.evaluate();
             assertThat(bodies).hasSize(1);
 
-            jdbc.update("DELETE FROM alerts");
+            jdbc.update("DELETE FROM hermit_alerts");
             status.set(200);
             alertService.evaluate();
             assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
             JsonNode notice = objectMapper.readTree(bodies.get(bodies.size() - 1));
-            long alertId = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
+            long alertId = jdbc.queryForObject("SELECT id FROM hermit_alerts", Long.class);
             assertThat(notice.get("id").asLong()).isEqualTo(alertId);
             assertThat(notice.get("kind").asText()).isEqualTo("UPSTREAM_ERROR_SURGE");
             assertThat(notice.get("conch").asText()).isEqualTo(CONCH);
@@ -418,7 +418,7 @@ class AlertEvaluationTest {
         try {
             properties.setWebhookUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/hook?token=" + TOKEN);
             alertService.evaluate();
-            long id = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
+            long id = jdbc.queryForObject("SELECT id FROM hermit_alerts", Long.class);
             alertService.ack(id, "ada");
             assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
             assertThat(bodies).hasSize(1);
@@ -428,13 +428,13 @@ class AlertEvaluationTest {
             assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
             assertThat(bodies).hasSize(1);
 
-            jdbc.update("UPDATE alerts SET created_at = ?",
+            jdbc.update("UPDATE hermit_alerts SET created_at = ?",
                     Timestamp.from(clock.instant().minus(Duration.ofHours(6)).plusSeconds(1)));
             alertService.evaluate();
             assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(1);
             assertThat(bodies).hasSize(1);
 
-            jdbc.update("UPDATE alerts SET created_at = ?",
+            jdbc.update("UPDATE hermit_alerts SET created_at = ?",
                     Timestamp.from(clock.instant().minus(Duration.ofHours(6))));
             alertService.evaluate();
             assertThat(alertCount(AlertKind.UPSTREAM_ERROR_SURGE)).isEqualTo(2);
@@ -445,13 +445,13 @@ class AlertEvaluationTest {
             assertThat(first.get("id").asLong()).isEqualTo(id);
             assertThat(first.get("adminUrl").asText()).isEqualTo("/alerts");
             Long openId = jdbc.queryForObject(
-                    "SELECT id FROM alerts WHERE acknowledged_at IS NULL", Long.class);
+                    "SELECT id FROM hermit_alerts WHERE acknowledged_at IS NULL", Long.class);
             assertThat(second.get("id").asLong()).isEqualTo(openId);
             assertThat(second.get("id").asLong()).isNotEqualTo(id);
             assertThat(second.get("adminUrl").asText()).isEqualTo("/alerts");
             assertThat(second.get("kind").asText()).isEqualTo("UPSTREAM_ERROR_SURGE");
             Long open = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM alerts WHERE acknowledged_at IS NULL", Long.class);
+                    "SELECT COUNT(*) FROM hermit_alerts WHERE acknowledged_at IS NULL", Long.class);
             assertThat(open).isEqualTo(1L);
         } finally {
             server.stop(0);
@@ -465,18 +465,18 @@ class AlertEvaluationTest {
         hour(CONCH, "1.1.0", PUBLISHED, 0, 20);
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
-        long id = jdbc.queryForObject("SELECT id FROM alerts", Long.class);
+        long id = jdbc.queryForObject("SELECT id FROM hermit_alerts", Long.class);
         alertService.ack(id, "ada");
 
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
 
-        jdbc.update("UPDATE alerts SET created_at = ?",
+        jdbc.update("UPDATE hermit_alerts SET created_at = ?",
                 Timestamp.from(clock.instant().minus(Duration.ofHours(6)).plusSeconds(1)));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
 
-        jdbc.update("UPDATE alerts SET created_at = ?",
+        jdbc.update("UPDATE hermit_alerts SET created_at = ?",
                 Timestamp.from(clock.instant().minus(Duration.ofHours(6))));
         alertService.evaluate();
         assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(2);
@@ -484,7 +484,7 @@ class AlertEvaluationTest {
 
     private void publish(String conch, String version, Instant publishedAt, boolean current) {
         jdbc.update(
-                "INSERT INTO conch_versions (conch, version, sha256, min_crab_version, package_path, status, "
+                "INSERT INTO hermit_conch_versions (conch, version, sha256, min_crab_version, package_path, status, "
                         + "uploaded_by, uploaded_at, published_by, published_at, is_current) "
                         + "VALUES (?, ?, ?, ?, ?, 'PUBLISHED', ?, ?, ?, ?, ?)",
                 conch,
@@ -501,7 +501,7 @@ class AlertEvaluationTest {
 
     private void hour(String conch, String version, Instant hour, long success, long failure) {
         jdbc.update(
-                "INSERT INTO hourly_counts (conch, conch_version, action, hour_start, instance_id, success, failure, "
+                "INSERT INTO hermit_hourly_counts (conch, conch_version, action, hour_start, instance_id, success, failure, "
                         + "avg_millis, p95_millis) VALUES (?, ?, 'list_todo', ?, ?, ?, ?, 1, 1)",
                 conch, version, Timestamp.from(hour), INSTANCE, success, failure);
     }
@@ -510,7 +510,7 @@ class AlertEvaluationTest {
         for (int i = 0; i < count; i++) {
             traceSeq++;
             jdbc.update(
-                    "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
+                    "INSERT INTO hermit_failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
                             + "conch_version, action, step_index, step_type, error_code, summary, occurred_at) "
                             + "VALUES (?, ?, '1.2.3', ?, ?, '1.0.0', 'list_todo', 1, 'extract', ?, 's', ?)",
                     Timestamp.from(clock.instant()),
@@ -524,13 +524,13 @@ class AlertEvaluationTest {
 
     private void audit(String action, String conch, Instant at) {
         jdbc.update(
-                "INSERT INTO audit_log (at, actor, action, conch, version, detail) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO hermit_audit_log (at, actor, action, conch, version, detail) VALUES (?, ?, ?, ?, ?, ?)",
                 Timestamp.from(at), TestSecrets.USERNAME, action, conch, "1.0.0", action.toLowerCase());
     }
 
     private int alertCount(AlertKind kind) {
         Integer count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM alerts WHERE kind = ?", Integer.class, kind.name());
+                "SELECT COUNT(*) FROM hermit_alerts WHERE kind = ?", Integer.class, kind.name());
         return count == null ? 0 : count;
     }
 

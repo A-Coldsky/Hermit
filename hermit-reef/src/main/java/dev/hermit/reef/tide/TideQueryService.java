@@ -48,7 +48,7 @@ public class TideQueryService {
         TimeRange range = range(from, to);
         String conchFilter = blankToNull(conch);
         List<CountRow> rows = jdbc.query(
-                "SELECT conch, action, hour_start, success, failure, avg_millis, p95_millis FROM hourly_counts "
+                "SELECT conch, action, hour_start, success, failure, avg_millis, p95_millis FROM hermit_hourly_counts "
                         + "WHERE hour_start >= ? AND hour_start < ? AND (? IS NULL OR conch = ?)",
                 (rs, rowNum) -> new CountRow(
                         rs.getString("conch"),
@@ -88,7 +88,7 @@ public class TideQueryService {
         String actionFilter = blankToNull(action);
         List<FailureRow> rows = jdbc.query(
                 "SELECT id, conch, conch_version, action, step_index, step_type, error_code, summary, trace_id "
-                        + "FROM failure_reports WHERE occurred_at >= ? AND occurred_at < ? "
+                        + "FROM hermit_failure_reports WHERE occurred_at >= ? AND occurred_at < ? "
                         + "AND (? IS NULL OR conch = ?) AND (? IS NULL OR conch_version = ?) "
                         + "AND (? IS NULL OR action = ?) ORDER BY occurred_at DESC, id DESC",
                 (rs, rowNum) -> new FailureRow(
@@ -154,7 +154,7 @@ public class TideQueryService {
         List<VersionStats> stats = new ArrayList<>();
         for (String version : requested) {
             long[] totals = jdbc.queryForObject(
-                    "SELECT COALESCE(SUM(success), 0), COALESCE(SUM(failure), 0) FROM hourly_counts "
+                    "SELECT COALESCE(SUM(success), 0), COALESCE(SUM(failure), 0) FROM hermit_hourly_counts "
                             + "WHERE conch = ? AND conch_version = ?",
                     (rs, rowNum) -> new long[] {rs.getLong(1), rs.getLong(2)},
                     conch,
@@ -172,7 +172,7 @@ public class TideQueryService {
         String conchFilter = blankToNull(conch);
         List<RollbackItem> events = jdbc.query(
                 "SELECT id, instance_id, conch, from_version, to_version, reason, occurred_at, received_at "
-                        + "FROM rollback_events WHERE occurred_at >= ? AND occurred_at < ? "
+                        + "FROM hermit_rollback_events WHERE occurred_at >= ? AND occurred_at < ? "
                         + "AND (? IS NULL OR conch = ?) ORDER BY occurred_at DESC, id DESC",
                 (rs, rowNum) -> new RollbackItem(
                         rs.getLong("id"),

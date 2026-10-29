@@ -77,11 +77,12 @@ engine:
 | `HERMIT_REEF_ADMIN_USER` / `HERMIT_REEF_ADMIN_PASSWORD` | 首次空库创建管理员；已有管理员不重设口令 |
 | `hermit.reef.jwt-ttl` | `8h`，JWT 有 60 秒时钟容差 |
 | `hermit.reef.latest-crab-version` / `crab-download-url` | 默认空；提供版本提示，不自动下载/升级 Crab |
-| `hermit.reef.report-retention-days` | `90`，用于 failure_reports/rollback_events 的清理 |
+| `hermit.reef.report-retention-days` | `90`，用于 `hermit_failure_reports` / `hermit_rollback_events` 的清理 |
 | `hermit.reef.retention-cron` / `HERMIT_REEF_RETENTION_CRON` | `0 0 3 * * *`。Spring 六段 cron（含秒），时区固定 UTC，默认每天 03:00。空白或无法解析的表达式拒绝启动。手动触发见 `POST /api/admin/retention/purge` |
 | `logging.pattern.level` | `%5p [%X{traceId}]`。请求处理期间 MDC 的 `traceId` 会出现在每条日志上，与响应里的值相同 |
 | `spring.datasource.url` | 默认 `jdbc:h2:file:${hermit.reef.data-dir}/db/reef;MODE=REGULAR` |
 | `spring.datasource.username` / `password` | H2 默认 `sa` / 空密码；部署 MySQL 时覆盖 |
+| `spring.flyway.table` / `SPRING_FLYWAY_TABLE` | `hermit_flyway_schema_history`。Compose 的 Reef 服务写了同一环境变量，MySQL 与默认 H2 共用这张历史表 |
 | `server.port` | Spring Boot 默认 8080 |
 | `server.compression.*` | 默认开启，仅对 ≥ 2KB 的 HTML/CSS/JS/SVG 做 gzip，接口 JSON 不压缩；Compose 中 Nginx 另有 gzip。Crab 由 Javalin 默认 gzip（≥ 1500 字节） |
 
@@ -102,7 +103,7 @@ Tide 配置位于 `hermit.reef.tide`：
 
 具体阈值比较和发布静默以 `AlertService` 为准。去重按 `(kind, conch, conch_version)`，窗口从告警 `created_at` 起算 `dedup-hours`。窗口内已有告警（不论是否已确认）就不再新建，也不再发 webhook。确认不重新计时，也不把剩余时间清掉。失败次数在窗口内继续上涨不会提前再报。`created_at` 早于或等于 `now - dedup-hours` 之后，条件仍然成立才新建下一条并再次通知。未确认但已超出窗口的旧告警同样不再抑制。
 
-Webhook 在新建告警并提交后 POST JSON，字段为 `id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。`id` 是 `alerts` 主键。`adminUrl` 是管理端告警页路径。Reef 自身没有对外源站配置：Crab 的 `reef.url` / `HERMIT_REEF_URL` 只存在于 Crab，不会传进 Reef，因此这里只写相对路径 `/alerts`。接收方按自己打开 Reef 的源站拼接，例如源站是 `https://reef.example` 时链接为 `https://reef.example/alerts`。超时 5 秒，失败只记日志，不重试，不影响告警落库。没有独立持久化重试队列。
+Webhook 在新建告警并提交后 POST JSON，字段为 `id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。`id` 是 `hermit_alerts` 主键。`adminUrl` 是管理端告警页路径。Reef 自身没有对外源站配置：Crab 的 `reef.url` / `HERMIT_REEF_URL` 只存在于 Crab，不会传进 Reef，因此这里只写相对路径 `/alerts`。接收方按自己打开 Reef 的源站拼接，例如源站是 `https://reef.example` 时链接为 `https://reef.example/alerts`。超时 5 秒，失败只记日志，不重试，不影响告警落库。没有独立持久化重试队列。
 
 ## 数据目录与备份
 
@@ -126,7 +127,9 @@ Crab HERMIT_HOME/
   logs/                 # 预留目录；调用日志实际存 H2
 ```
 
-Reef 要一致备份数据库、conches、keys。Compose 的 `reef-mysql` 与 `reef-data` 分别保存 MySQL 与 `/data`，升级必须保留两个卷。容器 Crab 的 `crab-data` 保存整个实例目录；要同时备份外部主密钥（如有），不能只备份数据库。实际卷名通常带 Compose 项目前缀，切换部署目录/项目名时要核对卷，避免意外创建新实例。恢复主密钥、公钥和实例 ID 时保持对应关系。H2 文件复制前停止所属进程，MySQL 使用数据库一致性备份；恢复应先在隔离实例验证。本次审计未实际做生产备份恢复演练。
+Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，Flyway 历史表是 `hermit_flyway_schema_history`。V1–V4 在发布前就地改写，没有把旧表改名的迁移。已经用旧表名启动过的库需要重建：删除 `reef-data/db` 下的 H2 文件，或删除并重建 Compose 的 MySQL 卷 `reef-mysql`。`reef-data` 里的 `keys/` 和 `conches/` 可以留下；整卷删除会同时丢掉密钥和已发布包。Crab 的 `crab-data` 不在这次变更里。
+
+之后的升级要一致备份数据库、conches、keys。Compose 的 `reef-mysql` 与 `reef-data` 分别保存 MySQL 与 `/data`，升级必须保留两个卷。容器 Crab 的 `crab-data` 保存整个实例目录；要同时备份外部主密钥（如有），不能只备份数据库。实际卷名通常带 Compose 项目前缀，切换部署目录/项目名时要核对卷，避免意外创建新实例。恢复主密钥、公钥和实例 ID 时保持对应关系。H2 文件复制前停止所属进程，MySQL 使用数据库一致性备份；恢复应先在隔离实例验证。本次审计未实际做生产备份恢复演练。
 
 保留策略：Crab 调用/步骤日志 30 天、幂等响应 24 小时，启动及每小时清理；debug 状态 24 小时自动过期。Reef 每日 UTC 03:00（北京时间 11:00）清理过期失败报告、回滚事件及登录失败记录。两端小时统计以及部分审计/告警表没有全量定期保留策略，不应假定所有数据都会在 90 天删除。Crab 的 `config_audit` 可以由 `GET /console/api/audit` 和 CLI `audit list` 读取，内容限于操作者、动作、origin、Conch、账号、时间和字段名，不含凭证或配置值；这张表没有定期清理。
 

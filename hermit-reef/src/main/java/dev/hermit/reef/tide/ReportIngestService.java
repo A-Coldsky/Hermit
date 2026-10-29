@@ -41,7 +41,7 @@ public class ReportIngestService {
 
     private void insertFailure(ReportBatch batch, FailureReport failure, Instant receivedAt) {
         Long existing = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM failure_reports WHERE instance_id = ? AND trace_id = ?",
+                "SELECT COUNT(*) FROM hermit_failure_reports WHERE instance_id = ? AND trace_id = ?",
                 Long.class,
                 batch.instanceId(),
                 failure.traceId());
@@ -49,7 +49,7 @@ public class ReportIngestService {
             return;
         }
         jdbc.update(
-                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
+                "INSERT INTO hermit_failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
                         + "conch_version, action, step_index, step_type, error_code, summary, occurred_at) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(receivedAt),
@@ -69,7 +69,7 @@ public class ReportIngestService {
     private void upsertCount(ReportBatch batch, CountReport count) {
         Timestamp hour = Timestamp.from(count.hourStart());
         int updated = jdbc.update(
-                "UPDATE hourly_counts SET success = ?, failure = ?, avg_millis = ?, p95_millis = ? "
+                "UPDATE hermit_hourly_counts SET success = ?, failure = ?, avg_millis = ?, p95_millis = ? "
                         + "WHERE conch = ? AND conch_version = ? AND action = ? AND hour_start = ? AND instance_id = ?",
                 count.success(),
                 count.failure(),
@@ -82,7 +82,7 @@ public class ReportIngestService {
                 batch.instanceId());
         if (updated == 0) {
             jdbc.update(
-                    "INSERT INTO hourly_counts (conch, conch_version, action, hour_start, instance_id, success, "
+                    "INSERT INTO hermit_hourly_counts (conch, conch_version, action, hour_start, instance_id, success, "
                             + "failure, avg_millis, p95_millis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     count.conch(),
                     count.conchVersion(),
@@ -99,7 +99,7 @@ public class ReportIngestService {
     private void insertRollback(ReportBatch batch, RollbackEvent event, Instant receivedAt) {
         try {
             jdbc.update(
-                    "INSERT INTO rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
+                    "INSERT INTO hermit_rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
                             + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     Timestamp.from(receivedAt),
                     batch.instanceId(),

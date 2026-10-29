@@ -62,7 +62,7 @@ public class AlertService {
             throw TideErrors.unprocessable();
         }
         String sql = "SELECT id, created_at, kind, conch, conch_version, detail_json, acknowledged_at, "
-                + "acknowledged_by FROM alerts";
+                + "acknowledged_by FROM hermit_alerts";
         if (filter.equals("open")) {
             sql += " WHERE acknowledged_at IS NULL";
         }
@@ -73,7 +73,7 @@ public class AlertService {
     @Transactional
     public AlertItem ack(long id, String actor) {
         jdbc.update(
-                "UPDATE alerts SET acknowledged_at = ?, acknowledged_by = ? WHERE id = ? AND acknowledged_at IS NULL",
+                "UPDATE hermit_alerts SET acknowledged_at = ?, acknowledged_by = ? WHERE id = ? AND acknowledged_at IS NULL",
                 Timestamp.from(clock.instant()),
                 actor,
                 id);
@@ -129,7 +129,7 @@ public class AlertService {
             List<WebhookNotice> created) {
         Instant from = now.minus(Duration.ofMinutes(properties.getSurgeWindowMinutes()));
         List<Surge> surges = jdbc.query(
-                "SELECT conch, COUNT(*) AS cnt FROM failure_reports "
+                "SELECT conch, COUNT(*) AS cnt FROM hermit_failure_reports "
                         + "WHERE error_code = ? AND occurred_at >= ? AND occurred_at <= ? "
                         + "GROUP BY conch HAVING COUNT(*) >= ? ORDER BY conch",
                 (rs, rowNum) -> new Surge(rs.getString("conch"), rs.getLong("cnt")),
@@ -155,7 +155,7 @@ public class AlertService {
     private boolean recentlyChanged(String conch, Instant now) {
         Instant since = now.minus(Duration.ofHours(properties.getQuietHours()));
         Long publishes = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM conch_versions WHERE conch = ? AND published_at >= ? AND published_at <= ?",
+                "SELECT COUNT(*) FROM hermit_conch_versions WHERE conch = ? AND published_at >= ? AND published_at <= ?",
                 Long.class,
                 conch,
                 Timestamp.from(since),
@@ -164,7 +164,7 @@ public class AlertService {
             return true;
         }
         Long rollbacks = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM audit_log WHERE conch = ? AND action = 'ROLLBACK' AND at >= ? AND at <= ?",
+                "SELECT COUNT(*) FROM hermit_audit_log WHERE conch = ? AND action = 'ROLLBACK' AND at >= ? AND at <= ?",
                 Long.class,
                 conch,
                 Timestamp.from(since),
@@ -177,7 +177,7 @@ public class AlertService {
     private boolean duplicateWithin(AlertKind kind, String conch, String version, Instant now) {
         Instant since = now.minus(Duration.ofHours(properties.getDedupHours()));
         Long count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM alerts WHERE kind = ? AND conch = ? AND created_at > ? "
+                "SELECT COUNT(*) FROM hermit_alerts WHERE kind = ? AND conch = ? AND created_at > ? "
                         + "AND ((? IS NULL AND conch_version IS NULL) OR conch_version = ?)",
                 Long.class,
                 kind.name(),
@@ -195,7 +195,7 @@ public class AlertService {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(
-                    "INSERT INTO alerts (created_at, kind, conch, conch_version, detail_json) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO hermit_alerts (created_at, kind, conch, conch_version, detail_json) VALUES (?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             statement.setTimestamp(1, Timestamp.from(createdAt));
             statement.setString(2, kind.name());
@@ -218,7 +218,7 @@ public class AlertService {
 
     private List<CurrentVersion> currentVersions() {
         return jdbc.query(
-                "SELECT conch, version, published_at FROM conch_versions "
+                "SELECT conch, version, published_at FROM hermit_conch_versions "
                         + "WHERE is_current = TRUE AND status = 'PUBLISHED' AND published_at IS NOT NULL "
                         + "ORDER BY conch, version",
                 (rs, rowNum) -> new CurrentVersion(
@@ -229,7 +229,7 @@ public class AlertService {
 
     private String previousPublished(String conch, Instant publishedAt) {
         List<String> versions = jdbc.query(
-                "SELECT version FROM conch_versions WHERE conch = ? AND status = 'PUBLISHED' AND published_at < ? "
+                "SELECT version FROM hermit_conch_versions WHERE conch = ? AND status = 'PUBLISHED' AND published_at < ? "
                         + "ORDER BY published_at DESC, id DESC LIMIT 1",
                 (rs, rowNum) -> rs.getString(1),
                 conch,
@@ -241,7 +241,7 @@ public class AlertService {
         Totals totals;
         if (toExclusive == null) {
             totals = jdbc.queryForObject(
-                    "SELECT COALESCE(SUM(success), 0), COALESCE(SUM(failure), 0) FROM hourly_counts "
+                    "SELECT COALESCE(SUM(success), 0), COALESCE(SUM(failure), 0) FROM hermit_hourly_counts "
                             + "WHERE conch = ? AND conch_version = ? AND hour_start >= ?",
                     (rs, rowNum) -> new Totals(rs.getLong(1), rs.getLong(2)),
                     conch,
@@ -249,7 +249,7 @@ public class AlertService {
                     Timestamp.from(fromInclusive));
         } else {
             totals = jdbc.queryForObject(
-                    "SELECT COALESCE(SUM(success), 0), COALESCE(SUM(failure), 0) FROM hourly_counts "
+                    "SELECT COALESCE(SUM(success), 0), COALESCE(SUM(failure), 0) FROM hermit_hourly_counts "
                             + "WHERE conch = ? AND conch_version = ? AND hour_start >= ? AND hour_start < ?",
                     (rs, rowNum) -> new Totals(rs.getLong(1), rs.getLong(2)),
                     conch,
@@ -263,7 +263,7 @@ public class AlertService {
     private AlertItem find(long id) {
         List<AlertItem> items = jdbc.query(
                 "SELECT id, created_at, kind, conch, conch_version, detail_json, acknowledged_at, acknowledged_by "
-                        + "FROM alerts WHERE id = ?",
+                        + "FROM hermit_alerts WHERE id = ?",
                 (rs, rowNum) -> mapAlert(rs),
                 id);
         return items.isEmpty() ? null : items.get(0);

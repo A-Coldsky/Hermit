@@ -39,6 +39,8 @@ services:
       SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/hermit?characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&useSSL=false&allowPublicKeyRetrieval=true&connectionTimeZone=UTC&serverTimezone=UTC"
       SPRING_DATASOURCE_USERNAME: hermit
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      # 与 application.yml 的 spring.flyway.table 相同。MySQL 约束名在库内全局唯一，所以一并加前缀。
+      SPRING_FLYWAY_TABLE: hermit_flyway_schema_history
       HERMIT_REEF_DATA_DIR: /data
       HERMIT_REEF_AGENT_TOKEN: ${HERMIT_REEF_AGENT_TOKEN}
       HERMIT_REEF_ADMIN_USER: ${HERMIT_REEF_ADMIN_USER}

@@ -65,33 +65,42 @@ class StorageTest {
     @BeforeEach
     void resetRows() {
         clock.setInstant(ReefTestConfig.START);
-        jdbc.update("DELETE FROM failure_reports");
-        jdbc.update("DELETE FROM admin_login_failures");
-        jdbc.update("DELETE FROM rollback_events");
-        jdbc.update("DELETE FROM hourly_counts");
-        jdbc.update("DELETE FROM conch_versions");
+        jdbc.update("DELETE FROM hermit_failure_reports");
+        jdbc.update("DELETE FROM hermit_admin_login_failures");
+        jdbc.update("DELETE FROM hermit_rollback_events");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
+        jdbc.update("DELETE FROM hermit_conch_versions");
     }
 
     @Test
     void flywayCreatesTheSchemaOnAnEmptyDatabase() {
         assertThat(tableNames()).contains(
-                "ADMIN_USERS",
-                "ADMIN_LOGIN_FAILURES",
-                "CONCH_VERSIONS",
-                "AUDIT_LOG",
-                "FAILURE_REPORTS",
-                "HOURLY_COUNTS",
-                "ROLLBACK_EVENTS",
-                "ALERTS",
-                "CONCH_AVAILABILITY");
+                "HERMIT_ADMIN_USERS",
+                "HERMIT_ADMIN_LOGIN_FAILURES",
+                "HERMIT_CONCH_VERSIONS",
+                "HERMIT_AUDIT_LOG",
+                "HERMIT_FAILURE_REPORTS",
+                "HERMIT_HOURLY_COUNTS",
+                "HERMIT_ROLLBACK_EVENTS",
+                "HERMIT_ALERTS",
+                "HERMIT_CONCH_AVAILABILITY");
         Integer applied = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM \"flyway_schema_history\" WHERE \"version\" = '1' AND \"success\" = TRUE",
+                "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '1' AND \"success\" = TRUE",
                 Integer.class);
         assertThat(applied).isEqualTo(1);
         assertThat(indexNames()).contains(
-                "idx_failure_reports_conch_version_occurred",
-                "idx_failure_reports_received_at",
-                "idx_hourly_counts_conch_hour");
+                "idx_hermit_failure_reports_conch_version_occurred",
+                "idx_hermit_failure_reports_received_at",
+                "idx_hermit_hourly_counts_conch_hour");
+    }
+
+    @Test
+    void everyTableNameStartsWithHermitAfterFlyway() {
+        List<String> names = tableNames();
+        assertThat(names).isNotEmpty();
+        assertThat(names).allSatisfy(name ->
+                assertThat(name.toLowerCase(Locale.ROOT)).startsWith("hermit_"));
+        assertThat(names).anyMatch(name -> name.equalsIgnoreCase("hermit_flyway_schema_history"));
     }
 
     @Test
@@ -106,12 +115,12 @@ class StorageTest {
         insertHourly(1, 0);
         assertThatThrownBy(() -> insertHourly(2, 0)).isInstanceOf(DataAccessException.class);
         jdbc.update(
-                "UPDATE hourly_counts SET success = ?, failure = ?, avg_millis = ?, p95_millis = ? "
+                "UPDATE hermit_hourly_counts SET success = ?, failure = ?, avg_millis = ?, p95_millis = ? "
                         + "WHERE conch = ? AND conch_version = ? AND action = ? AND hour_start = ? AND instance_id = ?",
                 9L, 8L, 7L, 6L, "legacy_oa", "1.0.0", "list_todo", Timestamp.from(ReefTestConfig.START),
                 "123e4567-e89b-12d3-a456-426614174000");
         Long success = jdbc.queryForObject(
-                "SELECT success FROM hourly_counts WHERE conch = ? AND instance_id = ?",
+                "SELECT success FROM hermit_hourly_counts WHERE conch = ? AND instance_id = ?",
                 Long.class,
                 "legacy_oa",
                 "123e4567-e89b-12d3-a456-426614174000");
@@ -150,9 +159,9 @@ class StorageTest {
 
         retentionJob.purgeExpiredReports();
 
-        assertThat(summaries("failure_reports")).containsExactlyInAnyOrder("boundary-failure", "new-failure");
+        assertThat(summaries("hermit_failure_reports")).containsExactlyInAnyOrder("boundary-failure", "new-failure");
         assertThat(reasons()).containsExactly("new-rollback");
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hourly_counts", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_hourly_counts", Integer.class)).isEqualTo(1);
         assertThat(retentionService.purge()).isEqualTo(new PurgeCounts(0, 0, 0));
     }
 
@@ -166,8 +175,8 @@ class StorageTest {
         insertLoginFailure(windowStart.plusSeconds(1));
 
         assertThat(retentionService.purge().loginFailures()).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM admin_login_failures", Integer.class)).isEqualTo(2);
-        Timestamp oldest = jdbc.queryForObject("SELECT MIN(failed_at) FROM admin_login_failures", Timestamp.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_admin_login_failures", Integer.class)).isEqualTo(2);
+        Timestamp oldest = jdbc.queryForObject("SELECT MIN(failed_at) FROM hermit_admin_login_failures", Timestamp.class);
         assertThat(oldest.toInstant()).isEqualTo(windowStart);
     }
 
@@ -185,7 +194,7 @@ class StorageTest {
 
     private void insertConchVersion(String conch, String version, String status) {
         jdbc.update(
-                "INSERT INTO conch_versions (conch, version, sha256, min_crab_version, package_path, status, "
+                "INSERT INTO hermit_conch_versions (conch, version, sha256, min_crab_version, package_path, status, "
                         + "uploaded_by, uploaded_at, is_current) VALUES (?, ?, ?, ?, ?, ?, ?, ?, FALSE)",
                 conch, version, "a".repeat(64), "0.1.0", "conches/legacy_oa.zip", status, "reef-admin",
                 Timestamp.from(ReefTestConfig.START));
@@ -193,7 +202,7 @@ class StorageTest {
 
     private void insertHourly(long success, long failure) {
         jdbc.update(
-                "INSERT INTO hourly_counts (conch, conch_version, action, hour_start, instance_id, success, "
+                "INSERT INTO hermit_hourly_counts (conch, conch_version, action, hour_start, instance_id, success, "
                         + "failure, avg_millis, p95_millis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 "legacy_oa", "1.0.0", "list_todo", Timestamp.from(ReefTestConfig.START),
                 "123e4567-e89b-12d3-a456-426614174000", success, failure, 10L, 20L);
@@ -202,7 +211,7 @@ class StorageTest {
     private void insertFailure(Instant receivedAt, String summary) {
         // (instance_id, trace_id) 从 V2 起唯一，夹具用各不相同的 summary 当 trace。
         jdbc.update(
-                "INSERT INTO failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
+                "INSERT INTO hermit_failure_reports (received_at, instance_id, crab_version, trace_id, conch, "
                         + "conch_version, action, step_index, step_type, error_code, summary, occurred_at) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "1.0.0", summary,
@@ -212,14 +221,14 @@ class StorageTest {
 
     private void insertLoginFailure(Instant failedAt) {
         jdbc.update(
-                "INSERT INTO admin_login_failures (username, failed_at) VALUES (?, ?)",
+                "INSERT INTO hermit_admin_login_failures (username, failed_at) VALUES (?, ?)",
                 "guessed-user",
                 Timestamp.from(failedAt));
     }
 
     private void insertRollback(Instant receivedAt, String reason) {
         jdbc.update(
-                "INSERT INTO rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
+                "INSERT INTO hermit_rollback_events (received_at, instance_id, conch, from_version, to_version, reason, "
                         + "occurred_at, event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 Timestamp.from(receivedAt), "123e4567-e89b-12d3-a456-426614174000", "legacy_oa", "1.0.1",
                 "1.0.0", reason, Timestamp.from(receivedAt), reason);
@@ -230,7 +239,7 @@ class StorageTest {
     }
 
     private List<String> reasons() {
-        return jdbc.queryForList("SELECT reason FROM rollback_events", String.class);
+        return jdbc.queryForList("SELECT reason FROM hermit_rollback_events", String.class);
     }
 
     private List<String> tableNames() {

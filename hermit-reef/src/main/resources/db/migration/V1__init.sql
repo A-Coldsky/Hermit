@@ -1,24 +1,27 @@
 -- 时间列都是 UTC。标识列用 AUTO_INCREMENT：H2（MODE=REGULAR）和 MySQL 8.4 都接受，省略 id 时从 1 起生成。
--- hourly_counts 的主键让同一实例、同一小时的重复上报可以按主键覆盖。
+-- 业务表、索引、唯一约束和检查约束都使用 hermit_ 前缀。MySQL 的约束名在库内全局唯一。
+-- 主键索引在 MySQL 里固定叫 PRIMARY，按表唯一，这里不另起名。当前没有外键。
+-- 发布前就地改写 V1–V4，没有数据迁移。已有 H2 文件和 MySQL 库必须重建。
+-- hermit_hourly_counts 的主键让同一实例、同一小时的重复上报可以按主键覆盖。
 
-CREATE TABLE admin_users (
+CREATE TABLE hermit_admin_users (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(128) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     created_at TIMESTAMP NOT NULL,
     disabled BOOLEAN NOT NULL DEFAULT FALSE,
-    CONSTRAINT uk_admin_users_username UNIQUE (username)
+    CONSTRAINT uk_hermit_admin_users_username UNIQUE (username)
 );
 
-CREATE TABLE admin_login_failures (
+CREATE TABLE hermit_admin_login_failures (
     username VARCHAR(128) NOT NULL,
     failed_at TIMESTAMP NOT NULL
 );
 
-CREATE INDEX idx_admin_login_failures_user_time
-    ON admin_login_failures (username, failed_at);
+CREATE INDEX idx_hermit_admin_login_failures_user_time
+    ON hermit_admin_login_failures (username, failed_at);
 
-CREATE TABLE conch_versions (
+CREATE TABLE hermit_conch_versions (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     conch VARCHAR(128) NOT NULL,
     version VARCHAR(64) NOT NULL,
@@ -33,11 +36,11 @@ CREATE TABLE conch_versions (
     is_current BOOLEAN NOT NULL DEFAULT FALSE,
     validation_json TEXT,
     diff_json TEXT,
-    CONSTRAINT uk_conch_versions_conch_version UNIQUE (conch, version),
-    CONSTRAINT chk_conch_versions_status CHECK (status IN ('UPLOADED', 'PUBLISHED'))
+    CONSTRAINT uk_hermit_conch_versions_conch_version UNIQUE (conch, version),
+    CONSTRAINT chk_hermit_conch_versions_status CHECK (status IN ('UPLOADED', 'PUBLISHED'))
 );
 
-CREATE TABLE audit_log (
+CREATE TABLE hermit_audit_log (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     at TIMESTAMP NOT NULL,
     actor VARCHAR(128) NOT NULL,
@@ -47,11 +50,11 @@ CREATE TABLE audit_log (
     detail TEXT
 );
 
-CREATE INDEX idx_audit_log_at ON audit_log (at);
+CREATE INDEX idx_hermit_audit_log_at ON hermit_audit_log (at);
 
-CREATE INDEX idx_audit_log_conch_at ON audit_log (conch, at);
+CREATE INDEX idx_hermit_audit_log_conch_at ON hermit_audit_log (conch, at);
 
-CREATE TABLE failure_reports (
+CREATE TABLE hermit_failure_reports (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     received_at TIMESTAMP NOT NULL,
     instance_id VARCHAR(64) NOT NULL,
@@ -67,13 +70,13 @@ CREATE TABLE failure_reports (
     occurred_at TIMESTAMP NOT NULL
 );
 
-CREATE INDEX idx_failure_reports_conch_version_occurred
-    ON failure_reports (conch, conch_version, occurred_at);
+CREATE INDEX idx_hermit_failure_reports_conch_version_occurred
+    ON hermit_failure_reports (conch, conch_version, occurred_at);
 
-CREATE INDEX idx_failure_reports_received_at
-    ON failure_reports (received_at);
+CREATE INDEX idx_hermit_failure_reports_received_at
+    ON hermit_failure_reports (received_at);
 
-CREATE TABLE hourly_counts (
+CREATE TABLE hermit_hourly_counts (
     conch VARCHAR(128) NOT NULL,
     conch_version VARCHAR(64) NOT NULL,
     action VARCHAR(128) NOT NULL,
@@ -86,10 +89,10 @@ CREATE TABLE hourly_counts (
     PRIMARY KEY (conch, conch_version, action, hour_start, instance_id)
 );
 
-CREATE INDEX idx_hourly_counts_conch_hour
-    ON hourly_counts (conch, hour_start);
+CREATE INDEX idx_hermit_hourly_counts_conch_hour
+    ON hermit_hourly_counts (conch, hour_start);
 
-CREATE TABLE rollback_events (
+CREATE TABLE hermit_rollback_events (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     received_at TIMESTAMP NOT NULL,
     instance_id VARCHAR(64) NOT NULL,
@@ -100,10 +103,10 @@ CREATE TABLE rollback_events (
     occurred_at TIMESTAMP NOT NULL
 );
 
-CREATE INDEX idx_rollback_events_received_at
-    ON rollback_events (received_at);
+CREATE INDEX idx_hermit_rollback_events_received_at
+    ON hermit_rollback_events (received_at);
 
-CREATE TABLE alerts (
+CREATE TABLE hermit_alerts (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     created_at TIMESTAMP NOT NULL,
     kind VARCHAR(64) NOT NULL,

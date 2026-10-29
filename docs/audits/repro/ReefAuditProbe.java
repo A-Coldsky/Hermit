@@ -33,7 +33,7 @@ public final class ReefAuditProbe {
         transaction.execute(status -> ingest.ingest(batch));
         transaction.execute(status -> ingest.ingest(batch));
         System.out.printf("ROLLBACK_RETRY: logicalEvents=1, storedRows=%d%n",
-                jdbc.queryForObject("SELECT COUNT(*) FROM rollback_events", Integer.class));
+                jdbc.queryForObject("SELECT COUNT(*) FROM hermit_rollback_events", Integer.class));
         // The isolated in-memory database is reclaimed when this probe JVM exits.
     }
 }

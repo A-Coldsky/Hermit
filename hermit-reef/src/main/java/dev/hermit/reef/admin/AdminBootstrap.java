@@ -36,7 +36,7 @@ public class AdminBootstrap implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM admin_users", Integer.class);
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM hermit_admin_users", Integer.class);
         int users = count == null ? 0 : count;
         Optional<String> username = secretSource.username();
         Optional<String> password = secretSource.password();
@@ -64,7 +64,7 @@ public class AdminBootstrap implements ApplicationRunner {
 
     private void create(String username, String password) {
         jdbc.update(
-                "INSERT INTO admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
                 username,
                 passwordEncoder.encode(password),
                 Timestamp.from(clock.instant()));

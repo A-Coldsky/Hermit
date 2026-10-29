@@ -87,6 +87,7 @@ Java 结果位于各模块 `target/surefire-reports/`。2026-10-16 同步到 `48
 ## 维护方式
 
 - 使用 `@TempDir`、`LegacyOaFixture`、`FakeReef`、`MutableClock`，不要对真实数据执行验收。
+- Reef 表、索引、唯一约束和检查约束使用 `hermit_` 前缀，Flyway 历史表是 `hermit_flyway_schema_history`。发布前 V1–V4 已就地改写，没有数据迁移。已有 `reef-data` 里的 H2 和 Compose MySQL 库必须重建。Crab 的 `CrabDatabase` 保持原表名。
 - 缺陷修复添加行为回归测试，特别关注权限、失败与并发交错。
 - DTO/Schema 修改检查双方；HTTP 响应修改同步两套前端 `api.ts`。
 - 涉及包格式/同步/发布/网关的改动，定点测试后再跑完整 verify。

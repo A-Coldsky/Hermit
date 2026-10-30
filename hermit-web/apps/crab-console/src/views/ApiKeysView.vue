@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import TimeText from '@shared/components/TimeText.vue'
 import { CopyDocument, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
-import { copyText, formatTime, notifyError, relativeTime } from '@shared/format'
+import { copyText, notifyError, relativeTime } from '@shared/format'
 import { api, type ApiKey, type CreatedApiKey, type ConchDetail } from '../api'
 
 const loading = ref(true)
@@ -110,6 +111,7 @@ onMounted(load)
     </PageHeader>
 
     <div class="hm-card">
+      <p class="hm-scroll-hint">表格可以左右滑动，「吊销」在最右侧。</p>
       <el-table v-loading="loading" :data="visible">
         <template #empty>{{ loading ? '' : '还没有 API Key' }}</template>
         <el-table-column label="名称" min-width="160">
@@ -130,13 +132,13 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="创建" width="170">
-          <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+        <el-table-column label="创建" width="220">
+          <template #default="{ row }"><TimeText :value="row.createdAt" /></template>
         </el-table-column>
         <el-table-column label="最近使用" width="120">
           <template #default="{ row }">{{ row.lastUsedAt ? relativeTime(row.lastUsedAt) : '从未' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="90" align="right">
+        <el-table-column label="操作" width="90" align="right" fixed="right">
           <template #default="{ row }">
             <el-button v-if="!row.revokedAt" link type="danger" @click="revoke(row)">吊销</el-button>
           </template>
@@ -145,6 +147,7 @@ onMounted(load)
     </div>
 
     <el-dialog v-model="form.open" title="创建 API Key" width="560px">
+      <el-alert type="info" :closable="false" show-icon title="创建后完整的 Key 只显示一次，请准备好立即复制保存。" class="once" />
       <el-form label-position="top" @submit.prevent="create">
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="用途说明，例如 claude-desktop 或 ops-script" />
@@ -188,6 +191,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.once {
+  margin-bottom: 16px;
+}
+
 .tag {
   margin-left: 6px;
 }

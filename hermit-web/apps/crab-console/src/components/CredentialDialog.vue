@@ -5,7 +5,7 @@ import { notifyError } from '@shared/format'
 import { api, type CredentialField } from '../api'
 import FieldInput from './FieldInput.vue'
 
-const props = defineProps<{ conch: string; account: string; fields: CredentialField[] }>()
+const props = defineProps<{ conch: string; account: string; fields: CredentialField[]; unreadable?: boolean }>()
 const emit = defineEmits<{ saved: [] }>()
 const open = defineModel<boolean>('open', { required: true })
 
@@ -14,6 +14,8 @@ const cleared = reactive<Record<string, boolean>>({})
 const stored = ref<string[]>([])
 const loading = ref(false)
 const saving = ref(false)
+
+const keepable = (name: string) => !props.unreadable && stored.value.includes(name)
 
 const changes = computed(() => {
   const body: Record<string, string> = {}
@@ -46,6 +48,13 @@ watch(open, async (value) => {
 })
 
 async function save() {
+  if (props.unreadable) {
+    const empty = props.fields.filter((f) => f.required && !values[f.name]).map((f) => f.label || f.name)
+    if (empty.length) {
+      ElMessage.warning(`凭证无法解密，需要全部重新填写：${empty.join('、')}`)
+      return
+    }
+  }
   if (!Object.keys(changes.value).length) {
     open.value = false
     return
@@ -67,6 +76,15 @@ async function save() {
 <template>
   <el-dialog v-model="open" :title="`填写凭证 · ${account}`" width="560px">
     <el-alert
+      v-if="unreadable"
+      type="error"
+      :closable="false"
+      show-icon
+      title="已保存的凭证无法用当前主密钥解密，需要全部重新填写，不能留空。"
+      class="notice"
+    />
+    <el-alert
+      v-else
       type="info"
       :closable="false"
       show-icon
@@ -78,7 +96,8 @@ async function save() {
         <template #label>
           <span>{{ field.label || field.name }}</span>
           <span class="mono hm-muted name">{{ field.name }}</span>
-          <el-tag v-if="stored.includes(field.name) && !cleared[field.name]" size="small" type="success" effect="plain">已保存</el-tag>
+          <el-tag v-if="unreadable" size="small" type="danger" effect="plain">需重填</el-tag>
+          <el-tag v-else-if="stored.includes(field.name) && !cleared[field.name]" size="small" type="success" effect="plain">已保存</el-tag>
           <el-tag v-else-if="cleared[field.name]" size="small" type="danger" effect="plain">将清除</el-tag>
         </template>
         <div class="row">
@@ -86,10 +105,10 @@ async function save() {
             v-model="values[field.name]"
             :type="field.type"
             :options="field.options"
-            :placeholder="stored.includes(field.name) ? '已保存，留空保持不变' : field.description ?? ''"
+            :placeholder="keepable(field.name) ? '已保存，留空保持不变' : field.description ?? ''"
             :disabled="cleared[field.name]"
           />
-          <el-checkbox v-if="stored.includes(field.name) && !field.required" v-model="cleared[field.name]">清除</el-checkbox>
+          <el-checkbox v-if="keepable(field.name) && !field.required" v-model="cleared[field.name]">清除</el-checkbox>
         </div>
         <div v-if="field.description" class="hm-muted desc">{{ field.description }}</div>
       </el-form-item>

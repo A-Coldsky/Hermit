@@ -11,12 +11,32 @@ const dateTime = new Intl.DateTimeFormat('zh-CN', {
   hour12: false,
 })
 
+const zoneName = new Intl.DateTimeFormat('zh-CN', { timeZoneName: 'short' })
+
+function zoneOf(date: Date): string {
+  return zoneName.formatToParts(date).find((p) => p.type === 'timeZoneName')?.value ?? ''
+}
+
+/** 浏览器本地时间，后面带时区，例如「2026/10/30 16:00:00 GMT+8」。 */
 export function formatTime(value: string | null | undefined): string {
   if (!value) {
     return '—'
   }
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : dateTime.format(date)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  const zone = zoneOf(date)
+  return zone ? `${dateTime.format(date)} ${zone}` : dateTime.format(date)
+}
+
+/** 同一时刻的 UTC 写法，给时间列做悬停提示。 */
+export function formatUtc(value: string | null | undefined): string {
+  if (!value) {
+    return ''
+  }
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : `${date.toISOString().slice(0, 19).replace('T', ' ')} UTC`
 }
 
 export function relativeTime(value: string | null | undefined): string {

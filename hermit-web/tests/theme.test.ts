@@ -27,6 +27,19 @@ function mix(base: string, color: string, weight: number): string {
   return `#${a.map((v, i) => Math.round(v * weight + b[i] * (1 - weight)).toString(16).padStart(2, '0')).join('')}`
 }
 
+function luminance(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
 const semantic = [
   ['success', '--hm-success'],
   ['warning', '--hm-warning'],
@@ -40,11 +53,24 @@ describe('Element 语义色', () => {
   })
 
   it.each(semantic)('%s 的明暗阶与 token 一致', (name, token) => {
-    const base = resolve(token)
+    const base = resolve(name === 'warning' ? '--hm-accent' : token)
     for (const level of [3, 5, 7, 8, 9]) {
       expect(resolve(`--el-color-${name}-light-${level}`)).toBe(mix('#ffffff', base, level / 10))
     }
-    expect(resolve(`--el-color-${name}-dark-2`)).toBe(mix('#000000', base, 0.2))
+    if (name !== 'warning') {
+      expect(resolve(`--el-color-${name}-dark-2`)).toBe(mix('#000000', base, 0.2))
+    }
+  })
+
+  it.each([
+    ['--hm-warning', '#ffffff'],
+    ['--hm-warning', '--el-color-warning-light-9'],
+    ['--el-color-warning-dark-2', '--el-color-warning-light-9'],
+    ['--hm-danger', '#ffffff'],
+    ['--hm-danger', '--el-color-danger-light-9'],
+  ])('浅色 %s 在 %s 上对比度不低于 4.5:1', (fg, bg) => {
+    const back = bg.startsWith('#') ? bg : resolve(bg)
+    expect(contrast(resolve(fg), back)).toBeGreaterThanOrEqual(4.5)
   })
 
   it('error 与 danger 同色', () => {
@@ -76,5 +102,15 @@ describe('暗色语义色', () => {
     for (const suffix of ['', '-light-3', '-light-5', '-light-7', '-light-8', '-light-9', '-dark-2']) {
       expect(resolve(`--el-color-error${suffix}`, dark)).toBe(resolve(`--el-color-danger${suffix}`, dark))
     }
+  })
+
+  it('暗色危险色在卡片和危险底色上对比度不低于 4.5:1', () => {
+    const danger = resolve('--hm-danger', dark)
+    expect(contrast(danger, resolve('--hm-surface', dark))).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(danger, resolve('--el-color-danger-light-9', dark))).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('暗色 plain 标签边框跟随文字色', () => {
+    expect(css).toMatch(/html\.dark \.el-tag--plain \{\s*--el-tag-border-color: currentColor;/)
   })
 })

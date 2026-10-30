@@ -237,7 +237,7 @@ nav {
 }
 
 .nav-item.active .icon {
-  color: #5eead4;
+  color: var(--hm-brand-soft);
 }
 
 .nav-item.active::before {

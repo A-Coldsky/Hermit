@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TimeText from '@shared/components/TimeText.vue'
 import { Clock, Delete, Promotion, Refresh, RefreshLeft, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
@@ -6,7 +7,7 @@ import PageHeader from '@shared/components/PageHeader.vue'
 import StatCard from '@shared/components/StatCard.vue'
 import TraceId from '@shared/components/TraceId.vue'
 import { ApiError } from '@shared/http'
-import { errorCodeLabels, formatTime, millis, notifyError } from '@shared/format'
+import { errorCodeLabels, millis, notifyError } from '@shared/format'
 import { api, type ReportBatch } from '../api'
 
 const loading = ref(true)
@@ -92,8 +93,8 @@ onMounted(load)
       <div class="hm-card">
         <div class="hm-card-title"><span>按小时计数</span></div>
         <el-table :data="batch.counts" empty-text="没有待上报的计数" max-height="360">
-          <el-table-column label="小时" width="170">
-            <template #default="{ row }">{{ formatTime(row.hourStart) }}</template>
+          <el-table-column label="小时" width="220">
+            <template #default="{ row }"><TimeText :value="row.hourStart" /></template>
           </el-table-column>
           <el-table-column label="能力" min-width="200">
             <template #default="{ row }">
@@ -115,8 +116,8 @@ onMounted(load)
       <div class="hm-card">
         <div class="hm-card-title"><span>失败样本</span></div>
         <el-table :data="batch.failures" empty-text="没有待上报的失败" max-height="360">
-          <el-table-column label="时间" width="170">
-            <template #default="{ row }">{{ formatTime(row.occurredAt) }}</template>
+          <el-table-column label="时间" width="220">
+            <template #default="{ row }"><TimeText :value="row.occurredAt" /></template>
           </el-table-column>
           <el-table-column label="能力" min-width="180">
             <template #default="{ row }"><span class="mono">{{ row.conch }}.{{ row.action }}</span></template>
@@ -138,8 +139,8 @@ onMounted(load)
       <div v-if="batch.events.length" class="hm-card">
         <div class="hm-card-title"><span>自动回退事件</span></div>
         <el-table :data="batch.events">
-          <el-table-column label="时间" width="170">
-            <template #default="{ row }">{{ formatTime(row.occurredAt) }}</template>
+          <el-table-column label="时间" width="220">
+            <template #default="{ row }"><TimeText :value="row.occurredAt" /></template>
           </el-table-column>
           <el-table-column label="Conch" min-width="140">
             <template #default="{ row }"><span class="mono">{{ row.conch }}</span></template>

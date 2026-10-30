@@ -24,7 +24,13 @@ const report = ref<SyncReport | null>(null)
 const latestCrab = ref<CrabRelease | null>(null)
 const syncedAt = ref<string | null>(null)
 
+const loaded = ref(false)
 const pending = computed(() => conches.value.filter((s) => s.needsConfiguration))
+const paused = computed(() => pending.value.filter((s) => s.loginPaused))
+const unconfigured = computed(() => pending.value.filter((s) => !s.loginPaused))
+const disabledInSync = computed(() => report.value?.conches.filter((s) => s.kind === 'DISABLED').map((s) => s.conch) ?? [])
+const removedOnly = computed(() => report.value?.removed.filter((name) => !disabledInSync.value.includes(name)) ?? [])
+const show = (value: number | string) => (loaded.value ? value : '—')
 const failures = computed(() => calls.value.filter((c) => !c.success).length)
 const changedConches = computed(() => report.value?.conches.filter((s) => s.kind !== 'SKIPPED_SAME') ?? [])
 
@@ -50,6 +56,7 @@ async function load() {
     conches.value = s.conches
     calls.value = c.calls
     debug.value = d
+    loaded.value = true
   } catch (error) {
     notifyError(error)
   } finally {
@@ -111,10 +118,18 @@ onMounted(load)
       </template>
     </el-alert>
 
-    <el-alert v-if="pending.length" type="warning" show-icon :closable="false" class="notice">
+    <el-alert v-if="unconfigured.length" type="warning" show-icon :closable="false" class="notice">
       <template #title>
-        {{ pending.length }} 个规则包还缺凭证或配置，调用会返回「待配置」：
-        <router-link v-for="s in pending" :key="s.conch" :to="`/conches/${encodeURIComponent(s.conch)}`" class="mono pending">
+        {{ unconfigured.length }} 个规则包还缺凭证或配置：
+        <router-link v-for="s in unconfigured" :key="s.conch" :to="`/conches/${encodeURIComponent(s.conch)}`" class="mono pending">
+          {{ s.conch }}
+        </router-link>
+      </template>
+    </el-alert>
+    <el-alert v-if="paused.length" type="warning" show-icon :closable="false" class="notice">
+      <template #title>
+        {{ paused.length }} 个规则包有账号暂停了自动登录，进入详情查看是哪个账号和恢复方法：
+        <router-link v-for="s in paused" :key="s.conch" :to="`/conches/${encodeURIComponent(s.conch)}`" class="mono pending">
           {{ s.conch }}
         </router-link>
       </template>
@@ -123,25 +138,25 @@ onMounted(load)
     <div class="hm-grid cols-4">
       <StatCard
         label="已安装规则包"
-        :value="conches.length"
-        :hint="`${conches.reduce((n, s) => n + s.capabilityCount, 0)} 个能力`"
+        :value="show(conches.length)"
+        :hint="loaded ? `${conches.reduce((n, s) => n + s.capabilityCount, 0)} 个能力` : ''"
         :icon="Box"
         to="/conches"
       />
       <StatCard
         label="待配置"
-        :value="pending.length"
-        :tone="pending.length ? 'warn' : 'ok'"
-        hint="缺凭证或配置项"
+        :value="show(pending.length)"
+        :tone="!loaded ? 'default' : pending.length ? 'warn' : 'ok'"
+        hint="缺凭证、配置，或有账号暂停自动登录"
         :icon="Setting"
         to="/conches"
       />
-      <StatCard label="最近调用" :value="calls.length" hint="最多显示最近 200 次" :icon="List" to="/calls" />
+      <StatCard label="最近调用" :value="show(calls.length)" hint="最多显示最近 200 次" :icon="List" to="/calls" />
       <StatCard
         label="其中失败"
-        :value="failures"
-        :hint="calls.length ? `失败率 ${percent(failures / calls.length)}` : '暂无调用'"
-        :tone="failures ? 'danger' : 'ok'"
+        :value="show(failures)"
+        :hint="!loaded ? '' : calls.length ? `失败率 ${percent(failures / calls.length)}` : '暂无调用'"
+        :tone="!loaded ? 'default' : failures ? 'danger' : 'ok'"
         :icon="WarningFilled"
         :to="{ path: '/calls', query: { failed: '1' } }"
       />
@@ -162,7 +177,14 @@ onMounted(load)
             :title="report.error.message"
             class="notice"
           />
-          <div v-if="report.notModified && !report.error" class="state ok">
+          <div v-if="report.notModified && !report.error && disabledInSync.length" class="state warn">
+            <el-icon :size="22"><WarningFilled /></el-icon>
+            <div>
+              <strong>{{ disabledInSync.length }} 个规则包已在 Reef 停用</strong>
+              <div class="hm-muted">上次同步时 Reef 没有新变化，停用的规则包不能调用</div>
+            </div>
+          </div>
+          <div v-else-if="report.notModified && !report.error" class="state ok">
             <el-icon :size="22"><CircleCheckFilled /></el-icon>
             <div>
               <strong>已是最新</strong>
@@ -177,7 +199,7 @@ onMounted(load)
               <span class="mono">{{ item.conch }} v{{ item.version }}</span>
               <span v-if="item.reason" class="hm-muted">{{ item.reason }}</span>
             </li>
-            <li v-for="name in report.removed" :key="`rm-${name}`">
+            <li v-for="name in removedOnly" :key="`rm-${name}`">
               <el-tag type="info" size="small" effect="plain">已移除</el-tag>
               <span class="mono">{{ name }}</span>
             </li>
@@ -316,6 +338,12 @@ onMounted(load)
   background: var(--el-color-success-light-9);
   border-color: var(--el-color-success-light-8);
   color: var(--hm-success);
+}
+
+.state.warn {
+  background: var(--el-color-warning-light-9);
+  border-color: var(--el-color-warning-light-8);
+  color: var(--el-color-warning-dark-2);
 }
 
 .code {

@@ -10,7 +10,8 @@ import io.javalin.http.Context;
 import io.javalin.http.HttpStatus;
 
 /**
- * Crab 本机页面。资源名只接受单段 {@code [A-Za-z0-9._-]}，拒绝 {@code ..}，避免 classpath 穿越。
+ * Crab 本机页面。静态资源名只接受单段 {@code [A-Za-z0-9._-]}，拒绝 {@code ..}，避免 classpath 穿越。
+ * 其它 {@code GET /console/**} 固定读 {@code index.html}，不把请求路径拼进资源名。
  */
 final class ConsoleUi {
     static final String ROOT_PROPERTY = "hermit.web.crab-root";
@@ -32,12 +33,47 @@ final class ConsoleUi {
             }
             ctx.redirect("/console/", HttpStatus.FOUND);
         });
-        http.get("/console/conches", ctx -> page(ctx));
-        http.get("/console/conches/{conch}", ctx -> page(ctx));
-        http.get("/console/apikeys", ctx -> page(ctx));
-        http.get("/console/calls", ctx -> page(ctx));
-        http.get("/console/reports", ctx -> page(ctx));
         http.get("/console/assets/{name}", ctx -> asset(ctx));
+        // <> 吃掉斜杠，一条路由覆盖多段深链。注册在具体路由之后；api 与 assets 再挡一层。
+        http.get("/console/<path>", ctx -> fallback(ctx));
+    }
+
+    private static void fallback(Context ctx) throws IOException {
+        String uri = ctx.req().getRequestURI();
+        String path = ctx.path();
+        if (traversal(uri) || traversal(path)) {
+            GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "not found");
+            return;
+        }
+        if (apiPath(path) || assetPath(path)) {
+            GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "not found");
+            return;
+        }
+        if (shellsPath(path)) {
+            ctx.redirect("/console/conches", HttpStatus.FOUND);
+            return;
+        }
+        page(ctx);
+    }
+
+    private static boolean apiPath(String path) {
+        return "/console/api".equals(path) || path.startsWith("/console/api/");
+    }
+
+    private static boolean assetPath(String path) {
+        return "/console/assets".equals(path) || path.startsWith("/console/assets/");
+    }
+
+    private static boolean shellsPath(String path) {
+        return "/console/shells".equals(path) || path.startsWith("/console/shells/");
+    }
+
+    private static boolean traversal(String value) {
+        if (value == null || value.isEmpty()) {
+            return false;
+        }
+        String lower = value.toLowerCase(Locale.ROOT);
+        return lower.contains("..") || lower.contains("%2e%2e");
     }
 
     private static void page(Context ctx) throws IOException {

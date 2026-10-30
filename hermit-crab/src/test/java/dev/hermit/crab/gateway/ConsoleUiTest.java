@@ -4,7 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.net.Socket;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -92,9 +97,70 @@ class ConsoleUiTest {
             TestServer.Reply page = server.console("GET", "/console/", null, false);
             assertThat(page.status()).isEqualTo(404);
             assertThat(page.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+            TestServer.Reply deep = server.console("GET", "/console/audit", null, false);
+            assertThat(deep.status()).isEqualTo(404);
+            assertThat(deep.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
             TestServer.Reply asset = server.console("GET", "/console/assets/app.js", null, false);
             assertThat(asset.status()).isEqualTo(404);
             assertThat(asset.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+            HttpResponse<String> shells = rawGet(server, "/console/shells/legacy_oa");
+            assertThat(shells.statusCode()).isEqualTo(302);
+            assertThat(shells.headers().firstValue("Location")).hasValue("/console/conches");
+        }
+    }
+
+    @Test
+    void deepLinksAreTheSpaAndLegacyShellsRedirect() throws Exception {
+        System.setProperty(ConsoleUi.ROOT_PROPERTY, "crab-ui-fixture");
+        try (TestServer server = TestServer.open(temp.resolve("fallback"), PASSWORD, listen())) {
+            for (String path : new String[] {
+                    "/console/audit",
+                    "/console/nope",
+                    "/console/nope/nested",
+                    "/console/shellsfake",
+                    "/console/Shells",
+                    "/console/audit?from=shells"
+            }) {
+                HttpResponse<String> page = rawGet(server, path);
+                assertThat(page.statusCode()).as(path).isEqualTo(200);
+                assertThat(page.headers().firstValue("Content-Type")).as(path).hasValue("text/html;charset=UTF-8");
+                assertThat(page.headers().firstValue("Cache-Control")).as(path).hasValue("no-cache");
+                assertThat(page.body()).as(path).contains("<div id=\"app\">");
+                assertThat(page.body()).as(path).doesNotContain(PASSWORD);
+            }
+            for (String path : new String[] {
+                    "/console/shells",
+                    "/console/shells/",
+                    "/console/shells/legacy_oa",
+                    "/console/shells/a/b",
+                    "/console/shells?next=https://evil.example/phish"
+            }) {
+                HttpResponse<String> redirect = rawGet(server, path);
+                assertThat(redirect.statusCode()).as(path).isEqualTo(302);
+                assertThat(redirect.headers().firstValue("Location")).as(path).hasValue("/console/conches");
+                assertThat(redirect.body()).as(path).doesNotContain("<div id=\"app\">").doesNotContain("evil.example");
+                assertThat(redirect.body()).as(path).doesNotContain(PASSWORD);
+            }
+
+            TestServer.Reply posted = server.console("POST", "/console/nope", "{}", false);
+            assertThat(posted.status()).isEqualTo(404);
+            assertThat(posted.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+            TestServer.Reply postShells = server.console("POST", "/console/shells", "{}", false);
+            assertThat(postShells.status()).isEqualTo(404);
+            assertThat(postShells.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+
+            TestServer.Reply api = server.console("GET", "/console/api/does-not-exist", null, true);
+            assertThat(api.status()).isEqualTo(404);
+            assertThat(api.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(api.body()).doesNotContain("<div id=\"app\">");
+            TestServer.Reply apiDenied = server.console("GET", "/console/api/conches", null, false);
+            assertThat(apiDenied.status()).isEqualTo(403);
+            assertThat(apiDenied.json().path("error").path("code").asText()).isEqualTo("FORBIDDEN");
+
+            TestServer.Reply nestedAsset = server.console("GET", "/console/assets/nested/app.js", null, false);
+            assertThat(nestedAsset.status()).isEqualTo(404);
+            assertThat(nestedAsset.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(nestedAsset.body()).doesNotContain("<div id=\"app\">");
         }
     }
 
@@ -116,5 +182,15 @@ class ConsoleUiTest {
 
     private static CrabConfig listen() {
         return CrabConfig.defaults().withListen("127.0.0.1", 0);
+    }
+
+    private static HttpResponse<String> rawGet(TestServer server, String path) throws Exception {
+        HttpClient client = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
+        return client.send(
+                HttpRequest.newBuilder(URI.create(server.base() + path)).timeout(Duration.ofSeconds(20)).GET().build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     }
 }

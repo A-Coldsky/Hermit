@@ -43,6 +43,11 @@ class UnknownRouteTest {
             assertThat(page.status()).isEqualTo(200);
             assertThat(page.header("Content-Type")).isEqualTo("text/html;charset=UTF-8");
             assertThat(page.body()).contains("<div id=\"app\">");
+            TestServer.Reply deep = server.console("GET", "/console/nope", null, false);
+            assertThat(deep.status()).isEqualTo(200);
+            assertThat(deep.header("Content-Type")).isEqualTo("text/html;charset=UTF-8");
+            assertThat(deep.body()).contains("<div id=\"app\">");
+            assertNotFound(server.console("POST", "/console/nope", "{}", false));
         }
     }
 

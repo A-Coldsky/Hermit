@@ -22,7 +22,11 @@
 
 失败时 success=false、data 通常为 null、error 包含 code/message。YAML、ZIP、静态页、OpenAPI 原文、304 和 MCP JSON-RPC 不套此格式。上传校验失败可携带结构化 data，请同时保留 traceId。
 
-已登录访问不存在的 Reef `/api/admin/**` 返回 404 `NOT_FOUND` 信封，`traceId` 与请求头 `X-Trace-Id`（合法时）相同。未登录的 `/api/**` 仍是 401，已登录但路径不在 `/api/admin/**` 下仍是 403；这两类由安全链拒绝，响应同样是信封，不是框架默认 JSON。页面路由（`/`、`/login`、`/conches` 等）继续返回 `index.html`。Crab 在带控制台头的回环连接上，未匹配的 `/console/api/**` 返回 404 `NOT_FOUND` 信封；未匹配的网关路径（不是 `/api/{conch}/{action}` 或已登记别名）同样如此。`traceId` 同时出现在响应体和 `X-Hermit-Trace`。`/console/` 下已注册的页面仍返回 `index.html`。
+已登录访问不存在的 Reef `/api/admin/**` 返回 404 `NOT_FOUND` 信封，`traceId` 与请求头 `X-Trace-Id`（合法时）相同。未登录的 `/api/**`（含 `/api` 本身）仍是 401，已登录但路径不在 `/api/admin/**` 下仍是 403；这两类由安全链拒绝，响应同样是信封，不是框架默认 JSON。`/agent/**` 在实例号或令牌无效时仍是 400/401；两者都有效但路径没有对应接口时是 404 `NOT_FOUND`。这些都不是 HTML。
+
+Reef 的 GET 页面（不是 `/api/**`、`/agent/**`、`/assets/**`）一律返回同一份 `index.html`，`Cache-Control: no-cache`，不看登录态。未登录打开未知页面得到的是这页，前端路由再进登录页，不是 401 JSON。已登录也是同一份静态页，响应里没有令牌或业务数据。`/assets/**` 仍是静态资源，缺失为 JSON `NOT_FOUND`。`GET /shells` 与 `GET /shells/**` 302 到 `/conches`。其它方法的未知页面路径仍由安全链拒绝。
+
+Crab 在回环连接上，`GET /console/**` 除 `/console/api/**` 与 `/console/assets/**` 外返回同一份 `index.html`（包括 `/console/audit` 和未登记的深链）。非回环仍是 403。`/console/api/**` 需要控制台头：没有头是 403，有头但路径不存在是 404 `NOT_FOUND` 信封。`GET /console/shells` 与 `GET /console/shells/**` 302 到 `/console/conches`。其它方法打到未登记的 `/console/**` 仍是 JSON `NOT_FOUND`。未匹配的网关路径（不是 `/api/{conch}/{action}` 或已登记别名）同样是 404 信封。`traceId` 同时出现在响应体和 `X-Hermit-Trace`。
 
 Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常，响应正文仍只有 `INTERNAL`。
 

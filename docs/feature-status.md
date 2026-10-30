@@ -26,8 +26,8 @@
 | 上报队列、聚合、退避、预览 | 已实现 | ReportSenderTest；失败/事件队列上限 10000，超限丢弃计数；小时统计单独存储 |
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
 | 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest。确认后，创建时间起算的去重窗口剩余时间内不新建、不推送；窗口结束后条件仍在才新建。失败上涨不提前打破窗口。Webhook 含告警 id 与相对路径 `/alerts`（无对外基址配置），没有持久化重试队列。负阈值，以及必须为正的窗口写成 0，启动时拒绝 |
-| Reef 管理页面 | 已实现 | 登录、仪表盘、Conch/上传/版本及校验警告明细、Tide、告警、审计、设置说明 |
-| Crab 本机控制台 | 已实现 | 概览、Conch、账号/凭证/配置、能力、API Key、调用、上报。Conch 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。详情横幅按默认账号与具体原因写标题并点名账号；凭证无法解密时对话框要求全部重填。概览把「账号暂停」与「缺凭证或配置」分开提示，同步卡有停用项时不显示「已是最新」。「配置审计」页按 Conch/账号筛选分页查看变更记录 |
+| Reef 管理页面 | 已实现 | 登录、仪表盘、Conch/上传/版本及校验警告明细、Tide、告警、审计、设置说明。GET 且不是 `/api/**`、`/agent/**`、`/assets/**` 的路径返回同一份 `index.html`，未登录不是 401 JSON，由已有前端路由进入登录页。`GET /shells` 与 `/shells/**` 302 到 `/conches`。页面响应不带账号或令牌。未知前端路径仍重定向到首页，没有单独的 404 视图 |
+| Crab 本机控制台 | 已实现 | 概览、Conch、账号/凭证/配置、能力、API Key、调用、上报。Conch 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。详情横幅按默认账号与具体原因写标题并点名账号；凭证无法解密时对话框要求全部重填。概览把「账号暂停」与「缺凭证或配置」分开提示，同步卡有停用项时不显示「已是最新」。「配置审计」页按 Conch/账号筛选分页查看变更记录。未登记的 `GET /console/**`（不含 `/console/api/**` 与 `/console/assets/**`）返回同一份 `index.html`。`GET /console/shells` 与其子路径 302 到 `/console/conches`。未知前端路径仍重定向到概览，没有单独的 404 视图 |
 | Crab 配置审计查询 | 已实现 | 控制台「配置审计」页、`GET /console/api/audit` 与 CLI `audit list`。可按 conch/account 分页，新的在前。只返回 id、时间、actor、action、origin、conch、account、字段名；不返回 detail 原文、配置值、凭证明文或密文。`config_audit` 仍无定期清理 |
 | Docker Reef + Nginx + MySQL / Crab | 已配置，运行未验收 | Crab 同机 client profile / 独立 Compose / Dockerfile 已提供；配置语法通过，尚未启动容器栈 |
 
@@ -77,3 +77,5 @@ hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过；Docker
 Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 历史表为 `hermit_flyway_schema_history`，V4 表为 `hermit_conch_availability`。V1–V4 就地改写，没有数据迁移。已有 `reef-data` 中的 H2 和 Compose MySQL 库必须重建。Crab 本地表名不变。
 
 2026-10-29 表前缀以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 125、hermit-crab 209、hermit-it 1，失败/错误/跳过均为 0；Vitest 51（10 个文件）。同一 JDK 先跑 `./mvnw -B -pl hermit-reef -am test -Dhermit.web.skip=true`：hermit-common 43、hermit-reef 125（打包页面测试 1 项因跳过前端资源而跳过），失败 0。未启动 MySQL 或 Compose。
+
+2026-10-30 页面深链回落以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 127、hermit-crab 210、hermit-it 1，失败/错误/跳过均为 0；Vitest 63（12 个文件）。覆盖 Crab `/console/audit`、`/console/nope` 及多段路径返回 `index.html`，`/console/shells/**` 302 到 `/console/conches`，`/console/api/**` 与非 GET 仍是 JSON；Reef 未登录未知页是同一份静态页而不是 401，已登录响应字节相同且不含令牌，`/api` 与 `/agent` 未知路径仍是 JSON，只有 POST 的管理接口 GET 仍是 405。未启动 MySQL 或 Compose，也未在浏览器里点选深链。前端未知路径仍重定向到首页。

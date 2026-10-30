@@ -1,6 +1,7 @@
 package dev.hermit.reef.admin;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -65,6 +66,7 @@ class AdminApiTest {
     @DynamicPropertySource
     static void dataDirectory(DynamicPropertyRegistry registry) {
         registry.add("hermit.reef.data-dir", () -> TestDataDirs.create("admin-api").toString());
+        registry.add("hermit.web.reef-root", () -> "classpath:/ui-fixture/");
     }
 
     @Autowired
@@ -300,20 +302,28 @@ class AdminApiTest {
                 .andExpect(jsonPath("$.error.message").value("unauthorized"))
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.traceId").value("trace-from-caller"));
-        mockMvc.perform(get("/anything").header(TraceIds.HEADER, "trace-from-caller"))
+        mockMvc.perform(post("/anything").header(TraceIds.HEADER, "trace-from-caller"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
                 .andExpect(jsonPath("$.error.message").value("unauthorized"))
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.traceId").value("trace-from-caller"));
+        String page = mockMvc.perform(get("/anything").header(TraceIds.HEADER, "trace-from-caller"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "text/html;charset=UTF-8"))
+                .andExpect(content().string(containsString("<div id=\"app\">")))
+                .andExpect(content().string(not(containsString(TestSecrets.PASSWORD))))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        mockMvc.perform(get("/h2-console"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(page));
         mockMvc.perform(get("/api/other").header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"))
                 .andExpect(jsonPath("$.error.message").value("forbidden"));
-        mockMvc.perform(get("/h2-console"))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
     }
 
     @Test

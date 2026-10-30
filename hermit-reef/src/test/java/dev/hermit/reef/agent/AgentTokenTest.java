@@ -1,8 +1,11 @@
 package dev.hermit.reef.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -70,6 +73,23 @@ class AgentTokenTest {
         assertNotOk(URI.create("http://localhost//agent/version"));
         assertNotOk(URI.create("http://localhost/agent;x=1/version"));
         assertNotOk(URI.create("http://localhost/agent/%2e%2e/api/admin/me"));
+    }
+
+    @Test
+    void unknownAgentPathStaysJsonAfterTheTokenCheck() throws Exception {
+        mockMvc.perform(get("/agent/no-such")
+                        .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
+                        .header(AgentAccessFilter.TOKEN_HEADER, TOKEN))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                .andExpect(content().string(not(containsString("<div id=\"app\">"))));
+        mockMvc.perform(get("/agent")
+                        .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
+                        .header(AgentAccessFilter.TOKEN_HEADER, TOKEN))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                .andExpect(content().string(not(containsString("<div id=\"app\">"))));
     }
 
     @Test

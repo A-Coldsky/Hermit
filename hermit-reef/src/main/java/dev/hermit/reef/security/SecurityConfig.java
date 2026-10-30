@@ -92,9 +92,8 @@ public class SecurityConfig {
                         .cacheControl(cache -> cache.disable())
                         .addHeaderWriter(cacheControlIfAbsent()))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.GET, "/", "/login", "/conches", "/conches/upload", "/conches/{conch}",
-                                "/tide", "/alerts", "/audit", "/settings", "/assets/**")
-                        .permitAll()
+                        // /api/** 与 /agent/** 在更前面的链上。剩下的 GET 是页面导航，回 SPA，不回 401 JSON。
+                        .requestMatchers(HttpMethod.GET, "/**").permitAll()
                         .anyRequest().denyAll())
                 .build();
     }

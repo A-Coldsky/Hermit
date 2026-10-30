@@ -85,7 +85,7 @@ CP="hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT.jar:$(cat hermit-crab/target/c
 java -cp "$CP" dev.hermit.crab.CrabMain serve
 ```
 
-浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。Crab 启动时后台同步，可从本机控制台手动同步；同步失败不一定导致进程退出，应检查返回的各 Conch 结果。Reef 连不上时，手动同步返回 502 `UPSTREAM_ERROR`，并在同步状态里留下失败原因，而不是继续显示上次成功。
+浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。Crab 启动时后台同步目录。新装默认不订阅，未订阅的规则包不会下载安装。可从本机控制台或下面的订阅接口安装；同步失败不一定导致进程退出，应检查返回的各 Conch 结果。Reef 连不上时，手动同步返回 502 `UPSTREAM_ERROR`，并在同步状态里留下失败原因，而不是继续显示上次成功。
 
 ## 5. 同步、创建账号/API Key、配置老系统
 
@@ -94,6 +94,9 @@ java -cp "$CP" dev.hermit.crab.CrabMain serve
 ```bash
 export CRAB_URL=http://127.0.0.1:7777
 curl -fsS -X POST "$CRAB_URL/console/api/sync" -H 'X-Hermit-Console: 1'
+# 同步只刷新目录。订阅后才会下载并安装 legacy_oa
+curl -fsS -X POST "$CRAB_URL/console/api/conches/legacy_oa/subscription" \
+  -H 'X-Hermit-Console: 1' -H 'Content-Type: application/json' -d '{}'
 curl -fsS "$CRAB_URL/console/api/conches" -H 'X-Hermit-Console: 1'
 
 API_KEY=$(curl -fsS -X POST "$CRAB_URL/console/api/apikeys" \

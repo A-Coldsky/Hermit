@@ -121,7 +121,7 @@ final class ReefClient {
         return URI.create(text).resolve(path);
     }
 
-    private static List<CatalogEntry> parseManifest(byte[] bytes) {
+    static List<CatalogEntry> parseManifest(byte[] bytes) {
         JsonNode root;
         try {
             root = JSON.readTree(bytes);
@@ -138,9 +138,22 @@ final class ReefClient {
                     textOrNull(node, "version"),
                     textOrNull(node, "sha256"),
                     textOrNull(node, "minCrabVersion"),
-                    textOrNull(node, "title")));
+                    textOrNull(node, "title"),
+                    textOrNull(node, "description"),
+                    countOrZero(node)));
         }
         return entries;
+    }
+
+    private static int countOrZero(JsonNode node) {
+        if (node == null) {
+            return 0;
+        }
+        JsonNode value = node.get("capabilityCount");
+        if (value == null || value.isNull() || !value.isIntegralNumber()) {
+            return 0;
+        }
+        return value.intValue();
     }
 
     private static String textOrNull(JsonNode node, String field) {
@@ -169,7 +182,23 @@ final class ReefClient {
         return out.toByteArray();
     }
 
-    record CatalogEntry(String conch, String version, String sha256, String minCrabVersion, String title) {
+    record CatalogEntry(
+            String conch,
+            String version,
+            String sha256,
+            String minCrabVersion,
+            String title,
+            String description,
+            int capabilityCount
+    ) {
+        CatalogEntry {
+            if (title == null || title.isBlank()) {
+                title = conch == null ? "" : conch;
+            }
+            if (capabilityCount < 0) {
+                capabilityCount = 0;
+            }
+        }
     }
 
     record ManifestFetch(boolean notModified, String etag, List<CatalogEntry> entries) {

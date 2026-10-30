@@ -18,6 +18,7 @@ import dev.hermit.common.model.Step;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
+import dev.hermit.crab.store.Origin;
 
 public final class ConchRegistry {
     private static final Logger LOG = Logger.getLogger(ConchRegistry.class.getName());
@@ -26,6 +27,7 @@ public final class ConchRegistry {
     private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script");
 
     private final AtomicReference<Map<String, ConchDoc>> conches = new AtomicReference<>(Map.of());
+    private final AtomicReference<Map<String, Origin>> origins = new AtomicReference<>(Map.of());
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
 
     /** Fired after a conch is added, replaced, or removed. */
@@ -40,8 +42,19 @@ public final class ConchRegistry {
     }
 
     public void put(ConchDoc doc) {
+        put(doc, Origin.OFFICIAL);
+    }
+
+    /**
+     * Origin is written before the document so a reader that sees the document also sees
+     * {@link Origin#LOCAL} instead of the official fallback.
+     */
+    public void put(ConchDoc doc, Origin origin) {
         if (doc == null) {
             throw new IllegalArgumentException("doc");
+        }
+        if (origin == null) {
+            throw new IllegalArgumentException("origin");
         }
         ArrayList<ValidationIssue> issues = new ArrayList<>();
         ValidationResult result = ConchValidator.validate(
@@ -51,13 +64,19 @@ public final class ConchRegistry {
         if (!issues.isEmpty()) {
             throw new ConchRejectedException(issues);
         }
-        Map<String, ConchDoc> before = conches.get();
-        Map<String, ConchDoc> after = conches.updateAndGet(current -> {
+        Map<String, ConchDoc> docsBefore = conches.get();
+        Map<String, Origin> originsBefore = origins.get();
+        origins.updateAndGet(current -> {
+            LinkedHashMap<String, Origin> copy = new LinkedHashMap<>(current);
+            copy.put(doc.conch(), origin);
+            return Collections.unmodifiableMap(copy);
+        });
+        conches.updateAndGet(current -> {
             LinkedHashMap<String, ConchDoc> copy = new LinkedHashMap<>(current);
             copy.put(doc.conch(), doc);
             return Collections.unmodifiableMap(copy);
         });
-        if (after != before) {
+        if (conches.get() != docsBefore || origins.get() != originsBefore) {
             changed();
         }
     }
@@ -66,8 +85,9 @@ public final class ConchRegistry {
         if (conch == null) {
             return;
         }
-        Map<String, ConchDoc> before = conches.get();
-        Map<String, ConchDoc> after = conches.updateAndGet(current -> {
+        Map<String, ConchDoc> docsBefore = conches.get();
+        Map<String, Origin> originsBefore = origins.get();
+        conches.updateAndGet(current -> {
             if (!current.containsKey(conch)) {
                 return current;
             }
@@ -75,9 +95,35 @@ public final class ConchRegistry {
             copy.remove(conch);
             return Collections.unmodifiableMap(copy);
         });
-        if (after != before) {
+        origins.updateAndGet(current -> {
+            if (!current.containsKey(conch)) {
+                return current;
+            }
+            LinkedHashMap<String, Origin> copy = new LinkedHashMap<>(current);
+            copy.remove(conch);
+            return Collections.unmodifiableMap(copy);
+        });
+        if (conches.get() != docsBefore || origins.get() != originsBefore) {
             changed();
         }
+    }
+
+    /**
+     * Stored origin, or {@link Origin#OFFICIAL} when a document is present without one.
+     * Null when the name is not loaded.
+     */
+    public Origin origin(String conch) {
+        if (conch == null) {
+            return null;
+        }
+        Origin stored = origins.get().get(conch);
+        if (stored != null) {
+            return stored;
+        }
+        if (conches.get().containsKey(conch)) {
+            return Origin.OFFICIAL;
+        }
+        return null;
     }
 
     private void changed() {

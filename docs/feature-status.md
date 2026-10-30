@@ -21,7 +21,8 @@
 | Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest。4xx/5xx 服务端日志带与响应相同的 traceId，4xx 不记请求体。已登录的未知 `/api/admin/**` 为 404 `NOT_FOUND` 信封。查询参数类型不匹配或缺少必填参数时 400 `INVALID_INPUT`，message 带字段名，不回显参数值。没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ConchApiTest/ConchConcurrencyTest/ConchSelfCheckFailureTest |
 | 停用 / 重新启用 Conch | 已实现 | Reef 管理端 Conch 详情页提供停用/启用（需填原因），停用后显示原因与操作人、版本表的发布和回滚不可点，目录标「已停用」。管理 API 记录 `DISABLE`/`ENABLE` 和原因。停用后清单不含该 Conch，Agent 下载 404，发布和回滚 409 `conch is disabled`，签名包字节不变。Crab 同步后卸下注册表、清 `current`、保留版本文件和账号；调用 409 `CONCH_DISABLED`；同步状态 `kind=DISABLED` 且出现在 `removed`。重新启用后重新验签安装。回滚固定未解除、且清单版本不高于坏版本时，重新启用不会把 Conch 装回去 |
-| Crab 定时/手动同步、ETag、验签 | 已实现 | ConchSyncTest/CrabWiringTest；可重试失败不记 ETag，304 核对 current。Reef 不可达时手动同步为 502 `UPSTREAM_ERROR`，状态改为这次失败；Reef 的 HTTP 错误仍保留上次成功 |
+| Crab 定时/手动同步、ETag、验签 | 已实现 | ConchSyncTest/CrabWiringTest；只安装已订阅的规则包。可重试失败不记 ETag，`NOT_SUBSCRIBED` 不阻止记 ETag。304 核对 current，并沿用目录缓存。Reef 不可达时手动同步为 502 `UPSTREAM_ERROR`，状态改为这次失败；Reef 的 HTTP 错误仍保留上次成功 |
+| Crab 规则包订阅 | 已实现 | 订阅只在本机 H2 `subscriptions`（schema 8）。新装默认不订阅。未订阅不下载；订阅后立即同步。退订卸下注册表、清 `current`、不写停用墓碑，账号/凭证/配置保留，调用变为 `NOT_FOUND`。`GET /console/api/catalog`、订阅/退订 API，以及 CLI `catalog` / `subscribe` / `unsubscribe`。控制台只更新了 `api.ts` 类型，没有订阅按钮，`labels.ts` 也没有新的中文标签。schema 8 升级把已有 `current` 指针的合法包名记为 actor `migration` |
 | 本地规则失配回滚、坏版本固定 | 已实现 | RollbackGuardTest；要求前一版本成功，5 次 `RULE_MISMATCH`；上游 400 与会话失效不计数；不等于发布前健康检查。回滚后控制台同步状态显示已安装版本和 `ROLLED_BACK`，固定解除前保持 |
 | 上报队列、聚合、退避、预览 | 已实现 | ReportSenderTest；失败/事件队列上限 10000，超限丢弃计数；小时统计单独存储 |
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
@@ -88,4 +89,6 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 
 2026-10-30 合入 main（#46–#48、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 128、hermit-crab 222、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 394，连同 Vitest 合计 469。未启动 MySQL 或 Compose，也未做浏览器验收。
 
-2026-10-30 再合入 origin/main `34f5b01`（#50、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 130、hermit-crab 223、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 397，合计 472。这是当前整棵树的计数。服务端页面回落与 shells 的 302 保持不变；应用内「页面不存在」与前端 `/shells` 跳转来自 #51，未改 Vue。未启动 MySQL 或 Compose，也未在浏览器里点选。
+2026-10-30 再合入 origin/main `34f5b01`（#50、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 130、hermit-crab 223、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 397，合计 472。服务端页面回落与 shells 的 302 保持不变；应用内「页面不存在」与前端 `/shells` 跳转来自 #51，未改 Vue。未启动 MySQL 或 Compose，也未在浏览器里点选。
+
+2026-10-30 Crab 规则包订阅（schema 8）以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 130、hermit-crab 237、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 411，连同 Vitest 合计 486。这是当前整棵树的计数。覆盖未订阅不下载、订阅后安装、退订后 `NOT_FOUND` 且账号仍可在重订阅后调用、schema 8 保留已安装包、与 LOCAL 同名拒绝订阅，以及 hermit-it 在同步安装前先订阅。未改 Vue，未在浏览器点选；未启动 MySQL 或 Compose。没有用真实 Reef 复测（FakeReef 与 hermit-it 的本机 Reef）。退订当时已经进入引擎的请求、退订后回滚固定是否仍挡住重装，都没有单独压测。

@@ -78,6 +78,7 @@ class ConchSyncTest {
         assertPermanent(SyncReasons.PATH_UNSAFE);
         assertPermanent(SyncReasons.ZIP_TOO_LARGE);
         assertPermanent(SyncReasons.MANIFEST_ENTRY_MISMATCH);
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.NOT_SUBSCRIBED, null))).isFalse();
 
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.INSTALLED, null))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION))).isFalse();
@@ -711,6 +712,7 @@ class ConchSyncTest {
             Optional<String> token,
             Clock clock
     ) {
+        TestSubscriptions.grantKnown(crab.dataSource);
         return new ConchSync(
                 settings(reef, token, Duration.ofMinutes(5)),
                 crab.paths,

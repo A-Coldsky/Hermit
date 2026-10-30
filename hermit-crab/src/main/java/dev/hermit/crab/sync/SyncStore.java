@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -64,6 +65,42 @@ final class SyncStore {
                     "DELETE FROM sync_state WHERE name IN ('manifest_etag', 'manifest_snapshot')")) {
                 statement.executeUpdate();
             }
+            return null;
+        });
+    }
+
+    /**
+     * Last HTTP 200 manifest. Empty means the list was saved and had no entries.
+     * Malformed JSON is treated as absent.
+     */
+    Optional<List<ReefClient.CatalogEntry>> catalog() {
+        Optional<String> raw = Db.transaction(dataSource, connection -> optionalString(connection,
+                "SELECT \"value\" FROM sync_state WHERE name = 'catalog_entries'"));
+        if (raw.isEmpty()) {
+            return Optional.empty();
+        }
+        return CatalogCache.decode(raw.get());
+    }
+
+    Optional<Instant> catalogSyncedAt() {
+        Optional<String> raw = Db.transaction(dataSource, connection -> optionalString(connection,
+                "SELECT \"value\" FROM sync_state WHERE name = 'catalog_synced_at'"));
+        if (raw.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Instant.parse(raw.get()));
+        } catch (DateTimeParseException ex) {
+            return Optional.empty();
+        }
+    }
+
+    void saveCatalog(List<ReefClient.CatalogEntry> entries, Instant at) {
+        String json = CatalogCache.encode(entries);
+        String syncedAt = at.toString();
+        Db.transaction(dataSource, connection -> {
+            upsertState(connection, "catalog_entries", json);
+            upsertState(connection, "catalog_synced_at", syncedAt);
             return null;
         });
     }

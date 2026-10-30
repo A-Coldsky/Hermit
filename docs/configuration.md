@@ -126,11 +126,13 @@ Crab HERMIT_HOME/
   data/crab.mv.db
   data/master.key        # 使用环境主密钥时需另行保管该密钥
   data/instance-id
-  conches/<conch>/current
+  conches/<conch>/current   # 已安装版本指针；订阅记录在 H2，不在此目录
   conches/<conch>/<version>/
   local-conches/          # 仅预留目录，当前无加载流程
   logs/                 # 预留目录；调用日志实际存 H2
 ```
+
+规则包订阅是 Crab H2 表 `subscriptions`（schema 8）里的行，不是 `config.yml` 的字段。新装 Crab 不订阅任何包。`conches/<conch>/current` 仍表示已安装版本。`local-conches/` 仍只是预留目录。
 
 Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，Flyway 历史表是 `hermit_flyway_schema_history`。V1–V4 在发布前就地改写，没有把旧表改名的迁移。已经用旧表名启动过的库需要重建：删除 `reef-data/db` 下的 H2 文件，或删除并重建 Compose 的 MySQL 卷 `reef-mysql`。`reef-data` 里的 `keys/` 和 `conches/` 可以留下；整卷删除会同时丢掉密钥和已发布包。Crab 的 `crab-data` 不在这次变更里。
 

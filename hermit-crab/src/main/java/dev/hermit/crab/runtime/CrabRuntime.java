@@ -26,6 +26,7 @@ import java.util.function.Function;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
 
+import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.config.CrabConfig;
@@ -57,12 +58,17 @@ import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.store.ConchConfigStore;
+import dev.hermit.crab.sync.ConchCatalog;
+import dev.hermit.crab.sync.ConchOutcome;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
 import dev.hermit.crab.sync.DisabledConches;
 import dev.hermit.crab.sync.InstalledConches;
 import dev.hermit.crab.sync.LoadReport;
 import dev.hermit.crab.sync.RollbackGuard;
 import dev.hermit.crab.sync.ConchSync;
+import dev.hermit.crab.sync.SubscriptionCommands;
+import dev.hermit.crab.sync.SubscriptionException;
+import dev.hermit.crab.sync.Subscriptions;
 import dev.hermit.crab.sync.SyncReport;
 import dev.hermit.crab.sync.SyncSettings;
 
@@ -96,6 +102,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final Set<String> switchDisabled;
     private final List<Runnable> catalogListeners = new CopyOnWriteArrayList<>();
     private final DisabledConches disabledConches;
+    private final Subscriptions subscriptions;
     private final Invoker invoker;
     private final ConchAdmin admin;
     private final String instanceId;
@@ -149,6 +156,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.switchDisabled.addAll(switches.disabledKeys(Origin.OFFICIAL));
         this.disabledConches = new DisabledConches(database.dataSource());
         this.disabledConches.load();
+        this.subscriptions = new Subscriptions(database.dataSource());
         this.invoker = new Invoker(
                 registry, accounts, vault, conchConfig, engine, callLogs, idempotency, this, disabledConches);
         this.admin = new ConchAdmin(
@@ -296,6 +304,43 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public Optional<SyncReport> lastSync() {
         return Optional.ofNullable(lastSync);
+    }
+
+    public boolean subscribed(String conch) {
+        return subscriptions.contains(conch);
+    }
+
+    public ConchCatalog catalog() {
+        prepare();
+        if (conchSync == null) {
+            return new ConchCatalog(false, null, List.of());
+        }
+        return conchSync.catalog();
+    }
+
+    /**
+     * Subscribes and syncs. One {@code SYNC_REQUESTED} audit is written after both the optional
+     * catalog prefetch and the install sync succeed.
+     */
+    public ConchOutcome subscribe(String conch, String actor) {
+        prepare();
+        if (conchSync == null) {
+            throw new SubscriptionException(
+                    409, ErrorCode.NOT_CONFIGURED, SubscriptionException.NOT_CONFIGURED);
+        }
+        ConchOutcome outcome = conchSync.subscribe(conch, actor, this::recordCredentialChanges);
+        AuditLog.record(database.dataSource(), actor, AuditKind.SYNC_REQUESTED, "sync", "{}");
+        return outcome;
+    }
+
+    public void unsubscribe(String conch, String actor) {
+        prepare();
+        if (conchSync != null) {
+            conchSync.unsubscribe(conch, actor);
+            return;
+        }
+        SubscriptionCommands.unsubscribe(
+                null, paths, registry, disabledConches, subscriptions, database.dataSource(), conch, actor);
     }
 
     public Optional<SyncReport> syncOnce(String requestedBy) {

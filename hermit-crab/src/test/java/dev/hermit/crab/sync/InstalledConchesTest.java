@@ -26,6 +26,7 @@ class InstalledConchesTest {
         try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
             reef.publish(ConchTexts.standard("other_sys", "1.0.0"));
+            TestSubscriptions.grantKnown(crab.dataSource);
             ConchRegistry installed = new ConchRegistry();
             new ConchSync(
                     new SyncSettings(

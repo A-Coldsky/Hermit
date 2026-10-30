@@ -6,6 +6,13 @@ export const outcomeLabels: Record<string, { text: string; tone: 'success' | 'in
   REJECTED: { text: '已拒绝', tone: 'danger' },
   ROLLED_BACK: { text: '已回退', tone: 'warning' },
   DISABLED: { text: '已停用', tone: 'danger' },
+  SKIPPED_LOCAL: { text: '本地同名，未安装', tone: 'warning' },
+  NOT_SUBSCRIBED: { text: '未订阅', tone: 'info' },
+}
+
+export const sourceLabels: Record<string, string> = {
+  LOCAL: '本地',
+  REEF: 'Reef',
 }
 
 export const originLabels: Record<string, string> = {
@@ -36,10 +43,15 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   TEST_LOGIN: { text: '测试登录', tone: 'info' },
   SYNC_REQUESTED: { text: '手动同步', tone: 'info' },
   CREDENTIAL_DECLARATION: { text: '凭证声明变更', tone: 'warning' },
+  CONCH_SUBSCRIBED: { text: '订阅规则包', tone: 'success' },
+  CONCH_UNSUBSCRIBED: { text: '取消订阅', tone: 'warning' },
+  LOCAL_CONCH_IMPORTED: { text: '导入本地规则包', tone: 'success' },
+  LOCAL_CONCH_DELETED: { text: '删除本地规则包', tone: 'danger' },
 }
 
 export const actorLabels: Record<string, string> = {
   cli: '命令行',
   console: '控制台',
   sync: '同步',
+  migration: '升级迁移',
 }

@@ -6,7 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, errorCodeLabels, formatTime, millis, notifyError } from '@shared/format'
 import { api, type CallDetail, type CallSummary, type ConchSummary } from '../api'
-import { originLabels, stepTypeLabels } from '../labels'
+import { originLabels, sourceLabels, stepTypeLabels } from '../labels'
 
 const route = useRoute()
 const router = useRouter()
@@ -140,6 +140,7 @@ onMounted(async () => {
           <template #default="{ row }">
             <span class="mono">{{ row.conch }}.{{ row.action }}</span>
             <span class="mono hm-muted"> v{{ row.conchVersion }}</span>
+            <el-tag v-if="row.source === 'LOCAL'" type="warning" effect="plain" size="small" class="local">本地</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="账号" width="120">
@@ -198,7 +199,7 @@ onMounted(async () => {
             <dt>能力</dt>
             <dd class="mono">{{ drawer.call.conch }}.{{ drawer.call.action }} v{{ drawer.call.conchVersion }}</dd>
             <dt>来源</dt>
-            <dd>{{ originLabels[drawer.call.origin] ?? drawer.call.origin }}</dd>
+            <dd>{{ sourceLabels[drawer.call.source] ?? originLabels[drawer.call.origin] ?? drawer.call.origin }}</dd>
             <dt>账号</dt>
             <dd class="mono">{{ drawer.call.account ?? '—' }}</dd>
             <dt>API Key</dt>
@@ -244,6 +245,10 @@ onMounted(async () => {
 
 .err {
   color: var(--hm-danger);
+}
+
+.local {
+  margin-left: 6px;
 }
 
 .err-msg {

@@ -15,6 +15,12 @@ const conchDetails = ref<ConchDetail[]>([])
 const form = reactive({ open: false, saving: false, name: '', readOnly: true, conches: [] as string[], actions: [] as string[] })
 const created = ref<CreatedApiKey | null>(null)
 
+const localNames = computed(() => conchDetails.value.filter((s) => s.source === 'LOCAL').map((s) => s.conch))
+
+function conchLabel(s: ConchDetail): string {
+  return s.title ? `${s.title}（${s.conch}）` : s.conch
+}
+
 const visible = computed(() => keys.value.filter((k) => showRevoked.value || !k.revokedAt))
 const actionOptions = computed(() =>
   conchDetails.value
@@ -127,7 +133,7 @@ onMounted(load)
           <template #default="{ row }">
             <div class="scope">
               <el-tag v-if="row.scope.readOnly" size="small" type="success" effect="plain">仅只读能力</el-tag>
-              <span><span class="hm-muted">规则包：</span><span class="mono">{{ scopeText(row.scope.conches, '全部') }}</span></span>
+              <span><span class="hm-muted">规则包：</span><span class="mono">{{ scopeText(row.scope.conches, '全部 Reef 规则包') }}</span></span>
               <span><span class="hm-muted">能力：</span><span class="mono">{{ scopeText(row.scope.actions, '全部') }}</span></span>
             </div>
           </template>
@@ -156,9 +162,15 @@ onMounted(load)
           <el-checkbox v-model="form.readOnly">只允许调用只读能力</el-checkbox>
         </el-form-item>
         <el-form-item label="允许的规则包">
-          <el-select v-model="form.conches" multiple clearable placeholder="不选表示全部规则包" class="full">
-            <el-option v-for="s in conchDetails" :key="s.conch" :label="s.title ? `${s.title}（${s.conch}）` : s.conch" :value="s.conch" />
+          <el-select v-model="form.conches" multiple clearable placeholder="不选表示全部 Reef 规则包" class="full">
+            <el-option v-for="s in conchDetails" :key="s.conch" :label="conchLabel(s)" :value="s.conch">
+              <span>{{ conchLabel(s) }}</span>
+              <el-tag v-if="s.source === 'LOCAL'" type="warning" effect="plain" size="small" class="tag">本地</el-tag>
+            </el-option>
           </el-select>
+          <p v-if="localNames.length && !form.conches.length" class="hint" data-test="local-hint">
+            不选只覆盖 Reef 规则包。本地规则包（{{ localNames.join('、') }}）要在这里明确选中才能调用。
+          </p>
         </el-form-item>
         <el-form-item label="允许的能力">
           <el-select v-model="form.actions" multiple clearable filterable placeholder="不选表示所选规则包的全部能力" class="full">
@@ -208,6 +220,13 @@ onMounted(load)
 
 .full {
   width: 100%;
+}
+
+.hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-color-warning-dark-2);
 }
 
 .option-title {

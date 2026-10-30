@@ -72,4 +72,14 @@ describe('版本表警告列', () => {
     expect(headers.indexOf('操作')).toBeGreaterThan(headers.indexOf('警告'))
     expect(headers.indexOf('操作')).toBeLessThan(headers.indexOf('上传'))
   })
+
+  it('每个版本显示自己的拉取次数', async () => {
+    const wrapper = await mountPage(VersionPanel, { props: { conch: 'legacy_oa', versions: [version({ pullCount: 7 })] } })
+    await flushPromises()
+    const headers = wrapper.findAll('.el-table__header th').map((th) => th.text())
+    const column = headers.indexOf('拉取')
+    expect(column).toBeGreaterThan(-1)
+    const cells = wrapper.findAll('.el-table__body tr')[0].findAll('td').map((td) => td.text())
+    expect(cells[column]).toBe('7')
+  })
 })

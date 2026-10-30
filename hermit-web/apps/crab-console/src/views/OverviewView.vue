@@ -32,7 +32,10 @@ const disabledInSync = computed(() => report.value?.conches.filter((s) => s.kind
 const removedOnly = computed(() => report.value?.removed.filter((name) => !disabledInSync.value.includes(name)) ?? [])
 const show = (value: number | string) => (loaded.value ? value : '—')
 const failures = computed(() => calls.value.filter((c) => !c.success).length)
-const changedConches = computed(() => report.value?.conches.filter((s) => s.kind !== 'SKIPPED_SAME') ?? [])
+const changedConches = computed(
+  () => report.value?.conches.filter((s) => s.kind !== 'SKIPPED_SAME' && s.kind !== 'NOT_SUBSCRIBED') ?? [],
+)
+const unsubscribedCount = computed(() => report.value?.conches.filter((s) => s.kind === 'NOT_SUBSCRIBED').length ?? 0)
 
 async function loadSync() {
   try {
@@ -204,6 +207,9 @@ onMounted(load)
               <span class="mono">{{ name }}</span>
             </li>
           </ul>
+          <p v-if="unsubscribedCount" class="hm-muted unsubscribed" data-test="unsubscribed">
+            Reef 上还有 {{ unsubscribedCount }} 个规则包本机没有订阅，<router-link to="/catalog">去订阅</router-link>
+          </p>
           <el-alert
             v-for="change in report.credentialChanges.filter((c) => c.addedRequired.length)"
             :key="change.conch"
@@ -302,6 +308,11 @@ onMounted(load)
 .small {
   font-size: 12px;
   font-weight: 400;
+}
+
+.unsubscribed {
+  margin: 8px 0 0;
+  font-size: 12.5px;
 }
 
 .outcomes {

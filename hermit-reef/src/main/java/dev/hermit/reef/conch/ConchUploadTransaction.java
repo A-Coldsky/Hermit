@@ -81,7 +81,8 @@ class ConchUploadTransaction {
                             null,
                             false,
                             validationJson,
-                            diffJson),
+                            diffJson,
+                            0),
                     "conches/" + conch + "/" + version + "/conch.yaml",
                     validationJson,
                     diffJson);

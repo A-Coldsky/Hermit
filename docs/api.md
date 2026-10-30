@@ -42,8 +42,8 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | GET | `/me` | 当前身份 |
 | GET | `/signing-key` | `data.publicKey` PEM；不提供私钥 |
 | POST | `/conches` | multipart 字段 `file`，YAML 或仅含 conch.yaml 的 ZIP；上传及解包 YAML 限 1 MiB |
-| GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null |
-| GET | `/conches/{conch}/versions` | 版本列表，每项含 `warningCount` 和 `warnings` 校验警告明细 |
+| GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null。两项都带 `pullCount`（long，JSON 数字）：该规则包全部版本成功下载次数之和，含尚未发布的版本 |
+| GET | `/conches/{conch}/versions` | 版本列表，每项含 `warningCount`、`warnings` 校验警告明细，以及 `pullCount`（该版本成功下载次数，long） |
 | GET | `/conches/{conch}/versions/{version}/yaml` | YAML 原文 |
 | GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异 |
 | POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。Conch 已停用时 409，`message` 为 `conch is disabled` |
@@ -63,15 +63,15 @@ Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400
 
 配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 
-停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布，也不能回滚。
+停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布，也不能回滚。拉取次数不进入清单，下载成功不会改变 ETag。
 
 Agent 路由：
 
 | 方法 | 路径 | 返回 |
 | --- | --- | --- |
 | GET | `/agent/version` | Crab 最新版本与下载地址提示 |
-| GET | `/agent/conches/manifest` | 当前可分发规则清单与 ETag，支持 If-None-Match/304。已停用的 Conch 不在清单里 |
-| GET | `/agent/conches/{conch}/{version}` | 已发布 ZIP。Conch 已停用时 404，包文件仍留在 Reef |
+| GET | `/agent/conches/manifest` | 当前可分发规则清单与 ETag，支持 If-None-Match/304。已停用的 Conch 不在清单里。每项含 `conch`、`version`、`sha256`、`minCrabVersion`、`title`，以及当前发布版本的 `description`（string 或 null）和 `capabilityCount`（int，能力个数，与管理端 `capabilityCount` 一样按 actions 计数）。ETag 覆盖这些字段，字段变化后旧 ETag 不再 304。清单请求和 304 不增加拉取次数。旧 Crab 忽略不认识的字段 |
+| GET | `/agent/conches/{conch}/{version}` | 已发布 ZIP。Conch 已停用、版本未发布或不存在时 404，包文件仍留在 Reef。验签失败为 500。只有成功返回 ZIP 时，该版本 `pull_count` 加 1（单条 `UPDATE`，`pull_count = pull_count + 1`）。失败、404 和停用不计。次数是下载成功次数，不按 Crab 实例统计 |
 | POST | `/agent/reports` | ReportBatch；instanceId 须与请求头一致 |
 
 ReportBatch 包含 instanceId/crabVersion/sentAt/failures/counts/events，严格 DTO 在 [common/report](../hermit-common/src/main/java/dev/hermit/common/report)。失败按实例+trace 去重，小时统计按复合主键覆盖；回滚事件按实例和 eventId 去重。

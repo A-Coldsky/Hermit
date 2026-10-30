@@ -46,7 +46,9 @@ public class ConchDistributionService {
                     verified.manifest().version(),
                     verified.manifest().sha256(),
                     verified.manifest().minCrabVersion(),
-                    verified.conchDoc().title()));
+                    verified.conchDoc().title(),
+                    verified.conchDoc().description(),
+                    verified.conchDoc().actions().size()));
         }
         entries.sort(Comparator.comparing(ManifestEntry::conch));
         byte[] canonical;
@@ -74,6 +76,9 @@ public class ConchDistributionService {
         } catch (PackageVerificationException ex) {
             log.error("Published conch failed verification reason={}", ex.reason());
             throw new ApiException(500, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message());
+        }
+        if (repository.incrementPullCount(row.conch(), row.version()) != 1) {
+            throw notFound();
         }
         return zip;
     }

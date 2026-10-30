@@ -138,6 +138,7 @@ onMounted(load)
             <strong>
               {{ row.title || row.conch }}
               <el-tag v-if="row.source === 'LOCAL'" type="warning" effect="plain" size="small" class="local">本地</el-tag>
+              <el-tag v-if="row.reefDisabled" type="danger" effect="plain" size="small" class="local reef-off">已失效</el-tag>
             </strong>
             <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
           </div>
@@ -149,6 +150,7 @@ onMounted(load)
           <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
           <span v-else>可用：可以通过 OpenAPI 和 MCP 调用</span>
         </div>
+        <p v-if="row.reefDisabled" class="reef-off-note">Reef 已停用：本机版本仍可调用，但不会再更新</p>
         <div class="foot hm-muted">
           <span><b class="num">{{ row.capabilityCount }}</b> 个能力</span>
           <span><b class="num">{{ row.accountCount }}</b> 个账号</span>
@@ -285,6 +287,12 @@ onMounted(load)
 .local {
   margin-left: 6px;
   vertical-align: 2px;
+}
+
+.reef-off-note {
+  margin: -4px 0 0;
+  font-size: 12.5px;
+  color: var(--hm-danger);
 }
 
 .summary {

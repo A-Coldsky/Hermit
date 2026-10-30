@@ -163,6 +163,26 @@ describe('本地规则包', () => {
     expect(buttons(wrapper, '取消订阅')).toHaveLength(0)
   })
 
+  it('Reef 停用后详情提示失效但仍可调用，列表带「已失效」', async () => {
+    crab.conch.mockResolvedValue({ ...detail('REEF'), reefDisabled: true, reefDisabledAt: '2026-10-30T00:00:00Z' })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    const alert = page.find('[data-test="reef-disabled"]')
+    expect(alert.text()).toContain('已失效')
+    expect(alert.text()).toContain('仍可正常调用')
+    expect(alert.text()).toContain('不会再下载或更新')
+
+    crab.conches.mockResolvedValue({
+      conches: [
+        { conch: 'legacy_oa', version: '1.0.0', title: 'OA', capabilityCount: 1, subscribed: true, accountCount: 1, needsConfiguration: false, loginPaused: false, source: 'REEF', reefDisabled: true, reefDisabledAt: '2026-10-30T00:00:00Z' },
+      ],
+    })
+    const list = await mountPage(ConchesView)
+    await flushPromises()
+    expect(list.find('.reef-off').text()).toBe('已失效')
+    expect(list.text()).toContain('可用：可以通过 OpenAPI 和 MCP 调用')
+  })
+
   it('Reef 包详情只有取消订阅', async () => {
     crab.conch.mockResolvedValue(detail('REEF'))
     const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })

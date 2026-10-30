@@ -183,8 +183,8 @@ onMounted(load)
           <div v-if="report.notModified && !report.error && disabledInSync.length" class="state warn">
             <el-icon :size="22"><WarningFilled /></el-icon>
             <div>
-              <strong>{{ disabledInSync.length }} 个规则包已在 Reef 停用</strong>
-              <div class="hm-muted">上次同步时 Reef 没有新变化，停用的规则包不能调用</div>
+              <strong>{{ disabledInSync.length }} 个规则包已失效（Reef 已停用）</strong>
+              <div class="hm-muted">本机保留的版本仍可调用，但不会再更新。上次同步时 Reef 没有新变化</div>
             </div>
           </div>
           <div v-else-if="report.notModified && !report.error" class="state ok">

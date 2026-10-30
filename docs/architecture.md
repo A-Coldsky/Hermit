@@ -86,6 +86,10 @@ sequenceDiagram
 
 同一 `(origin, conch, account)` 由公平锁串行执行；不同账号可并行。执行能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。
 
+## 页面路由
+
+Reef 与 Crab 的浏览器页面都是同一份静态 `index.html`，不用请求路径去读别的文件。Reef 上凡是 GET、且不是 `/api/**`、`/agent/**`、`/assets/**` 的路径都返回这份文件；未登录不会因此得到 401 JSON，已有的前端路由再把未登录用户送进登录页。`GET /shells` 与 `GET /shells/**` 302 到 `/conches`。Crab 在回环连接上，`GET /console/**` 除 `/console/api/**` 和 `/console/assets/**` 外同样返回 `index.html`；`GET /console/shells` 与其子路径 302 到 `/console/conches`。这两处 302 的地址是固定的，不保留 shells 后面的名字。页面响应里没有账号、令牌或业务数据。`/api/**`、`/agent/**`、`/console/api/**` 的未知路径仍是 JSON 信封。页面加载后，前端把 `/shells` 与 `/shells/:conch` 转到 `/conches`；未知路径显示「页面不存在」（Reef 未登录仍先进入登录页）。
+
 ## 数据与信任
 
 | 数据 | 位置与方式 |

@@ -2,10 +2,14 @@ package dev.hermit.reef.ui;
 
 import dev.hermit.reef.web.ApiException;
 import dev.hermit.reef.web.ReefErrorCode;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
@@ -13,9 +17,19 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.MediaTypeFactory;
 import org.springframework.stereotype.Controller;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.method.HandlerMethod;
+import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
+/**
+ * 管理端页面。除静态资源外，GET 固定返回 {@code index.html}，不按请求路径读别的文件。
+ * {@code /api/**} 与 {@code /agent/**} 即使进到这里也不回 HTML：没有对应接口是 JSON {@code NOT_FOUND}，
+ * 路径属于其它方法时仍是 405。
+ */
 @Controller
 public class AdminUiController {
 
@@ -24,31 +38,95 @@ public class AdminUiController {
     static final String ASSET_CACHE = "public, max-age=31536000, immutable";
 
     private final ResourceLoader resourceLoader;
+    private final ObjectProvider<RequestMappingHandlerMapping> mappings;
     private final String root;
 
     public AdminUiController(ResourceLoader resourceLoader,
+            ObjectProvider<RequestMappingHandlerMapping> mappings,
             @Value("${hermit.web.reef-root:classpath:/hermit-web/reef-admin/}") String root) {
         this.resourceLoader = resourceLoader;
+        this.mappings = mappings;
         this.root = root.endsWith("/") ? root : root + "/";
     }
 
-    @GetMapping({
-            "/",
-            "/login",
-            "/conches",
-            "/conches/upload",
-            "/conches/{conch}",
-            "/tide",
-            "/alerts",
-            "/audit",
-            "/settings"
-    })
-    public void page(HttpServletResponse response) throws IOException {
+    @GetMapping({"/", "/{*page}"})
+    public void page(HttpServletRequest request, HttpServletResponse response)
+            throws IOException, HttpRequestMethodNotSupportedException {
+        String path = requestPath(request);
+        if (legacyShells(path)) {
+            response.setStatus(HttpServletResponse.SC_FOUND);
+            response.setHeader(HttpHeaders.LOCATION, "/conches");
+            return;
+        }
+        if (reserved(path)) {
+            // 这条 GET 兜底比「只有 POST 的接口」更宽。路径对得上别的方法时仍是 405，完全没有的才是 404。
+            if (mappedForAnotherMethod(request)) {
+                throw new HttpRequestMethodNotSupportedException(request.getMethod());
+            }
+            throw notFound();
+        }
         byte[] body = read(root + "index.html");
         if (body == null) {
             throw notFound();
         }
         write(response, body, HTML, PAGE_CACHE);
+    }
+
+    static boolean legacyShells(String path) {
+        return "/shells".equals(path) || path.startsWith("/shells/");
+    }
+
+    static boolean reserved(String path) {
+        return under(path, "/api") || under(path, "/agent") || under(path, "/assets");
+    }
+
+    private static boolean under(String path, String prefix) {
+        return prefix.equals(path) || path.startsWith(prefix + "/");
+    }
+
+    private boolean mappedForAnotherMethod(HttpServletRequest request) {
+        for (Map.Entry<RequestMappingInfo, HandlerMethod> entry : mappings.getObject().getHandlerMethods().entrySet()) {
+            HandlerMethod handler = entry.getValue();
+            if (AdminUiController.class.isAssignableFrom(handler.getBeanType())
+                    && "page".equals(handler.getMethod().getName())) {
+                continue;
+            }
+            RequestMappingInfo info = entry.getKey();
+            if (!pathMatches(info, request)) {
+                continue;
+            }
+            Set<RequestMethod> methods = info.getMethodsCondition().getMethods();
+            if (methods.isEmpty() || methods.contains(RequestMethod.GET)) {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean pathMatches(RequestMappingInfo info, HttpServletRequest request) {
+        if (info.getPathPatternsCondition() != null
+                && info.getPathPatternsCondition().getMatchingCondition(request) != null) {
+            return true;
+        }
+        return info.getPatternsCondition() != null && info.getPatternsCondition().getMatchingCondition(request) != null;
+    }
+
+    static String requestPath(HttpServletRequest request) {
+        String servlet = request.getServletPath();
+        String info = request.getPathInfo();
+        String path = (servlet == null ? "" : servlet) + (info == null ? "" : info);
+        if (path.isEmpty()) {
+            path = request.getRequestURI();
+            String context = request.getContextPath();
+            if (context != null && !context.isEmpty() && path.startsWith(context)) {
+                path = path.substring(context.length());
+            }
+        }
+        if (path == null || path.isEmpty()) {
+            return "/";
+        }
+        return path.startsWith("/") ? path : "/" + path;
     }
 
     @GetMapping("/assets/{*path}")

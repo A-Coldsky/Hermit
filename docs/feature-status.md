@@ -26,8 +26,8 @@
 | 上报队列、聚合、退避、预览 | 已实现 | ReportSenderTest；失败/事件队列上限 10000，超限丢弃计数；小时统计单独存储 |
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
 | 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest。确认后，创建时间起算的去重窗口剩余时间内不新建、不推送；窗口结束后条件仍在才新建。失败上涨不提前打破窗口。Webhook 含告警 id 与相对路径 `/alerts`（无对外基址配置），没有持久化重试队列。负阈值，以及必须为正的窗口写成 0，启动时拒绝 |
-| Reef 管理页面 | 已实现 | 登录、仪表盘、Conch/上传/版本及校验警告明细、Tide、告警、审计、设置说明 |
-| Crab 本机控制台 | 已实现 | 概览、Conch、账号/凭证/配置、能力、API Key、调用、上报。调用记录的 `action` 筛选接受能力名或 `conch.action`；与 `conch` 冲突时 400。Conch 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。详情横幅按默认账号与具体原因写标题并点名账号；凭证无法解密时对话框要求全部重填。概览把「账号暂停」与「缺凭证或配置」分开提示，同步卡有停用项时不显示「已是最新」。两端的审计、调用、上报时间列显示浏览器本地时间和时区，悬停显示 UTC。「配置审计」页按 Conch/账号筛选分页查看变更记录 |
+| Reef 管理页面 | 已实现 | 登录、仪表盘、Conch/上传/版本及校验警告明细、Tide、告警、审计、设置说明。GET 且不是 `/api/**`、`/agent/**`、`/assets/**` 的路径返回同一份 `index.html`，未登录不是 401 JSON，由已有前端路由进入登录页。`GET /shells` 与 `/shells/**` 302 到 `/conches`。页面响应不带账号或令牌。前端把 `/shells` 与 `/shells/:conch` 转到 `/conches`；已登录的未知路径显示应用内「页面不存在」 |
+| Crab 本机控制台 | 已实现 | 概览、Conch、账号/凭证/配置、能力、API Key、调用、上报。调用记录的 `action` 筛选接受能力名或 `conch.action`；与 `conch` 冲突时 400。Conch 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。详情横幅按默认账号与具体原因写标题并点名账号；凭证无法解密时对话框要求全部重填。概览把「账号暂停」与「缺凭证或配置」分开提示，同步卡有停用项时不显示「已是最新」。两端的审计、调用、上报时间列显示浏览器本地时间和时区，悬停显示 UTC。「配置审计」页按 Conch/账号筛选分页查看变更记录。未登记的 `GET /console/**`（不含 `/console/api/**` 与 `/console/assets/**`）返回同一份 `index.html`。`GET /console/shells` 与其子路径 302 到 `/console/conches`。前端把 `shells` 与 `shells/:conch` 转到 `/conches`；未知路径显示应用内「页面不存在」 |
 | Crab 配置审计查询 | 已实现 | 控制台「配置审计」页、`GET /console/api/audit` 与 CLI `audit list`。可按 conch/account 分页，新的在前。只返回 id、时间、actor、action、origin、conch、account、字段名；不返回 detail 原文、配置值、凭证明文或密文。`config_audit` 仍无定期清理 |
 | Docker Reef + Nginx + MySQL / Crab | 已配置，运行未验收 | Crab 同机 client profile / 独立 Compose / Dockerfile 已提供；配置语法通过，尚未启动容器栈 |
 
@@ -82,4 +82,10 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 
 2026-10-30 MCP Origin 与协议版本头以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 125、hermit-crab 217、hermit-it 1，失败/错误/跳过均为 0；Vitest 63（12 个文件）。Java 小计 386，合计 449。本次新增 Crab 的 Origin、协议版本头和 `mcp.allowed_origins` 用例。未用真实 MCP 客户端或浏览器复测，也未启动 MySQL 或 Compose。
 
+2026-10-30 页面深链回落以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 127、hermit-crab 210、hermit-it 1，失败/错误/跳过均为 0；Vitest 63（12 个文件）。覆盖 Crab `/console/audit`、`/console/nope` 及多段路径返回 `index.html`，`/console/shells/**` 302 到 `/console/conches`，`/console/api/**` 与非 GET 仍是 JSON；Reef 未登录未知页是同一份静态页而不是 401，已登录响应字节相同且不含令牌，`/api` 与 `/agent` 未知路径仍是 JSON，只有 POST 的管理接口 GET 仍是 405。未启动 MySQL 或 Compose，也未在浏览器里点选深链。前端未知路径仍重定向到首页。合入 main 的 Origin 与主题改动后，计数见下一条。
+
+2026-10-30 合入 main（MCP Origin、主题与时区文案）后再以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 127、hermit-crab 218、hermit-it 1，失败/错误/跳过均为 0；Vitest 74（13 个文件）。Java 小计 389，合计 463。未启动 MySQL 或 Compose，也未在浏览器里点选。前端未知路径仍重定向到首页。
+
 2026-10-30 合入 main（#46–#48、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 128、hermit-crab 222、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 394，连同 Vitest 合计 469。未启动 MySQL 或 Compose，也未做浏览器验收。
+
+2026-10-30 再合入 origin/main `34f5b01`（#50、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 130、hermit-crab 223、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 397，合计 472。这是当前整棵树的计数。服务端页面回落与 shells 的 302 保持不变；应用内「页面不存在」与前端 `/shells` 跳转来自 #51，未改 Vue。未启动 MySQL 或 Compose，也未在浏览器里点选。

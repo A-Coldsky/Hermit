@@ -84,8 +84,10 @@ describe('Crab 概览', () => {
 
     const text = wrapper.text()
     expect(text).not.toContain('已是最新')
-    expect(text).toContain('1 个规则包已在 Reef 停用')
-    expect(text).toContain('已停用')
+    expect(text).toContain('1 个规则包已失效（Reef 已停用）')
+    expect(text).toContain('本机保留的版本仍可调用')
+    expect(text).toContain('已失效，不再更新')
+    expect(text).not.toContain('不能调用')
     expect(text).not.toContain('已移除')
   })
 

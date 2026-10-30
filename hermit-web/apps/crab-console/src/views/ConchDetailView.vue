@@ -5,6 +5,7 @@ import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
+import TimeText from '@shared/components/TimeText.vue'
 import { ApiError } from '@shared/http'
 import { notifyError } from '@shared/format'
 import { api, type Account, type ConfigValue, type ConchDetail } from '../api'
@@ -196,6 +197,7 @@ watch(
       <template #badge>
         <el-tag v-if="detail" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
         <el-tag v-if="local" type="warning" effect="plain" round>本地</el-tag>
+        <el-tag v-if="detail?.reefDisabled" type="danger" effect="plain" round>已失效</el-tag>
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <template v-if="local">
@@ -212,6 +214,19 @@ watch(
     </el-result>
 
     <template v-else-if="detail">
+      <el-alert
+        v-if="detail.reefDisabled"
+        type="error"
+        show-icon
+        :closable="false"
+        title="已失效：Reef 停用了这个规则包"
+        data-test="reef-disabled"
+      >
+        <template #default>
+          本机保留的 v{{ detail.version }} 仍可正常调用，但 Crab 不会再下载或更新它。Reef 重新启用后，下次同步自动恢复更新。
+          <template v-if="detail.reefDisabledAt">本机于 <TimeText :value="detail.reefDisabledAt" /> 发现停用。</template>
+        </template>
+      </el-alert>
       <el-alert v-if="local" type="info" show-icon :closable="false" title="本地规则包：未经 Reef 签名，只在本机可用">
         <template #default>
           只有在范围里明确选中 <span class="mono">{{ conch }}</span> 的 API Key 才能调用它；「全部规则包」的 Key 会被拒绝。调用不会上报 Reef。

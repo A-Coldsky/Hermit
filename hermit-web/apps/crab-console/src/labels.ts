@@ -5,7 +5,7 @@ export const outcomeLabels: Record<string, { text: string; tone: 'success' | 'in
   SKIPPED_PINNED: { text: '已固定版本', tone: 'info' },
   REJECTED: { text: '已拒绝', tone: 'danger' },
   ROLLED_BACK: { text: '已回退', tone: 'warning' },
-  DISABLED: { text: '已停用', tone: 'danger' },
+  DISABLED: { text: '已失效，不再更新', tone: 'warning' },
   SKIPPED_LOCAL: { text: '本地同名，未安装', tone: 'warning' },
   NOT_SUBSCRIBED: { text: '未订阅', tone: 'info' },
 }
@@ -47,6 +47,8 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   CONCH_UNSUBSCRIBED: { text: '取消订阅', tone: 'warning' },
   LOCAL_CONCH_IMPORTED: { text: '导入本地规则包', tone: 'success' },
   LOCAL_CONCH_DELETED: { text: '删除本地规则包', tone: 'danger' },
+  REEF_CONCH_DISABLED: { text: 'Reef 停用（失效）', tone: 'warning' },
+  REEF_CONCH_ENABLED: { text: 'Reef 重新启用', tone: 'success' },
 }
 
 export const actorLabels: Record<string, string> = {

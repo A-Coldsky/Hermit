@@ -147,7 +147,7 @@ onMounted(load)
               <el-tag v-if="row.installed && !row.localConflict" type="info" effect="plain" size="small" class="mono">
                 已安装 v{{ row.installedVersion }}
               </el-tag>
-              <el-tag v-if="row.disabled" type="danger" effect="plain" size="small">Reef 已停用</el-tag>
+              <el-tag v-if="row.disabled" type="danger" effect="plain" size="small">已失效（Reef 停用）</el-tag>
             </div>
           </template>
         </el-table-column>

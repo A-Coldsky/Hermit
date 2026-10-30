@@ -144,6 +144,7 @@ class RollbackGuardTest {
     }
 
     private static ConchSync sync(FakeReef reef, OpenCrab crab, ConchRegistry registry) {
+        TestSubscriptions.grantKnown(crab.dataSource);
         return new ConchSync(
                 new SyncSettings(reef.base(), Optional.empty(), reef.keys().getPublic(), Duration.ofMinutes(5),
                         INSTANCE),

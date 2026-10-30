@@ -83,13 +83,6 @@ public class LocalConchBehaviorTest {
 
             try (Connection connection = runtime.dataSource().getConnection();
                  Statement statement = connection.createStatement()) {
-                statement.execute("""
-                        CREATE TABLE subscriptions (
-                            conch VARCHAR(128) PRIMARY KEY,
-                            subscribed_at TIMESTAMP NOT NULL,
-                            actor VARCHAR(128) NOT NULL
-                        )
-                        """);
                 statement.execute("INSERT INTO subscriptions (conch, subscribed_at, actor) VALUES ('subscribed_ping', CURRENT_TIMESTAMP, 'cli')");
             }
             assertThatThrownBy(() -> runtime.localConches().importBytes(
@@ -123,7 +116,7 @@ public class LocalConchBehaviorTest {
             Files.createSymbolicLink(dir.resolve("linked_ping.yaml"), outside);
 
             runtime.loadInstalledConches();
-            assertThat(runtime.registry().origin("local_ping")).contains(Origin.LOCAL);
+            assertThat(runtime.registry().origin("local_ping")).isEqualTo(Origin.LOCAL);
             assertThat(runtime.registry().find("broken")).isEmpty();
             assertThat(runtime.registry().find("renamed")).isEmpty();
             assertThat(runtime.registry().find("linked_ping")).isEmpty();
@@ -140,7 +133,7 @@ public class LocalConchBehaviorTest {
             assertThat(results).anyMatch(row -> "local_ping.yaml".equals(row.file()) && row.ok() && "1.2.0".equals(row.version()));
             assertThat(results).anyMatch(row -> "local_two.yaml".equals(row.file()) && row.ok());
             assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.2.0");
-            assertThat(runtime.registry().origin("local_two")).contains(Origin.LOCAL);
+            assertThat(runtime.registry().origin("local_two")).isEqualTo(Origin.LOCAL);
             assertThat(auditCount(runtime, "LOCAL_CONCH_IMPORTED")).isGreaterThan(imported);
 
             Files.delete(dir.resolve("local_ping.yaml"));

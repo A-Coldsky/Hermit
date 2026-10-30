@@ -3,6 +3,7 @@ package dev.hermit.crab.store;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -52,8 +53,9 @@ class CrabDatabaseTest {
                     "HOURLY_COUNTS",
                     "REPORT_META",
                     "PENDING_CREDENTIAL_DELETES",
-                    "DISABLED_CONCHES");
-            assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6, 7, 9);
+                    "DISABLED_CONCHES",
+                    "SUBSCRIPTIONS");
+            assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9);
             assertThat(indexNames(fixture)).contains("CONFIG_AUDIT_AT_IDX");
             assertThat(columnType(fixture, "CREDENTIALS", "CIPHERTEXT")).contains("BINARY");
         } finally {
@@ -64,7 +66,7 @@ class CrabDatabaseTest {
             Account account = reopened.accounts.resolve(Origin.OFFICIAL, "oa", Optional.of("alice"));
             assertThat(account.account()).isEqualTo("alice");
             assertThat(account.defaultAccount()).isTrue();
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 9);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9);
         }
     }
 
@@ -74,7 +76,7 @@ class CrabDatabaseTest {
         try {
             try (Connection connection = fixture.dataSource.getConnection();
                  Statement statement = connection.createStatement()) {
-                statement.execute("DELETE FROM schema_version WHERE version IN (4, 5, 6, 7, 9)");
+                statement.execute("DELETE FROM schema_version WHERE version IN (4, 5, 6, 7, 8, 9)");
                 statement.execute("ALTER TABLE call_logs DROP COLUMN source");
                 statement.execute("ALTER TABLE sync_state ALTER COLUMN \"value\" SET DATA TYPE VARCHAR(512)");
                 statement.execute("ALTER TABLE rollback_queue DROP COLUMN event_id");
@@ -85,7 +87,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 9);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9);
             String value = "v".repeat(600);
             try (Connection connection = reopened.dataSource.getConnection();
                  PreparedStatement insert = connection.prepareStatement(
@@ -110,7 +112,7 @@ class CrabDatabaseTest {
         StoreFixture fixture = StoreFixture.open(temp);
         try {
             forgetVersionTwo(fixture);
-            assertThat(versions(fixture)).containsExactly(1, 3, 4, 5, 6, 7);
+            assertThat(versions(fixture)).containsExactly(1, 3, 4, 5, 6, 7, 8);
             assertThat(tableNames(fixture)).doesNotContain("CALL_LOGS", "SESSIONS", "IDEMPOTENCY");
             assertThat(tableNames(fixture)).contains("REPORT_QUEUE", "SYNC_STATE");
         } finally {
@@ -118,7 +120,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 9);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9);
             assertThat(tableNames(reopened)).contains(
                     "CALL_LOGS", "STEP_LOGS", "IDEMPOTENCY", "SESSIONS", "CAPABILITY_SWITCHES", "DEBUG_STATE",
                     "REPORT_QUEUE", "SYNC_STATE");
@@ -137,7 +139,7 @@ class CrabDatabaseTest {
                     INSERT INTO call_logs (trace_id, at, origin, conch, action, account, success, duration_ms)
                     VALUES ('trace-old', CURRENT_TIMESTAMP, 'OFFICIAL', 'legacy_oa', 'ping', 'alice', TRUE, 3)
                     """);
-            assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6, 7);
+            assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8);
             assertThat(tableNames(fixture)).contains("DISABLED_CONCHES");
             assertThat(indexNames(fixture)).contains("CONFIG_AUDIT_AT_IDX");
         } finally {
@@ -145,7 +147,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 9);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9);
             assertThat(tableNames(reopened)).contains("DISABLED_CONCHES");
             assertThat(indexNames(reopened)).contains("CONFIG_AUDIT_AT_IDX");
             try (Connection connection = reopened.dataSource.getConnection();
@@ -165,7 +167,7 @@ class CrabDatabaseTest {
         StoreFixture fixture = StoreFixture.open(temp);
         try (Connection connection = fixture.dataSource.getConnection();
              Statement statement = connection.createStatement()) {
-            statement.execute("DELETE FROM schema_version WHERE version IN (5, 6, 7, 9)");
+            statement.execute("DELETE FROM schema_version WHERE version IN (5, 6, 7, 8, 9)");
             statement.execute("ALTER TABLE call_logs DROP COLUMN source");
             statement.execute("ALTER TABLE rollback_queue DROP COLUMN event_id");
             insertQueuedRollback(connection, Instant.parse("2026-06-01T00:00:00Z"), "RULE_MISMATCH");
@@ -176,7 +178,7 @@ class CrabDatabaseTest {
 
         List<String> first;
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 9);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9);
             first = eventIds(reopened);
             assertThat(first).hasSize(2);
             assertThat(first).doesNotHaveDuplicates();
@@ -197,7 +199,7 @@ class CrabDatabaseTest {
                  Statement statement = connection.createStatement()) {
                 statement.execute("DROP TABLE disabled_conches");
                 statement.execute("DROP INDEX config_audit_at_idx");
-                statement.execute("DELETE FROM schema_version WHERE version IN (7, 9)");
+                statement.execute("DELETE FROM schema_version WHERE version IN (7, 8, 9)");
                 statement.execute("ALTER TABLE call_logs DROP COLUMN source");
             }
             assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6);
@@ -207,14 +209,48 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 9);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9);
             assertThat(tableNames(reopened)).contains("DISABLED_CONCHES");
             assertThat(indexNames(reopened)).doesNotContain("CONFIG_AUDIT_AT_IDX");
         }
     }
 
+    @Test
+    void versionEightSubscribesInstalledConchesOnce() throws Exception {
+        Path home = temp.resolve("seed");
+        Files.createDirectories(home.resolve("conches/legacy_oa"));
+        Files.writeString(home.resolve("conches/legacy_oa/current"), "1.0.0\n", StandardCharsets.UTF_8);
+        Files.createDirectories(home.resolve("conches/other_sys"));
+        Files.createDirectories(home.resolve("conches/Legacy"));
+        Files.writeString(home.resolve("conches/Legacy/current"), "1.0.0\n", StandardCharsets.UTF_8);
+        Files.createDirectories(home.resolve("conches/link_oa"));
+        Files.writeString(home.resolve("version.txt"), "1.0.0\n", StandardCharsets.UTF_8);
+        Files.createSymbolicLink(home.resolve("conches/link_oa/current"), home.resolve("version.txt"));
+
+        try (StoreFixture fixture = StoreFixture.open(home)) {
+            assertThat(subscriptions(fixture)).containsExactly("legacy_oa migration");
+        }
+
+        Files.createDirectories(home.resolve("conches/future_oa"));
+        Files.writeString(home.resolve("conches/future_oa/current"), "1.0.0\n", StandardCharsets.UTF_8);
+        try (StoreFixture again = StoreFixture.open(home)) {
+            assertThat(subscriptions(again)).containsExactly("legacy_oa migration");
+        }
+
+        try (StoreFixture fixture = StoreFixture.open(home)) {
+            try (Connection connection = fixture.dataSource.getConnection();
+                 Statement statement = connection.createStatement()) {
+                statement.execute("DROP TABLE subscriptions");
+                statement.execute("DELETE FROM schema_version WHERE version = 8");
+            }
+        }
+        try (StoreFixture reopened = StoreFixture.open(home)) {
+            assertThat(subscriptions(reopened)).containsExactly("future_oa migration", "legacy_oa migration");
+        }
+    }
+
     /**
-     * Leaves a database that recorded versions 1, 3, 4, 5, 6, and 7 and has no version-2 tables.
+     * Leaves a database that recorded versions 1, 3, 4, 5, 6, 7, and 8 and has no version-2 tables.
      * Version 3 tables stay; version 2 must not need them.
      */
     private static void forgetVersionTwo(StoreFixture fixture) throws Exception {
@@ -228,6 +264,19 @@ class CrabDatabaseTest {
             statement.execute("DROP TABLE IF EXISTS debug_state");
             statement.execute("DELETE FROM schema_version WHERE version = 2");
             statement.execute("DELETE FROM schema_version WHERE version = 9");
+        }
+    }
+
+    private static List<String> subscriptions(StoreFixture fixture) throws Exception {
+        try (Connection connection = fixture.dataSource.getConnection();
+             Statement statement = connection.createStatement();
+             ResultSet resultSet = statement.executeQuery(
+                     "SELECT conch, actor FROM subscriptions ORDER BY conch")) {
+            List<String> rows = new ArrayList<>();
+            while (resultSet.next()) {
+                rows.add(resultSet.getString(1) + " " + resultSet.getString(2));
+            }
+            return rows;
         }
     }
 

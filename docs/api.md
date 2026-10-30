@@ -111,7 +111,10 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/conch/account/action/k
 
 | 方法 | 路径 | 输入/用途 |
 | --- | --- | --- |
-| GET | `/conches`、`/conches/{conch}` | 已加载规则/字段声明/能力状态。列表项含 `needsConfiguration`、`loginPaused`、`source`；详情含 `loginPaused`、`source`。`source` 为 `LOCAL` 或 `REEF` |
+| GET | `/conches`、`/conches/{conch}` | 已加载规则/字段声明/能力状态。列表项含 `subscribed`、`needsConfiguration`、`loginPaused`、`source`；详情含 `loginPaused`、`source`。`source` 为 `LOCAL` 或 `REEF` |
+| GET | `/catalog` | 最近一次成功清单。`{conches, syncedAt, configured}`。未配置 Reef 时 `configured` 为 false，`conches` 为空。每项含 `conch`、`version`、`title`、`description`、`capabilityCount`、`subscribed`、`installed`、`installedVersion`、`disabled`、`localConflict`。`disabled` 表示停用墓碑还在。`localConflict` 表示该名字已是本机本地包 |
+| POST | `/conches/{conch}/subscription` | 订阅并立即同步。返回 `{conch, subscribed: true, outcome}`。`outcome` 与同步结果里的一行相同，清单未提到该包时为 JSON `null`。与本地包重名是 409，错误码仍是 `INVALID_INPUT` |
+| DELETE | `/conches/{conch}/subscription` | 退订。返回 `{conch, subscribed: false}` |
 | GET / POST | `/conches/{conch}/accounts` | 列表 / `{name}` 创建。账号行见下方字段 |
 | DELETE | `/conches/{conch}/accounts/{account}` | 删除账号/凭证并使会话失效 |
 | POST | `/conches/{conch}/accounts/{account}/default` | 设默认账号 |
@@ -165,7 +168,14 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 响应不含 `detail` 原文、配置值、凭证明文、密文，也不含 API Key 明文、哈希、id 或 name。debug 的 `enabled` 同样不返回。历史行的 detail 里如果还有别的键，读取时丢弃。`config_audit` 没有定期清理。
 
-同步结果里每个 Conch 有 `conch`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`SKIPPED_PINNED`、`SKIPPED_LOCAL`、`REJECTED`、`ROLLED_BACK`、`DISABLED` 之一。清单里的名字已经是本机本地包时为 `SKIPPED_LOCAL`，不下载、不覆盖，也不写入 ETag 快照。自动回滚尚未解除固定时，该 Conch 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 把已安装的 Conch 从清单去掉（停用）时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是卸下前的已安装版本，同时名字出现在 `removed`。随后的 304 不再带这行原始结果，控制台读取时仍按停用记录投影成 `DISABLED`，并放进 `removed`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
+新装 Crab 不订阅任何规则包。订阅只写在本机，Reef 不能代订。`POST /console/api/conches/{conch}/subscription` 要求名字合法且已在目录缓存里；缓存还没有时会先同步一次再判断。与本机 `Origin.LOCAL` 规则包同名时 HTTP 409，`code` 仍是 `INVALID_INPUT`（没有单独的 `CONFLICT`），`message` 为「与本机本地规则包同名」。导入本地包时，名字已在 `subscriptions` 里同样是 HTTP 409、`INVALID_INPUT`，`message` 为「与已订阅的规则包重名」；与已安装的正式包重名也是 409，`message` 为「与已安装的正式规则包重名」。不在目录里是 404 `NOT_FOUND`，`message` 为 `conch is not in the catalog`。非法名字是 400 `INVALID_INPUT`。未订阅是 404，`message` 为 `not subscribed`。Reef 未配置时目录接口 `configured` 为 false；订阅是 409 `NOT_CONFIGURED`。写上订阅行之后立即同步，并返回该包这一轮的 `outcome`。同步失败时订阅行保留，错误与 `POST /sync` 相同。重复订阅不再写第二条 `CONCH_SUBSCRIBED`，仍会清掉 ETag 再同步。
+
+退订删除订阅行，从注册表移除，删除 `current`，不写 `disabled_conches`，并清掉已有墓碑。账号、凭证、配置和版本目录保留。此后调用是 `NOT_FOUND`，不是 `CONCH_DISABLED`。已经进入引擎的请求仍使用当时的授权快照。
+
+`CONCH_SUBSCRIBED` 与 `CONCH_UNSUBSCRIBED` 的审计 target 是 `OFFICIAL/{conch}`，因此读取时 origin 为 `OFFICIAL`、conch 为包名、account 为空。detail 只有包名，不是 JSON，所以 `fields` 为空。响应仍不返回 detail 原文。
+
+同步结果里每个 Conch 有 `conch`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`SKIPPED_PINNED`、`SKIPPED_LOCAL`、`NOT_SUBSCRIBED`、`REJECTED`、`ROLLED_BACK`、`DISABLED` 之一。清单里的名字已经是本机本地包时为 `SKIPPED_LOCAL`，不下载、不覆盖，也不写入 ETag 快照。`NOT_SUBSCRIBED` 表示清单里有这个包，但本机未订阅，因此没有下载。自动回滚尚未解除固定时，该 Conch 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 把已安装的 Conch 从清单去掉（停用）时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是卸下前的已安装版本，同时名字出现在 `removed`。随后的 304 不再带这行原始结果，控制台读取时仍按停用记录投影成 `DISABLED`，并放进 `removed`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
+
 
 重新启用后，Crab 重新下载并验签安装，停用记录清除，调用恢复。若本地仍把该版本固定为坏版本，且清单版本没有高于坏版本，则不会装回去，调用继续是 `CONCH_DISABLED`。账号、凭证和配置在停用期间不删除。
 
@@ -176,6 +186,9 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 ```text
 serve
 sync
+catalog
+subscribe <conch>
+unsubscribe <conch>
 account list <conch>
 account add|remove|default <conch> <name>
 credential set <conch> <account> <field> [--from-env VAR]
@@ -195,6 +208,8 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
 普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
+
+`catalog` 打印目录缓存，一行一个包：`包名 版本`，后面按情况接 `subscribed`、`installed 版本`、`disabled`、`local-conflict`，最后是标题。缓存还没有时没有输出，退出 0。`subscribe` 成功时打印 `包名 版本 KIND`；这一轮结果里没有该包时打印 `包名 subscribed`。`unsubscribe` 成功时打印包名。未配置 `reef.url` 时 `catalog` 和 `subscribe` 与 `sync` 一样在 stderr 打印 `reef.url is not configured` 并退出 1。`unsubscribe` 在未配置 Reef 时仍可用。
 
 `audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。每一行是 `时间 actor action origin conch account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
 

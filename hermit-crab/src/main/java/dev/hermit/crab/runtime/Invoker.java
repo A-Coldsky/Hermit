@@ -119,7 +119,10 @@ public final class Invoker {
         if (doc == null || capability == null || disabled.disabled(conch, action)) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
         }
-        Origin origin = registry.origin(conch).orElse(Origin.OFFICIAL);
+        Origin origin = registry.origin(conch);
+        if (origin == null) {
+            origin = Origin.OFFICIAL;
+        }
         // 空的 conches 表示全部正式包。本地包必须被点名，否则这里就是 403，目录里仍能看见该工具。
         if (origin == Origin.LOCAL && !principal.scope().conches().contains(conch)) {
             return done(traceId, ErrorCode.FORBIDDEN, "forbidden", null);

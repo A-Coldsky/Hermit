@@ -100,7 +100,7 @@ public final class InstalledConches {
                 failures.add(failure(conch, version, SyncReasons.MANIFEST_ENTRY_MISMATCH));
                 return;
             }
-            if (registry.origin(conch).orElse(null) == Origin.LOCAL) {
+            if (registry.origin(conch) == Origin.LOCAL) {
                 failures.add(failure(conch, version, SyncReasons.LOCAL_KEPT));
                 LOG.log(Level.WARNING, "skip installed conch {0} because a local conch uses that name", conch);
                 return;

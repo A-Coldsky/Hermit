@@ -39,11 +39,13 @@ import dev.hermit.crab.store.CallLogStore;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.store.Origin;
+import dev.hermit.crab.sync.ConchCatalog;
 import dev.hermit.crab.sync.CrabRelease;
 import dev.hermit.crab.sync.LocalConchException;
 import dev.hermit.crab.sync.LocalConches;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
 import dev.hermit.crab.sync.ConchOutcome;
+import dev.hermit.crab.sync.SubscriptionException;
 import dev.hermit.crab.sync.SyncError;
 import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
@@ -83,6 +85,9 @@ final class ConsoleApi {
         post(app, "/console/api/debug", ctx -> setDebug(runtime, ctx));
         post(app, "/console/api/sync", ctx -> sync(runtime, ctx));
         get(app, "/console/api/sync", ctx -> syncStatus(runtime, ctx));
+        get(app, "/console/api/catalog", ctx -> catalog(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/subscription", ctx -> subscribe(runtime, ctx));
+        delete(app, "/console/api/conches/{conch}/subscription", ctx -> unsubscribe(runtime, ctx));
         get(app, "/console/api/reports/preview", ctx -> reportPreview(runtime, ctx));
         post(app, "/console/api/reports/send", ctx -> reportSend(runtime, ctx));
         post(app, "/console/api/local-conches", ctx -> importLocal(runtime, ctx));
@@ -101,6 +106,7 @@ final class ConsoleApi {
             row.put("version", doc.version().toString());
             row.put("title", text(doc.title()));
             row.put("capabilityCount", doc.actions().size());
+            row.put("subscribed", runtime.subscribed(doc.conch()));
             row.put("accountCount", accounts.size());
             row.put("needsConfiguration", needsConfiguration(runtime, doc, accounts, loginPaused));
             row.put("loginPaused", loginPaused);
@@ -376,6 +382,69 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, debug(runtime.debug().setEnabled(body.get("enabled").booleanValue(), Actors.CONSOLE)));
     }
 
+    private static void catalog(CrabRuntime runtime, Context ctx) {
+        ConchCatalog catalog = runtime.catalog();
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (ConchCatalog.Entry entry : catalog.conches()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("conch", entry.conch());
+            row.put("version", entry.version());
+            row.put("title", entry.title());
+            row.put("description", entry.description());
+            row.put("capabilityCount", entry.capabilityCount());
+            row.put("subscribed", entry.subscribed());
+            row.put("installed", entry.installed());
+            row.put("installedVersion", entry.installedVersion());
+            row.put("disabled", entry.disabled());
+            row.put("localConflict", entry.localConflict());
+            rows.add(row);
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conches", rows);
+        body.put("syncedAt", catalog.syncedAt());
+        body.put("configured", catalog.configured());
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void subscribe(CrabRuntime runtime, Context ctx) {
+        String conch = ctx.pathParam("conch");
+        try {
+            ConchOutcome outcome = runtime.subscribe(conch, Actors.CONSOLE);
+            LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+            body.put("conch", conch);
+            body.put("subscribed", true);
+            body.put("outcome", outcomeView(outcome));
+            GatewayResponses.writeData(ctx, body);
+        } catch (SyncException ex) {
+            SyncError error = ex.clientError().orElse(null);
+            if (error == null) {
+                throw ex;
+            }
+            GatewayResponses.writeError(ctx, StatusCodes.of(error.code()), error.code(), error.message());
+        }
+    }
+
+    private static void unsubscribe(CrabRuntime runtime, Context ctx) {
+        String conch = ctx.pathParam("conch");
+        runtime.unsubscribe(conch, Actors.CONSOLE);
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conch", conch);
+        body.put("subscribed", false);
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static Map<String, Object> outcomeView(ConchOutcome outcome) {
+        if (outcome == null) {
+            return null;
+        }
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("conch", outcome.conch());
+        row.put("version", outcome.version());
+        row.put("kind", outcome.kind() == null ? null : outcome.kind().name());
+        row.put("reason", outcome.reason());
+        return row;
+    }
+
     private static void sync(CrabRuntime runtime, Context ctx) {
         try {
             Optional<SyncReport> report = runtime.syncOnce(Actors.CONSOLE);
@@ -516,6 +585,8 @@ final class ConsoleApi {
                     return;
                 }
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
+            } catch (SubscriptionException ex) {
+                GatewayResponses.writeError(ctx, ex.status(), ex.code(), clientMessage(ex));
             } catch (IllegalArgumentException | IllegalStateException ex) {
                 String message = ex.getMessage();
                 if ("capability not found".equals(message)
@@ -589,7 +660,7 @@ final class ConsoleApi {
     }
 
     private static String source(CrabRuntime runtime, String conch) {
-        return runtime.registry().origin(conch).orElse(Origin.OFFICIAL) == Origin.LOCAL ? "LOCAL" : "REEF";
+        return runtime.registry().origin(conch) == Origin.LOCAL ? "LOCAL" : "REEF";
     }
 
     private static List<Map<String, Object>> issues(List<ValidationIssue> found) {

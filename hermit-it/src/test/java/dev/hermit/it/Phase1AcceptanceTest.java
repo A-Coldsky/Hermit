@@ -92,6 +92,11 @@ class Phase1AcceptanceTest {
                 Function<String, String> env = name -> "HERMIT_HOME".equals(name) ? crabHome.toString() : null;
                 try (CrabServer crab = CrabServer.start(env)) {
                     String crabBase = "http://127.0.0.1:" + crab.port();
+                    JsonNode subscribed = console(
+                            crabBase, "POST", "/console/api/conches/legacy_oa/subscription", "{}");
+                    assertThat(subscribed.path("data").path("subscribed").asBoolean()).isTrue();
+                    assertThat(subscribed.path("data").path("outcome").path("kind").asText())
+                            .isIn("INSTALLED", "SKIPPED_SAME");
                     waitUntil(POLL, () -> synced(crabBase, "1.0.0"));
                     assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.0.0");
 

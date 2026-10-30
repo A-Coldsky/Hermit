@@ -30,9 +30,11 @@ import dev.hermit.crab.mcp.McpStdio;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.CrabServer;
 import dev.hermit.crab.secure.MasterKeyException;
+import dev.hermit.crab.sync.ConchCatalog;
 import dev.hermit.crab.sync.ConchOutcome;
 import dev.hermit.crab.sync.LocalConchException;
 import dev.hermit.crab.sync.LocalConches;
+import dev.hermit.crab.sync.SubscriptionException;
 import dev.hermit.crab.sync.SyncError;
 import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
@@ -55,6 +57,9 @@ public final class CrabCommand {
             usage:
               crab serve
               crab sync
+              crab catalog
+              crab subscribe <conch>
+              crab unsubscribe <conch>
               crab account list <conch>
               crab account add|remove|default <conch> <name>
               crab credential set <conch> <account> <field> [--from-env VAR]
@@ -121,6 +126,9 @@ public final class CrabCommand {
         return switch (args[0]) {
             case "serve" -> serve(args, env, out, err);
             case "sync" -> sync(args, env, out, err);
+            case "catalog" -> catalog(args, env, out, err);
+            case "subscribe" -> subscribe(args, env, out, err);
+            case "unsubscribe" -> unsubscribe(args, env, out, err);
             case "account" -> account(args, env, out, err);
             case "credential" -> credential(args, env, in, out, err);
             case "config" -> config(args, env, out, err);
@@ -190,6 +198,90 @@ public final class CrabCommand {
             err.println(ex.clientError().map(SyncError::message).orElse(text(ex.getMessage())));
             return 1;
         }
+    }
+
+    private int catalog(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 1) {
+            err.print(USAGE);
+            return 1;
+        }
+        try (CrabRuntime runtime = open(env)) {
+            runtime.loadInstalledConches();
+            ConchCatalog catalog = runtime.catalog();
+            if (!catalog.configured()) {
+                err.println("reef.url is not configured");
+                return 1;
+            }
+            for (ConchCatalog.Entry entry : catalog.conches()) {
+                out.println(catalogLine(entry));
+            }
+            return 0;
+        } catch (SubscriptionException ex) {
+            err.println(clientMessage(ex));
+            return 1;
+        }
+    }
+
+    private int subscribe(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 2) {
+            err.print(USAGE);
+            return 1;
+        }
+        try (CrabRuntime runtime = open(env)) {
+            runtime.loadInstalledConches();
+            if (runtime.conchSync() == null) {
+                err.println("reef.url is not configured");
+                return 1;
+            }
+            ConchOutcome outcome = runtime.subscribe(args[1], Actors.CLI);
+            if (outcome == null) {
+                out.println(args[1] + " subscribed");
+            } else {
+                out.println(outcome.conch() + " " + text(outcome.version()) + " " + outcome.kind());
+            }
+            return 0;
+        } catch (SubscriptionException ex) {
+            err.println(clientMessage(ex));
+            return 1;
+        } catch (SyncException ex) {
+            err.println(ex.clientError().map(SyncError::message).orElse(text(ex.getMessage())));
+            return 1;
+        }
+    }
+
+    private int unsubscribe(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 2) {
+            err.print(USAGE);
+            return 1;
+        }
+        try (CrabRuntime runtime = open(env)) {
+            runtime.loadInstalledConches();
+            runtime.unsubscribe(args[1], Actors.CLI);
+            out.println(args[1]);
+            return 0;
+        } catch (SubscriptionException ex) {
+            err.println(clientMessage(ex));
+            return 1;
+        }
+    }
+
+    private static String catalogLine(ConchCatalog.Entry entry) {
+        StringBuilder line = new StringBuilder();
+        line.append(entry.conch()).append(' ').append(text(entry.version()));
+        if (entry.subscribed()) {
+            line.append(" subscribed");
+        }
+        if (entry.installed()) {
+            line.append(" installed ").append(text(entry.installedVersion()));
+        }
+        if (entry.disabled()) {
+            line.append(" disabled");
+        }
+        if (entry.localConflict()) {
+            line.append(" local-conflict");
+        }
+        line.append(' ').append(text(entry.title()));
+        return line.toString();
     }
 
     private int account(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {

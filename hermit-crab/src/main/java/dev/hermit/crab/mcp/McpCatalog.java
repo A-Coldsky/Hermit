@@ -303,7 +303,7 @@ final class McpCatalog {
     }
 
     private boolean local(String conch) {
-        return registry.origin(conch).orElse(null) == Origin.LOCAL;
+        return registry.origin(conch) == Origin.LOCAL;
     }
 
     private String localMark(String conch, String text) {

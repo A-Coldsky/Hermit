@@ -21,7 +21,7 @@ class ConchRegistryTest {
         ConchRegistry registry = new ConchRegistry();
         assertThat(registry.find("legacy_oa")).isEmpty();
         registry.put(EngineTestSupport.legacy());
-        assertThat(registry.origin("legacy_oa")).contains(Origin.OFFICIAL);
+        assertThat(registry.origin("legacy_oa")).isEqualTo(Origin.OFFICIAL);
         assertThat(registry.find("legacy_oa")).isPresent();
         assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
 
@@ -41,9 +41,9 @@ class ConchRegistryTest {
         registry.remove("missing");
         assertThat(registry.find("other_conch")).isPresent();
         registry.put(registry.find("other_conch").orElseThrow(), Origin.LOCAL);
-        assertThat(registry.origin("other_conch")).contains(Origin.LOCAL);
+        assertThat(registry.origin("other_conch")).isEqualTo(Origin.LOCAL);
         registry.put(registry.find("other_conch").orElseThrow());
-        assertThat(registry.origin("other_conch")).contains(Origin.OFFICIAL);
+        assertThat(registry.origin("other_conch")).isEqualTo(Origin.OFFICIAL);
     }
 
     @Test

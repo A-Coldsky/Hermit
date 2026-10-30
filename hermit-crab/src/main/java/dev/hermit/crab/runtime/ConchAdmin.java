@@ -172,7 +172,8 @@ public final class ConchAdmin {
 
     /** Registry origin, or {@link Origin#OFFICIAL} when the conch is not loaded. */
     private Origin origin(String conch) {
-        return registry.origin(conch).orElse(Origin.OFFICIAL);
+        Origin stored = registry.origin(conch);
+        return stored == null ? Origin.OFFICIAL : stored;
     }
 
     public CreatedApiKey createApiKey(String name, ApiKeyScope scope, String actor) {

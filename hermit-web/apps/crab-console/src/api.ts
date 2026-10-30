@@ -8,6 +8,8 @@ export interface ConchSummary {
   version: string
   title: string
   capabilityCount: number
+  /** 本机是否已订阅。未订阅的正式包不会出现在这份已加载列表里；本地包为 false。 */
+  subscribed: boolean
   accountCount: number
   /**
    * 缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停。
@@ -183,6 +185,7 @@ export type SyncOutcomeKind =
   | 'ROLLED_BACK'
   | 'DISABLED'
   | 'SKIPPED_LOCAL'
+  | 'NOT_SUBSCRIBED'
 
 export interface SyncReport {
   notModified: boolean
@@ -212,6 +215,44 @@ export interface LocalFileResult {
   version: string | null
   ok: boolean
   issues: ValidationIssue[]
+}
+
+/** 目录缓存里的一条。`disabled` 表示 Reef 停用墓碑还在。 */
+export interface CatalogConch {
+  conch: string
+  version: string | null
+  title: string
+  description: string | null
+  capabilityCount: number
+  subscribed: boolean
+  installed: boolean
+  installedVersion: string | null
+  disabled: boolean
+  localConflict: boolean
+}
+
+export interface Catalog {
+  conches: CatalogConch[]
+  syncedAt: string | null
+  configured: boolean
+}
+
+export interface SubscriptionOutcome {
+  conch: string
+  version: string | null
+  kind: SyncOutcomeKind | null
+  reason: string | null
+}
+
+export interface SubscriptionResult {
+  conch: string
+  subscribed: true
+  outcome: SubscriptionOutcome | null
+}
+
+export interface UnsubscribeResult {
+  conch: string
+  subscribed: false
 }
 
 export interface ReportBatch {
@@ -291,6 +332,11 @@ export const api = {
 
   syncStatus: () => http.get<{ report: SyncReport | null; latestCrab: CrabRelease | null }>(`${base}/sync`),
   sync: () => http.post<SyncReport>(`${base}/sync`),
+
+  /** Reef 未配置时 `configured` 为 false，`conches` 为空。 */
+  catalog: () => http.get<Catalog>(`${base}/catalog`),
+  subscribe: (conch: string) => http.post<SubscriptionResult>(`${conchPath(conch)}/subscription`),
+  unsubscribe: (conch: string) => http.del<UnsubscribeResult>(`${conchPath(conch)}/subscription`),
 
   reportPreview: () => http.get<{ batch: ReportBatch; dropped: number }>(`${base}/reports/preview`),
   sendReport: () => http.post<{ attempted: boolean; accepted: boolean; status: number }>(`${base}/reports/send`),

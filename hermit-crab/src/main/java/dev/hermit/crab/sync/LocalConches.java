@@ -68,7 +68,7 @@ public final class LocalConches {
         Parsed parsed = parse(raw);
         synchronized (lock) {
             rejectClash(parsed.doc().conch());
-            boolean replaced = registry.origin(parsed.doc().conch()).orElse(null) == Origin.LOCAL
+            boolean replaced = registry.origin(parsed.doc().conch()) == Origin.LOCAL
                     || Files.exists(yamlPath(parsed.doc().conch()), LinkOption.NOFOLLOW_LINKS);
             store(parsed.doc(), raw);
             audit(checked, AuditKind.LOCAL_CONCH_IMPORTED, parsed.doc());
@@ -101,7 +101,7 @@ public final class LocalConches {
     public void delete(String conch, String actor) {
         String checked = actor(actor);
         synchronized (lock) {
-            if (registry.origin(conch).orElse(null) != Origin.LOCAL) {
+            if (registry.origin(conch) != Origin.LOCAL) {
                 throw LocalConchException.notFound();
             }
             ConchDoc doc = registry.find(conch).orElse(null);
@@ -126,7 +126,7 @@ public final class LocalConches {
 
     public Export export(String conch) {
         synchronized (lock) {
-            if (registry.origin(conch).orElse(null) != Origin.LOCAL) {
+            if (registry.origin(conch) != Origin.LOCAL) {
                 throw LocalConchException.notFound();
             }
             ConchDoc doc = registry.find(conch).orElse(null);
@@ -250,7 +250,7 @@ public final class LocalConches {
     private void dropMissing(java.util.Set<String> kept) {
         ArrayList<String> stale = new ArrayList<>();
         for (var entry : registry.snapshot().entrySet()) {
-            if (registry.origin(entry.getKey()).orElse(null) == Origin.LOCAL && !kept.contains(entry.getKey())) {
+            if (registry.origin(entry.getKey()) == Origin.LOCAL && !kept.contains(entry.getKey())) {
                 stale.add(entry.getKey());
             }
         }
@@ -262,7 +262,7 @@ public final class LocalConches {
     private Map<String, String> localVersions() {
         LinkedHashMap<String, String> versions = new LinkedHashMap<>();
         for (Map.Entry<String, ConchDoc> entry : registry.snapshot().entrySet()) {
-            if (registry.origin(entry.getKey()).orElse(null) == Origin.LOCAL) {
+            if (registry.origin(entry.getKey()) == Origin.LOCAL) {
                 versions.put(entry.getKey(), entry.getValue().version().toString());
             }
         }
@@ -270,7 +270,7 @@ public final class LocalConches {
     }
 
     private void dropStem(String stem) {
-        if (stem != null && registry.origin(stem).orElse(null) == Origin.LOCAL) {
+        if (stem != null && registry.origin(stem) == Origin.LOCAL) {
             registry.remove(stem);
         }
     }
@@ -305,10 +305,10 @@ public final class LocalConches {
     }
 
     private void rejectClash(String conch) {
-        if (registry.origin(conch).orElse(null) == Origin.OFFICIAL) {
+        if (registry.origin(conch) == Origin.OFFICIAL) {
             throw LocalConchException.conflict("与已安装的正式规则包重名");
         }
-        if (SubscriptionNames.contains(dataSource, conch)) {
+        if (new Subscriptions(dataSource).contains(conch)) {
             throw LocalConchException.conflict("与已订阅的规则包重名");
         }
     }

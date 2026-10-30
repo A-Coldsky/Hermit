@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -23,6 +24,7 @@ import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
+import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.pkg.PackageVerificationException;
@@ -35,6 +37,9 @@ import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ConchRejectedException;
+import dev.hermit.crab.store.Actors;
+import dev.hermit.crab.store.AuditKind;
+import dev.hermit.crab.store.AuditLog;
 import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.Origin;
@@ -47,7 +52,9 @@ public final class ConchSync {
     private final CrabPaths paths;
     private final ConchRegistry registry;
     private final CredentialVault vault;
+    private final DataSource dataSource;
     private final SyncStore store;
+    private final Subscriptions subscriptions;
     private final DisabledConches disabledConches;
     private final ReefClient reef;
     private final Clock clock;
@@ -104,7 +111,9 @@ public final class ConchSync {
         this.paths = paths;
         this.registry = registry;
         this.vault = vault;
+        this.dataSource = dataSource;
         this.store = new SyncStore(dataSource);
+        this.subscriptions = new Subscriptions(dataSource);
         this.disabledConches = disabledConches == null ? new DisabledConches(dataSource) : disabledConches;
         if (loadDisabled || disabledConches == null) {
             this.disabledConches.load();
@@ -132,34 +141,86 @@ public final class ConchSync {
 
     public SyncReport syncOnce() {
         synchronized (this) {
-            try {
-                retryPendingCredentialDeletes();
-                retryClearDisabledCurrents();
-                Optional<CrabRelease> latest = readLatest();
-                ReefClient.ManifestFetch manifest = reef.manifest(store.etag().orElse(null));
-                if (manifest.notModified()) {
-                    if (snapshotMatches()) {
-                        if (manifest.etag() != null) {
-                            store.saveEtag(manifest.etag());
-                        }
-                        return deliver(unchanged(latest));
-                    }
-                    // The stored tag no longer describes this disk. Drop it and read the full
-                    // manifest once; a second 304 must not loop or be recorded.
-                    store.clearEtagAndSnapshot();
-                    manifest = reef.manifest(null);
-                    if (manifest.notModified()) {
-                        return deliver(unchanged(latest));
-                    }
-                }
-                return deliver(install(manifest, latest));
-            } catch (SyncException ex) {
-                // Record before leaving the sync lock so a later success cannot be overwritten
-                // by this attempt, and this attempt cannot be overwritten by an older success.
-                ex.clientError().ifPresent(error -> deliver(SyncReport.failed(error)));
-                throw ex;
-            }
+            return syncOnceLocked();
         }
+    }
+
+    private SyncReport syncOnceLocked() {
+        try {
+            retryPendingCredentialDeletes();
+            retryClearDisabledCurrents();
+            Optional<CrabRelease> latest = readLatest();
+            ReefClient.ManifestFetch manifest = reef.manifest(store.etag().orElse(null));
+            if (manifest.notModified()) {
+                if (snapshotMatches() && store.catalog().isPresent()) {
+                    if (manifest.etag() != null) {
+                        store.saveEtag(manifest.etag());
+                    }
+                    return deliver(unchanged(latest));
+                }
+                // The stored tag no longer describes this disk, or the catalog cache was never
+                // saved. Drop the tag and read the full manifest once; a second 304 must not loop.
+                store.clearEtagAndSnapshot();
+                manifest = reef.manifest(null);
+                if (manifest.notModified()) {
+                    return deliver(unchanged(latest));
+                }
+            }
+            return deliver(install(manifest, latest));
+        } catch (SyncException ex) {
+            // Record before leaving the sync lock so a later success cannot be overwritten
+            // by this attempt, and this attempt cannot be overwritten by an older success.
+            ex.clientError().ifPresent(error -> deliver(SyncReport.failed(error)));
+            throw ex;
+        }
+    }
+
+    public ConchCatalog catalog() {
+        synchronized (this) {
+            return readCatalog();
+        }
+    }
+
+    /**
+     * Subscribes, then syncs under this lock so a 304 cannot skip the install.
+     * {@code onEachReport} sees a prefetch when the catalog cache is absent, and the install sync.
+     * The caller writes one {@code SYNC_REQUESTED} audit after this returns.
+     */
+    public ConchOutcome subscribe(String conch, String actor, Consumer<SyncReport> onEachReport) {
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
+            throw new IllegalArgumentException("actor must be cli or console");
+        }
+        synchronized (this) {
+            if (!ConchValidator.isConchName(conch)) {
+                throw new SubscriptionException(400, ErrorCode.INVALID_INPUT, SubscriptionException.NAME_INVALID);
+            }
+            if (registry.origin(conch) == Origin.LOCAL) {
+                throw new SubscriptionException(409, ErrorCode.INVALID_INPUT, SubscriptionException.LOCAL_CONFLICT);
+            }
+            if (store.catalog().isEmpty()) {
+                SyncReport prefetched = syncOnceLocked();
+                if (onEachReport != null && prefetched != null) {
+                    onEachReport.accept(prefetched);
+                }
+            }
+            if (cached(conch).isEmpty()) {
+                throw new SubscriptionException(404, ErrorCode.NOT_FOUND, SubscriptionException.NOT_IN_CATALOG);
+            }
+            if (subscriptions.record(conch, actor, clock.instant())) {
+                AuditLog.record(dataSource, actor, AuditKind.CONCH_SUBSCRIBED, "OFFICIAL/" + conch, conch);
+            }
+            store.clearEtagAndSnapshot();
+            SyncReport report = syncOnceLocked();
+            if (onEachReport != null && report != null) {
+                onEachReport.accept(report);
+            }
+            return report == null ? null : outcomeFor(report, conch);
+        }
+    }
+
+    public void unsubscribe(String conch, String actor) {
+        SubscriptionCommands.unsubscribe(
+                this, paths, registry, disabledConches, subscriptions, dataSource, conch, actor);
     }
 
     /**
@@ -260,6 +321,7 @@ public final class ConchSync {
     }
 
     private SyncReport install(ReefClient.ManifestFetch manifest, Optional<CrabRelease> latest) {
+        store.saveCatalog(manifest.entries(), clock.instant());
         List<ConchOutcome> conches = new ArrayList<>();
         List<CredentialDeclarationChange> changes = new ArrayList<>();
         Set<String> present = new LinkedHashSet<>();
@@ -278,6 +340,10 @@ public final class ConchSync {
                     conches.add(rejected(entry, SyncReasons.VERSION_INVALID));
                     continue;
                 }
+                if (!subscriptions.contains(entry.conch())) {
+                    conches.add(new ConchOutcome(entry.conch(), entry.version(), OutcomeKind.NOT_SUBSCRIBED, null));
+                    continue;
+                }
                 InstallResult result = installEntry(entry);
                 conches.add(result.outcome());
                 result.change().ifPresent(changes::add);
@@ -286,11 +352,16 @@ public final class ConchSync {
             }
         }
         List<String> removed = new ArrayList<>();
-        for (String conch : registry.snapshot().keySet()) {
-            if (present.contains(conch) || isLocal(conch)) {
+        // Withdraw only a subscribed official conch Reef dropped. Leave unsubscribed names alone,
+        // and leave Origin.LOCAL alone. Both checks stay.
+        Map<String, ConchDoc> loaded = registry.snapshot();
+        for (String conch : loaded.keySet()) {
+            if (present.contains(conch)) {
                 continue;
             }
-            // Subscription filtering is a separate skip. Keep this local check beside it.
+            if (!subscriptions.contains(conch) || registry.origin(conch) == Origin.LOCAL) {
+                continue;
+            }
             deactivate(conch, conches, removed);
         }
         if (conches.stream().anyMatch(SyncFailures::retryable)) {
@@ -327,6 +398,62 @@ public final class ConchSync {
             versions.put(outcome.conch(), outcome.version());
         }
         return versions;
+    }
+
+    private ConchCatalog readCatalog() {
+        Optional<List<ReefClient.CatalogEntry>> cached = store.catalog();
+        List<ConchCatalog.Entry> rows = new ArrayList<>();
+        if (cached.isPresent()) {
+            for (ReefClient.CatalogEntry entry : cached.get()) {
+                rows.add(catalogRow(entry));
+            }
+            rows.sort(Comparator.comparing(ConchCatalog.Entry::conch, Comparator.nullsLast(String::compareTo)));
+        }
+        return new ConchCatalog(true, store.catalogSyncedAt().orElse(null), rows);
+    }
+
+    private ConchCatalog.Entry catalogRow(ReefClient.CatalogEntry entry) {
+        String name = entry.conch();
+        ConchDoc doc = name == null ? null : registry.find(name).orElse(null);
+        String pointer = name == null ? null : ConchFiles.readCurrent(paths, name).orElse(null);
+        String title = entry.title();
+        if (title == null || title.isBlank()) {
+            title = name == null ? "" : name;
+        }
+        String installedVersion = doc != null ? doc.version().toString() : pointer;
+        return new ConchCatalog.Entry(
+                name,
+                entry.version(),
+                title,
+                entry.description(),
+                entry.capabilityCount(),
+                name != null && subscriptions.contains(name),
+                doc != null || pointer != null,
+                installedVersion,
+                name != null && disabledConches.contains(name),
+                name != null && registry.origin(name) == Origin.LOCAL);
+    }
+
+    private Optional<ReefClient.CatalogEntry> cached(String conch) {
+        Optional<List<ReefClient.CatalogEntry>> catalog = store.catalog();
+        if (catalog.isEmpty()) {
+            return Optional.empty();
+        }
+        for (ReefClient.CatalogEntry entry : catalog.get()) {
+            if (conch.equals(entry.conch())) {
+                return Optional.of(entry);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static ConchOutcome outcomeFor(SyncReport report, String conch) {
+        for (ConchOutcome outcome : report.conches()) {
+            if (conch.equals(outcome.conch())) {
+                return outcome;
+            }
+        }
+        return null;
     }
 
     private static SyncReport unchanged(Optional<CrabRelease> latest) {
@@ -472,7 +599,10 @@ public final class ConchSync {
                 return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION));
             }
             ConchDoc previous = previousDoc(conch);
-            Origin previousOrigin = registry.origin(conch).orElse(Origin.OFFICIAL);
+            Origin previousOrigin = registry.origin(conch);
+            if (previousOrigin == null) {
+                previousOrigin = Origin.OFFICIAL;
+            }
             Optional<CredentialDeclarationChange> change = CredentialChanges.between(previous, verified.conchDoc());
             ConchFiles.install(paths, conch, version, zip, verified.conchYaml());
             try {
@@ -713,7 +843,7 @@ public final class ConchSync {
     }
 
     private boolean isLocal(String conch) {
-        return registry.origin(conch).orElse(null) == Origin.LOCAL;
+        return registry.origin(conch) == Origin.LOCAL;
     }
 
     private String redact(String message) {

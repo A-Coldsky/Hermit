@@ -79,6 +79,7 @@ class ConchSyncTest {
         assertPermanent(SyncReasons.PATH_UNSAFE);
         assertPermanent(SyncReasons.ZIP_TOO_LARGE);
         assertPermanent(SyncReasons.MANIFEST_ENTRY_MISMATCH);
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.NOT_SUBSCRIBED, null))).isFalse();
 
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.INSTALLED, null))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION))).isFalse();
@@ -669,7 +670,7 @@ class ConchSyncTest {
             assertThat(outcome(first, "local_ping").reason()).isEqualTo(SyncReasons.LOCAL_KEPT);
             assertThat(outcome(first, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
             assertThat(first.removed()).doesNotContain("local_ping");
-            assertThat(registry.origin("local_ping")).contains(Origin.LOCAL);
+            assertThat(registry.origin("local_ping")).isEqualTo(Origin.LOCAL);
             assertThat(registry.find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
             assertThat(reef.paths()).noneMatch(path -> path.startsWith("/agent/conches/local_ping/"));
             assertThat(syncState(crab, "manifest_snapshot")).doesNotContain("local_ping");
@@ -679,7 +680,7 @@ class ConchSyncTest {
             SyncReport second = sync.syncOnce();
             assertThat(second.removed()).doesNotContain("local_ping");
             assertThat(second.conches()).noneMatch(item -> "local_ping".equals(item.conch()));
-            assertThat(registry.origin("local_ping")).contains(Origin.LOCAL);
+            assertThat(registry.origin("local_ping")).isEqualTo(Origin.LOCAL);
             assertThat(registry.find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
         }
     }
@@ -770,6 +771,7 @@ class ConchSyncTest {
             Optional<String> token,
             Clock clock
     ) {
+        TestSubscriptions.grantKnown(crab.dataSource);
         return new ConchSync(
                 settings(reef, token, Duration.ofMinutes(5)),
                 crab.paths,

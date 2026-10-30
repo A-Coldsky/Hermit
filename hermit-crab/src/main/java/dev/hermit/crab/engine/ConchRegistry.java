@@ -26,12 +26,9 @@ public final class ConchRegistry {
     static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now");
     private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script");
 
-    private final AtomicReference<Map<String, Entry>> conches = new AtomicReference<>(Map.of());
+    private final AtomicReference<Map<String, ConchDoc>> conches = new AtomicReference<>(Map.of());
+    private final AtomicReference<Map<String, Origin>> origins = new AtomicReference<>(Map.of());
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
-
-    /** A loaded conch and where it came from. Official and local names do not share a slot. */
-    public record Entry(ConchDoc doc, Origin origin) {
-    }
 
     /** Fired after a conch is added, replaced, or removed. */
     public void addListener(Listener listener) {
@@ -44,11 +41,14 @@ public final class ConchRegistry {
         void changed();
     }
 
-    /** Same as {@link #put(ConchDoc, Origin)} with {@link Origin#OFFICIAL}. */
     public void put(ConchDoc doc) {
         put(doc, Origin.OFFICIAL);
     }
 
+    /**
+     * Origin is written before the document so a reader that sees the document also sees
+     * {@link Origin#LOCAL} instead of the official fallback.
+     */
     public void put(ConchDoc doc, Origin origin) {
         if (doc == null) {
             throw new IllegalArgumentException("doc");
@@ -60,13 +60,19 @@ public final class ConchRegistry {
         if (!issues.isEmpty()) {
             throw new ConchRejectedException(issues);
         }
-        Map<String, Entry> before = conches.get();
-        Map<String, Entry> after = conches.updateAndGet(current -> {
-            LinkedHashMap<String, Entry> copy = new LinkedHashMap<>(current);
-            copy.put(doc.conch(), new Entry(doc, origin));
+        Map<String, ConchDoc> docsBefore = conches.get();
+        Map<String, Origin> originsBefore = origins.get();
+        origins.updateAndGet(current -> {
+            LinkedHashMap<String, Origin> copy = new LinkedHashMap<>(current);
+            copy.put(doc.conch(), origin);
             return Collections.unmodifiableMap(copy);
         });
-        if (after != before) {
+        conches.updateAndGet(current -> {
+            LinkedHashMap<String, ConchDoc> copy = new LinkedHashMap<>(current);
+            copy.put(doc.conch(), doc);
+            return Collections.unmodifiableMap(copy);
+        });
+        if (conches.get() != docsBefore || origins.get() != originsBefore) {
             changed();
         }
     }
@@ -88,18 +94,45 @@ public final class ConchRegistry {
         if (conch == null) {
             return;
         }
-        Map<String, Entry> before = conches.get();
-        Map<String, Entry> after = conches.updateAndGet(current -> {
+        Map<String, ConchDoc> docsBefore = conches.get();
+        Map<String, Origin> originsBefore = origins.get();
+        conches.updateAndGet(current -> {
             if (!current.containsKey(conch)) {
                 return current;
             }
-            LinkedHashMap<String, Entry> copy = new LinkedHashMap<>(current);
+            LinkedHashMap<String, ConchDoc> copy = new LinkedHashMap<>(current);
             copy.remove(conch);
             return Collections.unmodifiableMap(copy);
         });
-        if (after != before) {
+        origins.updateAndGet(current -> {
+            if (!current.containsKey(conch)) {
+                return current;
+            }
+            LinkedHashMap<String, Origin> copy = new LinkedHashMap<>(current);
+            copy.remove(conch);
+            return Collections.unmodifiableMap(copy);
+        });
+        if (conches.get() != docsBefore || origins.get() != originsBefore) {
             changed();
         }
+    }
+
+    /**
+     * Stored origin, or {@link Origin#OFFICIAL} when a document is present without one.
+     * Null when the name is not loaded.
+     */
+    public Origin origin(String conch) {
+        if (conch == null) {
+            return null;
+        }
+        Origin stored = origins.get().get(conch);
+        if (stored != null) {
+            return stored;
+        }
+        if (conches.get().containsKey(conch)) {
+            return Origin.OFFICIAL;
+        }
+        return null;
     }
 
     private void changed() {
@@ -113,22 +146,10 @@ public final class ConchRegistry {
     }
 
     public Map<String, ConchDoc> snapshot() {
-        LinkedHashMap<String, ConchDoc> docs = new LinkedHashMap<>();
-        for (Map.Entry<String, Entry> entry : conches.get().entrySet()) {
-            docs.put(entry.getKey(), entry.getValue().doc());
-        }
-        return Collections.unmodifiableMap(docs);
+        return conches.get();
     }
 
     public Optional<ConchDoc> find(String conch) {
-        return entry(conch).map(Entry::doc);
-    }
-
-    public Optional<Origin> origin(String conch) {
-        return entry(conch).map(Entry::origin);
-    }
-
-    public Optional<Entry> entry(String conch) {
         if (conch == null) {
             return Optional.empty();
         }

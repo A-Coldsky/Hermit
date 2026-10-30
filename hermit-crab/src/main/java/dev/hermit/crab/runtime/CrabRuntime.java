@@ -60,6 +60,7 @@ import dev.hermit.crab.store.ConchConfigStore;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
 import dev.hermit.crab.sync.DisabledConches;
 import dev.hermit.crab.sync.InstalledConches;
+import dev.hermit.crab.sync.LocalConches;
 import dev.hermit.crab.sync.LoadReport;
 import dev.hermit.crab.sync.RollbackGuard;
 import dev.hermit.crab.sync.ConchSync;
@@ -98,6 +99,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final DisabledConches disabledConches;
     private final Invoker invoker;
     private final ConchAdmin admin;
+    private final LocalConches localConches;
     private final String instanceId;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean prepared = new AtomicBoolean();
@@ -147,12 +149,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.configDisabled = Set.copyOf(config.disabledCapabilities());
         this.switchDisabled = ConcurrentHashMap.newKeySet();
         this.switchDisabled.addAll(switches.disabledKeys(Origin.OFFICIAL));
+        this.switchDisabled.addAll(switches.disabledKeys(Origin.LOCAL));
         this.disabledConches = new DisabledConches(database.dataSource());
         this.disabledConches.load();
         this.invoker = new Invoker(
                 registry, accounts, vault, conchConfig, engine, callLogs, idempotency, this, disabledConches);
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
+        this.localConches = new LocalConches(paths, registry, database.dataSource());
         this.instanceId = InstanceIds.loadOrCreate(paths);
     }
 
@@ -272,10 +276,17 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             if (hasInstalledPointer()) {
                 throw new IllegalStateException("reef.public_key is required to verify installed conches");
             }
+            localConches.loadStartup();
             return new LoadReport(List.of(), List.of());
         }
         paths.conches();
-        return InstalledConches.loadAll(paths, reefKey, registry, disabledConches.names());
+        LoadReport official = InstalledConches.loadAll(paths, reefKey, registry, disabledConches.names());
+        localConches.loadStartup();
+        return official;
+    }
+
+    public LocalConches localConches() {
+        return localConches;
     }
 
     public javax.sql.DataSource dataSource() {
@@ -357,7 +368,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (doc == null || !doc.actions().containsKey(action)) {
             throw new IllegalArgumentException("capability not found");
         }
-        switches.setDisabled(Origin.OFFICIAL, conch, action, disabled, actor);
+        switches.setDisabled(registry.origin(conch).orElse(Origin.OFFICIAL), conch, action, disabled, actor);
         String key = conch + "." + action;
         if (disabled) {
             switchDisabled.add(key);

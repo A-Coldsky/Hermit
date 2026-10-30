@@ -54,7 +54,7 @@ flowchart LR
 1. 管理员上传 YAML，经解析和校验后保存为 `UPLOADED`，同版本受唯一性约束。
 2. `ConchPublishService` 锁定 Conch 记录，生成签名包、验签自检，标记 `PUBLISHED` 并切换当前版本。这里自检包完整性，不访问老系统。
 3. Crab 用实例 UUID 和 Agent token 拉取带 ETag 的 manifest，下载 ZIP，检查签名、哈希、身份和最低版本后安装。
-4. `ConchSync` 更新版本目录、`current`、数据库状态与注册表，清理被删除的凭证声明。可重试失败不记清单 ETag；304 时核对本地 current 与清单快照。
+4. `ConchSync` 更新版本目录、`current`、数据库状态与注册表，清理被删除的凭证声明。可重试失败不记清单 ETag；304 时核对本地 current 与清单快照。已从 `local-conches/` 加载的本地包不会被这次同步下载、覆盖或卸下。
 5. `RollbackGuard` 对同版本累计到 5 次 `RULE_MISMATCH` 且前一版本有成功记录时尝试回滚。成功调用清零，其他错误（含上游 HTTP 400 的 `INVALID_INPUT` 和会话失效的 `SESSION_EXPIRED`）不清零也不计数；不是所有请求严格相邻的“连续失败”。回滚写入 `current` 和固定记录后，控制台 `GET /console/api/sync` 在该 Conch 的文件锁内读取固定记录和 `current`（不替换注册表），把这一行显示为实际安装版本、`kind=ROLLED_BACK`、`reason=RULE_MISMATCH`，不再把坏版本显示成 `INSTALLED`。固定解除前都按这条投影。
 6. 坏版本被固定后，相同或更低版本跳过，超过坏版本的新版本可解除固定。保留最近 3 版，并保护当前、前一和回滚相关版本。
 7. Reef 连接失败（拒绝连接、无法解析、超时、同步被中断）时，这次尝试写入最近同步状态并清掉上次成功的 Conch 列表；手动 `POST /sync` 返回 502 `UPSTREAM_ERROR`，`message` 说明原因和下一步。下一次成功同步覆盖该失败。Reef 已经返回 HTTP 状态时不替换上次成功，手动请求仍是 500 `INTERNAL`。

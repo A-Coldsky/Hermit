@@ -53,7 +53,7 @@ public final class CallLogStore {
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT id, trace_id, at, origin, conch, action, account, conch_version,
-                           success, error_code, error_message, duration_ms, api_key_id
+                           success, error_code, error_message, duration_ms, api_key_id, source
                     FROM call_logs
                     WHERE (? IS NULL OR conch = ?)
                       AND (? IS NULL OR action = ?)
@@ -84,7 +84,7 @@ public final class CallLogStore {
             CallSummary summary;
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT id, trace_id, at, origin, conch, action, account, conch_version,
-                           success, error_code, error_message, duration_ms, api_key_id
+                           success, error_code, error_message, duration_ms, api_key_id, source
                     FROM call_logs
                     WHERE trace_id = ?
                     ORDER BY at DESC, id DESC
@@ -122,8 +122,8 @@ public final class CallLogStore {
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO call_logs (
                     trace_id, at, origin, conch, action, account, conch_version,
-                    success, error_code, error_message, duration_ms, api_key_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    success, error_code, error_message, duration_ms, api_key_id, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, Statement.RETURN_GENERATED_KEYS)) {
             statement.setString(1, call.traceId());
             Db.setInstant(statement, 2, clock.instant());
@@ -137,6 +137,7 @@ public final class CallLogStore {
             statement.setString(10, truncate(call.errorMessage()));
             statement.setLong(11, call.durationMs());
             statement.setString(12, call.apiKeyId());
+            statement.setString(13, sourceOf(call.origin()));
             statement.executeUpdate();
             try (ResultSet keys = statement.getGeneratedKeys()) {
                 if (!keys.next()) {
@@ -221,7 +222,17 @@ public final class CallLogStore {
                 resultSet.getString("error_code"),
                 resultSet.getString("error_message"),
                 resultSet.getLong("duration_ms"),
-                resultSet.getString("api_key_id"));
+                resultSet.getString("api_key_id"),
+                sourceOrReef(resultSet.getString("source")));
+    }
+
+    /** Console and Tide use {@code LOCAL} or {@code REEF}. Official calls are {@code REEF}. */
+    static String sourceOf(Origin origin) {
+        return origin == Origin.LOCAL ? "LOCAL" : "REEF";
+    }
+
+    private static String sourceOrReef(String source) {
+        return "LOCAL".equals(source) ? "LOCAL" : "REEF";
     }
 
     static String truncate(String value) {
@@ -293,7 +304,8 @@ public final class CallLogStore {
             String errorCode,
             String errorMessage,
             long durationMs,
-            String apiKeyId
+            String apiKeyId,
+            String source
     ) {
     }
 

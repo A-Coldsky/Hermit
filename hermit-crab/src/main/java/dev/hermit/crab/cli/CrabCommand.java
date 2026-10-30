@@ -7,6 +7,9 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -28,6 +31,8 @@ import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.CrabServer;
 import dev.hermit.crab.secure.MasterKeyException;
 import dev.hermit.crab.sync.ConchOutcome;
+import dev.hermit.crab.sync.LocalConchException;
+import dev.hermit.crab.sync.LocalConches;
 import dev.hermit.crab.sync.SyncError;
 import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
@@ -61,6 +66,10 @@ public final class CrabCommand {
               crab apikey create <name> [--conches a,b] [--actions conch.action] [--read-only]
               crab apikey list
               crab apikey revoke <id>
+              crab local import <file>
+              crab local reload
+              crab local delete <conch>
+              crab local export <conch> [--out file]
               crab mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
             """;
 
@@ -88,6 +97,12 @@ public final class CrabCommand {
         } catch (MasterKeyException ex) {
             err.println(clientMessage(ex));
             return 1;
+        } catch (LocalConchException ex) {
+            err.println(ex.getMessage());
+            for (ValidationIssue issue : ex.errors()) {
+                err.println(issue.code() + " " + issue.path());
+            }
+            return 1;
         } catch (IllegalArgumentException | IllegalStateException ex) {
             err.println(clientMessage(ex));
             return 1;
@@ -111,6 +126,7 @@ public final class CrabCommand {
             case "config" -> config(args, env, out, err);
             case "audit" -> audit(args, env, out, err);
             case "apikey" -> apiKey(args, env, out, err);
+            case "local" -> local(args, env, out, err);
             case "mcp-stdio" -> new McpStdio().run(args, env, in, out, err);
             default -> {
                 err.print(USAGE);
@@ -190,6 +206,7 @@ public final class CrabCommand {
                     yield 1;
                 }
                 yield withRuntime(env, runtime -> {
+                    runtime.loadInstalledConches();
                     for (Account account : runtime.admin().listAccounts(conch)) {
                         out.println(account.defaultAccount() ? account.account() + " default" : account.account());
                     }
@@ -203,6 +220,7 @@ public final class CrabCommand {
                 }
                 String name = args[3];
                 yield withRuntime(env, runtime -> {
+                    runtime.loadInstalledConches();
                     switch (verb) {
                         case "add" -> runtime.admin().createAccount(conch, name, Actors.CLI);
                         case "remove" -> runtime.admin().deleteAccount(conch, name, Actors.CLI);
@@ -238,6 +256,7 @@ public final class CrabCommand {
             String conch = parsed.positionals.get(2);
             String account = parsed.positionals.get(3);
             return withRuntime(env, runtime -> {
+                runtime.loadInstalledConches();
                 runtime.admin().requireAccount(conch, account);
                 for (String name : new TreeSet<>(runtime.admin().credentialNames(conch, account))) {
                     out.println(name);
@@ -307,6 +326,7 @@ public final class CrabCommand {
                 }
                 String key = args.length == 4 ? args[3] : null;
                 yield withRuntime(env, runtime -> {
+                    runtime.loadInstalledConches();
                     Map<String, String> stored = runtime.admin().storedConfig(conch);
                     if (key == null) {
                         for (String name : new TreeSet<>(stored.keySet())) {
@@ -349,6 +369,133 @@ public final class CrabCommand {
                 yield 1;
             }
         };
+    }
+
+    private int local(String[] args, Function<String, String> env, PrintStream out, PrintStream err) throws IOException {
+        if (args.length < 2) {
+            err.print(USAGE);
+            return 1;
+        }
+        return switch (args[1]) {
+            case "import" -> importLocal(args, env, out, err);
+            case "reload" -> reloadLocal(args, env, out, err);
+            case "delete" -> deleteLocal(args, env, out, err);
+            case "export" -> exportLocal(args, env, out, err);
+            default -> {
+                err.print(USAGE);
+                yield 1;
+            }
+        };
+    }
+
+    private int importLocal(String[] args, Function<String, String> env, PrintStream out, PrintStream err) throws IOException {
+        if (args.length != 3) {
+            err.print(USAGE);
+            return 1;
+        }
+        Path file = Path.of(args[2]);
+        if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+            err.println("yaml file is required");
+            return 1;
+        }
+        if (Files.size(file) > LocalConches.MAX_BYTES) {
+            err.println("yaml exceeds 1 MiB");
+            return 1;
+        }
+        byte[] raw = Files.readAllBytes(file);
+        return withRuntime(env, runtime -> {
+            runtime.loadInstalledConches();
+            LocalConches.ImportResult result = runtime.localConches().importBytes(raw, Actors.CLI);
+            out.println(result.conch() + " " + result.version() + " " + (result.replaced() ? "replaced" : "imported"));
+            for (ValidationIssue issue : result.warnings()) {
+                err.println(issue.code() + " " + issue.path());
+            }
+            return 0;
+        });
+    }
+
+    private int reloadLocal(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 2) {
+            err.print(USAGE);
+            return 1;
+        }
+        return withRuntime(env, runtime -> {
+            runtime.loadInstalledConches();
+            for (LocalConches.FileResult result : runtime.localConches().reload(Actors.CLI)) {
+                if (result.ok()) {
+                    out.println(result.file() + " " + result.conch() + " " + result.version() + " ok");
+                } else {
+                    out.println(result.file() + " - - failed");
+                    for (ValidationIssue issue : result.issues()) {
+                        err.println(issue.code() + " " + issue.path());
+                    }
+                }
+            }
+            return 0;
+        });
+    }
+
+    private int deleteLocal(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 3) {
+            err.print(USAGE);
+            return 1;
+        }
+        String conch = args[2];
+        return withRuntime(env, runtime -> {
+            runtime.loadInstalledConches();
+            runtime.localConches().delete(conch, Actors.CLI);
+            out.println(conch + " deleted");
+            return 0;
+        });
+    }
+
+    private int exportLocal(String[] args, Function<String, String> env, PrintStream out, PrintStream err) throws IOException {
+        String conch;
+        String outFile;
+        if (args.length == 3) {
+            conch = args[2];
+            outFile = null;
+        } else if (args.length == 5 && "--out".equals(args[3])) {
+            conch = args[2];
+            outFile = args[4];
+        } else {
+            err.print(USAGE);
+            return 1;
+        }
+        if (outFile != null) {
+            Path target = Path.of(outFile);
+            if (Files.isSymbolicLink(target)) {
+                err.println("output path is a symlink");
+                return 1;
+            }
+            Path parent = target.toAbsolutePath().getParent();
+            if (parent != null && !Files.isDirectory(parent)) {
+                err.println("output directory is missing");
+                return 1;
+            }
+        }
+        return withRuntime(env, runtime -> {
+            runtime.loadInstalledConches();
+            LocalConches.Export export = runtime.localConches().export(conch);
+            if (outFile == null) {
+                try {
+                    out.write(export.bytes());
+                    out.flush();
+                } catch (IOException ex) {
+                    err.println("output file was not written");
+                    return 1;
+                }
+                return 0;
+            }
+            try {
+                Files.write(Path.of(outFile), export.bytes());
+            } catch (IOException ex) {
+                err.println("output file was not written");
+                return 1;
+            }
+            out.println(Path.of(outFile));
+            return 0;
+        });
     }
 
     private int audit(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {

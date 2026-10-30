@@ -128,9 +128,11 @@ Crab HERMIT_HOME/
   data/instance-id
   conches/<conch>/current
   conches/<conch>/<version>/
-  local-conches/          # 仅预留目录，当前无加载流程
+  local-conches/          # 本机未签名规则，文件名 {conch}.yaml；启动加载，reload 与目录对齐
   logs/                 # 预留目录；调用日志实际存 H2
 ```
+
+`local-conches/` 只放这一台机器的未签名规则。文件名是 `{conch}.yaml`，不递归，不跟随符号链接。进程启动时加载；`crab local reload` 或 `POST /console/api/local-conches/reload` 让目录里的增删改生效。单个文件上限 1 MiB。控制台上传还受现有请求体上限（1_000_000 字节）约束。
 
 Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，Flyway 历史表是 `hermit_flyway_schema_history`。V1–V4 在发布前就地改写，没有把旧表改名的迁移。已经用旧表名启动过的库需要重建：删除 `reef-data/db` 下的 H2 文件，或删除并重建 Compose 的 MySQL 卷 `reef-mysql`。`reef-data` 里的 `keys/` 和 `conches/` 可以留下；整卷删除会同时丢掉密钥和已发布包。Crab 的 `crab-data` 不在这次变更里。
 

@@ -123,3 +123,13 @@ CSS/各提取器的详细参数看 [Extractors](../hermit-crab/src/main/java/dev
 ZIP 只包含 `conch.yaml`、`manifest.json`、`signature.sig`；manifest format=1，包含规则身份、最低版本和 YAML SHA-256，签名对 manifest 字节做 Ed25519。每个条目最多 1 MiB，并验证未知/重复条目、路径、签名、摘要与 YAML 元数据一致性。
 
 修改规则应增加版本号，通过 Reef 上传检查 errors/warnings，再发布并在隔离 Crab 验证实际登录、输入/输出、错误路径和回滚。单纯发布成功不会执行 `health_check` 或测试真实凭证。
+
+## 本地开发与导出
+
+本机可以导入未签名的 YAML，用来在这一台 Crab 上试规则。来源是控制台上传，或 `HERMIT_HOME/local-conches/{conch}.yaml` 加上重新加载。没有在线编辑器。文件名必须等于包名，只认直接放在该目录下的 `*.yaml`。
+
+导入走与 Reef 上传相同的解析和 `ConchValidator`。`config` 仍然不能写 `type: secret`。单文件上限 1 MiB。控制台这次请求还受 Crab 现有请求体上限（1_000_000 字节）约束。校验失败返回 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，每项含 `code`、`path`、`message`。
+
+名字只和本机注册表里的正式包、以及 `subscriptions` 里的名字冲突。冲突是 HTTP 409，错误码仍是 `INVALID_INPUT`（目前没有 `CONFLICT`）。与已有本地包同名则替换，版本以 YAML 为准。账号和凭证留在 `(LOCAL, conch, account)` 上，删除本地包也不清它们。
+
+导出的是磁盘上的原始字节，`Content-Type` 为 `application/yaml`。本地包可以经 HTTP 和 MCP 调用，但 API Key 的 `conches` 必须写上这个名字；留空表示全部正式包，不含本地包。MCP 工具和资源说明以 `[本地] ` 开头。调用记录的 `source` 为 `LOCAL`，不会进入 Tide 上报。同步不会下载、覆盖或卸下本地包。

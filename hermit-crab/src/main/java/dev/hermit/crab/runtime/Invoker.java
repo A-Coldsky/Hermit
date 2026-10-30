@@ -119,27 +119,32 @@ public final class Invoker {
         if (doc == null || capability == null || disabled.disabled(conch, action)) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
         }
+        Origin origin = registry.origin(conch).orElse(Origin.OFFICIAL);
+        // 空的 conches 表示全部正式包。本地包必须被点名，否则这里就是 403，目录里仍能看见该工具。
+        if (origin == Origin.LOCAL && !principal.scope().conches().contains(conch)) {
+            return done(traceId, ErrorCode.FORBIDDEN, "forbidden", null);
+        }
         if (!principal.permits(conch, action, CapabilityHttp.readOnly(capability))) {
             return done(traceId, ErrorCode.FORBIDDEN, "forbidden", null);
         }
         Account resolved;
         try {
-            resolved = accounts.resolve(Origin.OFFICIAL, conch, account == null ? Optional.empty() : account);
+            resolved = accounts.resolve(origin, conch, account == null ? Optional.empty() : account);
         } catch (AccountNotFoundException ex) {
-            if (ex.account() == null && accounts.list(Origin.OFFICIAL, conch).isEmpty()) {
+            if (ex.account() == null && accounts.list(origin, conch).isEmpty()) {
                 return done(traceId, ErrorCode.NOT_CONFIGURED, "no account configured", null);
             }
             return done(traceId, ErrorCode.ACCOUNT_NOT_FOUND, "account not found", null);
         } catch (IllegalArgumentException ex) {
             return done(traceId, ErrorCode.INVALID_INPUT, "invalid account name", null);
         }
-        Map<String, String> stored = config.all(Origin.OFFICIAL, conch);
+        Map<String, String> stored = config.all(origin, conch);
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
         if (!missingConfig.isEmpty()) {
             return done(traceId, ErrorCode.NOT_CONFIGURED, "missing config: " + String.join(", ", missingConfig), null);
         }
         List<String> missingCredentials = DeclaredSettings.missingCredentials(
-                doc, vault.fieldNames(Origin.OFFICIAL, conch, resolved.account()));
+                doc, vault.fieldNames(origin, conch, resolved.account()));
         if (!missingCredentials.isEmpty()) {
             return done(traceId, ErrorCode.NOT_CONFIGURED,
                     "missing credentials: " + String.join(", ", missingCredentials), null);
@@ -147,20 +152,21 @@ public final class Invoker {
         Map<String, String> merged = DeclaredSettings.mergedConfig(doc, stored);
         Map<String, String> secrets;
         try {
-            secrets = vault.decryptForExecution(Origin.OFFICIAL, conch, resolved.account());
+            secrets = vault.decryptForExecution(origin, conch, resolved.account());
         } catch (CredentialDecryptException ex) {
             return done(traceId, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE, null);
         }
         Map<String, Object> rawInput = input == null ? Map.of() : input;
         if (CapabilityHttp.method(capability) == HttpMethod.POST && idempotencyKey != null && idempotencyKey.isPresent()) {
-            return replayOrExecute(principal, doc, action, rawInput, resolved, secrets, merged, idempotencyKey.get(), traceId);
+            return replayOrExecute(principal, doc, origin, action, rawInput, resolved, secrets, merged, idempotencyKey.get(), traceId);
         }
-        return execute(principal, doc, action, rawInput, resolved, secrets, merged, Optional.empty(), traceId);
+        return execute(principal, doc, origin, action, rawInput, resolved, secrets, merged, Optional.empty(), traceId);
     }
 
     private InvokeOutcome replayOrExecute(
             ApiKeyPrincipal principal,
             ConchDoc doc,
+            Origin origin,
             String action,
             Map<String, Object> input,
             Account account,
@@ -169,16 +175,16 @@ public final class Invoker {
             String key,
             String traceId
     ) {
-        String lockId = Origin.OFFICIAL.name() + "\0" + doc.conch() + "\0" + account.account() + "\0" + action + "\0" + key;
+        String lockId = origin.name() + "\0" + doc.conch() + "\0" + account.account() + "\0" + action + "\0" + key;
         Object lock = idempotencyLocks[stripe(lockId)];
         synchronized (lock) {
             Optional<String> stored = idempotency.findFresh(
-                    Origin.OFFICIAL, doc.conch(), account.account(), action, key);
+                    origin, doc.conch(), account.account(), action, key);
             if (stored.isPresent()) {
                 return replay(stored.get());
             }
-            InvokeOutcome outcome = execute(principal, doc, action, input, account, secrets, merged, Optional.of(key), traceId);
-            idempotency.save(Origin.OFFICIAL, doc.conch(), account.account(), action, key, new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8));
+            InvokeOutcome outcome = execute(principal, doc, origin, action, input, account, secrets, merged, Optional.of(key), traceId);
+            idempotency.save(origin, doc.conch(), account.account(), action, key, new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8));
             return outcome;
         }
     }
@@ -195,6 +201,7 @@ public final class Invoker {
     private InvokeOutcome execute(
             ApiKeyPrincipal principal,
             ConchDoc doc,
+            Origin origin,
             String action,
             Map<String, Object> input,
             Account account,
@@ -205,7 +212,7 @@ public final class Invoker {
     ) {
         ExecutionRequest request = new ExecutionRequest(
                 traceId,
-                Origin.OFFICIAL,
+                origin,
                 doc.conch(),
                 action,
                 input,
@@ -214,7 +221,7 @@ public final class Invoker {
         ExecutionResult result = engine.execute(request, doc);
         Invocation invocation = new Invocation(
                 traceId,
-                Origin.OFFICIAL,
+                origin,
                 principal,
                 doc.conch(),
                 action,
@@ -222,7 +229,7 @@ public final class Invoker {
                 input,
                 idempotencyKey);
         publish(invocation, result);
-        log(principal, result, secrets, doc.conch(), action, account.account());
+        log(principal, result, secrets, origin, doc.conch(), action, account.account());
         if (result.success()) {
             return done(traceId, null, null, result.data());
         }
@@ -236,6 +243,9 @@ public final class Invoker {
             } catch (RuntimeException ex) {
                 LOG.warning("execution listener failed: " + ex.getClass().getName());
             }
+        }
+        if (invocation.origin() == Origin.LOCAL) {
+            return;
         }
         String version = result.conchVersion() == null ? "" : result.conchVersion();
         ReportQueue reports = reportQueue;
@@ -260,6 +270,7 @@ public final class Invoker {
             ApiKeyPrincipal principal,
             ExecutionResult result,
             Map<String, String> secrets,
+            Origin origin,
             String conch,
             String action,
             String account
@@ -273,7 +284,7 @@ public final class Invoker {
         try {
             callLogs.append(new CallLogStore.NewCall(
                     result.traceId() == null ? "" : result.traceId(),
-                    Origin.OFFICIAL,
+                    origin,
                     conch,
                     action,
                     account,

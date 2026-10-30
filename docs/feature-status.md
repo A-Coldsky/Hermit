@@ -16,7 +16,7 @@
 | 自动登录暂停状态 | 已实现 | 连续登录失败达上限后暂停。控制台账号行返回 `loginPaused`、`loginPauseReason`、`loginPauseRecovery`；Conch 列表 `needsConfiguration` 计入暂停，概览待配置因此计入 |
 | HTTP 网关/别名/OpenAPI | 已实现 | GatewayHttpTest；OpenAPI 无鉴权且仅描述能力接口 |
 | POST 幂等响应缓存 | 已实现，有缺陷 | 24h 密文缓存；无参数摘要/版本区分 |
-| MCP HTTP/SSE/工具/资源 | 已实现 | McpHttpTest；≤40 直接工具，>40 目录模式，确认行为不同。协议错误是 JSON-RPC `error.data.code`/`hint`（鉴权 HTTP 401 也是该 body）；工具失败为 `isError` + `structuredContent.error`。`outputSchema` 只在协商协议 `2025-06-18` 与 `2025-11-25` 声明。声明了 minimum/maximum 的入参越界会拒绝 |
+| MCP HTTP/SSE/工具/资源 | 已实现 | McpHttpTest；≤40 直接工具，>40 目录模式，确认行为不同。协议错误是 JSON-RPC `error.data.code`/`hint`（鉴权 HTTP 401 也是该 body）；工具失败为 `isError` + `structuredContent.error`。`outputSchema` 只在协商协议 `2025-06-18` 与 `2025-11-25` 声明。声明了 minimum/maximum 的入参越界会拒绝。带有且不在回环、监听地址同源或 `mcp.allowed_origins` 内的 `Origin` 返回 403 `ORIGIN_REJECTED`，不创建会话；没有 `Origin` 仍允许。非 `initialize` 请求的 `MCP-Protocol-Version` 不是支持版本时 400；缺该头沿用会话里协商的版本。`initialize` 的未知 `protocolVersion` 仍回落协商。这两处放行写在 `McpTransportPolicy` |
 | MCP stdio 桥接 | 已实现 | McpStdio；需要已运行的 HTTP Crab，CLI/验收覆盖不足以代表所有真实客户端兼容 |
 | Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest。4xx/5xx 服务端日志带与响应相同的 traceId，4xx 不记请求体。已登录的未知 `/api/admin/**` 为 404 `NOT_FOUND` 信封。没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ConchApiTest/ConchConcurrencyTest/ConchSelfCheckFailureTest |
@@ -77,3 +77,5 @@ hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过；Docker
 Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 历史表为 `hermit_flyway_schema_history`，V4 表为 `hermit_conch_availability`。V1–V4 就地改写，没有数据迁移。已有 `reef-data` 中的 H2 和 Compose MySQL 库必须重建。Crab 本地表名不变。
 
 2026-10-29 表前缀以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 125、hermit-crab 209、hermit-it 1，失败/错误/跳过均为 0；Vitest 51（10 个文件）。同一 JDK 先跑 `./mvnw -B -pl hermit-reef -am test -Dhermit.web.skip=true`：hermit-common 43、hermit-reef 125（打包页面测试 1 项因跳过前端资源而跳过），失败 0。未启动 MySQL 或 Compose。
+
+2026-10-30 MCP Origin 与协议版本头以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 125、hermit-crab 217、hermit-it 1，失败/错误/跳过均为 0；Vitest 63（12 个文件）。Java 小计 386，合计 449。本次新增 Crab 的 Origin、协议版本头和 `mcp.allowed_origins` 用例。未用真实 MCP 客户端或浏览器复测，也未启动 MySQL 或 Compose。

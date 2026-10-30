@@ -2,6 +2,7 @@ package dev.hermit.crab.config;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -20,7 +21,8 @@ public record CrabConfig(
         Map<String, String> aliases,
         int capabilityTimeoutSeconds,
         int sessionIdleMinutes,
-        int maxLoginFailures
+        int maxLoginFailures,
+        List<String> mcpAllowedOrigins
 ) {
     public CrabConfig {
         if (serverHost == null || serverHost.isBlank()) {
@@ -52,10 +54,11 @@ public record CrabConfig(
         for (Map.Entry<String, String> alias : aliases.entrySet()) {
             requireAlias(alias.getKey(), alias.getValue());
         }
+        mcpAllowedOrigins = normalizeOrigins(mcpAllowedOrigins);
     }
 
     public static CrabConfig defaults() {
-        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 60, List.of(), Map.of(), 60, 10, 3);
+        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 60, List.of(), Map.of(), 60, 10, 3, List.of());
     }
 
     public EngineSettings engineSettings() {
@@ -69,21 +72,28 @@ public record CrabConfig(
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, host, port, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures);
+                maxLoginFailures, mcpAllowedOrigins);
     }
 
     public CrabConfig withAliases(Map<String, String> aliasMap) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliasMap, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures);
+                maxLoginFailures, mcpAllowedOrigins);
     }
 
     public CrabConfig withDisabled(List<String> disabled) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabled, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures);
+                maxLoginFailures, mcpAllowedOrigins);
+    }
+
+    public CrabConfig withMcpAllowedOrigins(List<String> origins) {
+        return new CrabConfig(
+                reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
+                reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
+                maxLoginFailures, origins);
     }
 
     public static void requireAlias(String path, String target) {
@@ -106,6 +116,22 @@ public record CrabConfig(
         if (target == null || dot <= 0 || dot != target.lastIndexOf('.') || dot == target.length() - 1) {
             throw new IllegalArgumentException(where + " entries must be conch.action");
         }
+    }
+
+    private static List<String> normalizeOrigins(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        for (String entry : raw) {
+            String origin = HttpOrigin.normalize(entry == null ? "" : entry.strip());
+            if (origin == null) {
+                throw new IllegalArgumentException(
+                        "mcp.allowed_origins entries must be absolute http or https origins");
+            }
+            normalized.add(origin);
+        }
+        return List.copyOf(normalized);
     }
 
     public static Map<String, String> aliasTargets(Map<String, String> aliases) {

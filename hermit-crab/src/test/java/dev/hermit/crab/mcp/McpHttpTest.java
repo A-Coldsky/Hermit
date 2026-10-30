@@ -342,6 +342,120 @@ class McpHttpTest {
     }
 
     @Test
+    void originHeaderAllowsLoopbackAndRejectsOthers() throws Exception {
+        assertThat(McpTransportPolicy.ALLOW_MISSING_ORIGIN).isTrue();
+        try (SessionServer server = SessionServer.open(
+                temp.resolve("origin"), Clock.systemUTC(), 20, List.of("https://mcp.example"))) {
+            String key = server.apiKey.plaintext();
+            int port = server.app.port();
+            assertThat(server.endpoint.openSessions()).isZero();
+
+            Reply missing = server.post(key, null, initialize("{}"), null);
+            assertThat(missing.status()).isEqualTo(200);
+            assertThat(missing.header("Mcp-Session-Id")).isNotBlank();
+            assertThat(server.endpoint.openSessions()).isEqualTo(1);
+            String kept = missing.header("Mcp-Session-Id");
+
+            Reply loopback = server.post(key, null, initialize("{}"), Map.of("Origin", "http://127.0.0.1:" + port));
+            assertThat(loopback.status()).isEqualTo(200);
+            assertThat(loopback.header("Mcp-Session-Id")).isNotBlank();
+            Reply localhost = server.post(key, null, initialize("{}"), Map.of("Origin", "http://localhost:" + port));
+            assertThat(localhost.status()).isEqualTo(200);
+            assertThat(localhost.header("Mcp-Session-Id")).isNotBlank();
+            Reply ipv6 = server.post(key, null, initialize("{}"), Map.of("Origin", "http://[::1]:" + port));
+            assertThat(ipv6.status()).isEqualTo(200);
+            assertThat(ipv6.header("Mcp-Session-Id")).isNotBlank();
+            Reply listed = server.post(key, null, initialize("{}"), Map.of("Origin", "https://mcp.example"));
+            assertThat(listed.status()).isEqualTo(200);
+            assertThat(listed.header("Mcp-Session-Id")).isNotBlank();
+            Reply listedPort = server.post(key, null, initialize("{}"), Map.of("Origin", "https://MCP.Example:443"));
+            assertThat(listedPort.status()).isEqualTo(200);
+
+            int sessions = server.endpoint.openSessions();
+            int wrongPort = port == 9 ? 10 : 9;
+            Reply evil = server.post(key, null, initialize("{}"), Map.of("Origin", "http://evil.example"));
+            assertRejectedOrigin(evil);
+            Reply bare = server.post(key, null, initialize("{}"), Map.of("Origin", "evil.example"));
+            assertRejectedOrigin(bare);
+            Reply wrong = server.post(key, null, initialize("{}"), Map.of("Origin", "http://127.0.0.1:" + wrongPort));
+            assertRejectedOrigin(wrong);
+            Reply neighbor = server.post(key, null, initialize("{}"), Map.of("Origin", "http://10.9.8.7:" + port));
+            assertRejectedOrigin(neighbor);
+            Reply httpsLoop = server.post(key, null, initialize("{}"), Map.of("Origin", "https://127.0.0.1:" + port));
+            assertRejectedOrigin(httpsLoop);
+            Reply opaque = server.post(key, null, initialize("{}"), Map.of("Origin", "null"));
+            assertRejectedOrigin(opaque);
+            Reply otherLoop = server.post(key, null, initialize("{}"), Map.of("Origin", "http://127.0.0.2:" + port));
+            assertRejectedOrigin(otherLoop);
+            assertThat(server.endpoint.openSessions()).isEqualTo(sessions);
+            SecretChecks.absent(evil.body(), key);
+
+            Reply noKey = server.post(null, null, initialize("{}"), Map.of("Origin", "http://evil.example"));
+            assertThat(noKey.status()).isEqualTo(403);
+            assertThat(noKey.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.ORIGIN_REJECTED);
+
+            Reply getEvil = server.get(key, Map.of("Origin", "http://evil.example"));
+            assertRejectedOrigin(getEvil);
+            Reply deleteEvil = server.delete(key, kept, Map.of("Origin", "http://evil.example"));
+            assertRejectedOrigin(deleteEvil);
+            assertThat(server.ping(key, kept).status()).isEqualTo(200);
+            assertThat(server.endpoint.openSessions()).isEqualTo(sessions);
+        }
+    }
+
+    @Test
+    void protocolVersionHeaderIsCheckedAfterInitialize() throws Exception {
+        assertThat(McpTransportPolicy.NEGOTIATE_UNKNOWN_PROTOCOL).isTrue();
+        try (SessionServer server = SessionServer.open(temp.resolve("protocol"), Clock.systemUTC(), 20)) {
+            String key = server.apiKey.plaintext();
+            Reply initialized = server.post(key, null, initialize("2025-03-26", "{}"),
+                    Map.of("MCP-Protocol-Version", "1999-01-01"));
+            assertThat(initialized.status()).isEqualTo(200);
+            assertThat(initialized.json().path("result").path("protocolVersion").asText()).isEqualTo("2025-03-26");
+            String session = initialized.header("Mcp-Session-Id");
+            assertThat(session).isNotBlank();
+
+            Reply missingHeader = server.ping(key, session);
+            assertThat(missingHeader.status()).isEqualTo(200);
+
+            Reply supported = server.post(key, session, request(2, "ping", null),
+                    Map.of("MCP-Protocol-Version", "2025-11-25"));
+            assertThat(supported.status()).isEqualTo(200);
+            assertThat(supported.json().path("result").isObject()).isTrue();
+
+            int sessions = server.endpoint.openSessions();
+            Reply bad = server.post(key, session, request(3, "ping", null),
+                    Map.of("MCP-Protocol-Version", "1999-01-01"));
+            assertThat(bad.status()).isEqualTo(400);
+            assertThat(bad.json().path("jsonrpc").asText()).isEqualTo("2.0");
+            assertThat(bad.json().path("id").asInt()).isEqualTo(3);
+            assertThat(bad.json().path("error").path("code").asInt()).isEqualTo(-32600);
+            assertThat(bad.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.UNSUPPORTED_PROTOCOL);
+            assertThat(bad.json().path("error").path("data").path("hint").asText()).contains("2025-11-25");
+            assertThat(bad.header("Mcp-Session-Id")).isNull();
+            assertThat(server.endpoint.openSessions()).isEqualTo(sessions);
+            SecretChecks.absent(bad.body(), key);
+            assertThat(server.ping(key, session).status()).isEqualTo(200);
+
+            Reply blank = server.post(key, session, request(4, "ping", null),
+                    Map.of("MCP-Protocol-Version", " "));
+            assertThat(blank.status()).isEqualTo(400);
+            assertThat(blank.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.UNSUPPORTED_PROTOCOL);
+
+            Reply negotiated = server.post(key, null, initialize("1999-01-01", "{}"), null);
+            assertThat(negotiated.status()).isEqualTo(200);
+            assertThat(negotiated.json().path("result").path("protocolVersion").asText())
+                    .isEqualTo(McpTransportPolicy.NEGOTIATED_FALLBACK);
+            assertThat(negotiated.header("Mcp-Session-Id")).isNotBlank();
+
+            Reply getBad = server.get(key, Map.of("MCP-Protocol-Version", "1999-01-01"));
+            assertThat(getBad.status()).isEqualTo(400);
+            assertThat(getBad.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.UNSUPPORTED_PROTOCOL);
+            assertThat(getBad.json().get("id").isNull()).isTrue();
+        }
+    }
+
+    @Test
     void stdioForwardsProtocolAndRefusesAMissingCrab() throws Exception {
         try (Harness server = Harness.open(temp.resolve("stdio"), PASSWORD)) {
             server.configure("alice");
@@ -560,6 +674,17 @@ class McpHttpTest {
             names.add(tool.path("name").asText());
         }
         return names;
+    }
+
+    private static void assertRejectedOrigin(Reply reply) {
+        assertThat(reply.status()).isEqualTo(403);
+        assertThat(reply.header("Mcp-Session-Id")).isNull();
+        assertThat(reply.json().path("jsonrpc").asText()).isEqualTo("2.0");
+        assertThat(reply.json().get("id").isNull()).isTrue();
+        assertThat(reply.json().path("error").path("code").asInt()).isEqualTo(McpErrors.ORIGIN_RPC);
+        assertThat(reply.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.ORIGIN_REJECTED);
+        assertThat(reply.json().path("error").path("message").asText()).isNotBlank();
+        assertThat(reply.json().path("error").path("data").path("hint").asText()).contains("mcp.allowed_origins");
     }
 
     private static JsonNode toolError(Reply reply) {
@@ -966,8 +1091,14 @@ class McpHttpTest {
         }
 
         static SessionServer open(Path root, Clock clock, int maxSessions) {
+            return open(root, clock, maxSessions, List.of());
+        }
+
+        static SessionServer open(Path root, Clock clock, int maxSessions, List<String> allowedOrigins) {
             CrabRuntime runtime = CrabRuntime.open(
-                    new CrabPaths(root), CrabConfig.defaults().withListen("127.0.0.1", 0), name -> null);
+                    new CrabPaths(root),
+                    CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpAllowedOrigins(allowedOrigins),
+                    name -> null);
             McpEndpoint endpoint = new McpEndpoint(runtime, clock, McpEndpoint.IDLE_LIMIT, maxSessions);
             Javalin app = Javalin.create(config -> {
                 config.showJavalinBanner = false;
@@ -987,7 +1118,7 @@ class McpHttpTest {
         }
 
         String initialize(String key) throws Exception {
-            Reply reply = post(key, null, McpHttpTest.initialize("{}"));
+            Reply reply = post(key, null, McpHttpTest.initialize("{}"), null);
             if (reply.status() != 200 || reply.header("Mcp-Session-Id") == null) {
                 throw new AssertionError("initialize failed: " + reply.status() + " " + reply.body());
             }
@@ -995,17 +1126,45 @@ class McpHttpTest {
         }
 
         Reply ping(String key, String session) throws Exception {
-            return post(key, session, McpHttpTest.request(1, "ping", null));
+            return post(key, session, McpHttpTest.request(1, "ping", null), null);
         }
 
-        private Reply post(String key, String session, String body) throws Exception {
+        Reply post(String key, String session, String body, Map<String, String> extra) throws Exception {
+            return exchange("POST", key, session, body, extra);
+        }
+
+        Reply get(String key, Map<String, String> extra) throws Exception {
+            return exchange("GET", key, null, null, extra);
+        }
+
+        Reply delete(String key, String session, Map<String, String> extra) throws Exception {
+            return exchange("DELETE", key, session, null, extra);
+        }
+
+        private Reply exchange(String method, String key, String session, String body, Map<String, String> extra)
+                throws Exception {
+            boolean stream = "GET".equals(method) || "DELETE".equals(method);
             HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(base + "/mcp"))
-                    .timeout(Duration.ofSeconds(10))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + key)
-                    .POST(HttpRequest.BodyPublishers.ofString(body));
+                    .timeout(Duration.ofSeconds(stream ? 5 : 10));
+            if ("POST".equals(method)) {
+                builder.header("Content-Type", "application/json");
+                builder.POST(HttpRequest.BodyPublishers.ofString(body == null ? "" : body));
+            } else if ("DELETE".equals(method)) {
+                builder.DELETE();
+            } else {
+                builder.header("Accept", "application/json");
+                builder.GET();
+            }
+            if (key != null) {
+                builder.header("Authorization", "Bearer " + key);
+            }
             if (session != null) {
                 builder.header("Mcp-Session-Id", session);
+            }
+            if (extra != null) {
+                for (Map.Entry<String, String> entry : extra.entrySet()) {
+                    builder.header(entry.getKey(), entry.getValue());
+                }
             }
             HttpResponse<String> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             return new Reply(response.statusCode(), response.body(), response.headers().map());

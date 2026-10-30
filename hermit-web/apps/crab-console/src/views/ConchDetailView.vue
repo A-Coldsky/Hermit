@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { Refresh } from '@element-plus/icons-vue'
+import { Delete, Download, Refresh } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
@@ -100,6 +101,76 @@ async function load() {
   loading.value = false
 }
 
+const local = computed(() => detail.value?.source === 'LOCAL')
+const working = ref(false)
+
+async function exportYaml() {
+  if (!detail.value) return
+  working.value = true
+  try {
+    const text = await api.exportLocalConch(props.conch)
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/yaml' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${props.conch}-${detail.value.version}.yaml`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    working.value = false
+  }
+}
+
+async function confirmThen(message: string, title: string, confirm: string): Promise<boolean> {
+  try {
+    await ElMessageBox.confirm(message, title, { confirmButtonText: confirm, cancelButtonText: '取消', type: 'warning' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function removeLocal() {
+  const ok = await confirmThen(
+    `删除后 ${props.conch} 的 YAML 文件会从本机移除，调用会失败。账号、凭证和配置会保留，再次导入同名规则包后可以直接使用。`,
+    `删除本地规则包 ${props.conch}`,
+    '删除',
+  )
+  if (!ok) return
+  working.value = true
+  try {
+    await api.deleteLocalConch(props.conch)
+    ElMessage.success(`已删除本地规则包 ${props.conch}`)
+    void refreshPending()
+    void router.push('/conches')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    working.value = false
+  }
+}
+
+async function unsubscribe() {
+  const ok = await confirmThen(
+    `取消订阅后本机会卸载 ${props.conch}，调用会失败。账号、凭证和配置会保留，重新订阅后可以直接使用。`,
+    `取消订阅 ${detail.value?.title || props.conch}`,
+    '取消订阅',
+  )
+  if (!ok) return
+  working.value = true
+  try {
+    await api.unsubscribe(props.conch)
+    ElMessage.success(`已取消订阅 ${props.conch}`)
+    void refreshPending()
+    void router.push('/catalog')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    working.value = false
+  }
+}
+
 watch(
   () => props.conch,
   () => {
@@ -124,8 +195,14 @@ watch(
       </template>
       <template #badge>
         <el-tag v-if="detail" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
+        <el-tag v-if="local" type="warning" effect="plain" round>本地</el-tag>
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
+      <template v-if="local">
+        <el-button :icon="Download" :loading="working" @click="exportYaml">导出 YAML</el-button>
+        <el-button type="danger" plain :icon="Delete" :disabled="working" @click="removeLocal">删除</el-button>
+      </template>
+      <el-button v-else-if="detail" type="danger" plain :disabled="working" @click="unsubscribe">取消订阅</el-button>
     </PageHeader>
 
     <el-result v-if="missing" icon="warning" title="规则包未安装" :sub-title="`本机没有名为 ${conch} 的规则包`">
@@ -135,6 +212,12 @@ watch(
     </el-result>
 
     <template v-else-if="detail">
+      <el-alert v-if="local" type="info" show-icon :closable="false" title="本地规则包：未经 Reef 签名，只在本机可用">
+        <template #default>
+          只有在范围里明确选中 <span class="mono">{{ conch }}</span> 的 API Key 才能调用它；「全部规则包」的 Key 会被拒绝。调用不会上报 Reef。
+          导出的 YAML 可以直接在 Reef「上传规则包」页面上传，校验签名后发布给其他 Crab。
+        </template>
+      </el-alert>
       <el-alert v-if="partsFailed" type="error" show-icon :closable="false" title="账号或配置没有加载出来，下面的状态可能不完整">
         <template #default>
           <el-button size="small" @click="reloadParts">重新加载</el-button>

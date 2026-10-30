@@ -191,6 +191,9 @@ watch(() => props.conch, load, { immediate: true })
                 <div><strong>{{ capabilityCount }}</strong><span class="hm-muted">能力</span></div>
                 <div><strong>{{ credentialCount }}</strong><span class="hm-muted">凭证字段</span></div>
                 <div><strong>{{ configCount }}</strong><span class="hm-muted">配置项</span></div>
+                <div title="Crab 成功下载这个规则包的次数，各版本合计">
+                  <strong>{{ detail.pullCount }}</strong><span class="hm-muted">次拉取</span>
+                </div>
               </div>
             </div>
           </div>

@@ -10,6 +10,7 @@ export const router = createRouter({
       children: [
         { path: '', name: 'overview', component: () => import('./views/OverviewView.vue') },
         { path: 'conches', name: 'conches', component: () => import('./views/ConchesView.vue') },
+        { path: 'catalog', name: 'catalog', component: () => import('./views/CatalogView.vue') },
         { path: 'conches/:conch', name: 'conch', component: () => import('./views/ConchDetailView.vue'), props: true },
         { path: 'apikeys', name: 'apikeys', component: () => import('./views/ApiKeysView.vue') },
         { path: 'calls', name: 'calls', component: () => import('./views/CallsView.vue') },

@@ -143,6 +143,7 @@ async function runDiff() {
           <span v-else class="hm-muted">0</span>
         </template>
       </el-table-column>
+      <el-table-column prop="pullCount" label="拉取" width="80" align="right" />
       <el-table-column label="操作" width="280">
         <template #default="{ row }">
           <el-button link type="primary" @click="showYaml(row)">YAML</el-button>

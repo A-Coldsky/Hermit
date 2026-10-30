@@ -102,7 +102,7 @@ async function publish() {
       <el-step title="选择 YAML" description="拖入或点击选择文件" />
       <el-step title="校验并签名" description="检查结构、能力和字段" />
       <el-step title="待发布" description="确认差异和警告" />
-      <el-step title="发布" description="Crab 下次同步时切换" />
+      <el-step title="发布" description="订阅了的 Crab 下次同步时切换" />
     </el-steps>
 
     <div class="hm-card">
@@ -118,6 +118,10 @@ async function publish() {
         <div class="el-upload__text">把规则包 YAML 拖到这里，或 <em>点击选择文件</em></div>
         <template #tip>
           <div class="el-upload__tip">支持 .yaml / .yml，单个文件不超过 1 MB</div>
+          <div class="el-upload__tip" data-test="local-import-tip">
+            Crab 控制台「导出 YAML」得到的本地规则包可以直接上传。上传后由 Reef 校验并签名，发布后订阅了它的 Crab 才会安装。
+            若 Crab 本机仍有同名本地包，需要先在那台 Crab 上删除本地包再订阅。
+          </div>
         </template>
       </el-upload>
       <div v-if="uploading" class="status">

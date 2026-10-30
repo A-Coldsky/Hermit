@@ -62,6 +62,7 @@ class CrabWiringTest {
             CrabConfig config = config(reef.base().toString(), Ed25519Keys.writePublicPem(reef.keys().getPublic()), true);
             CrabPaths paths = new CrabPaths(temp.resolve("wired"));
             try (CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null)) {
+                TestSubscriptions.grantKnown(runtime.dataSource());
                 runtime.loadInstalledConches();
                 reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
                 SyncReport first = runtime.syncOnce(null).orElseThrow();
@@ -99,6 +100,7 @@ class CrabWiringTest {
                     .withListen("127.0.0.1", 0);
             CrabPaths paths = new CrabPaths(temp.resolve("console"));
             CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null);
+            TestSubscriptions.grantKnown(runtime.dataSource());
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
             try (CrabServer server = CrabServer.start(runtime)) {
                 HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -130,6 +132,7 @@ class CrabWiringTest {
             CrabConfig config = config(reef.base().toString(), Ed25519Keys.writePublicPem(reef.keys().getPublic()), false)
                     .withListen("127.0.0.1", 0);
             CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("scheduled")), config, name -> null);
+            TestSubscriptions.grantKnown(runtime.dataSource());
             try (CrabServer server = CrabServer.start(runtime)) {
                 HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
                 JsonNode startup = awaitSyncReport(http, server.port());
@@ -159,6 +162,7 @@ class CrabWiringTest {
                     .withListen("127.0.0.1", 0);
             CrabPaths paths = new CrabPaths(temp.resolve("rollback-status"));
             CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null);
+            TestSubscriptions.grantKnown(runtime.dataSource());
             try (CrabServer server = CrabServer.start(runtime)) {
                 HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
                 awaitSyncReport(http, server.port());
@@ -202,6 +206,7 @@ class CrabWiringTest {
             CrabConfig config = config(reef.base().toString(), Ed25519Keys.writePublicPem(reef.keys().getPublic()), false)
                     .withListen("127.0.0.1", 0);
             CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("reef-down")), config, name -> null);
+            TestSubscriptions.grantKnown(runtime.dataSource());
             try (CrabServer server = CrabServer.start(runtime)) {
                 HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
                 awaitSyncReport(http, server.port());

@@ -3,6 +3,9 @@ package dev.hermit.crab.store;
 import org.h2.jdbcx.JdbcConnectionPool;
 
 import javax.sql.DataSource;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -15,6 +18,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Logger;
+import java.util.stream.Stream;
+
+import dev.hermit.common.validate.ConchValidator;
 
 /**
  * H2 file database at {@code data/crab}. Startup applies migrations recorded in
@@ -26,7 +33,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Version 6 indexes {@code config_audit (at, id)} for newest-first reads and does not copy
  * {@code detail}. Version 7 adds {@code disabled_conches}, the tombstones for conches Reef withdrew
  * from the manifest. Version 6 is left as applied; do not fold the tombstones back into it.
- * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
+ * Version 8 adds {@code subscriptions}. On that upgrade, conches under {@code conches/} that
+ * already have a current pointer are inserted with actor {@code migration} so they stay installed.
+ * Version 7 is left as applied. Version 2 is applied when its own row is missing, not when
+ * {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Before the first official release these statements may be edited in
  * place when there is no stored data. After release, add a new version instead of rewriting one.
@@ -39,10 +49,14 @@ public final class CrabDatabase implements AutoCloseable {
     private static final String H2_OPTIONS =
             ";LOCK_TIMEOUT=10000;DB_CLOSE_ON_EXIT=FALSE;TRACE_LEVEL_FILE=0;TRACE_LEVEL_SYSTEM_OUT=0;FILE_LOCK=FILE";
 
+    private static final Logger LOG = Logger.getLogger(CrabDatabase.class.getName());
+
+    private final CrabPaths paths;
     private final JdbcConnectionPool pool;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public CrabDatabase(CrabPaths paths) {
+        this.paths = paths;
         this.pool = JdbcConnectionPool.create(jdbcUrl(paths.databaseFile()), "sa", "");
         try {
             migrate();
@@ -106,6 +120,10 @@ public final class CrabDatabase implements AutoCloseable {
             if (current < 7) {
                 applyV7(connection);
                 insertVersion(connection, 7);
+            }
+            if (current < 8) {
+                applyV8(connection);
+                insertVersion(connection, 8);
             }
             return null;
         });
@@ -407,6 +425,95 @@ public final class CrabDatabase implements AutoCloseable {
                     disabled_at TIMESTAMP WITH TIME ZONE NOT NULL
                 )
                 """);
+    }
+
+    /**
+     * {@code subscribed_at} is {@code TIMESTAMP WITH TIME ZONE} so {@link Db#setInstant} matches
+     * every other Crab instant column. The upgrade inserts a row only for a legal conch name whose
+     * {@code current} file is a readable regular file. A later startup does not scan again.
+     */
+    private void applyV8(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    conch VARCHAR(128) PRIMARY KEY,
+                    subscribed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    actor VARCHAR(128) NOT NULL
+                )
+                """);
+        seedSubscriptions(connection);
+    }
+
+    private void seedSubscriptions(Connection connection) throws SQLException {
+        Path root = paths.root().resolve("conches");
+        if (!Files.isDirectory(root)) {
+            return;
+        }
+        List<Path> children;
+        try (Stream<Path> listed = Files.list(root)) {
+            children = listed.toList();
+        } catch (IOException ex) {
+            SQLException failure = new SQLException("cannot list installed conches");
+            failure.initCause(ex);
+            throw failure;
+        }
+        for (Path child : children) {
+            if (Files.isSymbolicLink(child) || !Files.isDirectory(child)) {
+                continue;
+            }
+            String name = child.getFileName().toString();
+            if (!ConchValidator.isConchName(name)) {
+                continue;
+            }
+            Path current = child.resolve("current");
+            if (Files.isSymbolicLink(current) || !Files.isRegularFile(current)) {
+                continue;
+            }
+            String version;
+            try {
+                version = Files.readString(current, StandardCharsets.UTF_8).trim();
+            } catch (IOException ex) {
+                LOG.warning("subscription seed skipped unreadable current conch=" + name);
+                continue;
+            }
+            if (!pointerSegment(version) || subscribed(connection, name)) {
+                continue;
+            }
+            try (PreparedStatement insert = connection.prepareStatement("""
+                    INSERT INTO subscriptions (conch, subscribed_at, actor) VALUES (?, ?, ?)
+                    """)) {
+                insert.setString(1, name);
+                Db.setInstant(insert, 2, Instant.now());
+                insert.setString(3, "migration");
+                insert.executeUpdate();
+            }
+        }
+    }
+
+    private static boolean subscribed(Connection connection, String conch) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM subscriptions WHERE conch = ?")) {
+            statement.setString(1, conch);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
+    }
+
+    /** Same segment rules as {@code ConchFiles.safeSegment}. Kept here so store does not import sync. */
+    private static boolean pointerSegment(String value) {
+        if (value == null || value.isEmpty() || value.length() > 128) {
+            return false;
+        }
+        if (".".equals(value) || "..".equals(value)) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '/' || c == '\\' || c == '\0' || Character.isISOControl(c)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean applied(Connection connection, int version) throws SQLException {

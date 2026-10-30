@@ -15,5 +15,6 @@ record VersionRow(
         Instant publishedAt,
         boolean current,
         String validationJson,
-        String diffJson) {
+        String diffJson,
+        long pullCount) {
 }

@@ -12,6 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -131,6 +133,42 @@ class ConchConcurrencyTest {
             assertThat(distribution.manifest(null).entries()).isEmpty();
             assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE is_current = TRUE")).isEqualTo(1);
         }
+    }
+
+    @Test
+    void concurrentDownloadsEachIncrementPullCount() throws Exception {
+        uploads.upload(TestSecrets.USERNAME, sample());
+        publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.0.0");
+        int downloads = 16;
+        ExecutorService pool = Executors.newFixedThreadPool(downloads);
+        CountDownLatch ready = new CountDownLatch(downloads);
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        List<Future<?>> futures = new ArrayList<>();
+        try {
+            for (int i = 0; i < downloads; i++) {
+                futures.add(pool.submit(task(() -> {
+                    byte[] zip = distribution.publishedZip("legacy_oa", "1.0.0");
+                    if (zip.length < 2 || zip[0] != 'P' || zip[1] != 'K') {
+                        throw new IllegalStateException("download was not a zip");
+                    }
+                }, ready, start, failure)));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            for (Future<?> future : futures) {
+                future.get(30, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        if (failure.get() != null) {
+            throw new AssertionError("concurrent download failed", failure.get());
+        }
+        Long pulls = jdbc.queryForObject(
+                "SELECT pull_count FROM hermit_conch_versions WHERE conch = 'legacy_oa' AND version = '1.0.0'",
+                Long.class);
+        assertThat(pulls).isEqualTo((long) downloads);
     }
 
     private static void together(Runnable first, Runnable second) throws Exception {

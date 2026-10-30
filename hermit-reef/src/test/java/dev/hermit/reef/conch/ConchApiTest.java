@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.hermit.common.model.ConchDoc;
@@ -65,6 +66,7 @@ import org.springframework.test.web.servlet.MvcResult;
 class ConchApiTest {
 
     static final String TOKEN = "reef-agent-token-test";
+    private static final String SAMPLE_DESCRIPTION = "公司内部审批、公告、请假系统。本规则包覆盖待办审批和请假申请。";
     private static final String INSTANCE = "123e4567-e89b-12d3-a456-426614174000";
     private static final Path DATA = TestDataDirs.create("conch-api");
 
@@ -185,6 +187,7 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data[0].title").value("协同办公 OA"))
                 .andExpect(jsonPath("$.data[0].owner").value("平台组"))
                 .andExpect(jsonPath("$.data[0].capabilityCount").value(1))
+                .andExpect(jsonPath("$.data[0].pullCount").value(0))
                 .andExpect(jsonPath("$.data[0].publishedAt").value(nullValue()))
                 .andExpect(jsonPath("$.data[0].disabled").value(false))
                 .andExpect(jsonPath("$.data[0].disabledAt").value(nullValue()))
@@ -199,6 +202,7 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data[0].status").value("UPLOADED"))
                 .andExpect(jsonPath("$.data[0].uploadedBy").value(TestSecrets.USERNAME))
                 .andExpect(jsonPath("$.data[0].current").value(false))
+                .andExpect(jsonPath("$.data[0].pullCount").value(0))
                 .andExpect(jsonPath("$.data[0].warningCount").value(2))
                 .andExpect(jsonPath("$.data[0].warnings.length()").value(2))
                 .andExpect(jsonPath("$.data[0].warnings[0].code").value(ValidationCodes.UNKNOWN_RELATED))
@@ -495,6 +499,136 @@ class ConchApiTest {
                 .andExpect(status().isNotModified());
     }
 
+    @Test
+    void manifestEntrySerializesANullDescription() throws Exception {
+        ManifestEntry entry = new ManifestEntry("legacy_oa", "1.0.0", "ab", "1.0.0", "标题", null, 0);
+        JsonNode node = objectMapper.valueToTree(entry);
+        assertThat(node.get("description").isNull()).isTrue();
+        assertThat(node.get("title").asText()).isEqualTo("标题");
+        assertThat(node.get("capabilityCount").intValue()).isZero();
+        String withNull = etagOf(List.of(entry));
+        String withText = etagOf(List.of(new ManifestEntry(
+                entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
+                entry.title(), "说明", entry.capabilityCount())));
+        String renamed = etagOf(List.of(new ManifestEntry(
+                entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
+                "另一个标题", null, entry.capabilityCount())));
+        String moreCapabilities = etagOf(List.of(new ManifestEntry(
+                entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
+                entry.title(), null, 1)));
+        assertThat(withText).isNotEqualTo(withNull);
+        assertThat(renamed).isNotEqualTo(withNull);
+        assertThat(moreCapabilities).isNotEqualTo(withNull);
+    }
+
+    @Test
+    void pullCountTracksSuccessfulDownloadsAndManifestUsesTheCurrentVersion() throws Exception {
+        byte[] sample = sample();
+        upload(sample);
+        mockMvc.perform(agent("/agent/conches/legacy_oa/1.0.0"))
+                .andExpect(status().isNotFound());
+        assertThat(storedPull("legacy_oa", "1.0.0")).isZero();
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].pullCount").value(0));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/versions").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].pullCount").value(0))
+                .andExpect(jsonPath("$.data[0].status").value("UPLOADED"));
+
+        publish("1.0.0");
+        MvcResult firstManifest = manifest();
+        String firstEtag = firstManifest.getResponse().getHeader(HttpHeaders.ETAG);
+        assertManifestMetadata(firstManifest, "1.0.0", SAMPLE_DESCRIPTION, 1);
+        mockMvc.perform(agent("/agent/conches/manifest").header(HttpHeaders.IF_NONE_MATCH, firstEtag))
+                .andExpect(status().isNotModified())
+                .andExpect(content().string(""));
+        assertThat(storedPull("legacy_oa", "1.0.0")).isZero();
+
+        assertThat(download("1.0.0")).isNotEmpty();
+        assertThat(download("1.0.0")).isNotEmpty();
+        assertThat(storedPull("legacy_oa", "1.0.0")).isEqualTo(2);
+        MvcResult afterDownloads = manifest();
+        assertThat(afterDownloads.getResponse().getHeader(HttpHeaders.ETAG)).isEqualTo(firstEtag);
+        mockMvc.perform(agent("/agent/conches/manifest").header(HttpHeaders.IF_NONE_MATCH, firstEtag))
+                .andExpect(status().isNotModified());
+        assertThat(storedPull("legacy_oa", "1.0.0")).isEqualTo(2);
+        assertPullCounts(2, "1.0.0");
+
+        byte[] revised = withDescription(withVersion(sample, "1.1.0"), "只覆盖待办查询。");
+        assertThat(json(upload(revised)).get("success").asBoolean()).isTrue();
+        mockMvc.perform(agent("/agent/conches/legacy_oa/1.1.0"))
+                .andExpect(status().isNotFound());
+        assertThat(storedPull("legacy_oa", "1.1.0")).isZero();
+        assertThat(storedPull("legacy_oa", "1.0.0")).isEqualTo(2);
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/versions").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(jsonPath("$.data[0].version").value("1.1.0"))
+                .andExpect(jsonPath("$.data[0].status").value("UPLOADED"))
+                .andExpect(jsonPath("$.data[0].pullCount").value(0))
+                .andExpect(jsonPath("$.data[1].version").value("1.0.0"))
+                .andExpect(jsonPath("$.data[1].pullCount").value(2));
+
+        publish("1.1.0");
+        MvcResult secondManifest = manifest();
+        String secondEtag = secondManifest.getResponse().getHeader(HttpHeaders.ETAG);
+        assertThat(secondEtag).isNotEqualTo(firstEtag);
+        assertManifestMetadata(secondManifest, "1.1.0", "只覆盖待办查询。", 1);
+        mockMvc.perform(agent("/agent/conches/manifest").header(HttpHeaders.IF_NONE_MATCH, firstEtag))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].description").value("只覆盖待办查询。"));
+        assertThat(download("1.1.0")).isNotEmpty();
+        assertThat(storedPull("legacy_oa", "1.1.0")).isEqualTo(1);
+        assertThat(storedPull("legacy_oa", "1.0.0")).isEqualTo(2);
+        assertPullCounts(3, "1.1.0");
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/versions").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(jsonPath("$.data[0].version").value("1.1.0"))
+                .andExpect(jsonPath("$.data[0].status").value("PUBLISHED"))
+                .andExpect(jsonPath("$.data[0].pullCount").value(1))
+                .andExpect(jsonPath("$.data[1].version").value("1.0.0"))
+                .andExpect(jsonPath("$.data[1].pullCount").value(2));
+        MvcResult afterSecondDownload = manifest();
+        assertThat(afterSecondDownload.getResponse().getHeader(HttpHeaders.ETAG)).isEqualTo(secondEtag);
+        mockMvc.perform(agent("/agent/conches/manifest").header(HttpHeaders.IF_NONE_MATCH, secondEtag))
+                .andExpect(status().isNotModified());
+        assertThat(storedPull("legacy_oa", "1.0.0")).isEqualTo(2);
+        assertThat(storedPull("legacy_oa", "1.1.0")).isEqualTo(1);
+
+        mockMvc.perform(post("/api/admin/conches/legacy_oa/disable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"停用\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(agent("/agent/conches/legacy_oa/1.1.0"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(agent("/agent/conches/legacy_oa/1.0.0"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+        assertThat(storedPull("legacy_oa", "1.0.0")).isEqualTo(2);
+        assertThat(storedPull("legacy_oa", "1.1.0")).isEqualTo(1);
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(jsonPath("$.data[0].disabled").value(true))
+                .andExpect(jsonPath("$.data[0].pullCount").value(3));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(jsonPath("$.data.version").value("1.1.0"))
+                .andExpect(jsonPath("$.data.pullCount").value(3));
+    }
+
+    @Test
+    void verificationFailureDoesNotIncrementPullCount() throws Exception {
+        upload(sample());
+        publish("1.0.0");
+        Files.write(DATA.resolve("conches/legacy_oa/1.0.0/package.zip"), new byte[] {1, 2, 3, 4});
+        mockMvc.perform(agent("/agent/conches/legacy_oa/1.0.0"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error.code").value("INTERNAL"));
+        assertThat(storedPull("legacy_oa", "1.0.0")).isZero();
+        mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isInternalServerError());
+        assertThat(storedPull("legacy_oa", "1.0.0")).isZero();
+    }
+
     private String manifestEtag(String version) throws Exception {
         MvcResult result = mockMvc.perform(agent("/agent/conches/manifest"))
                 .andExpect(status().isOk())
@@ -502,6 +636,8 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data[0].version").value(version))
                 .andExpect(jsonPath("$.data[0].minCrabVersion").value("1.0.0"))
                 .andExpect(jsonPath("$.data[0].title").value("协同办公 OA"))
+                .andExpect(jsonPath("$.data[0].description").value(SAMPLE_DESCRIPTION))
+                .andExpect(jsonPath("$.data[0].capabilityCount").value(1))
                 .andExpect(header().exists(HttpHeaders.ETAG))
                 .andReturn();
         assertNoPrivateKey(result.getResponse().getContentAsString());
@@ -510,6 +646,68 @@ class ConchApiTest {
         PublicKey publicKey = Ed25519Keys.readPublicPem(Files.readString(DATA.resolve("keys/signing.pub")));
         assertThat(ConchPackage.readVerified(download(version), publicKey).manifest().sha256()).isEqualTo(sha);
         return result.getResponse().getHeader(HttpHeaders.ETAG);
+    }
+
+    private void publish(String version) throws Exception {
+        mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/" + version + "/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+    }
+
+    private MvcResult manifest() throws Exception {
+        return mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(header().exists(HttpHeaders.ETAG))
+                .andReturn();
+    }
+
+    private void assertManifestMetadata(MvcResult result, String version, String description, int capabilityCount)
+            throws Exception {
+        JsonNode data = objectMapper.readTree(result.getResponse().getContentAsString()).get("data");
+        assertThat(data.get(0).get("version").asText()).isEqualTo(version);
+        assertThat(data.get(0).get("title").asText()).isEqualTo("协同办公 OA");
+        assertThat(data.get(0).get("description").asText()).isEqualTo(description);
+        assertThat(data.get(0).get("capabilityCount").intValue()).isEqualTo(capabilityCount);
+        List<ManifestEntry> entries = objectMapper.convertValue(data, new TypeReference<List<ManifestEntry>>() {
+        });
+        assertThat(etagOf(entries)).isEqualTo(result.getResponse().getHeader(HttpHeaders.ETAG));
+        ManifestEntry current = entries.get(0);
+        assertThat(etagOf(List.of(shifted(current, current.title(), current.description() + "x", current.capabilityCount()))))
+                .isNotEqualTo(etagOf(List.of(current)));
+        assertThat(etagOf(List.of(shifted(current, current.title() + "x", current.description(), current.capabilityCount()))))
+                .isNotEqualTo(etagOf(List.of(current)));
+        assertThat(etagOf(List.of(shifted(current, current.title(), current.description(), current.capabilityCount() + 1))))
+                .isNotEqualTo(etagOf(List.of(current)));
+    }
+
+    private static ManifestEntry shifted(ManifestEntry entry, String title, String description, int capabilityCount) {
+        return new ManifestEntry(
+                entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
+                title, description, capabilityCount);
+    }
+
+    private void assertPullCounts(int sum, String currentVersion) throws Exception {
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].conch").value("legacy_oa"))
+                .andExpect(jsonPath("$.data[0].pullCount").value(sum));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value(currentVersion))
+                .andExpect(jsonPath("$.data.pullCount").value(sum));
+    }
+
+    private long storedPull(String conch, String version) {
+        Long value = jdbc.queryForObject(
+                "SELECT pull_count FROM hermit_conch_versions WHERE conch = ? AND version = ?",
+                Long.class,
+                conch,
+                version);
+        return value == null ? 0 : value;
+    }
+
+    private String etagOf(List<ManifestEntry> entries) throws Exception {
+        return "\"" + ConchHashes.sha256(objectMapper.writeValueAsBytes(entries)) + "\"";
     }
 
     private byte[] download(String version) throws Exception {
@@ -621,6 +819,16 @@ class ConchApiTest {
         String updated = text.replace("\nversion: 1.0.0\n", "\nversion: " + version + "\n");
         if (updated.equals(text)) {
             throw new IllegalStateException("version line not found");
+        }
+        return updated.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] withDescription(byte[] yaml, String description) {
+        String text = new String(yaml, StandardCharsets.UTF_8);
+        String needle = "\ndescription: " + SAMPLE_DESCRIPTION + "\n";
+        String updated = text.replace(needle, "\ndescription: " + description + "\n");
+        if (updated.equals(text)) {
+            throw new IllegalStateException("description line not found");
         }
         return updated.getBytes(StandardCharsets.UTF_8);
     }

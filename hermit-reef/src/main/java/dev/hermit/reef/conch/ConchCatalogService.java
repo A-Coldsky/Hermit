@@ -57,7 +57,8 @@ public class ConchCatalogService {
                     disabled,
                     disabled ? flag.disabledAt() : null,
                     disabled ? flag.disabledBy() : null,
-                    disabled ? flag.disabledReason() : null));
+                    disabled ? flag.disabledReason() : null,
+                    pullTotal(rows)));
         }
         summaries.sort(Comparator.comparing(ConchSummary::conch));
         return summaries;
@@ -69,7 +70,7 @@ public class ConchCatalogService {
         if (current == null) {
             throw notFound();
         }
-        return ConchDetail.from(readDoc(current), availability.find(current.conch()));
+        return ConchDetail.from(readDoc(current), availability.find(current.conch()), pullTotal(rows));
     }
 
     public List<ConchVersionItem> versions(String conch) {
@@ -90,7 +91,8 @@ public class ConchCatalogService {
                     row.publishedAt(),
                     row.current(),
                     warnings.size(),
-                    warnings));
+                    warnings,
+                    row.pullCount()));
         }
         return items;
     }
@@ -173,6 +175,14 @@ public class ConchCatalogService {
         return rows.stream()
                 .max(Comparator.comparing(row -> SemVer.parse(row.version())))
                 .orElseThrow(ConchCatalogService::notFound);
+    }
+
+    private static long pullTotal(List<VersionRow> rows) {
+        long total = 0;
+        for (VersionRow row : rows) {
+            total += row.pullCount();
+        }
+        return total;
     }
 
     private static Instant latestPublishedAt(List<VersionRow> rows) {

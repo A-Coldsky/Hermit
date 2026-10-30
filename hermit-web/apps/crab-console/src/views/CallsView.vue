@@ -156,7 +156,7 @@ onMounted(async () => {
           <template #default="{ row }">
             <template v-if="!row.success">
               <span class="err">{{ errorCodeLabels[row.errorCode ?? ''] ?? row.errorCode }}</span>
-              <span class="hm-muted"> {{ row.errorMessage ?? '' }}</span>
+              <span v-if="row.errorMessage" class="hm-muted err-msg">{{ row.errorMessage }}</span>
             </template>
           </template>
         </el-table-column>
@@ -243,6 +243,10 @@ onMounted(async () => {
 
 .err {
   color: var(--hm-danger);
+}
+
+.err-msg {
+  margin-left: 8px;
 }
 
 .notice {

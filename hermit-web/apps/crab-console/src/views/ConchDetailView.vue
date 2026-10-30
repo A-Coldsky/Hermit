@@ -28,26 +28,44 @@ const incompleteAccounts = computed(() =>
 )
 const unreadableAccounts = computed(() => accounts.value.filter((a) => a.credentialsUnreadable).map((a) => a.name))
 const pausedAccounts = computed(() => accounts.value.filter((a) => a.loginPaused))
+const needsAccount = computed(() => !!detail.value?.credentials.length && !accounts.value.length)
 const ready = computed(
   () =>
     !missingConfig.value.length &&
     !incompleteAccounts.value.length &&
     !unreadableAccounts.value.length &&
     !pausedAccounts.value.length &&
-    (accounts.value.length > 0 || !detail.value?.credentials.length),
+    !needsAccount.value,
 )
 
-async function loadParts() {
+function blockReason(account: Account): string | null {
+  if (account.credentialsUnreadable) return '凭证无法解密'
+  if (account.needsConfiguration) return '缺少凭证'
+  if (account.loginPaused) return '已暂停自动登录'
+  return null
+}
+
+const defaultAccount = computed(() => accounts.value.find((a) => a.default) ?? null)
+
+const bannerTitle = computed(() => {
+  if (missingConfig.value.length) return '缺少必填配置，调用会返回「待配置」'
+  if (needsAccount.value) return '还没有账号，调用会返回「待配置」'
+  const account = defaultAccount.value
+  const reason = account && blockReason(account)
+  if (account && reason) return `默认账号 ${account.name} ${reason}，不带 X-Hermit-Account 的调用会失败`
+  return '默认账号可以调用，部分账号需要处理'
+})
+
+async function fetchParts(): Promise<[Account[], Record<string, ConfigValue>]> {
   const [a, c] = await Promise.all([api.accounts(props.conch), api.config(props.conch)])
-  accounts.value = a.accounts
-  config.value = c.fields
-  partsFailed.value = false
-  void refreshPending()
+  return [a.accounts, c.fields]
 }
 
 async function reloadParts() {
   try {
-    await loadParts()
+    ;[accounts.value, config.value] = await fetchParts()
+    partsFailed.value = false
+    void refreshPending()
   } catch (error) {
     partsFailed.value = true
     notifyError(error)
@@ -57,8 +75,9 @@ async function reloadParts() {
 async function load() {
   loading.value = true
   missing.value = false
+  let next: ConchDetail
   try {
-    detail.value = await api.conch(props.conch)
+    next = await api.conch(props.conch)
   } catch (error) {
     detail.value = null
     if (error instanceof ApiError && error.status === 404) {
@@ -69,11 +88,28 @@ async function load() {
     loading.value = false
     return
   }
-  await reloadParts()
+  try {
+    ;[accounts.value, config.value] = await fetchParts()
+    partsFailed.value = false
+    void refreshPending()
+  } catch (error) {
+    partsFailed.value = true
+    notifyError(error)
+  }
+  detail.value = next
   loading.value = false
 }
 
-watch(() => props.conch, load, { immediate: true })
+watch(
+  () => props.conch,
+  () => {
+    detail.value = null
+    accounts.value = []
+    config.value = {}
+    void load()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -110,18 +146,18 @@ watch(() => props.conch, load, { immediate: true })
         type="warning"
         show-icon
         :closable="false"
-        :title="pausedAccounts.length && pausedAccounts.length === accounts.length && !missingConfig.length ? '自动登录已暂停，修正后才能调用' : '还不能调用，调用会返回「待配置」'"
+        :title="bannerTitle"
       >
         <template #default>
-          <div v-if="detail.credentials.length && !accounts.length">先新建一个账号并填写凭证。</div>
-          <div v-for="a in pausedAccounts" :key="a.name">
-            账号 <span class="mono">{{ a.name }}</span> 已暂停自动登录<template v-if="a.loginPauseReason">：{{ a.loginPauseReason }}</template>。修正凭证后在下方账号列表点「测试登录」，登录成功即恢复。
-          </div>
+          <div v-if="needsAccount">先新建一个账号并填写凭证。</div>
+          <div v-if="missingConfig.length">缺少必填配置：<span class="mono">{{ missingConfig.join(', ') }}</span></div>
           <div v-if="unreadableAccounts.length">
-            凭证无法解密，需重新填写：<span class="mono">{{ unreadableAccounts.join(', ') }}</span>
+            凭证无法解密，需全部重新填写：<span class="mono">{{ unreadableAccounts.join(', ') }}</span>
           </div>
           <div v-if="incompleteAccounts.length">账号缺少凭证：<span class="mono">{{ incompleteAccounts.join(', ') }}</span></div>
-          <div v-if="missingConfig.length">缺少必填配置：<span class="mono">{{ missingConfig.join(', ') }}</span></div>
+          <div v-for="a in pausedAccounts" :key="a.name">
+            账号 <span class="mono">{{ a.name }}</span> 已暂停自动登录<template v-if="a.loginPauseReason">：{{ a.loginPauseReason }}</template>。重新填写凭证后在下方账号列表点「测试登录」，登录成功即恢复。
+          </div>
         </template>
       </el-alert>
 

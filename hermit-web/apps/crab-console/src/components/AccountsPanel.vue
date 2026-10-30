@@ -123,14 +123,15 @@ function editCredentials(account: Account) {
     <p class="hm-muted hint">
       调用时用请求头 <code>X-Hermit-Account</code> 选择账号，不带时使用默认账号。每个账号有自己的凭证和登录会话。
     </p>
+    <p class="hm-scroll-hint">表格可以左右滑动，操作在最右侧。</p>
     <el-table :data="accounts" empty-text="还没有账号，新建一个后填写凭证">
-      <el-table-column label="账号" min-width="180">
+      <el-table-column label="账号" min-width="160">
         <template #default="{ row }">
           <span class="mono strong">{{ row.name }}</span>
           <el-tag v-if="row.default" size="small" class="tag">默认</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="凭证" min-width="220">
+      <el-table-column label="凭证" min-width="200">
         <template #default="{ row }">
           <template v-if="row.credentialsUnreadable">
             <el-tag type="danger" effect="plain" size="small">无法解密</el-tag>
@@ -143,17 +144,19 @@ function editCredentials(account: Account) {
           </template>
         </template>
       </el-table-column>
-      <el-table-column label="自动登录" min-width="220">
+      <el-table-column label="自动登录" min-width="200">
         <template #default="{ row }">
           <template v-if="row.loginPaused">
-            <el-tag type="danger" effect="plain" size="small">已暂停</el-tag>
+            <el-tag type="warning" effect="plain" size="small">已暂停</el-tag>
             <div v-if="row.loginPauseReason" class="note">{{ row.loginPauseReason }}</div>
-            <div class="hm-muted note">修正凭证后点「测试登录」，登录成功即恢复。</div>
+            <div class="hm-muted note">重新填写凭证后点「测试登录」，登录成功即恢复。</div>
           </template>
+          <span v-else-if="row.credentialsUnreadable" class="hm-muted">无法登录：凭证无法解密</span>
+          <span v-else-if="row.needsConfiguration" class="hm-muted">无法登录：缺少凭证</span>
           <span v-else class="hm-muted">正常</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="330" align="right">
+      <el-table-column label="操作" width="300" align="right" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" :disabled="!credentials.length" @click="editCredentials(row)">填写凭证</el-button>
           <el-button link type="primary" :loading="busy === row.name" @click="testLogin(row)">测试登录</el-button>
@@ -177,7 +180,14 @@ function editCredentials(account: Account) {
     </template>
   </el-dialog>
 
-  <CredentialDialog v-model:open="editing.open" :conch="conch" :account="editing.account" :fields="credentials" @saved="emit('changed')" />
+  <CredentialDialog
+    v-model:open="editing.open"
+    :conch="conch"
+    :account="editing.account"
+    :fields="credentials"
+    :unreadable="accounts.find((a) => a.name === editing.account)?.credentialsUnreadable ?? false"
+    @saved="emit('changed')"
+  />
 
   <el-dialog v-model="testResult.open" :title="`测试登录 · ${testResult.account}`" width="560px">
     <el-result v-if="testResult.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存">

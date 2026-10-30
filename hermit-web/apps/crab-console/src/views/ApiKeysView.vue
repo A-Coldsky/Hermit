@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import TimeText from '@shared/components/TimeText.vue'
 import { CopyDocument, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
-import { copyText, formatTime, notifyError, relativeTime } from '@shared/format'
+import { copyText, notifyError, relativeTime } from '@shared/format'
 import { api, type ApiKey, type CreatedApiKey, type ConchDetail } from '../api'
 
 const loading = ref(true)
@@ -131,8 +132,8 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="创建" width="170">
-          <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+        <el-table-column label="创建" width="220">
+          <template #default="{ row }"><TimeText :value="row.createdAt" /></template>
         </el-table-column>
         <el-table-column label="最近使用" width="120">
           <template #default="{ row }">{{ row.lastUsedAt ? relativeTime(row.lastUsedAt) : '从未' }}</template>

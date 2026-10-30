@@ -89,4 +89,20 @@ describe('Reef 规则包停用', () => {
     expect(reef.conch).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
+
+  it('停用时版本号不用绿色，启用弹窗事先标出原因必填', async () => {
+    reef.conch.mockResolvedValue({ ...base, disabled: true, disabledAt: '2026-10-26T03:00:00Z', disabledBy: 'admin', disabledReason: '下线' })
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' }, attach: true })
+    await flushPromises()
+
+    const version = wrapper.findAll('.el-tag').find((t) => t.text() === 'v1.0.0')!
+    expect(version.classes()).not.toContain('el-tag--success')
+
+    await wrapper.findAll('button').find((b) => b.text() === '启用')!.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('.required-label .star')).not.toBeNull()
+    expect(document.body.textContent).toContain('必填，会记入审计日志')
+    wrapper.unmount()
+  })
 })
+

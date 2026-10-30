@@ -91,7 +91,7 @@ async function publish() {
 
 <template>
   <div>
-    <PageHeader title="上传规则包" description="上传 YAML 后 Reef 会校验、签名并保存为待发布版本；版本号必须是比已有版本更大的 semver">
+    <PageHeader title="上传规则包" description="上传 YAML 后 Reef 会校验、签名并保存为待发布版本；版本号必须是 semver，并且大于这个规则包已上传过的最高版本（不只是当前发布版本）">
       <template #crumbs>
         <router-link to="/conches">规则包目录</router-link>
         <span class="hm-muted"> / 上传</span>

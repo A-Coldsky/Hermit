@@ -108,7 +108,7 @@ watch(() => props.conch, load, { immediate: true })
         <ConchAvatar :name="conch" :title="detail?.title" :size="48" />
       </template>
       <template #badge>
-        <el-tag v-if="detail" type="success" effect="light" round class="mono">v{{ detail.version }}</el-tag>
+        <el-tag v-if="detail" :type="detail.disabled ? 'info' : 'success'" effect="light" round class="mono">v{{ detail.version }}</el-tag>
         <el-tag v-if="detail?.disabled" type="danger" effect="light" round class="off">已停用</el-tag>
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
@@ -128,7 +128,7 @@ watch(() => props.conch, load, { immediate: true })
       <el-alert v-if="detail?.disabled" type="error" :closable="false" show-icon class="notice" title="这个规则包已停用">
         <template #default>
           <div>各 Crab 同步后会卸下它，调用返回「规则包已停用」（CONCH_DISABLED）。停用期间可以上传新版本，但不能发布或回滚。</div>
-          <div class="hm-muted">
+          <div class="reason">
             <template v-if="detail.disabledReason">原因：{{ detail.disabledReason }} · </template>
             {{ detail.disabledBy ?? '—' }} 于 {{ formatTime(detail.disabledAt) }} 停用
           </div>
@@ -229,13 +229,14 @@ watch(() => props.conch, load, { immediate: true })
       <p v-else class="hm-muted">
         停用后，各 Crab 下次同步时卸下这个规则包，调用会返回「规则包已停用」。账号和凭证保留在 Crab 本地，启用后可继续使用。
       </p>
+      <div class="required-label">原因 <span class="star">*</span><span class="hm-muted">必填，会记入审计日志</span></div>
       <el-input
         v-model="availability.reason"
         type="textarea"
         :rows="3"
         maxlength="500"
         show-word-limit
-        placeholder="原因，会记入审计日志"
+        placeholder="例如：上游系统维护到周五" aria-required="true"
       />
       <template #footer>
         <el-button @click="availability.open = false">取消</el-button>
@@ -248,6 +249,28 @@ watch(() => props.conch, load, { immediate: true })
 </template>
 
 <style scoped>
+.reason {
+  margin-top: 4px;
+  color: var(--hm-text);
+}
+
+.required-label {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin: 12px 0 6px;
+  font-weight: 500;
+}
+
+.required-label .star {
+  color: var(--hm-danger);
+}
+
+.required-label .hm-muted {
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .off {
   margin-left: 6px;
 }

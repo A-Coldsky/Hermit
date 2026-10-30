@@ -23,8 +23,12 @@ html:root {
   --hm-sidebar-line: rgba(255, 255, 255, 0.07);
   --hm-brand: #14b8a6;
   --hm-accent: #f59e0b;
-  --hm-warning: var(--hm-accent);
-  --hm-danger: #dc2626;
+  /* 浅色底上的文字要 ≥4.5:1，琥珀 --hm-accent 只用于色块和装饰。 */
+  --hm-warning: #92400e;
+  --hm-danger: #b91c1c;
+  --hm-brand-soft: #5eead4;
+  --hm-login-from: #0f2e2f;
+  --hm-login-to: #0b1620;
   --hm-success: #16a34a;
   --hm-topbar: rgba(255, 255, 255, 0.82);
   --hm-code-bg: #0f1d20;
@@ -43,20 +47,21 @@ html:root {
   --el-color-success-light-8: #d0eddb;
   --el-color-success-light-9: #e8f6ed;
   --el-color-success-dark-2: #12823b;
+  /* 明暗阶按 --hm-accent 混合，保持琥珀色块；文字色和 dark-2 用加深后的 --hm-warning。 */
   --el-color-warning: var(--hm-warning);
   --el-color-warning-light-3: #f8bb54;
   --el-color-warning-light-5: #facf85;
   --el-color-warning-light-7: #fce2b6;
   --el-color-warning-light-8: #fdecce;
   --el-color-warning-light-9: #fef5e7;
-  --el-color-warning-dark-2: #c47e09;
+  --el-color-warning-dark-2: #78350f;
   --el-color-danger: var(--hm-danger);
-  --el-color-danger-light-3: #e76767;
-  --el-color-danger-light-5: #ee9393;
-  --el-color-danger-light-7: #f5bebe;
-  --el-color-danger-light-8: #f8d4d4;
-  --el-color-danger-light-9: #fce9e9;
-  --el-color-danger-dark-2: #b01e1e;
+  --el-color-danger-light-3: #ce6060;
+  --el-color-danger-light-5: #dc8e8e;
+  --el-color-danger-light-7: #eabbbb;
+  --el-color-danger-light-8: #f1d2d2;
+  --el-color-danger-light-9: #f8e8e8;
+  --el-color-danger-dark-2: #941616;
   --el-color-info: var(--hm-muted);
   --el-color-info-light-3: #949ea4;
   --el-color-info-light-5: #b3babe;
@@ -113,7 +118,8 @@ html.dark {
   --hm-sidebar: #0a1719;
   --hm-sidebar-active: rgba(20, 184, 166, 0.14);
   --hm-sidebar-line: rgba(255, 255, 255, 0.05);
-  --hm-danger: #ef4444;
+  --hm-warning: var(--hm-accent);
+  --hm-danger: #f87171;
   --hm-success: #22c55e;
   --hm-topbar: rgba(21, 27, 30, 0.82);
   --hm-code-bg: #0a1214;
@@ -146,12 +152,12 @@ html.dark {
   --el-color-warning-light-8: #413012;
   --el-color-warning-light-9: #2a2213;
   --el-color-warning-dark-2: #f7b13c;
-  --el-color-danger-light-3: #ad3636;
-  --el-color-danger-light-5: #822c2c;
-  --el-color-danger-light-7: #562222;
-  --el-color-danger-light-8: #401e1e;
-  --el-color-danger-light-9: #2a1919;
-  --el-color-danger-dark-2: #f26969;
+  --el-color-danger-light-3: #b45555;
+  --el-color-danger-light-5: #864343;
+  --el-color-danger-light-7: #583030;
+  --el-color-danger-light-8: #422727;
+  --el-color-danger-light-9: #2b1d1d;
+  --el-color-danger-dark-2: #f98d8d;
   --el-color-error: var(--el-color-danger);
   --el-color-error-light-3: var(--el-color-danger-light-3);
   --el-color-error-light-5: var(--el-color-danger-light-5);
@@ -406,6 +412,11 @@ html .el-empty__description p {
 
 html .el-table .el-table__body td.el-table__cell {
   transition: background-color 0.12s;
+}
+
+/* 暗色下 plain 标签的底色与卡片太接近，边框直接用文字色才看得出轮廓。 */
+html.dark .el-tag--plain {
+  --el-tag-border-color: currentColor;
 }
 
 html .el-tag {

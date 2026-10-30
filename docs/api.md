@@ -190,7 +190,14 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 ## MCP
 
-`/mcp` 为 Streamable HTTP：POST JSON-RPC、GET SSE、DELETE 会话，使用 `Mcp-Session-Id`；每次仍校验 API Key，并将会话绑定 Key 身份。空闲 1 小时过期，最多 1000 会话。实现使用 SDK 的 Schema 类型和自有 Javalin 传输层，不直接使用 SDK Servlet transport。
+`/mcp` 为 Streamable HTTP（MCP 2025-11-25）：POST JSON-RPC、GET SSE、DELETE 会话，使用 `Mcp-Session-Id`；每次仍校验 API Key，并将会话绑定 Key 身份。空闲 1 小时过期，最多 1000 会话。实现使用 SDK 的 Schema 类型和自有 Javalin 传输层，不直接使用 SDK Servlet transport。
+
+`Origin` 与 `MCP-Protocol-Version` 按这一版传输规范检查：
+
+- 没有 `Origin` 的请求允许通过。CLI、桌面客户端和 `mcp-stdio` 都不带这个头。是否拒绝缺头只由 `McpTransportPolicy.ALLOW_MISSING_ORIGIN` 决定，当前为允许。
+- `Origin` 有值时必须命中下面之一，否则 HTTP 403，body 为 JSON-RPC 错误（`id` 为 null），并且不创建会话：`http://127.0.0.1:<实际监听端口>`、`http://localhost:<实际监听端口>`、`http://[::1]:<实际监听端口>`、`http://<server.host>:<实际监听端口>`（`server.host` 为 `0.0.0.0` 或 `::` 时没有这一条），以及 `mcp.allowed_origins` 里的源站。比较忽略 scheme 和主机大小写，`http` 的 80 与 `https` 的 443 可省略。IPv6 回环按 `[::1]` 比较。Crab 自身只提供 HTTP；反向代理上的 `https://` 源站写入允许列表。多个 `Origin` 头拒绝。
+- 非 `initialize` 的 POST，以及 GET、DELETE：带了 `MCP-Protocol-Version` 且不是 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` 时返回 HTTP 400。不带该头时不拒绝，继续使用该会话在 `initialize` 里协商到的版本。多个版本头同样拒绝。已支持但和会话不一致的版本头放行，不改写会话版本。
+- `initialize` 不看 `MCP-Protocol-Version` 头。请求体里的 `protocolVersion` 不在支持列表时，响应仍返回一个支持的版本（当前 `2025-11-25`）。是否改为直接拒绝只由 `McpTransportPolicy.NEGOTIATE_UNKNOWN_PROTOCOL` 决定，当前为协商。
 
 - 可见能力不超过 40 个时，直接工具名 `conch__action`。
 - 超过 40 个时，提供 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个目录工具。
@@ -209,6 +216,8 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 | 尚未 `initialize` | 400 | -32600 | `SESSION_REQUIRED`。先调用 `initialize`，再带响应头 `Mcp-Session-Id` |
 | 会话不存在或过期 | 404 | -32600 | `SESSION_NOT_FOUND`。重新 `initialize` |
 | JSON-RPC 参数类型不合法 | 200 | -32602 | `INVALID_PARAMS` |
+| `Origin` 不在允许范围 | 403 | -32003 | `ORIGIN_REJECTED`。不创建会话。没有 `Origin` 仍允许 |
+| 非 `initialize` 的 `MCP-Protocol-Version` 不受支持 | 400 | -32600 | `UNSUPPORTED_PROTOCOL`。去掉该头，或改成上面四个版本之一 |
 
 工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。
 

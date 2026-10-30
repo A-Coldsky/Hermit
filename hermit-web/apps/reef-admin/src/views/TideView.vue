@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import TimeText from '@shared/components/TimeText.vue'
 import { DataLine, Refresh, RefreshLeft, Warning, WarningFilled } from '@element-plus/icons-vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import BarChart from '@shared/components/BarChart.vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import StatCard from '@shared/components/StatCard.vue'
-import { formatTime, millis, notifyError, percent } from '@shared/format'
+import { millis, notifyError, percent } from '@shared/format'
 import { api, type FailureGroup, type RollbackEvent, type ConchSummary, type TideSummary } from '../api'
 import FailureGroups from '../components/FailureGroups.vue'
 import { rangePresets, rangeQuery } from '../range'
@@ -133,8 +134,8 @@ watch([range, conch], load, { immediate: true })
         </el-table-column>
         <el-table-column prop="reason" label="原因" min-width="220" show-overflow-tooltip />
         <el-table-column prop="instanceId" label="Crab 实例" min-width="160" show-overflow-tooltip />
-        <el-table-column label="发生时间" width="180">
-          <template #default="{ row }">{{ formatTime(row.occurredAt) }}</template>
+        <el-table-column label="发生时间" width="230">
+          <template #default="{ row }"><TimeText :value="row.occurredAt" /></template>
         </el-table-column>
       </el-table>
     </div>

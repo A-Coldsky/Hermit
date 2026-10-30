@@ -29,6 +29,42 @@ class CrabConfigLoaderTest {
         assertThat(config.sessionIdleMinutes()).isEqualTo(10);
         assertThat(config.maxLoginFailures()).isEqualTo(3);
         assertThat(config.reefUrl()).isNull();
+        assertThat(config.mcpAllowedOrigins()).isEmpty();
+    }
+
+    @Test
+    void mcpAllowedOriginsNormalizeAndRejectABadEntry() throws Exception {
+        Path file = new CrabPaths(temp).configFile();
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, """
+                mcp:
+                  allowed_origins:
+                    - https://MCP.Example:443
+                    - http://10.0.0.8:7777
+                """);
+        CrabConfig config = CrabConfigLoader.load(file);
+        assertThat(config.mcpAllowedOrigins()).containsExactly("https://mcp.example", "http://10.0.0.8:7777");
+
+        Files.writeString(file, """
+                mcp:
+                  allowed_origins:
+                    - "http://evil.example/%s"
+                """.formatted(TOKEN));
+        assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                .isInstanceOf(ConfigFileException.class)
+                .satisfies(ex -> {
+                    SecretChecks.absent(ex.getMessage(), TOKEN);
+                    assertThat(ex.getMessage()).contains("mcp.allowed_origins[0]").contains("origin");
+                });
+
+        Files.writeString(file, """
+                mcp:
+                  other: 1
+                """);
+        assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                .isInstanceOf(ConfigFileException.class)
+                .hasMessageContaining("mcp.other")
+                .hasMessageContaining("unknown key");
     }
 
     @Test

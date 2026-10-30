@@ -44,7 +44,7 @@ onMounted(load)
 
 <template>
   <div>
-    <PageHeader title="规则包目录" description="每个规则包（Conch）描述一个老系统的登录方式与可调用能力">
+    <PageHeader title="规则包目录" description="每个规则包描述一个老系统的登录方式与可调用能力">
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-button type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
     </PageHeader>
@@ -64,7 +64,7 @@ onMounted(load)
         <div v-for="n in 3" :key="n" class="hm-card"><el-skeleton :rows="3" animated /></div>
       </div>
       <div v-else-if="filtered.length" class="cards">
-        <RouterLink v-for="row in filtered" :key="row.conch" :to="`/conches/${encodeURIComponent(row.conch)}`" class="hm-card conch">
+        <RouterLink v-for="row in filtered" :key="row.conch" :to="`/conches/${encodeURIComponent(row.conch)}`" class="hm-card conch" :class="{ off: row.disabled }">
           <div class="top">
             <ConchAvatar :name="row.conch" :title="row.title" />
             <div class="name">
@@ -72,7 +72,7 @@ onMounted(load)
               <span class="mono hm-muted">{{ row.conch }}</span>
             </div>
             <el-tag v-if="row.disabled" type="danger" effect="light" round>已停用</el-tag>
-            <el-tag v-if="row.version" type="success" effect="light" round class="mono">v{{ row.version }}</el-tag>
+            <el-tag v-if="row.version" :type="row.disabled ? 'info' : 'success'" effect="light" round class="mono">v{{ row.version }}</el-tag>
             <el-tag v-else type="info" effect="light" round>未发布</el-tag>
           </div>
           <p class="desc">{{ row.description || '没有描述' }}</p>
@@ -100,7 +100,7 @@ onMounted(load)
     <div v-else class="hm-card">
       <el-table v-loading="loading" :data="filtered" row-class-name="clickable" @row-click="open">
         <template #empty>{{ loading ? '' : '还没有规则包，先上传一个 YAML' }}</template>
-        <el-table-column label="Conch" min-width="220">
+        <el-table-column label="规则包" min-width="220">
           <template #default="{ row }">
             <div class="row-name">
               <ConchAvatar :name="row.conch" :title="row.title" :size="32" />
@@ -113,7 +113,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="当前版本" width="190">
           <template #default="{ row }">
-            <el-tag v-if="row.version" type="success" effect="plain" class="mono">v{{ row.version }}</el-tag>
+            <el-tag v-if="row.version" :type="row.disabled ? 'info' : 'success'" effect="plain" class="mono">v{{ row.version }}</el-tag>
             <el-tag v-else type="info" effect="plain">未发布</el-tag>
             <el-tag v-if="row.disabled" type="danger" effect="plain" class="off">已停用</el-tag>
           </template>
@@ -211,6 +211,11 @@ onMounted(load)
 .go {
   color: var(--el-color-primary);
   transition: transform 0.15s;
+}
+
+.conch.off {
+  background: var(--hm-subtle);
+  opacity: 0.78;
 }
 
 .conch:hover .go {

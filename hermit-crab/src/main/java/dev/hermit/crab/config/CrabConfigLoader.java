@@ -24,7 +24,7 @@ import dev.hermit.crab.store.CrabPaths;
 public final class CrabConfigLoader {
     private static final long MAX_BYTES = 1_000_000L;
     private static final Set<String> ROOT = Set.of(
-            "reef", "server", "sync", "report", "capabilities", "aliases", "engine");
+            "reef", "server", "sync", "report", "capabilities", "aliases", "engine", "mcp");
     private static final Set<String> REEF = Set.of("url", "token", "public_key");
     private static final Set<String> SERVER = Set.of("host", "port");
     private static final Set<String> SYNC = Set.of("interval_seconds");
@@ -32,6 +32,7 @@ public final class CrabConfigLoader {
     private static final Set<String> CAPABILITIES = Set.of("disabled");
     private static final Set<String> ENGINE = Set.of(
             "capability_timeout_seconds", "session_idle_minutes", "max_login_failures");
+    private static final Set<String> MCP = Set.of("allowed_origins");
 
     private static final YAMLMapper YAML = yaml();
 
@@ -83,6 +84,7 @@ public final class CrabConfigLoader {
         JsonNode report = object(file, root, "report", REPORT);
         JsonNode capabilities = object(file, root, "capabilities", CAPABILITIES);
         JsonNode engine = object(file, root, "engine", ENGINE);
+        JsonNode mcp = object(file, root, "mcp", MCP);
         CrabConfig defaults = CrabConfig.defaults();
         try {
             return new CrabConfig(
@@ -102,7 +104,8 @@ public final class CrabConfigLoader {
                     integer(file, engine, "session_idle_minutes", "engine.session_idle_minutes",
                             defaults.sessionIdleMinutes(), 1, Integer.MAX_VALUE),
                     integer(file, engine, "max_login_failures", "engine.max_login_failures",
-                            defaults.maxLoginFailures(), 1, Integer.MAX_VALUE));
+                            defaults.maxLoginFailures(), 1, Integer.MAX_VALUE),
+                    origins(file, mcp));
         } catch (IllegalArgumentException ex) {
             throw new ConfigFileException(file + ": " + ex.getMessage());
         }
@@ -189,6 +192,30 @@ public final class CrabConfigLoader {
                 throw new ConfigFileException(file + ": capabilities.disabled[" + index + "]: expected a string");
             }
             values.add(item.asText().strip());
+            index++;
+        }
+        return List.copyOf(values);
+    }
+
+    private static List<String> origins(Path file, JsonNode mcp) {
+        if (mcp == null || !mcp.has("allowed_origins") || mcp.get("allowed_origins").isNull()) {
+            return List.of();
+        }
+        JsonNode node = mcp.get("allowed_origins");
+        if (!node.isArray()) {
+            throw new ConfigFileException(file + ": mcp.allowed_origins: expected a list");
+        }
+        ArrayList<String> values = new ArrayList<>();
+        int index = 0;
+        for (JsonNode item : node) {
+            if (!item.isTextual()) {
+                throw new ConfigFileException(file + ": mcp.allowed_origins[" + index + "]: expected a string");
+            }
+            String text = item.asText().strip();
+            if (HttpOrigin.normalize(text) == null) {
+                throw new ConfigFileException(file + ": mcp.allowed_origins[" + index + "]: expected an http(s) origin");
+            }
+            values.add(text);
             index++;
         }
         return List.copyOf(values);

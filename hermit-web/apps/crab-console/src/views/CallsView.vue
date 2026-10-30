@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TimeText from '@shared/components/TimeText.vue'
 import { CopyDocument, Refresh } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -127,8 +128,8 @@ onMounted(async () => {
 
       <el-table v-loading="loading" :data="paged" row-class-name="clickable" @row-click="onRow">
         <template #empty>{{ loading ? '' : '没有调用记录' }}</template>
-        <el-table-column label="时间" width="186">
-          <template #default="{ row }">{{ formatTime(row.at) }}</template>
+        <el-table-column label="时间" width="230">
+          <template #default="{ row }"><TimeText :value="row.at" /></template>
         </el-table-column>
         <el-table-column label="结果" width="90">
           <template #default="{ row }">

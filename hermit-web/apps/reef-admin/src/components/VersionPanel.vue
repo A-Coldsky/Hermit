@@ -227,7 +227,7 @@ async function runDiff() {
 }
 
 .warn {
-  color: var(--hm-accent);
+  color: var(--hm-warning);
   font-weight: 600;
 }
 

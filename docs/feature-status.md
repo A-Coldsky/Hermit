@@ -81,3 +81,5 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 2026-10-30 查询参数、API Key 规则包范围、调用记录筛选与断言说明以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 128、hermit-crab 214、hermit-it 1，失败/错误/跳过均为 0；Vitest 51（10 个文件）。Java 小计 386，连同 Vitest 合计 437。未启动 MySQL 或 Compose，也未做浏览器验收（未改 Vue）。
 
 2026-10-30 MCP Origin 与协议版本头以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 125、hermit-crab 217、hermit-it 1，失败/错误/跳过均为 0；Vitest 63（12 个文件）。Java 小计 386，合计 449。本次新增 Crab 的 Origin、协议版本头和 `mcp.allowed_origins` 用例。未用真实 MCP 客户端或浏览器复测，也未启动 MySQL 或 Compose。
+
+2026-10-30 合入 main（#46–#48、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 128、hermit-crab 222、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 394，连同 Vitest 合计 469。未启动 MySQL 或 Compose，也未做浏览器验收。

@@ -33,7 +33,7 @@ onMounted(load)
 
 <template>
   <div>
-    <PageHeader title="规则包与账号" description="已安装到本机的规则包（Conch）。为每个规则包建账号、填凭证和配置后即可调用">
+    <PageHeader title="规则包与账号" description="已安装到本机的规则包。为每个规则包建账号、填凭证和配置后即可调用">
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
 

@@ -113,6 +113,7 @@ async function runDiff() {
 
 <template>
   <div class="hm-card">
+    <p class="hm-scroll-hint">表格可以左右滑动查看上传和发布记录。</p>
     <el-table :data="versions">
       <template #empty>{{ loading ? '' : '还没有版本' }}</template>
       <el-table-column label="版本" width="150">
@@ -126,21 +127,6 @@ async function runDiff() {
           <el-tag :type="row.status === 'PUBLISHED' ? 'success' : 'info'" effect="plain" size="small">
             {{ versionStatusLabels[row.status] ?? row.status }}
           </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="上传" min-width="180">
-        <template #default="{ row }">
-          <div>{{ row.uploadedBy }}</div>
-          <div class="hm-muted small">{{ formatTime(row.uploadedAt) }}</div>
-        </template>
-      </el-table-column>
-      <el-table-column label="发布" min-width="180">
-        <template #default="{ row }">
-          <template v-if="row.publishedAt">
-            <div>{{ row.publishedBy }}</div>
-            <div class="hm-muted small">{{ formatTime(row.publishedAt) }}</div>
-          </template>
-          <span v-else class="hm-muted">—</span>
         </template>
       </el-table-column>
       <el-table-column label="警告" width="80" align="right">
@@ -176,6 +162,21 @@ async function runDiff() {
           >
             回滚到此版本
           </el-button>
+        </template>
+      </el-table-column>
+      <el-table-column label="上传" min-width="180">
+        <template #default="{ row }">
+          <div>{{ row.uploadedBy }}</div>
+          <div class="hm-muted small">{{ formatTime(row.uploadedAt) }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="发布" min-width="180">
+        <template #default="{ row }">
+          <template v-if="row.publishedAt">
+            <div>{{ row.publishedBy }}</div>
+            <div class="hm-muted small">{{ formatTime(row.publishedAt) }}</div>
+          </template>
+          <span v-else class="hm-muted">—</span>
         </template>
       </el-table-column>
     </el-table>

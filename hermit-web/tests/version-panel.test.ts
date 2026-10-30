@@ -62,10 +62,13 @@ describe('版本表警告列', () => {
     expect(wrapper.find('button[aria-label*="条警告"]').exists()).toBe(false)
   })
 
-  it('操作列不固定在右侧，不会盖住警告列', async () => {
+  it('操作列排在上传、发布记录之前，窄屏不用滑到最右，也不固定盖住警告列', async () => {
     const wrapper = await mountPage(VersionPanel, { props: { conch: 'legacy_oa', versions: [version({})] } })
     await flushPromises()
     expect(wrapper.text()).toContain('YAML')
     expect(wrapper.find('.el-table-fixed-column--right').exists()).toBe(false)
+    const headers = wrapper.findAll('.el-table__header th').map((th) => th.text())
+    expect(headers.indexOf('操作')).toBeGreaterThan(headers.indexOf('警告'))
+    expect(headers.indexOf('操作')).toBeLessThan(headers.indexOf('上传'))
   })
 })

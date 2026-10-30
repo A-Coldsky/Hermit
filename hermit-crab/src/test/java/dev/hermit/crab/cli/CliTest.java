@@ -296,6 +296,57 @@ class CliTest {
     }
 
     @Test
+    void localImportReloadExportAndDelete() throws Exception {
+        Path home = temp.resolve("local-home");
+        Files.createDirectories(home);
+        Path file = home.resolve("in.yaml");
+        Files.writeString(file, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_ping", "1.0.0"));
+        ByteArrayOutputStream imported = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {"local", "import", file.toString()},
+                env(home),
+                InputStream.nullInputStream(),
+                stdout(imported),
+                stderr(err));
+        assertThat(code).isZero();
+        assertThat(imported.toString(StandardCharsets.UTF_8)).contains("local_ping 1.0.0 imported");
+        assertThat(run(env(home), InputStream.nullInputStream(), "account", "add", "local_ping", "alice")).isZero();
+        try (CrabDatabase database = new CrabDatabase(new CrabPaths(home));
+             Connection connection = database.dataSource().getConnection();
+             PreparedStatement query = connection.prepareStatement(
+                     "SELECT origin FROM accounts WHERE conch = ? AND account = ?")) {
+            query.setString(1, "local_ping");
+            query.setString(2, "alice");
+            try (ResultSet resultSet = query.executeQuery()) {
+                assertThat(resultSet.next()).isTrue();
+                assertThat(resultSet.getString(1)).isEqualTo("LOCAL");
+            }
+        }
+
+        Path dir = home.resolve("local-conches");
+        Files.writeString(dir.resolve("local_two.yaml"), dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_two", "1.0.0"));
+        ByteArrayOutputStream reloaded = new ByteArrayOutputStream();
+        assertThat(run(env(home), InputStream.nullInputStream(), reloaded, "local", "reload")).isZero();
+        assertThat(reloaded.toString(StandardCharsets.UTF_8)).contains("local_two.yaml local_two 1.0.0 ok");
+
+        Path out = home.resolve("out.yaml");
+        ByteArrayOutputStream exported = new ByteArrayOutputStream();
+        assertThat(run(env(home), InputStream.nullInputStream(), exported, "local", "export", "local_ping", "--out", out.toString()))
+                .isZero();
+        assertThat(Files.readAllBytes(out)).isEqualTo(Files.readAllBytes(dir.resolve("local_ping.yaml")));
+
+        ByteArrayOutputStream raw = new ByteArrayOutputStream();
+        assertThat(run(env(home), InputStream.nullInputStream(), raw, "local", "export", "local_two")).isZero();
+        assertThat(raw.toByteArray()).isEqualTo(Files.readAllBytes(dir.resolve("local_two.yaml")));
+
+        ByteArrayOutputStream deleted = new ByteArrayOutputStream();
+        assertThat(run(env(home), InputStream.nullInputStream(), deleted, "local", "delete", "local_two")).isZero();
+        assertThat(deleted.toString(StandardCharsets.UTF_8)).contains("local_two deleted");
+        assertThat(dir.resolve("local_two.yaml")).doesNotExist();
+    }
+
+    @Test
     void syncWithoutReefUrlExits() {
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = new CrabCommand().run(

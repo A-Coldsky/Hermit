@@ -8,7 +8,7 @@ export interface ConchSummary {
   version: string
   title: string
   capabilityCount: number
-  /** 本机是否已订阅。未订阅的规则包不会出现在这份已加载列表里。 */
+  /** 本机是否已订阅。未订阅的正式包不会出现在这份已加载列表里；本地包为 false。 */
   subscribed: boolean
   accountCount: number
   /**
@@ -18,6 +18,8 @@ export interface ConchSummary {
   needsConfiguration: boolean
   /** 任一账号自动登录已暂停。原因和恢复方法在账号行。 */
   loginPaused: boolean
+  /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。 */
+  source: 'LOCAL' | 'REEF'
 }
 
 export interface CredentialField {
@@ -52,6 +54,8 @@ export interface ConchDetail {
   capabilities: CapabilityState[]
   /** 任一账号自动登录已暂停。账号行带原因和恢复方法。 */
   loginPaused: boolean
+  /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。 */
+  source: 'LOCAL' | 'REEF'
 }
 
 export interface Account {
@@ -139,6 +143,8 @@ export interface CallSummary {
   errorMessage: string | null
   durationMs: number
   apiKeyId: string | null
+  /** 调用时的来源。本地包为 `LOCAL`，其余记为 `REEF`。 */
+  source: 'LOCAL' | 'REEF'
 }
 
 export interface CallStep {
@@ -178,6 +184,7 @@ export type SyncOutcomeKind =
   | 'REJECTED'
   | 'ROLLED_BACK'
   | 'DISABLED'
+  | 'SKIPPED_LOCAL'
   | 'NOT_SUBSCRIBED'
 
 export interface SyncReport {
@@ -187,6 +194,27 @@ export interface SyncReport {
   credentialChanges: { conch: string; addedRequired: string[]; removed: string[] }[]
   latestCrab: CrabRelease | null
   error: SyncError | null
+}
+
+export interface ValidationIssue {
+  code: string
+  path: string
+  message: string
+}
+
+export interface LocalImportResult {
+  conch: string
+  version: string
+  replaced: boolean
+  warnings: ValidationIssue[]
+}
+
+export interface LocalFileResult {
+  file: string
+  conch: string | null
+  version: string | null
+  ok: boolean
+  issues: ValidationIssue[]
 }
 
 /** 目录缓存里的一条。`disabled` 表示 Reef 停用墓碑还在。 */
@@ -312,4 +340,16 @@ export const api = {
 
   reportPreview: () => http.get<{ batch: ReportBatch; dropped: number }>(`${base}/reports/preview`),
   sendReport: () => http.post<{ attempted: boolean; accepted: boolean; status: number }>(`${base}/reports/send`),
+
+  /** `file` 是 multipart 字段名。校验失败时 data 为 `{ errors, warnings }`。 */
+  importLocalConch: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return http.upload<LocalImportResult>(`${base}/local-conches`, form)
+  },
+  reloadLocalConches: () => http.post<{ results: LocalFileResult[] }>(`${base}/local-conches/reload`),
+  deleteLocalConch: (conch: string) =>
+    http.del<{ conch: string; deleted: boolean }>(`${base}/local-conches/${seg(conch)}`),
+  /** 响应体是原始 YAML 文本，与磁盘文件一致。 */
+  exportLocalConch: (conch: string) => http.text(`${base}/local-conches/${seg(conch)}/export`),
 }

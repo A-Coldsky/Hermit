@@ -56,11 +56,7 @@ public final class ConchRegistry {
         if (origin == null) {
             throw new IllegalArgumentException("origin");
         }
-        ArrayList<ValidationIssue> issues = new ArrayList<>();
-        ValidationResult result = ConchValidator.validate(
-                doc, ConchValidator.Context.of(CrabVersion.CURRENT, STEP_TYPES));
-        issues.addAll(result.errors());
-        reserved(doc, issues);
+        List<ValidationIssue> issues = inspect(doc);
         if (!issues.isEmpty()) {
             throw new ConchRejectedException(issues);
         }
@@ -79,6 +75,19 @@ public final class ConchRegistry {
         if (conches.get() != docsBefore || origins.get() != originsBefore) {
             changed();
         }
+    }
+
+    /** Errors that {@link #put(ConchDoc, Origin)} would reject, including reserved-variable writes. */
+    public List<ValidationIssue> inspect(ConchDoc doc) {
+        if (doc == null) {
+            throw new IllegalArgumentException("doc");
+        }
+        ArrayList<ValidationIssue> issues = new ArrayList<>();
+        ValidationResult result = ConchValidator.validate(
+                doc, ConchValidator.Context.of(CrabVersion.CURRENT, STEP_TYPES));
+        issues.addAll(result.errors());
+        reserved(doc, issues);
+        return List.copyOf(issues);
     }
 
     public void remove(String conch) {

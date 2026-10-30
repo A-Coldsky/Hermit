@@ -18,6 +18,7 @@ import dev.hermit.common.pkg.VerifiedConch;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ConchRejectedException;
 import dev.hermit.crab.store.CrabPaths;
+import dev.hermit.crab.store.Origin;
 
 public final class InstalledConches {
 
@@ -99,7 +100,12 @@ public final class InstalledConches {
                 failures.add(failure(conch, version, SyncReasons.MANIFEST_ENTRY_MISMATCH));
                 return;
             }
-            registry.put(verified.conchDoc());
+            if (registry.origin(conch) == Origin.LOCAL) {
+                failures.add(failure(conch, version, SyncReasons.LOCAL_KEPT));
+                LOG.log(Level.WARNING, "skip installed conch {0} because a local conch uses that name", conch);
+                return;
+            }
+            registry.put(verified.conchDoc(), Origin.OFFICIAL);
             loaded.add(conch);
         } catch (PackageVerificationException ex) {
             failures.add(failure(conch, version, ex.reason().name()));

@@ -10,6 +10,11 @@ public enum OutcomeKind {
     ROLLED_BACK,
     /** Reef dropped the conch from the distribution manifest. Calls return CONCH_DISABLED. */
     DISABLED,
+    /**
+     * The manifest named a conch already loaded from {@code local-conches}.
+     * Nothing is downloaded and the local entry is left in place.
+     */
+    SKIPPED_LOCAL,
     /** Reef listed the conch, and this Crab has not subscribed, so it was not downloaded. */
     NOT_SUBSCRIBED
 }

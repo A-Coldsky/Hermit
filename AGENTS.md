@@ -48,5 +48,5 @@
 - 账号/会话按 `(origin, conch, account)` 隔离；HTTP/MCP 调用共用 `Invoker`，不得绕过权限和能力禁用检查。
 - 规则快照/权限修改需检查审计 A01 的版本切换竞态。
 - 首次正式发布前，若用户确认没有存量数据，可以就地改写已有迁移；发布之后一律新增版本，不改已经生效的迁移。Reef 用 Flyway，Crab 建表与升级在 `CrabDatabase`，不使用 Flyway。
-- `health_check`、`local-conches`、debug 状态尚未接通完整执行链，不能标成完整可用功能。
+- `health_check`、debug 状态尚未接通完整执行链，不能标成完整可用功能。`local-conches` 可导入、调用和导出：无签名、只在本机、仅显式 Key。
 - 对外行为变化同步更新文档、前端 API 类型和功能状态，报告验证结果及未验证边界。

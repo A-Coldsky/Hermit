@@ -15,7 +15,7 @@ final class SyncFailures {
         }
         return switch (outcome.kind()) {
             case INSTALLED, SKIPPED_SAME, SKIPPED_MIN_VERSION, SKIPPED_PINNED, ROLLED_BACK, DISABLED,
-                    NOT_SUBSCRIBED -> false;
+                    SKIPPED_LOCAL, NOT_SUBSCRIBED -> false;
             case REJECTED -> !permanent(outcome.reason());
         };
     }

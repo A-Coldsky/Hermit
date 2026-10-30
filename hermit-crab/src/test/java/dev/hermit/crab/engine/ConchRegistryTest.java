@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ValidationCodes;
 import dev.hermit.common.validate.ValidationIssue;
+import dev.hermit.crab.store.Origin;
 
 class ConchRegistryTest {
 
@@ -20,6 +21,7 @@ class ConchRegistryTest {
         ConchRegistry registry = new ConchRegistry();
         assertThat(registry.find("legacy_oa")).isEmpty();
         registry.put(EngineTestSupport.legacy());
+        assertThat(registry.origin("legacy_oa")).isEqualTo(Origin.OFFICIAL);
         assertThat(registry.find("legacy_oa")).isPresent();
         assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
 
@@ -38,6 +40,10 @@ class ConchRegistryTest {
         assertThat(registry.find("other_conch")).isPresent();
         registry.remove("missing");
         assertThat(registry.find("other_conch")).isPresent();
+        registry.put(registry.find("other_conch").orElseThrow(), Origin.LOCAL);
+        assertThat(registry.origin("other_conch")).isEqualTo(Origin.LOCAL);
+        registry.put(registry.find("other_conch").orElseThrow());
+        assertThat(registry.origin("other_conch")).isEqualTo(Origin.OFFICIAL);
     }
 
     @Test

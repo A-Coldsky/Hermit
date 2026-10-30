@@ -259,7 +259,8 @@ class SubscriptionTest {
             new Subscriptions(crab.dataSource).record("legacy_oa", "test", Instant.EPOCH);
             int downloads = reef.downloads();
             SyncReport report = sync.syncOnce();
-            assertThat(report.conches()).noneMatch(item -> "legacy_oa".equals(item.conch()));
+            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.SKIPPED_LOCAL);
+            assertThat(outcome(report, "legacy_oa").reason()).isEqualTo(SyncReasons.LOCAL_KEPT);
             assertThat(reef.downloads()).isEqualTo(downloads);
             assertThat(registry.origin("legacy_oa")).isEqualTo(Origin.LOCAL);
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/current"))).isFalse();
@@ -367,8 +368,10 @@ class SubscriptionTest {
         try (FakeReef reef = new FakeReef()) {
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
             CrabConfig config = config(reef).withListen("127.0.0.1", 0);
-            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("console")), config, name -> null);
-            runtime.registry().put(ConchParser.parse(ConchTexts.standard("other_sys", "1.0.0")), Origin.LOCAL);
+            Path home = temp.resolve("console");
+            Files.createDirectories(home.resolve("local-conches"));
+            Files.writeString(home.resolve("local-conches/other_sys.yaml"), ConchTexts.standard("other_sys", "1.0.0"));
+            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config, name -> null);
             try (CrabServer server = CrabServer.start(runtime)) {
                 HttpClient http = HttpClient.newHttpClient();
                 HttpResponse<String> clash = send(

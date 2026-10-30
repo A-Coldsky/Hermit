@@ -111,9 +111,9 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/conch/account/action/k
 
 | 方法 | 路径 | 输入/用途 |
 | --- | --- | --- |
-| GET | `/conches`、`/conches/{conch}` | 已加载规则/字段声明/能力状态。列表项含 `subscribed`、`needsConfiguration`、`loginPaused`；详情含 `loginPaused` |
-| GET | `/catalog` | 最近一次成功清单。`{conches, syncedAt, configured}`。未配置 Reef 时 `configured` 为 false，`conches` 为空。每项含 `conch`、`version`、`title`、`description`、`capabilityCount`、`subscribed`、`installed`、`installedVersion`、`disabled`、`localConflict`。`disabled` 表示停用墓碑还在 |
-| POST | `/conches/{conch}/subscription` | 订阅并立即同步。返回 `{conch, subscribed: true, outcome}`。`outcome` 与同步结果里的一行相同，清单未提到该包时为 JSON `null` |
+| GET | `/conches`、`/conches/{conch}` | 已加载规则/字段声明/能力状态。列表项含 `subscribed`、`needsConfiguration`、`loginPaused`、`source`；详情含 `loginPaused`、`source`。`source` 为 `LOCAL` 或 `REEF` |
+| GET | `/catalog` | 最近一次成功清单。`{conches, syncedAt, configured}`。未配置 Reef 时 `configured` 为 false，`conches` 为空。每项含 `conch`、`version`、`title`、`description`、`capabilityCount`、`subscribed`、`installed`、`installedVersion`、`disabled`、`localConflict`。`disabled` 表示停用墓碑还在。`localConflict` 表示该名字已是本机本地包 |
+| POST | `/conches/{conch}/subscription` | 订阅并立即同步。返回 `{conch, subscribed: true, outcome}`。`outcome` 与同步结果里的一行相同，清单未提到该包时为 JSON `null`。与本地包重名是 409，错误码仍是 `INVALID_INPUT` |
 | DELETE | `/conches/{conch}/subscription` | 退订。返回 `{conch, subscribed: false}` |
 | GET / POST | `/conches/{conch}/accounts` | 列表 / `{name}` 创建。账号行见下方字段 |
 | DELETE | `/conches/{conch}/accounts/{account}` | 删除账号/凭证并使会话失效 |
@@ -122,14 +122,18 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/conch/account/action/k
 | POST | `/conches/{conch}/accounts/{account}/test-login` | 重置登录暂停并测试登录 |
 | GET / PUT | `/conches/{conch}/config` | 配置声明/值 / `{字段:字符串}`；空字符串清除覆盖 |
 | POST | `/capabilities/{conch}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
-| GET / POST | `/apikeys` | 列表 / `{name,conches,actions,readOnly}`；新 Key 仅返回一次 plaintext。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建 |
+| GET / POST | `/apikeys` | 列表 / `{name,conches,actions,readOnly}`；新 Key 仅返回一次 plaintext。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载（含本地包）或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建。空的 `conches` 仍表示全部正式包，不包含本地包 |
 | DELETE | `/apikeys/{id}` | 撤销 |
-| GET | `/calls`、`/calls/{traceId}` | `conch`、`action`、`limit` 查询及步骤摘要。`action` 可以是库存的能力名，或 `conch.action`（按第一个 `.` 拆开后分别匹配）。若同时传入 `conch` 且与 `action` 里的包名不同，返回 400 `INVALID_INPUT`，不会当成空列表 |
+| GET | `/calls`、`/calls/{traceId}` | `conch`、`action`、`limit` 查询及步骤摘要。每行含 `source`：`LOCAL` 或 `REEF`。`action` 可以是库存的能力名，或 `conch.action`（按第一个 `.` 拆开后分别匹配）。若同时传入 `conch` 且与 `action` 里的包名不同，返回 400 `INVALID_INPUT`，不会当成空列表 |
 | GET | `/audit` | 配置审计，新的在前。参数 `conch`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
 | GET / POST | `/debug` | 读状态 / `{enabled}`；当前只存状态，24h 过期 |
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |
 | GET | `/reports/preview` | 待发送批次和丢弃数 |
 | POST | `/reports/send` | 手动发送，返回 attempted/accepted/status |
+| POST | `/local-conches` | 导入。`multipart/form-data` 字段 `file`，或 `text/yaml`、`application/yaml`、`application/x-yaml` 正文。成功 `{conch, version, replaced, warnings}`。校验失败 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`。与正式包或订阅重名是 409，错误码仍是 `INVALID_INPUT` |
+| POST | `/local-conches/reload` | 按 `local-conches/` 目录增删改。`{results:[{file, conch, version, ok, issues}]}` |
+| DELETE | `/local-conches/{conch}` | 删除本地包文件和注册表项，保留账号与凭证。非本地包 404 |
+| GET | `/local-conches/{conch}/export` | `application/yaml`，`Content-Disposition: attachment; filename="{conch}-{version}.yaml"`，正文与磁盘文件相同 |
 
 Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。概览待配置按它计数。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。
 
@@ -164,13 +168,14 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 响应不含 `detail` 原文、配置值、凭证明文、密文，也不含 API Key 明文、哈希、id 或 name。debug 的 `enabled` 同样不返回。历史行的 detail 里如果还有别的键，读取时丢弃。`config_audit` 没有定期清理。
 
-新装 Crab 不订阅任何规则包。订阅只写在本机，Reef 不能代订。`POST /console/api/conches/{conch}/subscription` 要求名字合法且已在目录缓存里；缓存还没有时会先同步一次再判断。与本机 `Origin.LOCAL` 规则包同名时 HTTP 409，`code` 仍是 `INVALID_INPUT`（没有单独的 `CONFLICT`），`message` 为「与本机本地规则包同名」。不在目录里是 404 `NOT_FOUND`，`message` 为 `conch is not in the catalog`。非法名字是 400 `INVALID_INPUT`。未订阅是 404，`message` 为 `not subscribed`。Reef 未配置时目录接口 `configured` 为 false；订阅是 409 `NOT_CONFIGURED`。写上订阅行之后立即同步，并返回该包这一轮的 `outcome`。同步失败时订阅行保留，错误与 `POST /sync` 相同。重复订阅不再写第二条 `CONCH_SUBSCRIBED`，仍会清掉 ETag 再同步。
+新装 Crab 不订阅任何规则包。订阅只写在本机，Reef 不能代订。`POST /console/api/conches/{conch}/subscription` 要求名字合法且已在目录缓存里；缓存还没有时会先同步一次再判断。与本机 `Origin.LOCAL` 规则包同名时 HTTP 409，`code` 仍是 `INVALID_INPUT`（没有单独的 `CONFLICT`），`message` 为「与本机本地规则包同名」。导入本地包时，名字已在 `subscriptions` 里同样是 HTTP 409、`INVALID_INPUT`，`message` 为「与已订阅的规则包重名」；与已安装的正式包重名也是 409，`message` 为「与已安装的正式规则包重名」。不在目录里是 404 `NOT_FOUND`，`message` 为 `conch is not in the catalog`。非法名字是 400 `INVALID_INPUT`。未订阅是 404，`message` 为 `not subscribed`。Reef 未配置时目录接口 `configured` 为 false；订阅是 409 `NOT_CONFIGURED`。写上订阅行之后立即同步，并返回该包这一轮的 `outcome`。同步失败时订阅行保留，错误与 `POST /sync` 相同。重复订阅不再写第二条 `CONCH_SUBSCRIBED`，仍会清掉 ETag 再同步。
 
 退订删除订阅行，从注册表移除，删除 `current`，不写 `disabled_conches`，并清掉已有墓碑。账号、凭证、配置和版本目录保留。此后调用是 `NOT_FOUND`，不是 `CONCH_DISABLED`。已经进入引擎的请求仍使用当时的授权快照。
 
 `CONCH_SUBSCRIBED` 与 `CONCH_UNSUBSCRIBED` 的审计 target 是 `OFFICIAL/{conch}`，因此读取时 origin 为 `OFFICIAL`、conch 为包名、account 为空。detail 只有包名，不是 JSON，所以 `fields` 为空。响应仍不返回 detail 原文。
 
-同步结果里每个 Conch 有 `conch`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`SKIPPED_PINNED`、`REJECTED`、`ROLLED_BACK`、`DISABLED`、`NOT_SUBSCRIBED` 之一。`NOT_SUBSCRIBED` 表示清单里有这个包，但本机未订阅，因此没有下载。自动回滚尚未解除固定时，该 Conch 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 把已安装的 Conch 从清单去掉（停用）时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是卸下前的已安装版本，同时名字出现在 `removed`。随后的 304 不再带这行原始结果，控制台读取时仍按停用记录投影成 `DISABLED`，并放进 `removed`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
+同步结果里每个 Conch 有 `conch`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`SKIPPED_PINNED`、`SKIPPED_LOCAL`、`NOT_SUBSCRIBED`、`REJECTED`、`ROLLED_BACK`、`DISABLED` 之一。清单里的名字已经是本机本地包时为 `SKIPPED_LOCAL`，不下载、不覆盖，也不写入 ETag 快照。`NOT_SUBSCRIBED` 表示清单里有这个包，但本机未订阅，因此没有下载。自动回滚尚未解除固定时，该 Conch 的 `version` 是实际安装版本，`kind` 为 `ROLLED_BACK`，`reason` 为 `RULE_MISMATCH`。Reef 把已安装的 Conch 从清单去掉（停用）时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是卸下前的已安装版本，同时名字出现在 `removed`。随后的 304 不再带这行原始结果，控制台读取时仍按停用记录投影成 `DISABLED`，并放进 `removed`。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
+
 
 重新启用后，Crab 重新下载并验签安装，停用记录清除，调用恢复。若本地仍把该版本固定为坏版本，且清单版本没有高于坏版本，则不会装回去，调用继续是 `CONCH_DISABLED`。账号、凭证和配置在停用期间不删除。
 
@@ -195,6 +200,10 @@ audit list [--conch NAME] [--account NAME] [--limit N] [--page N]
 apikey create <name> [--conches a,b] [--actions conch.action] [--read-only]
 apikey list
 apikey revoke <id>
+local import <file>
+local reload
+local delete <conch>
+local export <conch> [--out file]
 mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
@@ -215,7 +224,7 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 - 非 `initialize` 的 POST，以及 GET、DELETE：带了 `MCP-Protocol-Version` 且不是 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` 时返回 HTTP 400。不带该头时不拒绝，继续使用该会话在 `initialize` 里协商到的版本。多个版本头同样拒绝。已支持但和会话不一致的版本头放行，不改写会话版本。
 - `initialize` 不看 `MCP-Protocol-Version` 头。请求体里的 `protocolVersion` 不在支持列表时，响应仍返回一个支持的版本（当前 `2025-11-25`）。是否改为直接拒绝只由 `McpTransportPolicy.NEGOTIATE_UNKNOWN_PROTOCOL` 决定，当前为协商。
 
-- 可见能力不超过 40 个时，直接工具名 `conch__action`。
+- 可见能力不超过 40 个时，直接工具名 `conch__action`。本地包的直接工具说明、资源说明、`list_systems` 里该包的说明，以及 `describe_capability` 的说明，都以 `[本地] ` 开头。使用指南里也会标明这是本地包。空 `conches` 的 Key 仍能看见这些工具；调用时 `Invoker` 返回 403 `FORBIDDEN`。显式写出包名的 Key 可以调用。
 - 超过 40 个时，提供 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个目录工具。
 - 目录模式调用非只读能力需要支持 elicitation 且保持 SSE，明确确认后执行；直接模式没有同样的服务端确认步骤，客户端应依据工具注解交互。
 - guide resource 为 `hermit://conches/{conch}/guide`，由说明、参数、示例生成。

@@ -39,6 +39,7 @@ import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.runtime.Invoker;
 import dev.hermit.crab.secure.CredentialCipher;
+import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyPrincipal;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.CallLogStore;
@@ -87,6 +88,7 @@ class ConchSyncTest {
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_PINNED, SyncReasons.PINNED))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.ROLLED_BACK, RollbackGuard.REASON))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.DISABLED, SyncReasons.DISABLED))).isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.INSTALLED, "HTTP_500"))).isFalse();
     }
 
@@ -651,6 +653,63 @@ class ConchSyncTest {
                 executor.shutdownNow();
             }
         }
+    }
+
+    @Test
+    void localConchSurvivesSyncAndIsNotDownloaded() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            ConchRegistry registry = new ConchRegistry();
+            LocalConches local = new LocalConches(crab.paths, registry, crab.dataSource);
+            local.importBytes(ping("local_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            reef.publish(ConchTexts.standard("local_ping", "9.9.9"));
+            ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            SyncReport first = sync.syncOnce();
+
+            assertThat(outcome(first, "local_ping").kind()).isEqualTo(OutcomeKind.SKIPPED_LOCAL);
+            assertThat(outcome(first, "local_ping").reason()).isEqualTo(SyncReasons.LOCAL_KEPT);
+            assertThat(outcome(first, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(first.removed()).doesNotContain("local_ping");
+            assertThat(registry.origin("local_ping")).isEqualTo(Origin.LOCAL);
+            assertThat(registry.find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            assertThat(reef.paths()).noneMatch(path -> path.startsWith("/agent/conches/local_ping/"));
+            assertThat(syncState(crab, "manifest_snapshot")).doesNotContain("local_ping");
+            assertThat(SyncFailures.retryable(outcome(first, "local_ping"))).isFalse();
+
+            reef.remove("local_ping");
+            SyncReport second = sync.syncOnce();
+            assertThat(second.removed()).doesNotContain("local_ping");
+            assertThat(second.conches()).noneMatch(item -> "local_ping".equals(item.conch()));
+            assertThat(registry.origin("local_ping")).isEqualTo(Origin.LOCAL);
+            assertThat(registry.find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
+        }
+    }
+
+    private static String ping(String name, String version) {
+        return """
+                conch: %s
+                version: %s
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:9/
+                title: 本地探测
+                description: 只在本机。
+                credentials: {}
+                actions:
+                  ping:
+                    title: 探测
+                    description: 返回标记。
+                    steps:
+                      - set:
+                          marker: ok
+                    output:
+                      marker: { type: string, description: 标记, value: ok }
+                    examples:
+                      - input: {}
+                        output: { marker: ok }
+                    notes: 本地
+                    mcp: { read_only: true }
+                """.formatted(name, version);
     }
 
     private static void publish(FakeReef reef, ConchSync sync, String version) {

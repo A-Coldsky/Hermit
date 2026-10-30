@@ -332,16 +332,16 @@ public final class ConchSync {
                     continue;
                 }
                 present.add(entry.conch());
+                if (isLocal(entry.conch())) {
+                    conches.add(outcome(entry, OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT));
+                    continue;
+                }
                 if (!version(entry.version()).isPresent()) {
                     conches.add(rejected(entry, SyncReasons.VERSION_INVALID));
                     continue;
                 }
                 if (!subscriptions.contains(entry.conch())) {
                     conches.add(new ConchOutcome(entry.conch(), entry.version(), OutcomeKind.NOT_SUBSCRIBED, null));
-                    continue;
-                }
-                if (registry.origin(entry.conch()) == Origin.LOCAL) {
-                    LOG.log(Level.INFO, "skip reef install for local conch={0}", entry.conch());
                     continue;
                 }
                 InstallResult result = installEntry(entry);
@@ -353,7 +353,7 @@ public final class ConchSync {
         }
         List<String> removed = new ArrayList<>();
         // Withdraw only a subscribed official conch Reef dropped. Leave unsubscribed names alone,
-        // and leave Origin.LOCAL alone. Section C's local conches keep both checks.
+        // and leave Origin.LOCAL alone. Both checks stay.
         Map<String, ConchDoc> loaded = registry.snapshot();
         for (String conch : loaded.keySet()) {
             if (present.contains(conch)) {
@@ -500,6 +500,9 @@ public final class ConchSync {
     }
 
     private InstallResult installEntry(ReefClient.CatalogEntry entry) {
+        if (isLocal(entry.conch())) {
+            return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT));
+        }
         if (!ConchValidator.isConchName(entry.conch())) {
             return InstallResult.of(rejected(entry, SyncReasons.CONCH_NAME));
         }
@@ -577,6 +580,9 @@ public final class ConchSync {
         String conch = entry.conch();
         String version = entry.version();
         synchronized (ConchFileLocks.of(conch)) {
+            if (isLocal(conch)) {
+                return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT));
+            }
             Optional<SyncStore.Pin> pinNow = store.pin(conch);
             if (pinNow.isPresent() && !newerThanPin(version, pinNow.get())) {
                 return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_PINNED, SyncReasons.PINNED));
@@ -593,23 +599,27 @@ public final class ConchSync {
                 return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION));
             }
             ConchDoc previous = previousDoc(conch);
+            Origin previousOrigin = registry.origin(conch);
+            if (previousOrigin == null) {
+                previousOrigin = Origin.OFFICIAL;
+            }
             Optional<CredentialDeclarationChange> change = CredentialChanges.between(previous, verified.conchDoc());
             ConchFiles.install(paths, conch, version, zip, verified.conchYaml());
             try {
-                registry.put(verified.conchDoc());
+                registry.put(verified.conchDoc(), Origin.OFFICIAL);
             } catch (ConchRejectedException ex) {
                 ConchFiles.deleteVersion(paths, conch, version);
                 return InstallResult.of(rejected(entry, registryReason(ex)));
             } catch (RuntimeException ex) {
                 ConchFiles.deleteVersion(paths, conch, version);
-                registryRestore(conch, previous);
+                registryRestore(conch, previous, previousOrigin);
                 return InstallResult.of(rejected(entry, SyncReasons.REGISTRY_REJECTED));
             }
             try {
                 ConchFiles.writeCurrent(paths, conch, version);
             } catch (RuntimeException ex) {
                 LOG.log(Level.WARNING, "current pointer write failed conch={0}", conch);
-                registryRestore(conch, previous);
+                registryRestore(conch, previous, previousOrigin);
                 ConchFiles.deleteVersion(paths, conch, version);
                 return InstallResult.of(rejected(entry, SyncReasons.CURRENT_WRITE_FAILED));
             }
@@ -677,6 +687,9 @@ public final class ConchSync {
     }
 
     private InstallResult keepCurrent(ReefClient.CatalogEntry entry) {
+        if (isLocal(entry.conch())) {
+            return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT));
+        }
         String conch = entry.conch();
         if (!ConchFiles.safeSegment(conch)) {
             return InstallResult.of(rejected(entry, SyncReasons.PATH_UNSAFE));
@@ -685,6 +698,9 @@ public final class ConchSync {
             Optional<String> currentNow = ConchFiles.readCurrent(paths, conch);
             if (currentNow.isEmpty() || !currentNow.get().equals(entry.version())) {
                 return null;
+            }
+            if (isLocal(conch)) {
+                return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT));
             }
             if (registry.find(conch).isEmpty() && !loadInstalled(conch, entry.version())) {
                 return InstallResult.of(rejected(entry, SyncReasons.PACKAGE_MISSING));
@@ -707,10 +723,15 @@ public final class ConchSync {
             if (!conch.equals(verified.manifest().conch()) || !version.equals(verified.manifest().version())) {
                 return false;
             }
-            registry.put(verified.conchDoc());
+            if (isLocal(conch)) {
+                return false;
+            }
+            registry.put(verified.conchDoc(), Origin.OFFICIAL);
             return true;
         } catch (RuntimeException | IOException ex) {
-            registry.remove(conch);
+            if (!isLocal(conch)) {
+                registry.remove(conch);
+            }
             return false;
         }
     }
@@ -804,16 +825,25 @@ public final class ConchSync {
         }
     }
 
-    private void registryRestore(String conch, ConchDoc previous) {
+    private void registryRestore(String conch, ConchDoc previous, Origin origin) {
+        if (isLocal(conch)) {
+            return;
+        }
         if (previous == null) {
             registry.remove(conch);
             return;
         }
         try {
-            registry.put(previous);
+            registry.put(previous, origin == null ? Origin.OFFICIAL : origin);
         } catch (RuntimeException ex) {
-            registry.remove(conch);
+            if (!isLocal(conch)) {
+                registry.remove(conch);
+            }
         }
+    }
+
+    private boolean isLocal(String conch) {
+        return registry.origin(conch) == Origin.LOCAL;
     }
 
     private String redact(String message) {

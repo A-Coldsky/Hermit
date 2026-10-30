@@ -31,6 +31,7 @@
 | Reef 管理页面 | 已实现 | 登录、仪表盘、Conch/上传/版本及校验警告明细、Tide、告警、审计、设置说明。GET 且不是 `/api/**`、`/agent/**`、`/assets/**` 的路径返回同一份 `index.html`，未登录不是 401 JSON，由已有前端路由进入登录页。`GET /shells` 与 `/shells/**` 302 到 `/conches`。页面响应不带账号或令牌。前端把 `/shells` 与 `/shells/:conch` 转到 `/conches`；已登录的未知路径显示应用内「页面不存在」 |
 | Crab 本机控制台 | 已实现 | 概览、Conch、账号/凭证/配置、能力、API Key、调用、上报。调用记录的 `action` 筛选接受能力名或 `conch.action`；与 `conch` 冲突时 400。Conch 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。详情横幅按默认账号与具体原因写标题并点名账号；凭证无法解密时对话框要求全部重填。概览把「账号暂停」与「缺凭证或配置」分开提示，同步卡有停用项时不显示「已是最新」。两端的审计、调用、上报时间列显示浏览器本地时间和时区，悬停显示 UTC。「配置审计」页按 Conch/账号筛选分页查看变更记录。未登记的 `GET /console/**`（不含 `/console/api/**` 与 `/console/assets/**`）返回同一份 `index.html`。`GET /console/shells` 与其子路径 302 到 `/console/conches`。前端把 `shells` 与 `shells/:conch` 转到 `/conches`；未知路径显示应用内「页面不存在」 |
 | Crab 配置审计查询 | 已实现 | 控制台「配置审计」页、`GET /console/api/audit` 与 CLI `audit list`。可按 conch/account 分页，新的在前。只返回 id、时间、actor、action、origin、conch、account、字段名；不返回 detail 原文、配置值、凭证明文或密文。`config_audit` 仍无定期清理 |
+| 本地规则包 `local-conches` | 已实现 | 控制台上传或 `local-conches/{conch}.yaml` 导入后，HTTP 与 MCP 经 `Invoker` 调用。无签名、只在本机。API Key 的 `conches` 必须显式包含包名，空范围不含本地包。导出是磁盘上的原始 YAML。同步不覆盖、不删除：移除循环同时跳过未订阅和 `Origin.LOCAL`。与已订阅或已安装的正式包重名是 409 `INVALID_INPUT`；订阅已导入的本地包同样是 409。schema 9 给 `call_logs` 增加 `source`。调用记录 `source=LOCAL`，不上报 Tide，也不进入回滚计数 |
 | Docker Reef + Nginx + MySQL / Crab | 已配置，运行未验收 | Crab 同机 client profile / 独立 Compose / Dockerfile 已提供；配置语法通过，尚未启动容器栈 |
 
 ## 部分实现与缺口
@@ -38,7 +39,6 @@
 | 项目 | 实际状态 | 后续工作 |
 | --- | --- | --- |
 | `health_check` | Parser/Model 接收，示例声明；无执行方 | 定义执行时机、账号选择、失败门槛，并接入发布/安装流程，或移除误导性声明 |
-| `local-conches` / Origin.LOCAL | 路径/存储命名空间与底层测试存在，产品调用仅 OFFICIAL | 明确本地规则的加载、信任、编辑和路由设计 |
 | debug | API/持久化/24h 过期存在；执行引擎/日志不读这个状态；新 UI 明示未接入调用记录 | 定义调试行为及脱敏边界，再接入日志采集 |
 | `mcp.destructive` | 可解析，但 tool annotation 从 readOnly/idempotent 推导 | 对齐字段声明与实际注解；确认模式一致性需产品决定 |
 | Crab 升级 | Reef 提供最新版本/下载地址，Crab 展示提示 | 无自动下载/升级器；继续手工升级或另行实现 |
@@ -96,4 +96,6 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 
 2026-10-30 规则包拉取次数以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 135、hermit-crab 223、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 402，连同 Vitest 合计 477。覆盖成功下载加一、未发布与停用 404 不计、清单和 304 不计、验签失败不计、各版本之和、清单 `description`/`capabilityCount` 进入 ETag，以及 16 路并发下载。未启动 MySQL 或 Compose。管理页面类型已有 `pullCount`，界面未展示，也未在浏览器里点选。停用与下载并发、以及响应还没写完客户端就断开，没有覆盖。合入订阅分支后的计数见下一条。
 
-2026-10-30 合入 origin/main（#52 拉取次数）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 135、hermit-crab 237、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 416，连同 Vitest 合计 491。这是当前整棵树的计数。订阅与拉取次数两侧的功能行、接口说明和上面两段验证记录都保留。未改 Vue，未在浏览器点选；未启动 MySQL 或 Compose。没有用真实 Reef 复测。退订当时已经进入引擎的请求、退订后回滚固定，以及停用与下载并发、响应未写完就断开，都没有单独压测。
+2026-10-30 合入 origin/main（#52 拉取次数）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 135、hermit-crab 237、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 416，连同 Vitest 合计 491。订阅与拉取次数两侧的功能行、接口说明和上面两段验证记录都保留。本地包合入后的计数见下一条。未改 Vue，未在浏览器点选；未启动 MySQL 或 Compose。没有用真实 Reef 复测。退订当时已经进入引擎的请求、退订后回滚固定，以及停用与下载并发、响应未写完就断开，都没有单独压测。
+
+2026-10-30 本地规则包（schema 9）合入 origin/main（#52 拉取次数、#53 订阅 schema 8）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 135、hermit-crab 245、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 424，连同 Vitest 合计 499。这是当前整棵树的计数。schema 9 在 schema 8 之后执行；schema 8 改为按自身行是否缺失来补，已记下版本 9 的库仍会建 `subscriptions`。同步移除循环只卸下已订阅且不是 `Origin.LOCAL` 的包。订阅已导入的本地包，以及导入已订阅或已安装正式包的名字，都是 HTTP 409、错误码 `INVALID_INPUT`。注册表沿用 `put(doc, Origin)` 与 `origin(name)`。未改 Vue，未在浏览器点选；未启动 MySQL 或 Compose。没有用真实 MCP 客户端复测。控制台请求体上限仍是 1_000_000 字节，逻辑上限是 1 MiB。停用墓碑同名不视为重名。删除或重载时已经进入引擎的请求没有单独压测。

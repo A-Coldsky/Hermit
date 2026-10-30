@@ -1,9 +1,11 @@
 package dev.hermit.crab.gateway;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -16,8 +18,10 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.LoginPause;
+import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
@@ -34,8 +38,11 @@ import dev.hermit.crab.store.ApiKeySummary;
 import dev.hermit.crab.store.CallLogStore;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.DebugStateStore;
+import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.sync.ConchCatalog;
 import dev.hermit.crab.sync.CrabRelease;
+import dev.hermit.crab.sync.LocalConchException;
+import dev.hermit.crab.sync.LocalConches;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
 import dev.hermit.crab.sync.ConchOutcome;
 import dev.hermit.crab.sync.SubscriptionException;
@@ -44,6 +51,7 @@ import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
 import io.javalin.http.Context;
 import io.javalin.http.HandlerType;
+import io.javalin.http.UploadedFile;
 
 /**
  * Loopback console. Callers are already checked for the socket address and
@@ -82,6 +90,10 @@ final class ConsoleApi {
         delete(app, "/console/api/conches/{conch}/subscription", ctx -> unsubscribe(runtime, ctx));
         get(app, "/console/api/reports/preview", ctx -> reportPreview(runtime, ctx));
         post(app, "/console/api/reports/send", ctx -> reportSend(runtime, ctx));
+        post(app, "/console/api/local-conches", ctx -> importLocal(runtime, ctx));
+        post(app, "/console/api/local-conches/reload", ctx -> reloadLocal(runtime, ctx));
+        delete(app, "/console/api/local-conches/{conch}", ctx -> deleteLocal(runtime, ctx));
+        get(app, "/console/api/local-conches/{conch}/export", ctx -> exportLocal(runtime, ctx));
     }
 
     private static void conches(CrabRuntime runtime, Context ctx) {
@@ -98,6 +110,7 @@ final class ConsoleApi {
             row.put("accountCount", accounts.size());
             row.put("needsConfiguration", needsConfiguration(runtime, doc, accounts, loginPaused));
             row.put("loginPaused", loginPaused);
+            row.put("source", source(runtime, doc.conch()));
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("conches", rows));
@@ -125,6 +138,7 @@ final class ConsoleApi {
         }
         body.put("capabilities", capabilities);
         body.put("loginPaused", loginPaused(runtime, doc, runtime.admin().listAccounts(doc.conch())));
+        body.put("source", source(runtime, doc.conch()));
         GatewayResponses.writeData(ctx, body);
     }
 
@@ -556,6 +570,21 @@ final class ConsoleApi {
                 GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, "request body too large");
             } catch (AccountNotFoundException ex) {
                 GatewayResponses.writeError(ctx, 404, ErrorCode.ACCOUNT_NOT_FOUND, "account not found");
+            } catch (LocalConchException ex) {
+                if (ex.hasIssues()) {
+                    LinkedHashMap<String, Object> data = new LinkedHashMap<>();
+                    data.put("errors", issues(ex.errors()));
+                    data.put("warnings", issues(ex.warnings()));
+                    String traceId = GatewayResponses.trace(ctx);
+                    GatewayResponses.write(
+                            ctx,
+                            ex.status(),
+                            ApiJson.bytes(ApiEnvelope.json(data, ex.code(), ex.getMessage(), traceId)),
+                            traceId,
+                            false);
+                    return;
+                }
+                GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
             } catch (SubscriptionException ex) {
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), clientMessage(ex));
             } catch (IllegalArgumentException | IllegalStateException ex) {
@@ -569,6 +598,84 @@ final class ConsoleApi {
                 GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, clientMessage(ex));
             }
         });
+    }
+
+    private static void importLocal(CrabRuntime runtime, Context ctx) throws Exception {
+        LocalConches.ImportResult result = runtime.localConches().importBytes(localBody(ctx), Actors.CONSOLE);
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conch", result.conch());
+        body.put("version", result.version());
+        body.put("replaced", result.replaced());
+        body.put("warnings", issues(result.warnings()));
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void reloadLocal(CrabRuntime runtime, Context ctx) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (LocalConches.FileResult result : runtime.localConches().reload(Actors.CONSOLE)) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("file", result.file());
+            row.put("conch", result.conch());
+            row.put("version", result.version());
+            row.put("ok", result.ok());
+            row.put("issues", issues(result.issues()));
+            rows.add(row);
+        }
+        GatewayResponses.writeData(ctx, Map.of("results", rows));
+    }
+
+    private static void deleteLocal(CrabRuntime runtime, Context ctx) {
+        String conch = ctx.pathParam("conch");
+        runtime.localConches().delete(conch, Actors.CONSOLE);
+        GatewayResponses.writeData(ctx, Map.of("conch", conch, "deleted", true));
+    }
+
+    private static void exportLocal(CrabRuntime runtime, Context ctx) {
+        LocalConches.Export export = runtime.localConches().export(ctx.pathParam("conch"));
+        ctx.header("Content-Disposition", "attachment; filename=\"" + export.conch() + "-" + export.version() + ".yaml\"");
+        GatewayResponses.writeBytes(ctx, 200, "application/yaml", "no-store", export.bytes());
+    }
+
+    private static byte[] localBody(Context ctx) throws Exception {
+        String type = ctx.contentType();
+        if (type != null && isYaml(type)) {
+            return LocalConches.readLimited(ctx.req().getInputStream());
+        }
+        if (type != null && type.toLowerCase(Locale.ROOT).startsWith("multipart/")) {
+            UploadedFile file = ctx.uploadedFile("file");
+            if (file != null) {
+                try (InputStream in = file.content()) {
+                    return LocalConches.readLimited(in);
+                }
+            }
+        }
+        throw new IllegalArgumentException("file or yaml body is required");
+    }
+
+    private static boolean isYaml(String type) {
+        String lower = type.toLowerCase(Locale.ROOT);
+        return lower.startsWith("text/yaml")
+                || lower.startsWith("application/yaml")
+                || lower.startsWith("application/x-yaml");
+    }
+
+    private static String source(CrabRuntime runtime, String conch) {
+        return runtime.registry().origin(conch) == Origin.LOCAL ? "LOCAL" : "REEF";
+    }
+
+    private static List<Map<String, Object>> issues(List<ValidationIssue> found) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        if (found == null) {
+            return rows;
+        }
+        for (ValidationIssue issue : found) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("code", issue.code());
+            row.put("path", issue.path());
+            row.put("message", issue.message());
+            rows.add(row);
+        }
+        return rows;
     }
 
     private static ConchDoc requireConch(CrabRuntime runtime, Context ctx) {
@@ -679,6 +786,7 @@ final class ConsoleApi {
         body.put("errorMessage", row.errorMessage());
         body.put("durationMs", row.durationMs());
         body.put("apiKeyId", row.apiKeyId());
+        body.put("source", row.source());
         return body;
     }
 

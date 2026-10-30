@@ -65,83 +65,86 @@ public final class ConchAdmin {
     }
 
     public Account createAccount(String conch, String name, String actor) {
-        return accounts.create(Origin.OFFICIAL, conch, name, actor);
+        return accounts.create(origin(conch), conch, name, actor);
     }
 
     public void deleteAccount(String conch, String name, String actor) {
-        accounts.delete(Origin.OFFICIAL, conch, name, actor);
-        sessions.invalidate(new SessionKey(Origin.OFFICIAL, conch, name));
+        Origin source = origin(conch);
+        accounts.delete(source, conch, name, actor);
+        sessions.invalidate(new SessionKey(source, conch, name));
     }
 
     public void setDefault(String conch, String name, String actor) {
-        accounts.setDefault(Origin.OFFICIAL, conch, name, actor);
+        accounts.setDefault(origin(conch), conch, name, actor);
     }
 
     public List<Account> listAccounts(String conch) {
-        return accounts.list(Origin.OFFICIAL, conch);
+        return accounts.list(origin(conch), conch);
     }
 
     public Account requireAccount(String conch, String name) {
-        return accounts.resolve(Origin.OFFICIAL, conch, Optional.of(name));
+        return accounts.resolve(origin(conch), conch, Optional.of(name));
     }
 
     public List<String> missingCredentials(ConchDoc doc, String account) {
-        return DeclaredSettings.missingCredentials(doc, vault.fieldNames(Origin.OFFICIAL, doc.conch(), account));
+        return DeclaredSettings.missingCredentials(doc, vault.fieldNames(origin(doc.conch()), doc.conch(), account));
     }
 
     public Set<String> credentialNames(String conch, String account) {
-        return vault.fieldNames(Origin.OFFICIAL, conch, account);
+        return vault.fieldNames(origin(conch), conch, account);
     }
 
     /** Stored ciphertext for this account cannot be opened with the current master key. */
     public boolean credentialsUnreadable(String conch, String account) {
-        return !vault.readable(Origin.OFFICIAL, conch, account);
+        return !vault.readable(origin(conch), conch, account);
     }
 
     public boolean loginPaused(String conch, String account) {
-        return sessions.loginPaused(new SessionKey(Origin.OFFICIAL, conch, account));
+        return sessions.loginPaused(new SessionKey(origin(conch), conch, account));
     }
 
     public void writeCredentials(ConchDoc doc, String account, Map<String, String> fields, String actor) {
         requireAccount(doc.conch(), account);
         DeclaredSettings.checkCredentialFields(doc, fields);
-        vault.write(Origin.OFFICIAL, doc.conch(), account, fields, actor);
-        sessions.invalidate(new SessionKey(Origin.OFFICIAL, doc.conch(), account));
+        Origin source = origin(doc.conch());
+        vault.write(source, doc.conch(), account, fields, actor);
+        sessions.invalidate(new SessionKey(source, doc.conch(), account));
     }
 
     public Map<String, String> storedConfig(String conch) {
-        return config.all(Origin.OFFICIAL, conch);
+        return config.all(origin(conch), conch);
     }
 
     public void putConfig(ConchDoc doc, String key, String value, String actor) {
         ConfigField field = doc.config().get(key);
         DeclaredSettings.checkConfigValue(field, value);
         if (value.isEmpty()) {
-            config.delete(Origin.OFFICIAL, doc.conch(), key, actor);
+            config.delete(origin(doc.conch()), doc.conch(), key, actor);
             return;
         }
-        config.put(Origin.OFFICIAL, doc.conch(), key, value, actor);
+        config.put(origin(doc.conch()), doc.conch(), key, value, actor);
     }
 
     public void deleteConfig(ConchDoc doc, String key, String actor) {
         if (!doc.config().containsKey(key)) {
             throw new IllegalArgumentException("unknown config field");
         }
-        config.delete(Origin.OFFICIAL, doc.conch(), key, actor);
+        config.delete(origin(doc.conch()), doc.conch(), key, actor);
     }
 
     public ExecutionResult testLogin(ConchDoc doc, String account, String traceId, String actor) {
         Account resolved = requireAccount(doc.conch(), account);
-        SessionKey key = new SessionKey(Origin.OFFICIAL, doc.conch(), resolved.account());
+        Origin source = origin(doc.conch());
+        SessionKey key = new SessionKey(source, doc.conch(), resolved.account());
         sessions.resetLoginPause(key);
         sessions.invalidate(key);
         AuditLog.record(
                 dataSource,
                 actor,
                 AuditKind.TEST_LOGIN,
-                Origin.OFFICIAL.name() + "/" + doc.conch() + "/" + resolved.account(),
+                source.name() + "/" + doc.conch() + "/" + resolved.account(),
                 "{\"account\":\"" + resolved.account() + "\"}");
-        Map<String, String> stored = config.all(Origin.OFFICIAL, doc.conch());
+        Map<String, String> stored = config.all(source, doc.conch());
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
         if (!missingConfig.isEmpty()) {
             return failed(doc, traceId, "missing config: " + String.join(", ", missingConfig));
@@ -152,19 +155,25 @@ public final class ConchAdmin {
         }
         Map<String, String> secrets;
         try {
-            secrets = vault.decryptForExecution(Origin.OFFICIAL, doc.conch(), resolved.account());
+            secrets = vault.decryptForExecution(source, doc.conch(), resolved.account());
         } catch (CredentialDecryptException ex) {
             return failed(doc, traceId, CredentialDecryptException.MESSAGE);
         }
         ExecutionRequest request = new ExecutionRequest(
                 traceId,
-                Origin.OFFICIAL,
+                source,
                 doc.conch(),
                 "test_login",
                 Map.of(),
                 resolved.account(),
                 new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
         return engine.testLogin(request);
+    }
+
+    /** Registry origin, or {@link Origin#OFFICIAL} when the conch is not loaded. */
+    private Origin origin(String conch) {
+        Origin stored = registry.origin(conch);
+        return stored == null ? Origin.OFFICIAL : stored;
     }
 
     public CreatedApiKey createApiKey(String name, ApiKeyScope scope, String actor) {

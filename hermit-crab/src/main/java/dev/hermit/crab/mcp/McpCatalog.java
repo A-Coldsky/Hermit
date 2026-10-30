@@ -16,6 +16,7 @@ import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.store.ApiKeyPrincipal;
+import dev.hermit.crab.store.Origin;
 import io.modelcontextprotocol.spec.McpSchema;
 
 final class McpCatalog {
@@ -27,6 +28,7 @@ final class McpCatalog {
     static final String CALL = "call_capability";
     private static final String GUIDE_PREFIX = "hermit://conches/";
     private static final String GUIDE_SUFFIX = "/guide";
+    private static final String LOCAL_PREFIX = "[本地] ";
 
     private final ConchRegistry registry;
     private final BiPredicate<String, String> disabled;
@@ -69,7 +71,7 @@ final class McpCatalog {
         for (ConchDoc conch : conches(principal)) {
             resources.add(McpSchema.Resource.builder(guideUri(conch.conch()), conch.conch())
                     .title(conch.title())
-                    .description("由元数据生成的使用指南")
+                    .description(localMark(conch.conch(), "由元数据生成的使用指南"))
                     .mimeType("text/markdown")
                     .build());
         }
@@ -92,7 +94,7 @@ final class McpCatalog {
         if (conch == null) {
             return Optional.empty();
         }
-        return Optional.of(markdown(conch, actions));
+        return Optional.of(markdown(conch, actions, local(conch.conch())));
     }
 
     Map<String, Object> listSystems(ApiKeyPrincipal principal) {
@@ -107,7 +109,7 @@ final class McpCatalog {
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("conch", conch.conch());
             row.put("title", conch.title());
-            row.put("description", conch.description());
+            row.put("description", localMark(conch.conch(), conch.description()));
             row.put("capabilities", count);
             systems.add(row);
         }
@@ -149,7 +151,7 @@ final class McpCatalog {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("name", ref.toolName());
         body.put("title", action.title());
-        body.put("description", action.description());
+        body.put("description", localMark(ref.conch().conch(), action.description()));
         body.put("notes", action.notes());
         body.put("readOnly", CapabilityHttp.readOnly(action));
         body.put("idempotent", action.idempotent());
@@ -202,12 +204,12 @@ final class McpCatalog {
                 tool(CALL, "调用一个能力。非只读能力需要用户确认。", callSchema(), null, false, false));
     }
 
-    private static McpSchema.Tool directTool(CapabilityRef ref, boolean outputSchema) {
+    private McpSchema.Tool directTool(CapabilityRef ref, boolean outputSchema) {
         Action action = ref.action();
         boolean readOnly = CapabilityHttp.readOnly(action);
         McpSchema.Tool.Builder builder = McpSchema.Tool.builder(ref.toolName(), withAccount(action))
                 .title(action.title())
-                .description(toolDescription(action))
+                .description(localMark(ref.conch().conch(), toolDescription(action)))
                 .annotations(hints(readOnly, action.idempotent()));
         if (outputSchema) {
             builder.outputSchema(looseOutputSchema(action));
@@ -300,6 +302,17 @@ final class McpCatalog {
                 .build();
     }
 
+    private boolean local(String conch) {
+        return registry.origin(conch) == Origin.LOCAL;
+    }
+
+    private String localMark(String conch, String text) {
+        if (!local(conch)) {
+            return text;
+        }
+        return LOCAL_PREFIX + (text == null ? "" : text);
+    }
+
     static String toolDescription(Action action) {
         StringBuilder text = new StringBuilder();
         append(text, action.title());
@@ -380,9 +393,12 @@ final class McpCatalog {
         return text.toString().toLowerCase(Locale.ROOT);
     }
 
-    private static String markdown(ConchDoc conch, List<CapabilityRef> actions) {
+    private static String markdown(ConchDoc conch, List<CapabilityRef> actions, boolean local) {
         StringBuilder text = new StringBuilder();
         text.append("# ").append(blank(conch.title()) ? conch.conch() : conch.title()).append("\n\n");
+        if (local) {
+            text.append("来源：本地规则包。调用需要 API Key 的 conches 显式包含该名称。\n\n");
+        }
         if (!blank(conch.description())) {
             text.append(conch.description()).append("\n\n");
         }

@@ -35,8 +35,11 @@ import dev.hermit.common.validate.ConchValidator;
  * from the manifest. Version 6 is left as applied; do not fold the tombstones back into it.
  * Version 8 adds {@code subscriptions}. On that upgrade, conches under {@code conches/} that
  * already have a current pointer are inserted with actor {@code migration} so they stay installed.
- * Version 7 is left as applied. Version 2 is applied when its own row is missing, not when
- * {@code MAX(version)} is below 2:
+ * Version 8 runs when its own row is missing, not when {@code MAX(version)} is below 8, so a
+ * database that already recorded version 9 still receives the table. Version 7 is left as applied.
+ * Version 9 adds {@code call_logs.source} and only alters the version-2 call log table. It runs
+ * when its own row is missing and does not read or create version-8 tables.
+ * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Before the first official release these statements may be edited in
  * place when there is no stored data. After release, add a new version instead of rewriting one.
@@ -121,9 +124,14 @@ public final class CrabDatabase implements AutoCloseable {
                 applyV7(connection);
                 insertVersion(connection, 7);
             }
-            if (current < 8) {
+            // Version 9 may already be recorded. Do not gate version 8 on MAX(version).
+            if (!applied(connection, 8)) {
                 applyV8(connection);
                 insertVersion(connection, 8);
+            }
+            if (!applied(connection, 9)) {
+                applyV9(connection);
+                insertVersion(connection, 9);
             }
             return null;
         });
@@ -514,6 +522,12 @@ public final class CrabDatabase implements AutoCloseable {
             }
         }
         return true;
+    }
+
+    private static void applyV9(Connection connection) throws SQLException {
+        execute(connection, """
+                ALTER TABLE call_logs ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'REEF'
+                """);
     }
 
     private static boolean applied(Connection connection, int version) throws SQLException {

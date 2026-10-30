@@ -14,6 +14,8 @@ import dev.hermit.crab.sync.DisabledConches;
  * An empty actions set still means every action. Bare names and unknown capabilities are rejected
  * at creation so a key is not stored only to fail every call with {@code FORBIDDEN}.
  * Names in {@code conches} must be loaded, or tombstoned in {@code disabled_conches}.
+ * A loaded local conch counts as known. An empty {@code conches} set does not authorize calls
+ * to local conches; {@code Invoker} requires the name to be listed.
  */
 public final class ApiKeyScopes {
     private ApiKeyScopes() {

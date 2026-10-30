@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RuntimeStoreTest {
     @TempDir
@@ -39,6 +40,43 @@ class RuntimeStoreTest {
             clock.advance(Duration.ofDays(31));
             assertThat(logs.purgeBefore(clock.instant().minus(Duration.ofDays(30)))).isEqualTo(1);
             assertThat(logs.findByTraceId("trace-1")).isEmpty();
+        }
+    }
+
+    @Test
+    void callLogActionFilterAcceptsQualifiedNamesAndRejectsConflicts() {
+        try (StoreFixture fixture = StoreFixture.open(temp.resolve("calls"))) {
+            MutableClock clock = new MutableClock(Instant.parse("2026-10-12T00:00:00Z"));
+            CallLogStore logs = new CallLogStore(fixture.dataSource, clock);
+            logs.append(call("trace-todo", "legacy_oa", "list_todo"), List.of());
+            logs.append(call("trace-note", "legacy_oa", "save_note"), List.of());
+            logs.append(call("trace-other", "other_oa", "list_todo"), List.of());
+            logs.append(call("trace-dotted", "pkg", "do.thing"), List.of());
+
+            assertThat(traceIds(logs.list(null, "list_todo", 20)))
+                    .containsExactlyInAnyOrder("trace-todo", "trace-other");
+            assertThat(traceIds(logs.list(null, "legacy_oa.list_todo", 20))).containsExactly("trace-todo");
+            assertThat(traceIds(logs.list("legacy_oa", "legacy_oa.list_todo", 20))).containsExactly("trace-todo");
+            assertThat(traceIds(logs.list("legacy_oa", "list_todo", 20))).containsExactly("trace-todo");
+            assertThat(traceIds(logs.list(null, "pkg.do.thing", 20))).containsExactly("trace-dotted");
+            assertThat(traceIds(logs.list(" ", "  ", 20))).hasSize(4);
+
+            String secret = "sid-secret-cookie-91";
+            assertThatThrownBy(() -> logs.list("other_oa", "legacy_oa.list_todo", 20))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("action")
+                    .hasMessageContaining("conch")
+                    .hasMessageNotContaining("legacy_oa")
+                    .hasMessageNotContaining("other_oa");
+            assertThatThrownBy(() -> logs.list("kept", secret + ".list_todo", 20))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageNotContaining(secret);
+            assertThatThrownBy(() -> logs.list(null, "." + secret, 20))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageNotContaining(secret);
+            assertThatThrownBy(() -> logs.list(null, secret + ".", 20))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageNotContaining(secret);
         }
     }
 
@@ -97,6 +135,19 @@ class RuntimeStoreTest {
             assertThat(debug.get().enabled()).isFalse();
             assertThat(debug.get().expiresAt()).isNull();
         }
+    }
+
+    private static CallLogStore.NewCall call(String traceId, String conch, String action) {
+        return new CallLogStore.NewCall(
+                traceId, Origin.OFFICIAL, conch, action, "alice", "1.0.0", true, null, null, 4, null);
+    }
+
+    private static java.util.List<String> traceIds(java.util.List<CallLogStore.CallSummary> rows) {
+        java.util.ArrayList<String> ids = new java.util.ArrayList<>();
+        for (CallLogStore.CallSummary row : rows) {
+            ids.add(row.traceId());
+        }
+        return ids;
     }
 
     private static CredentialCipher cipher(CrabPaths paths) {

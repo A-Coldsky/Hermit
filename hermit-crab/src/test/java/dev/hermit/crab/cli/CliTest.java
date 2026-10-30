@@ -179,6 +179,52 @@ class CliTest {
     }
 
     @Test
+    void apiKeyCreateRejectsUnknownConchesAndAllowsDisabledOnes() throws Exception {
+        Path root = temp.resolve("conch-scope");
+        installLegacy(root);
+        Function<String, String> env = env(root);
+
+        ByteArrayOutputStream unknownErr = new ByteArrayOutputStream();
+        int unknown = new CrabCommand().run(
+                new String[] {"apikey", "create", "ghost", "--conches", "no_such_pack"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(unknownErr));
+        assertThat(unknown).isEqualTo(1);
+        assertThat(unknownErr.toString(StandardCharsets.UTF_8)).contains("规则包不存在").contains("no_such_pack");
+
+        ByteArrayOutputStream created = new ByteArrayOutputStream();
+        int ok = new CrabCommand().run(
+                new String[] {"apikey", "create", "scoped", "--conches", "legacy_oa"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(created),
+                stderr(new ByteArrayOutputStream()));
+        assertThat(ok).isZero();
+        assertThat(created.toString(StandardCharsets.UTF_8)).contains("id ");
+
+        try (CrabDatabase database = new CrabDatabase(new CrabPaths(root));
+             Connection connection = database.dataSource().getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "INSERT INTO disabled_conches (conch, version, disabled_at) VALUES (?, ?, CURRENT_TIMESTAMP)")) {
+            statement.setString(1, "legacy_oa");
+            statement.setString(2, "1.0.0");
+            statement.executeUpdate();
+        }
+        ByteArrayOutputStream disabledOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream disabledErr = new ByteArrayOutputStream();
+        int disabled = new CrabCommand().run(
+                new String[] {"apikey", "create", "paused", "--conches", "legacy_oa"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(disabledOut),
+                stderr(disabledErr));
+        assertThat(disabled).as(disabledErr.toString(StandardCharsets.UTF_8)).isZero();
+        assertThat(disabledOut.toString(StandardCharsets.UTF_8)).contains("id ");
+    }
+
+    @Test
     void auditListPrintsNamesWithoutSecretsAndPages() throws Exception {
         Path root = temp.resolve("audit");
         installLegacy(root);

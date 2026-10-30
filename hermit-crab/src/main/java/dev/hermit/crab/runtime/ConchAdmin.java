@@ -27,6 +27,7 @@ import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.store.ConchConfigStore;
+import dev.hermit.crab.sync.DisabledConches;
 
 import javax.sql.DataSource;
 
@@ -39,6 +40,7 @@ public final class ConchAdmin {
     private final SessionManager sessions;
     private final RuleEngine engine;
     private final ConchRegistry registry;
+    private final DisabledConches disabledConches;
 
     public ConchAdmin(
             DataSource dataSource,
@@ -48,7 +50,8 @@ public final class ConchAdmin {
             ApiKeyService apiKeys,
             SessionManager sessions,
             RuleEngine engine,
-            ConchRegistry registry
+            ConchRegistry registry,
+            DisabledConches disabledConches
     ) {
         this.dataSource = dataSource;
         this.accounts = accounts;
@@ -58,6 +61,7 @@ public final class ConchAdmin {
         this.sessions = sessions;
         this.engine = engine;
         this.registry = registry;
+        this.disabledConches = disabledConches == null ? DisabledConches.none() : disabledConches;
     }
 
     public Account createAccount(String conch, String name, String actor) {
@@ -164,7 +168,7 @@ public final class ConchAdmin {
     }
 
     public CreatedApiKey createApiKey(String name, ApiKeyScope scope, String actor) {
-        ApiKeyScopes.requireInstalled(registry, scope);
+        ApiKeyScopes.requireInstalled(registry, scope, disabledConches);
         return apiKeys.create(name, scope, actor);
     }
 

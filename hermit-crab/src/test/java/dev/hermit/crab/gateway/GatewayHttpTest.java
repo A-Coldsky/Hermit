@@ -1,6 +1,7 @@
 package dev.hermit.crab.gateway;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -162,6 +163,8 @@ class GatewayHttpTest {
             TestServer.Reply aliased = headerKey(server);
             assertThat(aliased.status()).isEqualTo(200);
 
+            // 未加载的包名不能建 Key。墓碑里的名字可以，范围仍不含 legacy_oa。
+            server.runtime.disabledConches().mark("other", "1.0.0", Instant.parse("2026-10-30T00:00:00Z"));
             var limited = server.runtime.admin().createApiKey(
                     "narrow", new ApiKeyScope(Set.of("other"), Set.of(), false), Actors.CLI);
             TestServer.Reply forbidden = server.call(

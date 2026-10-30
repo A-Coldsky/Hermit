@@ -1,6 +1,7 @@
 package dev.hermit.reef.admin;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -247,6 +248,45 @@ class AdminApiTest {
                 .andExpect(jsonPath("$.data.size").value(200));
         mockMvc.perform(get("/api/admin/audit"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void mistypedQueryParametersAreInvalidInputAndNameTheField() throws Exception {
+        String token = loginToken();
+        String bad = "size-not-numeric-9f3c";
+        int before = MemoryLogAppender.LINES.size();
+        mockMvc.perform(get("/api/admin/audit").param("size", bad).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("invalid input: size"))
+                .andExpect(content().string(not(containsString(bad))));
+        mockMvc.perform(get("/api/admin/audit").param("page", bad).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("invalid input: page"))
+                .andExpect(content().string(not(containsString(bad))));
+        mockMvc.perform(post("/api/admin/alerts/" + bad + "/ack").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("invalid input: id"))
+                .andExpect(content().string(not(containsString(bad))));
+        mockMvc.perform(get("/api/admin/probe-required").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("invalid input: widget"));
+        mockMvc.perform(get("/api/admin/probe-required").param("widget", bad)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value("invalid input: widget"))
+                .andExpect(content().string(not(containsString(bad))));
+        mockMvc.perform(get("/api/admin/audit").param("size", "0").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+        mockMvc.perform(get("/api/admin/audit").param("size", "201").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+        assertThat(linesSince(before)).noneMatch(line -> line.contains("MethodArgumentTypeMismatchException"));
+        assertThat(linesSince(before)).noneMatch(line -> line.contains(bad) && line.contains("ERROR"));
     }
 
     @Test

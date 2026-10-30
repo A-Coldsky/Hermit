@@ -24,6 +24,8 @@
 
 已登录访问不存在的 Reef `/api/admin/**` 返回 404 `NOT_FOUND` 信封，`traceId` 与请求头 `X-Trace-Id`（合法时）相同。未登录的 `/api/**` 仍是 401，已登录但路径不在 `/api/admin/**` 下仍是 403；这两类由安全链拒绝，响应同样是信封，不是框架默认 JSON。页面路由（`/`、`/login`、`/conches` 等）继续返回 `index.html`。Crab 在带控制台头的回环连接上，未匹配的 `/console/api/**` 返回 404 `NOT_FOUND` 信封；未匹配的网关路径（不是 `/api/{conch}/{action}` 或已登记别名）同样如此。`traceId` 同时出现在响应体和 `X-Hermit-Trace`。`/console/` 下已注册的页面仍返回 `index.html`。
 
+Reef 的查询参数、路径变量或请求头无法转换成声明类型，或缺少必填项时，`GlobalExceptionHandler` 返回 400 `INVALID_INPUT`。`message` 为 `invalid input: 字段名`（多个字段用逗号连接），不回显原始参数值，也不把该异常记成 500。例如 `GET /api/admin/audit?size=abc` 的 message 是 `invalid input: size`。数字越界仍由各接口自己返回 400，message 为 `invalid input`。上传缺少 `file` 仍是 422。
+
 Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常，响应正文仍只有 `INTERNAL`。
 
 ## Reef 管理与分发
@@ -50,7 +52,7 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | GET | `/tide/rollbacks` | conch/from/to |
 | GET | `/alerts` | status |
 | POST | `/alerts/{id}/ack` | 确认告警 |
-| GET | `/audit` | 管理操作审计；参数见 AuditController |
+| GET | `/audit` | 管理操作审计。`conch` 可选；`page` 默认 1；`size` 默认 20，最大 200。小于 1 或 `size` 大于 200 为 400。非数字见上面的参数类型错误 |
 | POST | `/retention/purge` | 立即清理过期失败报告、回滚事件和锁定窗口外的登录失败。`data` 为 `{failureReports, rollbackEvents, loginFailures}`。写入审计 `RETENTION_PURGE`，detail 为同样的三个计数。需要管理员 JWT |
 
 Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。确认告警只记下确认人和时间，不结束去重窗口：同一 `(kind, conch, conch_version)` 自 `created_at` 起 `dedup-hours` 内不再新建。窗口过后条件仍成立才会再出现一条。失败次数上涨不会提前打破这个窗口。
@@ -77,7 +79,7 @@ GET  /api/{conch}/{action}?param=value
 POST /api/{conch}/{action}           JSON object body
 ```
 
-使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。空 conches/actions 集合表示不限对应维度。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。CLI `apikey create --actions` 使用同一规则。
+使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。空 conches/actions 集合表示不限对应维度。`conches` 里的每个名字必须是当前已加载的规则包，或仍在停用墓碑 `disabled_conches` 里的名字；未知名字创建时返回 `INVALID_INPUT`，并在 message 里列出这些名字。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。停用墓碑只放行规则包名，不放行该包上已经卸下的能力。CLI `apikey create --conches` / `--actions` 使用同一规则。
 
 POST 可带 `Idempotency-Key`，当前缓存键为 origin/conch/account/action/key，有效期 24 小时，不包含 API Key 身份、请求体摘要或规则版本。相同键重放保存的响应（含旧 traceId），不同业务操作不要复用键；修复方向见审计待确认设计项。
 
@@ -97,7 +99,7 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/conch/account/action/k
 
 `CONCH_DISABLED` 的 `message` 是 `conch disabled`。Reef 把 Conch 从分发清单去掉之后，Crab 下次同步会卸下注册表并清掉 `current`，版本文件和账号凭证仍保留。此后 HTTP 调用返回 409 `CONCH_DISABLED`，而不是 404 `NOT_FOUND`。MCP 直接工具或 `call_capability` 在工具已不在目录里时，同样返回 `CONCH_DISABLED`，hint 说明需要管理员重新启用后再同步。已经拿着授权快照、正在执行的请求仍跑完那份快照，不会在中途换成另一个版本。控制台测试登录和 Conch 详情在注册表里已经没有这份规则时仍是 `NOT_FOUND`。
 
-能力请求已经发出后，上游 HTTP 400 也返回 `INVALID_INPUT`，文案为「上游拒绝了输入（HTTP 400）。请修改参数后重试。」，不再继续提取或断言。它和调用前的参数校验共用错误码，但 `failedStepType` 为 `request`。MCP 对这段文案的 hint 是按该系统的要求修改参数。上游 HTTP 401/403，以及重定向到登录页，都视为会话失效：幂等能力重新登录并重放一次，其它能力返回 `SESSION_EXPIRED` 且不重放。这两类都不会把响应体抽成空列表，也不计入 `RollbackGuard`。登录步骤不走这套映射，失败仍是 `AUTH_FAILED`；`cookie_exists` 未通过时说明登录未建立会话，并提示核对用户名和密码、重新测试登录，或检查登录页是否改版。期望状态与实际状态不一致（例如期望 200 实际 404）仍是 `RULE_MISMATCH`，累计 5 次且前一版本曾成功时仍会自动回滚。
+能力请求已经发出后，上游 HTTP 400 也返回 `INVALID_INPUT`，文案为「上游拒绝了输入（HTTP 400）。请修改参数后重试。」，不再继续提取或断言。它和调用前的参数校验共用错误码，但 `failedStepType` 为 `request`。MCP 对这段文案的 hint 是按该系统的要求修改参数。上游 HTTP 401/403，以及重定向到登录页，都视为会话失效：幂等能力重新登录并重放一次，其它能力返回 `SESSION_EXPIRED` 且不重放。这两类都不会把响应体抽成空列表，也不计入 `RollbackGuard`。登录步骤不走这套映射，失败仍是 `AUTH_FAILED`；`cookie_exists` 未通过时说明登录未建立会话，并提示核对用户名和密码、重新测试登录，或检查登录页是否改版。`contains`、`not_contains`、`header_exists`、`not_redirected_to` 和 `status` 失败时同样给出下一步说明，不以「assert 未通过」开头，也不写入断言原文、凭证或 Cookie。`status` 会写出期望和实际的状态码；期望值不是数字时不回显原文。期望状态与实际状态不一致（例如期望 200 实际 404）仍是 `RULE_MISMATCH`，累计 5 次且前一版本曾成功时仍会自动回滚。
 
 ## Crab 本机管理 API
 
@@ -113,9 +115,9 @@ POST 可带 `Idempotency-Key`，当前缓存键为 origin/conch/account/action/k
 | POST | `/conches/{conch}/accounts/{account}/test-login` | 重置登录暂停并测试登录 |
 | GET / PUT | `/conches/{conch}/config` | 配置声明/值 / `{字段:字符串}`；空字符串清除覆盖 |
 | POST | `/capabilities/{conch}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
-| GET / POST | `/apikeys` | 列表 / `{name,conches,actions,readOnly}`；新 Key 仅返回一次 plaintext。`actions` 必须是已加载的 `conch.action`，裸名或不存在的能力拒绝创建 |
+| GET / POST | `/apikeys` | 列表 / `{name,conches,actions,readOnly}`；新 Key 仅返回一次 plaintext。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建 |
 | DELETE | `/apikeys/{id}` | 撤销 |
-| GET | `/calls`、`/calls/{traceId}` | conch/action/limit 查询及步骤摘要 |
+| GET | `/calls`、`/calls/{traceId}` | `conch`、`action`、`limit` 查询及步骤摘要。`action` 可以是库存的能力名，或 `conch.action`（按第一个 `.` 拆开后分别匹配）。若同时传入 `conch` 且与 `action` 里的包名不同，返回 400 `INVALID_INPUT`，不会当成空列表 |
 | GET | `/audit` | 配置审计，新的在前。参数 `conch`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
 | GET / POST | `/debug` | 读状态 / `{enabled}`；当前只存状态，24h 过期 |
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |

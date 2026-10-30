@@ -41,10 +41,15 @@ public final class CallLogStore {
         });
     }
 
+    /**
+     * {@code action} is either the stored action name or {@code conch.action}, split on the first
+     * dot. When {@code conch} is also set and names a different package, this throws
+     * {@link IllegalArgumentException} so the console can answer 400 rather than an empty page.
+     * The message names the parameters and does not repeat the query values.
+     */
     public List<CallSummary> list(String conch, String action, int limit) {
         int capped = Math.min(LIST_LIMIT, Math.max(1, limit));
-        String conchFilter = blankToNull(conch);
-        String actionFilter = blankToNull(action);
+        CallFilter filter = callFilter(blankToNull(conch), blankToNull(action));
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT id, trace_id, at, origin, conch, action, account, conch_version,
@@ -55,10 +60,10 @@ public final class CallLogStore {
                     ORDER BY at DESC, id DESC
                     LIMIT ?
                     """)) {
-                statement.setString(1, conchFilter);
-                statement.setString(2, conchFilter);
-                statement.setString(3, actionFilter);
-                statement.setString(4, actionFilter);
+                statement.setString(1, filter.conch());
+                statement.setString(2, filter.conch());
+                statement.setString(3, filter.action());
+                statement.setString(4, filter.action());
                 statement.setInt(5, capped);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     List<CallSummary> rows = new ArrayList<>();
@@ -234,8 +239,30 @@ public final class CallLogStore {
         return value.substring(0, end);
     }
 
+    static CallFilter callFilter(String conch, String action) {
+        if (action == null) {
+            return new CallFilter(conch, null);
+        }
+        int dot = action.indexOf('.');
+        if (dot < 0) {
+            return new CallFilter(conch, action);
+        }
+        String qualifiedConch = action.substring(0, dot);
+        String qualifiedAction = action.substring(dot + 1);
+        if (qualifiedConch.isBlank() || qualifiedAction.isBlank()) {
+            throw new IllegalArgumentException("action 须为能力名或 conch.action");
+        }
+        if (conch != null && !conch.equals(qualifiedConch)) {
+            throw new IllegalArgumentException("action 与 conch 参数不一致");
+        }
+        return new CallFilter(qualifiedConch, qualifiedAction);
+    }
+
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    record CallFilter(String conch, String action) {
     }
 
     public record NewCall(

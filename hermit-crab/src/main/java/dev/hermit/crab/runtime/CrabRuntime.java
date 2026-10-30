@@ -151,7 +151,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.disabledConches.load();
         this.invoker = new Invoker(
                 registry, accounts, vault, conchConfig, engine, callLogs, idempotency, this, disabledConches);
-        this.admin = new ConchAdmin(database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry);
+        this.admin = new ConchAdmin(
+                database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.instanceId = InstanceIds.loadOrCreate(paths);
     }
 

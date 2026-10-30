@@ -20,6 +20,18 @@ final class StepRunner {
     static final String COOKIE_MISSING_SUMMARY =
             "没有找到会话 Cookie。请核对账号和密码；若凭证无误，再确认上游是否仍会建立会话。";
 
+    static final String CONTAINS_MISMATCH =
+            "响应正文里没有规则要求的内容。请核对上游页面是否改版，或更新规则中的包含条件。";
+
+    static final String NOT_CONTAINS_MISMATCH =
+            "响应正文里出现了规则不允许的内容。请核对上游返回，或更新规则中的排除条件。";
+
+    static final String HEADER_MISSING =
+            "响应里没有规则要求的响应头。请核对上游是否仍返回该头，或更新规则中的响应头条件。";
+
+    static final String REDIRECT_FORBIDDEN =
+            "响应被重定向到了规则不允许的地址。请核对登录是否仍有效，或上游跳转是否改版。";
+
     private final TemplateEngine templates;
     private final FilterRegistry filters;
     private final ScriptStep scripts = new ScriptStep();
@@ -121,19 +133,19 @@ final class StepRunner {
                 case "status" -> checkStatus(entry.getValue(), status);
                 case "contains" -> {
                     if (!body.contains(Values.text(entry.getValue()))) {
-                        fail("assert 未通过: contains");
+                        fail(CONTAINS_MISMATCH);
                     }
                 }
                 case "not_contains" -> {
                     if (body.contains(Values.text(entry.getValue()))) {
-                        fail("assert 未通过: not_contains");
+                        fail(NOT_CONTAINS_MISMATCH);
                     }
                 }
                 case "cookie_exists" -> checkCookie(Values.text(entry.getValue()), cookies);
                 case "header_exists" -> checkHeader(Values.text(entry.getValue()), headers);
                 case "not_redirected_to" -> {
                     if (redirectedTo(redirect, url, Values.text(entry.getValue()))) {
-                        fail("assert 未通过: not_redirected_to");
+                        fail(REDIRECT_FORBIDDEN);
                     }
                 }
                 default -> fail("未知的 assert 键");
@@ -149,12 +161,38 @@ final class StepRunner {
                     return;
                 }
             }
-            fail("assert 未通过: status 期望 " + expected + " 实际 " + actual);
+            fail(statusMismatch(expected, actual));
         }
         if (expected instanceof Number number && number.intValue() == actual) {
             return;
         }
-        fail("assert 未通过: status 期望 " + expected + " 实际 " + actual);
+        fail(statusMismatch(expected, actual));
+    }
+
+    /** 只写出数字状态码。期望值若不是数字，不能把渲染后的原文放进错误说明。 */
+    private static String statusMismatch(Object expected, int actual) {
+        return "响应状态与规则不一致：期望 " + statusText(expected) + "，实际 " + actual
+                + "。请核对上游接口是否改版，或更新规则里的状态断言。";
+    }
+
+    private static String statusText(Object expected) {
+        if (expected instanceof Number number) {
+            return Integer.toString(number.intValue());
+        }
+        if (expected instanceof java.util.List<?> list && !list.isEmpty()) {
+            StringBuilder builder = new StringBuilder();
+            for (Object item : list) {
+                if (!(item instanceof Number number)) {
+                    return "规则声明的状态";
+                }
+                if (builder.length() > 0) {
+                    builder.append('、');
+                }
+                builder.append(number.intValue());
+            }
+            return builder.toString();
+        }
+        return "规则声明的状态";
     }
 
     private static void checkCookie(String name, BasicCookieStore cookies) {
@@ -168,7 +206,7 @@ final class StepRunner {
 
     private static void checkHeader(String name, Map<String, Object> headers) {
         if (!headers.containsKey(name.toLowerCase(Locale.ROOT))) {
-            fail("assert 未通过: header_exists");
+            fail(HEADER_MISSING);
         }
     }
 

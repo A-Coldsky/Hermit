@@ -137,6 +137,8 @@ class McpHttpTest {
             assertThat(accountError.path("hint").asText()).contains("账号");
             assertThat(unknown.body()).doesNotContain("Exception");
 
+            // 未加载的包名不能建 Key。墓碑里的名字可以，目录仍不含 legacy_oa。
+            server.runtime.disabledConches().mark("missing_conch", "1.0.0", Instant.parse("2026-10-30T00:00:00Z"));
             CreatedApiKey narrow = server.runtime.admin().createApiKey(
                     "narrow", new ApiKeyScope(Set.of("missing_conch"), Set.of(), false), Actors.CLI);
             Reply narrowInit = server.post(narrow.plaintext(), null, null, initialize("{}"));

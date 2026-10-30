@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import TimeText from '@shared/components/TimeText.vue'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
-import { formatTime, notifyError } from '@shared/format'
+import { notifyError } from '@shared/format'
 import { api, type AuditPage } from '../api'
 import { auditActionLabels } from '../labels'
 
@@ -64,8 +65,8 @@ onMounted(load)
       </div>
       <el-table v-loading="loading" :data="result.items">
         <template #empty>{{ loading ? '' : '没有记录' }}</template>
-        <el-table-column label="时间" width="180">
-          <template #default="{ row }">{{ formatTime(row.at) }}</template>
+        <el-table-column label="时间" width="230">
+          <template #default="{ row }"><TimeText :value="row.at" /></template>
         </el-table-column>
         <el-table-column prop="actor" label="操作人" width="140" />
         <el-table-column label="操作" width="120">

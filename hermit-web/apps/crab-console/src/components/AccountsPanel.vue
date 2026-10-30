@@ -225,7 +225,7 @@ function editCredentials(account: Account) {
 
 .missing {
   margin-left: 6px;
-  color: var(--hm-accent);
+  color: var(--hm-warning);
 }
 
 .note {

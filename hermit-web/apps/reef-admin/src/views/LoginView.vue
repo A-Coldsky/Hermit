@@ -37,9 +37,9 @@ async function submit() {
   <div class="login">
     <section class="brand">
       <svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true">
-        <path d="M10 44c0-14 10-26 24-26 9 0 17 5 20 13-6-3-12-2-16 2 5 1 9 5 9 11H10z" fill="#5eead4" />
+        <path d="M10 44c0-14 10-26 24-26 9 0 17 5 20 13-6-3-12-2-16 2 5 1 9 5 9 11H10z" fill="currentColor" />
         <circle cx="26" cy="34" r="3" fill="#0f172a" />
-        <path d="M8 48h48" stroke="#5eead4" stroke-width="3" stroke-linecap="round" />
+        <path d="M8 48h48" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
       </svg>
       <h1>Hermit Reef</h1>
       <p>把内网老系统包装成可调用的 OpenAPI 与 MCP 能力。在这里上传、发布和回滚规则包，并查看各 Crab 回传的运行指标。</p>
@@ -52,7 +52,7 @@ async function submit() {
     <section class="panel">
       <el-form class="form" label-position="top" size="large" @submit.prevent="submit">
         <h2>登录管理端</h2>
-        <p class="lead">使用部署时配置的管理员账号登录</p>
+        <p class="lead">请先登录。使用部署时配置的管理员账号</p>
         <el-form-item label="用户名">
           <el-input v-model="form.username" :prefix-icon="User" autocomplete="username" autofocus />
         </el-form-item>
@@ -79,7 +79,7 @@ async function submit() {
   background:
     radial-gradient(circle at 15% 15%, rgba(45, 212, 191, 0.28), transparent 45%),
     radial-gradient(circle at 85% 90%, rgba(245, 158, 11, 0.14), transparent 40%),
-    linear-gradient(160deg, #0f2e2f, #0b1620 70%);
+    linear-gradient(160deg, var(--hm-login-from), var(--hm-login-to) 70%);
   color: #e2e8f0;
   padding: 72px;
   display: flex;
@@ -126,11 +126,15 @@ async function submit() {
   color: #9fb3bf;
 }
 
+.brand svg {
+  color: var(--hm-brand-soft);
+}
+
 .points .el-icon {
   flex-shrink: 0;
   margin-top: 2px;
   font-size: 18px;
-  color: #5eead4;
+  color: var(--hm-brand-soft);
 }
 
 .points b {

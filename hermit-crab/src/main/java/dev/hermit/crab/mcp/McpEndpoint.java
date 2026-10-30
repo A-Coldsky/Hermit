@@ -7,10 +7,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -30,7 +30,6 @@ import dev.hermit.crab.store.ApiKeyPrincipal;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.modelcontextprotocol.spec.McpSchema;
-import io.modelcontextprotocol.spec.ProtocolVersions;
 
 /**
  * Streamable HTTP on Javalin. The SDK servlet transport is compiled against Jakarta Servlet 6.1,
@@ -43,11 +42,6 @@ public final class McpEndpoint {
 
     private static final Logger LOG = Logger.getLogger(McpEndpoint.class.getName());
     private static final String SESSION_HEADER = "Mcp-Session-Id";
-    private static final Set<String> PROTOCOLS = Set.of(
-            ProtocolVersions.MCP_2024_11_05,
-            ProtocolVersions.MCP_2025_03_26,
-            ProtocolVersions.MCP_2025_06_18,
-            ProtocolVersions.MCP_2025_11_25);
     private static final McpSchema.ServerCapabilities CAPABILITIES = McpSchema.ServerCapabilities.builder()
             .tools(true)
             .resources(false, true)
@@ -94,6 +88,12 @@ public final class McpEndpoint {
         http.delete("/mcp", this::delete);
     }
 
+    int openSessions() {
+        synchronized (sessionLock) {
+            return sessions.size();
+        }
+    }
+
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
@@ -125,6 +125,9 @@ public final class McpEndpoint {
         if (closed.get()) {
             return;
         }
+        if (!acceptOrigin(ctx)) {
+            return;
+        }
         sweep();
         Optional<ApiKeyPrincipal> principal = authenticate(ctx);
         if (principal.isEmpty()) {
@@ -154,6 +157,9 @@ public final class McpEndpoint {
     }
 
     private void dispatch(Context ctx, ApiKeyPrincipal principal, JsonNode message) {
+        if (!isInitialize(message) && !acceptProtocolHeader(ctx, id(message))) {
+            return;
+        }
         if (!message.isObject() || !"2.0".equals(message.path("jsonrpc").asText())) {
             writeRpcError(ctx, id(message), McpErrors.invalidRequest(), null);
             return;
@@ -210,9 +216,11 @@ public final class McpEndpoint {
             writeRpcError(ctx, id, McpErrors.invalidParams(), null);
             return;
         }
-        String protocol = PROTOCOLS.contains(request.protocolVersion())
-                ? request.protocolVersion()
-                : ProtocolVersions.MCP_2025_11_25;
+        String protocol = McpTransportPolicy.negotiate(request.protocolVersion());
+        if (protocol == null) {
+            writeRpcError(ctx, id, McpErrors.unsupportedProtocolVersion(), null);
+            return;
+        }
         McpSession session = new McpSession(UUID.randomUUID().toString(), principal.id(), protocol, request.capabilities());
         synchronized (sessionLock) {
             reap(clock.millis());
@@ -245,6 +253,9 @@ public final class McpEndpoint {
 
     private void get(Context ctx) {
         if (closed.get()) {
+            return;
+        }
+        if (!acceptOrigin(ctx) || !acceptProtocolHeader(ctx, null)) {
             return;
         }
         sweep();
@@ -286,6 +297,9 @@ public final class McpEndpoint {
 
     private void delete(Context ctx) {
         if (closed.get()) {
+            return;
+        }
+        if (!acceptOrigin(ctx) || !acceptProtocolHeader(ctx, null)) {
             return;
         }
         sweep();
@@ -371,6 +385,42 @@ public final class McpEndpoint {
         if (sessions.remove(session.id, session)) {
             session.wake();
         }
+    }
+
+    private boolean acceptOrigin(Context ctx) {
+        if (McpTransportPolicy.originAllowed(
+                headerValues(ctx, "Origin"),
+                runtime.config().serverHost(),
+                ctx.req().getLocalPort(),
+                runtime.config().mcpAllowedOrigins())) {
+            return true;
+        }
+        writeRpcError(ctx, null, McpErrors.originRejected(), null);
+        return false;
+    }
+
+    private boolean acceptProtocolHeader(Context ctx, JsonNode requestId) {
+        if (McpTransportPolicy.protocolHeaderAllowed(headerValues(ctx, McpTransportPolicy.PROTOCOL_HEADER))) {
+            return true;
+        }
+        writeRpcError(ctx, requestId, McpErrors.unsupportedProtocolHeader(), null);
+        return false;
+    }
+
+    private static boolean isInitialize(JsonNode message) {
+        return message != null && message.isObject() && "initialize".equals(message.path("method").asText());
+    }
+
+    private static List<String> headerValues(Context ctx, String name) {
+        Enumeration<String> values = ctx.req().getHeaders(name);
+        if (values == null || !values.hasMoreElements()) {
+            return List.of();
+        }
+        ArrayList<String> collected = new ArrayList<>();
+        while (values.hasMoreElements()) {
+            collected.add(values.nextElement());
+        }
+        return List.copyOf(collected);
     }
 
     private Optional<ApiKeyPrincipal> authenticate(Context ctx) {

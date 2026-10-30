@@ -10,6 +10,8 @@ import io.modelcontextprotocol.spec.ProtocolVersions;
 final class McpErrors {
     /** Server-error range. Auth failures are HTTP 401 plus this JSON-RPC code. */
     static final int AUTH_RPC = -32001;
+    /** Disallowed Origin. HTTP 403 plus this JSON-RPC code. */
+    static final int ORIGIN_RPC = -32003;
 
     static final String AUTH_MISSING = "AUTH_MISSING";
     static final String AUTH_INVALID = "AUTH_INVALID";
@@ -23,6 +25,8 @@ final class McpErrors {
     static final String REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE";
     static final String NOT_FOUND = "NOT_FOUND";
     static final String INTERNAL = "INTERNAL";
+    static final String ORIGIN_REJECTED = "ORIGIN_REJECTED";
+    static final String UNSUPPORTED_PROTOCOL = "UNSUPPORTED_PROTOCOL";
 
     private McpErrors() {
     }
@@ -127,6 +131,34 @@ final class McpErrors {
                 NOT_FOUND,
                 "资源不存在。请用 resources/list 查看当前 Key 可见的指南。",
                 "先调用 resources/list，再读取返回的 URI。");
+    }
+
+    static Failure originRejected() {
+        return new Failure(
+                403,
+                ORIGIN_RPC,
+                ORIGIN_REJECTED,
+                "Origin 不在允许范围内。",
+                "从本机控制台源站访问，或把该源站写入 mcp.allowed_origins。不带 Origin 的本机客户端可以直接访问。");
+    }
+
+    static Failure unsupportedProtocolHeader() {
+        return new Failure(
+                400,
+                McpSchema.ErrorCodes.INVALID_REQUEST,
+                UNSUPPORTED_PROTOCOL,
+                "MCP-Protocol-Version 不是支持的协议版本。",
+                "去掉该头以沿用 initialize 协商的版本，或改成 2024-11-05、2025-03-26、2025-06-18、2025-11-25。");
+    }
+
+    /** Used only when {@link McpTransportPolicy#NEGOTIATE_UNKNOWN_PROTOCOL} is false. */
+    static Failure unsupportedProtocolVersion() {
+        return new Failure(
+                400,
+                McpSchema.ErrorCodes.INVALID_REQUEST,
+                UNSUPPORTED_PROTOCOL,
+                "protocolVersion 不是支持的协议版本。",
+                "改成 2024-11-05、2025-03-26、2025-06-18、2025-11-25 之一。");
     }
 
     static Failure internalError() {

@@ -251,6 +251,7 @@ export const api = {
     http.post<CreatedApiKey>(`${base}/apikeys`, body),
   revokeApiKey: (id: string) => http.del<{ revoked: boolean }>(`${base}/apikeys/${seg(id)}`),
 
+  /** `action` 可以是能力名，或 `conch.action`（按第一个 `.` 拆开）。与 `conch` 同时给出且包名不同时，接口返回 400。 */
   calls: (query: { conch?: string; action?: string; limit?: number }) =>
     http.get<{ calls: CallSummary[] }>(`${base}/calls`, query),
   audit: (query: { conch?: string; account?: string; page?: number; limit?: number } = {}) =>

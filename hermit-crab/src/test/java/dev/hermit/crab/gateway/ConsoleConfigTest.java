@@ -1,6 +1,7 @@
 package dev.hermit.crab.gateway;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -84,6 +85,55 @@ class ConsoleConfigTest {
 
             TestServer.Reply listed = server.console("GET", "/console/api/apikeys", null, true);
             assertThat(names(listed)).contains("reader").doesNotContain("bare", "ghost");
+        }
+    }
+
+    @Test
+    void apiKeyCreateRejectsUnknownConchesAndAllowsDisabledTombstones() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp, PASSWORD, config)) {
+            TestServer.Reply installed = server.console(
+                    "POST", "/console/api/apikeys", "{\"name\":\"scoped\",\"conches\":[\"legacy_oa\"]}", true);
+            assertThat(installed.status()).isEqualTo(200);
+
+            TestServer.Reply unknown = server.console(
+                    "POST", "/console/api/apikeys", "{\"name\":\"ghost-pack\",\"conches\":[\"no_such_pack\"]}", true);
+            assertThat(unknown.status()).isEqualTo(400);
+            assertThat(unknown.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(unknown.json().path("error").path("message").asText())
+                    .contains("规则包不存在")
+                    .contains("no_such_pack");
+
+            TestServer.Reply several = server.console(
+                    "POST",
+                    "/console/api/apikeys",
+                    "{\"name\":\"mixed\",\"conches\":[\"legacy_oa\",\"missing_pack\",\"another_missing\"]}",
+                    true);
+            assertThat(several.status()).isEqualTo(400);
+            assertThat(several.json().path("error").path("message").asText())
+                    .contains("another_missing")
+                    .contains("missing_pack")
+                    .doesNotContain("legacy_oa");
+
+            server.runtime.registry().remove("legacy_oa");
+            server.runtime.disabledConches().mark("legacy_oa", "1.0.0", Instant.parse("2026-10-30T00:00:00Z"));
+            TestServer.Reply disabled = server.console(
+                    "POST", "/console/api/apikeys", "{\"name\":\"paused\",\"conches\":[\"legacy_oa\"]}", true);
+            assertThat(disabled.status()).isEqualTo(200);
+            assertThat(disabled.json().path("data").path("scope").path("conches").get(0).asText())
+                    .isEqualTo("legacy_oa");
+
+            TestServer.Reply bare = server.console(
+                    "POST",
+                    "/console/api/apikeys",
+                    "{\"name\":\"bare-still\",\"conches\":[\"legacy_oa\"],\"actions\":[\"list_todo\"]}",
+                    true);
+            assertThat(bare.status()).isEqualTo(400);
+            assertThat(bare.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(bare.json().path("error").path("message").asText()).contains("conch.action");
+
+            TestServer.Reply listed = server.console("GET", "/console/api/apikeys", null, true);
+            assertThat(names(listed)).contains("scoped", "paused").doesNotContain("ghost-pack", "mixed", "bare-still");
         }
     }
 

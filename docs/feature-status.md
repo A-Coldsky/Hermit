@@ -10,15 +10,15 @@
 | 模板、内置过滤器、输入 Schema | 已实现 | TemplateEngine/InputPreparer；不提供完整最终输出 Schema 验证 |
 | HTTP 请求、登录、alive_check、Cookie 会话 | 已实现，有缺陷 | RuleEngine/HttpCalls/SessionManager。能力请求的上游 HTTP 400 为 `INVALID_INPUT`；401/403 与登录重定向为会话失效（幂等重放一次，否则 `SESSION_EXPIRED`），不计入回滚。选择器失配等仍是 `RULE_MISMATCH`。慢速响应的总 deadline 仍不可靠 |
 | CSS/XPath/JSONPath/regex 提取 | 已实现 | Extractors + EngineUnitTest/LegacyOaEngineTest |
-| assert/set/script | 已实现 | StepRunner/ScriptStep；脚本 Java 隔离和时间/结果限制有测试，无进程级内存隔离 |
+| assert/set/script | 已实现 | StepRunner/ScriptStep。断言失败给出下一步中文说明，不以「assert 未通过」开头，也不写入凭证或 Cookie 值。脚本 Java 隔离和时间/结果限制有测试，无进程级内存隔离 |
 | 多账号/默认账号/凭证/配置 | 已实现 | ConchAdmin + store；credentials 加密只写。主密钥文件缺失且已有密文时拒绝启动，不另造新密钥；密钥对不上时账号 `credentialsUnreadable`，调用 `NOT_CONFIGURED` |
-| API Key 创建、撤销、scope | 已实现，有缺陷 | ApiKeyService/Principal；按 Conch/action/只读限制，未按账号限制。创建时拒绝裸能力名和不存在的 `conch.action` |
+| API Key 创建、撤销、scope | 已实现，有缺陷 | ApiKeyService/Principal；按 Conch/action/只读限制，未按账号限制。创建时拒绝裸能力名、不存在的 `conch.action`，以及未加载且不在 `disabled_conches` 墓碑中的规则包名。墓碑中的停用包名可以写入 `conches` |
 | 自动登录暂停状态 | 已实现 | 连续登录失败达上限后暂停。控制台账号行返回 `loginPaused`、`loginPauseReason`、`loginPauseRecovery`；Conch 列表 `needsConfiguration` 计入暂停，概览待配置因此计入 |
 | HTTP 网关/别名/OpenAPI | 已实现 | GatewayHttpTest；OpenAPI 无鉴权且仅描述能力接口 |
 | POST 幂等响应缓存 | 已实现，有缺陷 | 24h 密文缓存；无参数摘要/版本区分 |
 | MCP HTTP/SSE/工具/资源 | 已实现 | McpHttpTest；≤40 直接工具，>40 目录模式，确认行为不同。协议错误是 JSON-RPC `error.data.code`/`hint`（鉴权 HTTP 401 也是该 body）；工具失败为 `isError` + `structuredContent.error`。`outputSchema` 只在协商协议 `2025-06-18` 与 `2025-11-25` 声明。声明了 minimum/maximum 的入参越界会拒绝。带有且不在回环、监听地址同源或 `mcp.allowed_origins` 内的 `Origin` 返回 403 `ORIGIN_REJECTED`，不创建会话；没有 `Origin` 仍允许。非 `initialize` 请求的 `MCP-Protocol-Version` 不是支持版本时 400；缺该头沿用会话里协商的版本。`initialize` 的未知 `protocolVersion` 仍回落协商。这两处放行写在 `McpTransportPolicy` |
 | MCP stdio 桥接 | 已实现 | McpStdio；需要已运行的 HTTP Crab，CLI/验收覆盖不足以代表所有真实客户端兼容 |
-| Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest。4xx/5xx 服务端日志带与响应相同的 traceId，4xx 不记请求体。已登录的未知 `/api/admin/**` 为 404 `NOT_FOUND` 信封。没有完整管理员生命周期管理 API |
+| Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest。4xx/5xx 服务端日志带与响应相同的 traceId，4xx 不记请求体。已登录的未知 `/api/admin/**` 为 404 `NOT_FOUND` 信封。查询参数类型不匹配或缺少必填参数时 400 `INVALID_INPUT`，message 带字段名，不回显参数值。没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ConchApiTest/ConchConcurrencyTest/ConchSelfCheckFailureTest |
 | 停用 / 重新启用 Conch | 已实现 | Reef 管理端 Conch 详情页提供停用/启用（需填原因），停用后显示原因与操作人、版本表的发布和回滚不可点，目录标「已停用」。管理 API 记录 `DISABLE`/`ENABLE` 和原因。停用后清单不含该 Conch，Agent 下载 404，发布和回滚 409 `conch is disabled`，签名包字节不变。Crab 同步后卸下注册表、清 `current`、保留版本文件和账号；调用 409 `CONCH_DISABLED`；同步状态 `kind=DISABLED` 且出现在 `removed`。重新启用后重新验签安装。回滚固定未解除、且清单版本不高于坏版本时，重新启用不会把 Conch 装回去 |
 | Crab 定时/手动同步、ETag、验签 | 已实现 | ConchSyncTest/CrabWiringTest；可重试失败不记 ETag，304 核对 current。Reef 不可达时手动同步为 502 `UPSTREAM_ERROR`，状态改为这次失败；Reef 的 HTTP 错误仍保留上次成功 |
@@ -27,7 +27,7 @@
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest；聚合延迟不等同于全量原始样本精确分位数 |
 | 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest。确认后，创建时间起算的去重窗口剩余时间内不新建、不推送；窗口结束后条件仍在才新建。失败上涨不提前打破窗口。Webhook 含告警 id 与相对路径 `/alerts`（无对外基址配置），没有持久化重试队列。负阈值，以及必须为正的窗口写成 0，启动时拒绝 |
 | Reef 管理页面 | 已实现 | 登录、仪表盘、Conch/上传/版本及校验警告明细、Tide、告警、审计、设置说明 |
-| Crab 本机控制台 | 已实现 | 概览、Conch、账号/凭证/配置、能力、API Key、调用、上报。Conch 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。详情横幅按默认账号与具体原因写标题并点名账号；凭证无法解密时对话框要求全部重填。概览把「账号暂停」与「缺凭证或配置」分开提示，同步卡有停用项时不显示「已是最新」。两端的审计、调用、上报时间列显示浏览器本地时间和时区，悬停显示 UTC。「配置审计」页按 Conch/账号筛选分页查看变更记录 |
+| Crab 本机控制台 | 已实现 | 概览、Conch、账号/凭证/配置、能力、API Key、调用、上报。调用记录的 `action` 筛选接受能力名或 `conch.action`；与 `conch` 冲突时 400。Conch 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。详情横幅按默认账号与具体原因写标题并点名账号；凭证无法解密时对话框要求全部重填。概览把「账号暂停」与「缺凭证或配置」分开提示，同步卡有停用项时不显示「已是最新」。两端的审计、调用、上报时间列显示浏览器本地时间和时区，悬停显示 UTC。「配置审计」页按 Conch/账号筛选分页查看变更记录 |
 | Crab 配置审计查询 | 已实现 | 控制台「配置审计」页、`GET /console/api/audit` 与 CLI `audit list`。可按 conch/account 分页，新的在前。只返回 id、时间、actor、action、origin、conch、account、字段名；不返回 detail 原文、配置值、凭证明文或密文。`config_audit` 仍无定期清理 |
 | Docker Reef + Nginx + MySQL / Crab | 已配置，运行未验收 | Crab 同机 client profile / 独立 Compose / Dockerfile 已提供；配置语法通过，尚未启动容器栈 |
 
@@ -78,4 +78,8 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 
 2026-10-29 表前缀以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 125、hermit-crab 209、hermit-it 1，失败/错误/跳过均为 0；Vitest 51（10 个文件）。同一 JDK 先跑 `./mvnw -B -pl hermit-reef -am test -Dhermit.web.skip=true`：hermit-common 43、hermit-reef 125（打包页面测试 1 项因跳过前端资源而跳过），失败 0。未启动 MySQL 或 Compose。
 
+2026-10-30 查询参数、API Key 规则包范围、调用记录筛选与断言说明以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 128、hermit-crab 214、hermit-it 1，失败/错误/跳过均为 0；Vitest 51（10 个文件）。Java 小计 386，连同 Vitest 合计 437。未启动 MySQL 或 Compose，也未做浏览器验收（未改 Vue）。
+
 2026-10-30 MCP Origin 与协议版本头以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 125、hermit-crab 217、hermit-it 1，失败/错误/跳过均为 0；Vitest 63（12 个文件）。Java 小计 386，合计 449。本次新增 Crab 的 Origin、协议版本头和 `mcp.allowed_origins` 用例。未用真实 MCP 客户端或浏览器复测，也未启动 MySQL 或 Compose。
+
+2026-10-30 合入 main（#46–#48、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 128、hermit-crab 222、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 394，连同 Vitest 合计 469。未启动 MySQL 或 Compose，也未做浏览器验收。

@@ -284,7 +284,13 @@ class LegacyOaEngineTest {
                     """, true)));
             ExecutionResult result = running.execute("status_conch", "missing", "alice");
             assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
-            assertThat(result.error().summary()).contains("404");
+            assertThat(result.error().summary())
+                    .contains("404")
+                    .contains("200")
+                    .contains("请核对")
+                    .doesNotStartWith("assert 未通过")
+                    .doesNotContain("assert 未通过")
+                    .doesNotContain(EngineTestSupport.PASSWORD);
             assertThat(result.error().failedStepType()).isEqualTo("assert");
         }
     }

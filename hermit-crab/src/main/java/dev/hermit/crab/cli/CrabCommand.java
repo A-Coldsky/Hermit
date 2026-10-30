@@ -499,7 +499,7 @@ public final class CrabCommand {
                 Set<String> conches = parsed.conches == null ? Set.of() : parsed.conches;
                 Set<String> actions = parsed.actions == null ? Set.of() : parsed.actions;
                 yield withRuntime(env, runtime -> {
-                    if (!actions.isEmpty()) {
+                    if (!actions.isEmpty() || !conches.isEmpty()) {
                         runtime.loadInstalledConches();
                     }
                     CreatedApiKey created = runtime.admin().createApiKey(

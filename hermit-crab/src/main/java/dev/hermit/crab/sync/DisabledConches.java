@@ -16,10 +16,10 @@ import javax.sql.DataSource;
 import dev.hermit.crab.store.Db;
 
 /**
- * Conches Reef has withdrawn from the distribution manifest. The set is checked before a call
- * looks up the registry, so a conch that is still loaded for an in-flight snapshot is not served
- * to new requests. Rows survive restart; {@code current} is cleared separately so startup does
- * not load the package again.
+ * Subscribed official conches Reef dropped from the distribution manifest. The row is a marker:
+ * the installed package stays loaded and callable. {@code disabled_at} is the first time Crab
+ * saw the absence and is not refreshed on later syncs. Rows survive restart. A call returns
+ * {@code CONCH_DISABLED} only when the name is tombstoned and the registry no longer has it.
  */
 public final class DisabledConches {
 
@@ -29,6 +29,7 @@ public final class DisabledConches {
     private final DataSource dataSource;
     private final Set<String> names = ConcurrentHashMap.newKeySet();
     private final Map<String, String> versions = new ConcurrentHashMap<>();
+    private final Map<String, Instant> disabledAt = new ConcurrentHashMap<>();
 
     public DisabledConches(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -43,13 +44,18 @@ public final class DisabledConches {
         if (dataSource == null) {
             return;
         }
-        Map<String, String> stored = Db.transaction(dataSource, this::readAll);
+        Map<String, Stored> stored = Db.transaction(dataSource, this::readAll);
         names.clear();
         versions.clear();
-        names.addAll(stored.keySet());
-        for (Map.Entry<String, String> entry : stored.entrySet()) {
-            if (entry.getValue() != null) {
-                versions.put(entry.getKey(), entry.getValue());
+        disabledAt.clear();
+        for (Map.Entry<String, Stored> entry : stored.entrySet()) {
+            names.add(entry.getKey());
+            Stored row = entry.getValue();
+            if (row.version() != null) {
+                versions.put(entry.getKey(), row.version());
+            }
+            if (row.disabledAt() != null) {
+                disabledAt.put(entry.getKey(), row.disabledAt());
             }
         }
     }
@@ -70,6 +76,9 @@ public final class DisabledConches {
         } else {
             versions.put(conch, version);
         }
+        if (at != null) {
+            disabledAt.put(conch, at);
+        }
     }
 
     public void clear(String conch) {
@@ -88,6 +97,12 @@ public final class DisabledConches {
         }
         names.remove(conch);
         versions.remove(conch);
+        disabledAt.remove(conch);
+    }
+
+    /** When Crab first recorded the tombstone, or null when the name is not disabled. */
+    public Instant disabledAt(String conch) {
+        return conch == null ? null : disabledAt.get(conch);
     }
 
     public boolean contains(String conch) {
@@ -102,16 +117,19 @@ public final class DisabledConches {
         return versions.get(conch);
     }
 
-    private Map<String, String> readAll(Connection connection) throws SQLException {
-        Map<String, String> stored = new LinkedHashMap<>();
+    private Map<String, Stored> readAll(Connection connection) throws SQLException {
+        Map<String, Stored> stored = new LinkedHashMap<>();
         try (PreparedStatement statement = connection.prepareStatement(
-                "SELECT conch, version FROM disabled_conches");
+                "SELECT conch, version, disabled_at FROM disabled_conches");
                 ResultSet resultSet = statement.executeQuery()) {
             while (resultSet.next()) {
-                stored.put(resultSet.getString(1), resultSet.getString(2));
+                stored.put(resultSet.getString(1), new Stored(resultSet.getString(2), Db.instant(resultSet, "disabled_at")));
             }
         }
         return stored;
+    }
+
+    private record Stored(String version, Instant disabledAt) {
     }
 
     private static void upsert(Connection connection, String conch, String version, Instant at) throws SQLException {

@@ -288,7 +288,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return new LoadReport(List.of(), List.of());
         }
         paths.conches();
-        LoadReport official = InstalledConches.loadAll(paths, reefKey, registry, disabledConches.names());
+        LoadReport official = InstalledConches.loadAll(paths, reefKey, registry);
         localConches.loadStartup();
         return official;
     }

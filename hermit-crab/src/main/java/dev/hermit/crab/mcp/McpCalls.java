@@ -191,12 +191,13 @@ final class McpCalls {
     }
 
     /**
-     * A tool name is {@code conch__action}. A disabled conch is reported as {@code CONCH_DISABLED}
-     * unless a longer loaded conch name owns that prefix.
+     * A tool name is {@code conch__action}. A tombstoned conch that is not loaded is
+     * {@code CONCH_DISABLED}. A loaded conch, including one Reef has stopped distributing,
+     * is called through {@code Invoker} and is not handled here.
      */
     private McpSchema.CallToolResult missingTool(String toolName) {
         String disabled = longestConchPrefix(toolName, runtime.disabledConches().names());
-        if (disabled != null) {
+        if (disabled != null && runtime.registry().find(disabled).isEmpty()) {
             String live = longestConchPrefix(toolName, runtime.registry().snapshot().keySet());
             if (live == null || live.length() <= disabled.length()) {
                 return toolError("CONCH_DISABLED", DisabledConches.CALL_MESSAGE);

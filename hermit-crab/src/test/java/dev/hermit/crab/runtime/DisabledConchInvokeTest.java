@@ -41,7 +41,7 @@ class DisabledConchInvokeTest {
     Path temp;
 
     @Test
-    void aDisabledConchIsRejectedBeforeTheLoadedSnapshotRuns() {
+    void aLoadedDisabledConchStaysCallableUntilTheRegistryLosesIt() {
         try (CrabDatabase database = new CrabDatabase(new CrabPaths(temp));
                 SessionManager sessions = new SessionManager()) {
             CredentialCipher cipher = new CredentialCipher(new byte[32]);
@@ -51,6 +51,7 @@ class DisabledConchInvokeTest {
             accounts.create(Origin.OFFICIAL, CONCH, "alice", Actors.CLI);
             DisabledConches disabled = DisabledConches.none();
             disabled.mark(CONCH, "1.0.0", Instant.EPOCH);
+            boolean[] capabilityOff = {false};
             Invoker invoker = new Invoker(
                     registry,
                     accounts,
@@ -59,22 +60,42 @@ class DisabledConchInvokeTest {
                     new RuleEngine(registry, sessions),
                     new CallLogStore(database.dataSource(), Clock.systemUTC()),
                     new IdempotencyStore(database.dataSource(), cipher, Clock.systemUTC()),
-                    (conch, action) -> false,
+                    (conch, action) -> capabilityOff[0],
                     disabled);
             ApiKeyPrincipal principal = new ApiKeyPrincipal("key", "key", new ApiKeyScope(Set.of(), Set.of(), true));
 
-            InvokeOutcome blocked = invoker.invoke(
-                    principal, CONCH, ACTION, Map.of(), Optional.empty(), Optional.empty(), "disabled");
-            String blockedBody = new String(blocked.body(), StandardCharsets.UTF_8);
-            assertThat(blocked.status()).isEqualTo(409);
-            assertThat(blockedBody).contains("CONCH_DISABLED").doesNotContain(MARKER);
-            assertThat(registry.find(CONCH)).isPresent();
-
-            disabled.clear(CONCH);
             InvokeOutcome open = invoker.invoke(
-                    principal, CONCH, ACTION, Map.of(), Optional.empty(), Optional.empty(), "enabled");
+                    principal, CONCH, ACTION, Map.of(), Optional.empty(), Optional.empty(), "still-loaded");
             assertThat(open.status()).isEqualTo(200);
             assertThat(new String(open.body(), StandardCharsets.UTF_8)).contains(MARKER);
+            assertThat(registry.find(CONCH)).isPresent();
+
+            capabilityOff[0] = true;
+            InvokeOutcome capability = invoker.invoke(
+                    principal, CONCH, ACTION, Map.of(), Optional.empty(), Optional.empty(), "capability-off");
+            assertThat(capability.status()).isEqualTo(404);
+            assertThat(new String(capability.body(), StandardCharsets.UTF_8))
+                    .contains("NOT_FOUND")
+                    .doesNotContain("CONCH_DISABLED")
+                    .doesNotContain(MARKER);
+            capabilityOff[0] = false;
+
+            ApiKeyPrincipal narrow = new ApiKeyPrincipal(
+                    "narrow", "narrow", new ApiKeyScope(Set.of("other_pack"), Set.of(), false));
+            InvokeOutcome forbidden = invoker.invoke(
+                    narrow, CONCH, ACTION, Map.of(), Optional.empty(), Optional.empty(), "narrow");
+            assertThat(forbidden.status()).isEqualTo(403);
+            assertThat(new String(forbidden.body(), StandardCharsets.UTF_8))
+                    .contains("FORBIDDEN")
+                    .doesNotContain("CONCH_DISABLED");
+
+            registry.remove(CONCH);
+            InvokeOutcome blocked = invoker.invoke(
+                    principal, CONCH, ACTION, Map.of(), Optional.empty(), Optional.empty(), "unloaded");
+            assertThat(blocked.status()).isEqualTo(409);
+            assertThat(new String(blocked.body(), StandardCharsets.UTF_8))
+                    .contains("CONCH_DISABLED")
+                    .doesNotContain(MARKER);
         }
     }
 

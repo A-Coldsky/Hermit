@@ -155,7 +155,33 @@ class Phase1AcceptanceTest {
                             reefBase, "/api/admin/conches/legacy_oa/versions/1.0.0/publish", token, "");
                     assertThat(blocked.statusCode()).isEqualTo(409);
                     console(crabBase, "POST", "/console/api/sync", "{}");
-                    assertCode(get(crabBase, "/api/legacy_oa/list_todo", apiKey, null), 409, "CONCH_DISABLED");
+                    JsonNode stillRunning = call(crabBase, apiKey, null);
+                    assertThat(stillRunning.path("success").asBoolean()).as(stillRunning.toString()).isTrue();
+                    JsonNode listed = console(crabBase, "GET", "/console/api/conches", null);
+                    JsonNode listedRow = null;
+                    for (JsonNode row : listed.path("data").path("conches")) {
+                        if ("legacy_oa".equals(row.path("conch").asText())) {
+                            listedRow = row;
+                        }
+                    }
+                    assertThat(listedRow).isNotNull();
+                    assertThat(listedRow.path("version").asText()).isEqualTo("1.0.0");
+                    assertThat(listedRow.path("reefDisabled").asBoolean()).isTrue();
+                    assertThat(listedRow.path("reefDisabledAt").asText()).contains("T");
+                    JsonNode detail = console(crabBase, "GET", "/console/api/conches/legacy_oa", null);
+                    assertThat(detail.path("data").path("reefDisabled").asBoolean()).isTrue();
+                    assertThat(detail.path("data").path("reefDisabledAt").asText())
+                            .isEqualTo(listedRow.path("reefDisabledAt").asText());
+                    JsonNode catalog = console(crabBase, "GET", "/console/api/catalog", null);
+                    JsonNode catalogRow = null;
+                    for (JsonNode row : catalog.path("data").path("conches")) {
+                        if ("legacy_oa".equals(row.path("conch").asText())) {
+                            catalogRow = row;
+                        }
+                    }
+                    assertThat(catalogRow).isNotNull();
+                    assertThat(catalogRow.path("disabled").asBoolean()).isTrue();
+                    assertThat(catalogRow.path("installedVersion").asText()).isEqualTo("1.0.0");
                     JsonNode syncBody = console(crabBase, "GET", "/console/api/sync", null);
                     JsonNode report = syncBody.path("data").path("report");
                     boolean shownDisabled = false;
@@ -166,7 +192,19 @@ class Phase1AcceptanceTest {
                         }
                     }
                     assertThat(shownDisabled).as(syncBody.toString()).isTrue();
-                    assertThat(report.path("removed").toString()).contains("legacy_oa");
+                    assertThat(report.path("removed").toString()).doesNotContain("legacy_oa");
+                    console(crabBase, "POST", "/console/api/sync", "{}");
+                    assertThat(call(crabBase, apiKey, null).path("success").asBoolean()).isTrue();
+
+                    HttpResponse<String> enabled = post(
+                            reefBase, "/api/admin/conches/legacy_oa/enable", token, "{\"reason\":\"phase1 enable\"}");
+                    assertThat(enabled.statusCode()).as(safe(enabled.body())).isEqualTo(200);
+                    console(crabBase, "POST", "/console/api/sync", "{}");
+                    assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.0.0");
+                    JsonNode reopened = console(crabBase, "GET", "/console/api/conches/legacy_oa", null);
+                    assertThat(reopened.path("data").path("reefDisabled").asBoolean()).isFalse();
+                    assertThat(reopened.path("data").path("reefDisabledAt").isNull()).isTrue();
+                    assertThat(call(crabBase, apiKey, null).path("success").asBoolean()).isTrue();
 
                     String leaked = sample.replace("conch: legacy_oa", "conch: leaked_pw")
                             .replace("password: \"{{credential.password | md5}}\"",

@@ -348,31 +348,46 @@ class ConchSyncTest {
     }
 
     @Test
-    void removesConchesThatLeftTheManifestAndKeepsTheirFiles() throws Exception {
+    void aConchThatLeftTheManifestStaysLoadedAndIsNotListedAsRemoved() throws Exception {
         try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
             reef.publish(ConchTexts.standard("other_sys", "1.0.0"));
             ConchRegistry registry = new ConchRegistry();
             ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
             sync.syncOnce();
+            int downloads = reef.downloads();
             reef.remove("other_sys");
 
             SyncReport report = sync.syncOnce();
 
-            assertThat(report.removed()).containsExactly("other_sys");
+            assertThat(report.removed()).doesNotContain("other_sys");
+            assertThat(report.conches().stream().filter(item -> "other_sys".equals(item.conch()))).hasSize(1);
             assertThat(outcome(report, "other_sys").kind()).isEqualTo(OutcomeKind.DISABLED);
             assertThat(outcome(report, "other_sys").version()).isEqualTo("1.0.0");
             assertThat(outcome(report, "other_sys").reason()).isEqualTo(SyncReasons.DISABLED);
-            assertThat(registry.find("other_sys")).isEmpty();
+            assertThat(SyncFailures.retryable(outcome(report, "other_sys"))).isFalse();
+            assertThat(reef.downloads()).isEqualTo(downloads);
+            assertThat(registry.find("other_sys")).isPresent();
             assertThat(registry.find("legacy_oa")).isPresent();
             assertThat(Files.exists(crab.paths.conches().resolve("other_sys/1.0.0/package.zip"))).isTrue();
-            assertThat(Files.exists(crab.paths.conches().resolve("other_sys/current"))).isFalse();
+            assertThat(Files.readString(crab.paths.conches().resolve("other_sys/current")).trim()).isEqualTo("1.0.0");
             assertThat(sync.disabledConches().contains("other_sys")).isTrue();
+            assertThat(sync.disabledConches().contains("legacy_oa")).isFalse();
+            ConchCatalog.Entry absent = sync.catalog().conches().stream()
+                    .filter(entry -> "other_sys".equals(entry.conch()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(absent.disabled()).isTrue();
+            assertThat(absent.version()).isNull();
+            assertThat(absent.installedVersion()).isEqualTo("1.0.0");
+            assertThat(absent.subscribed()).isTrue();
+            assertThat(absent.title()).isEqualTo("标题");
+            assertThat(auditCount(crab, "REEF_CONCH_DISABLED")).isEqualTo(1);
         }
     }
 
     @Test
-    void aWithdrawnConchStaysDisabledAcross304AndRestartsUntilItReturns() throws Exception {
+    void aWithdrawnConchStaysCallableAcross304AndRestartsUntilItReturns() throws Exception {
         try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp);
                 SessionManager sessions = new SessionManager()) {
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
@@ -380,19 +395,29 @@ class ConchSyncTest {
             ConchRegistry registry = new ConchRegistry();
             ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
             sync.syncOnce();
+            crab.accounts.create(Origin.OFFICIAL, "other_sys", "alice", "cli");
+            crab.vault.write(Origin.OFFICIAL, "other_sys", "alice", Map.of("username", "alice", "password", SECRET), "cli");
+            int downloads = reef.downloads();
             reef.remove("other_sys");
             sync.syncOnce();
+            var disabledAt = sync.disabledConches().disabledAt("other_sys");
+            assertThat(disabledAt).isNotNull();
+            assertThat(reef.downloads()).isEqualTo(downloads);
 
             SyncReport unchanged = sync.syncOnce();
             assertThat(unchanged.notModified()).isTrue();
+            assertThat(reef.downloads()).isEqualTo(downloads);
+            assertThat(sync.disabledConches().disabledAt("other_sys")).isEqualTo(disabledAt);
+            assertThat(auditCount(crab, "REEF_CONCH_DISABLED")).isEqualTo(1);
             SyncReport shown = sync.visibleStatus(unchanged);
             assertThat(outcome(shown, "other_sys").kind()).isEqualTo(OutcomeKind.DISABLED);
-            assertThat(shown.removed()).contains("other_sys");
+            assertThat(shown.removed()).doesNotContain("other_sys");
+            assertThat(shown.conches().stream().filter(item -> "other_sys".equals(item.conch()))).hasSize(1);
             assertThat(shown.notModified()).isTrue();
 
             ConchRegistry restarted = new ConchRegistry();
-            InstalledConches.loadAll(crab.paths, reef.keys().getPublic(), restarted, sync.disabledConches().names());
-            assertThat(restarted.find("other_sys")).isEmpty();
+            InstalledConches.loadAll(crab.paths, reef.keys().getPublic(), restarted);
+            assertThat(restarted.find("other_sys")).isPresent();
             assertThat(restarted.find("legacy_oa")).isPresent();
 
             Invoker invoker = new Invoker(
@@ -406,25 +431,63 @@ class ConchSyncTest {
                     (conch, action) -> false,
                     sync.disabledConches());
             ApiKeyPrincipal principal = new ApiKeyPrincipal("key", "key", new ApiKeyScope(java.util.Set.of(), java.util.Set.of(), false));
-            String disabledBody = new String(invoker.invoke(
-                    principal, "other_sys", "list_todo", Map.of(), Optional.empty(), Optional.empty(), "trace-disabled")
-                    .body(), StandardCharsets.UTF_8);
-            assertThat(disabledBody).contains("CONCH_DISABLED");
-            assertThat(registry.find("other_sys")).isEmpty();
+            var called = invoker.invoke(
+                    principal, "other_sys", "list_todo", Map.of(), Optional.empty(), Optional.empty(), "trace-disabled");
+            String disabledBody = new String(called.body(), StandardCharsets.UTF_8);
+            assertThat(called.status()).isEqualTo(200);
+            assertThat(disabledBody).contains("ok").doesNotContain("CONCH_DISABLED").doesNotContain(SECRET);
+            assertThat(registry.find("other_sys")).isPresent();
+            assertThat(Files.readString(crab.paths.conches().resolve("other_sys/current")).trim()).isEqualTo("1.0.0");
 
             reef.publish(ConchTexts.standard("other_sys", "1.0.0"));
             SyncReport restored = sync.syncOnce();
-            assertThat(outcome(restored, "other_sys").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(outcome(restored, "other_sys").kind()).isEqualTo(OutcomeKind.SKIPPED_SAME);
+            assertThat(reef.downloads()).isEqualTo(downloads);
             assertThat(sync.disabledConches().contains("other_sys")).isFalse();
+            assertThat(auditCount(crab, "REEF_CONCH_ENABLED")).isEqualTo(1);
+            assertThat(auditCount(crab, "REEF_CONCH_DISABLED")).isEqualTo(1);
             assertThat(registry.find("other_sys")).isPresent();
             assertThat(Files.readString(crab.paths.conches().resolve("other_sys/current")).trim()).isEqualTo("1.0.0");
-            assertThat(ConchPackage.readVerified(
-                    Files.readAllBytes(crab.paths.conches().resolve("other_sys/1.0.0/package.zip")),
-                    reef.keys().getPublic()).manifest().conch()).isEqualTo("other_sys");
             String resumed = new String(invoker.invoke(
                     principal, "other_sys", "list_todo", Map.of(), Optional.empty(), Optional.empty(), "trace-back")
                     .body(), StandardCharsets.UTF_8);
-            assertThat(resumed).doesNotContain("CONCH_DISABLED");
+            assertThat(resumed).contains("ok").doesNotContain("CONCH_DISABLED");
+
+            reef.publish(ConchTexts.standard("other_sys", "1.0.1"));
+            SyncReport bumped = sync.syncOnce();
+            assertThat(outcome(bumped, "other_sys").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(outcome(bumped, "other_sys").version()).isEqualTo("1.0.1");
+            assertThat(reef.downloads()).isEqualTo(downloads + 1);
+            assertThat(registry.find("other_sys").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(sync.disabledConches().contains("other_sys")).isFalse();
+        }
+    }
+
+    @Test
+    void aSoleDisabledConchKeepsAStableSnapshotWithoutDownloading() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            int downloads = reef.downloads();
+            reef.remove("legacy_oa");
+
+            SyncReport disabled = sync.syncOnce();
+            assertThat(outcome(disabled, "legacy_oa").kind()).isEqualTo(OutcomeKind.DISABLED);
+            assertThat(disabled.removed()).isEmpty();
+            assertThat(reef.downloads()).isEqualTo(downloads);
+            assertThat(registry.find("legacy_oa")).isPresent();
+            assertThat(syncState(crab, "manifest_snapshot")).contains("legacy_oa").contains("1.0.0");
+            int manifests = manifestRequests(reef);
+
+            assertThat(sync.syncOnce().notModified()).isTrue();
+            assertThat(sync.syncOnce().notModified()).isTrue();
+            assertThat(reef.downloads()).isEqualTo(downloads);
+            assertThat(manifestRequests(reef)).isEqualTo(manifests + 2);
+            assertThat(auditCount(crab, "REEF_CONCH_DISABLED")).isEqualTo(1);
+            assertThat(SyncFailures.retryable(new ConchOutcome("legacy_oa", "1.0.0", OutcomeKind.DISABLED, SyncReasons.DISABLED)))
+                    .isFalse();
         }
     }
 
@@ -682,6 +745,8 @@ class ConchSyncTest {
             assertThat(second.conches()).noneMatch(item -> "local_ping".equals(item.conch()));
             assertThat(registry.origin("local_ping")).isEqualTo(Origin.LOCAL);
             assertThat(registry.find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            assertThat(sync.disabledConches().contains("local_ping")).isFalse();
+            assertThat(auditCount(crab, "REEF_CONCH_DISABLED")).isZero();
         }
     }
 
@@ -732,6 +797,18 @@ class ConchSyncTest {
                     return null;
                 }
                 return resultSet.getString(1);
+            }
+        }
+    }
+
+    private static int auditCount(OpenCrab crab, String kind) throws Exception {
+        try (Connection connection = crab.dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT COUNT(*) FROM config_audit WHERE kind = ?")) {
+            statement.setString(1, kind);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
             }
         }
     }

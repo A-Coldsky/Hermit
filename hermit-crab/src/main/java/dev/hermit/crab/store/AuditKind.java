@@ -18,5 +18,9 @@ public enum AuditKind {
     CONCH_SUBSCRIBED,
     CONCH_UNSUBSCRIBED,
     LOCAL_CONCH_IMPORTED,
-    LOCAL_CONCH_DELETED
+    LOCAL_CONCH_DELETED,
+    /** Reef first dropped a subscribed official conch from the manifest. */
+    REEF_CONCH_DISABLED,
+    /** Reef listed that conch again and the disable tombstone was cleared. */
+    REEF_CONCH_ENABLED
 }

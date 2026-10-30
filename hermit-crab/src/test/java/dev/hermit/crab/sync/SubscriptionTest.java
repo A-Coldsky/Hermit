@@ -195,8 +195,14 @@ class SubscriptionTest {
                         "caller", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CONSOLE);
                 reef.remove("legacy_oa");
                 runtime.syncOnce(Actors.CONSOLE);
-                assertThat(invoke(runtime, key, "trace-disabled").status()).isEqualTo(409);
+                var kept = invoke(runtime, key, "trace-disabled");
+                assertThat(kept.status()).isEqualTo(409);
+                assertThat(new String(kept.body(), StandardCharsets.UTF_8)).contains("NOT_CONFIGURED")
+                        .doesNotContain("CONCH_DISABLED");
+                assertThat(runtime.registry().find("legacy_oa")).isPresent();
+                assertThat(Files.exists(runtime.paths().conches().resolve("legacy_oa/current"))).isTrue();
                 assertThat(runtime.conchSync().disabledConches().contains("legacy_oa")).isTrue();
+                assertThat(auditCount(runtime, "REEF_CONCH_DISABLED")).isEqualTo(1);
 
                 runtime.unsubscribe("legacy_oa", Actors.CONSOLE);
                 var missing = invoke(runtime, key, "trace-cleared");
@@ -205,6 +211,11 @@ class SubscriptionTest {
                         .doesNotContain("CONCH_DISABLED");
                 assertThat(runtime.conchSync().disabledConches().contains("legacy_oa")).isFalse();
                 assertThat(runtime.subscribed("legacy_oa")).isFalse();
+                assertThat(runtime.registry().find("legacy_oa")).isEmpty();
+                assertThat(Files.exists(runtime.paths().conches().resolve("legacy_oa/current"))).isFalse();
+                assertThat(auditCount(runtime, "REEF_CONCH_ENABLED")).isZero();
+                assertThat(auditCount(runtime, "REEF_CONCH_DISABLED")).isEqualTo(1);
+                assertThat(auditDetails(runtime, "CONCH_UNSUBSCRIBED")).containsExactly("legacy_oa");
             }
         }
     }
@@ -406,6 +417,86 @@ class SubscriptionTest {
                         http, server.port(), "DELETE", "/console/api/conches/legacy_oa/subscription", null);
                 assertThat(removed.statusCode()).isEqualTo(200);
                 assertThat(JSON.readTree(removed.body()).path("data").path("subscribed").asBoolean()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    void consoleMarksAReefDisabledConchWithoutUnloadingIt() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            CrabConfig config = config(reef).withListen("127.0.0.1", 0);
+            try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("disabled-console")), config, name -> null);
+                 CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newHttpClient();
+                HttpResponse<String> subscribed = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/subscription", "{}");
+                assertThat(subscribed.statusCode()).as(subscribed.body()).isEqualTo(200);
+                int downloads = reef.downloads();
+
+                HttpResponse<String> before = send(http, server.port(), "GET", "/console/api/conches/legacy_oa", null);
+                JsonNode open = JSON.readTree(before.body()).path("data");
+                assertThat(open.path("reefDisabled").asBoolean()).isFalse();
+                assertThat(open.path("reefDisabledAt").isNull()).isTrue();
+
+                reef.remove("legacy_oa");
+                HttpResponse<String> synced = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(synced.statusCode()).as(synced.body()).isEqualTo(200);
+                JsonNode report = JSON.readTree(synced.body()).path("data");
+                assertThat(report.path("removed").toString()).doesNotContain("legacy_oa");
+                boolean shownDisabled = false;
+                for (JsonNode row : report.path("conches")) {
+                    if ("legacy_oa".equals(row.path("conch").asText()) && "DISABLED".equals(row.path("kind").asText())) {
+                        shownDisabled = true;
+                        assertThat(row.path("version").asText()).isEqualTo("1.0.0");
+                    }
+                }
+                assertThat(shownDisabled).isTrue();
+
+                HttpResponse<String> list = send(http, server.port(), "GET", "/console/api/conches", null);
+                JsonNode summary = JSON.readTree(list.body()).path("data").path("conches").get(0);
+                assertThat(summary.path("conch").asText()).isEqualTo("legacy_oa");
+                assertThat(summary.path("version").asText()).isEqualTo("1.0.0");
+                assertThat(summary.path("reefDisabled").asBoolean()).isTrue();
+                assertThat(summary.path("reefDisabledAt").asText()).contains("T");
+                String at = summary.path("reefDisabledAt").asText();
+
+                HttpResponse<String> detail = send(http, server.port(), "GET", "/console/api/conches/legacy_oa", null);
+                assertThat(JSON.readTree(detail.body()).path("data").path("reefDisabledAt").asText()).isEqualTo(at);
+
+                HttpResponse<String> catalog = send(http, server.port(), "GET", "/console/api/catalog", null);
+                JsonNode entry = JSON.readTree(catalog.body()).path("data").path("conches").get(0);
+                assertThat(entry.path("conch").asText()).isEqualTo("legacy_oa");
+                assertThat(entry.path("disabled").asBoolean()).isTrue();
+                assertThat(entry.path("version").isNull()).isTrue();
+                assertThat(entry.path("installedVersion").asText()).isEqualTo("1.0.0");
+                assertThat(entry.path("subscribed").asBoolean()).isTrue();
+
+                HttpResponse<String> second = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(second.statusCode()).as(second.body()).isEqualTo(200);
+                assertThat(JSON.readTree(second.body()).path("data").path("notModified").asBoolean()).isTrue();
+                HttpResponse<String> later = send(http, server.port(), "GET", "/console/api/conches/legacy_oa", null);
+                assertThat(JSON.readTree(later.body()).path("data").path("reefDisabledAt").asText()).isEqualTo(at);
+                assertThat(reef.downloads()).isEqualTo(downloads);
+
+                HttpResponse<String> audit = send(http, server.port(), "GET", "/console/api/audit?conch=legacy_oa", null);
+                int disabledAudits = 0;
+                int enabledAudits = 0;
+                for (JsonNode item : JSON.readTree(audit.body()).path("data").path("entries")) {
+                    if ("REEF_CONCH_DISABLED".equals(item.path("action").asText())) {
+                        disabledAudits++;
+                        assertThat(item.path("actor").asText()).isEqualTo("sync");
+                        assertThat(item.path("origin").asText()).isEqualTo("OFFICIAL");
+                        assertThat(item.path("conch").asText()).isEqualTo("legacy_oa");
+                        assertThat(item.path("account").isNull()).isTrue();
+                        assertThat(item.path("fields")).isEmpty();
+                    }
+                    if ("REEF_CONCH_ENABLED".equals(item.path("action").asText())) {
+                        enabledAudits++;
+                    }
+                }
+                assertThat(disabledAudits).isEqualTo(1);
+                assertThat(enabledAudits).isZero();
             }
         }
     }

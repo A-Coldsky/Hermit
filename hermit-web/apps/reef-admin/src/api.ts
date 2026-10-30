@@ -61,6 +61,7 @@ export interface ConchSummary {
   disabledAt: string | null
   disabledBy: string | null
   disabledReason: string | null
+  pullCount: number
 }
 
 export interface FieldDeclaration {
@@ -103,6 +104,7 @@ export interface ConchDetail {
   disabledAt: string | null
   disabledBy: string | null
   disabledReason: string | null
+  pullCount: number
 }
 
 export interface ConchVersion {
@@ -115,6 +117,7 @@ export interface ConchVersion {
   current: boolean
   warningCount: number
   warnings: ValidationIssue[]
+  pullCount: number
 }
 
 export interface UploadResult {

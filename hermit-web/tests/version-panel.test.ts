@@ -18,6 +18,7 @@ function version(overrides: Partial<ConchVersion>): ConchVersion {
     current: true,
     warningCount: 0,
     warnings: [],
+    pullCount: 0,
     ...overrides,
   }
 }

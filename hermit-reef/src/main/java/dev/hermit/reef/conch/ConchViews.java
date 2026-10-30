@@ -50,7 +50,8 @@ record ConchSummary(
         boolean disabled,
         Instant disabledAt,
         String disabledBy,
-        String disabledReason) {
+        String disabledReason,
+        long pullCount) {
 }
 
 record ConchVersionItem(
@@ -62,7 +63,8 @@ record ConchVersionItem(
         Instant publishedAt,
         boolean current,
         int warningCount,
-        List<ValidationIssue> warnings) {
+        List<ValidationIssue> warnings,
+        long pullCount) {
 }
 
 record CredentialDeclaration(
@@ -149,9 +151,10 @@ record ConchDetail(
         boolean disabled,
         Instant disabledAt,
         String disabledBy,
-        String disabledReason) {
+        String disabledReason,
+        long pullCount) {
 
-    static ConchDetail from(ConchDoc doc, AvailabilityRow availability) {
+    static ConchDetail from(ConchDoc doc, AvailabilityRow availability, long pullCount) {
         Map<String, CredentialDeclaration> credentials = new java.util.LinkedHashMap<>();
         if (doc.credentials() != null) {
             doc.credentials().forEach((name, field) -> credentials.put(name, CredentialDeclaration.from(field)));
@@ -177,9 +180,17 @@ record ConchDetail(
                 availability != null && availability.disabled(),
                 availability != null && availability.disabled() ? availability.disabledAt() : null,
                 availability != null && availability.disabled() ? availability.disabledBy() : null,
-                availability != null && availability.disabled() ? availability.disabledReason() : null);
+                availability != null && availability.disabled() ? availability.disabledReason() : null,
+                pullCount);
     }
 }
 
-record ManifestEntry(String conch, String version, String sha256, String minCrabVersion, String title) {
+record ManifestEntry(
+        String conch,
+        String version,
+        String sha256,
+        String minCrabVersion,
+        String title,
+        String description,
+        int capabilityCount) {
 }

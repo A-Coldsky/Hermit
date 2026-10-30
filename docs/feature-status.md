@@ -20,6 +20,7 @@
 | MCP stdio 桥接 | 已实现 | McpStdio；需要已运行的 HTTP Crab，CLI/验收覆盖不足以代表所有真实客户端兼容 |
 | Reef 管理员初始化、JWT、锁定、审计 | 已实现 | AdminBootstrap/AdminApiTest。4xx/5xx 服务端日志带与响应相同的 traceId，4xx 不记请求体。已登录的未知 `/api/admin/**` 为 404 `NOT_FOUND` 信封。查询参数类型不匹配或缺少必填参数时 400 `INVALID_INPUT`，message 带字段名，不回显参数值。没有完整管理员生命周期管理 API |
 | 上传、签名发布、分发、管理员回滚 | 已实现 | ConchApiTest/ConchConcurrencyTest/ConchSelfCheckFailureTest |
+| 规则包拉取次数与清单元数据 | 已实现（API） | Flyway V5 给 `hermit_conch_versions` 增加 `pull_count`（默认 0）。成功下载已发布 ZIP 时该版本加 1；清单、304、404、停用和验签失败不计，也不按实例去重。`GET /api/admin/conches` 与详情的 `pullCount` 是各版本之和，版本列表是该版本自己的次数。清单每项带当前发布版本的 `title`、`description`、`capabilityCount`，ETag 随这些字段变化，不随拉取次数变化。`reef-admin` 的 `api.ts` 已包含 `pullCount`，页面未展示。已跑过 V1–V4 的库启动时补列，不必为这一列重建；更早的无 `hermit_` 前缀库仍要按配置文档重建 |
 | 停用 / 重新启用 Conch | 已实现 | Reef 管理端 Conch 详情页提供停用/启用（需填原因），停用后显示原因与操作人、版本表的发布和回滚不可点，目录标「已停用」。管理 API 记录 `DISABLE`/`ENABLE` 和原因。停用后清单不含该 Conch，Agent 下载 404，发布和回滚 409 `conch is disabled`，签名包字节不变。Crab 同步后卸下注册表、清 `current`、保留版本文件和账号；调用 409 `CONCH_DISABLED`；同步状态 `kind=DISABLED` 且出现在 `removed`。重新启用后重新验签安装。回滚固定未解除、且清单版本不高于坏版本时，重新启用不会把 Conch 装回去 |
 | Crab 定时/手动同步、ETag、验签 | 已实现 | ConchSyncTest/CrabWiringTest；可重试失败不记 ETag，304 核对 current。Reef 不可达时手动同步为 502 `UPSTREAM_ERROR`，状态改为这次失败；Reef 的 HTTP 错误仍保留上次成功 |
 | 本地规则失配回滚、坏版本固定 | 已实现 | RollbackGuardTest；要求前一版本成功，5 次 `RULE_MISMATCH`；上游 400 与会话失效不计数；不等于发布前健康检查。回滚后控制台同步状态显示已安装版本和 `ROLLED_BACK`，固定解除前保持 |
@@ -88,4 +89,6 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 
 2026-10-30 合入 main（#46–#48、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 128、hermit-crab 222、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 394，连同 Vitest 合计 469。未启动 MySQL 或 Compose，也未做浏览器验收。
 
-2026-10-30 再合入 origin/main `34f5b01`（#50、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 130、hermit-crab 223、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 397，合计 472。这是当前整棵树的计数。服务端页面回落与 shells 的 302 保持不变；应用内「页面不存在」与前端 `/shells` 跳转来自 #51，未改 Vue。未启动 MySQL 或 Compose，也未在浏览器里点选。
+2026-10-30 再合入 origin/main `34f5b01`（#50、#51）后以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 130、hermit-crab 223、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 397，合计 472。服务端页面回落与 shells 的 302 保持不变；应用内「页面不存在」与前端 `/shells` 跳转来自 #51，未改 Vue。未启动 MySQL 或 Compose，也未在浏览器里点选。
+
+2026-10-30 规则包拉取次数以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 135、hermit-crab 223、hermit-it 1，失败/错误/跳过均为 0；Vitest 75（14 个文件）。Java 小计 402，连同 Vitest 合计 477。这是当前整棵树的计数。覆盖成功下载加一、未发布与停用 404 不计、清单和 304 不计、验签失败不计、各版本之和、清单 `description`/`capabilityCount` 进入 ETag，以及 16 路并发下载。未启动 MySQL 或 Compose。管理页面类型已有 `pullCount`，界面未展示，也未在浏览器里点选。停用与下载并发、以及响应还没写完客户端就断开，没有覆盖。

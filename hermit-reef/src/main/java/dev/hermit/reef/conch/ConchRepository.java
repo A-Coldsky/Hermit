@@ -24,7 +24,8 @@ class ConchRepository {
             instant(rs.getTimestamp("published_at")),
             rs.getBoolean("is_current"),
             rs.getString("validation_json"),
-            rs.getString("diff_json"));
+            rs.getString("diff_json"),
+            rs.getLong("pull_count"));
 
     private final JdbcTemplate jdbc;
 
@@ -35,7 +36,7 @@ class ConchRepository {
     List<VersionRow> listAll() {
         return jdbc.query(
                 "SELECT id, conch, version, sha256, min_crab_version, package_path, status, uploaded_by, uploaded_at, "
-                        + "published_by, published_at, is_current, validation_json, diff_json "
+                        + "published_by, published_at, is_current, validation_json, diff_json, pull_count "
                         + "FROM hermit_conch_versions ORDER BY conch, id",
                 ROWS);
     }
@@ -49,7 +50,7 @@ class ConchRepository {
         }
         return jdbc.query(
                 "SELECT id, conch, version, sha256, min_crab_version, package_path, status, uploaded_by, uploaded_at, "
-                        + "published_by, published_at, is_current, validation_json, diff_json "
+                        + "published_by, published_at, is_current, validation_json, diff_json, pull_count "
                         + "FROM hermit_conch_versions WHERE conch = ? ORDER BY id FOR UPDATE",
                 ROWS,
                 conch);
@@ -78,6 +79,17 @@ class ConchRepository {
                         + "WHERE conch = ? AND version = ? AND status = 'UPLOADED'",
                 actor,
                 Timestamp.from(publishedAt),
+                conch,
+                version);
+    }
+
+    /**
+     * 单条 {@code pull_count = pull_count + 1}。调用方只在验签通过、且该 Conch 未停用时调用。
+     */
+    int incrementPullCount(String conch, String version) {
+        return jdbc.update(
+                "UPDATE hermit_conch_versions SET pull_count = pull_count + 1 "
+                        + "WHERE conch = ? AND version = ? AND status = 'PUBLISHED'",
                 conch,
                 version);
     }

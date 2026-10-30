@@ -88,10 +88,25 @@ class StorageTest {
                 "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '1' AND \"success\" = TRUE",
                 Integer.class);
         assertThat(applied).isEqualTo(1);
+        Integer pullCountMigration = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '5' AND \"success\" = TRUE",
+                Integer.class);
+        assertThat(pullCountMigration).isEqualTo(1);
         assertThat(indexNames()).contains(
                 "idx_hermit_failure_reports_conch_version_occurred",
                 "idx_hermit_failure_reports_received_at",
                 "idx_hermit_hourly_counts_conch_hour");
+    }
+
+    @Test
+    void pullCountDefaultsToZero() {
+        insertConchVersion("legacy_oa", "1.0.0", "UPLOADED");
+        Long count = jdbc.queryForObject(
+                "SELECT pull_count FROM hermit_conch_versions WHERE conch = ? AND version = ?",
+                Long.class,
+                "legacy_oa",
+                "1.0.0");
+        assertThat(count).isZero();
     }
 
     @Test

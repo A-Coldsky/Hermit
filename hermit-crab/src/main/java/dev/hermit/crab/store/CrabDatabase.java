@@ -31,8 +31,9 @@ import dev.hermit.common.validate.ConchValidator;
  * Version 5 adds {@code rollback_queue.event_id} and fills a unique id for rows already queued.
  * Version 5 is applied when {@code MAX(version)} is below 5, the same way as version 4.
  * Version 6 indexes {@code config_audit (at, id)} for newest-first reads and does not copy
- * {@code detail}. Version 7 adds {@code disabled_conches}, the tombstones for conches Reef withdrew
- * from the manifest. Version 6 is left as applied; do not fold the tombstones back into it.
+ * {@code detail}. Version 7 adds {@code disabled_conches}, the marker that Reef dropped a
+ * subscribed official conch from the manifest. The installed package stays loaded.
+ * Version 6 is left as applied; do not fold the tombstones back into it.
  * Version 8 adds {@code subscriptions}. On that upgrade, conches under {@code conches/} that
  * already have a current pointer are inserted with actor {@code migration} so they stay installed.
  * Version 8 runs when its own row is missing, not when {@code MAX(version)} is below 8, so a

@@ -20,6 +20,13 @@ export interface ConchSummary {
   loginPaused: boolean
   /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。 */
   source: 'LOCAL' | 'REEF'
+  /**
+   * Reef 已停用。本机仍保留已安装版本，HTTP/MCP 照常调用；同步不再更新这份包。
+   * 本地包为 false。
+   */
+  reefDisabled: boolean
+  /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
+  reefDisabledAt: string | null
 }
 
 export interface CredentialField {
@@ -56,6 +63,10 @@ export interface ConchDetail {
   loginPaused: boolean
   /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。 */
   source: 'LOCAL' | 'REEF'
+  /** Reef 已停用。本机仍保留已安装版本并可调用。本地包为 false。 */
+  reefDisabled: boolean
+  /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
+  reefDisabledAt: string | null
 }
 
 export interface Account {
@@ -111,7 +122,7 @@ export interface ConfigAuditEntry {
   id: number
   at: string
   actor: string
-  /** AuditKind 名称，例如 CREDENTIALS_WRITTEN、CONFIG_PUT、CAPABILITY_DISABLED。 */
+  /** AuditKind 名称，例如 CREDENTIALS_WRITTEN、CONFIG_PUT、CAPABILITY_DISABLED、REEF_CONCH_DISABLED、REEF_CONCH_ENABLED。 */
   action: string
   origin: string | null
   conch: string | null
@@ -217,7 +228,10 @@ export interface LocalFileResult {
   issues: ValidationIssue[]
 }
 
-/** 目录缓存里的一条。`disabled` 表示 Reef 停用墓碑还在。 */
+/**
+ * 目录里的一条。`disabled` 与停用墓碑一致。
+ * Reef 清单已经不再列出、但本机有墓碑时，`version` 为 null，`installedVersion` 是本机保留的版本。
+ */
 export interface CatalogConch {
   conch: string
   version: string | null

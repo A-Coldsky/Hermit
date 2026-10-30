@@ -148,7 +148,6 @@ public final class ConchSync {
     private SyncReport syncOnceLocked() {
         try {
             retryPendingCredentialDeletes();
-            retryClearDisabledCurrents();
             Optional<CrabRelease> latest = readLatest();
             ReefClient.ManifestFetch manifest = reef.manifest(store.etag().orElse(null));
             if (manifest.notModified()) {
@@ -261,7 +260,8 @@ public final class ConchSync {
 
     /**
      * A later 304 replaces the conch rows. Tombstones are reapplied here so the console still
-     * shows the conch as disabled, without touching the registry (audit A01).
+     * shows the conch as disabled, without touching the registry (audit A01). The name is not
+     * also listed in {@code removed}.
      */
     private SyncReport projectDisabled(SyncReport last) {
         List<String> names = new ArrayList<>(disabledConches.names());
@@ -278,6 +278,9 @@ public final class ConchSync {
         LinkedHashSet<String> removed = new LinkedHashSet<>(last.removed());
         boolean changed = false;
         for (String conch : names) {
+            if (removed.remove(conch)) {
+                changed = true;
+            }
             ConchOutcome current = rows.get(conch);
             if (current != null && (current.kind() == OutcomeKind.INSTALLED || current.kind() == OutcomeKind.SKIPPED_SAME)) {
                 continue;
@@ -286,9 +289,6 @@ public final class ConchSync {
                     SyncReasons.DISABLED);
             if (!projected.equals(current)) {
                 rows.put(conch, projected);
-                changed = true;
-            }
-            if (removed.add(conch)) {
                 changed = true;
             }
         }
@@ -336,6 +336,11 @@ public final class ConchSync {
                     conches.add(outcome(entry, OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT));
                     continue;
                 }
+                if (subscriptions.contains(entry.conch())) {
+                    // Reef listed it again. Drop the tombstone before any download so a later
+                    // failure can retry as a normal update.
+                    releaseReefDisable(entry.conch());
+                }
                 if (!version(entry.version()).isPresent()) {
                     conches.add(rejected(entry, SyncReasons.VERSION_INVALID));
                     continue;
@@ -362,7 +367,7 @@ public final class ConchSync {
             if (!subscriptions.contains(conch) || registry.origin(conch) == Origin.LOCAL) {
                 continue;
             }
-            deactivate(conch, conches, removed);
+            deactivate(conch, conches);
         }
         if (conches.stream().anyMatch(SyncFailures::retryable)) {
             store.clearEtagAndSnapshot();
@@ -389,7 +394,9 @@ public final class ConchSync {
     private static Map<String, String> expectedVersions(List<ConchOutcome> conches) {
         Map<String, String> versions = new TreeMap<>();
         for (ConchOutcome outcome : conches) {
-            if (outcome.kind() != OutcomeKind.INSTALLED && outcome.kind() != OutcomeKind.SKIPPED_SAME) {
+            if (outcome.kind() != OutcomeKind.INSTALLED
+                    && outcome.kind() != OutcomeKind.SKIPPED_SAME
+                    && outcome.kind() != OutcomeKind.DISABLED) {
                 continue;
             }
             if (outcome.conch() == null || outcome.version() == null) {
@@ -403,13 +410,54 @@ public final class ConchSync {
     private ConchCatalog readCatalog() {
         Optional<List<ReefClient.CatalogEntry>> cached = store.catalog();
         List<ConchCatalog.Entry> rows = new ArrayList<>();
+        LinkedHashSet<String> listed = new LinkedHashSet<>();
         if (cached.isPresent()) {
             for (ReefClient.CatalogEntry entry : cached.get()) {
                 rows.add(catalogRow(entry));
+                if (entry.conch() != null) {
+                    listed.add(entry.conch());
+                }
             }
-            rows.sort(Comparator.comparing(ConchCatalog.Entry::conch, Comparator.nullsLast(String::compareTo)));
         }
+        appendAbsentDisabled(rows, listed);
+        rows.sort(Comparator.comparing(ConchCatalog.Entry::conch, Comparator.nullsLast(String::compareTo)));
         return new ConchCatalog(true, store.catalogSyncedAt().orElse(null), rows);
+    }
+
+    /**
+     * A disabled conch has left the Reef manifest, so the cache no longer has a row.
+     * Keep one with {@code disabled=true} so the catalog flag matches the tombstone.
+     * {@code version} is null: Reef is not publishing a version. {@code installedVersion}
+     * is the copy Crab kept.
+     */
+    private void appendAbsentDisabled(List<ConchCatalog.Entry> rows, Set<String> listed) {
+        List<String> names = new ArrayList<>(disabledConches.names());
+        names.sort(String::compareTo);
+        for (String name : names) {
+            if (name == null || listed.contains(name) || isLocal(name)) {
+                continue;
+            }
+            rows.add(absentDisabledRow(name));
+        }
+    }
+
+    private ConchCatalog.Entry absentDisabledRow(String name) {
+        ConchDoc doc = registry.find(name).orElse(null);
+        String pointer = ConchFiles.safeSegment(name) ? ConchFiles.readCurrent(paths, name).orElse(null) : null;
+        String installedVersion = doc != null ? doc.version().toString() : pointer;
+        String title = doc != null && doc.title() != null && !doc.title().isBlank() ? doc.title() : name;
+        int count = doc == null || doc.actions() == null ? 0 : doc.actions().size();
+        return new ConchCatalog.Entry(
+                name,
+                null,
+                title,
+                doc == null ? null : doc.description(),
+                count,
+                subscriptions.contains(name),
+                doc != null || pointer != null,
+                installedVersion,
+                true,
+                false);
     }
 
     private ConchCatalog.Entry catalogRow(ReefClient.CatalogEntry entry) {
@@ -592,7 +640,7 @@ public final class ConchSync {
                 if (registry.find(conch).isEmpty() && !loadInstalled(conch, version)) {
                     return InstallResult.of(rejected(entry, SyncReasons.PACKAGE_MISSING));
                 }
-                disabledConches.clear(conch);
+                releaseReefDisable(conch);
                 if (pinNow.isPresent()) {
                     store.clearPin(conch);
                 }
@@ -644,46 +692,67 @@ public final class ConchSync {
             }
             Set<String> removed = change.map(CredentialDeclarationChange::removed).orElseGet(Set::of);
             deleteRemovedFields(conch, verified.conchDoc(), removed);
-            // Tombstone drops only after the new doc is in the registry, so a call cannot observe
-            // "enabled" against an empty registry. In-flight requests keep the snapshot they already
-            // authorized (audit A01) and are not switched onto this version.
-            disabledConches.clear(conch);
+            // Clear only after the new doc is in the registry. In-flight requests keep the snapshot
+            // they already authorized (audit A01) and are not switched onto this version.
+            releaseReefDisable(conch);
             return new InstallResult(outcome(entry, OutcomeKind.INSTALLED, null), change);
         }
     }
 
     /**
-     * Reef left this conch out of the manifest. Record the tombstone before dropping the registry
-     * entry so new calls return {@code CONCH_DISABLED} instead of a bare not-found. The authorized
-     * snapshot of a request already inside the engine is left alone (audit A01); this path does
-     * not install a replacement version.
+     * Reef left this subscribed official conch out of the manifest. Record the tombstone once
+     * and leave the registry entry and {@code current} in place, so calls keep using the
+     * installed snapshot (audit A01). This path does not download or install another version.
      */
-    private void deactivate(String conch, List<ConchOutcome> conches, List<String> removed) {
-        if (!ConchFiles.safeSegment(conch)) {
-            disabledConches.mark(conch, null, clock.instant());
-            registry.remove(conch);
-            removed.add(conch);
-            conches.add(new ConchOutcome(conch, null, OutcomeKind.DISABLED, SyncReasons.DISABLED));
+    private void deactivate(String conch, List<ConchOutcome> conches) {
+        if (isLocal(conch)) {
             return;
         }
-        synchronized (ConchFileLocks.of(conch)) {
-            String version = ConchFiles.readCurrent(paths, conch).orElse(null);
+        if (!ConchFiles.safeSegment(conch)) {
+            String version = registry.find(conch).map(doc -> doc.version().toString()).orElse(null);
             try {
-                disabledConches.mark(conch, version, clock.instant());
+                noteReefDisabled(conch, version);
             } catch (RuntimeException ex) {
                 LOG.log(Level.WARNING, "disable tombstone failed conch={0}", conch);
                 conches.add(new ConchOutcome(conch, version, OutcomeKind.REJECTED, SyncReasons.DISABLE_FAILED));
                 return;
             }
-            registry.remove(conch);
-            try {
-                ConchFiles.clearCurrent(paths, conch);
-            } catch (RuntimeException ex) {
-                LOG.log(Level.WARNING, "clear current failed conch={0}", conch);
+            conches.add(new ConchOutcome(conch, version, OutcomeKind.DISABLED, SyncReasons.DISABLED));
+            return;
+        }
+        synchronized (ConchFileLocks.of(conch)) {
+            if (isLocal(conch)) {
+                return;
             }
-            removed.add(conch);
+            String version = ConchFiles.readCurrent(paths, conch)
+                    .orElseGet(() -> registry.find(conch).map(doc -> doc.version().toString()).orElse(null));
+            try {
+                noteReefDisabled(conch, version);
+            } catch (RuntimeException ex) {
+                LOG.log(Level.WARNING, "disable tombstone failed conch={0}", conch);
+                conches.add(new ConchOutcome(conch, version, OutcomeKind.REJECTED, SyncReasons.DISABLE_FAILED));
+                return;
+            }
             conches.add(new ConchOutcome(conch, version, OutcomeKind.DISABLED, SyncReasons.DISABLED));
         }
+    }
+
+    /** First observation only. A later sync does not refresh {@code disabled_at} or write another audit row. */
+    private void noteReefDisabled(String conch, String version) {
+        if (disabledConches.contains(conch)) {
+            return;
+        }
+        disabledConches.mark(conch, version, clock.instant());
+        AuditLog.record(dataSource, Actors.SYNC, AuditKind.REEF_CONCH_DISABLED, "OFFICIAL/" + conch, conch);
+    }
+
+    /** Reef listed the conch again. One audit row, then normal install may download. */
+    private void releaseReefDisable(String conch) {
+        if (conch == null || !disabledConches.contains(conch)) {
+            return;
+        }
+        disabledConches.clear(conch);
+        AuditLog.record(dataSource, Actors.SYNC, AuditKind.REEF_CONCH_ENABLED, "OFFICIAL/" + conch, conch);
     }
 
     private InstallResult keepCurrent(ReefClient.CatalogEntry entry) {
@@ -705,7 +774,7 @@ public final class ConchSync {
             if (registry.find(conch).isEmpty() && !loadInstalled(conch, entry.version())) {
                 return InstallResult.of(rejected(entry, SyncReasons.PACKAGE_MISSING));
             }
-            disabledConches.clear(conch);
+            releaseReefDisable(conch);
             if (store.pin(conch).isPresent()) {
                 store.clearPin(conch);
             }
@@ -733,24 +802,6 @@ public final class ConchSync {
                 registry.remove(conch);
             }
             return false;
-        }
-    }
-
-    private void retryClearDisabledCurrents() {
-        for (String conch : disabledConches.names()) {
-            if (!ConchFiles.safeSegment(conch)) {
-                continue;
-            }
-            synchronized (ConchFileLocks.of(conch)) {
-                if (!disabledConches.contains(conch)) {
-                    continue;
-                }
-                try {
-                    ConchFiles.clearCurrent(paths, conch);
-                } catch (RuntimeException ex) {
-                    LOG.log(Level.WARNING, "clear current failed conch={0}", conch);
-                }
-            }
         }
     }
 

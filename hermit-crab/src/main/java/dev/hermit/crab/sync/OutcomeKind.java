@@ -8,7 +8,11 @@ public enum OutcomeKind {
     REJECTED,
     /** Local status after {@link RollbackGuard} restored an older installed version. */
     ROLLED_BACK,
-    /** Reef dropped the conch from the distribution manifest. Calls return CONCH_DISABLED. */
+    /**
+     * Reef dropped a subscribed official conch from the distribution manifest.
+     * The installed copy stays loaded and callable. Sync does not download it again
+     * until Reef lists the name.
+     */
     DISABLED,
     /**
      * The manifest named a conch already loaded from {@code local-conches}.

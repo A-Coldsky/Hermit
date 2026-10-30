@@ -7,7 +7,6 @@ import java.nio.file.Path;
 import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
@@ -27,19 +26,15 @@ public final class InstalledConches {
     private InstalledConches() {
     }
 
-    public static LoadReport loadAll(CrabPaths paths, PublicKey key, ConchRegistry registry) {
-        return loadAll(paths, key, registry, Set.of());
-    }
-
     /**
-     * Conches in {@code disabled} are left unloaded even when {@code current} still points at a
-     * package. That keeps a Reef disable in force across restart.
+     * Loads every package that still has a {@code current} pointer, including one Reef has
+     * disabled. A tombstone does not unload the package. A package whose {@code current} was
+     * already deleted (an older disable) stays unloaded.
      */
-    public static LoadReport loadAll(CrabPaths paths, PublicKey key, ConchRegistry registry, Set<String> disabled) {
+    public static LoadReport loadAll(CrabPaths paths, PublicKey key, ConchRegistry registry) {
         if (paths == null || key == null || registry == null) {
             throw new IllegalArgumentException("paths, key, and registry are required");
         }
-        Set<String> skipped = disabled == null ? Set.of() : disabled;
         List<String> loaded = new ArrayList<>();
         List<ConchOutcome> failures = new ArrayList<>();
         try (Stream<Path> children = Files.list(paths.conches())) {
@@ -47,9 +42,6 @@ public final class InstalledConches {
                 String conch = child.getFileName().toString();
                 if (!ConchFiles.safeSegment(conch)) {
                     failures.add(new ConchOutcome(conch, null, OutcomeKind.REJECTED, SyncReasons.PATH_UNSAFE));
-                    continue;
-                }
-                if (skipped.contains(conch)) {
                     continue;
                 }
                 synchronized (ConchFileLocks.of(conch)) {

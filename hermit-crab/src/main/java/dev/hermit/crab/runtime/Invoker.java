@@ -109,12 +109,13 @@ public final class Invoker {
         if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
         }
-        // 停用墓碑先于注册表。已经带着授权快照进入引擎的请求仍执行那份快照（审计 A01）；
-        // 新请求在这里返回，不会在停用期间读到另一份版本。
-        if (disabledConches.contains(conch)) {
+        // 墓碑只表示 Reef 不再分发。包仍在注册表里时，调用继续走后面的权限和能力检查。
+        // 注册表里已经没有这份包（旧数据清掉了 current）才返回 CONCH_DISABLED。
+        // 已经带着授权快照进入引擎的请求仍执行那份快照（审计 A01）。
+        ConchDoc doc = registry.find(conch).orElse(null);
+        if (doc == null && disabledConches.contains(conch)) {
             return done(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE, null);
         }
-        ConchDoc doc = registry.find(conch).orElse(null);
         Action capability = doc == null ? null : doc.actions().get(action);
         if (doc == null || capability == null || disabled.disabled(conch, action)) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);

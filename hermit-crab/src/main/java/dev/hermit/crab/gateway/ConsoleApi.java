@@ -111,6 +111,7 @@ final class ConsoleApi {
             row.put("needsConfiguration", needsConfiguration(runtime, doc, accounts, loginPaused));
             row.put("loginPaused", loginPaused);
             row.put("source", source(runtime, doc.conch()));
+            putReefDisabled(runtime, doc.conch(), row);
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("conches", rows));
@@ -139,6 +140,7 @@ final class ConsoleApi {
         body.put("capabilities", capabilities);
         body.put("loginPaused", loginPaused(runtime, doc, runtime.admin().listAccounts(doc.conch())));
         body.put("source", source(runtime, doc.conch()));
+        putReefDisabled(runtime, doc.conch(), body);
         GatewayResponses.writeData(ctx, body);
     }
 
@@ -661,6 +663,17 @@ final class ConsoleApi {
 
     private static String source(CrabRuntime runtime, String conch) {
         return runtime.registry().origin(conch) == Origin.LOCAL ? "LOCAL" : "REEF";
+    }
+
+    /**
+     * Reef dropped this official conch from the manifest. The installed copy stays in the list.
+     * {@code reefDisabledAt} is the first time this Crab recorded the tombstone.
+     */
+    private static void putReefDisabled(CrabRuntime runtime, String conch, Map<String, Object> row) {
+        boolean reefDisabled = runtime.registry().origin(conch) != Origin.LOCAL
+                && runtime.disabledConches().contains(conch);
+        row.put("reefDisabled", reefDisabled);
+        row.put("reefDisabledAt", reefDisabled ? runtime.disabledConches().disabledAt(conch) : null);
     }
 
     private static List<Map<String, Object>> issues(List<ValidationIssue> found) {

@@ -174,7 +174,9 @@ public final class McpStdio {
             HttpResponse<byte[]> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
             response.headers().firstValue("Mcp-Session-Id").ifPresent(session::set);
             if (response.statusCode() == 401) {
-                err.println("authentication failed: " + rpcErrorMessage(response.body()));
+                byte[] body = response.body();
+                emit(out, authenticationStdout(body, line));
+                err.println("authentication failed: " + rpcErrorMessage(body));
                 exit.compareAndSet(0, 1);
                 return;
             }
@@ -237,6 +239,8 @@ public final class McpStdio {
         try {
             HttpResponse<InputStream> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() == 401) {
+                byte[] body = response.body().readAllBytes();
+                emit(out, authenticationStdout(body, null));
                 err.println("authentication failed");
                 exit.compareAndSet(0, 1);
                 return;
@@ -292,6 +296,48 @@ public final class McpStdio {
             current = current.getCause();
         }
         return false;
+    }
+
+    /**
+     * 401 时先把 Crab 的 JSON-RPC 错误写到 stdout。没有可解析的错误对象时，用请求 id 写一条
+     * {@code -32001}，避免客户端只看到进程退出。
+     */
+    static String authenticationStdout(byte[] body, String requestLine) {
+        String trimmed = body == null ? "" : new String(body, StandardCharsets.UTF_8).trim();
+        if (jsonRpcError(trimmed)) {
+            return trimmed;
+        }
+        JsonNode id = requestId(requestLine);
+        String idJson = id == null || id.isNull() ? "null" : McpJson.write(id);
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + idJson
+                + ",\"error\":{\"code\":" + McpErrors.AUTH_RPC + ",\"message\":\"authentication failed\"}}";
+    }
+
+    private static boolean jsonRpcError(String body) {
+        if (body.isEmpty() || body.charAt(0) != '{') {
+            return false;
+        }
+        try {
+            JsonNode node = McpJson.tree(body.getBytes(StandardCharsets.UTF_8));
+            return node.path("error").isObject() && node.path("error").has("code");
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
+    private static JsonNode requestId(String requestLine) {
+        if (requestLine == null || requestLine.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode id = McpJson.tree(requestLine.getBytes(StandardCharsets.UTF_8)).get("id");
+            if (id == null || id.isNull()) {
+                return null;
+            }
+            return id;
+        } catch (RuntimeException ex) {
+            return null;
+        }
     }
 
     /** 401 的 body 是 JSON-RPC 错误；读不出就只报状态，避免把未知内容写到终端。 */

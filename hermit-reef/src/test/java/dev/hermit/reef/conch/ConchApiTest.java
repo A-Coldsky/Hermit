@@ -325,6 +325,36 @@ class ConchApiTest {
     }
 
     @Test
+    void diffDefaultsToTheTwoHighestSemverVersions() throws Exception {
+        byte[] sample = sample();
+        assertThat(upload(sample).getResponse().getStatus()).isEqualTo(200);
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/diff").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value(ConchCatalogService.DIFF_NEEDS_TWO_VERSIONS));
+
+        assertThat(upload(withVersion(sample, "1.2.0")).getResponse().getStatus()).isEqualTo(200);
+        assertThat(upload(withOtp(withVersion(sample, "1.10.0"))).getResponse().getStatus()).isEqualTo(200);
+
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/diff")
+                        .param("from", "1.0.0")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("invalid input"));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/diff")
+                        .param("to", "1.10.0")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value("invalid input"));
+
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/diff").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.addedCredentials[0]").value("otp"))
+                .andExpect(jsonPath("$.data.removedCredentials.length()").value(0));
+    }
+
+    @Test
     void rejectsBadZipsEmptyFilesAndOversizeUploads() throws Exception {
         assertThat(upload(new byte[0]).getResponse().getStatus()).isEqualTo(422);
         assertThat(upload(new byte[ConchPaths.MAX_UPLOAD_BYTES + 1]).getResponse().getStatus()).isEqualTo(422);
@@ -335,7 +365,8 @@ class ConchApiTest {
                 .andExpect(status().isUnprocessableEntity());
         mockMvc.perform(get("/api/admin/conches/legacy_oa/diff").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value(ConchCatalogService.DIFF_NEEDS_TWO_VERSIONS));
         mockMvc.perform(post("/api/admin/conches/legacy_oa/rollback")
                         .header(HttpHeaders.AUTHORIZATION, bearer())
                         .contentType(MediaType.APPLICATION_JSON)

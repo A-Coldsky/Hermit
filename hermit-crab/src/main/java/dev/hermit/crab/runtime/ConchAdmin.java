@@ -136,7 +136,6 @@ public final class ConchAdmin {
         Account resolved = requireAccount(doc.conch(), account);
         Origin source = origin(doc.conch());
         SessionKey key = new SessionKey(source, doc.conch(), resolved.account());
-        sessions.resetLoginPause(key);
         sessions.invalidate(key);
         AuditLog.record(
                 dataSource,

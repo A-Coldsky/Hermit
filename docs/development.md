@@ -77,7 +77,7 @@ npm run dev:reef
 | Tide | `ReportIngestTest`、`TideQueryTest`、`AlertEvaluationTest`、`TidePropertiesTest` | 上报校验、失败去重、聚合与告警、阈值负值拒绝 |
 | 执行 | `EngineUnitTest`、`LegacyOaEngineTest`、`ScriptStepTest` | 模拟 OA、登录隔离、编码/提取、脚本 |
 | 数据 | `SecretFlowTest`、`CredentialCipherTest`、`MasterKeyProviderTest`、`*StoreTest` | 加密、绑定、账户、主密钥、日志 |
-| 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等、本机限制、MCP 模式与 SSE |
+| 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等冲突与同体回放、本机限制、调用渠道、MCP 模式与 SSE、stdio 401 的 JSON-RPC |
 | 前端 | `loading-empty.test.ts`、`copy.test.ts`、`theme.test.ts`、`version-panel.test.ts`、`bar-chart.test.ts` | 初始加载、说明文案、浅色/暗色颜色映射、版本警告详情和图表刻度 |
 | 同步/上报 | `ConchSyncTest`、`SubscriptionTest`、`InstalledConchesTest`、`RollbackGuardTest`、`ReportSenderTest`、`CrabWiringTest`、`SyncExceptionTest` | ETag、订阅安装、失败重试、验签、固定回滚、回滚后的同步状态、Reef 不可达、定时任务 |
 | 验收 | [Phase1AcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/Phase1AcceptanceTest.java) | 独立 Reef + Crab + 模拟 OA，发布调用、坏版本回滚、反馈与敏感数据检查 |
@@ -87,7 +87,7 @@ Java 结果位于各模块 `target/surefire-reports/`。2026-10-16 同步到 `48
 ## 维护方式
 
 - 使用 `@TempDir`、`LegacyOaFixture`、`FakeReef`、`MutableClock`，不要对真实数据执行验收。
-- Reef 表、索引、唯一约束和检查约束使用 `hermit_` 前缀，Flyway 历史表是 `hermit_flyway_schema_history`。发布前 V1–V4 已就地改写，没有数据迁移。已有 `reef-data` 里的 H2 和 Compose MySQL 库必须重建。Crab 的 `CrabDatabase` 保持原表名。
+- Reef 表、索引、唯一约束和检查约束使用 `hermit_` 前缀，Flyway 历史表是 `hermit_flyway_schema_history`。发布前 V1–V4 已就地改写，没有数据迁移。已有 `reef-data` 里的 H2 和 Compose MySQL 库必须重建。Crab 的 `CrabDatabase` 保持原表名。schema 10 起新增版本，不改已经生效的迁移：10 是幂等请求体摘要，11 是调用记录 `channel`。
 - 缺陷修复添加行为回归测试，特别关注权限、失败与并发交错。
 - DTO/Schema 修改检查双方；HTTP 响应修改同步两套前端 `api.ts`。
 - 涉及包格式/同步/发布/网关的改动，定点测试后再跑完整 verify。

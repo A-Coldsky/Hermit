@@ -21,6 +21,8 @@ import java.util.Optional;
  */
 public final class CallLogStore {
     public static final int ERROR_MESSAGE_LIMIT = 500;
+    /** Omitted {@code limit} on the console call list. */
+    public static final int DEFAULT_LIST_LIMIT = 100;
     public static final int LIST_LIMIT = 500;
 
     private final DataSource dataSource;
@@ -48,15 +50,26 @@ public final class CallLogStore {
      * The message names the parameters and does not repeat the query values.
      */
     public List<CallSummary> list(String conch, String action, int limit) {
+        return list(conch, action, null, limit);
+    }
+
+    /**
+     * {@code channel} blank means no channel filter. Any other value must be {@code HTTP},
+     * {@code MCP}, or {@code CONSOLE}.
+     */
+    public List<CallSummary> list(String conch, String action, String channel, int limit) {
         int capped = Math.min(LIST_LIMIT, Math.max(1, limit));
         CallFilter filter = callFilter(blankToNull(conch), blankToNull(action));
+        CallChannel parsedChannel = CallChannel.parseFilter(channel);
+        String channelName = parsedChannel == null ? null : parsedChannel.name();
         return Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT id, trace_id, at, origin, conch, action, account, conch_version,
-                           success, error_code, error_message, duration_ms, api_key_id, source
+                           success, error_code, error_message, duration_ms, api_key_id, source, channel
                     FROM call_logs
                     WHERE (? IS NULL OR conch = ?)
                       AND (? IS NULL OR action = ?)
+                      AND (? IS NULL OR channel = ?)
                     ORDER BY at DESC, id DESC
                     LIMIT ?
                     """)) {
@@ -64,7 +77,9 @@ public final class CallLogStore {
                 statement.setString(2, filter.conch());
                 statement.setString(3, filter.action());
                 statement.setString(4, filter.action());
-                statement.setInt(5, capped);
+                statement.setString(5, channelName);
+                statement.setString(6, channelName);
+                statement.setInt(7, capped);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     List<CallSummary> rows = new ArrayList<>();
                     while (resultSet.next()) {
@@ -84,7 +99,7 @@ public final class CallLogStore {
             CallSummary summary;
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT id, trace_id, at, origin, conch, action, account, conch_version,
-                           success, error_code, error_message, duration_ms, api_key_id, source
+                           success, error_code, error_message, duration_ms, api_key_id, source, channel
                     FROM call_logs
                     WHERE trace_id = ?
                     ORDER BY at DESC, id DESC
@@ -122,8 +137,8 @@ public final class CallLogStore {
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO call_logs (
                     trace_id, at, origin, conch, action, account, conch_version,
-                    success, error_code, error_message, duration_ms, api_key_id, source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    success, error_code, error_message, duration_ms, api_key_id, source, channel
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, Statement.RETURN_GENERATED_KEYS)) {
             statement.setString(1, call.traceId());
             Db.setInstant(statement, 2, clock.instant());
@@ -138,6 +153,7 @@ public final class CallLogStore {
             statement.setLong(11, call.durationMs());
             statement.setString(12, call.apiKeyId());
             statement.setString(13, sourceOf(call.origin()));
+            statement.setString(14, channelOf(call.channel()));
             statement.executeUpdate();
             try (ResultSet keys = statement.getGeneratedKeys()) {
                 if (!keys.next()) {
@@ -223,7 +239,8 @@ public final class CallLogStore {
                 resultSet.getString("error_message"),
                 resultSet.getLong("duration_ms"),
                 resultSet.getString("api_key_id"),
-                sourceOrReef(resultSet.getString("source")));
+                sourceOrReef(resultSet.getString("source")),
+                channelOrHttp(resultSet.getString("channel")));
     }
 
     /** Console and Tide use {@code LOCAL} or {@code REEF}. Official calls are {@code REEF}. */
@@ -233,6 +250,18 @@ public final class CallLogStore {
 
     private static String sourceOrReef(String source) {
         return "LOCAL".equals(source) ? "LOCAL" : "REEF";
+    }
+
+    static String channelOf(CallChannel channel) {
+        return channel == null ? CallChannel.HTTP.name() : channel.name();
+    }
+
+    /** Unknown or missing stored values read as {@code HTTP}, the schema 11 default. */
+    private static String channelOrHttp(String channel) {
+        if (CallChannel.MCP.name().equals(channel) || CallChannel.CONSOLE.name().equals(channel)) {
+            return channel;
+        }
+        return CallChannel.HTTP.name();
     }
 
     static String truncate(String value) {
@@ -287,8 +316,29 @@ public final class CallLogStore {
             String errorCode,
             String errorMessage,
             long durationMs,
-            String apiKeyId
+            String apiKeyId,
+            CallChannel channel
     ) {
+        public NewCall(
+                String traceId,
+                Origin origin,
+                String conch,
+                String action,
+                String account,
+                String conchVersion,
+                boolean success,
+                String errorCode,
+                String errorMessage,
+                long durationMs,
+                String apiKeyId
+        ) {
+            this(traceId, origin, conch, action, account, conchVersion, success, errorCode, errorMessage,
+                    durationMs, apiKeyId, CallChannel.HTTP);
+        }
+
+        public NewCall {
+            channel = channel == null ? CallChannel.HTTP : channel;
+        }
     }
 
     public record CallSummary(
@@ -305,7 +355,8 @@ public final class CallLogStore {
             String errorMessage,
             long durationMs,
             String apiKeyId,
-            String source
+            String source,
+            String channel
     ) {
     }
 

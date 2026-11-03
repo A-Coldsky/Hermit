@@ -13,5 +13,10 @@ public enum ErrorCode {
     NOT_FOUND,
     /** Reef 已停用该 Conch。Crab 同步后不再执行它。 */
     CONCH_DISABLED,
+    /**
+     * 同一 Idempotency-Key 在有效期内换了请求体。HTTP 409，与 {@code NOT_CONFIGURED}、
+     * {@code CONCH_DISABLED} 共用状态码，靠错误码区分。
+     */
+    IDEMPOTENCY_CONFLICT,
     INTERNAL
 }

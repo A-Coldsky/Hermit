@@ -13,11 +13,13 @@ import dev.hermit.common.model.HttpMethod;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.mcp.McpEndpoint;
 import dev.hermit.crab.runtime.ApiJson;
+import dev.hermit.crab.runtime.BodyDigests;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.IdempotencyKeys;
 import dev.hermit.crab.runtime.InvokeOutcome;
 import dev.hermit.crab.store.ApiKeyPrincipal;
+import dev.hermit.crab.store.CallChannel;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.http.HandlerType;
@@ -144,11 +146,14 @@ public final class CrabHttpServer implements AutoCloseable {
         }
         Map<String, Object> input = Map.of();
         Optional<String> idempotency = Optional.empty();
+        String bodySha256 = null;
         if (enabled.isPresent() && CapabilityHttp.method(enabled.get()) == HttpMethod.GET) {
             input = queryInput(ctx);
         } else if (enabled.isPresent() && CapabilityHttp.method(enabled.get()) == HttpMethod.POST) {
+            byte[] raw;
             try {
-                input = ApiJson.objectMap(RequestBodies.read(ctx.req()));
+                raw = RequestBodies.read(ctx.req());
+                input = ApiJson.objectMap(raw);
             } catch (RequestBodies.BodyTooLargeException ex) {
                 GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, "request body too large");
                 return;
@@ -163,6 +168,7 @@ public final class CrabHttpServer implements AutoCloseable {
                     return;
                 }
                 idempotency = Optional.of(key);
+                bodySha256 = BodyDigests.sha256(raw);
             }
         }
         String account = ctx.header("X-Hermit-Account");
@@ -174,6 +180,8 @@ public final class CrabHttpServer implements AutoCloseable {
                 input,
                 accountName,
                 idempotency,
+                bodySha256,
+                CallChannel.HTTP,
                 GatewayResponses.trace(ctx));
         GatewayResponses.writeOutcome(ctx, outcome);
     }

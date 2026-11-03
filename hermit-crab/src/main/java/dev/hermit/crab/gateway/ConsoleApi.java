@@ -290,8 +290,11 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of("apiKeys", rows));
     }
 
+    private static final Set<String> API_KEY_FIELDS = Set.of("name", "readOnly", "conches", "actions");
+
     private static void createApiKey(CrabRuntime runtime, Context ctx) throws Exception {
         JsonNode body = object(ctx);
+        rejectUnknownFields(body, API_KEY_FIELDS);
         String name = requiredText(body, "name");
         boolean readOnly = bool(body, "readOnly", false);
         Set<String> conches = stringSet(body.get("conches"));
@@ -314,7 +317,8 @@ final class ConsoleApi {
 
     private static void calls(CrabRuntime runtime, Context ctx) {
         int limit = limit(ctx);
-        List<CallLogStore.CallSummary> rows = runtime.callLogs().list(ctx.queryParam("conch"), ctx.queryParam("action"), limit);
+        List<CallLogStore.CallSummary> rows = runtime.callLogs().list(
+                ctx.queryParam("conch"), ctx.queryParam("action"), ctx.queryParam("channel"), limit);
         ArrayList<Map<String, Object>> calls = new ArrayList<>();
         for (CallLogStore.CallSummary row : rows) {
             calls.add(summary(row));
@@ -800,6 +804,7 @@ final class ConsoleApi {
         body.put("durationMs", row.durationMs());
         body.put("apiKeyId", row.apiKeyId());
         body.put("source", row.source());
+        body.put("channel", row.channel());
         return body;
     }
 
@@ -893,10 +898,28 @@ final class ConsoleApi {
         return parsed;
     }
 
+    private static void rejectUnknownFields(JsonNode body, Set<String> allowed) {
+        ArrayList<String> unknown = new ArrayList<>();
+        body.fieldNames().forEachRemaining(name -> {
+            if (!allowed.contains(name)) {
+                unknown.add(name);
+            }
+        });
+        if (unknown.isEmpty()) {
+            return;
+        }
+        unknown.sort(String::compareTo);
+        String joined = String.join(", ", unknown);
+        if (joined.length() > 120) {
+            throw new IllegalArgumentException("unknown field");
+        }
+        throw new IllegalArgumentException("unknown field: " + joined);
+    }
+
     private static int limit(Context ctx) {
         String raw = ctx.queryParam("limit");
         if (raw == null || raw.isBlank()) {
-            return 50;
+            return CallLogStore.DEFAULT_LIST_LIMIT;
         }
         int limit;
         try {

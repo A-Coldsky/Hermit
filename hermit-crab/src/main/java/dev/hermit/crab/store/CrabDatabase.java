@@ -40,6 +40,12 @@ import dev.hermit.common.validate.ConchValidator;
  * database that already recorded version 9 still receives the table. Version 7 is left as applied.
  * Version 9 adds {@code call_logs.source} and only alters the version-2 call log table. It runs
  * when its own row is missing and does not read or create version-8 tables.
+ * Version 10 adds nullable {@code idempotency.body_sha256} (lowercase hex SHA-256 of the raw
+ * request body). It runs when its own row is missing. Rows from before this version stay null;
+ * a later retry cannot prove the body matches, so the caller treats null as a conflict.
+ * Version 11 adds {@code call_logs.channel} with default {@code HTTP}. It runs when its own row
+ * is missing and does not rewrite earlier call-log columns. Versions 10 and 11 are not folded
+ * together: they alter different tables.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Before the first official release these statements may be edited in
@@ -133,6 +139,14 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 9)) {
                 applyV9(connection);
                 insertVersion(connection, 9);
+            }
+            if (!applied(connection, 10)) {
+                applyV10(connection);
+                insertVersion(connection, 10);
+            }
+            if (!applied(connection, 11)) {
+                applyV11(connection);
+                insertVersion(connection, 11);
             }
             return null;
         });
@@ -528,6 +542,16 @@ public final class CrabDatabase implements AutoCloseable {
     private static void applyV9(Connection connection) throws SQLException {
         execute(connection, """
                 ALTER TABLE call_logs ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'REEF'
+                """);
+    }
+
+    private static void applyV10(Connection connection) throws SQLException {
+        execute(connection, "ALTER TABLE idempotency ADD COLUMN body_sha256 VARCHAR(64)");
+    }
+
+    private static void applyV11(Connection connection) throws SQLException {
+        execute(connection, """
+                ALTER TABLE call_logs ADD COLUMN channel VARCHAR(16) NOT NULL DEFAULT 'HTTP'
                 """);
     }
 

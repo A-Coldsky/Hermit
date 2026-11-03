@@ -16,8 +16,9 @@ import java.util.Optional;
 
 /**
  * Stores the client envelope for a POST idempotency key. The blob is ciphertext; the AAD field
- * is {@code idempotency}. A row older than 24 hours, or one that no longer decrypts, is deleted
- * and treated as a miss.
+ * is {@code idempotency}. {@code body_sha256} is the lowercase hex SHA-256 of the raw request
+ * body and is not encrypted. A row older than 24 hours, or one that no longer decrypts, is
+ * deleted and treated as a miss. A null digest is a row written before schema 10.
  */
 public final class IdempotencyStore {
     public static final Duration TTL = Duration.ofHours(24);
@@ -33,7 +34,7 @@ public final class IdempotencyStore {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    public Optional<String> findFresh(Origin origin, String conch, String account, String action, String key) {
+    public Optional<Cached> findFresh(Origin origin, String conch, String account, String action, String key) {
         return Db.transaction(dataSource, connection -> {
             Row row = select(connection, origin, conch, account, action, key);
             if (row == null) {
@@ -44,7 +45,8 @@ public final class IdempotencyStore {
                 return Optional.empty();
             }
             try {
-                return Optional.of(cipher.decrypt(origin, conch, account, FIELD, row.ciphertext()));
+                String envelope = cipher.decrypt(origin, conch, account, FIELD, row.ciphertext());
+                return Optional.of(new Cached(envelope, row.bodySha256()));
             } catch (CredentialDecryptException ex) {
                 delete(connection, origin, conch, account, action, key);
                 return Optional.empty();
@@ -52,13 +54,26 @@ public final class IdempotencyStore {
         });
     }
 
-    public void save(Origin origin, String conch, String account, String action, String key, String envelopeJson) {
+    /**
+     * {@code bodySha256} is the lowercase hex digest of the raw body, or null when the caller has
+     * no body bytes (in-process callers). HTTP always passes a digest.
+     */
+    public void save(
+            Origin origin,
+            String conch,
+            String account,
+            String action,
+            String key,
+            String envelopeJson,
+            String bodySha256
+    ) {
         Objects.requireNonNull(envelopeJson, "envelopeJson");
         byte[] ciphertext = cipher.encrypt(origin, conch, account, FIELD, envelopeJson);
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
-                    INSERT INTO idempotency (origin, conch, account, action, "key", created_at, response_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO idempotency (
+                        origin, conch, account, action, "key", created_at, response_json, body_sha256
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """)) {
                 statement.setString(1, origin.name());
                 statement.setString(2, conch);
@@ -67,6 +82,7 @@ public final class IdempotencyStore {
                 statement.setString(5, key);
                 Db.setInstant(statement, 6, clock.instant());
                 statement.setBytes(7, ciphertext);
+                statement.setString(8, bodySha256);
                 statement.executeUpdate();
             }
             return null;
@@ -93,7 +109,7 @@ public final class IdempotencyStore {
             String key
     ) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT created_at, response_json FROM idempotency
+                SELECT created_at, response_json, body_sha256 FROM idempotency
                 WHERE origin = ? AND conch = ? AND account = ? AND action = ? AND "key" = ?
                 """)) {
             statement.setString(1, origin.name());
@@ -105,7 +121,10 @@ public final class IdempotencyStore {
                 if (!resultSet.next()) {
                     return null;
                 }
-                return new Row(Db.instant(resultSet, "created_at"), resultSet.getBytes("response_json"));
+                return new Row(
+                        Db.instant(resultSet, "created_at"),
+                        resultSet.getBytes("response_json"),
+                        resultSet.getString("body_sha256"));
             }
         }
     }
@@ -131,6 +150,10 @@ public final class IdempotencyStore {
         }
     }
 
-    private record Row(Instant createdAt, byte[] ciphertext) {
+    private record Row(Instant createdAt, byte[] ciphertext, String bodySha256) {
+    }
+
+    /** Decrypted envelope plus the stored body digest. The digest is null for pre-schema-10 rows. */
+    public record Cached(String envelope, String bodySha256) {
     }
 }

@@ -19,7 +19,7 @@
 | `mcp.allowed_origins` | `[]` | 额外允许访问 `/mcp` 的浏览器 Origin。没有 `Origin` 的客户端仍允许。本机源站见下方 |
 | `engine.capability_timeout_seconds` | `60` | 正整数；当前不能可靠限制慢速响应的总时间，见审计 A03 |
 | `engine.session_idle_minutes` | `10` | 空闲超过此阈值且配置 alive_check 时检测会话 |
-| `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；test-login 可重置 |
+| `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；只有测试登录成功才解除，失败不会清掉暂停 |
 
 完整配置示例：
 
@@ -134,6 +134,8 @@ Crab HERMIT_HOME/
 
 规则包订阅是 Crab H2 表 `subscriptions`（schema 8）里的行，不是 `config.yml` 的字段。新装 Crab 不订阅任何包。`conches/<conch>/current` 仍表示已安装版本。
 
+schema 10 给 `idempotency` 增加可空列 `body_sha256`（原始请求体的 SHA-256，小写十六进制）。schema 11 给 `call_logs` 增加 `channel`，旧行默认 `HTTP`。两列分属两张表，所以没有并进同一次迁移。`channel` 是调用入口（`HTTP` / `MCP` / `CONSOLE`），`source` 仍是规则包来源（`LOCAL` / `REEF`）。调用记录列表不传 `limit` 时返回 100 条，最多 500 条。控制台调用记录页自己传 100，概览自己传 200；CLI 没有这条列表。
+
 `local-conches/` 只放这一台机器的未签名规则。文件名是 `{conch}.yaml`，不递归，不跟随符号链接。进程启动时加载；`crab local reload` 或 `POST /console/api/local-conches/reload` 让目录里的增删改生效。单个文件上限 1 MiB。控制台上传还受现有请求体上限（1_000_000 字节）约束。与已订阅或已安装的正式包重名时拒绝导入。
 
 Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，Flyway 历史表是 `hermit_flyway_schema_history`。V1–V4 在发布前就地改写，没有把旧表改名的迁移。已经用旧表名启动过的库需要重建：删除 `reef-data/db` 下的 H2 文件，或删除并重建 Compose 的 MySQL 卷 `reef-mysql`。`reef-data` 里的 `keys/` 和 `conches/` 可以留下；整卷删除会同时丢掉密钥和已发布包。Crab 的 `crab-data` 不在这次变更里。
@@ -166,7 +168,7 @@ Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，F
 | `NOT_CONFIGURED` | 默认账号、必填凭证和配置是否齐全；也包括主密钥对不上、凭证无法解密 |
 | 启动提示主密钥文件缺失 / 凭证无法解密 | 恢复原来的 `data/master.key` 或原来的 `HERMIT_MASTER_KEY`。确认放弃旧凭证时删除 `data` 里的数据库后再启动，全新安装才会重新生成主密钥 |
 | `ACCOUNT_NOT_FOUND` | 请求点名账号是否存在，是否有默认账号 |
-| `AUTH_FAILED` / 暂停登录 | 老系统凭证、验证码等变化；修正后 test-login |
+| `AUTH_FAILED` / 暂停登录 | 老系统凭证、验证码等变化；修正后测试登录成功才恢复 |
 | 新版本一直跳过 | min_crab_version、固定回滚状态、相同版本不可覆盖 |
 | CLI 报数据库占用 | serve 已持有 H2；使用本机控制台 API 或停止 serve 后操作 |
 | `RULE_MISMATCH` | 通过 traceId 查步骤信息，核对页面选择器/输出；可能触发回滚 |

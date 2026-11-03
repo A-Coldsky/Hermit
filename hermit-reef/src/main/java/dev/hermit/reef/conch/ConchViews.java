@@ -18,9 +18,6 @@ record UploadResponse(String conch, String version, List<ValidationIssue> warnin
 record PublishResponse(String conch, String version) {
 }
 
-record RollbackResponse(String conch, String from, String to) {
-}
-
 record ConchAvailabilityView(
         String conch,
         boolean disabled,
@@ -192,5 +189,9 @@ record ManifestEntry(
         String minCrabVersion,
         String title,
         String description,
-        int capabilityCount) {
+        int capabilityCount,
+        List<String> requiredCredentials) {
+    ManifestEntry {
+        requiredCredentials = requiredCredentials == null ? List.of() : List.copyOf(requiredCredentials);
+    }
 }

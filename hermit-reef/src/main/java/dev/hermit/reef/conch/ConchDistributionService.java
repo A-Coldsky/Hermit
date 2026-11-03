@@ -2,6 +2,8 @@ package dev.hermit.reef.conch;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.pkg.PackageVerificationException;
 import dev.hermit.common.pkg.VerifiedConch;
 import dev.hermit.common.version.SemVer;
@@ -48,7 +50,8 @@ public class ConchDistributionService {
                     verified.manifest().minCrabVersion(),
                     verified.conchDoc().title(),
                     verified.conchDoc().description(),
-                    verified.conchDoc().actions().size()));
+                    verified.conchDoc().actions().size(),
+                    requiredCredentialNames(verified.conchDoc())));
         }
         entries.sort(Comparator.comparing(ManifestEntry::conch));
         byte[] canonical;
@@ -94,6 +97,21 @@ public class ConchDistributionService {
             }
         }
         return false;
+    }
+
+    static List<String> requiredCredentialNames(ConchDoc doc) {
+        if (doc == null || doc.credentials() == null || doc.credentials().isEmpty()) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        for (var entry : doc.credentials().entrySet()) {
+            CredentialField field = entry.getValue();
+            if (entry.getKey() != null && field != null && field.required()) {
+                names.add(entry.getKey());
+            }
+        }
+        names.sort(String::compareTo);
+        return List.copyOf(names);
     }
 
     private List<VersionRow> currentRows() {

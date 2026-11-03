@@ -65,7 +65,7 @@ import dev.hermit.crab.sync.DisabledConches;
 import dev.hermit.crab.sync.InstalledConches;
 import dev.hermit.crab.sync.LocalConches;
 import dev.hermit.crab.sync.LoadReport;
-import dev.hermit.crab.sync.RollbackGuard;
+import dev.hermit.crab.sync.UpdateResult;
 import dev.hermit.crab.sync.ConchSync;
 import dev.hermit.crab.sync.SubscriptionCommands;
 import dev.hermit.crab.sync.SubscriptionException;
@@ -75,7 +75,7 @@ import dev.hermit.crab.sync.SyncSettings;
 
 /**
  * Composition root for one Crab process. {@link #loadInstalledConches()} verifies packages when a
- * Reef public key is configured and binds sync, rollback, and report hooks when {@code reef.url}
+ * Reef public key is configured and binds sync and report hooks when {@code reef.url}
  * is set. Listeners run after every engine execution.
  */
 public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate {
@@ -267,12 +267,12 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 syncSettings, paths, registry, vault, database.dataSource(), clock, disabledConches);
         sync.onReport(this::rememberCompletedSync);
         this.conchSync = sync;
+        admin.bindStagedDeclarations(sync::stagedDeclaration);
         ReportSettings reportSettings = new ReportSettings(
                 config.reportEnabled(), reefUrl, token, instance, CrabVersion.CURRENT.toString());
         this.reportQueue = new ReportQueue(reportSettings, database.dataSource(), clock);
-        RollbackGuard rollbackGuard = new RollbackGuard(
-                paths, reefKey, registry, database.dataSource(), reportQueue, clock);
-        invoker.bindHooks(reportQueue, rollbackGuard);
+        invoker.bindHooks(reportQueue);
+        invoker.bindVersionSuccess(database.dataSource(), clock);
         if (config.reportEnabled()) {
             this.reportSender = new ReportSender(reportSettings, reportQueue, clock);
         }
@@ -342,6 +342,33 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         ConchOutcome outcome = conchSync.subscribe(conch, actor, this::recordCredentialChanges);
         AuditLog.record(database.dataSource(), actor, AuditKind.SYNC_REQUESTED, "sync", "{}");
         return outcome;
+    }
+
+    /**
+     * Installs the last synced catalog version when it is higher than the installed version.
+     * The caller syncs first; this method does not refetch the manifest.
+     */
+    public ConchOutcome update(String conch, String actor) {
+        prepare();
+        if (conchSync == null) {
+            throw new SubscriptionException(
+                    409, ErrorCode.NOT_CONFIGURED, SubscriptionException.NOT_CONFIGURED);
+        }
+        UpdateResult result = conchSync.update(conch, actor);
+        result.credentialChange().ifPresent(change -> recordCredentialChange(change, Actors.SYNC));
+        if (result.fromVersion() != null && result.toVersion() != null && reportQueue != null) {
+            try {
+                reportQueue.enqueueVersionChange(
+                        conch,
+                        result.fromVersion(),
+                        result.toVersion(),
+                        ReportQueue.MANUAL_UPDATE,
+                        clock.instant());
+            } catch (RuntimeException ex) {
+                LOG.warning("version change report failed: " + ex.getClass().getName());
+            }
+        }
+        return result.outcome();
     }
 
     public void unsubscribe(String conch, String actor) {
@@ -491,16 +518,20 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     private void recordCredentialChanges(SyncReport report) {
         for (CredentialDeclarationChange change : report.credentialChanges()) {
-            LinkedHashMap<String, Object> detail = new LinkedHashMap<>();
-            detail.put("addedRequired", new ArrayList<>(new TreeSet<>(change.addedRequired())));
-            detail.put("removed", new ArrayList<>(new TreeSet<>(change.removed())));
-            AuditLog.record(
-                    database.dataSource(),
-                    Actors.SYNC,
-                    AuditKind.CREDENTIAL_DECLARATION,
-                    change.conch(),
-                    ApiJson.write(detail));
+            recordCredentialChange(change, Actors.SYNC);
         }
+    }
+
+    private void recordCredentialChange(CredentialDeclarationChange change, String actor) {
+        LinkedHashMap<String, Object> detail = new LinkedHashMap<>();
+        detail.put("addedRequired", new ArrayList<>(new TreeSet<>(change.addedRequired())));
+        detail.put("removed", new ArrayList<>(new TreeSet<>(change.removed())));
+        AuditLog.record(
+                database.dataSource(),
+                actor,
+                AuditKind.CREDENTIAL_DECLARATION,
+                change.conch(),
+                ApiJson.write(detail));
     }
 
     private boolean hasInstalledPointer() {

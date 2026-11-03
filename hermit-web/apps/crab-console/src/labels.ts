@@ -2,6 +2,8 @@ export const outcomeLabels: Record<string, { text: string; tone: 'success' | 'in
   INSTALLED: { text: '已安装', tone: 'success' },
   SKIPPED_SAME: { text: '已是最新', tone: 'info' },
   SKIPPED_MIN_VERSION: { text: 'Crab 版本过低', tone: 'warning' },
+  UPDATE_AVAILABLE: { text: '有新版本', tone: 'warning' },
+  SKIPPED_OLDER: { text: '清单版本更低', tone: 'info' },
   SKIPPED_PINNED: { text: '已固定版本', tone: 'info' },
   REJECTED: { text: '已拒绝', tone: 'danger' },
   ROLLED_BACK: { text: '已回退', tone: 'warning' },

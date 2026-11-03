@@ -13,22 +13,15 @@ import java.sql.ResultSet;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 
 import javax.sql.DataSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.pkg.Ed25519Keys;
 import dev.hermit.crab.config.CrabConfig;
-import dev.hermit.crab.engine.ExecutionError;
-import dev.hermit.crab.engine.ExecutionResult;
-import dev.hermit.crab.report.ReportQueue;
-import dev.hermit.crab.report.ReportSettings;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.CrabServer;
@@ -85,7 +78,15 @@ class CrabWiringTest {
                 assertThat(runtime.reportSender().preview().batch().counts()).isNotEmpty();
 
                 reef.publish(ConchTexts.withoutPassword("legacy_oa", "1.1.0"));
-                runtime.syncOnce(Actors.CONSOLE);
+                SyncReport available = runtime.syncOnce(Actors.CONSOLE).orElseThrow();
+                assertThat(available.conches()).anyMatch(row ->
+                        row.kind() == OutcomeKind.UPDATE_AVAILABLE && "1.0.0".equals(row.version()));
+                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+                assertThatThrownBy(() -> runtime.update("legacy_oa", Actors.CONSOLE))
+                        .isInstanceOf(UpdateException.class)
+                        .hasMessage("missing credentials for update: otp");
+                runtime.admin().writeCredentials(doc, "alice", Map.of("otp", "123456"), Actors.CLI);
+                assertThat(runtime.update("legacy_oa", Actors.CONSOLE).kind()).isEqualTo(OutcomeKind.INSTALLED);
                 String detail = auditDetail(runtimeDataSource(runtime));
                 assertThat(detail).contains("otp").contains("password");
                 assertThat(detail).doesNotContain("pw");
@@ -156,11 +157,11 @@ class CrabWiringTest {
     }
 
     @Test
-    void consoleStatusShowsTheInstalledVersionAfterAutomaticRollback() throws Exception {
+    void consoleStatusKeepsTheInstalledVersionUntilAManualUpdate() throws Exception {
         try (FakeReef reef = new FakeReef()) {
             CrabConfig config = config(reef.base().toString(), Ed25519Keys.writePublicPem(reef.keys().getPublic()), false)
                     .withListen("127.0.0.1", 0);
-            CrabPaths paths = new CrabPaths(temp.resolve("rollback-status"));
+            CrabPaths paths = new CrabPaths(temp.resolve("forward-status"));
             CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null);
             TestSubscriptions.grantKnown(runtime.dataSource());
             try (CrabServer server = CrabServer.start(runtime)) {
@@ -169,33 +170,25 @@ class CrabWiringTest {
 
                 reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
                 runtime.conchSync().runScheduled();
-                guard(reef, runtime).onResult("legacy_oa", "1.0.0", execution(true, "1.0.0", null));
 
                 reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
                 runtime.conchSync().runScheduled();
+                JsonNode waiting = syncData(http, server.port()).path("report").path("conches");
+                assertThat(waiting.size()).isEqualTo(1);
+                assertThat(waiting.get(0).path("version").asText()).isEqualTo("1.0.0");
+                assertThat(waiting.get(0).path("kind").asText()).isEqualTo("UPDATE_AVAILABLE");
+                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+
+                HttpResponse<String> update = send(http, server.port(), "POST", "/console/api/conches/legacy_oa/update", "{}");
+                assertThat(update.statusCode()).as(update.body()).isEqualTo(200);
+                assertThat(JSON.readTree(update.body()).path("data").path("outcome").path("kind").asText()).isEqualTo("INSTALLED");
+                assertThat(JSON.readTree(update.body()).path("data").path("outcome").path("version").asText()).isEqualTo("1.0.1");
+                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+
+                runtime.conchSync().runScheduled();
                 JsonNode installed = syncData(http, server.port()).path("report").path("conches");
-                assertThat(installed.size()).isEqualTo(1);
                 assertThat(installed.get(0).path("version").asText()).isEqualTo("1.0.1");
-                assertThat(installed.get(0).path("kind").asText()).isEqualTo("INSTALLED");
-
-                RollbackGuard guard = guard(reef, runtime);
-                for (int i = 0; i < RollbackGuard.MISMATCH_LIMIT; i++) {
-                    guard.onResult("legacy_oa", "1.0.1", execution(false, "1.0.1", ErrorCode.RULE_MISMATCH));
-                }
-
-                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
-                assertThat(pinned(runtime)).containsExactly("1.0.1", "1.0.0");
-
-                JsonNode status = syncData(http, server.port());
-                JsonNode conches = status.path("report").path("conches");
-                assertThat(conches.size()).isEqualTo(1);
-                assertThat(conches.get(0).path("conch").asText()).isEqualTo("legacy_oa");
-                assertThat(conches.get(0).path("version").asText()).isEqualTo("1.0.0");
-                assertThat(conches.get(0).path("kind").asText()).isEqualTo("ROLLED_BACK");
-                assertThat(conches.get(0).path("reason").asText()).isEqualTo(RollbackGuard.REASON);
-                assertThat(conches.toString()).doesNotContain("INSTALLED");
-                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
-                assertThat(pinned(runtime)).containsExactly("1.0.1", "1.0.0");
+                assertThat(installed.get(0).path("kind").asText()).isEqualTo("SKIPPED_SAME");
             }
         }
     }
@@ -281,42 +274,6 @@ class CrabWiringTest {
 
     private static DataSource runtimeDataSource(CrabRuntime runtime) {
         return runtime.dataSource();
-    }
-
-    private static RollbackGuard guard(FakeReef reef, CrabRuntime runtime) {
-        ReportSettings settings = new ReportSettings(
-                false, reef.base(), Optional.empty(), UUID.randomUUID(), "1.0.0");
-        return new RollbackGuard(
-                runtime.paths(),
-                reef.keys().getPublic(),
-                runtime.registry(),
-                runtime.dataSource(),
-                new ReportQueue(settings, runtime.dataSource()));
-    }
-
-    private static ExecutionResult execution(boolean success, String version, ErrorCode code) {
-        return new ExecutionResult(
-                success,
-                null,
-                success ? null : new ExecutionError(code, "mismatch", 0, "assert", "mismatch"),
-                1,
-                List.of(),
-                version,
-                "trace-rollback");
-    }
-
-    private static List<String> pinned(CrabRuntime runtime) throws Exception {
-        try (Connection connection = runtime.dataSource().getConnection();
-             PreparedStatement statement = connection.prepareStatement(
-                     "SELECT bad_version, rolled_back_to FROM pinned_rollbacks WHERE conch = ?")) {
-            statement.setString(1, "legacy_oa");
-            try (ResultSet rows = statement.executeQuery()) {
-                assertThat(rows.next()).isTrue();
-                List<String> pin = List.of(rows.getString(1), rows.getString(2));
-                assertThat(rows.next()).isFalse();
-                return pin;
-            }
-        }
     }
 
     private static String auditDetail(DataSource dataSource) throws Exception {

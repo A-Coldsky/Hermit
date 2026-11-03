@@ -104,7 +104,7 @@ Tide 配置位于 `hermit.reef.tide`：
 | `webhook-url` | 空，设置后发送告警通知 |
 | `evaluate-cron` | `0 */5 * * * *`，每 5 分钟评估 |
 
-启动时校验这些数。`new-version-min-calls`、`baseline-window-days`、`surge-window-minutes`、`surge-min-count`、`dedup-hours` 必须 ≥ 1，写成 0 或负数会拒绝启动，异常信息带对应配置键。`regression-delta`、`no-baseline-failure-rate`、`quiet-hours` 必须 ≥ 0；负数拒绝，0 合法。`quiet-hours=0` 表示没有发布/回滚静默。
+启动时校验这些数。`new-version-min-calls`、`baseline-window-days`、`surge-window-minutes`、`surge-min-count`、`dedup-hours` 必须 ≥ 1，写成 0 或负数会拒绝启动，异常信息带对应配置键。`regression-delta`、`no-baseline-failure-rate`、`quiet-hours` 必须 ≥ 0；负数拒绝，0 合法。`quiet-hours=0` 表示没有发布静默。静默看最近的发布时间，也看历史审计里 `action='ROLLBACK'` 的旧行。新的管理操作不再写 `ROLLBACK`。
 
 具体阈值比较和发布静默以 `AlertService` 为准。去重按 `(kind, conch, conch_version)`，窗口从告警 `created_at` 起算 `dedup-hours`。窗口内已有告警（不论是否已确认）就不再新建，也不再发 webhook。确认不重新计时，也不把剩余时间清掉。失败次数在窗口内继续上涨不会提前再报。`created_at` 早于或等于 `now - dedup-hours` 之后，条件仍然成立才新建下一条并再次通知。未确认但已超出窗口的旧告警同样不再抑制。
 
@@ -135,6 +135,8 @@ Crab HERMIT_HOME/
 规则包订阅是 Crab H2 表 `subscriptions`（schema 8）里的行，不是 `config.yml` 的字段。新装 Crab 不订阅任何包。`conches/<conch>/current` 仍表示已安装版本。
 
 schema 10 给 `idempotency` 增加可空列 `body_sha256`（原始请求体的 SHA-256，小写十六进制）。schema 11 给 `call_logs` 增加 `channel`，旧行默认 `HTTP`。两列分属两张表，所以没有并进同一次迁移。`channel` 是调用入口（`HTTP` / `MCP` / `CONSOLE`），`source` 仍是规则包来源（`LOCAL` / `REEF`）。调用记录列表不传 `limit` 时返回 100 条，最多 500 条。控制台调用记录页自己传 100，概览自己传 200；CLI 没有这条列表。
+
+schema 12 删除 `pinned_rollbacks`。判断依据是版本 12 这一行是否已经记下，不看 `MAX(version)`，因此已经记下更高号码、却没有版本 12 的库启动时仍会删表。版本 3 里创建这张表的语句不改写：新库先建再删。规则失配不再切换版本。`mismatch_streak` 还在，不再写入。`rollback_queue` 仍上报版本变化；手动更新成功且上报开启时 reason 为 `MANUAL_UPDATE`。
 
 `local-conches/` 只放这一台机器的未签名规则。文件名是 `{conch}.yaml`，不递归，不跟随符号链接。进程启动时加载；`crab local reload` 或 `POST /console/api/local-conches/reload` 让目录里的增删改生效。单个文件上限 1 MiB。控制台上传还受现有请求体上限（1_000_000 字节）约束。与已订阅或已安装的正式包重名时拒绝导入。
 
@@ -169,9 +171,9 @@ Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，F
 | 启动提示主密钥文件缺失 / 凭证无法解密 | 恢复原来的 `data/master.key` 或原来的 `HERMIT_MASTER_KEY`。确认放弃旧凭证时删除 `data` 里的数据库后再启动，全新安装才会重新生成主密钥 |
 | `ACCOUNT_NOT_FOUND` | 请求点名账号是否存在，是否有默认账号 |
 | `AUTH_FAILED` / 暂停登录 | 老系统凭证、验证码等变化；修正后测试登录成功才恢复 |
-| 新版本一直跳过 | min_crab_version、固定回滚状态、相同版本不可覆盖 |
+| 新版本没有装上 | 同步只刷新目录。已安装的包要手动 `update`。同时看 `min_crab_version`、Reef 是否停用、默认账号是否缺新增必填凭证 |
 | CLI 报数据库占用 | serve 已持有 H2；使用本机控制台 API 或停止 serve 后操作 |
-| `RULE_MISMATCH` | 通过 traceId 查步骤信息，核对页面选择器/输出；可能触发回滚 |
-| 上游 HTTP 400，或会话 401/403 | 分别是 `INVALID_INPUT` 与 `SESSION_EXPIRED`，不触发自动回滚。核对参数或凭证；页面结构变化才是 `RULE_MISMATCH` |
+| `RULE_MISMATCH` | 通过 traceId 查步骤信息，核对页面选择器/输出。已安装版本保持不动，用更高版本修复后再手动更新 |
+| 上游 HTTP 400，或会话 401/403 | 分别是 `INVALID_INPUT` 与 `SESSION_EXPIRED`。核对参数或凭证；页面结构变化才是 `RULE_MISMATCH` |
 
 Reef 日志：`docker compose logs -f reef` 或 Java 进程输出。Crab 日志查看进程输出与控制台调用详情；同机容器用 `docker compose --profile client logs -f crab`，独立容器用 `docker compose -f docker-compose.crab.yml logs -f crab`。不要把敏感配置直接附入问题报告。

@@ -37,14 +37,14 @@ flowchart LR
 | [common/parse](../hermit-common/src/main/java/dev/hermit/common/parse) / [validate](../hermit-common/src/main/java/dev/hermit/common/validate) | 形状/未知字段/别名解析，语义校验，`ConchDiff` |
 | [common/template](../hermit-common/src/main/java/dev/hermit/common/template) / [pkg](../hermit-common/src/main/java/dev/hermit/common/pkg) | 表达式/过滤器，ZIP/SHA-256/Ed25519 |
 | [reef](../hermit-reef/src/main/java/dev/hermit/reef) | `ReefApplication` 启动；`security` 三条安全链；`admin` 登录/初始化 |
-| [reef/conch](../hermit-reef/src/main/java/dev/hermit/reef/conch) | 上传/发布/停用/回滚/分发，存储、数据库行锁和本地锁 |
+| [reef/conch](../hermit-reef/src/main/java/dev/hermit/reef/conch) | 上传/发布/停用/分发，存储、数据库行锁和本地锁 |
 | [reef/tide](../hermit-reef/src/main/java/dev/hermit/reef/tide) / [retention](../hermit-reef/src/main/java/dev/hermit/reef/retention) | 报告入库、聚合、告警/Webhook、过期清理 |
 | [crab/cli](../hermit-crab/src/main/java/dev/hermit/crab/cli) | `CrabMain` 经 `CrabCommand` 分派命令 |
 | [crab/runtime](../hermit-crab/src/main/java/dev/hermit/crab/runtime) | `CrabRuntime` 装配；`CrabServer` 生命周期；`Invoker` 调用层；`ConchAdmin` 管理操作 |
 | [crab/engine](../hermit-crab/src/main/java/dev/hermit/crab/engine) | 输入校验、规则注册、账号锁/会话、步骤、Rhino 沙箱、输出脱敏 |
 | [crab/store](../hermit-crab/src/main/java/dev/hermit/crab/store) / [secure](../hermit-crab/src/main/java/dev/hermit/crab/secure) | H2、账户、配置、凭证/会话/幂等响应加密、API Key、日志 |
 | [crab/gateway](../hermit-crab/src/main/java/dev/hermit/crab/gateway) / [mcp](../hermit-crab/src/main/java/dev/hermit/crab/mcp) | HTTP API、本机控制台、OpenAPI、MCP HTTP/SSE、stdio 桥接 |
-| [crab/sync](../hermit-crab/src/main/java/dev/hermit/crab/sync) / [report](../hermit-crab/src/main/java/dev/hermit/crab/report) | ETag/安装/回滚/版本保留；失败队列、小时计数与发送重试 |
+| [crab/sync](../hermit-crab/src/main/java/dev/hermit/crab/sync) / [report](../hermit-crab/src/main/java/dev/hermit/crab/report) | ETag/安装/手动更新/版本保留；失败队列、小时计数与发送重试 |
 | [web/apps](../hermit-web/apps) / [shared](../hermit-web/shared) | Vue 3 + TypeScript + Element Plus（按需引入）；两套路由/API 类型/共享组件、明暗主题 |
 | [web/tests](../hermit-web/tests) | Vitest + jsdom；加载/空态、文案、主题、版本警告展示与图表刻度 |
 | [Dockerfile.crab](../Dockerfile.crab) / [容器入口](../deploy/crab-entrypoint.sh) | 打包运行依赖、首次配置/公钥引导、主密钥/实例 ID 校验与降权启动 |
@@ -52,13 +52,13 @@ flowchart LR
 ## 发布与同步
 
 1. 管理员上传 YAML，经解析和校验后保存为 `UPLOADED`，同版本受唯一性约束。
-2. `ConchPublishService` 锁定 Conch 记录，生成签名包、验签自检，标记 `PUBLISHED` 并切换当前版本。这里自检包完整性，不访问老系统。
+2. `ConchPublishService` 锁定 Conch 记录。已有当前版本时，目标 semver 必须严格更高；否则 409，不切换。然后生成签名包、验签自检，标记 `PUBLISHED` 并切换当前版本。这里自检包完整性，不访问老系统。没有管理员回滚。
 3. Crab 用实例 UUID 和 Agent token 拉取带 ETag 的 manifest。新装默认不订阅任何规则包。同步只下载并安装 `subscriptions` 里的名字；清单里其余条目记 `NOT_SUBSCRIBED`，不下载、不进注册表。已经从 `local-conches/` 加载的同名包记 `SKIPPED_LOCAL`，不下载、不覆盖。成功的 HTTP 200 把清单条目（含 title、description、capabilityCount；缺省时 title 为包名、description 为空、capabilityCount 为 0）写入目录缓存。304 且本地快照仍匹配时沿用该缓存；缓存还没写过时再拉一次完整清单。
-4. `ConchSync` 更新已订阅包的版本目录、`current`、数据库状态与注册表，清理被删除的凭证声明。可重试失败不记清单 ETag。`NOT_SUBSCRIBED` 与 `SKIPPED_LOCAL` 都不阻止记下 ETag，也不写入 ETag 快照。`DISABLED` 也不阻止记下 ETag，并把本机保留的版本写入快照，因此 `current` 仍匹配时可以 304，且不会下载。订阅会清掉 ETag 再同步，避免 304 跳过安装。清单里已经没有、但本机已订阅且来源为 OFFICIAL 的已加载包写入 `disabled_conches`，注册表和 `current` 留在原地。未订阅的名字和 `Origin.LOCAL` 都留下，也不写墓碑。
-5. `RollbackGuard` 对同版本累计到 5 次 `RULE_MISMATCH` 且前一版本有成功记录时尝试回滚。成功调用清零，其他错误（含上游 HTTP 400 的 `INVALID_INPUT` 和会话失效的 `SESSION_EXPIRED`）不清零也不计数；不是所有请求严格相邻的“连续失败”。回滚写入 `current` 和固定记录后，控制台 `GET /console/api/sync` 在该 Conch 的文件锁内读取固定记录和 `current`（不替换注册表），把这一行显示为实际安装版本、`kind=ROLLED_BACK`、`reason=RULE_MISMATCH`，不再把坏版本显示成 `INSTALLED`。固定解除前都按这条投影。
-6. 坏版本被固定后，相同或更低版本跳过，超过坏版本的新版本可解除固定。保留最近 3 版，并保护当前、前一和回滚相关版本。
+4. `ConchSync` 刷新目录。第一次订阅才下载并安装 Reef 当前版本。已经安装的正式包遇到更高清单版本记 `UPDATE_AVAILABLE`，不下载；更低版本记 `SKIPPED_OLDER`，不降级。手动更新才下载、验签，并在默认账号具备新增必填凭证后切换 `current` 和注册表。切换时才清理被删除的凭证声明。可重试失败不记清单 ETag。`UPDATE_AVAILABLE` 与 `SKIPPED_OLDER` 把已安装版本写入快照，因此后续同步可以 304。`NOT_SUBSCRIBED` 与 `SKIPPED_LOCAL` 都不阻止记下 ETag，也不写入 ETag 快照。`DISABLED` 也不阻止记下 ETag，并把本机保留的版本写入快照，因此 `current` 仍匹配时可以 304，且不会下载。订阅会清掉 ETag 再同步，避免 304 跳过安装。清单里已经没有、但本机已订阅且来源为 OFFICIAL 的已加载包写入 `disabled_conches`，注册表和 `current` 留在原地。未订阅的名字和 `Origin.LOCAL` 都留下，也不写墓碑。
+5. `RULE_MISMATCH` 进入失败报告，不切换版本。成功的正式调用由 `Invoker` 写入 `version_success`。schema 12 删除 `pinned_rollbacks`。`mismatch_streak` 不再写入。
+6. 保留最近 3 个安装过的版本，并保护当前版本、上一次成功的版本，以及这次切换之前的版本。失配不改变当前版本。
 7. Reef 连接失败（拒绝连接、无法解析、超时、同步被中断）时，这次尝试写入最近同步状态并清掉上次成功的 Conch 列表；手动 `POST /sync` 返回 502 `UPSTREAM_ERROR`，`message` 说明原因和下一步。下一次成功同步覆盖该失败。Reef 已经返回 HTTP 状态时不替换上次成功，手动请求仍是 500 `INTERNAL`。
-8. 管理员停用 Conch 时，Reef 只写 `hermit_conch_availability`（Flyway V4）和审计，不改已签名的 ZIP。分发清单去掉该 Conch，ETag 随之变化。Agent 清单没有停用标志，已停用、从未发布和已撤回的名字都不出现，Crab 读不到 `hermit_conch_availability`。契约是：本机注册表里已有、已订阅、来源是 OFFICIAL、并且这次从清单消失的包，下次同步写入 `disabled_conches`（`CrabDatabase` 版本 7；版本 6 仍只是 `config_audit_at_idx`，已应用的版本 6 不改写）。墓碑是标记。注册表项和 `current` 保留，版本目录和账号凭证保留，HTTP/MCP 仍经 `Invoker` 调用。同步在墓碑还在时不下载、不重试、不重装。第一次写入墓碑记一条 `REEF_CONCH_DISABLED`（actor `sync`，target `OFFICIAL/{conch}`，detail 为包名）。清单再次列出该名字时清掉墓碑，记一条 `REEF_CONCH_ENABLED`，然后按普通更新继续（相同版本不下载，更高版本才安装，回滚固定仍可跳过）。停用和撤回在清单上相同；已经装在本机的包都按停用保留。从未装进注册表的名字不写墓碑。停用期间 Reef 不能发布或回滚，上传仍可以。本机退订则删掉 `subscriptions` 行、卸下注册表、清掉 `current`，并清掉已有停用墓碑，不新写墓碑，也不写 `REEF_CONCH_ENABLED`；账号、凭证和配置保留。已经拿着授权快照的请求仍执行那份快照。schema 8 升级时，已有 `current` 指针的合法包名会以 actor `migration` 写入订阅，避免升级后不再更新。只有墓碑还在、注册表里已经没有这份包时，新调用才返回 `CONCH_DISABLED`。
+8. 管理员停用 Conch 时，Reef 只写 `hermit_conch_availability`（Flyway V4）和审计，不改已签名的 ZIP。分发清单去掉该 Conch，ETag 随之变化。Agent 清单没有停用标志，已停用、从未发布和已撤回的名字都不出现，Crab 读不到 `hermit_conch_availability`。契约是：本机注册表里已有、已订阅、来源是 OFFICIAL、并且这次从清单消失的包，下次同步写入 `disabled_conches`（`CrabDatabase` 版本 7；版本 6 仍只是 `config_audit_at_idx`，已应用的版本 6 不改写）。墓碑是标记。注册表项和 `current` 保留，版本目录和账号凭证保留，HTTP/MCP 仍经 `Invoker` 调用。同步在墓碑还在时不下载、不重试、不重装。第一次写入墓碑记一条 `REEF_CONCH_DISABLED`（actor `sync`，target `OFFICIAL/{conch}`，detail 为包名）。清单再次列出该名字时清掉墓碑，记一条 `REEF_CONCH_ENABLED`，然后按普通更新继续（相同版本不下载，更高版本记 `UPDATE_AVAILABLE`，更低版本记 `SKIPPED_OLDER`）。停用和撤回在清单上相同；已经装在本机的包都按停用保留。从未装进注册表的名字不写墓碑。停用期间 Reef 不能发布，上传仍可以。本机退订则删掉 `subscriptions` 行、卸下注册表、清掉 `current`，并清掉已有停用墓碑，不新写墓碑，也不写 `REEF_CONCH_ENABLED`；账号、凭证和配置保留。已经拿着授权快照的请求仍执行那份快照。schema 8 升级时，已有 `current` 指针的合法包名会以 actor `migration` 写入订阅，避免升级后不再更新。只有墓碑还在、注册表里已经没有这份包时，新调用才返回 `CONCH_DISABLED`。
 
 注册表用不可变 Map 原子替换，但一次请求仍可能跨版本读取；见审计 A01。`Invoker` 把已经授权的 `ConchDoc` 交给引擎，执行使用这份快照，而不是中途再读注册表里的另一版本。Reef 停用只写墓碑，不替换注册表里的版本：已加载的调用继续走权限和能力检查，已经带着快照进来的请求仍执行那份快照。停用不打开版本切换窗口。
 
@@ -80,7 +80,7 @@ sequenceDiagram
   O-->>E: HTML/JSON/Cookie
   E->>E: 提取、脚本、模板输出、脱敏
   E-->>I: ExecutionResult + StepLog
-  I->>I: 上报、回滚判定、调用日志
+  I->>I: 上报、记录成功版本、调用日志
   I-->>C: API envelope / MCP result
 ```
 

@@ -28,7 +28,7 @@
 | --- | --- |
 | 规则字段/步骤 | common `model`、`parse`、`validate`；crab `engine`；MCP/OpenAPI 投影 |
 | 请求与权限 | `CrabHttpServer` → `Invoker` → `RuleEngine`；`ApiKeyPrincipal` |
-| 同步/回滚 | `ConchSync`、`InstalledConches`、`RollbackGuard`、`SyncStore` |
+| 同步/手动更新 | `ConchSync`、`InstalledConches`、`VersionSuccess`、`SyncStore` |
 | 凭证与账号 | `ConchAdmin`、`AccountStore`、`CredentialVault`、`CredentialCipher` |
 | Reef 发布 | `ConchUploadService`、`ConchPublishService`、`ConchDistributionService` |
 | 上报/告警 | Crab `report`、Reef `tide`、common `report` DTO |

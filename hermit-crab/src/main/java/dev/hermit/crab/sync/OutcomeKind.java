@@ -4,10 +4,17 @@ public enum OutcomeKind {
     INSTALLED,
     SKIPPED_SAME,
     SKIPPED_MIN_VERSION,
-    SKIPPED_PINNED,
+    /**
+     * A subscribed installed conch has a higher manifest version. Sync recorded it and did not
+     * download. {@code version} on the outcome is the installed version.
+     */
+    UPDATE_AVAILABLE,
+    /**
+     * The manifest version is lower than the installed version. Sync did not download it.
+     * {@code version} on the outcome is the installed version.
+     */
+    SKIPPED_OLDER,
     REJECTED,
-    /** Local status after {@link RollbackGuard} restored an older installed version. */
-    ROLLED_BACK,
     /**
      * Reef dropped a subscribed official conch from the distribution manifest.
      * The installed copy stays loaded and callable. Sync does not download it again

@@ -27,6 +27,12 @@ export interface ConchSummary {
   reefDisabled: boolean
   /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
   reefDisabledAt: string | null
+  /** 最近一次同步的清单版本高于已安装版本，且 Crab 可以安装它。 */
+  updateAvailable: boolean
+  /** 清单上的版本。本地包，以及清单里已经没有的停用包，为 null。 */
+  latestVersion: string | null
+  /** 清单要求、但当前已安装版本未要求的凭证名，已排序。 */
+  newRequiredCredentials: string[]
 }
 
 export interface CredentialField {
@@ -67,6 +73,12 @@ export interface ConchDetail {
   reefDisabled: boolean
   /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
   reefDisabledAt: string | null
+  /** 最近一次同步的清单版本高于已安装版本，且 Crab 可以安装它。 */
+  updateAvailable: boolean
+  /** 清单上的版本。本地包，以及清单里已经没有的停用包，为 null。 */
+  latestVersion: string | null
+  /** 清单要求、但当前已安装版本未要求的凭证名，已排序。 */
+  newRequiredCredentials: string[]
 }
 
 export interface Account {
@@ -197,6 +209,8 @@ export type SyncOutcomeKind =
   | 'SKIPPED_SAME'
   | 'SKIPPED_MIN_VERSION'
   | 'SKIPPED_PINNED'
+  | 'UPDATE_AVAILABLE'
+  | 'SKIPPED_OLDER'
   | 'REJECTED'
   | 'ROLLED_BACK'
   | 'DISABLED'
@@ -248,6 +262,9 @@ export interface CatalogConch {
   installedVersion: string | null
   disabled: boolean
   localConflict: boolean
+  updateAvailable: boolean
+  latestVersion: string | null
+  newRequiredCredentials: string[]
 }
 
 export interface Catalog {
@@ -266,6 +283,11 @@ export interface SubscriptionOutcome {
 export interface SubscriptionResult {
   conch: string
   subscribed: true
+  outcome: SubscriptionOutcome | null
+}
+
+export interface UpdateResult {
+  conch: string
   outcome: SubscriptionOutcome | null
 }
 
@@ -358,6 +380,8 @@ export const api = {
   /** Reef 未配置时 `configured` 为 false，`conches` 为空。 */
   catalog: () => http.get<Catalog>(`${base}/catalog`),
   subscribe: (conch: string) => http.post<SubscriptionResult>(`${conchPath(conch)}/subscription`),
+  /** 安装最近一次同步清单里的更高版本。不重新拉取清单。 */
+  update: (conch: string) => http.post<UpdateResult>(`${conchPath(conch)}/update`),
   unsubscribe: (conch: string) => http.del<UnsubscribeResult>(`${conchPath(conch)}/subscription`),
 
   reportPreview: () => http.get<{ batch: ReportBatch; dropped: number }>(`${base}/reports/preview`),

@@ -22,7 +22,13 @@ public record ConchCatalog(boolean configured, Instant syncedAt, List<Entry> con
             boolean installed,
             String installedVersion,
             boolean disabled,
-            boolean localConflict
+            boolean localConflict,
+            boolean updateAvailable,
+            String latestVersion,
+            List<String> newRequiredCredentials
     ) {
+        public Entry {
+            newRequiredCredentials = newRequiredCredentials == null ? List.of() : List.copyOf(newRequiredCredentials);
+        }
     }
 }

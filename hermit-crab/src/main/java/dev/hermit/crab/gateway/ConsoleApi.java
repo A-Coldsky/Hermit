@@ -46,6 +46,7 @@ import dev.hermit.crab.sync.LocalConches;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
 import dev.hermit.crab.sync.ConchOutcome;
 import dev.hermit.crab.sync.SubscriptionException;
+import dev.hermit.crab.sync.UpdateException;
 import dev.hermit.crab.sync.SyncError;
 import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
@@ -87,6 +88,7 @@ final class ConsoleApi {
         get(app, "/console/api/sync", ctx -> syncStatus(runtime, ctx));
         get(app, "/console/api/catalog", ctx -> catalog(runtime, ctx));
         post(app, "/console/api/conches/{conch}/subscription", ctx -> subscribe(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/update", ctx -> update(runtime, ctx));
         delete(app, "/console/api/conches/{conch}/subscription", ctx -> unsubscribe(runtime, ctx));
         get(app, "/console/api/reports/preview", ctx -> reportPreview(runtime, ctx));
         post(app, "/console/api/reports/send", ctx -> reportSend(runtime, ctx));
@@ -97,6 +99,7 @@ final class ConsoleApi {
     }
 
     private static void conches(CrabRuntime runtime, Context ctx) {
+        Map<String, ConchCatalog.Entry> catalog = catalogByName(runtime);
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (ConchDoc doc : runtime.registry().snapshot().values()) {
             List<Account> accounts = runtime.admin().listAccounts(doc.conch());
@@ -112,6 +115,7 @@ final class ConsoleApi {
             row.put("loginPaused", loginPaused);
             row.put("source", source(runtime, doc.conch()));
             putReefDisabled(runtime, doc.conch(), row);
+            putUpdateFields(catalog.get(doc.conch()), row);
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("conches", rows));
@@ -141,6 +145,7 @@ final class ConsoleApi {
         body.put("loginPaused", loginPaused(runtime, doc, runtime.admin().listAccounts(doc.conch())));
         body.put("source", source(runtime, doc.conch()));
         putReefDisabled(runtime, doc.conch(), body);
+        putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
         GatewayResponses.writeData(ctx, body);
     }
 
@@ -388,6 +393,28 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, debug(runtime.debug().setEnabled(body.get("enabled").booleanValue(), Actors.CONSOLE)));
     }
 
+    private static Map<String, ConchCatalog.Entry> catalogByName(CrabRuntime runtime) {
+        LinkedHashMap<String, ConchCatalog.Entry> rows = new LinkedHashMap<>();
+        for (ConchCatalog.Entry entry : runtime.catalog().conches()) {
+            if (entry.conch() != null) {
+                rows.put(entry.conch(), entry);
+            }
+        }
+        return rows;
+    }
+
+    private static void putUpdateFields(ConchCatalog.Entry entry, Map<String, Object> row) {
+        if (entry == null) {
+            row.put("updateAvailable", false);
+            row.put("latestVersion", null);
+            row.put("newRequiredCredentials", List.of());
+            return;
+        }
+        row.put("updateAvailable", entry.updateAvailable());
+        row.put("latestVersion", entry.latestVersion());
+        row.put("newRequiredCredentials", entry.newRequiredCredentials());
+    }
+
     private static void catalog(CrabRuntime runtime, Context ctx) {
         ConchCatalog catalog = runtime.catalog();
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
@@ -403,6 +430,9 @@ final class ConsoleApi {
             row.put("installedVersion", entry.installedVersion());
             row.put("disabled", entry.disabled());
             row.put("localConflict", entry.localConflict());
+            row.put("updateAvailable", entry.updateAvailable());
+            row.put("latestVersion", entry.latestVersion());
+            row.put("newRequiredCredentials", entry.newRequiredCredentials());
             rows.add(row);
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
@@ -428,6 +458,15 @@ final class ConsoleApi {
             }
             GatewayResponses.writeError(ctx, StatusCodes.of(error.code()), error.code(), error.message());
         }
+    }
+
+    private static void update(CrabRuntime runtime, Context ctx) {
+        String conch = ctx.pathParam("conch");
+        ConchOutcome outcome = runtime.update(conch, Actors.CONSOLE);
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conch", conch);
+        body.put("outcome", outcomeView(outcome));
+        GatewayResponses.writeData(ctx, body);
     }
 
     private static void unsubscribe(CrabRuntime runtime, Context ctx) {
@@ -592,6 +631,8 @@ final class ConsoleApi {
                 }
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
             } catch (SubscriptionException ex) {
+                GatewayResponses.writeError(ctx, ex.status(), ex.code(), clientMessage(ex));
+            } catch (UpdateException ex) {
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), clientMessage(ex));
             } catch (IllegalArgumentException | IllegalStateException ex) {
                 String message = ex.getMessage();

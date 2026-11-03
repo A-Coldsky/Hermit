@@ -43,7 +43,6 @@ class CrabDatabaseTest {
                     "CAPABILITY_SWITCHES",
                     "DEBUG_STATE",
                     "VERSION_SUCCESS",
-                    "PINNED_ROLLBACKS",
                     "MISMATCH_STREAK",
                     "CONCH_PREVIOUS",
                     "INSTALLED_VERSIONS",
@@ -55,7 +54,8 @@ class CrabDatabaseTest {
                     "PENDING_CREDENTIAL_DELETES",
                     "DISABLED_CONCHES",
                     "SUBSCRIPTIONS");
-            assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            assertThat(tableNames(fixture)).doesNotContain("PINNED_ROLLBACKS");
+            assertThat(versions(fixture)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
             assertThat(indexNames(fixture)).contains("CONFIG_AUDIT_AT_IDX");
             assertThat(columnType(fixture, "CREDENTIALS", "CIPHERTEXT")).contains("BINARY");
         } finally {
@@ -66,7 +66,7 @@ class CrabDatabaseTest {
             Account account = reopened.accounts.resolve(Origin.OFFICIAL, "oa", Optional.of("alice"));
             assertThat(account.account()).isEqualTo("alice");
             assertThat(account.defaultAccount()).isTrue();
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
         }
     }
 
@@ -76,7 +76,7 @@ class CrabDatabaseTest {
         try {
             try (Connection connection = fixture.dataSource.getConnection();
                  Statement statement = connection.createStatement()) {
-                statement.execute("DELETE FROM schema_version WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11)");
+                statement.execute("DELETE FROM schema_version WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12)");
                 statement.execute("ALTER TABLE call_logs DROP COLUMN source");
                 statement.execute("ALTER TABLE call_logs DROP COLUMN channel");
                 statement.execute("ALTER TABLE idempotency DROP COLUMN body_sha256");
@@ -89,7 +89,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
             String value = "v".repeat(600);
             try (Connection connection = reopened.dataSource.getConnection();
                  PreparedStatement insert = connection.prepareStatement(
@@ -122,7 +122,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
             assertThat(tableNames(reopened)).contains(
                     "CALL_LOGS", "STEP_LOGS", "IDEMPOTENCY", "SESSIONS", "CAPABILITY_SWITCHES", "DEBUG_STATE",
                     "REPORT_QUEUE", "SYNC_STATE");
@@ -138,7 +138,7 @@ class CrabDatabaseTest {
             statement.execute("ALTER TABLE call_logs DROP COLUMN source");
             statement.execute("ALTER TABLE call_logs DROP COLUMN channel");
             statement.execute("ALTER TABLE idempotency DROP COLUMN body_sha256");
-            statement.execute("DELETE FROM schema_version WHERE version IN (9, 10, 11)");
+            statement.execute("DELETE FROM schema_version WHERE version IN (9, 10, 11, 12)");
             statement.execute("""
                     INSERT INTO call_logs (trace_id, at, origin, conch, action, account, success, duration_ms)
                     VALUES ('trace-old', CURRENT_TIMESTAMP, 'OFFICIAL', 'legacy_oa', 'ping', 'alice', TRUE, 3)
@@ -151,7 +151,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
             assertThat(tableNames(reopened)).contains("DISABLED_CONCHES");
             assertThat(indexNames(reopened)).contains("CONFIG_AUDIT_AT_IDX");
             try (Connection connection = reopened.dataSource.getConnection();
@@ -175,7 +175,7 @@ class CrabDatabaseTest {
              Statement statement = connection.createStatement()) {
             statement.execute("ALTER TABLE call_logs DROP COLUMN channel");
             statement.execute("ALTER TABLE idempotency DROP COLUMN body_sha256");
-            statement.execute("DELETE FROM schema_version WHERE version IN (10, 11)");
+            statement.execute("DELETE FROM schema_version WHERE version IN (10, 11, 12)");
             statement.execute("""
                     INSERT INTO call_logs (trace_id, at, origin, conch, action, account, success, duration_ms, source)
                     VALUES ('trace-old', CURRENT_TIMESTAMP, 'OFFICIAL', 'legacy_oa', 'ping', 'alice', TRUE, 3, 'REEF')
@@ -190,7 +190,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(home)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
             try (Connection connection = reopened.dataSource.getConnection();
                  PreparedStatement calls = connection.prepareStatement(
                          "SELECT channel FROM call_logs WHERE trace_id = ?")) {
@@ -213,11 +213,37 @@ class CrabDatabaseTest {
     }
 
     @Test
+    void versionTwelveDropsPinnedRollbacksWhenThatVersionRowIsMissing() throws Exception {
+        StoreFixture fixture = StoreFixture.open(temp);
+        try (Connection connection = fixture.dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            assertThat(tableNames(fixture)).doesNotContain("PINNED_ROLLBACKS");
+            statement.execute("DELETE FROM schema_version WHERE version = 12");
+            statement.execute("""
+                    CREATE TABLE pinned_rollbacks (
+                        conch VARCHAR(256) PRIMARY KEY,
+                        bad_version VARCHAR(64) NOT NULL,
+                        rolled_back_to VARCHAR(64) NOT NULL
+                    )
+                    """);
+            assertThat(tableNames(fixture)).contains("PINNED_ROLLBACKS");
+            assertThat(versions(fixture)).doesNotContain(12);
+        } finally {
+            fixture.close();
+        }
+
+        try (StoreFixture reopened = StoreFixture.open(temp)) {
+            assertThat(tableNames(reopened)).doesNotContain("PINNED_ROLLBACKS");
+            assertThat(versions(reopened)).contains(12);
+        }
+    }
+
+    @Test
     void versionFiveAssignsUniqueEventIdsToExistingRollbackRows() throws Exception {
         StoreFixture fixture = StoreFixture.open(temp);
         try (Connection connection = fixture.dataSource.getConnection();
              Statement statement = connection.createStatement()) {
-            statement.execute("DELETE FROM schema_version WHERE version IN (5, 6, 7, 8, 9, 10, 11)");
+            statement.execute("DELETE FROM schema_version WHERE version IN (5, 6, 7, 8, 9, 10, 11, 12)");
             statement.execute("ALTER TABLE call_logs DROP COLUMN source");
             statement.execute("ALTER TABLE call_logs DROP COLUMN channel");
             statement.execute("ALTER TABLE idempotency DROP COLUMN body_sha256");
@@ -230,7 +256,7 @@ class CrabDatabaseTest {
 
         List<String> first;
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
             first = eventIds(reopened);
             assertThat(first).hasSize(2);
             assertThat(first).doesNotHaveDuplicates();
@@ -251,7 +277,7 @@ class CrabDatabaseTest {
                  Statement statement = connection.createStatement()) {
                 statement.execute("DROP TABLE disabled_conches");
                 statement.execute("DROP INDEX config_audit_at_idx");
-                statement.execute("DELETE FROM schema_version WHERE version IN (7, 8, 9, 10, 11)");
+                statement.execute("DELETE FROM schema_version WHERE version IN (7, 8, 9, 10, 11, 12)");
                 statement.execute("ALTER TABLE call_logs DROP COLUMN source");
                 statement.execute("ALTER TABLE call_logs DROP COLUMN channel");
                 statement.execute("ALTER TABLE idempotency DROP COLUMN body_sha256");
@@ -263,7 +289,7 @@ class CrabDatabaseTest {
         }
 
         try (StoreFixture reopened = StoreFixture.open(temp)) {
-            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+            assertThat(versions(reopened)).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
             assertThat(tableNames(reopened)).contains("DISABLED_CONCHES");
             assertThat(indexNames(reopened)).doesNotContain("CONFIG_AUDIT_AT_IDX");
         }
@@ -317,7 +343,7 @@ class CrabDatabaseTest {
             statement.execute("DROP TABLE IF EXISTS capability_switches");
             statement.execute("DROP TABLE IF EXISTS debug_state");
             statement.execute("DELETE FROM schema_version WHERE version = 2");
-            statement.execute("DELETE FROM schema_version WHERE version IN (9, 10, 11)");
+            statement.execute("DELETE FROM schema_version WHERE version IN (9, 10, 11, 12)");
         }
     }
 

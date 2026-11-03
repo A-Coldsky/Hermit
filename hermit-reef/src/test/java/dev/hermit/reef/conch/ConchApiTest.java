@@ -288,37 +288,30 @@ class ConchApiTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"version\":\"1.0.0\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.from").value("1.1.0"))
-                .andExpect(jsonPath("$.data.to").value("1.0.0"));
-        manifestEtag("1.0.0");
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
         assertThat(download("1.1.0")).isNotEmpty();
         assertThat(ConchPackage.readVerified(download("1.0.0"), publicKey).manifest().version()).isEqualTo("1.0.0");
+        mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_UPLOADED));
 
         upload(withVersion(sample, "1.2.0"));
         mockMvc.perform(agent("/agent/conches/legacy_oa/1.2.0"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
-        mockMvc.perform(post("/api/admin/conches/legacy_oa/rollback")
-                        .header(HttpHeaders.AUTHORIZATION, bearer())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"version\":\"1.0.0\"}"))
+        mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.2.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.1.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchPublishService.ROLLBACK_REJECTED));
-        mockMvc.perform(post("/api/admin/conches/legacy_oa/rollback")
-                        .header(HttpHeaders.AUTHORIZATION, bearer())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"version\":\"1.2.0\"}"))
-                .andExpect(status().isConflict());
+                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_UPLOADED));
 
-        String rollbackDetail = jdbc.queryForObject(
-                "SELECT detail FROM hermit_audit_log WHERE action = 'ROLLBACK'", String.class);
-        JsonNode rollback = objectMapper.readTree(rollbackDetail);
-        assertThat(rollback.get("from").asText()).isEqualTo("1.1.0");
-        assertThat(rollback.get("to").asText()).isEqualTo("1.0.0");
         Integer publishes = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM hermit_audit_log WHERE action = 'PUBLISH'", Integer.class);
-        assertThat(publishes).isEqualTo(2);
+        assertThat(publishes).isEqualTo(3);
         Integer currents = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM hermit_conch_versions WHERE is_current = TRUE", Integer.class);
         assertThat(currents).isEqualTo(1);
@@ -371,7 +364,8 @@ class ConchApiTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
         mockMvc.perform(post("/api/admin/conches/missing/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isNotFound());
@@ -447,12 +441,6 @@ class ConchApiTest {
 
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.DISABLED));
-        mockMvc.perform(post("/api/admin/conches/legacy_oa/rollback")
-                        .header(HttpHeaders.AUTHORIZATION, bearer())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"version\":\"1.0.0\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.DISABLED));
         assertThat(json(upload(withVersion(sample, "1.1.0"))).get("success").asBoolean()).isTrue();
@@ -531,8 +519,22 @@ class ConchApiTest {
     }
 
     @Test
+    void publishingAVersionThatIsNotHigherConflicts() throws Exception {
+        byte[] sample = sample();
+        upload(sample);
+        upload(withVersion(sample, "1.1.0"));
+        publish("1.1.0");
+        mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("CONFLICT"))
+                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_HIGHER));
+        manifestEtag("1.1.0");
+    }
+
+    @Test
     void manifestEntrySerializesANullDescription() throws Exception {
-        ManifestEntry entry = new ManifestEntry("legacy_oa", "1.0.0", "ab", "1.0.0", "标题", null, 0);
+        ManifestEntry entry = new ManifestEntry("legacy_oa", "1.0.0", "ab", "1.0.0", "标题", null, 0, List.of());
         JsonNode node = objectMapper.valueToTree(entry);
         assertThat(node.get("description").isNull()).isTrue();
         assertThat(node.get("title").asText()).isEqualTo("标题");
@@ -540,13 +542,13 @@ class ConchApiTest {
         String withNull = etagOf(List.of(entry));
         String withText = etagOf(List.of(new ManifestEntry(
                 entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
-                entry.title(), "说明", entry.capabilityCount())));
+                entry.title(), "说明", entry.capabilityCount(), List.of())));
         String renamed = etagOf(List.of(new ManifestEntry(
                 entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
-                "另一个标题", null, entry.capabilityCount())));
+                "另一个标题", null, entry.capabilityCount(), List.of())));
         String moreCapabilities = etagOf(List.of(new ManifestEntry(
                 entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
-                entry.title(), null, 1)));
+                entry.title(), null, 1, List.of("otp"))));
         assertThat(withText).isNotEqualTo(withNull);
         assertThat(renamed).isNotEqualTo(withNull);
         assertThat(moreCapabilities).isNotEqualTo(withNull);
@@ -699,6 +701,10 @@ class ConchApiTest {
         assertThat(data.get(0).get("title").asText()).isEqualTo("协同办公 OA");
         assertThat(data.get(0).get("description").asText()).isEqualTo(description);
         assertThat(data.get(0).get("capabilityCount").intValue()).isEqualTo(capabilityCount);
+        assertThat(data.get(0).get("requiredCredentials")).isNotNull();
+        java.util.ArrayList<String> required = new java.util.ArrayList<>();
+        data.get(0).get("requiredCredentials").forEach(node -> required.add(node.asText()));
+        assertThat(required).containsExactly("password", "username");
         List<ManifestEntry> entries = objectMapper.convertValue(data, new TypeReference<List<ManifestEntry>>() {
         });
         assertThat(etagOf(entries)).isEqualTo(result.getResponse().getHeader(HttpHeaders.ETAG));
@@ -709,12 +715,16 @@ class ConchApiTest {
                 .isNotEqualTo(etagOf(List.of(current)));
         assertThat(etagOf(List.of(shifted(current, current.title(), current.description(), current.capabilityCount() + 1))))
                 .isNotEqualTo(etagOf(List.of(current)));
+        assertThat(etagOf(List.of(new ManifestEntry(
+                current.conch(), current.version(), current.sha256(), current.minCrabVersion(),
+                current.title(), current.description(), current.capabilityCount(), List.of("otp")))))
+                .isNotEqualTo(etagOf(List.of(current)));
     }
 
     private static ManifestEntry shifted(ManifestEntry entry, String title, String description, int capabilityCount) {
         return new ManifestEntry(
                 entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
-                title, description, capabilityCount);
+                title, description, capabilityCount, entry.requiredCredentials());
     }
 
     private void assertPullCounts(int sum, String currentVersion) throws Exception {

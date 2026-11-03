@@ -1,7 +1,5 @@
 package dev.hermit.reef.conch;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.hermit.common.pkg.PackageVerificationException;
 import dev.hermit.common.pkg.ConchPackage;
 import dev.hermit.common.pkg.VerifiedConch;
@@ -12,9 +10,7 @@ import dev.hermit.reef.web.ApiException;
 import dev.hermit.reef.web.ReefErrorCode;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -24,7 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class ConchPublishService {
 
     static final String PUBLISH_NOT_UPLOADED = "only an uploaded version can be published";
-    static final String ROLLBACK_REJECTED = "rollback target must be a published version that is not current";
+    static final String PUBLISH_NOT_HIGHER = "published version must be higher than the current version";
 
     private static final Logger log = LoggerFactory.getLogger(ConchPublishService.class);
 
@@ -34,19 +30,17 @@ public class ConchPublishService {
     private final PackageVerifier verifier;
     private final ConchAvailabilityRepository availability;
     private final AuditService auditService;
-    private final ObjectMapper objectMapper;
     private final Clock clock;
 
     public ConchPublishService(ConchRepository repository, ConchStorage storage, SigningKeyStore keys,
             PackageVerifier verifier, ConchAvailabilityRepository availability, AuditService auditService,
-            ObjectMapper objectMapper, Clock clock) {
+            Clock clock) {
         this.repository = repository;
         this.storage = storage;
         this.keys = keys;
         this.verifier = verifier;
         this.availability = availability;
         this.auditService = auditService;
-        this.objectMapper = objectMapper;
         this.clock = clock;
     }
 
@@ -58,6 +52,7 @@ public class ConchPublishService {
         if (!"UPLOADED".equals(target.status())) {
             throw conflict(PUBLISH_NOT_UPLOADED);
         }
+        rejectIfNotHigher(target);
         byte[] yaml = storage.readYaml(target.conch(), target.version());
         byte[] zip = ConchPackage.write(yaml, keys.privateKey());
         storage.writeZip(target.conch(), target.version(), zip);
@@ -84,34 +79,22 @@ public class ConchPublishService {
         return new PublishResponse(target.conch(), target.version());
     }
 
-    @Transactional
-    public RollbackResponse rollback(String actor, String conch, String version) {
-        requireActor(actor);
-        if (version == null || version.isBlank() || version.length() > 64) {
-            throw ApiException.invalidInput();
+    private void rejectIfNotHigher(VersionRow target) {
+        VersionRow current = null;
+        for (VersionRow row : repository.lockConch(target.conch())) {
+            if (row.current()) {
+                current = row;
+                break;
+            }
         }
-        SemVer parsed;
-        try {
-            parsed = SemVer.parse(version);
-        } catch (IllegalArgumentException ex) {
-            throw ApiException.invalidInput();
+        if (current == null) {
+            return;
         }
-        String canonical = parsed.toString();
-        List<VersionRow> rows = repository.lockConch(conch);
-        VersionRow target = rows.stream().filter(row -> row.version().equals(canonical)).findFirst().orElse(null);
-        if (target == null) {
-            throw notFound();
+        SemVer currentVersion = SemVer.parse(current.version());
+        SemVer targetVersion = SemVer.parse(target.version());
+        if (targetVersion.compareTo(currentVersion) <= 0) {
+            throw conflict(PUBLISH_NOT_HIGHER);
         }
-        rejectIfDisabled(target.conch());
-        if (!"PUBLISHED".equals(target.status()) || target.current()) {
-            throw conflict(ROLLBACK_REJECTED);
-        }
-        String from = rows.stream().filter(VersionRow::current).map(VersionRow::version).findFirst().orElse(null);
-        if (repository.switchCurrent(target.conch(), target.version()) != 1) {
-            throw conflict(ROLLBACK_REJECTED);
-        }
-        auditService.record(actor, AuditAction.ROLLBACK, target.conch(), target.version(), detail(from, target.version()));
-        return new RollbackResponse(target.conch(), from, target.version());
     }
 
     private VersionRow requireRow(String conch, String version) {
@@ -135,17 +118,6 @@ public class ConchPublishService {
         AvailabilityRow row = availability.lock(conch);
         if (row != null && row.disabled()) {
             throw conflict(ConchAvailabilityService.DISABLED);
-        }
-    }
-
-    private String detail(String from, String to) {
-        Map<String, String> body = new LinkedHashMap<>();
-        body.put("from", from);
-        body.put("to", to);
-        try {
-            return objectMapper.writeValueAsString(body);
-        } catch (JsonProcessingException ex) {
-            throw new ApiException(500, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message());
         }
     }
 

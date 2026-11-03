@@ -14,7 +14,8 @@ final class VersionRetention {
 
     /**
      * Keeps the three most recently installed versions, the version now current, the previous
-     * successful version, and the version current was switched away from.
+     * successful version, and the version current was switched away from. A rule mismatch does
+     * not change which version is current.
      */
     static Set<String> keep(
             String current,

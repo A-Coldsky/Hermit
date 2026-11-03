@@ -16,6 +16,9 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import dev.hermit.common.model.CredentialField;
+import dev.hermit.common.model.ConchDoc;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -176,25 +179,13 @@ public final class FakeReef implements AutoCloseable {
     public void publish(String yaml) {
         byte[] zip = ConchPackage.write(yaml.getBytes(StandardCharsets.UTF_8), keys.getPrivate());
         VerifiedConch verified = ConchPackage.readVerified(zip, keys.getPublic());
-        put(new Entry(
-                verified.conchDoc().conch(),
-                verified.manifest().version(),
-                verified.manifest().sha256(),
-                verified.manifest().minCrabVersion(),
-                verified.conchDoc().title(),
-                zip));
+        put(entryFrom(verified, zip));
     }
 
     public void publishSignedBy(String yaml, PrivateKey privateKey, java.security.PublicKey publicKey) {
         byte[] zip = ConchPackage.write(yaml.getBytes(StandardCharsets.UTF_8), privateKey);
         VerifiedConch verified = ConchPackage.readVerified(zip, publicKey);
-        put(new Entry(
-                verified.conchDoc().conch(),
-                verified.manifest().version(),
-                verified.manifest().sha256(),
-                verified.manifest().minCrabVersion(),
-                verified.conchDoc().title(),
-                zip));
+        put(entryFrom(verified, zip));
     }
 
     public void publishTamperedSignature(String yaml) {
@@ -209,6 +200,7 @@ public final class FakeReef implements AutoCloseable {
                 verified.manifest().sha256(),
                 verified.manifest().minCrabVersion(),
                 verified.conchDoc().title(),
+                requiredNames(verified.conchDoc()),
                 rezip(files)));
     }
 
@@ -221,16 +213,17 @@ public final class FakeReef implements AutoCloseable {
                 "0000000000000000000000000000000000000000000000000000000000000000",
                 verified.manifest().minCrabVersion(),
                 verified.conchDoc().title(),
+                requiredNames(verified.conchDoc()),
                 zip));
     }
 
     public void catalog(String conch, String version) {
-        put(new Entry(conch, version, "abc", "1.0.0", "标题", new byte[0]));
+        put(new Entry(conch, version, "abc", "1.0.0", "标题", List.of(), new byte[0]));
     }
 
     public void publishOversize(String conch) {
         byte[] body = new byte[1024 * 1024 + 1];
-        put(new Entry(conch, "1.0.0", "abc", "1.0.0", "标题", body));
+        put(new Entry(conch, "1.0.0", "abc", "1.0.0", "标题", List.of(), body));
     }
 
     public void remove(String conch) {
@@ -379,6 +372,10 @@ public final class FakeReef implements AutoCloseable {
             node.put("sha256", entry.sha256);
             node.put("minCrabVersion", entry.minCrabVersion);
             node.put("title", entry.title);
+            ArrayNode credentials = node.putArray("requiredCredentials");
+            for (String name : entry.requiredCredentials) {
+                credentials.add(name);
+            }
         });
         return envelope(data).toString().getBytes(StandardCharsets.UTF_8);
     }
@@ -388,8 +385,34 @@ public final class FakeReef implements AutoCloseable {
         entries.stream()
                 .sorted(Comparator.comparing(entry -> entry.conch))
                 .forEach(entry -> payload.append(entry.conch).append('|').append(entry.version).append('|')
-                        .append(entry.sha256).append('|').append(etagSalt).append('\n'));
+                        .append(entry.sha256).append('|').append(String.join(",", entry.requiredCredentials))
+                        .append('|').append(etagSalt).append('\n'));
         return "\"" + sha256(payload.toString().getBytes(StandardCharsets.UTF_8)) + "\"";
+    }
+
+    private static Entry entryFrom(VerifiedConch verified, byte[] zip) {
+        return new Entry(
+                verified.conchDoc().conch(),
+                verified.manifest().version(),
+                verified.manifest().sha256(),
+                verified.manifest().minCrabVersion(),
+                verified.conchDoc().title(),
+                requiredNames(verified.conchDoc()),
+                zip);
+    }
+
+    private static List<String> requiredNames(ConchDoc doc) {
+        if (doc.credentials() == null || doc.credentials().isEmpty()) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        for (Map.Entry<String, CredentialField> field : doc.credentials().entrySet()) {
+            if (field.getValue() != null && field.getValue().required()) {
+                names.add(field.getKey());
+            }
+        }
+        names.sort(String::compareTo);
+        return List.copyOf(names);
     }
 
     private static ObjectNode envelope(com.fasterxml.jackson.databind.JsonNode data) {
@@ -456,6 +479,13 @@ public final class FakeReef implements AutoCloseable {
         return buffer.toByteArray();
     }
 
-    private record Entry(String conch, String version, String sha256, String minCrabVersion, String title, byte[] body) {
+    private record Entry(
+            String conch,
+            String version,
+            String sha256,
+            String minCrabVersion,
+            String title,
+            List<String> requiredCredentials,
+            byte[] body) {
     }
 }

@@ -144,6 +144,8 @@ final class ConfigAudit {
             addNames(names, object.get("cleared"));
             addNames(names, object.get("addedRequired"));
             addNames(names, object.get("removed"));
+            addText(names, object.get("from"));
+            addText(names, object.get("to"));
             JsonNode key = object.get("key");
             if (key != null && key.isTextual()) {
                 addName(names, key.textValue());
@@ -160,6 +162,12 @@ final class ConfigAudit {
             if (item.isTextual()) {
                 addName(names, item.textValue());
             }
+        }
+    }
+
+    private static void addText(Set<String> names, JsonNode node) {
+        if (node != null && node.isTextual()) {
+            addName(names, node.textValue());
         }
     }
 

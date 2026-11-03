@@ -85,8 +85,8 @@ class ConchSyncTest {
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_MIN_VERSION, SyncReasons.MIN_CRAB_VERSION)))
                 .isFalse();
-        assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_PINNED, SyncReasons.PINNED))).isFalse();
-        assertThat(SyncFailures.retryable(outcome(OutcomeKind.ROLLED_BACK, RollbackGuard.REASON))).isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.UPDATE_AVAILABLE, SyncReasons.UPDATE_AVAILABLE))).isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_OLDER, SyncReasons.OLDER_MANIFEST))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.DISABLED, SyncReasons.DISABLED))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.INSTALLED, "HTTP_500"))).isFalse();
@@ -114,9 +114,19 @@ class ConchSyncTest {
             assertThat(reef.paths()).doesNotContain("/agent/crab.jar");
 
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
-            sync.syncOnce();
+            SyncReport available = sync.syncOnce();
+            assertThat(outcome(available, "legacy_oa").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+            assertThat(outcome(available, "legacy_oa").version()).isEqualTo("1.0.0");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            int downloads = reef.downloads();
+            assertThat(reef.downloads()).isEqualTo(downloads);
+
+            ConchOutcome updated = sync.update("legacy_oa", Actors.CONSOLE).outcome();
+            assertThat(updated.kind()).isEqualTo(OutcomeKind.INSTALLED);
             assertThat(registry.snapshot()).containsOnlyKeys("legacy_oa");
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(Files.readString(current).trim()).isEqualTo("1.0.1");
+            assertThat(reef.downloads()).isGreaterThan(downloads);
         }
     }
 
@@ -177,19 +187,22 @@ class ConchSyncTest {
             Files.delete(current);
             Files.createDirectory(current);
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
-            SyncReport failed = sync.syncOnce();
+            SyncReport available = sync.syncOnce();
 
-            assertThat(outcome(failed, "legacy_oa").reason()).isEqualTo(SyncReasons.CURRENT_WRITE_FAILED);
-            assertThat(syncState(crab, "manifest_etag")).isNull();
-            assertThat(syncState(crab, "manifest_snapshot")).isNull();
+            assertThat(outcome(available, "legacy_oa").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+            assertThat(outcome(available, "legacy_oa").version()).isEqualTo("1.0.0");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
             int downloads = reef.downloads();
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessage(SyncReasons.CURRENT_WRITE_FAILED);
+            assertThat(reef.downloads()).isGreaterThan(downloads);
+            assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.1"))).isFalse();
 
             Files.delete(current);
-            SyncReport installed = sync.syncOnce();
+            ConchOutcome installed = sync.update("legacy_oa", Actors.CONSOLE).outcome();
 
-            assertThat(installed.notModified()).isFalse();
-            assertThat(reef.downloads()).isGreaterThan(downloads);
-            assertThat(outcome(installed, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(installed.kind()).isEqualTo(OutcomeKind.INSTALLED);
             assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
         }
     }
@@ -230,10 +243,10 @@ class ConchSyncTest {
             SyncReport changed = sync.syncOnce();
 
             assertThat(changed.notModified()).isFalse();
-            assertThat(outcome(changed, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(outcome(changed, "legacy_oa").kind()).isEqualTo(OutcomeKind.SKIPPED_SAME);
             assertThat(Files.readString(current).trim()).isEqualTo("1.0.0");
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
-            assertThat(reef.downloads()).isGreaterThan(downloads);
+            assertThat(reef.downloads()).isEqualTo(downloads);
             assertThat(manifestRequests(reef) - manifests).isEqualTo(2);
 
             Files.delete(current);
@@ -242,9 +255,9 @@ class ConchSyncTest {
             SyncReport deleted = sync.syncOnce();
 
             assertThat(deleted.notModified()).isFalse();
-            assertThat(outcome(deleted, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(outcome(deleted, "legacy_oa").kind()).isEqualTo(OutcomeKind.SKIPPED_SAME);
             assertThat(Files.readString(current).trim()).isEqualTo("1.0.0");
-            assertThat(reef.downloads()).isGreaterThan(downloads);
+            assertThat(reef.downloads()).isEqualTo(downloads);
             assertThat(manifestRequests(reef) - manifests).isEqualTo(2);
         }
     }
@@ -341,7 +354,11 @@ class ConchSyncTest {
 
             SyncReport report = sync.syncOnce();
 
-            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.REJECTED);
+            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+            assertThat(outcome(report, "legacy_oa").version()).isEqualTo("1.0.0");
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessage("BAD_SIGNATURE");
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
             assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.0");
         }
@@ -455,10 +472,10 @@ class ConchSyncTest {
 
             reef.publish(ConchTexts.standard("other_sys", "1.0.1"));
             SyncReport bumped = sync.syncOnce();
-            assertThat(outcome(bumped, "other_sys").kind()).isEqualTo(OutcomeKind.INSTALLED);
-            assertThat(outcome(bumped, "other_sys").version()).isEqualTo("1.0.1");
-            assertThat(reef.downloads()).isEqualTo(downloads + 1);
-            assertThat(registry.find("other_sys").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(outcome(bumped, "other_sys").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+            assertThat(outcome(bumped, "other_sys").version()).isEqualTo("1.0.0");
+            assertThat(reef.downloads()).isEqualTo(downloads);
+            assertThat(registry.find("other_sys").orElseThrow().version().toString()).isEqualTo("1.0.0");
             assertThat(sync.disabledConches().contains("other_sys")).isFalse();
         }
     }
@@ -505,15 +522,26 @@ class ConchSyncTest {
 
             reef.publish(ConchTexts.withoutPassword("legacy_oa", "1.0.1"));
             SyncReport report = sync.syncOnce();
+            assertThat(report.credentialChanges()).isEmpty();
+            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+            assertThat(sync.catalog().conches().stream().filter(row -> "legacy_oa".equals(row.conch())).findFirst()
+                    .orElseThrow().newRequiredCredentials()).containsExactly("otp");
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessage("missing credentials for update: otp");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            assertThat(crab.vault.fieldNames(Origin.OFFICIAL, "legacy_oa", "alice")).containsExactlyInAnyOrder("password", "username");
 
-            assertThat(report.credentialChanges()).singleElement().satisfies(change -> {
+            crab.vault.write(Origin.OFFICIAL, "legacy_oa", "alice", Map.of("otp", "123456"), "cli");
+            UpdateResult updated = sync.update("legacy_oa", Actors.CONSOLE);
+            assertThat(updated.credentialChange()).get().satisfies(change -> {
                 assertThat(change.conch()).isEqualTo("legacy_oa");
                 assertThat(change.addedRequired()).containsExactly("otp");
                 assertThat(change.removed()).containsExactly("password");
             });
-            assertThat(crab.vault.fieldNames(Origin.OFFICIAL, "legacy_oa", "alice")).containsExactly("username");
+            assertThat(crab.vault.fieldNames(Origin.OFFICIAL, "legacy_oa", "alice")).containsExactlyInAnyOrder("otp", "username");
             assertThat(crab.vault.decryptForExecution(Origin.LOCAL, "legacy_oa", "alice")).containsEntry("password", SECRET);
-            assertThat(report.toString()).doesNotContain(SECRET);
+            assertThat(updated.toString()).doesNotContain(SECRET);
         }
     }
 
@@ -530,11 +558,12 @@ class ConchSyncTest {
             Path current = crab.paths.conches().resolve("legacy_oa").resolve("current");
             Files.delete(current);
             Files.createDirectory(current);
-            reef.publish(ConchTexts.withoutPassword("legacy_oa", "1.0.1"));
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
             SyncReport report = sync.syncOnce();
-
-            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.REJECTED);
-            assertThat(outcome(report, "legacy_oa").reason()).isEqualTo(SyncReasons.CURRENT_WRITE_FAILED);
+            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessage(SyncReasons.CURRENT_WRITE_FAILED);
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
             assertThat(crab.vault.decryptForExecution(Origin.OFFICIAL, "legacy_oa", "alice"))
                     .containsEntry("password", SECRET);
@@ -553,6 +582,8 @@ class ConchSyncTest {
             ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
             sync.syncOnce();
             reef.publish(ConchTexts.withoutPassword("legacy_oa", "1.0.1"));
+            crab.vault.write(Origin.OFFICIAL, "legacy_oa", "alice", Map.of("otp", "123456"), "cli");
+            sync.syncOnce();
             sync.failNextCredentialDelete();
 
             Logger logger = Logger.getLogger(ConchSync.class.getName());
@@ -576,14 +607,14 @@ class ConchSyncTest {
             Level previous = logger.getLevel();
             logger.setLevel(Level.ALL);
             try {
-                SyncReport report = sync.syncOnce();
-                assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+                UpdateResult updated = sync.update("legacy_oa", Actors.CONSOLE);
+                assertThat(updated.outcome().kind()).isEqualTo(OutcomeKind.INSTALLED);
                 assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
                 assertThat(crab.vault.decryptForExecution(Origin.OFFICIAL, "legacy_oa", "alice"))
                         .containsEntry("password", SECRET);
 
                 sync.syncOnce();
-                assertThat(crab.vault.fieldNames(Origin.OFFICIAL, "legacy_oa", "alice")).containsExactly("username");
+                assertThat(crab.vault.fieldNames(Origin.OFFICIAL, "legacy_oa", "alice")).containsExactlyInAnyOrder("otp", "username");
             } finally {
                 logger.removeHandler(handler);
                 logger.setLevel(previous);
@@ -616,14 +647,7 @@ class ConchSyncTest {
             ConchRegistry registry = new ConchRegistry();
             ConchSync sync = sync(reef, crab, registry, Optional.empty(), new SteppingClock());
             publish(reef, sync, "1.0.0");
-            new RollbackGuard(
-                    crab.paths,
-                    reef.keys().getPublic(),
-                    registry,
-                    crab.dataSource,
-                    new dev.hermit.crab.report.ReportQueue(new dev.hermit.crab.report.ReportSettings(
-                            false, reef.base(), Optional.empty(), INSTANCE, "1.0.0"), crab.dataSource))
-                    .onResult("legacy_oa", "1.0.0", success("1.0.0"));
+            new SyncStore(crab.dataSource).recordSuccess("legacy_oa", "1.0.0", Instant.parse("2026-06-01T00:00:00Z"));
             publish(reef, sync, "1.0.1");
             publish(reef, sync, "1.0.2");
             publish(reef, sync, "1.0.3");
@@ -780,7 +804,14 @@ class ConchSyncTest {
     private static void publish(FakeReef reef, ConchSync sync, String version) {
         reef.publish(ConchTexts.standard("legacy_oa", version));
         SyncReport report = sync.syncOnce();
-        assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+        ConchOutcome seen = outcome(report, "legacy_oa");
+        if (seen.kind() == OutcomeKind.UPDATE_AVAILABLE) {
+            ConchOutcome updated = sync.update("legacy_oa", Actors.CONSOLE).outcome();
+            assertThat(updated.kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(updated.version()).isEqualTo(version);
+            return;
+        }
+        assertThat(seen.kind()).isEqualTo(OutcomeKind.INSTALLED);
     }
 
     private static ConchOutcome outcome(SyncReport report, String conch) {

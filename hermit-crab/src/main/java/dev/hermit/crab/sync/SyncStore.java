@@ -118,78 +118,6 @@ final class SyncStore {
         return etag != null && etag.length() <= 512;
     }
 
-    Optional<Pin> pin(String conch) {
-        return Db.transaction(dataSource, connection -> {
-            try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT bad_version, rolled_back_to FROM pinned_rollbacks WHERE conch = ?
-                    """)) {
-                statement.setString(1, conch);
-                try (ResultSet resultSet = statement.executeQuery()) {
-                    if (!resultSet.next()) {
-                        return Optional.empty();
-                    }
-                    return Optional.of(new Pin(resultSet.getString(1), resultSet.getString(2)));
-                }
-            }
-        });
-    }
-
-    void pin(String conch, String badVersion, String rolledBackTo, Instant at) {
-        Db.transaction(dataSource, connection -> {
-            try (PreparedStatement update = connection.prepareStatement("""
-                    UPDATE pinned_rollbacks
-                    SET bad_version = ?, rolled_back_to = ?, at = ?
-                    WHERE conch = ?
-                    """)) {
-                update.setString(1, badVersion);
-                update.setString(2, rolledBackTo);
-                Db.setInstant(update, 3, at);
-                update.setString(4, conch);
-                if (update.executeUpdate() == 1) {
-                    return null;
-                }
-            }
-            try (PreparedStatement insert = connection.prepareStatement("""
-                    INSERT INTO pinned_rollbacks (conch, bad_version, rolled_back_to, at)
-                    VALUES (?, ?, ?, ?)
-                    """)) {
-                insert.setString(1, conch);
-                insert.setString(2, badVersion);
-                insert.setString(3, rolledBackTo);
-                Db.setInstant(insert, 4, at);
-                insert.executeUpdate();
-            }
-            return null;
-        });
-    }
-
-    /** Conch name order, so status projection locks one conch at a time without inverting lock order. */
-    List<PinRow> pins() {
-        return Db.transaction(dataSource, connection -> {
-            try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT conch, bad_version, rolled_back_to FROM pinned_rollbacks ORDER BY conch
-                    """);
-                 ResultSet resultSet = statement.executeQuery()) {
-                List<PinRow> rows = new ArrayList<>();
-                while (resultSet.next()) {
-                    rows.add(new PinRow(resultSet.getString(1), resultSet.getString(2), resultSet.getString(3)));
-                }
-                return rows;
-            }
-        });
-    }
-
-    void clearPin(String conch) {
-        Db.transaction(dataSource, connection -> {
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "DELETE FROM pinned_rollbacks WHERE conch = ?")) {
-                statement.setString(1, conch);
-                statement.executeUpdate();
-            }
-            return null;
-        });
-    }
-
     void recordSuccess(String conch, String version, Instant at) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement update = connection.prepareStatement("""
@@ -211,20 +139,6 @@ final class SyncStore {
                 insert.executeUpdate();
             }
             return null;
-        });
-    }
-
-    boolean succeeded(String conch, String version) {
-        return Db.transaction(dataSource, connection -> {
-            try (PreparedStatement statement = connection.prepareStatement("""
-                    SELECT 1 FROM version_success WHERE conch = ? AND version = ?
-                    """)) {
-                statement.setString(1, conch);
-                statement.setString(2, version);
-                try (ResultSet resultSet = statement.executeQuery()) {
-                    return resultSet.next();
-                }
-            }
         });
     }
 
@@ -280,53 +194,6 @@ final class SyncStore {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
                     "DELETE FROM conch_previous WHERE conch = ?")) {
-                statement.setString(1, conch);
-                statement.executeUpdate();
-            }
-            return null;
-        });
-    }
-
-    int recordMismatch(String conch, String version) {
-        return Db.transaction(dataSource, connection -> {
-            String stored = null;
-            int streak = 0;
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "SELECT version, streak FROM mismatch_streak WHERE conch = ?")) {
-                statement.setString(1, conch);
-                try (ResultSet resultSet = statement.executeQuery()) {
-                    if (resultSet.next()) {
-                        stored = resultSet.getString(1);
-                        streak = resultSet.getInt(2);
-                    }
-                }
-            }
-            int next = version.equals(stored) ? streak + 1 : 1;
-            if (stored == null) {
-                try (PreparedStatement insert = connection.prepareStatement(
-                        "INSERT INTO mismatch_streak (conch, version, streak) VALUES (?, ?, ?)")) {
-                    insert.setString(1, conch);
-                    insert.setString(2, version);
-                    insert.setInt(3, next);
-                    insert.executeUpdate();
-                }
-            } else {
-                try (PreparedStatement update = connection.prepareStatement(
-                        "UPDATE mismatch_streak SET version = ?, streak = ? WHERE conch = ?")) {
-                    update.setString(1, version);
-                    update.setInt(2, next);
-                    update.setString(3, conch);
-                    update.executeUpdate();
-                }
-            }
-            return next;
-        });
-    }
-
-    void clearStreak(String conch) {
-        Db.transaction(dataSource, connection -> {
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "DELETE FROM mismatch_streak WHERE conch = ?")) {
                 statement.setString(1, conch);
                 statement.executeUpdate();
             }
@@ -471,12 +338,6 @@ final class SyncStore {
                 return Optional.ofNullable(resultSet.getString(1));
             }
         }
-    }
-
-    record Pin(String badVersion, String rolledBackTo) {
-    }
-
-    record PinRow(String conch, String badVersion, String rolledBackTo) {
     }
 
     record Installed(String version, Instant at) {

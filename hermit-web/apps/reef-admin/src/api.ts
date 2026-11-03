@@ -232,10 +232,6 @@ export const api = {
     http.post<{ conch: string; version: string }>(
       `/api/admin/conches/${seg(conch)}/versions/${seg(version)}/publish`,
     ),
-  rollback: (conch: string, version: string) =>
-    http.post<{ conch: string; from: string | null; to: string }>(`/api/admin/conches/${seg(conch)}/rollback`, {
-      version,
-    }),
   disableConch: (conch: string, reason: string) =>
     http.post<ConchAvailability>(`/api/admin/conches/${seg(conch)}/disable`, { reason }),
   enableConch: (conch: string, reason: string) =>

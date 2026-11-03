@@ -209,14 +209,14 @@ class AdminApiTest {
         clock.setInstant(ReefTestConfig.START.plusSeconds(1));
         auditService.record(TestSecrets.USERNAME, AuditAction.PUBLISH, "legacy_oa", "1.0.0", "published");
         clock.setInstant(ReefTestConfig.START.plusSeconds(2));
-        auditService.record(TestSecrets.USERNAME, AuditAction.ROLLBACK, "other", "2.0.0", "rolled");
+        auditService.record(TestSecrets.USERNAME, AuditAction.DISABLE, "other", "2.0.0", "disabled");
 
         mockMvc.perform(get("/api/admin/audit").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.page").value(1))
                 .andExpect(jsonPath("$.data.size").value(20))
                 .andExpect(jsonPath("$.data.total").value(3))
-                .andExpect(jsonPath("$.data.items[0].action").value("ROLLBACK"))
+                .andExpect(jsonPath("$.data.items[0].action").value("DISABLE"))
                 .andExpect(jsonPath("$.data.items[1].action").value("PUBLISH"))
                 .andExpect(jsonPath("$.data.items[2].action").value("UPLOAD"));
 

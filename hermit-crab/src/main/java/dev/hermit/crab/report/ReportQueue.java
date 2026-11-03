@@ -78,6 +78,17 @@ public final class ReportQueue {
         }
     }
 
+    public static final String MANUAL_UPDATE = "MANUAL_UPDATE";
+
+    /**
+     * Queues a version-change event on the existing rollback channel. Callers pass
+     * {@link #MANUAL_UPDATE} after a user installs a higher version. Disabled reporting
+     * returns without writing a row.
+     */
+    public void enqueueVersionChange(String conch, String fromVersion, String toVersion, String reason, Instant at) {
+        enqueueRollback(conch, fromVersion, toVersion, reason, at);
+    }
+
     public void enqueueRollback(String conch, String fromVersion, String toVersion, String reason, Instant at) {
         if (!settings.enabled()) {
             return;

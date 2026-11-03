@@ -73,14 +73,14 @@ npm run dev:reef
 | 层 | 主要测试 | 重点 |
 | --- | --- | --- |
 | common | `ConchParserTest`、`ConchValidatorTest`、`ConchDiffTest`、`ConchPackageTest`、`TemplateEngineTest` | 严格字段、引用、版本差异、签名、模板 |
-| Reef | `AdminApiTest`、`AgentToken*Test`、`ConchApiTest`、`ConchConcurrencyTest`、`SigningKeyStoreTest` | 鉴权、令牌缺失拒绝、发布回滚、并发、密钥 |
+| Reef | `AdminApiTest`、`AgentToken*Test`、`ConchApiTest`、`ConchConcurrencyTest`、`SigningKeyStoreTest` | 鉴权、令牌缺失拒绝、发布必须更高、并发、密钥 |
 | Tide | `ReportIngestTest`、`TideQueryTest`、`AlertEvaluationTest`、`TidePropertiesTest` | 上报校验、失败去重、聚合与告警、阈值负值拒绝 |
 | 执行 | `EngineUnitTest`、`LegacyOaEngineTest`、`ScriptStepTest` | 模拟 OA、登录隔离、编码/提取、脚本 |
 | 数据 | `SecretFlowTest`、`CredentialCipherTest`、`MasterKeyProviderTest`、`*StoreTest` | 加密、绑定、账户、主密钥、日志 |
 | 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等冲突与同体回放、本机限制、调用渠道、MCP 模式与 SSE、stdio 401 的 JSON-RPC |
 | 前端 | `loading-empty.test.ts`、`copy.test.ts`、`theme.test.ts`、`version-panel.test.ts`、`bar-chart.test.ts` | 初始加载、说明文案、浅色/暗色颜色映射、版本警告详情和图表刻度 |
-| 同步/上报 | `ConchSyncTest`、`SubscriptionTest`、`InstalledConchesTest`、`RollbackGuardTest`、`ReportSenderTest`、`CrabWiringTest`、`SyncExceptionTest` | ETag、订阅安装、失败重试、验签、固定回滚、回滚后的同步状态、Reef 不可达、定时任务 |
-| 验收 | [Phase1AcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/Phase1AcceptanceTest.java) | 独立 Reef + Crab + 模拟 OA，发布调用、坏版本回滚、反馈与敏感数据检查 |
+| 同步/上报 | `ConchSyncTest`、`SubscriptionTest`、`InstalledConchesTest`、`RuleMismatchStaysTest`、`ReportSenderTest`、`CrabWiringTest`、`SyncExceptionTest` | ETag、订阅安装、手动更新、失败重试、验签、失配不切换版本、Reef 不可达、定时任务 |
+| 验收 | [Phase1AcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/Phase1AcceptanceTest.java) | 独立 Reef + Crab + 模拟 OA，发布后手动更新、失配不回退、反馈与敏感数据检查 |
 
 Java 结果位于各模块 `target/surefire-reports/`。2026-10-16 同步到 `48daca7` 后完整 verify：common 41、Reef 97、Crab 170、验收 1，共 309 项 Java 测试，以及 4 个前端测试文件中的 18 项 Vitest 测试均通过，无失败或跳过。没有 JaCoCo 配置，测试条数不是行/分支覆盖率。
 

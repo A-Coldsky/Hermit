@@ -31,6 +31,12 @@ final class CatalogCache {
                 text(node, "title", entry.title());
                 text(node, "description", entry.description());
                 node.put("capabilityCount", entry.capabilityCount());
+                if (entry.requiredCredentialsKnown()) {
+                    ArrayNode names = node.putArray("requiredCredentials");
+                    for (String name : entry.requiredCredentials()) {
+                        names.add(name);
+                    }
+                }
             }
         }
         return array.toString();
@@ -50,6 +56,8 @@ final class CatalogCache {
                 if (node == null || !node.isObject()) {
                     return Optional.empty();
                 }
+                JsonNode credentials = node.get("requiredCredentials");
+                boolean known = credentials != null && credentials.isArray();
                 entries.add(new ReefClient.CatalogEntry(
                         textOrNull(node, "conch"),
                         textOrNull(node, "version"),
@@ -57,7 +65,9 @@ final class CatalogCache {
                         textOrNull(node, "minCrabVersion"),
                         textOrNull(node, "title"),
                         textOrNull(node, "description"),
-                        countOrZero(node)));
+                        countOrZero(node),
+                        known ? credentialNames(credentials) : List.of(),
+                        known));
             }
             return Optional.of(List.copyOf(entries));
         } catch (Exception ex) {
@@ -79,6 +89,17 @@ final class CatalogCache {
             return null;
         }
         return value.asText();
+    }
+
+    private static List<String> credentialNames(JsonNode array) {
+        List<String> names = new ArrayList<>();
+        for (JsonNode item : array) {
+            if (item != null && item.isTextual() && !item.asText().isBlank()) {
+                names.add(item.asText());
+            }
+        }
+        names.sort(String::compareTo);
+        return List.copyOf(names);
     }
 
     private static int countOrZero(JsonNode node) {

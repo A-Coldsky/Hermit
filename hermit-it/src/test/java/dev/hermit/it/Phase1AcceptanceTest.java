@@ -30,8 +30,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * 第一期完成标准。Reef 以独立进程启动，管理员来自环境变量。告警走 {@code RULE_MISMATCH_SURGE}：
- * 连续 5 次失配会把 Crab 退回旧版本，凑不满默认的 10 次；测试把 {@code surge-min-count} 调到 5，
- * 并把 {@code quiet-hours} 调到 0（刚发布的版本否则至少静默 1 小时）。
+ * 连续 5 次失配不再切换版本，仍要凑满告警次数；测试把 {@code surge-min-count} 调到 5，
+ * 并把 {@code quiet-hours} 调到 0（刚发布的版本否则至少静默 1 小时）。版本只向前，由 Crab 手动更新。
  */
 class Phase1AcceptanceTest {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -128,16 +128,24 @@ class Phase1AcceptanceTest {
                             .replace("td:nth-child(1)", "td.forged-missing");
                     upload(reefBase, token, "legacy_oa.yaml", forged.getBytes(StandardCharsets.UTF_8), 200);
                     publish(reefBase, token, "legacy_oa", "1.1.0");
-                    waitUntil(POLL, () -> synced(crabBase, "1.1.0"));
+                    waitUntil(POLL, () -> updateAvailable(crabBase, "1.1.0"));
+                    assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.0.0");
+                    JsonNode stillGood = call(crabBase, apiKey, null);
+                    assertThat(stillGood.path("success").asBoolean()).isTrue();
 
+                    HttpResponse<String> rollback = post(
+                            reefBase, "/api/admin/conches/legacy_oa/rollback", token, "{\"version\":\"1.0.0\"}");
+                    assertThat(rollback.statusCode()).as(safe(rollback.body())).isEqualTo(405);
+                    assertThat(json(rollback).path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+
+                    JsonNode updated = console(crabBase, "POST", "/console/api/conches/legacy_oa/update", "{}");
+                    assertThat(updated.path("data").path("outcome").path("kind").asText()).isEqualTo("INSTALLED");
+                    assertThat(updated.path("data").path("outcome").path("version").asText()).isEqualTo("1.1.0");
+                    assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.1.0");
                     for (int i = 0; i < 5; i++) {
                         assertCode(call(crabBase, apiKey, null), 422, "RULE_MISMATCH");
                     }
-                    waitUntil(POLL, () -> "1.0.0".equals(conchVersion(crabBase, "legacy_oa")));
-                    JsonNode restored = call(crabBase, apiKey, null);
-                    assertThat(restored.path("success").asBoolean()).isTrue();
-                    assertThat(restored.path("data").path("items").get(0).path("title").asText()).isEqualTo("张三的请假申请");
-                    assertCookieOwner(fixture, "alice", "bob");
+                    assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.1.0");
 
                     JsonNode sent = console(crabBase, "POST", "/console/api/reports/send", "{}");
                     boolean delivered = sent.path("data").path("accepted").asBoolean()
@@ -145,7 +153,21 @@ class Phase1AcceptanceTest {
                     assertThat(delivered).as(sent.toString()).isTrue();
                     waitUntil(POLL, () -> alertKinds(reefBase, token).contains("RULE_MISMATCH_SURGE"));
                     assertThat(alertKinds(reefBase, token)).contains("RULE_MISMATCH_SURGE");
-                    assertThat(rollbackReasons(reefBase, token)).contains("RULE_MISMATCH");
+                    assertThat(rollbackReasons(reefBase, token)).contains("MANUAL_UPDATE");
+
+                    String fixed = sample.replace("\nversion: 1.0.0\n", "\nversion: 1.2.0\n");
+                    upload(reefBase, token, "legacy_oa.yaml", fixed.getBytes(StandardCharsets.UTF_8), 200);
+                    publish(reefBase, token, "legacy_oa", "1.2.0");
+                    waitUntil(POLL, () -> updateAvailable(crabBase, "1.2.0"));
+                    assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.1.0");
+                    assertCode(call(crabBase, apiKey, null), 422, "RULE_MISMATCH");
+                    JsonNode repaired = console(crabBase, "POST", "/console/api/conches/legacy_oa/update", "{}");
+                    assertThat(repaired.path("data").path("outcome").path("version").asText()).isEqualTo("1.2.0");
+                    assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.2.0");
+                    JsonNode restored = call(crabBase, apiKey, null);
+                    assertThat(restored.path("success").asBoolean()).isTrue();
+                    assertThat(restored.path("data").path("items").get(0).path("title").asText()).isEqualTo("张三的请假申请");
+                    assertCookieOwner(fixture, "alice", "bob");
 
                     HttpResponse<String> disabled = post(
                             reefBase, "/api/admin/conches/legacy_oa/disable", token, "{\"reason\":\"phase1 disable\"}");
@@ -165,7 +187,7 @@ class Phase1AcceptanceTest {
                         }
                     }
                     assertThat(listedRow).isNotNull();
-                    assertThat(listedRow.path("version").asText()).isEqualTo("1.0.0");
+                    assertThat(listedRow.path("version").asText()).isEqualTo("1.2.0");
                     assertThat(listedRow.path("reefDisabled").asBoolean()).isTrue();
                     assertThat(listedRow.path("reefDisabledAt").asText()).contains("T");
                     JsonNode detail = console(crabBase, "GET", "/console/api/conches/legacy_oa", null);
@@ -181,7 +203,7 @@ class Phase1AcceptanceTest {
                     }
                     assertThat(catalogRow).isNotNull();
                     assertThat(catalogRow.path("disabled").asBoolean()).isTrue();
-                    assertThat(catalogRow.path("installedVersion").asText()).isEqualTo("1.0.0");
+                    assertThat(catalogRow.path("installedVersion").asText()).isEqualTo("1.2.0");
                     JsonNode syncBody = console(crabBase, "GET", "/console/api/sync", null);
                     JsonNode report = syncBody.path("data").path("report");
                     boolean shownDisabled = false;
@@ -200,7 +222,7 @@ class Phase1AcceptanceTest {
                             reefBase, "/api/admin/conches/legacy_oa/enable", token, "{\"reason\":\"phase1 enable\"}");
                     assertThat(enabled.statusCode()).as(safe(enabled.body())).isEqualTo(200);
                     console(crabBase, "POST", "/console/api/sync", "{}");
-                    assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.0.0");
+                    assertThat(conchVersion(crabBase, "legacy_oa")).isEqualTo("1.2.0");
                     JsonNode reopened = console(crabBase, "GET", "/console/api/conches/legacy_oa", null);
                     assertThat(reopened.path("data").path("reefDisabled").asBoolean()).isFalse();
                     assertThat(reopened.path("data").path("reefDisabledAt").isNull()).isTrue();
@@ -319,6 +341,27 @@ class Phase1AcceptanceTest {
     private void publish(String base, String token, String conch, String version) throws Exception {
         HttpResponse<String> response = post(base, "/api/admin/conches/" + conch + "/versions/" + version + "/publish", token, "");
         assertThat(response.statusCode()).as(safe(response.body())).isEqualTo(200);
+    }
+
+    private boolean updateAvailable(String base, String version) {
+        try {
+            postConsole(base, "/console/api/sync", "{}");
+            HttpResponse<String> response = consoleRaw(base, "GET", "/console/api/catalog", null);
+            if (response.statusCode() != 200) {
+                return false;
+            }
+            for (JsonNode row : json(response).path("data").path("conches")) {
+                if (!"legacy_oa".equals(row.path("conch").asText())) {
+                    continue;
+                }
+                return row.path("updateAvailable").asBoolean()
+                        && version.equals(row.path("latestVersion").asText())
+                        && !version.equals(conchVersion(base, "legacy_oa"));
+            }
+            return false;
+        } catch (Exception ex) {
+            return false;
+        }
     }
 
     private boolean synced(String base, String version) {

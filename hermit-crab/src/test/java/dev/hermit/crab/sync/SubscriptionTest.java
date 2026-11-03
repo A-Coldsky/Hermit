@@ -242,8 +242,9 @@ class SubscriptionTest {
                 assertThat(runtime.subscribed("legacy_oa")).isTrue();
                 assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
                 SyncReport report = runtime.syncOnce(Actors.CONSOLE).orElseThrow();
-                assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
-                assertThat(outcome(report, "legacy_oa").version()).isEqualTo("1.0.1");
+                assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+                assertThat(outcome(report, "legacy_oa").version()).isEqualTo("1.0.0");
+                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
             }
         }
     }

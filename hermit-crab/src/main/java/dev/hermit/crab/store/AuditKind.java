@@ -17,6 +17,8 @@ public enum AuditKind {
     CREDENTIAL_DECLARATION,
     CONCH_SUBSCRIBED,
     CONCH_UNSUBSCRIBED,
+    /** A console or CLI user installed a higher catalog version. Detail has {@code from} and {@code to}. */
+    CONCH_UPDATED,
     LOCAL_CONCH_IMPORTED,
     LOCAL_CONCH_DELETED,
     /** Reef first dropped a subscribed official conch from the manifest. */

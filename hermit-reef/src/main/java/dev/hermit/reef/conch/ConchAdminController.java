@@ -109,22 +109,12 @@ public class ConchAdminController {
         return ApiResponse.ok(availability.enable(actor(), conch, reason), TraceIds.current(request));
     }
 
-    @PostMapping("/conches/{conch}/rollback")
-    public ApiResponse<RollbackResponse> rollback(@PathVariable("conch") String conch,
-            @RequestBody(required = false) RollbackBody body, HttpServletRequest request) {
-        String version = body == null ? null : body.version();
-        return ApiResponse.ok(publishService.rollback(actor(), conch, version), TraceIds.current(request));
-    }
-
     private static String actor() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || authentication.getName() == null || authentication.getName().isBlank()) {
             throw new ApiException(401, ReefErrorCode.UNAUTHORIZED, ReefErrorCode.UNAUTHORIZED.message());
         }
         return authentication.getName();
-    }
-
-    public record RollbackBody(String version) {
     }
 
     public record ReasonBody(String reason) {

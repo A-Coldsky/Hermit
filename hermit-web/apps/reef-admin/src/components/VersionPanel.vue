@@ -35,8 +35,8 @@ async function confirm(message: string, title: string, button: string): Promise<
 
 async function publish(row: ConchVersion) {
   const message = current.value
-    ? `当前发布版本是 v${current.value.version}。发布后各 Crab 下次同步会切换到 v${row.version}。`
-    : `发布后各 Crab 下次同步会安装 v${row.version}。`
+    ? `当前发布版本是 v${current.value.version}。发布后，已订阅的 Crab 需要手动更新才会安装 v${row.version}。`
+    : `发布后，Crab 第一次订阅时会安装 v${row.version}。之后的更高版本需要手动更新。`
   if (!(await confirm(message, `发布 v${row.version}`, '发布'))) {
     return
   }
@@ -44,23 +44,6 @@ async function publish(row: ConchVersion) {
   try {
     await api.publish(props.conch, row.version)
     ElMessage.success(`v${row.version} 已发布`)
-    emit('changed')
-  } catch (error) {
-    notifyError(error)
-  } finally {
-    busy.value = null
-  }
-}
-
-async function rollback(row: ConchVersion) {
-  const message = `把当前发布版本从 v${current.value?.version ?? '—'} 切回 v${row.version}。各 Crab 下次同步时生效。`
-  if (!(await confirm(message, `回滚到 v${row.version}`, '回滚'))) {
-    return
-  }
-  busy.value = row.version
-  try {
-    const result = await api.rollback(props.conch, row.version)
-    ElMessage.success(`已回滚：v${result.from ?? '—'} → v${result.to}`)
     emit('changed')
   } catch (error) {
     notifyError(error)
@@ -148,20 +131,11 @@ async function runDiff() {
         <template #default="{ row }">
           <el-button link type="primary" @click="showYaml(row)">YAML</el-button>
           <el-button link type="primary" :disabled="versions.length < 2" @click="openDiff(row)">对比</el-button>
-          <el-tooltip v-if="disabled && (row.status === 'UPLOADED' || !row.current)" content="规则包已停用，先启用再发布或回滚">
-            <span class="off">{{ row.status === 'UPLOADED' ? '发布' : '回滚到此版本' }}</span>
+          <el-tooltip v-if="disabled && row.status === 'UPLOADED'" content="规则包已停用，先启用再发布">
+            <span class="off">发布</span>
           </el-tooltip>
           <el-button v-else-if="row.status === 'UPLOADED'" link type="primary" :loading="busy === row.version" @click="publish(row)">
             发布
-          </el-button>
-          <el-button
-            v-else-if="!row.current"
-            link
-            type="warning"
-            :loading="busy === row.version"
-            @click="rollback(row)"
-          >
-            回滚到此版本
           </el-button>
         </template>
       </el-table-column>

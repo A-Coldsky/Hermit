@@ -46,6 +46,10 @@ import dev.hermit.common.validate.ConchValidator;
  * Version 11 adds {@code call_logs.channel} with default {@code HTTP}. It runs when its own row
  * is missing and does not rewrite earlier call-log columns. Versions 10 and 11 are not folded
  * together: they alter different tables.
+ * Version 12 drops {@code pinned_rollbacks}. Automatic rollback no longer switches versions.
+ * It runs when its own row is missing, including a database that already recorded version 11,
+ * and does not rewrite the version-3 {@code CREATE TABLE}. The mismatch streak table stays
+ * and is no longer written.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Before the first official release these statements may be edited in
@@ -147,6 +151,12 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 11)) {
                 applyV11(connection);
                 insertVersion(connection, 11);
+            }
+            // A database that already recorded version 11 still needs this drop. Do not gate it
+            // on MAX(version), and do not rewrite the version-3 CREATE TABLE.
+            if (!applied(connection, 12)) {
+                applyV12(connection);
+                insertVersion(connection, 12);
             }
             return null;
         });
@@ -553,6 +563,10 @@ public final class CrabDatabase implements AutoCloseable {
         execute(connection, """
                 ALTER TABLE call_logs ADD COLUMN channel VARCHAR(16) NOT NULL DEFAULT 'HTTP'
                 """);
+    }
+
+    private static void applyV12(Connection connection) throws SQLException {
+        execute(connection, "DROP TABLE IF EXISTS pinned_rollbacks");
     }
 
     private static boolean applied(Connection connection, int version) throws SQLException {

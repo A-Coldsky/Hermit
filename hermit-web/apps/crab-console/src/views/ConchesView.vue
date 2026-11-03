@@ -137,8 +137,9 @@ onMounted(load)
           <div class="name">
             <strong>
               {{ row.title || row.conch }}
-              <el-tag v-if="row.source === 'LOCAL'" type="warning" effect="plain" size="small" class="local">本地</el-tag>
-              <el-tag v-if="row.reefDisabled" type="danger" effect="plain" size="small" class="local reef-off">已失效</el-tag>
+              <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
+              <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">已失效</el-tag>
+              <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
             </strong>
             <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
           </div>
@@ -151,6 +152,9 @@ onMounted(load)
           <span v-else>可用：可以通过 OpenAPI 和 MCP 调用</span>
         </div>
         <p v-if="row.reefDisabled" class="reef-off-note">Reef 已停用：本机版本仍可调用，但不会再更新</p>
+        <p v-else-if="row.updateAvailable" class="update-note">
+          可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。进入详情更新
+        </p>
         <div class="foot hm-muted">
           <span><b class="num">{{ row.capabilityCount }}</b> 个能力</span>
           <span><b class="num">{{ row.accountCount }}</b> 个账号</span>
@@ -289,10 +293,11 @@ onMounted(load)
   vertical-align: 2px;
 }
 
-.reef-off-note {
+.reef-off-note,
+.update-note {
   margin: -4px 0 0;
   font-size: 12.5px;
-  color: var(--hm-danger);
+  color: var(--hm-warning);
 }
 
 .summary {

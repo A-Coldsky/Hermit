@@ -9,7 +9,7 @@ import TraceId from '@shared/components/TraceId.vue'
 import { ApiError } from '@shared/http'
 import { errorCodeLabels, formatTime, notifyError, percent, relativeTime } from '@shared/format'
 import { api, type CallSummary, type CrabRelease, type DebugState, type ConchSummary, type SyncReport } from '../api'
-import { outcomeLabels } from '../labels'
+import { outcomeLabels, syncReasonLabels } from '../labels'
 import { refreshPending } from '../status'
 
 const router = useRouter()
@@ -55,7 +55,7 @@ async function loadSync() {
 async function load() {
   loading.value = true
   try {
-    const [s, c, d] = await Promise.all([api.conches(), api.calls({ limit: 200 }), api.debug(), loadSync()])
+    const [s, c, d] = await Promise.all([api.conches(), api.calls({ limit: 100 }), api.debug(), loadSync()])
     conches.value = s.conches
     calls.value = c.calls
     debug.value = d
@@ -154,7 +154,7 @@ onMounted(load)
         :icon="Setting"
         to="/conches"
       />
-      <StatCard label="最近调用" :value="show(calls.length)" hint="最多显示最近 200 次" :icon="List" to="/calls" />
+      <StatCard label="最近调用" :value="show(calls.length)" hint="最多显示最近 100 次" :icon="List" to="/calls" />
       <StatCard
         label="其中失败"
         :value="show(failures)"
@@ -200,7 +200,8 @@ onMounted(load)
                 {{ outcomeLabels[item.kind ?? '']?.text ?? item.kind }}
               </el-tag>
               <span class="mono">{{ item.conch }} v{{ item.version }}</span>
-              <span v-if="item.reason" class="hm-muted">{{ item.reason }}</span>
+              <span v-if="item.reason" class="hm-muted">{{ syncReasonLabels[item.reason] ?? item.reason }}</span>
+              <router-link v-if="item.kind === 'UPDATE_AVAILABLE'" :to="`/conches/${encodeURIComponent(item.conch)}`">去更新</router-link>
             </li>
             <li v-for="name in removedOnly" :key="`rm-${name}`">
               <el-tag type="info" size="small" effect="plain">已移除</el-tag>
@@ -271,8 +272,9 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="错误" width="200">
           <template #default="{ row }">
-            <el-tag type="danger" size="small" effect="light" round>{{ errorCodeLabels[row.errorCode ?? ''] ?? row.errorCode }}</el-tag>
-            <span class="mono code">{{ row.errorCode }}</span>
+            <el-tag type="danger" size="small" effect="light" round :title="row.errorCode ?? ''">
+              {{ errorCodeLabels[row.errorCode ?? ''] ?? '调用失败' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="errorMessage" label="信息" min-width="220" show-overflow-tooltip />
@@ -355,12 +357,6 @@ onMounted(load)
   background: var(--el-color-warning-light-9);
   border-color: var(--el-color-warning-light-8);
   color: var(--el-color-warning-dark-2);
-}
-
-.code {
-  margin-left: 6px;
-  font-size: 11px;
-  color: var(--hm-muted);
 }
 
 :deep(.clickable) {

@@ -1,9 +1,12 @@
 import { flushPromises } from '@vue/test-utils'
+import { ElMessageBox } from 'element-plus'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConchVersion } from '../apps/reef-admin/src/api'
 import { mountPage } from './helpers'
 
-vi.mock('../apps/reef-admin/src/api', () => ({ api: {} }))
+const reef = vi.hoisted(() => ({ diff: vi.fn(), publish: vi.fn() }))
+
+vi.mock('../apps/reef-admin/src/api', () => ({ api: reef }))
 
 import VersionPanel from '../apps/reef-admin/src/components/VersionPanel.vue'
 
@@ -81,5 +84,31 @@ describe('版本表警告列', () => {
     expect(column).toBeGreaterThan(-1)
     const cells = wrapper.findAll('.el-table__body tr')[0].findAll('td').map((td) => td.text())
     expect(cells[column]).toBe('7')
+  })
+})
+
+describe('发布确认', () => {
+  it('列出相对当前版本新增的必填凭证，没有回滚按钮', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    reef.diff.mockResolvedValue({ newRequiredCredentials: ['token'] })
+    const wrapper = await mountPage(VersionPanel, {
+      props: {
+        conch: 'legacy_oa',
+        versions: [
+          version({ version: '1.1.0', status: 'UPLOADED', current: false, publishedBy: null, publishedAt: null }),
+          version({}),
+        ],
+      },
+    })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('回滚')
+    const publish = wrapper.findAll('button').find((b) => b.text() === '发布')!
+    await publish.trigger('click')
+    await flushPromises()
+    expect(reef.diff).toHaveBeenCalledWith('legacy_oa', '1.0.0', '1.1.0')
+    expect(confirm.mock.calls[0][0]).toContain('新增必填凭证：token')
+    expect(confirm.mock.calls[0][0]).toContain('手动更新')
+    expect(reef.publish).not.toHaveBeenCalled()
+    confirm.mockRestore()
   })
 })

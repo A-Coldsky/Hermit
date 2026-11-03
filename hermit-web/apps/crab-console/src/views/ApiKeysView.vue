@@ -86,8 +86,9 @@ async function revoke(key: ApiKey) {
   try {
     await ElMessageBox.confirm(`吊销后使用 ${key.prefix}… 的调用方会立即失败，且无法恢复。`, `吊销 ${key.name}`, {
       confirmButtonText: '吊销',
-      cancelButtonText: '取消',
+      cancelButtonText: '保留',
       type: 'warning',
+      confirmButtonType: 'danger',
     })
   } catch {
     return
@@ -165,7 +166,7 @@ onMounted(load)
           <el-select v-model="form.conches" multiple clearable placeholder="不选表示全部 Reef 规则包" class="full">
             <el-option v-for="s in conchDetails" :key="s.conch" :label="conchLabel(s)" :value="s.conch">
               <span>{{ conchLabel(s) }}</span>
-              <el-tag v-if="s.source === 'LOCAL'" type="warning" effect="plain" size="small" class="tag">本地</el-tag>
+              <el-tag v-if="s.source === 'LOCAL'" type="info" effect="plain" size="small" class="tag">本地</el-tag>
             </el-option>
           </el-select>
           <p v-if="localNames.length && !form.conches.length" class="hint" data-test="local-hint">

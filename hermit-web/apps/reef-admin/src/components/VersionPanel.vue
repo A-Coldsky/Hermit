@@ -33,9 +33,23 @@ async function confirm(message: string, title: string, button: string): Promise<
   }
 }
 
+async function newCredentials(row: ConchVersion): Promise<string> {
+  if (!current.value) return ''
+  try {
+    const diff = await api.diff(props.conch, current.value.version, row.version)
+    const added = diff.newRequiredCredentials ?? []
+    return added.length ? `这个版本新增必填凭证：${added.join('、')}。Crab 使用者要先填好这些凭证才能更新。` : ''
+  } catch {
+    return '没能读取与当前版本的差异，发布前请先点「对比」确认是否新增了必填凭证。'
+  }
+}
+
 async function publish(row: ConchVersion) {
+  busy.value = row.version
+  const credentials = await newCredentials(row)
+  busy.value = null
   const message = current.value
-    ? `当前发布版本是 v${current.value.version}。发布后，已订阅的 Crab 需要手动更新才会安装 v${row.version}。`
+    ? `当前发布版本是 v${current.value.version}。发布后，已订阅的 Crab 需要手动更新才会安装 v${row.version}。${credentials}`
     : `发布后，Crab 第一次订阅时会安装 v${row.version}。之后的更高版本需要手动更新。`
   if (!(await confirm(message, `发布 v${row.version}`, '发布'))) {
     return

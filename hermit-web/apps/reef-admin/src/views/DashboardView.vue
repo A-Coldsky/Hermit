@@ -7,7 +7,7 @@ import StatCard from '@shared/components/StatCard.vue'
 import { notifyError, percent, relativeTime } from '@shared/format'
 import { api, type Alert, type RollbackEvent, type ConchSummary, type TideSummary } from '../api'
 import { refreshOpenAlerts } from '../alerts'
-import { alertKindLabels, isoDaysAgo } from '../labels'
+import { alertKindLabels, isoDaysAgo, versionChangeReasons } from '../labels'
 import { toBars, totals } from '../tide'
 
 const loading = ref(true)
@@ -105,10 +105,10 @@ onMounted(load)
     </div>
 
     <div class="hm-card row">
-      <div class="hm-card-title"><span>最近的自动回退</span></div>
+      <div class="hm-card-title"><span>最近的版本切换</span></div>
       <el-table :data="rollbacks.slice(0, 10)">
-        <template #empty>{{ loading ? '' : '7 天内没有 Crab 发生自动回退' }}</template>
-        <el-table-column label="Conch" min-width="160">
+        <template #empty>{{ loading ? '' : '7 天内没有 Crab 切换版本' }}</template>
+        <el-table-column label="规则包" min-width="160">
           <template #default="{ row }">
             <router-link :to="`/conches/${encodeURIComponent(row.conch)}`" class="mono">{{ row.conch }}</router-link>
           </template>
@@ -118,7 +118,9 @@ onMounted(load)
             <span class="mono">{{ row.fromVersion }} → {{ row.toVersion }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="reason" label="原因" min-width="220" show-overflow-tooltip />
+        <el-table-column label="原因" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ versionChangeReasons[row.reason] ?? row.reason }}</template>
+        </el-table-column>
         <el-table-column prop="instanceId" label="Crab 实例" min-width="140" show-overflow-tooltip />
         <el-table-column label="时间" width="120">
           <template #default="{ row }">{{ relativeTime(row.occurredAt) }}</template>

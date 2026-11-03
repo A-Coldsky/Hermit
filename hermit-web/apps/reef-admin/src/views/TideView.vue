@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import TimeText from '@shared/components/TimeText.vue'
+import { versionChangeReasons } from '../labels'
 import { DataLine, Refresh, RefreshLeft, Warning, WarningFilled } from '@element-plus/icons-vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import BarChart from '@shared/components/BarChart.vue'
@@ -72,7 +73,7 @@ watch([range, conch], load, { immediate: true })
       <StatCard label="调用次数" :value="sum.calls" :icon="DataLine" />
       <StatCard label="失败次数" :value="sum.failures" :tone="sum.failures ? 'warn' : 'ok'" :icon="WarningFilled" />
       <StatCard label="失败率" :value="percent(sum.rate)" :tone="sum.rate > 0.1 ? 'danger' : sum.rate > 0.02 ? 'warn' : 'ok'" :icon="Warning" />
-      <StatCard label="自动回退" :value="rollbacks.length" :tone="rollbacks.length ? 'danger' : 'default'" hint="Crab 因新版本异常切回旧版" :icon="RefreshLeft" />
+      <StatCard label="版本切换" :value="rollbacks.length" hint="Crab 使用者手动更新规则包的次数" :icon="RefreshLeft" />
     </div>
 
     <div class="hm-card">
@@ -90,7 +91,7 @@ watch([range, conch], load, { immediate: true })
       </div>
       <el-table :data="actions" max-height="420">
         <template #empty>{{ loading ? '' : '所选范围内没有调用' }}</template>
-        <el-table-column label="Conch" min-width="140">
+        <el-table-column label="规则包" min-width="140">
           <template #default="{ row }">
             <router-link :to="`/conches/${encodeURIComponent(row.conch)}?tab=stats`" class="mono">{{ row.conch }}</router-link>
           </template>
@@ -123,16 +124,18 @@ watch([range, conch], load, { immediate: true })
     </div>
 
     <div class="hm-card">
-      <div class="hm-card-title"><span>自动回退记录</span></div>
+      <div class="hm-card-title"><span>版本切换记录</span></div>
       <el-table :data="rollbacks">
-        <template #empty>{{ loading ? '' : '所选范围内没有自动回退' }}</template>
-        <el-table-column label="Conch" min-width="140">
+        <template #empty>{{ loading ? '' : '所选范围内没有 Crab 切换版本' }}</template>
+        <el-table-column label="规则包" min-width="140">
           <template #default="{ row }"><span class="mono">{{ row.conch }}</span></template>
         </el-table-column>
         <el-table-column label="版本变化" min-width="150">
           <template #default="{ row }"><span class="mono">{{ row.fromVersion }} → {{ row.toVersion }}</span></template>
         </el-table-column>
-        <el-table-column prop="reason" label="原因" min-width="220" show-overflow-tooltip />
+        <el-table-column label="原因" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ versionChangeReasons[row.reason] ?? row.reason }}</template>
+        </el-table-column>
         <el-table-column prop="instanceId" label="Crab 实例" min-width="160" show-overflow-tooltip />
         <el-table-column label="发生时间" width="230">
           <template #default="{ row }"><TimeText :value="row.occurredAt" /></template>

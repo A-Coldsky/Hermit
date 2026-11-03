@@ -66,3 +66,8 @@ export const issueHints: Record<string, IssueHint> = {
 export function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString()
 }
+
+export const versionChangeReasons: Record<string, string> = {
+  MANUAL_UPDATE: '使用者手动更新',
+  RULE_MISMATCH: '旧版本的自动回退',
+}

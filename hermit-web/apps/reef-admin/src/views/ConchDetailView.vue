@@ -83,7 +83,7 @@ async function saveAvailability() {
       ElMessage.success('已停用。各 Crab 下次同步时标记为失效，已安装的版本仍可调用，但不会再更新')
     } else {
       await api.enableConch(props.conch, reason)
-      ElMessage.success('已启用，各 Crab 下次同步时重新安装当前版本')
+      ElMessage.success('已启用。各 Crab 下次同步时取消失效标记；有更高版本时由使用者手动更新')
     }
     availability.open = false
     await load()
@@ -127,7 +127,7 @@ watch(() => props.conch, load, { immediate: true })
     <template v-else>
       <el-alert v-if="detail?.disabled" type="error" :closable="false" show-icon class="notice" title="这个规则包已停用">
         <template #default>
-          <div>各 Crab 同步后把它标记为失效：已安装的版本仍可调用，但不会再下载或更新。启用后，订阅了它的 Crab 下次同步时恢复更新。停用期间可以上传新版本，但不能发布或回滚。</div>
+          <div>各 Crab 同步后把它标记为失效：已安装的版本仍可调用，但不会再下载或更新。启用后，Crab 下次同步时取消失效标记，有更高版本时由使用者手动更新。停用期间可以上传新版本，但不能发布。</div>
           <div class="reason">
             <template v-if="detail.disabledReason">原因：{{ detail.disabledReason }} · </template>
             {{ detail.disabledBy ?? '—' }} 于 {{ formatTime(detail.disabledAt) }} 停用
@@ -228,7 +228,7 @@ watch(() => props.conch, load, { immediate: true })
     </template>
 
     <el-dialog v-model="availability.open" :title="detail?.disabled ? `启用 ${conch}` : `停用 ${conch}`" width="480px">
-      <p v-if="detail?.disabled" class="hm-muted">启用后，各 Crab 下次同步时重新验签并安装当前发布版本 v{{ detail.version }}。</p>
+      <p v-if="detail?.disabled" class="hm-muted">启用后，各 Crab 下次同步时取消失效标记。本机版本低于当前发布版本 v{{ detail.version }} 时，Crab 上显示「有新版本」，由使用者手动更新。</p>
       <p v-else class="hm-muted">
         停用后，各 Crab 下次同步时把它标记为失效。已安装的版本仍可调用，但 Crab 不会再下载新版本；还没安装的 Crab 也装不上。启用后恢复正常更新。
       </p>

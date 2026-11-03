@@ -10,6 +10,8 @@ import { notifyError } from '@shared/format'
 import { api, type Catalog, type CatalogConch } from '../api'
 import { outcomeLabels } from '../labels'
 import { refreshPending } from '../status'
+import { unsubscribeMessage } from '../copy'
+import { updateConch } from '../update'
 
 const router = useRouter()
 const loading = ref(true)
@@ -69,9 +71,9 @@ async function subscribe(row: CatalogConch) {
 async function unsubscribe(row: CatalogConch) {
   try {
     await ElMessageBox.confirm(
-      `取消订阅后，本机会卸载 ${row.conch}，调用它的 OpenAPI 和 MCP 请求会失败。账号、凭证和配置会保留，重新订阅后可以直接使用。`,
+      unsubscribeMessage(row.conch),
       `取消订阅 ${row.title || row.conch}`,
-      { confirmButtonText: '取消订阅', cancelButtonText: '保留', type: 'warning' },
+      { confirmButtonText: '取消订阅', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
     )
   } catch {
     return
@@ -84,6 +86,16 @@ async function unsubscribe(row: CatalogConch) {
     void refreshPending()
   } catch (error) {
     notifyError(error)
+  } finally {
+    busy.value = null
+  }
+}
+
+async function update(row: CatalogConch) {
+  busy.value = row.conch
+  try {
+    if (await updateConch(row)) void refreshPending()
+    await load()
   } finally {
     busy.value = null
   }
@@ -147,13 +159,15 @@ onMounted(load)
               <el-tag v-if="row.installed && !row.localConflict" type="info" effect="plain" size="small" class="mono">
                 已安装 v{{ row.installedVersion }}
               </el-tag>
-              <el-tag v-if="row.disabled" type="danger" effect="plain" size="small">已失效（Reef 停用）</el-tag>
+              <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="mono">有新版本 v{{ row.latestVersion }}</el-tag>
+              <el-tag v-if="row.disabled" type="warning" effect="plain" size="small">已失效（Reef 停用），本机仍可调用</el-tag>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="170" align="right" fixed="right">
+        <el-table-column label="操作" width="200" align="right" fixed="right">
           <template #default="{ row }">
             <el-button v-if="row.installed && !row.localConflict" link type="primary" @click="open(row)">管理</el-button>
+            <el-button v-if="row.updateAvailable" link type="primary" :loading="busy === row.conch" @click="update(row)">更新</el-button>
             <el-button v-if="row.subscribed" link type="danger" :loading="busy === row.conch" @click="unsubscribe(row)">取消订阅</el-button>
             <el-tooltip v-else-if="row.localConflict" content="本机已有同名本地规则包。删除本地包后才能订阅" placement="top">
               <span><el-button link type="primary" disabled>订阅</el-button></span>

@@ -140,6 +140,8 @@ class GatewayHttpTest {
             assertThat(listed.status()).isEqualTo(200);
             assertThat(listed.json().path("success").asBoolean()).isTrue();
             assertThat(listed.json().path("data").path("items").isArray()).isTrue();
+            assertThat(server.runtime.callLogs().findByTraceId(listed.json().path("traceId").asText())
+                    .orElseThrow().call().channel()).isEqualTo("HTTP");
             assertThat(server.fixture.count("POST", "/login.aspx")).isEqualTo(1);
 
             server.configureAccount("bob");
@@ -257,6 +259,60 @@ class GatewayHttpTest {
             assertThat(left.get().status()).isEqualTo(200);
             assertThat(right.get().body()).isEqualTo(left.get().body());
             assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void idempotencyKeyConflictsWhenTheBodyChangesAndReplaysTheSameBody() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("idem"), PASSWORD, config)) {
+            server.configureAccount("alice");
+            String same = "{\"text\":\"hello\"}";
+            TestServer.Reply first = server.call(
+                    "POST", "/api/legacy_oa/save_note", server.apiKey.plaintext(), "alice", "note-a", same);
+            assertThat(first.status()).isEqualTo(200);
+            int lists = server.fixture.count("GET", "/todo/list.aspx");
+
+            TestServer.Reply replay = server.call(
+                    "POST", "/api/legacy_oa/save_note", server.apiKey.plaintext(), "alice", "note-a", same);
+            assertThat(replay.status()).isEqualTo(200);
+            assertThat(replay.body()).isEqualTo(first.body());
+            assertThat(replay.header("Idempotent-Replayed")).isEqualTo("true");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists);
+
+            String spaced = "{ \"text\" : \"hello\" }";
+            TestServer.Reply spacedConflict = server.call(
+                    "POST", "/api/legacy_oa/save_note", server.apiKey.plaintext(), "alice", "note-a", spaced);
+            assertThat(spacedConflict.status()).isEqualTo(409);
+            assertThat(spacedConflict.json().path("error").path("code").asText()).isEqualTo("IDEMPOTENCY_CONFLICT");
+            assertThat(spacedConflict.json().path("error").path("message").asText())
+                    .isEqualTo(dev.hermit.crab.runtime.Invoker.IDEMPOTENCY_CONFLICT);
+            assertThat(spacedConflict.header("Idempotent-Replayed")).isNull();
+            assertThat(spacedConflict.body()).doesNotContain("hello");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists);
+
+            TestServer.Reply other = server.call(
+                    "POST", "/api/legacy_oa/save_note", server.apiKey.plaintext(), "alice", "note-a", "{\"text\":\"other\"}");
+            assertThat(other.status()).isEqualTo(409);
+            assertThat(other.json().path("error").path("code").asText()).isEqualTo("IDEMPOTENCY_CONFLICT");
+            assertThat(other.body()).doesNotContain("other");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists);
+
+            TestServer.Reply again = server.call(
+                    "POST", "/api/legacy_oa/save_note", server.apiKey.plaintext(), "alice", "note-a", same);
+            assertThat(again.body()).isEqualTo(first.body());
+            assertThat(again.header("Idempotent-Replayed")).isEqualTo("true");
+
+            try (Connection connection = server.runtime.dataSource().getConnection();
+                 Statement statement = connection.createStatement()) {
+                assertThat(statement.executeUpdate(
+                        "UPDATE idempotency SET body_sha256 = NULL WHERE \"key\" = 'note-a'")).isEqualTo(1);
+            }
+            TestServer.Reply legacy = server.call(
+                    "POST", "/api/legacy_oa/save_note", server.apiKey.plaintext(), "alice", "note-a", same);
+            assertThat(legacy.status()).isEqualTo(409);
+            assertThat(legacy.json().path("error").path("code").asText()).isEqualTo("IDEMPOTENCY_CONFLICT");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists);
         }
     }
 

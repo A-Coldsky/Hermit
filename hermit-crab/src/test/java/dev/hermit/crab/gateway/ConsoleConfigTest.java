@@ -134,6 +134,32 @@ class ConsoleConfigTest {
 
             TestServer.Reply listed = server.console("GET", "/console/api/apikeys", null, true);
             assertThat(names(listed)).contains("scoped", "paused").doesNotContain("ghost-pack", "mixed", "bare-still");
+
+            TestServer.Reply nested = server.console(
+                    "POST",
+                    "/console/api/apikeys",
+                    "{\"name\":\"nested\",\"scope\":{\"conches\":[\"legacy_oa\"]}}",
+                    true);
+            assertThat(nested.status()).isEqualTo(400);
+            assertThat(nested.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(nested.json().path("error").path("message").asText()).isEqualTo("unknown field: scope");
+
+            TestServer.Reply extra = server.console(
+                    "POST",
+                    "/console/api/apikeys",
+                    "{\"name\":\"extra\",\"readOnly\":false,\"comment\":\"nope\"}",
+                    true);
+            assertThat(extra.status()).isEqualTo(400);
+            assertThat(extra.json().path("error").path("message").asText()).isEqualTo("unknown field: comment");
+
+            TestServer.Reply open = server.console(
+                    "POST", "/console/api/apikeys", "{\"name\":\"open-reef\"}", true);
+            assertThat(open.status()).isEqualTo(200);
+            assertThat(open.json().path("data").path("scope").path("conches")).isEmpty();
+            assertThat(open.json().path("data").path("scope").path("actions")).isEmpty();
+
+            TestServer.Reply afterRejects = server.console("GET", "/console/api/apikeys", null, true);
+            assertThat(names(afterRejects)).contains("open-reef").doesNotContain("nested", "extra");
         }
     }
 
@@ -170,6 +196,16 @@ class ConsoleConfigTest {
             assertThat(pending.path("needsConfiguration").asBoolean()).isTrue();
             TestServer.Reply detail = server.console("GET", "/console/api/conches/legacy_oa", null, true);
             assertThat(detail.json().path("data").path("loginPaused").asBoolean()).isTrue();
+
+            TestServer.Reply failedLogin = server.console(
+                    "POST", "/console/api/conches/legacy_oa/accounts/alice/test-login", "{}", true);
+            assertThat(failedLogin.status()).isEqualTo(422);
+            assertThat(failedLogin.json().path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
+            assertThat(account(server, "alice").path("loginPaused").asBoolean()).isTrue();
+            TestServer.Reply stillPaused = server.call(
+                    "GET", "/api/legacy_oa/list_todo", server.apiKey.plaintext(), "alice", null, null);
+            assertThat(stillPaused.status()).isEqualTo(422);
+            assertThat(stillPaused.json().path("error").path("message").asText()).contains("暂停");
 
             server.runtime.admin().writeCredentials(server.conch, "alice", Map.of("password", PASSWORD), Actors.CLI);
             TestServer.Reply login = server.console(

@@ -127,7 +127,8 @@ public final class RuleEngine {
     }
 
     /**
-     * Runs auth steps only. The caller resets the login pause and invalidates the session first.
+     * Runs auth steps only. The caller invalidates the session first and does not clear a login
+     * pause. Success records an auth success, which clears the pause. Failure leaves it.
      * Success does not include auth step logs; {@code login} keeps those logs on the failure path.
      */
     public ExecutionResult testLogin(ExecutionRequest request) {

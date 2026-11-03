@@ -118,6 +118,8 @@ class McpHttpTest {
             assertThat(result.path("content").get(0).path("text").asText()).contains("items");
             assertThat(server.runtime.callLogs().list("legacy_oa", "list_todo", 5).get(0).account()).isEqualTo("bob");
             assertThat(server.runtime.callLogs().list("legacy_oa", "list_todo", 5).get(0).traceId()).isNotBlank();
+            assertThat(server.runtime.callLogs().list("legacy_oa", "list_todo", 5).get(0).channel()).isEqualTo("MCP");
+            assertThat(server.runtime.callLogs().list("legacy_oa", "list_todo", 5).get(0).source()).isEqualTo("REEF");
             SecretChecks.absent(called.body(), PASSWORD);
             SecretChecks.absent(called.body(), server.apiKey.plaintext());
 
@@ -488,6 +490,24 @@ class McpHttpTest {
             assertThat(rejected).isEqualTo(1);
             SecretChecks.absent(rejectedOut.toString(StandardCharsets.UTF_8), server.apiKey.plaintext());
             SecretChecks.absent(rejectedErr.toString(StandardCharsets.UTF_8), server.apiKey.plaintext());
+
+            String initialize = initialize("{}");
+            ByteArrayOutputStream deniedOut = new ByteArrayOutputStream();
+            ByteArrayOutputStream deniedErr = new ByteArrayOutputStream();
+            int denied = new CrabCommand().run(
+                    new String[] {"mcp-stdio", "--url", server.base + "/mcp"},
+                    name -> "HERMIT_API_KEY".equals(name) ? "not-a-real-key" : null,
+                    new ByteArrayInputStream((initialize + "\n").getBytes(StandardCharsets.UTF_8)),
+                    new PrintStream(deniedOut, true, StandardCharsets.UTF_8),
+                    new PrintStream(deniedErr, true, StandardCharsets.UTF_8));
+            assertThat(denied).isEqualTo(1);
+            JsonNode rpc = ApiJson.tree(deniedOut.toByteArray());
+            assertThat(rpc.path("jsonrpc").asText()).isEqualTo("2.0");
+            assertThat(rpc.path("error").path("code").asInt()).isEqualTo(McpErrors.AUTH_RPC);
+            assertThat(rpc.path("error").path("data").path("code").asText()).isEqualTo(McpErrors.AUTH_INVALID);
+            assertThat(deniedErr.toString(StandardCharsets.UTF_8)).contains("authentication failed");
+            SecretChecks.absent(deniedOut.toString(StandardCharsets.UTF_8), "not-a-real-key");
+            SecretChecks.absent(deniedErr.toString(StandardCharsets.UTF_8), "not-a-real-key");
         }
         int port;
         try (ServerSocket socket = new ServerSocket(0)) {
@@ -503,6 +523,39 @@ class McpHttpTest {
         assertThat(down).isEqualTo(2);
         assertThat(downErr.toString(StandardCharsets.UTF_8)).contains("crab is not running");
         SecretChecks.absent(downErr.toString(StandardCharsets.UTF_8), "not-a-real-key");
+    }
+
+    @Test
+    void stdioWritesAJsonRpcErrorWhenUnauthorizedHasNoBody() throws Exception {
+        com.sun.net.httpserver.HttpServer stub = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        stub.createContext("/mcp", exchange -> {
+            exchange.sendResponseHeaders(401, -1);
+            exchange.close();
+        });
+        stub.start();
+        try {
+            int port = stub.getAddress().getPort();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ByteArrayOutputStream err = new ByteArrayOutputStream();
+            int code = new CrabCommand().run(
+                    new String[] {"mcp-stdio", "--url", "http://127.0.0.1:" + port + "/mcp"},
+                    name -> "HERMIT_API_KEY".equals(name) ? "not-a-real-key" : null,
+                    new ByteArrayInputStream((initialize("{}") + "\n").getBytes(StandardCharsets.UTF_8)),
+                    new PrintStream(out, true, StandardCharsets.UTF_8),
+                    new PrintStream(err, true, StandardCharsets.UTF_8));
+            assertThat(code).isEqualTo(1);
+            JsonNode rpc = ApiJson.tree(out.toByteArray());
+            assertThat(rpc.path("jsonrpc").asText()).isEqualTo("2.0");
+            assertThat(rpc.path("id").asInt()).isEqualTo(1);
+            assertThat(rpc.path("error").path("code").asInt()).isEqualTo(McpErrors.AUTH_RPC);
+            assertThat(rpc.path("error").path("message").asText()).isEqualTo("authentication failed");
+            assertThat(err.toString(StandardCharsets.UTF_8)).contains("authentication failed");
+            SecretChecks.absent(out.toString(StandardCharsets.UTF_8), "not-a-real-key");
+            SecretChecks.absent(err.toString(StandardCharsets.UTF_8), "not-a-real-key");
+        } finally {
+            stub.stop(0);
+        }
     }
 
     @Test

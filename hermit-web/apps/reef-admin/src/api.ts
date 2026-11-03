@@ -220,6 +220,7 @@ export const api = {
   versions: (conch: string) => http.get<ConchVersion[]>(`/api/admin/conches/${seg(conch)}/versions`),
   yaml: (conch: string, version: string) =>
     http.text(`/api/admin/conches/${seg(conch)}/versions/${seg(version)}/yaml`),
+  /** 都不传时对比该包 semver 最高的两个版本，高的为 to。只传一个仍是 400。少于两个版本也是 400。 */
   diff: (conch: string, from?: string, to?: string) =>
     http.get<ConchDiff>(`/api/admin/conches/${seg(conch)}/diff`, { from, to }),
   upload: (file: File) => {

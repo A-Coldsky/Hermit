@@ -66,7 +66,7 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 
 - 权限中的只读仅由 `mcp.read_only` 决定，不能因为 GET 或 idempotent 就推断只读。
 - `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。会话失效包括重定向到 `alive_check.expect_not_redirect` 前缀，以及能力请求返回 HTTP 401/403。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
-- POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。
+- POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。同键换请求体返回 `IDEMPOTENCY_CONFLICT`，见 [api.md](api.md)。
 - `mcp.expose` 默认 true，read_only/destructive 默认 false。当前 MCP destructiveHint 从“非只读且非幂等”计算，声明的 destructive 字段没有独立传入注解，见功能状态。
 
 ## 步骤

@@ -86,13 +86,18 @@ class RuntimeStoreTest {
             MutableClock clock = new MutableClock(Instant.parse("2026-10-12T00:00:00Z"));
             CredentialCipher cipher = cipher(fixture.paths);
             IdempotencyStore store = new IdempotencyStore(fixture.dataSource, cipher, clock);
-            store.save(Origin.OFFICIAL, "legacy_oa", "alice", "save_note", "k1", "{\"success\":true}");
+            String digest = "a".repeat(64);
+            store.save(Origin.OFFICIAL, "legacy_oa", "alice", "save_note", "k1", "{\"success\":true}", digest);
             assertThat(store.findFresh(Origin.OFFICIAL, "legacy_oa", "alice", "save_note", "k1"))
-                    .contains("{\"success\":true}");
+                    .get()
+                    .satisfies(cached -> {
+                        assertThat(cached.envelope()).isEqualTo("{\"success\":true}");
+                        assertThat(cached.bodySha256()).isEqualTo(digest);
+                    });
             clock.advance(Duration.ofHours(24));
             assertThat(store.findFresh(Origin.OFFICIAL, "legacy_oa", "alice", "save_note", "k1")).isEmpty();
             clock.advance(Duration.ofHours(-24));
-            store.save(Origin.OFFICIAL, "legacy_oa", "alice", "save_note", "k2", "{\"success\":true}");
+            store.save(Origin.OFFICIAL, "legacy_oa", "alice", "save_note", "k2", "{\"success\":true}", null);
             try (var connection = fixture.dataSource.getConnection();
                  var statement = connection.prepareStatement(
                          "UPDATE idempotency SET response_json = ? WHERE \"key\" = ?")) {

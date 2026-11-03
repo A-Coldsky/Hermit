@@ -22,6 +22,9 @@ import org.springframework.stereotype.Service;
 @Service
 public class ConchCatalogService {
 
+    /** Both version parameters omitted, and this conch has fewer than two stored versions. */
+    public static final String DIFF_NEEDS_TWO_VERSIONS = "at least two versions are required to diff";
+
     private final ConchRepository repository;
     private final ConchAvailabilityRepository availability;
     private final ConchStorage storage;
@@ -103,8 +106,21 @@ public class ConchCatalogService {
     }
 
     public ConchDiff diff(String conch, String from, String to) {
-        if (from == null || to == null || from.isBlank() || to.isBlank()) {
+        boolean fromBlank = from == null || from.isBlank();
+        boolean toBlank = to == null || to.isBlank();
+        if (fromBlank != toBlank) {
             throw ApiException.invalidInput();
+        }
+        if (fromBlank) {
+            List<VersionRow> ranked = new ArrayList<>(rowsOf(conch));
+            ranked.sort(Comparator
+                    .comparing((VersionRow row) -> SemVer.parse(row.version()), Comparator.reverseOrder())
+                    .thenComparing(VersionRow::version, Comparator.reverseOrder()));
+            if (ranked.size() < 2) {
+                throw new ApiException(400, ReefErrorCode.INVALID_INPUT, DIFF_NEEDS_TWO_VERSIONS);
+            }
+            to = ranked.get(0).version();
+            from = ranked.get(1).version();
         }
         ConchDoc oldDoc = readDoc(requireVersion(conch, from));
         ConchDoc newDoc = readDoc(requireVersion(conch, to));

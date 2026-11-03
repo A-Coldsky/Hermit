@@ -347,6 +347,27 @@ class CliTest {
     }
 
     @Test
+    void apiKeyCreateRejectsUnknownOptions() {
+        Path root = temp.resolve("unknown-opt");
+        Function<String, String> env = env(root);
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {"apikey", "create", "wide", "--scope", "legacy_oa"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(out),
+                stderr(err));
+        assertThat(code).isEqualTo(1);
+        assertThat(err.toString(StandardCharsets.UTF_8)).contains("unknown option");
+        assertThat(out.toString(StandardCharsets.UTF_8)).doesNotContain("id ");
+
+        ByteArrayOutputStream listed = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), listed, "apikey", "list")).isZero();
+        assertThat(listed.toString(StandardCharsets.UTF_8)).doesNotContain("wide");
+    }
+
+    @Test
     void syncWithoutReefUrlExits() {
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = new CrabCommand().run(

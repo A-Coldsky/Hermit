@@ -82,7 +82,7 @@ export interface Account {
   loginPaused: boolean
   /** 暂停时为原因，否则 null。 */
   loginPauseReason: string | null
-  /** 暂停时为恢复方法（修正凭证后执行测试登录），否则 null。 */
+  /** 暂停时为恢复方法（修正凭证后测试登录成功才恢复），否则 null。 */
   loginPauseRecovery: string | null
 }
 
@@ -154,8 +154,13 @@ export interface CallSummary {
   errorMessage: string | null
   durationMs: number
   apiKeyId: string | null
-  /** 调用时的来源。本地包为 `LOCAL`，其余记为 `REEF`。 */
+  /** 规则包来源。本地包为 `LOCAL`，其余记为 `REEF`。与 `channel` 不是同一件事。 */
   source: 'LOCAL' | 'REEF'
+  /**
+   * 调用入口。`HTTP` 是对外 OpenAPI，`MCP` 是 MCP。
+   * `CONSOLE` 留给控制台执行能力的路径；测试登录不写调用记录，当前没有写入方。
+   */
+  channel: 'HTTP' | 'MCP' | 'CONSOLE'
 }
 
 export interface CallStep {
@@ -334,8 +339,11 @@ export const api = {
     http.post<CreatedApiKey>(`${base}/apikeys`, body),
   revokeApiKey: (id: string) => http.del<{ revoked: boolean }>(`${base}/apikeys/${seg(id)}`),
 
-  /** `action` 可以是能力名，或 `conch.action`（按第一个 `.` 拆开）。与 `conch` 同时给出且包名不同时，接口返回 400。 */
-  calls: (query: { conch?: string; action?: string; limit?: number }) =>
+  /**
+   * `action` 可以是能力名，或 `conch.action`（按第一个 `.` 拆开）。与 `conch` 同时给出且包名不同时，接口返回 400。
+   * `channel` 为 `HTTP`、`MCP` 或 `CONSOLE`。不传 `limit` 时服务端默认 100，最大 500。
+   */
+  calls: (query: { conch?: string; action?: string; channel?: 'HTTP' | 'MCP' | 'CONSOLE'; limit?: number }) =>
     http.get<{ calls: CallSummary[] }>(`${base}/calls`, query),
   audit: (query: { conch?: string; account?: string; page?: number; limit?: number } = {}) =>
     http.get<ConfigAuditPage>(`${base}/audit`, query),

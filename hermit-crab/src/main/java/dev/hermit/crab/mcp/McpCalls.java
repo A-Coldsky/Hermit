@@ -16,6 +16,7 @@ import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.InvokeOutcome;
 import dev.hermit.crab.store.ApiKeyPrincipal;
+import dev.hermit.crab.store.CallChannel;
 import io.modelcontextprotocol.spec.McpSchema;
 
 final class McpCalls {
@@ -238,6 +239,8 @@ final class McpCalls {
                     input,
                     account,
                     Optional.empty(),
+                    null,
+                    CallChannel.MCP,
                     traceId);
         } catch (RuntimeException ex) {
             return toolError("INTERNAL", "internal error");

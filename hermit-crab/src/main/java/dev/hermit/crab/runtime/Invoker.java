@@ -27,6 +27,7 @@ import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.AccountStore;
 import dev.hermit.crab.store.ApiKeyPrincipal;
+import dev.hermit.crab.store.CallChannel;
 import dev.hermit.crab.store.CallLogStore;
 import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.IdempotencyStore;
@@ -36,6 +37,7 @@ import dev.hermit.crab.store.ConchConfigStore;
 public final class Invoker {
     private static final Logger LOG = Logger.getLogger(Invoker.class.getName());
     private static final int NAME_LIMIT = 256;
+    public static final String IDEMPOTENCY_CONFLICT = "Idempotency-Key was already used with a different request body";
     /** Power of two. Distinct keys share a stripe; stripes are not removed after a request. */
     static final int IDEMPOTENCY_STRIPES = 64;
 
@@ -106,6 +108,25 @@ public final class Invoker {
             Optional<String> idempotencyKey,
             String traceId
     ) {
+        return invoke(principal, conch, action, input, account, idempotencyKey, null, CallChannel.HTTP, traceId);
+    }
+
+    /**
+     * {@code bodySha256} is the raw-body digest for an idempotency key. Null matches only another
+     * null (in-process callers). HTTP passes {@link BodyDigests#sha256}. {@code channel} is the
+     * entry that reached this invoker; null is recorded as {@link CallChannel#HTTP}.
+     */
+    public InvokeOutcome invoke(
+            ApiKeyPrincipal principal,
+            String conch,
+            String action,
+            Map<String, Object> input,
+            Optional<String> account,
+            Optional<String> idempotencyKey,
+            String bodySha256,
+            CallChannel channel,
+            String traceId
+    ) {
         if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
         }
@@ -161,10 +182,13 @@ public final class Invoker {
             return done(traceId, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE, null);
         }
         Map<String, Object> rawInput = input == null ? Map.of() : input;
+        CallChannel recorded = channel == null ? CallChannel.HTTP : channel;
         if (CapabilityHttp.method(capability) == HttpMethod.POST && idempotencyKey != null && idempotencyKey.isPresent()) {
-            return replayOrExecute(principal, doc, origin, action, rawInput, resolved, secrets, merged, idempotencyKey.get(), traceId);
+            return replayOrExecute(
+                    principal, doc, origin, action, rawInput, resolved, secrets, merged,
+                    idempotencyKey.get(), bodySha256, recorded, traceId);
         }
-        return execute(principal, doc, origin, action, rawInput, resolved, secrets, merged, Optional.empty(), traceId);
+        return execute(principal, doc, origin, action, rawInput, resolved, secrets, merged, Optional.empty(), recorded, traceId);
     }
 
     private InvokeOutcome replayOrExecute(
@@ -177,20 +201,43 @@ public final class Invoker {
             Map<String, String> secrets,
             Map<String, String> merged,
             String key,
+            String bodySha256,
+            CallChannel channel,
             String traceId
     ) {
         String lockId = origin.name() + "\0" + doc.conch() + "\0" + account.account() + "\0" + action + "\0" + key;
         Object lock = idempotencyLocks[stripe(lockId)];
         synchronized (lock) {
-            Optional<String> stored = idempotency.findFresh(
+            Optional<IdempotencyStore.Cached> stored = idempotency.findFresh(
                     origin, doc.conch(), account.account(), action, key);
             if (stored.isPresent()) {
-                return replay(stored.get());
+                if (!sameBody(stored.get().bodySha256(), bodySha256)) {
+                    return done(traceId, ErrorCode.IDEMPOTENCY_CONFLICT, IDEMPOTENCY_CONFLICT, null);
+                }
+                return replay(stored.get().envelope());
             }
-            InvokeOutcome outcome = execute(principal, doc, origin, action, input, account, secrets, merged, Optional.of(key), traceId);
-            idempotency.save(origin, doc.conch(), account.account(), action, key, new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8));
+            InvokeOutcome outcome = execute(
+                    principal, doc, origin, action, input, account, secrets, merged, Optional.of(key), channel, traceId);
+            idempotency.save(
+                    origin,
+                    doc.conch(),
+                    account.account(),
+                    action,
+                    key,
+                    new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8),
+                    bodySha256);
             return outcome;
         }
+    }
+
+    /** Both absent matches. A stored null (schema &lt; 10) does not match a real digest. */
+    static boolean sameBody(String stored, String incoming) {
+        boolean storedAbsent = stored == null || stored.isEmpty();
+        boolean incomingAbsent = incoming == null || incoming.isEmpty();
+        if (storedAbsent || incomingAbsent) {
+            return storedAbsent && incomingAbsent;
+        }
+        return stored.equals(incoming);
     }
 
     private InvokeOutcome replay(String envelope) {
@@ -212,6 +259,7 @@ public final class Invoker {
             Map<String, String> secrets,
             Map<String, String> merged,
             Optional<String> idempotencyKey,
+            CallChannel channel,
             String traceId
     ) {
         ExecutionRequest request = new ExecutionRequest(
@@ -233,7 +281,7 @@ public final class Invoker {
                 input,
                 idempotencyKey);
         publish(invocation, result);
-        log(principal, result, secrets, origin, doc.conch(), action, account.account());
+        log(principal, result, secrets, origin, doc.conch(), action, account.account(), channel);
         if (result.success()) {
             return done(traceId, null, null, result.data());
         }
@@ -277,7 +325,8 @@ public final class Invoker {
             Origin origin,
             String conch,
             String action,
-            String account
+            String account,
+            CallChannel channel
     ) {
         String message = null;
         String code = null;
@@ -297,7 +346,8 @@ public final class Invoker {
                     code,
                     message,
                     result.durationMillis(),
-                    principal.id()), result.stepLogs());
+                    principal.id(),
+                    channel), result.stepLogs());
         } catch (RuntimeException ex) {
             LOG.warning("call log failed: " + ex.getClass().getName());
         }

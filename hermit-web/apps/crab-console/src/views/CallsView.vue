@@ -6,7 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, errorCodeLabels, formatTime, millis, notifyError } from '@shared/format'
 import { api, type CallDetail, type CallSummary, type ConchSummary } from '../api'
-import { originLabels, sourceLabels, stepTypeLabels } from '../labels'
+import { channelLabels, originLabels, sourceLabels, stepTypeLabels } from '../labels'
 
 const route = useRoute()
 const router = useRouter()
@@ -14,7 +14,13 @@ const router = useRouter()
 const loading = ref(true)
 const calls = ref<CallSummary[]>([])
 const conches = ref<ConchSummary[]>([])
-const filter = reactive({ conch: '', action: '', limit: 100, failedOnly: route.query.failed === '1' })
+const filter = reactive({
+  conch: '',
+  action: '',
+  channel: '' as '' | CallSummary['channel'],
+  limit: 100,
+  failedOnly: route.query.failed === '1',
+})
 const page = reactive({ current: 1, size: 20 })
 const drawer = reactive({ open: false, loading: false, call: null as CallDetail | null })
 
@@ -36,7 +42,12 @@ async function load() {
   loading.value = true
   try {
     calls.value = (
-      await api.calls({ conch: filter.conch || undefined, action: filter.action.trim() || undefined, limit: filter.limit })
+      await api.calls({
+        conch: filter.conch || undefined,
+        action: filter.action.trim() || undefined,
+        channel: filter.channel || undefined,
+        limit: filter.limit,
+      })
     ).calls
   } catch (error) {
     notifyError(error)
@@ -59,8 +70,7 @@ async function openTrace(traceId: string) {
 }
 
 function failureTitle(code: string | null): string {
-  const label = errorCodeLabels[code ?? ''] ?? code ?? '调用失败'
-  return code && code !== 'AUTH_FAILED' ? `${label}（${code}）` : label
+  return errorCodeLabels[code ?? ''] ?? '调用失败'
 }
 
 function onRow(row: CallSummary) {
@@ -87,7 +97,7 @@ watch(
   },
 )
 
-watch(() => [filter.conch, filter.limit], load)
+watch(() => [filter.conch, filter.channel, filter.limit], load)
 watch(() => [filter.failedOnly, calls.value], () => (page.current = 1))
 
 onMounted(async () => {
@@ -112,6 +122,9 @@ onMounted(async () => {
           <el-option v-for="s in conches" :key="s.conch" :label="s.conch" :value="s.conch" />
         </el-select>
         <el-input v-model="filter.action" placeholder="能力名" clearable class="pick" @keyup.enter="load" @clear="load" />
+        <el-select v-model="filter.channel" placeholder="全部渠道" clearable class="limit" data-test="channel-filter">
+          <el-option v-for="(label, key) in channelLabels" :key="key" :label="label" :value="key" />
+        </el-select>
         <el-select v-model="filter.limit" class="limit">
           <el-option v-for="n in [50, 100, 200, 500]" :key="n" :label="`最近 ${n} 条`" :value="n" />
         </el-select>
@@ -140,8 +153,11 @@ onMounted(async () => {
           <template #default="{ row }">
             <span class="mono">{{ row.conch }}.{{ row.action }}</span>
             <span class="mono hm-muted"> v{{ row.conchVersion }}</span>
-            <el-tag v-if="row.source === 'LOCAL'" type="warning" effect="plain" size="small" class="local">本地</el-tag>
+            <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
           </template>
+        </el-table-column>
+        <el-table-column label="渠道" width="100">
+          <template #default="{ row }">{{ channelLabels[row.channel] ?? row.channel ?? '—' }}</template>
         </el-table-column>
         <el-table-column label="账号" width="120">
           <template #default="{ row }"><span class="mono">{{ row.account ?? '—' }}</span></template>
@@ -189,6 +205,10 @@ onMounted(async () => {
             class="notice"
           />
           <dl class="hm-kv">
+            <template v-if="drawer.call.errorCode">
+              <dt>错误码</dt>
+              <dd class="mono" data-test="error-code">{{ drawer.call.errorCode }}</dd>
+            </template>
             <dt>traceId</dt>
             <dd>
               <code>{{ drawer.call.traceId }}</code>
@@ -198,6 +218,8 @@ onMounted(async () => {
             <dd>{{ formatTime(drawer.call.at) }}</dd>
             <dt>能力</dt>
             <dd class="mono">{{ drawer.call.conch }}.{{ drawer.call.action }} v{{ drawer.call.conchVersion }}</dd>
+            <dt>渠道</dt>
+            <dd>{{ channelLabels[drawer.call.channel] ?? drawer.call.channel ?? '—' }}</dd>
             <dt>来源</dt>
             <dd>{{ sourceLabels[drawer.call.source] ?? originLabels[drawer.call.origin] ?? drawer.call.origin }}</dd>
             <dt>账号</dt>

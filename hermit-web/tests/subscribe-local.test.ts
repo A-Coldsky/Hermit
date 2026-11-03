@@ -1,4 +1,5 @@
 import { flushPromises } from '@vue/test-utils'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../shared/http'
 import { mountPage } from './helpers'
@@ -8,6 +9,7 @@ const crab = vi.hoisted(() => ({
   sync: vi.fn(),
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
+  update: vi.fn(),
   conches: vi.fn(),
   conch: vi.fn(),
   accounts: vi.fn(),
@@ -170,7 +172,7 @@ describe('本地规则包', () => {
     const alert = page.find('[data-test="reef-disabled"]')
     expect(alert.text()).toContain('已失效')
     expect(alert.text()).toContain('仍可正常调用')
-    expect(alert.text()).toContain('不会再下载或更新')
+    expect(alert.text()).toContain('不能再更新')
 
     crab.conches.mockResolvedValue({
       conches: [
@@ -204,5 +206,77 @@ describe('本地规则包', () => {
     const hint = document.body.querySelector('[data-test="local-hint"]')
     expect(hint?.textContent).toContain('mine')
     wrapper.unmount()
+  })
+})
+
+describe('手动更新', () => {
+  const updatable = {
+    ...detail('REEF'),
+    updateAvailable: true,
+    latestVersion: '1.1.0',
+    newRequiredCredentials: ['token'],
+  }
+
+  it('详情提示有新版本和新增凭证，确认后调用更新', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    crab.conch.mockResolvedValue(updatable)
+    crab.update.mockResolvedValue({
+      conch: 'legacy_oa',
+      outcome: { conch: 'legacy_oa', version: '1.1.0', kind: 'INSTALLED', reason: null },
+    })
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    const alert = wrapper.find('[data-test="update-available"]')
+    expect(alert.text()).toContain('v1.1.0')
+    expect(alert.text()).toContain('token')
+
+    await buttons(wrapper, '更新到 v1.1.0')[0].trigger('click')
+    await flushPromises()
+    expect(confirm.mock.calls[0][0]).toContain('不能退回旧版本')
+    expect(crab.update).toHaveBeenCalledWith('legacy_oa')
+    expect(crab.conch).toHaveBeenCalledTimes(2)
+    confirm.mockRestore()
+  })
+
+  it('缺新凭证时说明要补哪些，不当成普通错误', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const warning = vi.spyOn(ElMessage, 'warning')
+    const error = vi.spyOn(ElMessage, 'error')
+    crab.conch.mockResolvedValue(updatable)
+    crab.update.mockRejectedValue(new ApiError(409, 'CONFLICT', 'missing credentials for update: token, cookie'))
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    await buttons(wrapper, '更新到 v1.1.0')[0].trigger('click')
+    await flushPromises()
+    const message = (warning.mock.calls[0][0] as { message: string }).message
+    expect(message).toContain('token、cookie')
+    expect(error).not.toHaveBeenCalled()
+    confirm.mockRestore()
+    warning.mockRestore()
+    error.mockRestore()
+  })
+
+  it('目录和列表标出有新版本，目录可以直接更新', async () => {
+    crab.catalog.mockResolvedValue({
+      conches: [
+        entry({ subscribed: true, installed: true, installedVersion: '1.0.0', updateAvailable: true, latestVersion: '1.1.0', newRequiredCredentials: [] }),
+      ],
+      syncedAt: '2026-10-30T00:00:00Z',
+      configured: true,
+    })
+    const catalog = await mountPage(CatalogView)
+    await flushPromises()
+    expect(catalog.text()).toContain('有新版本 v1.1.0')
+    expect(buttons(catalog, '更新')).toHaveLength(1)
+
+    crab.conches.mockResolvedValue({
+      conches: [
+        { conch: 'legacy_oa', version: '1.0.0', title: 'OA', capabilityCount: 1, subscribed: true, accountCount: 1, needsConfiguration: false, loginPaused: false, source: 'REEF', reefDisabled: false, reefDisabledAt: null, updateAvailable: true, latestVersion: '1.1.0', newRequiredCredentials: ['token'] },
+      ],
+    })
+    const list = await mountPage(ConchesView)
+    await flushPromises()
+    expect(list.text()).toContain('有新版本 v1.1.0')
+    expect(list.find('.update-note').text()).toContain('token')
   })
 })

@@ -51,6 +51,32 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   LOCAL_CONCH_DELETED: { text: '删除本地规则包', tone: 'danger' },
   REEF_CONCH_DISABLED: { text: 'Reef 停用（失效）', tone: 'warning' },
   REEF_CONCH_ENABLED: { text: 'Reef 重新启用', tone: 'success' },
+  CONCH_UPDATED: { text: '更新规则包', tone: 'success' },
+}
+
+export const syncReasonLabels: Record<string, string> = {
+  SAME_VERSION: '已是 Reef 当前版本',
+  MIN_CRAB_VERSION: '需要更高版本的 Crab',
+  UPDATE_AVAILABLE: 'Reef 有更高版本，点「更新」后安装',
+  OLDER_MANIFEST: 'Reef 当前版本低于本机，本机版本保持不变',
+  ZIP_TOO_LARGE: '规则包文件过大',
+  MANIFEST_ENTRY_MISMATCH: '下载的包与清单不一致',
+  VERSION_INVALID: '版本号无效',
+  CONCH_NAME: '规则包名称无效',
+  PATH_UNSAFE: '路径不安全',
+  CURRENT_WRITE_FAILED: '本机写入失败',
+  REGISTRY_REJECTED: '规则包没有通过本机校验',
+  CREDENTIAL_DELETE_FAILED: '清理已移除的凭证失败',
+  PACKAGE_MISSING: '本机缺少这个版本的文件',
+  DISABLED: 'Reef 已停用，本机版本仍可调用，不再更新',
+  DISABLE_FAILED: '记录停用状态失败',
+  LOCAL_KEPT: '本机已有同名本地规则包',
+}
+
+export const channelLabels: Record<string, string> = {
+  HTTP: 'OpenAPI',
+  MCP: 'MCP',
+  CONSOLE: '控制台',
 }
 
 export const actorLabels: Record<string, string> = {

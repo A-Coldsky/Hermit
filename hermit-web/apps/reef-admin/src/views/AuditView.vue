@@ -51,7 +51,7 @@ onMounted(load)
 
 <template>
   <div>
-    <PageHeader title="审计日志" description="登录、上传、发布、回滚等管理操作的记录">
+    <PageHeader title="审计日志" description="登录、上传、发布、停用等管理操作的记录">
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
 

@@ -82,7 +82,8 @@ export function millis(value: number | string | null | undefined): string {
 
 export function errorText(error: unknown): string {
   if (error instanceof ApiError) {
-    return error.code && error.code !== 'INTERNAL' ? `${error.message}（${error.code}）` : error.message
+    const label = errorCodeLabels[error.code ?? '']
+    return label && label !== error.message ? `${label}：${error.message}` : error.message
   }
   if (error instanceof Error) {
     return error.message
@@ -116,4 +117,6 @@ export const errorCodeLabels: Record<string, string> = {
   FORBIDDEN: '无权限',
   NOT_FOUND: '不存在',
   INTERNAL: '内部错误',
+  CONFLICT: '状态冲突',
+  IDEMPOTENCY_CONFLICT: '幂等键冲突',
 }

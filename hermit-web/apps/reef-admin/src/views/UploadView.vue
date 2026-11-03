@@ -68,11 +68,15 @@ async function publish() {
   }
   const { conch, version } = result.value
   try {
-    await ElMessageBox.confirm(`发布后所有 Crab 下次同步时都会切换到 ${conch} v${version}。`, '确认发布', {
-      confirmButtonText: '发布',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
+    const added = result.value.diff?.newRequiredCredentials ?? []
+    const credentials = added.length
+      ? `这个版本新增必填凭证：${added.join('、')}。Crab 使用者要先填好这些凭证才能更新。`
+      : ''
+    await ElMessageBox.confirm(
+      `发布后，新订阅的 Crab 直接安装 ${conch} v${version}；已订阅的 Crab 需要手动更新。${credentials}`,
+      '确认发布',
+      { confirmButtonText: '发布', cancelButtonText: '取消', type: 'warning' },
+    )
   } catch {
     return
   }
@@ -102,7 +106,7 @@ async function publish() {
       <el-step title="选择 YAML" description="拖入或点击选择文件" />
       <el-step title="校验并签名" description="检查结构、能力和字段" />
       <el-step title="待发布" description="确认差异和警告" />
-      <el-step title="发布" description="订阅了的 Crab 下次同步时切换" />
+      <el-step title="发布" description="新订阅直接安装，已订阅的 Crab 手动更新" />
     </el-steps>
 
     <div class="hm-card">

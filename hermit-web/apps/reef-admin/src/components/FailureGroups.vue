@@ -21,7 +21,7 @@ defineProps<{ groups: FailureGroup[]; showConch?: boolean; loading?: boolean }>(
         <p class="hm-muted hint">在对应 Crab 的控制台「调用记录」里用 traceId 查看完整步骤。</p>
       </template>
     </el-table-column>
-    <el-table-column v-if="showConch" label="Conch" min-width="140">
+    <el-table-column v-if="showConch" label="规则包" min-width="140">
       <template #default="{ row }">
         <router-link :to="`/conches/${encodeURIComponent(row.conch)}?tab=stats`" class="mono">{{ row.conch }}</router-link>
       </template>

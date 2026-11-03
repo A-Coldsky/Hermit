@@ -134,10 +134,11 @@ describe('Crab 调用详情标题', () => {
     wrapper.unmount()
   })
 
-  it('其他错误仍附带错误码，便于对照日志', async () => {
+  it('其他错误标题只显示中文，原始错误码放在详情字段里', async () => {
     const wrapper = await openDetail('TIMEOUT')
     const title = document.body.querySelector('.el-drawer .el-alert__title')?.textContent ?? ''
-    expect(title).toBe('超时（TIMEOUT）')
+    expect(title).toBe('超时')
+    expect(document.body.querySelector('[data-test="error-code"]')?.textContent).toBe('TIMEOUT')
     wrapper.unmount()
   })
 })

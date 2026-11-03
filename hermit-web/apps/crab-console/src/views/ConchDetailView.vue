@@ -13,6 +13,8 @@ import AccountsPanel from '../components/AccountsPanel.vue'
 import CapabilityToggles from '../components/CapabilityToggles.vue'
 import ConfigPanel from '../components/ConfigPanel.vue'
 import { refreshPending } from '../status'
+import { unsubscribeMessage } from '../copy'
+import { updateConch } from '../update'
 
 const props = defineProps<{ conch: string }>()
 const router = useRouter()
@@ -125,7 +127,12 @@ async function exportYaml() {
 
 async function confirmThen(message: string, title: string, confirm: string): Promise<boolean> {
   try {
-    await ElMessageBox.confirm(message, title, { confirmButtonText: confirm, cancelButtonText: '取消', type: 'warning' })
+    await ElMessageBox.confirm(message, title, {
+      confirmButtonText: confirm,
+      cancelButtonText: '保留',
+      type: 'warning',
+      confirmButtonType: 'danger',
+    })
     return true
   } catch {
     return false
@@ -152,9 +159,28 @@ async function removeLocal() {
   }
 }
 
+async function update() {
+  if (!detail.value) return
+  working.value = true
+  try {
+    const switched = await updateConch({
+      conch: props.conch,
+      installedVersion: detail.value.version,
+      latestVersion: detail.value.latestVersion,
+      newRequiredCredentials: detail.value.newRequiredCredentials,
+    })
+    if (switched) {
+      void refreshPending()
+      await load()
+    }
+  } finally {
+    working.value = false
+  }
+}
+
 async function unsubscribe() {
   const ok = await confirmThen(
-    `取消订阅后本机会卸载 ${props.conch}，调用会失败。账号、凭证和配置会保留，重新订阅后可以直接使用。`,
+    unsubscribeMessage(props.conch),
     `取消订阅 ${detail.value?.title || props.conch}`,
     '取消订阅',
   )
@@ -196,8 +222,9 @@ watch(
       </template>
       <template #badge>
         <el-tag v-if="detail" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
-        <el-tag v-if="local" type="warning" effect="plain" round>本地</el-tag>
-        <el-tag v-if="detail?.reefDisabled" type="danger" effect="plain" round>已失效</el-tag>
+        <el-tag v-if="local" type="info" effect="plain" round>本地</el-tag>
+        <el-tag v-if="detail?.reefDisabled" type="warning" effect="plain" round>已失效</el-tag>
+        <el-tag v-if="detail?.updateAvailable" type="warning" effect="plain" round class="mono">有新版本 v{{ detail.latestVersion }}</el-tag>
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <template v-if="local">
@@ -216,15 +243,31 @@ watch(
     <template v-else-if="detail">
       <el-alert
         v-if="detail.reefDisabled"
-        type="error"
+        type="warning"
         show-icon
         :closable="false"
         title="已失效：Reef 停用了这个规则包"
         data-test="reef-disabled"
       >
         <template #default>
-          本机保留的 v{{ detail.version }} 仍可正常调用，但 Crab 不会再下载或更新它。Reef 重新启用后，下次同步自动恢复更新。
+          本机保留的 v{{ detail.version }} 仍可正常调用，但不能再更新。Reef 重新启用后，下次同步取消失效标记；有更高版本时可以在这里手动更新。
           <template v-if="detail.reefDisabledAt">本机于 <TimeText :value="detail.reefDisabledAt" /> 发现停用。</template>
+        </template>
+      </el-alert>
+      <el-alert
+        v-if="detail.updateAvailable"
+        type="info"
+        show-icon
+        :closable="false"
+        :title="`Reef 有新版本 v${detail.latestVersion}，本机仍是 v${detail.version}`"
+        data-test="update-available"
+      >
+        <template #default>
+          <div>不更新也可以一直使用当前版本。更新后不能退回旧版本。</div>
+          <div v-if="detail.newRequiredCredentials.length">
+            新版本需要这些凭证：<span class="mono">{{ detail.newRequiredCredentials.join('、') }}</span>。先在下方默认账号里填好，再点更新。
+          </div>
+          <el-button type="primary" size="small" class="update-btn" :loading="working" @click="update">更新到 v{{ detail.latestVersion }}</el-button>
         </template>
       </el-alert>
       <el-alert v-if="local" type="info" show-icon :closable="false" title="本地规则包：未经 Reef 签名，只在本机可用">
@@ -271,6 +314,10 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.update-btn {
+  margin-top: 8px;
 }
 
 .detail :deep(.hm-card + .hm-card) {

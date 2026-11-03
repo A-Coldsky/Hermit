@@ -71,13 +71,13 @@ describe('Reef 概览', () => {
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('一切正常')
-    expect(wrapper.text()).not.toContain('7 天内没有 Crab 发生自动回退')
+    expect(wrapper.text()).not.toContain('7 天内没有 Crab 切换版本')
     expect(wrapper.text()).not.toContain('所选范围内没有调用数据')
 
     alerts.resolve({ alerts: [] })
     await flushPromises()
     expect(wrapper.text()).toContain('一切正常')
-    expect(wrapper.text()).toContain('7 天内没有 Crab 发生自动回退')
+    expect(wrapper.text()).toContain('7 天内没有 Crab 切换版本')
   })
 })
 

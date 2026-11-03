@@ -86,7 +86,7 @@ onMounted(() => load())
             <el-tag :type="row.acknowledgedAt ? 'info' : 'danger'" effect="plain">{{ alertKindLabels[row.kind] ?? row.kind }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Conch" min-width="160">
+        <el-table-column label="规则包" min-width="160">
           <template #default="{ row }">
             <router-link :to="`/conches/${encodeURIComponent(row.conch)}?tab=stats`" class="mono">{{ row.conch }}</router-link>
             <span v-if="row.conchVersion" class="mono hm-muted"> v{{ row.conchVersion }}</span>

@@ -77,7 +77,7 @@ onMounted(load)
       <div class="hm-grid cols-4">
         <StatCard label="小时计数" :value="batch.counts.length" :hint="`覆盖 ${callTotal} 次调用`" :icon="Clock" />
         <StatCard label="失败样本" :value="batch.failures.length" :tone="batch.failures.length ? 'warn' : 'default'" :icon="WarningFilled" />
-        <StatCard label="自动回退事件" :value="batch.events.length" :tone="batch.events.length ? 'danger' : 'default'" :icon="RefreshLeft" />
+        <StatCard label="版本切换事件" :value="batch.events.length" :icon="RefreshLeft" />
         <StatCard label="已丢弃" :value="dropped" :tone="dropped ? 'warn' : 'default'" hint="队列满时丢弃的旧记录" :icon="Delete" />
       </div>
 
@@ -137,12 +137,12 @@ onMounted(load)
       </div>
 
       <div v-if="batch.events.length" class="hm-card">
-        <div class="hm-card-title"><span>自动回退事件</span></div>
+        <div class="hm-card-title"><span>版本切换事件</span></div>
         <el-table :data="batch.events">
           <el-table-column label="时间" width="220">
             <template #default="{ row }"><TimeText :value="row.occurredAt" /></template>
           </el-table-column>
-          <el-table-column label="Conch" min-width="140">
+          <el-table-column label="规则包" min-width="140">
             <template #default="{ row }"><span class="mono">{{ row.conch }}</span></template>
           </el-table-column>
           <el-table-column label="版本变化" min-width="140">

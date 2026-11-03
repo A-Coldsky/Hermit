@@ -66,9 +66,9 @@ async function makeDefault(account: Account) {
 async function remove(account: Account) {
   try {
     await ElMessageBox.confirm(
-      `删除账号 ${account.name} 会同时删除它保存的凭证和登录会话。${account.default ? '它是默认账号，删除后不带 X-Hermit-Account 的调用将无法选中账号。' : ''}`,
+      `删除账号 ${account.name} 会同时删除它保存的凭证和登录会话，删除后不可恢复。${account.default ? '它是默认账号，删除后不带 X-Hermit-Account 的调用将无法选中账号。' : ''}`,
       '删除账号',
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+      { confirmButtonText: '删除', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
     )
   } catch {
     return

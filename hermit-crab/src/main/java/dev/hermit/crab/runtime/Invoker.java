@@ -1,5 +1,7 @@
 package dev.hermit.crab.runtime;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -7,6 +9,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Logger;
+
+import javax.sql.DataSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -22,7 +26,7 @@ import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.sync.DisabledConches;
-import dev.hermit.crab.sync.RollbackGuard;
+import dev.hermit.crab.sync.VersionSuccess;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.AccountStore;
@@ -53,7 +57,8 @@ public final class Invoker {
     private final List<CrabRuntime.ExecutionListener> listeners = new CopyOnWriteArrayList<>();
     private final Object[] idempotencyLocks = newIdempotencyLocks();
     private volatile ReportQueue reportQueue;
-    private volatile RollbackGuard rollbackGuard;
+    private volatile DataSource versionSuccess;
+    private volatile Clock versionClock = Clock.systemUTC();
 
     public Invoker(
             ConchRegistry registry,
@@ -94,9 +99,14 @@ public final class Invoker {
         listeners.add(listener);
     }
 
-    public void bindHooks(ReportQueue reportQueue, RollbackGuard rollbackGuard) {
+    public void bindHooks(ReportQueue reportQueue) {
         this.reportQueue = reportQueue;
-        this.rollbackGuard = rollbackGuard;
+    }
+
+    /** Successful official calls record the executed version so retention can keep it. */
+    public void bindVersionSuccess(DataSource dataSource, Clock clock) {
+        this.versionSuccess = dataSource;
+        this.versionClock = clock == null ? Clock.systemUTC() : clock;
     }
 
     public InvokeOutcome invoke(
@@ -308,12 +318,14 @@ public final class Invoker {
                 LOG.warning("report hook failed: " + ex.getClass().getName());
             }
         }
-        RollbackGuard guard = rollbackGuard;
-        if (guard != null) {
-            try {
-                guard.onResult(invocation.conch(), version, result);
-            } catch (RuntimeException ex) {
-                LOG.warning("rollback hook failed: " + ex.getClass().getName());
+        if (result.success()) {
+            DataSource source = versionSuccess;
+            if (source != null) {
+                try {
+                    VersionSuccess.record(source, invocation.conch(), version, Instant.now(versionClock));
+                } catch (RuntimeException ex) {
+                    LOG.warning("version success hook failed: " + ex.getClass().getName());
+                }
             }
         }
     }

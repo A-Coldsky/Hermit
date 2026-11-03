@@ -53,14 +53,22 @@ public final class DeclaredSettings {
     }
 
     public static void checkCredentialFields(ConchDoc doc, Map<String, String> fields) {
+        checkCredentialFields(doc, null, fields);
+    }
+
+    /**
+     * Accepts a field declared on the installed doc or, when the installed doc does not declare it,
+     * on a staged higher version. The installed declaration wins when both declare the name.
+     */
+    public static void checkCredentialFields(ConchDoc installed, ConchDoc staged, Map<String, String> fields) {
         if (fields == null) {
             throw new IllegalArgumentException("credential fields are required");
         }
-        if (doc.credentials() == null) {
+        if (credentialMap(installed) == null && credentialMap(staged) == null) {
             throw new IllegalArgumentException("conch declares no credentials");
         }
         for (Map.Entry<String, String> entry : fields.entrySet()) {
-            CredentialField declared = doc.credentials().get(entry.getKey());
+            CredentialField declared = declaration(installed, staged, entry.getKey());
             if (declared == null) {
                 throw new IllegalArgumentException("unknown credential field");
             }
@@ -72,6 +80,29 @@ public final class DeclaredSettings {
                 checkShape(declared.type(), declared.options(), entry.getValue(), entry.getKey());
             }
         }
+    }
+
+    public static boolean declaresCredential(ConchDoc installed, ConchDoc staged, String field) {
+        return declaration(installed, staged, field) != null;
+    }
+
+    private static Map<String, CredentialField> credentialMap(ConchDoc doc) {
+        if (doc == null || doc.credentials() == null) {
+            return null;
+        }
+        return doc.credentials();
+    }
+
+    private static CredentialField declaration(ConchDoc installed, ConchDoc staged, String name) {
+        Map<String, CredentialField> current = credentialMap(installed);
+        if (current != null && current.containsKey(name)) {
+            return current.get(name);
+        }
+        Map<String, CredentialField> stagedFields = credentialMap(staged);
+        if (stagedFields == null) {
+            return null;
+        }
+        return stagedFields.get(name);
     }
 
     public static void checkConfigValue(ConfigField field, String value) {

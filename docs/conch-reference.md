@@ -83,7 +83,7 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 
 request 的 path 与 url 必须二选一，form 与 json 互斥。默认 GET、UTF-8、15,000ms、不跟随重定向；响应最多 5 MiB。解码优先 Content-Type charset，其次 HTML meta，再使用步骤 encoding。开启重定向最多 5 跳，只允许同源；Cookie 由账号客户端管理，规则不能自行覆盖 Cookie 头。
 
-能力请求返回 HTTP 400 时，引擎以 `INVALID_INPUT` 结束，不把响应交给后续 extract/assert，也不记入回滚。HTTP 401 与 403 视为会话失效，处理方式与重定向到登录页相同，因此读操作不会在会话失效时返回成功的空列表。登录步骤里的这些状态码仍交给 assert。`cookie_exists` 失败时，登录结果说明「登录未建立会话：上游没有发回会话 Cookie」，并提示核对用户名和密码；凭证正确时重新测试登录，或检查登录页是否已改版。`contains`、`not_contains`、`header_exists`、`not_redirected_to` 和 `status` 失败时同样是下一步说明，不以「assert 未通过」开头，文案不包含断言原文、凭证或 Cookie。`status` 写出期望和实际状态码。其它未期望的状态（例如期望 200 实际 404）仍是 `RULE_MISMATCH`，连续达到 5 次且前一版本曾成功时仍会自动回滚。响应体不会写入错误文案。
+能力请求返回 HTTP 400 时，引擎以 `INVALID_INPUT` 结束，不把响应交给后续 extract/assert，也不切换已安装版本。HTTP 401 与 403 视为会话失效，处理方式与重定向到登录页相同，因此读操作不会在会话失效时返回成功的空列表。登录步骤里的这些状态码仍交给 assert。`cookie_exists` 失败时，登录结果说明「登录未建立会话：上游没有发回会话 Cookie」，并提示核对用户名和密码；凭证正确时重新测试登录，或检查登录页是否已改版。`contains`、`not_contains`、`header_exists`、`not_redirected_to` 和 `status` 失败时同样是下一步说明，不以「assert 未通过」开头，文案不包含断言原文、凭证或 Cookie。`status` 写出期望和实际状态码。其它未期望的状态（例如期望 200 实际 404）仍是 `RULE_MISMATCH`。失配不会把 Crab 切回旧版本。响应体不会写入错误文案。
 
 ```yaml
 steps:
@@ -122,7 +122,7 @@ CSS/各提取器的详细参数看 [Extractors](../hermit-crab/src/main/java/dev
 
 ZIP 只包含 `conch.yaml`、`manifest.json`、`signature.sig`；manifest format=1，包含规则身份、最低版本和 YAML SHA-256，签名对 manifest 字节做 Ed25519。每个条目最多 1 MiB，并验证未知/重复条目、路径、签名、摘要与 YAML 元数据一致性。
 
-修改规则应增加版本号，通过 Reef 上传检查 errors/warnings，再发布并在隔离 Crab 验证实际登录、输入/输出、错误路径和回滚。单纯发布成功不会执行 `health_check` 或测试真实凭证。
+修改规则应增加版本号，通过 Reef 上传检查 errors/warnings，再发布一个更高版本，并在隔离 Crab 上手动更新后验证实际登录、输入/输出和错误路径。单纯发布成功不会执行 `health_check` 或测试真实凭证，也不会让已安装的 Crab 自动换版本。
 
 ## 本地开发与导出
 

@@ -81,15 +81,16 @@ class ConchConcurrencyTest {
             uploads.upload(TestSecrets.USERNAME, sample);
             uploads.upload(TestSecrets.USERNAME, withVersion(sample, "1.1.0"));
             together(
-                    () -> publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.0.0"),
+                    () -> publishOrNotHigher("1.0.0"),
                     () -> publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.1.0"));
             assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE is_current = TRUE")).isEqualTo(1);
-            assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE status = 'PUBLISHED'")).isEqualTo(2);
+            assertThat(currentVersion()).isEqualTo("1.1.0");
+            assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE status = 'PUBLISHED'")).isIn(1, 2);
         }
     }
 
     @Test
-    void concurrentRollbacksLeaveExactlyOneCurrentVersion() throws Exception {
+    void concurrentLowerPublishesStayBehindTheHigherCurrentVersion() throws Exception {
         byte[] sample = sample();
         for (int i = 0; i < 8; i++) {
             jdbc.update("DELETE FROM hermit_conch_versions");
@@ -97,14 +98,13 @@ class ConchConcurrencyTest {
             uploads.upload(TestSecrets.USERNAME, sample);
             uploads.upload(TestSecrets.USERNAME, withVersion(sample, "1.1.0"));
             uploads.upload(TestSecrets.USERNAME, withVersion(sample, "1.2.0"));
-            publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.0.0");
-            publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.1.0");
             publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.2.0");
             together(
-                    () -> publishService.rollback(TestSecrets.USERNAME, "legacy_oa", "1.0.0"),
-                    () -> publishService.rollback(TestSecrets.USERNAME, "legacy_oa", "1.1.0"));
+                    () -> publishOrNotHigher("1.0.0"),
+                    () -> publishOrNotHigher("1.1.0"));
             assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE is_current = TRUE")).isEqualTo(1);
-            assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE status = 'PUBLISHED'")).isEqualTo(3);
+            assertThat(currentVersion()).isEqualTo("1.2.0");
+            assertThat(count("SELECT COUNT(*) FROM hermit_conch_versions WHERE status = 'PUBLISHED'")).isEqualTo(1);
         }
     }
 
@@ -204,6 +204,21 @@ class ConchConcurrencyTest {
                 failure.compareAndSet(null, ex);
             }
         };
+    }
+
+    private void publishOrNotHigher(String version) {
+        try {
+            publishService.publish(TestSecrets.USERNAME, "legacy_oa", version);
+        } catch (ApiException ex) {
+            if (ex.status() != 409 || !ConchPublishService.PUBLISH_NOT_HIGHER.equals(ex.getMessage())) {
+                throw ex;
+            }
+        }
+    }
+
+    private String currentVersion() {
+        return jdbc.queryForObject(
+                "SELECT version FROM hermit_conch_versions WHERE is_current = TRUE", String.class);
     }
 
     private int count(String sql) {

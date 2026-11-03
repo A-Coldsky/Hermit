@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.ConfigField;
@@ -41,6 +42,7 @@ public final class ConchAdmin {
     private final RuleEngine engine;
     private final ConchRegistry registry;
     private final DisabledConches disabledConches;
+    private volatile Function<String, Optional<ConchDoc>> stagedDeclarations = name -> Optional.empty();
 
     public ConchAdmin(
             DataSource dataSource,
@@ -62,6 +64,14 @@ public final class ConchAdmin {
         this.engine = engine;
         this.registry = registry;
         this.disabledConches = disabledConches == null ? DisabledConches.none() : disabledConches;
+    }
+
+    /**
+     * Looks up a verified staged package for credential names the installed doc does not declare.
+     * The lookup takes the sync lock and must not be called from a thread that already holds it.
+     */
+    public void bindStagedDeclarations(Function<String, Optional<ConchDoc>> lookup) {
+        this.stagedDeclarations = lookup == null ? name -> Optional.empty() : lookup;
     }
 
     public Account createAccount(String conch, String name, String actor) {
@@ -103,9 +113,13 @@ public final class ConchAdmin {
         return sessions.loginPaused(new SessionKey(origin(conch), conch, account));
     }
 
+    public boolean declaresCredential(ConchDoc doc, String field) {
+        return DeclaredSettings.declaresCredential(doc, staged(doc.conch()), field);
+    }
+
     public void writeCredentials(ConchDoc doc, String account, Map<String, String> fields, String actor) {
         requireAccount(doc.conch(), account);
-        DeclaredSettings.checkCredentialFields(doc, fields);
+        DeclaredSettings.checkCredentialFields(doc, staged(doc.conch()), fields);
         Origin source = origin(doc.conch());
         vault.write(source, doc.conch(), account, fields, actor);
         sessions.invalidate(new SessionKey(source, doc.conch(), account));
@@ -167,6 +181,15 @@ public final class ConchAdmin {
                 resolved.account(),
                 new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
         return engine.testLogin(request);
+    }
+
+    private ConchDoc staged(String conch) {
+        Function<String, Optional<ConchDoc>> lookup = stagedDeclarations;
+        if (lookup == null || conch == null) {
+            return null;
+        }
+        Optional<ConchDoc> found = lookup.apply(conch);
+        return found == null ? null : found.orElse(null);
     }
 
     /** Registry origin, or {@link Origin#OFFICIAL} when the conch is not loaded. */

@@ -35,6 +35,7 @@ import dev.hermit.crab.sync.ConchOutcome;
 import dev.hermit.crab.sync.LocalConchException;
 import dev.hermit.crab.sync.LocalConches;
 import dev.hermit.crab.sync.SubscriptionException;
+import dev.hermit.crab.sync.UpdateException;
 import dev.hermit.crab.sync.SyncError;
 import dev.hermit.crab.sync.SyncException;
 import dev.hermit.crab.sync.SyncReport;
@@ -60,6 +61,7 @@ public final class CrabCommand {
               crab catalog
               crab subscribe <conch>
               crab unsubscribe <conch>
+              crab update <conch>
               crab account list <conch>
               crab account add|remove|default <conch> <name>
               crab credential set <conch> <account> <field> [--from-env VAR]
@@ -129,6 +131,7 @@ public final class CrabCommand {
             case "catalog" -> catalog(args, env, out, err);
             case "subscribe" -> subscribe(args, env, out, err);
             case "unsubscribe" -> unsubscribe(args, env, out, err);
+            case "update" -> update(args, env, out, err);
             case "account" -> account(args, env, out, err);
             case "credential" -> credential(args, env, in, out, err);
             case "config" -> config(args, env, out, err);
@@ -265,6 +268,25 @@ public final class CrabCommand {
         }
     }
 
+    private int update(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 2) {
+            err.print(USAGE);
+            return 1;
+        }
+        return withRuntime(env, runtime -> {
+            try {
+                runtime.loadInstalledConches();
+                ConchOutcome outcome = runtime.update(args[1], Actors.CLI);
+                String version = outcome == null || outcome.version() == null ? "" : outcome.version();
+                out.println(args[1] + " " + version);
+                return 0;
+            } catch (SubscriptionException | UpdateException ex) {
+                err.println(clientMessage(ex));
+                return 1;
+            }
+        });
+    }
+
     private static String catalogLine(ConchCatalog.Entry entry) {
         StringBuilder line = new StringBuilder();
         line.append(entry.conch()).append(' ').append(text(entry.version()));
@@ -279,6 +301,9 @@ public final class CrabCommand {
         }
         if (entry.localConflict()) {
             line.append(" local-conflict");
+        }
+        if (entry.updateAvailable()) {
+            line.append(" update-available ").append(text(entry.latestVersion()));
         }
         line.append(' ').append(text(entry.title()));
         return line.toString();
@@ -379,7 +404,7 @@ public final class CrabCommand {
                 err.println("conch is not installed");
                 return 1;
             }
-            if (doc.credentials() == null || !doc.credentials().containsKey(field)) {
+            if (!runtime.admin().declaresCredential(doc, field)) {
                 err.println("unknown credential field");
                 return 1;
             }

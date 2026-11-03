@@ -25,6 +25,7 @@ import java.util.logging.Logger;
 import javax.sql.DataSource;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.pkg.PackageVerificationException;
@@ -32,11 +33,14 @@ import dev.hermit.common.pkg.ConchManifest;
 import dev.hermit.common.pkg.ConchPackage;
 import dev.hermit.common.pkg.VerifiedConch;
 import dev.hermit.common.version.SemVer;
+import dev.hermit.common.validate.ConchDiff;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ConchRejectedException;
+import dev.hermit.crab.store.AccountNotFoundException;
+import dev.hermit.crab.store.AccountStore;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.AuditKind;
 import dev.hermit.crab.store.AuditLog;
@@ -223,39 +227,114 @@ public final class ConchSync {
     }
 
     /**
-     * Console view of {@code last}. While a rollback pin matches the current pointer, that conch
-     * is shown as the installed version with {@link OutcomeKind#ROLLED_BACK}. Reads the pin and
-     * current file under {@link ConchFileLocks} and does not touch the registry, so it does not
-     * open another version-switch window beside audit A01.
+     * Installs the last synced catalog version when it is strictly higher than the installed one.
+     * Holds this lock so it does not race {@link #syncOnce()}. Does not refetch the manifest.
+     * When the default account lacks a newly required credential, the verified zip is stored under
+     * the version directory and the current pointer stays put.
+     */
+    public UpdateResult update(String conch, String actor) {
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
+            throw new IllegalArgumentException("actor must be cli or console");
+        }
+        synchronized (this) {
+            if (!ConchValidator.isConchName(conch)) {
+                throw new UpdateException(400, ErrorCode.INVALID_INPUT, SubscriptionException.NAME_INVALID);
+            }
+            if (isLocal(conch)) {
+                throw new UpdateException(409, ErrorCode.INVALID_INPUT, UpdateException.LOCAL_CONFLICT);
+            }
+            if (!subscriptions.contains(conch)) {
+                throw new UpdateException(404, ErrorCode.NOT_FOUND, SubscriptionException.NOT_SUBSCRIBED);
+            }
+            if (disabledConches.contains(conch)) {
+                throw new UpdateException(409, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE);
+            }
+            ReefClient.CatalogEntry entry = cached(conch).orElseThrow(() ->
+                    new UpdateException(404, ErrorCode.NOT_FOUND, SubscriptionException.NOT_IN_CATALOG));
+            String installedText = installedVersionText(conch);
+            if (installedText == null) {
+                throw new UpdateException(404, ErrorCode.NOT_FOUND, UpdateException.NOT_INSTALLED);
+            }
+            Optional<SemVer> installed = version(installedText);
+            Optional<SemVer> incoming = version(entry.version());
+            if (installed.isEmpty() || incoming.isEmpty() || !ConchFiles.safeSegment(entry.version())) {
+                throw updateRejected(SyncReasons.VERSION_INVALID);
+            }
+            if (incoming.get().compareTo(installed.get()) <= 0) {
+                throw new UpdateException(409, ErrorCode.INVALID_INPUT, UpdateException.NOT_HIGHER);
+            }
+            if (entry.sha256() == null || entry.minCrabVersion() == null) {
+                throw updateRejected(SyncReasons.MANIFEST_ENTRY_MISMATCH);
+            }
+            if (!minCrabAllows(entry.minCrabVersion())) {
+                throw updateRejected(version(entry.minCrabVersion()).isEmpty()
+                        ? SyncReasons.VERSION_INVALID
+                        : SyncReasons.MIN_CRAB_VERSION);
+            }
+            Fetched fetched = fetchVerified(entry);
+            if (fetched.rejected() != null) {
+                throw updateRejected(fetched.rejected().reason());
+            }
+            VerifiedConch verified = fetched.verified();
+            if (entry.requiredCredentialsKnown()
+                    && !requiredNames(verified.conchDoc()).equals(entry.requiredCredentials())) {
+                throw updateRejected(SyncReasons.MANIFEST_ENTRY_MISMATCH);
+            }
+            if (verified.conchDoc().minCrabVersion().compareTo(crabVersion) > 0) {
+                throw updateRejected(SyncReasons.MIN_CRAB_VERSION);
+            }
+            ConchDoc installedDoc = registry.find(conch).orElse(null);
+            List<String> newly = installedDoc == null
+                    ? requiredNames(verified.conchDoc())
+                    : sorted(ConchDiff.between(installedDoc, verified.conchDoc()).newRequiredCredentials());
+            List<String> missing = missingOnDefaultAccount(conch, newly);
+            if (!missing.isEmpty()) {
+                synchronized (ConchFileLocks.of(conch)) {
+                    if (isLocal(conch)) {
+                        throw new UpdateException(409, ErrorCode.INVALID_INPUT, UpdateException.LOCAL_CONFLICT);
+                    }
+                    ConchFiles.install(paths, conch, entry.version(), fetched.zip(), verified.conchYaml());
+                }
+                throw new UpdateException(
+                        409,
+                        ErrorCode.NOT_CONFIGURED,
+                        UpdateException.MISSING_PREFIX + String.join(", ", missing),
+                        missing);
+            }
+            InstallResult activated = activate(entry, verified, fetched.zip(), installedText);
+            if (activated.outcome().kind() != OutcomeKind.INSTALLED) {
+                throw updateRejected(activated.outcome().reason());
+            }
+            AuditLog.record(
+                    dataSource,
+                    actor,
+                    AuditKind.CONCH_UPDATED,
+                    "OFFICIAL/" + conch,
+                    "{\"from\":\"" + installedText + "\",\"to\":\"" + entry.version() + "\"}");
+            return new UpdateResult(activated.outcome(), activated.change(), installedText, entry.version());
+        }
+    }
+
+    /**
+     * Verified doc of a higher catalog version already stored on disk. Takes this lock.
+     * Callers that already hold the lock must not call this method.
+     */
+    public Optional<ConchDoc> stagedDeclaration(String conch) {
+        synchronized (this) {
+            return readStagedDeclaration(conch);
+        }
+    }
+
+    /**
+     * Console view of {@code last}. Tombstones are reapplied so a conch Reef dropped stays
+     * disabled. Does not touch the registry, so it does not open a version-switch window
+     * beside audit A01.
      */
     public SyncReport visibleStatus(SyncReport last) {
         if (last == null) {
             return null;
         }
-        return projectDisabled(projectRollbacks(last));
-    }
-
-    private SyncReport projectRollbacks(SyncReport last) {
-        LinkedHashMap<String, ConchOutcome> rows = new LinkedHashMap<>();
-        for (ConchOutcome outcome : last.conches()) {
-            if (outcome.conch() != null) {
-                rows.put(outcome.conch(), outcome);
-            }
-        }
-        boolean changed = false;
-        for (SyncStore.PinRow pin : store.pins()) {
-            ConchOutcome current = rows.get(pin.conch());
-            ConchOutcome projected = projectRollback(pin.conch(), current);
-            if (projected != current) {
-                changed = true;
-                rows.put(pin.conch(), projected);
-            }
-        }
-        if (!changed) {
-            return last;
-        }
-        return new SyncReport(false, List.copyOf(rows.values()), last.removed(), last.credentialChanges(),
-                last.latestCrab(), last.error());
+        return projectDisabled(last);
     }
 
     /**
@@ -297,27 +376,6 @@ public final class ConchSync {
         }
         return new SyncReport(last.notModified(), List.copyOf(rows.values()), List.copyOf(removed),
                 last.credentialChanges(), last.latestCrab(), last.error());
-    }
-
-    private ConchOutcome projectRollback(String conch, ConchOutcome outcome) {
-        if (!ConchFiles.safeSegment(conch)) {
-            return outcome;
-        }
-        synchronized (ConchFileLocks.of(conch)) {
-            Optional<SyncStore.Pin> pin = store.pin(conch);
-            if (pin.isEmpty()) {
-                return outcome;
-            }
-            Optional<String> installed = ConchFiles.readCurrent(paths, conch);
-            if (installed.isEmpty() || !installed.get().equals(pin.get().rolledBackTo())) {
-                return outcome;
-            }
-            ConchOutcome rolled = new ConchOutcome(conch, installed.get(), OutcomeKind.ROLLED_BACK, RollbackGuard.REASON);
-            if (rolled.equals(outcome)) {
-                return outcome;
-            }
-            return rolled;
-        }
     }
 
     private SyncReport install(ReefClient.ManifestFetch manifest, Optional<CrabRelease> latest) {
@@ -396,6 +454,8 @@ public final class ConchSync {
         for (ConchOutcome outcome : conches) {
             if (outcome.kind() != OutcomeKind.INSTALLED
                     && outcome.kind() != OutcomeKind.SKIPPED_SAME
+                    && outcome.kind() != OutcomeKind.UPDATE_AVAILABLE
+                    && outcome.kind() != OutcomeKind.SKIPPED_OLDER
                     && outcome.kind() != OutcomeKind.DISABLED) {
                 continue;
             }
@@ -457,7 +517,10 @@ public final class ConchSync {
                 doc != null || pointer != null,
                 installedVersion,
                 true,
-                false);
+                false,
+                false,
+                null,
+                List.of());
     }
 
     private ConchCatalog.Entry catalogRow(ReefClient.CatalogEntry entry) {
@@ -469,17 +532,28 @@ public final class ConchSync {
             title = name == null ? "" : name;
         }
         String installedVersion = doc != null ? doc.version().toString() : pointer;
+        boolean local = name != null && registry.origin(name) == Origin.LOCAL;
+        boolean disabled = name != null && disabledConches.contains(name);
+        boolean subscribed = name != null && subscriptions.contains(name);
+        boolean installed = doc != null || pointer != null;
+        List<String> newly = local || doc == null ? List.of() : newlyRequired(doc, entry.requiredCredentials());
+        boolean updateAvailable = !local && !disabled && subscribed && installed
+                && higherInstallable(entry, installedVersion);
+        String latestVersion = local ? null : entry.version();
         return new ConchCatalog.Entry(
                 name,
                 entry.version(),
                 title,
                 entry.description(),
                 entry.capabilityCount(),
-                name != null && subscriptions.contains(name),
-                doc != null || pointer != null,
+                subscribed,
+                installed,
                 installedVersion,
-                name != null && disabledConches.contains(name),
-                name != null && registry.origin(name) == Origin.LOCAL);
+                disabled,
+                local,
+                updateAvailable,
+                latestVersion,
+                local ? List.of() : newly);
     }
 
     private Optional<ReefClient.CatalogEntry> cached(String conch) {
@@ -561,69 +635,55 @@ public final class ConchSync {
         if (!ConchFiles.safeSegment(entry.version())) {
             return InstallResult.of(rejected(entry, SyncReasons.PATH_UNSAFE));
         }
-        SemVer incoming = parsed.get();
         if (entry.sha256() == null || entry.minCrabVersion() == null) {
             return InstallResult.of(rejected(entry, SyncReasons.MANIFEST_ENTRY_MISMATCH));
         }
-        Optional<SyncStore.Pin> pin = store.pin(entry.conch());
-        if (pin.isPresent()) {
-            SemVer bad;
-            try {
-                bad = SemVer.parse(pin.get().badVersion());
-            } catch (IllegalArgumentException ex) {
-                bad = null;
-            }
-            if (bad != null && incoming.compareTo(bad) <= 0) {
-                return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_PINNED, SyncReasons.PINNED));
-            }
-        }
-        SemVer min;
-        try {
-            min = SemVer.parse(entry.minCrabVersion());
-        } catch (IllegalArgumentException ex) {
+        SemVer incoming = parsed.get();
+        String installedText = installedVersionText(entry.conch());
+        Optional<SemVer> min = version(entry.minCrabVersion());
+        if (min.isEmpty()) {
             return InstallResult.of(rejected(entry, SyncReasons.VERSION_INVALID));
         }
-        if (min.compareTo(crabVersion) > 0) {
+        if (min.get().compareTo(crabVersion) > 0) {
+            String shown = installedText == null ? entry.version() : installedText;
+            return InstallResult.of(new ConchOutcome(
+                    entry.conch(), shown, OutcomeKind.SKIPPED_MIN_VERSION, SyncReasons.MIN_CRAB_VERSION));
+        }
+        if (installedText == null) {
+            return downloadAndActivate(entry, null);
+        }
+        Optional<SemVer> installed = version(installedText);
+        if (installed.isEmpty()) {
+            return downloadAndActivate(entry, null);
+        }
+        int compared = incoming.compareTo(installed.get());
+        if (compared < 0) {
+            return InstallResult.of(new ConchOutcome(
+                    entry.conch(), installedText, OutcomeKind.SKIPPED_OLDER, SyncReasons.OLDER_MANIFEST));
+        }
+        if (compared > 0) {
+            return InstallResult.of(new ConchOutcome(
+                    entry.conch(), installedText, OutcomeKind.UPDATE_AVAILABLE, SyncReasons.UPDATE_AVAILABLE));
+        }
+        return alignCurrent(entry);
+    }
+
+    private InstallResult downloadAndActivate(ReefClient.CatalogEntry entry, String previousCurrent) {
+        Fetched fetched = fetchVerified(entry);
+        if (fetched.rejected() != null) {
+            return InstallResult.of(fetched.rejected());
+        }
+        if (fetched.verified().conchDoc().minCrabVersion().compareTo(crabVersion) > 0) {
             return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_MIN_VERSION, SyncReasons.MIN_CRAB_VERSION));
         }
-        Optional<String> current = ConchFiles.readCurrent(paths, entry.conch());
-        if (current.isPresent() && current.get().equals(entry.version())) {
-            InstallResult kept = keepCurrent(entry);
-            if (kept != null) {
-                return kept;
-            }
-        }
-        ReefClient.Download download = reef.download(entry.conch(), entry.version());
-        if (download.tooLarge()) {
-            return InstallResult.of(rejected(entry, SyncReasons.ZIP_TOO_LARGE));
-        }
-        if (download.body() == null) {
-            return InstallResult.of(rejected(entry, SyncReasons.http(download.status())));
-        }
-        VerifiedConch verified;
-        try {
-            verified = ConchPackage.readVerified(download.body(), settings.reefKey());
-        } catch (PackageVerificationException ex) {
-            return InstallResult.of(rejected(entry, ex.reason().name()));
-        }
-        ConchManifest manifest = verified.manifest();
-        if (!manifest.conch().equals(entry.conch())
-                || !manifest.version().equals(entry.version())
-                || !manifest.sha256().equals(entry.sha256())) {
-            return InstallResult.of(rejected(entry, SyncReasons.MANIFEST_ENTRY_MISMATCH));
-        }
-        if (verified.conchDoc().minCrabVersion().compareTo(crabVersion) > 0) {
-            return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_MIN_VERSION, SyncReasons.MIN_CRAB_VERSION));
-        }
-        return activate(entry, verified, download.body(), current.orElse(null), pin.isPresent());
+        return activate(entry, fetched.verified(), fetched.zip(), previousCurrent);
     }
 
     private InstallResult activate(
             ReefClient.CatalogEntry entry,
             VerifiedConch verified,
             byte[] zip,
-            String previousCurrent,
-            boolean clearPin
+            String previousCurrent
     ) {
         String conch = entry.conch();
         String version = entry.version();
@@ -631,20 +691,17 @@ public final class ConchSync {
             if (isLocal(conch)) {
                 return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT));
             }
-            Optional<SyncStore.Pin> pinNow = store.pin(conch);
-            if (pinNow.isPresent() && !newerThanPin(version, pinNow.get())) {
-                return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_PINNED, SyncReasons.PINNED));
-            }
             Optional<String> currentNow = ConchFiles.readCurrent(paths, conch);
             if (currentNow.isPresent() && currentNow.get().equals(version)) {
-                if (registry.find(conch).isEmpty() && !loadInstalled(conch, version)) {
+                ConchDoc loaded = registry.find(conch).orElse(null);
+                boolean loadedMatches = loaded != null && version.equals(loaded.version().toString());
+                if (loadedMatches || (loaded == null && loadInstalled(conch, version))) {
+                    releaseReefDisable(conch);
+                    return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION));
+                }
+                if (loaded == null) {
                     return InstallResult.of(rejected(entry, SyncReasons.PACKAGE_MISSING));
                 }
-                releaseReefDisable(conch);
-                if (pinNow.isPresent()) {
-                    store.clearPin(conch);
-                }
-                return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION));
             }
             ConchDoc previous = previousDoc(conch);
             Origin previousOrigin = registry.origin(conch);
@@ -678,9 +735,6 @@ public final class ConchSync {
                 store.clearPrevious(conch);
             }
             store.recordInstalled(conch, version, clock.instant());
-            if (clearPin || pinNow.isPresent()) {
-                store.clearPin(conch);
-            }
             try {
                 ConchFiles.prune(paths, conch, VersionRetention.keep(
                         version,
@@ -746,7 +800,7 @@ public final class ConchSync {
         AuditLog.record(dataSource, Actors.SYNC, AuditKind.REEF_CONCH_DISABLED, "OFFICIAL/" + conch, conch);
     }
 
-    /** Reef listed the conch again. One audit row, then normal install may download. */
+    /** Reef listed the conch again. One audit row, then the forward-only compare runs. */
     private void releaseReefDisable(String conch) {
         if (conch == null || !disabledConches.contains(conch)) {
             return;
@@ -755,31 +809,187 @@ public final class ConchSync {
         AuditLog.record(dataSource, Actors.SYNC, AuditKind.REEF_CONCH_ENABLED, "OFFICIAL/" + conch, conch);
     }
 
-    private InstallResult keepCurrent(ReefClient.CatalogEntry entry) {
-        if (isLocal(entry.conch())) {
-            return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT));
-        }
+    private InstallResult alignCurrent(ReefClient.CatalogEntry entry) {
         String conch = entry.conch();
         if (!ConchFiles.safeSegment(conch)) {
             return InstallResult.of(rejected(entry, SyncReasons.PATH_UNSAFE));
         }
         synchronized (ConchFileLocks.of(conch)) {
-            Optional<String> currentNow = ConchFiles.readCurrent(paths, conch);
-            if (currentNow.isEmpty() || !currentNow.get().equals(entry.version())) {
-                return null;
-            }
             if (isLocal(conch)) {
                 return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT));
             }
-            if (registry.find(conch).isEmpty() && !loadInstalled(conch, entry.version())) {
-                return InstallResult.of(rejected(entry, SyncReasons.PACKAGE_MISSING));
+            ConchDoc doc = registry.find(conch).orElse(null);
+            boolean registryMatches = doc != null && entry.version().equals(doc.version().toString());
+            Optional<String> pointer = ConchFiles.readCurrent(paths, conch);
+            boolean pointerMatches = pointer.isPresent() && entry.version().equals(pointer.get());
+            if (registryMatches && !pointerMatches) {
+                try {
+                    ConchFiles.writeCurrent(paths, conch, entry.version());
+                } catch (RuntimeException ex) {
+                    LOG.log(Level.WARNING, "current pointer write failed conch={0}", conch);
+                    return InstallResult.of(rejected(entry, SyncReasons.CURRENT_WRITE_FAILED));
+                }
+            } else if (!registryMatches) {
+                if (!pointerMatches || !loadInstalled(conch, entry.version())) {
+                    return InstallResult.of(rejected(entry, SyncReasons.PACKAGE_MISSING));
+                }
             }
             releaseReefDisable(conch);
-            if (store.pin(conch).isPresent()) {
-                store.clearPin(conch);
-            }
             return InstallResult.of(outcome(entry, OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION));
         }
+    }
+
+    private Fetched fetchVerified(ReefClient.CatalogEntry entry) {
+        ReefClient.Download download = reef.download(entry.conch(), entry.version());
+        if (download.tooLarge()) {
+            return Fetched.rejected(rejected(entry, SyncReasons.ZIP_TOO_LARGE));
+        }
+        if (download.body() == null) {
+            return Fetched.rejected(rejected(entry, SyncReasons.http(download.status())));
+        }
+        VerifiedConch verified;
+        try {
+            verified = ConchPackage.readVerified(download.body(), settings.reefKey());
+        } catch (PackageVerificationException ex) {
+            return Fetched.rejected(rejected(entry, ex.reason().name()));
+        }
+        ConchManifest manifest = verified.manifest();
+        if (!manifest.conch().equals(entry.conch())
+                || !manifest.version().equals(entry.version())
+                || !manifest.sha256().equals(entry.sha256())) {
+            return Fetched.rejected(rejected(entry, SyncReasons.MANIFEST_ENTRY_MISMATCH));
+        }
+        return Fetched.ok(verified, download.body());
+    }
+
+    private Optional<ConchDoc> readStagedDeclaration(String conch) {
+        if (conch == null || !ConchValidator.isConchName(conch) || isLocal(conch) || !ConchFiles.safeSegment(conch)) {
+            return Optional.empty();
+        }
+        Optional<ReefClient.CatalogEntry> cached = cached(conch);
+        if (cached.isEmpty()) {
+            return Optional.empty();
+        }
+        ReefClient.CatalogEntry entry = cached.get();
+        String latest = entry.version();
+        if (latest == null || !ConchFiles.safeSegment(latest) || entry.sha256() == null) {
+            return Optional.empty();
+        }
+        Optional<SemVer> latestSem = version(latest);
+        Optional<SemVer> installed = version(installedVersionText(conch));
+        if (latestSem.isEmpty() || installed.isEmpty() || latestSem.get().compareTo(installed.get()) <= 0) {
+            return Optional.empty();
+        }
+        try {
+            java.nio.file.Path zip = ConchFiles.versionDir(paths, conch, latest).resolve("package.zip");
+            if (!Files.isRegularFile(zip) || Files.isSymbolicLink(zip) || Files.size(zip) > ConchFiles.MAX_ZIP_BYTES) {
+                return Optional.empty();
+            }
+            VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings.reefKey());
+            ConchManifest manifest = verified.manifest();
+            if (!conch.equals(manifest.conch())
+                    || !latest.equals(manifest.version())
+                    || !entry.sha256().equals(manifest.sha256())) {
+                return Optional.empty();
+            }
+            return Optional.of(verified.conchDoc());
+        } catch (RuntimeException | IOException ex) {
+            return Optional.empty();
+        }
+    }
+
+    private String installedVersionText(String conch) {
+        if (conch == null) {
+            return null;
+        }
+        ConchDoc doc = registry.find(conch).orElse(null);
+        if (doc != null && registry.origin(conch) != Origin.LOCAL) {
+            return doc.version().toString();
+        }
+        if (!ConchFiles.safeSegment(conch)) {
+            return null;
+        }
+        return ConchFiles.readCurrent(paths, conch).filter(value -> version(value).isPresent()).orElse(null);
+    }
+
+    private boolean minCrabAllows(String minCrabVersion) {
+        Optional<SemVer> min = version(minCrabVersion);
+        return min.isPresent() && min.get().compareTo(crabVersion) <= 0;
+    }
+
+    private boolean higherInstallable(ReefClient.CatalogEntry entry, String installedVersion) {
+        if (installedVersion == null || entry.version() == null || !minCrabAllows(entry.minCrabVersion())) {
+            return false;
+        }
+        Optional<SemVer> manifest = version(entry.version());
+        Optional<SemVer> installed = version(installedVersion);
+        return manifest.isPresent() && installed.isPresent() && manifest.get().compareTo(installed.get()) > 0;
+    }
+
+    private List<String> missingOnDefaultAccount(String conch, List<String> newly) {
+        if (newly == null || newly.isEmpty()) {
+            return List.of();
+        }
+        String account;
+        try {
+            account = new AccountStore(dataSource).resolve(Origin.OFFICIAL, conch, Optional.empty()).account();
+        } catch (AccountNotFoundException ex) {
+            if (ex.account() != null) {
+                throw ex;
+            }
+            return List.of();
+        }
+        Set<String> present = vault.fieldNames(Origin.OFFICIAL, conch, account);
+        List<String> missing = new ArrayList<>();
+        for (String name : newly) {
+            if (!present.contains(name)) {
+                missing.add(name);
+            }
+        }
+        return List.copyOf(missing);
+    }
+
+    private static List<String> newlyRequired(ConchDoc installed, List<String> manifestNames) {
+        if (installed == null || manifestNames == null || manifestNames.isEmpty()) {
+            return List.of();
+        }
+        Set<String> already = Set.copyOf(requiredNames(installed));
+        List<String> newly = new ArrayList<>();
+        for (String name : manifestNames) {
+            if (name != null && !already.contains(name)) {
+                newly.add(name);
+            }
+        }
+        newly.sort(String::compareTo);
+        return List.copyOf(newly);
+    }
+
+    private static List<String> requiredNames(ConchDoc doc) {
+        if (doc == null || doc.credentials() == null) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        for (Map.Entry<String, CredentialField> field : doc.credentials().entrySet()) {
+            if (field.getKey() != null && field.getValue() != null && field.getValue().required()) {
+                names.add(field.getKey());
+            }
+        }
+        names.sort(String::compareTo);
+        return List.copyOf(names);
+    }
+
+    private static List<String> sorted(List<String> names) {
+        if (names == null || names.isEmpty()) {
+            return List.of();
+        }
+        List<String> copy = new ArrayList<>(names);
+        copy.sort(String::compareTo);
+        return List.copyOf(copy);
+    }
+
+    private static UpdateException updateRejected(String reason) {
+        String message = reason == null || reason.isBlank() ? SyncReasons.MANIFEST_ENTRY_MISMATCH : reason;
+        return new UpdateException(409, ErrorCode.INVALID_INPUT, message);
     }
 
     private boolean loadInstalled(String conch, String version) {
@@ -845,14 +1055,6 @@ public final class ConchSync {
             return Optional.of(SemVer.parse(text));
         } catch (IllegalArgumentException ex) {
             return Optional.empty();
-        }
-    }
-
-    private static boolean newerThanPin(String version, SyncStore.Pin pin) {
-        try {
-            return SemVer.parse(version).compareTo(SemVer.parse(pin.badVersion())) > 0;
-        } catch (IllegalArgumentException ex) {
-            return false;
         }
     }
 
@@ -937,6 +1139,38 @@ public final class ConchSync {
     private record InstallResult(ConchOutcome outcome, Optional<CredentialDeclarationChange> change) {
         static InstallResult of(ConchOutcome outcome) {
             return new InstallResult(outcome, Optional.empty());
+        }
+    }
+
+    private static final class Fetched {
+        private final VerifiedConch verified;
+        private final byte[] zip;
+        private final ConchOutcome rejected;
+
+        private Fetched(VerifiedConch verified, byte[] zip, ConchOutcome rejected) {
+            this.verified = verified;
+            this.zip = zip;
+            this.rejected = rejected;
+        }
+
+        static Fetched ok(VerifiedConch verified, byte[] zip) {
+            return new Fetched(verified, zip, null);
+        }
+
+        static Fetched rejected(ConchOutcome outcome) {
+            return new Fetched(null, null, outcome);
+        }
+
+        VerifiedConch verified() {
+            return verified;
+        }
+
+        byte[] zip() {
+            return zip;
+        }
+
+        ConchOutcome rejected() {
+            return rejected;
         }
     }
 }

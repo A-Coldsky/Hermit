@@ -133,6 +133,8 @@ final class ReefClient {
         }
         List<CatalogEntry> entries = new ArrayList<>();
         for (JsonNode node : root.get("data")) {
+            JsonNode credentials = node.get("requiredCredentials");
+            boolean known = credentials != null && credentials.isArray();
             entries.add(new CatalogEntry(
                     textOrNull(node, "conch"),
                     textOrNull(node, "version"),
@@ -140,9 +142,25 @@ final class ReefClient {
                     textOrNull(node, "minCrabVersion"),
                     textOrNull(node, "title"),
                     textOrNull(node, "description"),
-                    countOrZero(node)));
+                    countOrZero(node),
+                    known ? credentialNames(credentials) : List.of(),
+                    known));
         }
         return entries;
+    }
+
+    private static List<String> credentialNames(JsonNode array) {
+        List<String> names = new ArrayList<>();
+        for (JsonNode item : array) {
+            if (item != null && item.isTextual()) {
+                String name = item.asText();
+                if (name != null && !name.isBlank()) {
+                    names.add(name);
+                }
+            }
+        }
+        names.sort(String::compareTo);
+        return List.copyOf(names);
     }
 
     private static int countOrZero(JsonNode node) {
@@ -189,7 +207,9 @@ final class ReefClient {
             String minCrabVersion,
             String title,
             String description,
-            int capabilityCount
+            int capabilityCount,
+            List<String> requiredCredentials,
+            boolean requiredCredentialsKnown
     ) {
         CatalogEntry {
             if (title == null || title.isBlank()) {
@@ -197,6 +217,18 @@ final class ReefClient {
             }
             if (capabilityCount < 0) {
                 capabilityCount = 0;
+            }
+            if (requiredCredentials == null) {
+                requiredCredentials = List.of();
+            } else {
+                List<String> names = new ArrayList<>();
+                for (String name : requiredCredentials) {
+                    if (name != null && !name.isBlank()) {
+                        names.add(name);
+                    }
+                }
+                names.sort(String::compareTo);
+                requiredCredentials = List.copyOf(names);
             }
         }
     }

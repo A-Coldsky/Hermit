@@ -94,14 +94,6 @@ class ConchRepository {
                 version);
     }
 
-    int switchCurrent(String conch, String version) {
-        jdbc.update("UPDATE hermit_conch_versions SET is_current = FALSE WHERE conch = ?", conch);
-        return jdbc.update(
-                "UPDATE hermit_conch_versions SET is_current = TRUE WHERE conch = ? AND version = ? AND status = 'PUBLISHED'",
-                conch,
-                version);
-    }
-
     private static Instant instant(Timestamp timestamp) {
         return timestamp == null ? null : timestamp.toInstant();
     }

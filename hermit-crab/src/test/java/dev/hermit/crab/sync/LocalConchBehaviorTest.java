@@ -173,7 +173,7 @@ public class LocalConchBehaviorTest {
                     new ReportSettings(true, URI.create("http://127.0.0.1:9/"), Optional.empty(), UUID.randomUUID(), "1.0.0"),
                     runtime.dataSource(),
                     Clock.systemUTC());
-            runtime.invoker().bindHooks(reports, null);
+            runtime.invoker().bindHooks(reports);
 
             InvokeOutcome denied = runtime.invoker().invoke(
                     openPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-deny");

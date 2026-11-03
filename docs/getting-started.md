@@ -94,9 +94,11 @@ java -cp "$CP" dev.hermit.crab.CrabMain serve
 ```bash
 export CRAB_URL=http://127.0.0.1:7777
 curl -fsS -X POST "$CRAB_URL/console/api/sync" -H 'X-Hermit-Console: 1'
-# 同步只刷新目录。订阅后才会下载并安装 legacy_oa
+# 同步只刷新目录。第一次订阅会安装 Reef 当前版本。之后的更高版本不会自动安装
 curl -fsS -X POST "$CRAB_URL/console/api/conches/legacy_oa/subscription" \
   -H 'X-Hermit-Console: 1' -H 'Content-Type: application/json' -d '{}'
+# 目录里 updateAvailable 为 true 时，再手动安装清单上的更高版本：
+# curl -fsS -X POST "$CRAB_URL/console/api/conches/legacy_oa/update" -H 'X-Hermit-Console: 1'
 curl -fsS "$CRAB_URL/console/api/conches" -H 'X-Hermit-Console: 1'
 
 API_KEY=$(curl -fsS -X POST "$CRAB_URL/console/api/apikeys" \

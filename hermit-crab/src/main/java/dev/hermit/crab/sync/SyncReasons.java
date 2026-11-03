@@ -4,7 +4,8 @@ public final class SyncReasons {
 
     public static final String SAME_VERSION = "SAME_VERSION";
     public static final String MIN_CRAB_VERSION = "MIN_CRAB_VERSION";
-    public static final String PINNED = "PINNED";
+    public static final String UPDATE_AVAILABLE = "UPDATE_AVAILABLE";
+    public static final String OLDER_MANIFEST = "OLDER_MANIFEST";
     public static final String ZIP_TOO_LARGE = "ZIP_TOO_LARGE";
     public static final String MANIFEST_ENTRY_MISMATCH = "MANIFEST_ENTRY_MISMATCH";
     public static final String VERSION_INVALID = "VERSION_INVALID";

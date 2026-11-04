@@ -9,7 +9,7 @@ public final class StatusCodes {
     public static int of(ErrorCode code) {
         return switch (code) {
             case FORBIDDEN -> 403;
-            case NOT_FOUND, ACCOUNT_NOT_FOUND -> 404;
+            case NOT_FOUND, ACCOUNT_NOT_FOUND, CAPABILITY_DISABLED -> 404;
             case NOT_CONFIGURED, CONCH_DISABLED, IDEMPOTENCY_CONFLICT, CONFLICT -> 409;
             case INVALID_INPUT -> 400;
             case TIMEOUT -> 504;

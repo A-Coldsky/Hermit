@@ -110,6 +110,8 @@ export interface ConfigValue {
 }
 
 export interface ApiKeyScope {
+  /** 全部正式规则包的全部能力，不含本地包。两个集合都为空的旧 Key 也是 true。 */
+  all: boolean
   conches: string[] | null
   actions: string[] | null
   readOnly: boolean
@@ -380,7 +382,7 @@ export const api = {
     http.post<{ disabled: boolean }>(`${base}/capabilities/${seg(conch)}/${seg(action)}/${enabled ? 'enable' : 'disable'}`),
 
   apiKeys: () => http.get<{ apiKeys: ApiKey[] }>(`${base}/apikeys`),
-  createApiKey: (body: { name: string; readOnly: boolean; conches: string[]; actions: string[] }) =>
+  createApiKey: (body: { name: string; readOnly: boolean; all: boolean; conches: string[]; actions: string[] }) =>
     http.post<CreatedApiKey>(`${base}/apikeys`, body),
   revokeApiKey: (id: string) => http.del<{ revoked: boolean }>(`${base}/apikeys/${seg(id)}`),
 

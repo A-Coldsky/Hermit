@@ -28,7 +28,7 @@
 | 上报队列、聚合、退避、预览 | 已实现 | ReportSenderTest。失败明细和小时计数先留在内存，每 30 秒、发送前和正常关闭时批量写入 H2；异常退出可能丢掉最近 30 秒。空批次不发 HTTP。失败/事件队列上限 10000，超限丢弃计数。`report.interval_seconds` 默认 300、最小 60。`report.enabled: false` 不记录也不发送，未发送队列保留。控制台 `GET/PUT /console/api/reports/settings` 写入 schema 13 并热更新，审计 `REPORT_SETTINGS_CHANGED` |
 | Reef 引导文件 | 已实现 | `POST /console/api/reef/bootstrap` 与 CLI `reef import <file>`。校验 kind/version/reef，未知字段 400。清单只有 2xx 或 304 才写入。401 与 403 转为 400 `reef rejected the token`。其他 HTTP 状态为 400 `reef url did not answer as Reef (HTTP n)`，不写文件。连不上为 502 `cannot reach reef`。已安装正式包时更换公钥为 409 `CONFLICT`。写入 `reef-bootstrap.json`（0600）后本进程热更新并同步一次，审计 `REEF_BOOTSTRAPPED`（无令牌明文）。令牌进入脱敏名单。容器入口在该文件存在时不再要求 Reef 环境变量。没有环境变量也没有引导文件时仍可启动。本次没有做 Vue 页面 |
 | Reef Tide 查询、失败聚合、版本对比 | 已实现 | TideQueryTest。失败分组、样本和版本切换带 `owner`（旧数据为 null，不同用户拆成不同组）。小时汇总不加 `owner`。聚合延迟不等同于全量原始样本精确分位数 |
-| 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest。确认后，创建时间起算的去重窗口剩余时间内不新建、不推送；窗口结束后条件仍在才新建。失败上涨不提前打破窗口。Webhook 含告警 id 与相对路径 `/alerts`（无对外基址配置），没有持久化重试队列。负阈值，以及必须为正的窗口写成 0，启动时拒绝 |
+| 告警评估、确认、Webhook | 已实现，有边界 | AlertEvaluationTest。确认后，创建时间起算的去重窗口剩余时间内不新建、不推送；窗口结束后条件仍在才新建。失败上涨不提前打破窗口。Webhook 含告警 id 与相对路径 `/alerts`（无对外基址配置），没有持久化重试队列。`webhook-url` 为空不推送；非空只接受 http 或 https，`ftp://` 或没有协议的值拒绝启动。负阈值，以及必须为正的窗口写成 0，启动时拒绝 |
 | Reef 管理页面 | 已实现 | 按角色显示菜单与按钮：普通用户看不到上传、发布、停用、告警确认、用户管理与审计，相应路由跳回概览（权限仍以服务端 403 为准）。「我的令牌」生成令牌后只在弹窗里显示一次明文，可改 Reef 地址后下载或复制初始化 JSON，列出名下 Crab（用户 · 实例号）；管理员可切换看全部。「用户管理」新建用户、改角色、禁用/启用、重置他人密码；右上角菜单改自己的密码。登录、仪表盘、Conch/上传/版本及校验警告明细、Tide、告警、审计、设置说明。GET 且不是 `/api/**`、`/agent/**`、`/assets/**` 的路径返回同一份 `index.html`，未登录不是 401 JSON，由已有前端路由进入登录页。`GET /shells` 与 `/shells/**` 302 到 `/conches`。页面响应不带账号或令牌。前端把 `/shells` 与 `/shells/:conch` 转到 `/conches`；已登录的未知路径显示应用内「页面不存在」 |
 | Crab 本机控制台 | 已实现 | 「连接 Reef」页显示当前连接（来源、地址、令牌所属用户与名称、令牌前缀、公钥指纹、实例号），可选择文件或粘贴整份初始化 JSON，页面先检查 `kind` 再提交，已连接时先确认替换；导入失败的英文原因翻成中文。「上报」页有开关与间隔（最少 60 秒、按分钟步进），保存后立即生效。目录和概览在未连接时引导到「连接 Reef」。概览、Conch、账号/凭证/配置、能力、API Key、调用、上报。调用记录的 `action` 筛选接受能力名或 `conch.action`；与 `conch` 冲突时 400。每条记录另有 `channel`（`HTTP` 对外 OpenAPI、`MCP`、预留的 `CONSOLE`），可按 `channel` 筛选；省略 `limit` 时 100，最大 500。控制台调用页与概览都传 100；调用页有「渠道」列和筛选，详情抽屉列出原始错误码，标题只显示中文。目前没有写入 `CONSOLE` 的路径，测试登录不写调用记录。Conch 详情与列表显示自动登录「已暂停」及恢复方法，账号行标出凭证无法解密。详情横幅按默认账号与具体原因写标题并点名账号；凭证无法解密时对话框要求全部重填。概览把「账号暂停」与「缺凭证或配置」分开提示，同步卡有停用项时不显示「已是最新」。两端的审计、调用、上报时间列显示浏览器本地时间和时区，悬停显示 UTC。「配置审计」页按 Conch/账号筛选分页查看变更记录。未登记的 `GET /console/**`（不含 `/console/api/**` 与 `/console/assets/**`）返回同一份 `index.html`。`GET /console/shells` 与其子路径 302 到 `/console/conches`。前端把 `shells` 与 `shells/:conch` 转到 `/conches`；未知路径显示应用内「页面不存在」 |
 | Crab 配置审计查询 | 已实现 | 控制台「配置审计」页、`GET /console/api/audit` 与 CLI `audit list`。可按 conch/account 分页，新的在前。只返回 id、时间、actor、action、origin、conch、account、字段名；不返回 detail 原文、配置值、凭证明文或密文。`config_audit` 仍无定期清理 |
@@ -42,10 +42,10 @@
 | `health_check` | Parser/Model 接收，示例声明；无执行方 | 定义执行时机、账号选择、失败门槛，并接入发布/安装流程，或移除误导性声明 |
 | debug | API/持久化/24h 过期存在；执行引擎/日志不读这个状态；新 UI 明示未接入调用记录 | 定义调试行为及脱敏边界，再接入日志采集 |
 | `mcp.destructive` | 可解析，但 tool annotation 从 readOnly/idempotent 推导 | 对齐字段声明与实际注解；确认模式一致性需产品决定 |
-| Crab 升级 | Reef 提供最新版本/下载地址，Crab 展示提示 | 无自动下载/升级器；继续手工升级或另行实现 |
+| Crab 升级 | Reef 提供最新版本/下载地址，Crab 展示提示。`latest-crab-version` 为空不提示升级；非空必须是 semver，否则 Reef 拒绝启动 | 无自动下载/升级器；继续手工升级或另行实现 |
 | 管理员页面 | API 已有，Vue 页面未做 | 改自己的口令、创建用户、调整角色和禁用、重置他人口令、签发和吊销 Agent 令牌、按用户查看 Crab 实例都有管理 API。`apps/reef-admin/src/api.ts` 有对应类型。页面还没做 |
 | 配置批量原子更新 | 控制台 PUT 逐字段调用 putConfig | 校验/写入失败可能部分生效；补事务行为测试 |
-| 数据保留 | `hermit_failure_reports`、`hermit_rollback_events` 按保留天数清理，登录失败按锁定窗口清理。定时默认每天 03:00 UTC，`hermit.reef.retention-cron` 可改；管理员 `POST /api/admin/retention/purge` 返回删除条数并写审计 | 两端小时统计及部分审计/告警数据仍可持续增长 |
+| 数据保留 | `hermit_failure_reports`、`hermit_rollback_events` 按保留天数清理，登录失败按锁定窗口清理。定时默认每天 03:00 UTC，`hermit.reef.retention-cron` 可改；管理员 `POST /api/admin/retention/purge` 返回删除条数并写审计。空白 `hermit.reef.data-dir` 在创建目录前拒绝启动，message 为 `hermit.reef.data-dir must not be blank`，不会把空串解析成工作目录 | 两端小时统计及部分审计/告警数据仍可持续增长 |
 | 前端交互测试 | 类型检查、构建、后端静态资源测试和 Vitest/jsdom 组件测试 | 仍缺真实浏览器 E2E |
 | 交付工程化 | Maven 构建/Java/Vitest 测试和 Crab Docker 运行镜像已提供 | 无 CI workflow/覆盖率门槛/自动依赖扫描；原生 Crab 仍为普通 jar |
 
@@ -122,3 +122,5 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 2026-11-04 合入 origin/main（#63 Reef 管理页面）后，引导探测只接受清单的 2xx 与 304。以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 150、hermit-crab 261、hermit-it 1，失败/错误/跳过均为 0；Vitest 94（16 个文件），`vue-tsc` 通过。Java 小计 455，连同 Vitest 合计 549。这是当前整棵树的计数。401 与 403 为 400 `reef rejected the token`。404、500、302，以及返回 HTML 的 404，为 400 `reef url did not answer as Reef (HTTP n)`，不写 `reef-bootstrap.json`，已有文件也不替换。201 与 304 可以导入。未改 hermit-reef。未在浏览器点选，未启动 MySQL 或 Compose。
 
 2026-11-04 Crab 控制台「连接 Reef」与上报设置页面：新增 Vitest 4 项（导入前检查、提交与连接信息、替换确认与令牌被拒提示、关闭上报），合计 Vitest 98（17 个文件），`vue-tsc` 与两端构建通过。只改前端与文档。未在浏览器点选，文件选择只测了粘贴路径。
+
+2026-11-04 Reef 启动配置：`hermit.reef.tide.webhook-url` 只接受 http/https，空字符串仍不推送；`hermit.reef.latest-crab-version` 非空时必须是 semver，空仍不提示升级；空白 `hermit.reef.data-dir` 在创建目录之前拒绝，message 为 `hermit.reef.data-dir must not be blank`。以 JDK 17.0.20.1 执行 `./mvnw -pl hermit-reef -am test -Dhermit.web.skip=true` 通过。Surefire：hermit-common 43、hermit-reef 173（打包页面测试 1 项因跳过前端资源而跳过），失败 0、错误 0。覆盖 `ftp://example` 和没有协议的地址拒绝启动并点名 `hermit.reef.tide.webhook-url`，`https://` 与 `https://hooks.example/tide`、`http://127.0.0.1:9/hook` 可以通过；`latest-crab-version` 的 `abc`、`1.2`、`v1.0.0`、`1.0.0+build` 拒绝启动，空和 `1.2.3`、`1.2.3-alpha.1` 可以通过；`data-dir` 空串与纯空白的失败信息里没有 `/app`，工作目录下也不会因此出现 `db`、`conches`、`keys`。未跑 hermit-crab、hermit-it 和 Vitest，未启动 MySQL 或 Compose。

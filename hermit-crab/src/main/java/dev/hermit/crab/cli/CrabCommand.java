@@ -82,7 +82,7 @@ public final class CrabCommand {
               crab local reload
               crab local delete <conch>
               crab local export <conch> [--out file]
-              crab mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
+              crab mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
             """;
 
     public int run(String[] args, Function<String, String> env, InputStream in, PrintStream out, PrintStream err) {

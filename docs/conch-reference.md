@@ -58,7 +58,7 @@ actions:
 
 Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。缺 examples 是校验错误；notes/related 等说明质量问题可能产生警告。示例中 related 指向不存在的能力产生警告，不代表那些能力已实现。
 
-输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由 `InputPreparer` 转换并按生成的 JSON Schema 校验。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换，以及小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`）都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内再当成功。HTTP 网关和 MCP 都经过 `Invoker` 与 `RuleEngine`，所以这条校验两边相同。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`，能定位到单个字段时还有 `field`。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；示例 `legacy_oa` 的 `page` 声明了 `minimum: 1`。
+输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由 `InputPreparer` 转换并按生成的 JSON Schema 校验。生成的 schema 含 `additionalProperties: false`。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换、小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`），以及未声明字段，都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内、也不会丢掉多余字段再当成功。HTTP 网关和 MCP 都经过 `Invoker` 与 `RuleEngine`，所以这条校验两边相同。MCP 在校验前去掉账号选择（直接工具的 `account`，或能力入参已占用该名字时的 `_account`）。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`、`traceId`，能定位到单个字段时还有 `field`。`traceId` 与响应头 `X-Hermit-Trace` 相同。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；示例 `legacy_oa` 的 `page` 声明了 `minimum: 1`。
 
 ## HTTP 方法、只读和幂等是不同概念
 

@@ -31,12 +31,29 @@ final class McpCalls {
         this.catalog = catalog;
     }
 
+    /** 调用记录、响应头和失败体共用的这一次编号。目录模式决定未知工具的 hint。 */
+    private record Attempt(boolean directory, String traceId) {
+    }
+
     McpSchema.CallToolResult call(
             ApiKeyPrincipal principal,
             McpSession session,
             Optional<String> headerAccount,
             JsonNode params
     ) {
+        return call(principal, session, headerAccount, params, UUID.randomUUID().toString());
+    }
+
+    McpSchema.CallToolResult call(
+            ApiKeyPrincipal principal,
+            McpSession session,
+            Optional<String> headerAccount,
+            JsonNode params,
+            String traceId
+    ) {
+        Attempt attempt = new Attempt(catalog.directory(principal), traceId == null || traceId.isBlank()
+                ? UUID.randomUUID().toString()
+                : traceId);
         McpSchema.CallToolRequest request;
         try {
             request = McpJson.convert(params, McpSchema.CallToolRequest.class);
@@ -45,17 +62,17 @@ final class McpCalls {
         }
         String name = request.name() == null ? "" : request.name();
         if (name.isBlank()) {
-            return toolError("INVALID_INPUT", "name is required");
+            return fail(attempt, "INVALID_INPUT", "name is required");
         }
         Map<String, Object> arguments = request.arguments() == null ? Map.of() : request.arguments();
-        if (catalog.directory(principal)) {
-            return directory(principal, session, headerAccount, name, arguments);
+        if (attempt.directory()) {
+            return directory(principal, session, headerAccount, name, arguments, attempt);
         }
         Optional<McpCatalog.CapabilityRef> found = catalog.find(principal, name);
         if (found.isEmpty()) {
-            return missingTool(name);
+            return missingTool(attempt, name);
         }
-        return invokeDirect(principal, headerAccount, found.get(), arguments);
+        return invokeDirect(principal, headerAccount, found.get(), arguments, attempt);
     }
 
     private McpSchema.CallToolResult directory(
@@ -63,101 +80,106 @@ final class McpCalls {
             McpSession session,
             Optional<String> headerAccount,
             String name,
-            Map<String, Object> arguments
+            Map<String, Object> arguments,
+            Attempt attempt
     ) {
         return switch (name) {
             case McpCatalog.LIST_SYSTEMS -> ok(catalog.listSystems(principal));
-            case McpCatalog.SEARCH -> search(principal, arguments);
-            case McpCatalog.DESCRIBE -> describe(principal, arguments);
-            case McpCatalog.CALL -> callCapability(principal, session, headerAccount, arguments);
-            default -> toolError("NOT_FOUND", "not found");
+            case McpCatalog.SEARCH -> search(principal, arguments, attempt);
+            case McpCatalog.DESCRIBE -> describe(principal, arguments, attempt);
+            case McpCatalog.CALL -> callCapability(principal, session, headerAccount, arguments, attempt);
+            default -> fail(attempt, "NOT_FOUND", "not found");
         };
     }
 
-    private McpSchema.CallToolResult search(ApiKeyPrincipal principal, Map<String, Object> arguments) {
+    private McpSchema.CallToolResult search(ApiKeyPrincipal principal, Map<String, Object> arguments, Attempt attempt) {
         Object query = arguments.get("query");
         if (!(query instanceof String text) || text.isBlank()) {
             if (query != null && !(query instanceof String)) {
-                return toolError("INVALID_INPUT", "query must be a string", "query");
+                return fail(attempt, "INVALID_INPUT", "query must be a string", "query");
             }
-            return toolError("INVALID_INPUT", "query is required");
+            return fail(attempt, "INVALID_INPUT", "query is required");
         }
         Object conch = arguments.get("conch");
         if (conch != null && !(conch instanceof String)) {
-            return toolError("INVALID_INPUT", "invalid conch");
+            return fail(attempt, "INVALID_INPUT", "invalid conch");
         }
         return ok(catalog.search(principal, text, conch instanceof String name ? name : null));
     }
 
-    private McpSchema.CallToolResult describe(ApiKeyPrincipal principal, Map<String, Object> arguments) {
+    private McpSchema.CallToolResult describe(ApiKeyPrincipal principal, Map<String, Object> arguments, Attempt attempt) {
         Object name = arguments.get("name");
         if (!(name instanceof String text) || text.isBlank()) {
-            return toolError("INVALID_INPUT", "name is required");
+            return fail(attempt, "INVALID_INPUT", "name is required");
         }
         return catalog.describe(principal, text)
                 .map(McpCalls::ok)
-                .orElseGet(() -> toolError("NOT_FOUND", "not found"));
+                .orElseGet(() -> fail(attempt, "NOT_FOUND", "not found"));
     }
 
     private McpSchema.CallToolResult callCapability(
             ApiKeyPrincipal principal,
             McpSession session,
             Optional<String> headerAccount,
-            Map<String, Object> arguments
+            Map<String, Object> arguments,
+            Attempt attempt
     ) {
         Object name = arguments.get("name");
         if (!(name instanceof String text) || text.isBlank()) {
-            return toolError("INVALID_INPUT", "name is required");
+            return fail(attempt, "INVALID_INPUT", "name is required");
         }
         Optional<McpCatalog.CapabilityRef> found = catalog.find(principal, text);
         if (found.isEmpty()) {
-            return missingTool(text);
+            return missingTool(attempt, text);
         }
         Object rawArguments = arguments.get("arguments");
         Map<String, Object> input = copyObject(rawArguments);
         if (rawArguments != null && input == null) {
-            return toolError("INVALID_INPUT", "arguments must be an object");
+            return fail(attempt, "INVALID_INPUT", "arguments must be an object");
         }
         if (input == null) {
             input = Map.of();
         }
         Optional<String> account = account(headerAccount, arguments.get("account"));
         if (account == null) {
-            return toolError("INVALID_INPUT", "invalid account name", "account");
+            return fail(attempt, "INVALID_INPUT", "invalid account name", "account");
         }
         if (!CapabilityHttp.readOnly(found.get().action())) {
-            McpSchema.CallToolResult confirmed = confirm(session, found.get().action(), input, account);
+            McpSchema.CallToolResult confirmed = confirm(session, found.get().action(), input, account, attempt);
             if (confirmed != null) {
                 return confirmed;
             }
         }
-        return invoke(principal, found.get(), input, account);
+        return invoke(principal, found.get(), input, account, attempt);
     }
 
     private McpSchema.CallToolResult invokeDirect(
             ApiKeyPrincipal principal,
             Optional<String> headerAccount,
             McpCatalog.CapabilityRef ref,
-            Map<String, Object> arguments
+            Map<String, Object> arguments,
+            Attempt attempt
     ) {
         LinkedHashMap<String, Object> input = new LinkedHashMap<>(arguments);
+        // 账号选择不是能力入参。additionalProperties: false 校验前先拿掉，避免被当成未声明字段。
         String selector = ref.action().input().containsKey("account") ? "_account" : "account";
         Object rawAccount = input.remove(selector);
         Optional<String> account = account(headerAccount, rawAccount);
         if (account == null) {
-            return toolError("INVALID_INPUT", "invalid account name", selector);
+            return fail(attempt, "INVALID_INPUT", "invalid account name", selector);
         }
-        return invoke(principal, ref, input, account);
+        return invoke(principal, ref, input, account, attempt);
     }
 
     private McpSchema.CallToolResult confirm(
             McpSession session,
             Action action,
             Map<String, Object> input,
-            Optional<String> account
+            Optional<String> account,
+            Attempt attempt
     ) {
         if (session == null || !session.supportsElicitation() || !session.streaming()) {
-            return toolError("FORBIDDEN", NO_CONFIRM);
+            return fail(attempt, "FORBIDDEN", NO_CONFIRM);
         }
         StringBuilder message = new StringBuilder("确认执行 ");
         message.append(action.title() == null || action.title().isBlank() ? action.name() : action.title());
@@ -175,10 +197,10 @@ final class McpCalls {
         try {
             answer = session.elicit(McpSchema.ElicitFormRequest.builder(message.toString(), schema).build());
         } catch (TimeoutException ex) {
-            return toolError("INTERNAL", "确认超时");
+            return fail(attempt, "INTERNAL", "确认超时");
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            return toolError("INTERNAL", "internal error");
+            return fail(attempt, "INTERNAL", "internal error");
         }
         JsonNode confirm = answer == null ? null : answer.path("content").path("confirm");
         boolean accepted = answer != null
@@ -186,7 +208,7 @@ final class McpCalls {
                 && confirm.isBoolean()
                 && confirm.booleanValue();
         if (!accepted) {
-            return toolError("FORBIDDEN", REJECTED);
+            return fail(attempt, "FORBIDDEN", REJECTED);
         }
         return null;
     }
@@ -196,15 +218,15 @@ final class McpCalls {
      * {@code CONCH_DISABLED}. A loaded conch, including one Reef has stopped distributing,
      * is called through {@code Invoker} and is not handled here.
      */
-    private McpSchema.CallToolResult missingTool(String toolName) {
+    private McpSchema.CallToolResult missingTool(Attempt attempt, String toolName) {
         String disabled = longestConchPrefix(toolName, runtime.disabledConches().names());
         if (disabled != null && runtime.registry().find(disabled).isEmpty()) {
             String live = longestConchPrefix(toolName, runtime.registry().snapshot().keySet());
             if (live == null || live.length() <= disabled.length()) {
-                return toolError("CONCH_DISABLED", DisabledConches.CALL_MESSAGE);
+                return fail(attempt, "CONCH_DISABLED", DisabledConches.CALL_MESSAGE);
             }
         }
-        return toolError("NOT_FOUND", "not found");
+        return fail(attempt, "NOT_FOUND", "not found");
     }
 
     private static String longestConchPrefix(String toolName, Set<String> conches) {
@@ -227,11 +249,12 @@ final class McpCalls {
             ApiKeyPrincipal principal,
             McpCatalog.CapabilityRef ref,
             Map<String, Object> input,
-            Optional<String> account
+            Optional<String> account,
+            Attempt attempt
     ) {
-        String traceId = UUID.randomUUID().toString();
         InvokeOutcome outcome;
         try {
+            // MCP 不传 Idempotency-Key。同键回放只在 HTTP POST。
             outcome = runtime.invoker().invoke(
                     principal,
                     ref.conch().conch(),
@@ -241,26 +264,28 @@ final class McpCalls {
                     Optional.empty(),
                     null,
                     CallChannel.MCP,
-                    traceId);
+                    attempt.traceId());
         } catch (RuntimeException ex) {
-            return toolError("INTERNAL", "internal error");
+            return fail(attempt, "INTERNAL", "internal error");
         }
-        return fromOutcome(outcome);
+        return fromOutcome(outcome, attempt);
     }
 
-    private static McpSchema.CallToolResult fromOutcome(InvokeOutcome outcome) {
+    private static McpSchema.CallToolResult fromOutcome(InvokeOutcome outcome, Attempt attempt) {
         JsonNode envelope;
         try {
             envelope = ApiJson.tree(outcome.body());
         } catch (IllegalArgumentException ex) {
-            return toolError("INTERNAL", "internal error");
+            return toolError("INTERNAL", "internal error", null, attempt.directory(), attempt.traceId());
         }
         if (envelope.path("success").asBoolean(false)) {
             return ok(structured(envelope.get("data")));
         }
         String code = envelope.path("error").path("code").asText("INTERNAL");
         String message = envelope.path("error").path("message").asText("");
-        return toolError(code, message);
+        String logged = envelope.path("traceId").asText("");
+        String traceId = logged.isBlank() ? attempt.traceId() : logged;
+        return toolError(code, message, null, attempt.directory(), traceId);
     }
 
     private static Object structured(JsonNode data) {
@@ -307,17 +332,32 @@ final class McpCalls {
                 .build();
     }
 
-    static McpSchema.CallToolResult toolError(String code, String message) {
-        return toolError(code, message, null);
+    private static McpSchema.CallToolResult fail(Attempt attempt, String code, String message) {
+        return toolError(code, message, null, attempt.directory(), attempt.traceId());
     }
 
-    static McpSchema.CallToolResult toolError(String code, String message, String field) {
+    private static McpSchema.CallToolResult fail(Attempt attempt, String code, String message, String field) {
+        return toolError(code, message, field, attempt.directory(), attempt.traceId());
+    }
+
+    static McpSchema.CallToolResult toolError(
+            String code,
+            String message,
+            String field,
+            boolean directory,
+            String traceId
+    ) {
         String resolved = code == null || code.isBlank() ? "INTERNAL" : code;
         String text = message == null ? "" : message;
+        if ("NOT_FOUND".equals(resolved) && (text.isBlank() || "not found".equals(text))) {
+            text = McpErrors.UNKNOWN_TOOL;
+        }
+        String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
         LinkedHashMap<String, String> error = new LinkedHashMap<>();
         error.put("code", resolved);
         error.put("message", text);
-        error.put("hint", McpErrors.toolHint(resolved, text));
+        error.put("hint", McpErrors.toolHint(resolved, text, directory));
+        error.put("traceId", id);
         String named = field == null || field.isBlank() ? McpErrors.fieldOf(text) : field;
         if (named != null && !named.isBlank()) {
             error.put("field", named);

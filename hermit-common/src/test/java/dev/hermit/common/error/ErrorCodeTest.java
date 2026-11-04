@@ -21,6 +21,7 @@ class ErrorCodeTest {
                 ErrorCode.NOT_FOUND,
                 ErrorCode.CONCH_DISABLED,
                 ErrorCode.IDEMPOTENCY_CONFLICT,
+                ErrorCode.CONFLICT,
                 ErrorCode.INTERNAL);
     }
 }

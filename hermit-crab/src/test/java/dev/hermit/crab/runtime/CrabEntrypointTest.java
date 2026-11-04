@@ -1,0 +1,116 @@
+package dev.hermit.crab.runtime;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+class CrabEntrypointTest {
+    @TempDir
+    Path temp;
+
+    @Test
+    void startsWithoutReefEnvOrBootstrap() throws Exception {
+        Result result = run(Map.of());
+        assertThat(result.status).as(result.err).isZero();
+        String config = Files.readString(temp.resolve("home/config.yml"));
+        assertThat(config).doesNotContain("url:").contains("interval_seconds: 300");
+    }
+
+    @Test
+    void bootstrapFileSkipsReefEnvAndPubkeyLogin() throws Exception {
+        Path home = temp.resolve("home");
+        Files.createDirectories(home);
+        Files.writeString(home.resolve("reef-bootstrap.json"), "{\"kind\":\"hermit-crab-bootstrap\"}\n");
+        Result result = run(Map.of());
+        assertThat(result.status).as(result.err).isZero();
+        assertThat(result.err).doesNotContain("reef.pub");
+        String config = Files.readString(home.resolve("config.yml"));
+        assertThat(config).doesNotContain("url:").contains("interval_seconds: 300");
+        assertThat(Files.getPosixFilePermissions(home.resolve("reef-bootstrap.json"))).containsExactlyInAnyOrder(
+                PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+    }
+
+    @Test
+    void urlWithoutTokenStillExits() throws Exception {
+        Result result = run(Map.of("HERMIT_REEF_URL", "http://127.0.0.1:9"));
+        assertThat(result.status).isEqualTo(1);
+        assertThat(result.err).contains("HERMIT_REEF_AGENT_TOKEN");
+    }
+
+    @Test
+    void envWithoutPubkeyStillRequiresOne() throws Exception {
+        Result result = run(Map.of(
+                "HERMIT_REEF_URL", "http://127.0.0.1:9",
+                "HERMIT_REEF_AGENT_TOKEN", "token-value"));
+        assertThat(result.status).isEqualTo(1);
+        assertThat(result.err).contains("reef.pub");
+    }
+
+    @Test
+    void existingConfigWithoutEnvKeepsReefLinesAndChecksThePort() throws Exception {
+        Path home = temp.resolve("home");
+        Files.createDirectories(home);
+        Files.writeString(home.resolve("config.yml"), """
+                reef:
+                  url: "http://reef.internal"
+                  token: "kept-token"
+                server:
+                  host: "127.0.0.1"
+                  port: 7777
+                """);
+        Result ok = run(Map.of());
+        assertThat(ok.status).as(ok.err).isZero();
+        assertThat(Files.readString(home.resolve("config.yml"))).contains("http://reef.internal");
+
+        Files.writeString(home.resolve("config.yml"), """
+                server:
+                  host: "127.0.0.1"
+                  port: 1
+                """);
+        Result bad = run(Map.of());
+        assertThat(bad.status).isEqualTo(1);
+        assertThat(bad.err).contains("server.port");
+    }
+
+    private Result run(Map<String, String> extra) throws Exception {
+        Path bin = temp.resolve("bin");
+        Files.createDirectories(bin);
+        Files.writeString(bin.resolve("chown"), "#!/bin/sh\nexit 0\n");
+        Files.writeString(bin.resolve("runuser"), "#!/bin/sh\nexit 0\n");
+        Files.setPosixFilePermissions(bin.resolve("chown"), SetExec.EXEC);
+        Files.setPosixFilePermissions(bin.resolve("runuser"), SetExec.EXEC);
+        Path script = Path.of("../deploy/crab-entrypoint.sh");
+        if (!Files.exists(script)) {
+            script = Path.of("deploy/crab-entrypoint.sh");
+        }
+        ProcessBuilder builder = new ProcessBuilder("sh", script.toAbsolutePath().toString());
+        builder.environment().clear();
+        builder.environment().put("PATH", bin.toAbsolutePath() + ":/usr/bin:/bin");
+        builder.environment().put("HERMIT_HOME", temp.resolve("home").toAbsolutePath().toString());
+        builder.environment().put("HERMIT_CRAB_PORT", "7777");
+        builder.environment().putAll(extra);
+        builder.redirectErrorStream(false);
+        Process process = builder.start();
+        byte[] out = process.getInputStream().readAllBytes();
+        byte[] err = process.getErrorStream().readAllBytes();
+        int status = process.waitFor();
+        return new Result(status, new String(out, StandardCharsets.UTF_8), new String(err, StandardCharsets.UTF_8));
+    }
+
+    private record Result(int status, String out, String err) {
+    }
+
+    private static final class SetExec {
+        static final java.util.Set<PosixFilePermission> EXEC = java.util.EnumSet.of(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.OWNER_EXECUTE);
+    }
+}

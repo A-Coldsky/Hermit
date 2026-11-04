@@ -28,6 +28,8 @@ import dev.hermit.crab.config.CrabConfigLoader;
 import dev.hermit.crab.engine.ConchRejectedException;
 import dev.hermit.crab.mcp.McpStdio;
 import dev.hermit.crab.runtime.CrabRuntime;
+import dev.hermit.crab.runtime.ReefBootstrap;
+import dev.hermit.crab.runtime.ReefBootstrapException;
 import dev.hermit.crab.runtime.CrabServer;
 import dev.hermit.crab.secure.MasterKeyException;
 import dev.hermit.crab.sync.ConchCatalog;
@@ -58,6 +60,7 @@ public final class CrabCommand {
             usage:
               crab serve
               crab sync
+              crab reef import <file>
               crab catalog
               crab subscribe <conch>
               crab unsubscribe <conch>
@@ -104,6 +107,9 @@ public final class CrabCommand {
         } catch (MasterKeyException ex) {
             err.println(clientMessage(ex));
             return 1;
+        } catch (ReefBootstrapException ex) {
+            err.println(ex.getMessage());
+            return 1;
         } catch (LocalConchException ex) {
             err.println(ex.getMessage());
             for (ValidationIssue issue : ex.errors()) {
@@ -128,6 +134,7 @@ public final class CrabCommand {
         return switch (args[0]) {
             case "serve" -> serve(args, env, out, err);
             case "sync" -> sync(args, env, out, err);
+            case "reef" -> reef(args, env, out, err);
             case "catalog" -> catalog(args, env, out, err);
             case "subscribe" -> subscribe(args, env, out, err);
             case "unsubscribe" -> unsubscribe(args, env, out, err);
@@ -144,6 +151,41 @@ public final class CrabCommand {
                 yield 1;
             }
         };
+    }
+
+    private int reef(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 3 || !"import".equals(args[1])) {
+            err.print(USAGE);
+            return 1;
+        }
+        Path file = Path.of(args[2]);
+        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+            err.println("bootstrap file cannot be read");
+            return 1;
+        }
+        long size;
+        try {
+            size = Files.size(file);
+        } catch (IOException ex) {
+            err.println("bootstrap file cannot be read");
+            return 1;
+        }
+        if (size > ReefBootstrap.MAX_BYTES) {
+            err.println("bootstrap is larger than 64 KiB");
+            return 1;
+        }
+        byte[] body;
+        try {
+            body = Files.readAllBytes(file);
+        } catch (IOException ex) {
+            err.println("bootstrap file cannot be read");
+            return 1;
+        }
+        return withRuntime(env, runtime -> {
+            runtime.importBootstrap(body, Actors.CLI);
+            out.println("imported");
+            return 0;
+        });
     }
 
     private int serve(String[] args, Function<String, String> env, PrintStream out, PrintStream err) throws Exception {

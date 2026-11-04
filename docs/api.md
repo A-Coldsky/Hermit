@@ -145,8 +145,11 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | GET | `/audit` | 配置审计，新的在前。参数 `conch`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
 | GET / POST | `/debug` | 读状态 / `{enabled}`；当前只存状态，24h 过期 |
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |
-| GET | `/reports/preview` | 待发送批次和丢弃数 |
-| POST | `/reports/send` | 手动发送，返回 attempted/accepted/status |
+| GET | `/reef` | 当前生效的 Reef 连接。`{configured, source, url, owner, tokenName, tokenPrefix, publicKeyFingerprint, instanceId, importedAt}`。`source` 为 `BOOTSTRAP`、`CONFIG`，或未配置时的 JSON `null`。`tokenPrefix` 只在令牌长于 12 个字符时返回前 12 个字符，否则为 `null`。`publicKeyFingerprint` 是公钥 X.509 SubjectPublicKeyInfo 的 SHA-256，小写十六进制。响应没有令牌明文 |
+| POST | `/reef/bootstrap` | 导入引导 JSON，正文不超过 64 KiB。校验通过后探测 `GET /agent/conches/manifest`，写入 `$HERMIT_HOME/reef-bootstrap.json`（POSIX 0600），并在本进程热更新 URL、令牌和公钥，然后触发一次同步。成功时响应与 `GET /reef` 相同。非法 JSON、未知字段或公钥不是 Ed25519 PEM 为 400 `INVALID_INPUT`。清单只有 2xx 或 304 才继续写入。401 与 403 为 400 `INVALID_INPUT`，`message` 为 `reef rejected the token`。其他 HTTP 状态（含 404、5xx，以及返回 HTML 的错误页）为 400 `INVALID_INPUT`，`message` 为 `reef url did not answer as Reef (HTTP <状态码>)`，不写引导文件，已有文件也不替换。连不上或超时为 502 `UPSTREAM_ERROR`，`message` 为 `cannot reach reef`。本机已有正式包的 `current` 指针且新公钥与当前公钥不同（含当前没有公钥）为 409 `CONFLICT`，`message` 为 `public key differs from installed conches`。同一把公钥可以改 URL 和令牌。控制台请求体仍有 1 MB 上限，超过该上限时 message 为 `request body too large` |
+| GET / PUT | `/reports/settings` | `{enabled, intervalSeconds}`。没有 schema 13 的行时读 config.yml。PUT 两个字段都必填，`intervalSeconds` 为不小于 60 的整数，未知字段 400 `INVALID_INPUT`。写入覆盖 config.yml，并立刻作用于本进程。关闭上报不清空未发送队列；再次开启后仍按原保留策略发送 |
+| GET | `/reports/preview` | 待发送批次和丢弃数。上报关闭或未配置 Reef 时 409 `NOT_CONFIGURED` |
+| POST | `/reports/send` | 手动发送，返回 attempted/accepted/status。上报关闭或未配置 Reef 时 409 `NOT_CONFIGURED`。批次为空时不发 HTTP |
 | POST | `/local-conches` | 导入。`multipart/form-data` 字段 `file`，或 `text/yaml`、`application/yaml`、`application/x-yaml` 正文。成功 `{conch, version, replaced, warnings}`。校验失败 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`。与正式包或订阅重名是 409，错误码仍是 `INVALID_INPUT` |
 | POST | `/local-conches/reload` | 按 `local-conches/` 目录增删改。`{results:[{file, conch, version, ok, issues}]}` |
 | DELETE | `/local-conches/{conch}` | 删除本地包文件和注册表项，保留账号与凭证。非本地包 404 |
@@ -185,7 +188,7 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 响应不含 `detail` 原文、配置值、凭证明文、密文，也不含 API Key 明文、哈希、id 或 name。debug 的 `enabled` 同样不返回。历史行的 detail 里如果还有别的键，读取时丢弃。`config_audit` 没有定期清理。
 
-新装 Crab 不订阅任何规则包。订阅只写在本机，Reef 不能代订。`POST /console/api/conches/{conch}/subscription` 要求名字合法且已在目录缓存里；缓存还没有时会先同步一次再判断。与本机 `Origin.LOCAL` 规则包同名时 HTTP 409，`code` 仍是 `INVALID_INPUT`（没有单独的 `CONFLICT`），`message` 为「与本机本地规则包同名」。导入本地包时，名字已在 `subscriptions` 里同样是 HTTP 409、`INVALID_INPUT`，`message` 为「与已订阅的规则包重名」；与已安装的正式包重名也是 409，`message` 为「与已安装的正式规则包重名」。不在目录里是 404 `NOT_FOUND`，`message` 为 `conch is not in the catalog`。非法名字是 400 `INVALID_INPUT`。未订阅是 404，`message` 为 `not subscribed`。Reef 未配置时目录接口 `configured` 为 false；订阅是 409 `NOT_CONFIGURED`。写上订阅行之后立即同步，并返回该包这一轮的 `outcome`。同步失败时订阅行保留，错误与 `POST /sync` 相同。重复订阅不再写第二条 `CONCH_SUBSCRIBED`，仍会清掉 ETag 再同步。
+新装 Crab 不订阅任何规则包。订阅只写在本机，Reef 不能代订。`POST /console/api/conches/{conch}/subscription` 要求名字合法且已在目录缓存里；缓存还没有时会先同步一次再判断。与本机 `Origin.LOCAL` 规则包同名时 HTTP 409，`code` 仍是 `INVALID_INPUT`，`message` 为「与本机本地规则包同名」。`CONFLICT` 只用于已安装正式包时拒绝更换另一把 Reef 公钥，不用于重名。导入本地包时，名字已在 `subscriptions` 里同样是 HTTP 409、`INVALID_INPUT`，`message` 为「与已订阅的规则包重名」；与已安装的正式包重名也是 409，`message` 为「与已安装的正式规则包重名」。不在目录里是 404 `NOT_FOUND`，`message` 为 `conch is not in the catalog`。非法名字是 400 `INVALID_INPUT`。未订阅是 404，`message` 为 `not subscribed`。Reef 未配置时目录接口 `configured` 为 false；订阅是 409 `NOT_CONFIGURED`。写上订阅行之后立即同步，并返回该包这一轮的 `outcome`。同步失败时订阅行保留，错误与 `POST /sync` 相同。重复订阅不再写第二条 `CONCH_SUBSCRIBED`，仍会清掉 ETag 再同步。
 
 退订删除订阅行，从注册表移除，删除 `current`，并清掉已有墓碑。退订不新写墓碑，也不写 `REEF_CONCH_ENABLED`。账号、凭证、配置和版本目录保留。此后调用是 `NOT_FOUND`。已经进入引擎的请求仍使用当时的授权快照。
 
@@ -207,6 +210,7 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 ```text
 serve
 sync
+reef import <file>
 catalog
 subscribe <conch>
 unsubscribe <conch>

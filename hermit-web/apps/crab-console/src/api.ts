@@ -134,7 +134,7 @@ export interface ConfigAuditEntry {
   id: number
   at: string
   actor: string
-  /** AuditKind 名称，例如 CREDENTIALS_WRITTEN、CONFIG_PUT、CAPABILITY_DISABLED、REEF_CONCH_DISABLED、REEF_CONCH_ENABLED。 */
+  /** AuditKind 名称，例如 CREDENTIALS_WRITTEN、CONFIG_PUT、CAPABILITY_DISABLED、REEF_CONCH_DISABLED、REEF_CONCH_ENABLED、REEF_BOOTSTRAPPED、REPORT_SETTINGS_CHANGED。 */
   action: string
   origin: string | null
   conch: string | null
@@ -296,6 +296,25 @@ export interface UnsubscribeResult {
   subscribed: false
 }
 
+/** `source` 为 `BOOTSTRAP`、`CONFIG`，或尚未配置时的 null。响应不含令牌明文。 */
+export interface ReefConnection {
+  configured: boolean
+  source: 'BOOTSTRAP' | 'CONFIG' | null
+  url: string | null
+  owner: string | null
+  tokenName: string | null
+  tokenPrefix: string | null
+  publicKeyFingerprint: string | null
+  instanceId: string
+  importedAt: string | null
+}
+
+/** 控制台保存的上报开关。`intervalSeconds` 至少为 60，并覆盖 config.yml。 */
+export interface ReportSettings {
+  enabled: boolean
+  intervalSeconds: number
+}
+
 export interface ReportBatch {
   instanceId: string
   crabVersion: string
@@ -383,6 +402,14 @@ export const api = {
   /** 安装最近一次同步清单里的更高版本。不重新拉取清单。 */
   update: (conch: string) => http.post<UpdateResult>(`${conchPath(conch)}/update`),
   unsubscribe: (conch: string) => http.del<UnsubscribeResult>(`${conchPath(conch)}/subscription`),
+
+  /** 当前生效的 Reef 连接。令牌只返回前缀。 */
+  reef: () => http.get<ReefConnection>(`${base}/reef`),
+  /** 导入引导 JSON。服务端会先连 Reef 校验令牌，再热更新本进程。 */
+  importReefBootstrap: (body: unknown) => http.post<ReefConnection>(`${base}/reef/bootstrap`, body),
+
+  reportSettings: () => http.get<ReportSettings>(`${base}/reports/settings`),
+  updateReportSettings: (body: ReportSettings) => http.put<ReportSettings>(`${base}/reports/settings`, body),
 
   reportPreview: () => http.get<{ batch: ReportBatch; dropped: number }>(`${base}/reports/preview`),
   sendReport: () => http.post<{ attempted: boolean; accepted: boolean; status: number }>(`${base}/reports/send`),

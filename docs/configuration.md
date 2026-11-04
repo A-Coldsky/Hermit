@@ -12,8 +12,8 @@
 | `server.host` | `127.0.0.1` | HTTP 监听地址，改为其他地址前确认访问边界 |
 | `server.port` | `7777` | 0–65535；0 分配随机端口，主要用于测试 |
 | `sync.interval_seconds` | `300` | 正整数，周期同步；启动另有一次异步同步 |
-| `report.enabled` | `true` | 是否记录/发送运行上报；关闭不影响本地调用日志 |
-| `report.interval_seconds` | `60` | 正整数；发送失败还有退避 |
+| `report.enabled` | `true` | 是否记录/发送运行上报；关闭不影响本地调用日志。控制台 `PUT /console/api/reports/settings` 写在 H2，覆盖这里的值 |
+| `report.interval_seconds` | `300` | 整数，最小 60；小于 60 拒绝加载。发送失败还有退避。控制台设置同样至少 60 秒，并覆盖这里的值 |
 | `capabilities.disabled` | `[]` | `conch.action` 列表，与数据库禁用状态取并集 |
 | `aliases` | `{}` | URL 路径 → `conch.action`；不可占用 api/console/mcp/openapi 路径 |
 | `mcp.allowed_origins` | `[]` | 额外允许访问 `/mcp` 的浏览器 Origin。没有 `Origin` 的客户端仍允许。本机源站见下方 |
@@ -30,7 +30,7 @@ reef:
   public_key: reef.pub
 server: {host: 127.0.0.1, port: 7777}
 sync: {interval_seconds: 300}
-report: {enabled: true, interval_seconds: 60}
+report: {enabled: true, interval_seconds: 300}
 capabilities:
   disabled: [legacy_oa.submit_leave]
 aliases:
@@ -56,9 +56,9 @@ mcp:
 | 环境变量 | 容器入口行为 |
 | --- | --- |
 | `HERMIT_HOME` | 两份 Compose 都设置为 `/var/lib/hermit` |
-| `HERMIT_REEF_URL` | 必填；同机 profile 自动设为 `http://127.0.0.1:${HTTP_PORT:-80}`，独立部署自行填写 |
-| `HERMIT_REEF_AGENT_TOKEN` | 必须非空白且与 Reef 相同，写入 `reef.token` |
-| `HERMIT_REEF_ADMIN_USER` / `HERMIT_REEF_ADMIN_PASSWORD` | 首次无公钥时登录 Reef 取公钥；不是 Crab 日常调用的凭据 |
+| `HERMIT_REEF_URL` | 与令牌一起设置时，同机 profile 自动设为 `http://127.0.0.1:${HTTP_PORT:-80}`，独立部署自行填写。已有 `reef-bootstrap.json`，或 URL 与令牌都未设置时，不再要求它 |
+| `HERMIT_REEF_AGENT_TOKEN` | 与 URL 一起设置时必须非空白且与 Reef 相同，写入 `reef.token`。只设置 URL 或只设置令牌、又没有引导文件时拒绝启动。引导文件存在时不把环境变量里的令牌写进新生成的 config.yml |
+| `HERMIT_REEF_ADMIN_USER` / `HERMIT_REEF_ADMIN_PASSWORD` | 仅在用环境变量首次生成 config.yml、且还没有公钥时登录 Reef 取公钥；不是 Crab 日常调用的凭据。已有引导文件时不登录 |
 | `HERMIT_REEF_PUBLIC_KEY_FILE` | 可选，容器内 PEM 文件路径；独立 Compose 传入此变量，同机 profile 需额外 override |
 | `HERMIT_CRAB_PORT` | 默认 7777，容器入口要求 1–65535 |
 | `HERMIT_CRAB_INSTANCE_ID` | 可选 UUID；已有实例 ID 不同则拒绝覆盖 |
@@ -67,9 +67,13 @@ mcp:
 
 路径变量不会自动挂载文件，需要 Compose override 的只读 bind mount 或 `docker run --mount`。主密钥文件格式沿用 `data/master.key` 的 Base64 文本，不能填原始二进制密钥。
 
-仅在缺少 `config.yml` 时初始化公钥和配置：先保留现有 `reef.pub`，其次复制指定公钥，否则用管理员登录取得 `/api/admin/signing-key`。从远端引导公钥需要可信的 HTTPS 连接；后续启动不自动轮换公钥。已有配置但缺少/损坏公钥时，应恢复可信公钥，不能期待脚本重新登录修复。
+`$HERMIT_HOME/reef-bootstrap.json` 存在时，入口把该文件设为 POSIX 0600，不要求 `HERMIT_REEF_URL` / `HERMIT_REEF_AGENT_TOKEN`，也不为公钥做管理员登录。缺少 `config.yml` 时只写入 server、sync 和 report（上报间隔 300 秒），不把环境变量中的 URL 或令牌复制进去。Java 启动时用引导文件覆盖 config.yml 里的 `reef.url`、`reef.token` 和 `reef.public_key`。
 
-入口不会覆盖已有配置，而是按整行文本检查 URL、token、host 和 port；手写 YAML 即使语义相同，缩进/引号不同也可能不通过。变更这些环境变量前停止 Crab 并备份实例目录；同步修改对应配置行，或备份并移走 `config.yml` 后让入口重新生成，再恢复自定义 aliases/engine 等选项。保留 `reef.pub` 和 `data/`，不要为改配置删除数据卷。`reef.token` 还需与 Reef 同步变更。
+URL 与令牌都已设置、且没有引导文件时，行为与以前相同：仅在缺少 `config.yml` 时初始化公钥和配置。先保留现有 `reef.pub`，其次复制指定公钥，否则用管理员登录取得 `/api/admin/signing-key`。从远端引导公钥需要可信的 HTTPS 连接；后续启动不自动轮换公钥。已有配置但缺少/损坏公钥时，应恢复可信公钥，不能期待脚本重新登录修复。新生成的 `report.interval_seconds` 为 300。
+
+URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 `config.yml` 时生成一份不含 `reef` 的配置，控制台之后可以导入引导文件。已经写过 `reef` 的旧 `config.yml` 会保留，Java 继续使用其中的 URL、令牌和公钥；入口只检查 `server.host` 与 `server.port`。
+
+入口不会覆盖已有配置。环境变量提供了 URL 和令牌、且没有引导文件时，按整行文本检查 URL、token、host 和 port；手写 YAML 即使语义相同，缩进/引号不同也可能不通过。有引导文件，或两者都没设时，不再对照 URL 和 token 行。变更这些环境变量前停止 Crab 并备份实例目录；同步修改对应配置行，或备份并移走 `config.yml` 后让入口重新生成，再恢复自定义 aliases/engine 等选项。保留 `reef.pub`、`reef-bootstrap.json` 和 `data/`，不要为改配置删除数据卷。`reef.token` 还需与 Reef 同步变更。
 
 ## Reef 配置
 
@@ -128,6 +132,7 @@ Reef data-dir/
 
 Crab HERMIT_HOME/
   config.yml
+  reef-bootstrap.json    # 可选。存在时覆盖 config.yml 的 reef.url / token / public_key
   reef.pub               # 示例公钥位置，路径可自定
   data/crab.mv.db
   data/master.key        # 使用环境主密钥时需另行保管该密钥
@@ -143,6 +148,10 @@ Crab HERMIT_HOME/
 schema 10 给 `idempotency` 增加可空列 `body_sha256`（原始请求体的 SHA-256，小写十六进制）。schema 11 给 `call_logs` 增加 `channel`，旧行默认 `HTTP`。两列分属两张表，所以没有并进同一次迁移。`channel` 是调用入口（`HTTP` / `MCP` / `CONSOLE`），`source` 仍是规则包来源（`LOCAL` / `REEF`）。调用记录列表不传 `limit` 时返回 100 条，最多 500 条。控制台调用记录页自己传 100，概览自己传 200；CLI 没有这条列表。
 
 schema 12 删除 `pinned_rollbacks`。判断依据是版本 12 这一行是否已经记下，不看 `MAX(version)`，因此已经记下更高号码、却没有版本 12 的库启动时仍会删表。版本 3 里创建这张表的语句不改写：新库先建再删。规则失配不再切换版本。`mismatch_streak` 还在，不再写入。`rollback_queue` 仍上报版本变化；手动更新成功且上报开启时 reason 为 `MANUAL_UPDATE`。
+
+schema 13 增加 `report_settings`（`id`、`enabled`、`interval_seconds`、`updated_at`）。判断依据是版本 13 这一行是否已经记下，不看 `MAX(version)`。没有 `id = 1` 的行时，`report.enabled` 与 `report.interval_seconds` 仍来自 config.yml。控制台 PUT 写入这一行后覆盖配置文件，并在本进程立即生效。关闭上报不清空 `report_queue` 或 `rollback_queue`。
+
+小时成功/失败计数和失败明细先留在内存。每 30 秒、每次发送前，以及进程正常关闭时，一起写入 H2。批次为空时不向 Reef 发 HTTP。发送的小时统计是合并后的全量，不是增量。异常退出可能丢掉尚未刷盘的最近 30 秒计数，以及还在内存里的失败明细。回滚事件仍在入队时立即写入 H2。导入的 Reef 令牌和 config.yml 里的令牌都会进入脱敏用的已知秘密列表（长度至少 4，并包含其 URL 编码）。签名校验和公钥信任根不变：已安装的正式包在下载和加载时仍用当前公钥验签。
 
 `local-conches/` 只放这一台机器的未签名规则。文件名是 `{conch}.yaml`，不递归，不跟随符号链接。进程启动时加载；`crab local reload` 或 `POST /console/api/local-conches/reload` 让目录里的增删改生效。单个文件上限 1 MiB。控制台上传还受现有请求体上限（1_000_000 字节）约束。与已订阅或已安装的正式包重名时拒绝导入。
 

@@ -24,6 +24,7 @@ import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.secure.CredentialDecryptException;
+import dev.hermit.crab.secure.KnownSecrets;
 import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.sync.DisabledConches;
 import dev.hermit.crab.sync.VersionSuccess;
@@ -57,6 +58,7 @@ public final class Invoker {
     private final List<CrabRuntime.ExecutionListener> listeners = new CopyOnWriteArrayList<>();
     private final Object[] idempotencyLocks = newIdempotencyLocks();
     private volatile ReportQueue reportQueue;
+    private volatile KnownSecrets knownSecrets = KnownSecrets.empty();
     private volatile DataSource versionSuccess;
     private volatile Clock versionClock = Clock.systemUTC();
 
@@ -101,6 +103,10 @@ public final class Invoker {
 
     public void bindHooks(ReportQueue reportQueue) {
         this.reportQueue = reportQueue;
+    }
+
+    public void bindKnownSecrets(KnownSecrets knownSecrets) {
+        this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
     }
 
     /** Successful official calls record the executed version so retention can keep it. */
@@ -365,8 +371,8 @@ public final class Invoker {
         }
     }
 
-    private static Set<String> secretValues(Map<String, String> secrets) {
-        LinkedHashSet<String> values = new LinkedHashSet<>();
+    private Set<String> secretValues(Map<String, String> secrets) {
+        LinkedHashSet<String> values = new LinkedHashSet<>(knownSecrets.copy());
         if (secrets != null) {
             for (String value : secrets.values()) {
                 if (value != null) {

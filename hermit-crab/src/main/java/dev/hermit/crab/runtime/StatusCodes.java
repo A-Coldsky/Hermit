@@ -10,7 +10,7 @@ public final class StatusCodes {
         return switch (code) {
             case FORBIDDEN -> 403;
             case NOT_FOUND, ACCOUNT_NOT_FOUND -> 404;
-            case NOT_CONFIGURED, CONCH_DISABLED, IDEMPOTENCY_CONFLICT -> 409;
+            case NOT_CONFIGURED, CONCH_DISABLED, IDEMPOTENCY_CONFLICT, CONFLICT -> 409;
             case INVALID_INPUT -> 400;
             case TIMEOUT -> 504;
             case UPSTREAM_ERROR -> 502;

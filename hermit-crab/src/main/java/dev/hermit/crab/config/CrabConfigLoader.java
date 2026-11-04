@@ -96,7 +96,7 @@ public final class CrabConfigLoader {
                     integer(file, sync, "interval_seconds", "sync.interval_seconds", defaults.syncIntervalSeconds(), 1, Integer.MAX_VALUE),
                     bool(file, report, "enabled", "report.enabled", defaults.reportEnabled()),
                     integer(file, report, "interval_seconds", "report.interval_seconds",
-                            defaults.reportIntervalSeconds(), 1, Integer.MAX_VALUE),
+                            defaults.reportIntervalSeconds(), 60, Integer.MAX_VALUE),
                     disabled(file, capabilities),
                     aliases(file, root.get("aliases")),
                     integer(file, engine, "capability_timeout_seconds", "engine.capability_timeout_seconds",

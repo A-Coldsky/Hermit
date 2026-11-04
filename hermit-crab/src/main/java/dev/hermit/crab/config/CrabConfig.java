@@ -34,8 +34,8 @@ public record CrabConfig(
         if (syncIntervalSeconds < 1) {
             throw new IllegalArgumentException("sync.interval_seconds must be positive");
         }
-        if (reportIntervalSeconds < 1) {
-            throw new IllegalArgumentException("report.interval_seconds must be positive");
+        if (reportIntervalSeconds < 60) {
+            throw new IllegalArgumentException("report.interval_seconds must be at least 60");
         }
         if (capabilityTimeoutSeconds < 1) {
             throw new IllegalArgumentException("engine.capability_timeout_seconds must be positive");
@@ -58,7 +58,7 @@ public record CrabConfig(
     }
 
     public static CrabConfig defaults() {
-        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 60, List.of(), Map.of(), 60, 10, 3, List.of());
+        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 300, List.of(), Map.of(), 60, 10, 3, List.of());
     }
 
     public EngineSettings engineSettings() {
@@ -66,6 +66,13 @@ public record CrabConfig(
                 Duration.ofSeconds(capabilityTimeoutSeconds),
                 Duration.ofMinutes(sessionIdleMinutes),
                 maxLoginFailures);
+    }
+
+    public CrabConfig withReef(String url, String token, String publicKey) {
+        return new CrabConfig(
+                url, token, publicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
+                reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
+                maxLoginFailures, mcpAllowedOrigins);
     }
 
     public CrabConfig withListen(String host, int port) {

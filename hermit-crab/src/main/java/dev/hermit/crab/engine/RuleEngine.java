@@ -393,7 +393,7 @@ public final class RuleEngine {
                         outcome.status(),
                         outcome.extractCount()));
                 // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
-                rejectCapabilityStatus(auth, outcome, i, step.type(), logs);
+                rejectCapabilityStatus(auth, outcome, i, step.type(), logs, definitions);
             } catch (RuleProblem ex) {
                 ErrorCode code = ex.code;
                 String summary = ex.summary;
@@ -550,15 +550,17 @@ public final class RuleEngine {
     }
 
     /**
-     * 能力请求在提取之前处理最终状态。400、401/403 和登录重定向保持原映射。
-     * 其它非 2xx 不再进入 extract/assert，避免把 404 页面抽成空列表。
+     * 能力请求在提取之前处理最终状态。400、401/403、登录重定向，以及 HttpCalls 已经拦住的 5xx，保持原映射。
+     * 其它非 2xx：后续 status 断言覆盖了实际状态码时放行；非 GET 的 3xx 且不是登录重定向时放行。
+     * 其余（例如没有 status 断言的 GET 404）不再进入 extract，避免抽成空列表。
      */
     private static void rejectCapabilityStatus(
             boolean auth,
             Outcome outcome,
             int index,
             String type,
-            List<StepLog> logs
+            List<StepLog> logs,
+            List<Step> definitions
     ) {
         if (auth || outcome.status() == null) {
             return;
@@ -570,10 +572,75 @@ public final class RuleEngine {
         if (status == 400) {
             throw new StepFailure(ErrorCode.INVALID_INPUT, UPSTREAM_INPUT_REJECTED, index, type, logs);
         }
-        if (status < 200 || status >= 300) {
-            throw new StepFailure(
-                    ErrorCode.UPSTREAM_ERROR, HttpCalls.upstreamStatus(status), index, type, logs);
+        if (status >= 200 && status < 300) {
+            return;
         }
+        if (status >= 300 && status < 400 && !isGet(outcome.method())) {
+            return;
+        }
+        if (statusExpectationCovers(definitions, index, status)) {
+            return;
+        }
+        throw new StepFailure(ErrorCode.UPSTREAM_ERROR, HttpCalls.upstreamStatus(status), index, type, logs);
+    }
+
+    private static boolean isGet(String method) {
+        return method == null || method.isBlank() || "GET".equalsIgnoreCase(method);
+    }
+
+    /**
+     * 这次请求之后、下一次 request 之前，是否有 assert.status 覆盖实际状态码。
+     * 字面量数字或数字列表对不上则不算覆盖。含模板等非字面量时无法预判，交给 assert。
+     */
+    private static boolean statusExpectationCovers(List<Step> definitions, int requestIndex, int actual) {
+        for (int j = requestIndex + 1; j < definitions.size(); j++) {
+            Step step = definitions.get(j);
+            if ("request".equals(step.type())) {
+                break;
+            }
+            if (!"assert".equals(step.type()) || !step.def().containsKey("status")) {
+                continue;
+            }
+            Boolean covered = literalStatusIncludes(step.def().get("status"), actual);
+            if (covered == null || covered) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** {@code null} 表示不是字面量状态码，渲染后才知道是否匹配。 */
+    private static Boolean literalStatusIncludes(Object expected, int actual) {
+        if (expected instanceof Number number) {
+            return number.intValue() == actual;
+        }
+        if (expected instanceof String text) {
+            String trimmed = text.trim();
+            if (trimmed.isEmpty() || trimmed.contains("{{")) {
+                return null;
+            }
+            try {
+                return Integer.parseInt(trimmed) == actual;
+            } catch (NumberFormatException ex) {
+                return null;
+            }
+        }
+        if (expected instanceof List<?> list) {
+            if (list.isEmpty()) {
+                return false;
+            }
+            boolean unknown = false;
+            for (Object item : list) {
+                Boolean one = literalStatusIncludes(item, actual);
+                if (one == null) {
+                    unknown = true;
+                } else if (one) {
+                    return true;
+                }
+            }
+            return unknown ? null : false;
+        }
+        return null;
     }
 
     /** 重定向到登录页，或上游直接返回 401/403，都是会话失效。 */

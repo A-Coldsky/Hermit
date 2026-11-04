@@ -223,6 +223,19 @@ public final class LegacyOaFixture implements AutoCloseable {
             redirect(exchange, 302, "http://127.0.0.1:1/nope", null);
             return;
         }
+        if ("/form-post".equals(path) && "POST".equals(method)) {
+            redirect(exchange, 303, "/not-login", null);
+            return;
+        }
+        if ("/form-login".equals(path) && "POST".equals(method)) {
+            redirect(exchange, 303, "/login.aspx", null);
+            return;
+        }
+        if ("/cached".equals(path)) {
+            exchange.sendResponseHeaders(304, -1);
+            exchange.close();
+            return;
+        }
         if ("/huge".equals(path)) {
             huge(exchange);
             return;

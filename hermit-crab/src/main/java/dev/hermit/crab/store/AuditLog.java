@@ -13,6 +13,8 @@ import java.util.Objects;
 public final class AuditLog {
     public static final int DEFAULT_LIMIT = 50;
     public static final int MAX_LIMIT = 200;
+    /** {@code page} below 1, or too large to page. HTTP 400 {@code INVALID_INPUT}. */
+    public static final String PAGE_OUT_OF_RANGE = "页码超出范围。";
 
     private AuditLog() {
     }
@@ -38,7 +40,7 @@ public final class AuditLog {
         String conchFilter = conchFilter(conch);
         String accountFilter = accountFilter(account);
         if (page < 1) {
-            throw new IllegalArgumentException("page is out of range");
+            throw new IllegalArgumentException(PAGE_OUT_OF_RANGE);
         }
         if (limit < 1 || limit > MAX_LIMIT) {
             throw new IllegalArgumentException("limit is out of range");
@@ -47,7 +49,7 @@ public final class AuditLog {
         try {
             offset = Math.multiplyExact(page - 1, limit);
         } catch (ArithmeticException ex) {
-            throw new IllegalArgumentException("page is out of range");
+            throw new IllegalArgumentException(PAGE_OUT_OF_RANGE);
         }
         return Db.transaction(
                 dataSource,

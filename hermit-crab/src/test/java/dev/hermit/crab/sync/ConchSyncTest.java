@@ -31,6 +31,7 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.pkg.Ed25519Keys;
 import dev.hermit.common.pkg.PackageReason;
 import dev.hermit.common.pkg.ConchPackage;
@@ -867,6 +868,61 @@ class ConchSyncTest {
 
     private static ConchOutcome outcome(OutcomeKind kind, String reason) {
         return new ConchOutcome("legacy_oa", "1.0.0", kind, reason);
+    }
+
+    @Test
+    void aDisabledConchWhoseLocalCopyIsGoneIsNotDownloaded() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("gone"))) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            reef.remove("legacy_oa");
+            sync.syncOnce();
+            assertThat(sync.disabledConches().contains("legacy_oa")).isTrue();
+            assertThat(registry.find("legacy_oa")).isPresent();
+
+            int downloads = reef.downloads();
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .satisfies(ex -> {
+                        UpdateException update = (UpdateException) ex;
+                        assertThat(update.status()).isEqualTo(409);
+                        assertThat(update.code()).isEqualTo(ErrorCode.CONCH_DISABLED);
+                        assertThat(update).hasMessage(DisabledConches.UPDATE_MESSAGE);
+                    });
+            assertThat(reef.downloads()).isEqualTo(downloads);
+
+            deleteTree(crab.paths.conches().resolve("legacy_oa"));
+            registry.remove("legacy_oa");
+            SyncReport again = sync.syncOnce();
+            assertThat(again.conches().stream().map(ConchOutcome::conch)).doesNotContain("legacy_oa");
+            assertThat(registry.find("legacy_oa")).isEmpty();
+            assertThat(sync.disabledConches().contains("legacy_oa")).isTrue();
+            assertThat(reef.downloads()).isEqualTo(downloads);
+
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .satisfies(ex -> {
+                        UpdateException update = (UpdateException) ex;
+                        assertThat(update.status()).isEqualTo(409);
+                        assertThat(update.code()).isEqualTo(ErrorCode.CONCH_DISABLED);
+                        assertThat(update).hasMessage(DisabledConches.CALL_MESSAGE);
+                    });
+            assertThat(reef.downloads()).isEqualTo(downloads);
+            assertThat(registry.find("legacy_oa")).isEmpty();
+        }
+    }
+
+    private static void deleteTree(Path root) throws Exception {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (var walk = Files.walk(root)) {
+            for (Path path : walk.sorted((left, right) -> right.compareTo(left)).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
     }
 
     private static List<String> versionDirs(OpenCrab crab) throws Exception {

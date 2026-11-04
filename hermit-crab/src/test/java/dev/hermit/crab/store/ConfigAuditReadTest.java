@@ -190,7 +190,7 @@ class ConfigAuditReadTest {
 
         assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, "oa", null, 0, 10))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("page is out of range");
+                .hasMessage("页码超出范围。");
         assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, "oa", null, 1, 201))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("limit is out of range");

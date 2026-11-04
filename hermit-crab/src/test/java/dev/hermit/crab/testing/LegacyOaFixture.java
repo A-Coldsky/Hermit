@@ -43,6 +43,8 @@ public final class LegacyOaFixture implements AutoCloseable {
     private volatile boolean rendezvous;
     private volatile boolean brokenTable;
     private volatile int todoStatus = 200;
+    /** 非 null 时，已登录的待办请求改成 302 到这个地址，用来区分登录页和其它跳转。 */
+    private volatile String todoRedirect;
     private volatile int homeStatus = 200;
     /** 非 0 时，/api/tasks 固定回这个状态，用来复现上游 400。 */
     private volatile int apiFixedStatus;
@@ -77,6 +79,10 @@ public final class LegacyOaFixture implements AutoCloseable {
 
     public void todoStatus(int status) {
         this.todoStatus = status;
+    }
+
+    public void todoRedirect(String location) {
+        this.todoRedirect = location;
     }
 
     public void homeStatus(int status) {
@@ -217,6 +223,19 @@ public final class LegacyOaFixture implements AutoCloseable {
             redirect(exchange, 302, "http://127.0.0.1:1/nope", null);
             return;
         }
+        if ("/form-post".equals(path) && "POST".equals(method)) {
+            redirect(exchange, 303, "/not-login", null);
+            return;
+        }
+        if ("/form-login".equals(path) && "POST".equals(method)) {
+            redirect(exchange, 303, "/login.aspx", null);
+            return;
+        }
+        if ("/cached".equals(path)) {
+            exchange.sendResponseHeaders(304, -1);
+            exchange.close();
+            return;
+        }
         if ("/huge".equals(path)) {
             huge(exchange);
             return;
@@ -313,8 +332,13 @@ public final class LegacyOaFixture implements AutoCloseable {
             while (!closed && System.nanoTime() < end) {
                 Thread.sleep(20);
             }
-            if (todoStatus >= 500) {
-                html(exchange, todoStatus, "err");
+            if (todoRedirect != null) {
+                redirect(exchange, 302, todoRedirect, null);
+                return;
+            }
+            // 非 200 的正文故意不像待办表。若引擎继续提取，each 会得到空列表并成功返回。
+            if (todoStatus != 200) {
+                html(exchange, todoStatus, "<html><body>empty-list-marker</body></html>");
                 return;
             }
             // 保留 table#todo，去掉单元格。只改表格 id 时 each 匹配 0 条，按契约是空列表。

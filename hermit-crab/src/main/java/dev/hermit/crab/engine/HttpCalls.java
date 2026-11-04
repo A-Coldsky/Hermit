@@ -88,7 +88,7 @@ final class HttpCalls {
         }
         Charset charset = charset(spec.get("encoding"));
         boolean follow = Values.bool(spec.get("follow_redirects"), false);
-        int stepTimeout = positive(spec.get("timeout_ms"), 15_000);
+        Long stepLimit = timeoutLimit(spec.get("timeout_ms"));
         URI target = resolve(base, spec);
         Map<String, Object> query = optionalMap(spec.get("query"), "query");
         if (query != null && !query.isEmpty()) {
@@ -122,7 +122,7 @@ final class HttpCalls {
                     contentType,
                     headers,
                     charset,
-                    stepTimeout,
+                    stepLimit,
                     deadlineNanos);
             if (expectPrefix != null && isRedirect(exchange.status)
                     && pathHasPrefix(exchange.redirect, target, expectPrefix)) {
@@ -132,7 +132,7 @@ final class HttpCalls {
                 if (exchange.status >= 500) {
                     throw new RuleProblem(
                             ErrorCode.UPSTREAM_ERROR,
-                            "上游状态码 " + exchange.status,
+                            upstreamStatus(exchange.status),
                             method,
                             exchange.path,
                             exchange.status);
@@ -213,12 +213,13 @@ final class HttpCalls {
             ContentType contentType,
             Map<String, Object> headers,
             Charset stepEncoding,
-            int stepTimeout,
+            Long stepLimit,
             long deadlineNanos
     ) {
         long remainingMs = remainingMillis(deadlineNanos);
-        long timeoutMs = Math.min(stepTimeout, remainingMs);
-        boolean capabilityBound = remainingMs <= stepTimeout;
+        // 没写 timeout_ms 时，空闲读等到能力 deadline。写了则用该值，并且不超过剩余 deadline。
+        long timeoutMs = stepLimit == null ? remainingMs : Math.min(stepLimit, remainingMs);
+        boolean capabilityBound = stepLimit == null || remainingMs <= stepLimit;
         HttpUriRequestBase request = new HttpUriRequestBase(method, target);
         request.setConfig(RequestConfig.custom()
                 .setResponseTimeout(Timeout.ofMilliseconds(timeoutMs))
@@ -230,7 +231,7 @@ final class HttpCalls {
         applyHeaders(request, headers, target, method);
         String path = pathOf(target);
         // responseTimeout 只限制相邻读取的空闲。持续慢速输出不会触发它，到能力 deadline 时取消请求，
-        // 才能打断已经阻塞在 InputStream.read 上的线程。
+        // 才能打断已经阻塞在 InputStream.read 上的线程。没写 timeout_ms 时，这段空闲上限就是剩余 deadline。
         Cancellable cancellable = request;
         ScheduledFuture<?> cancellation = scheduleCancellation(cancellable, deadlineNanos);
         try {
@@ -264,7 +265,7 @@ final class HttpCalls {
                 throw new DeadlineExceeded(-1, "request", List.of());
             }
             if (isTimeout(ex)) {
-                throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, "上游读取超时", method, path, null);
+                throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, STEP_TIMEOUT, method, path, null);
             }
             throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, "上游连接失败", method, path, null);
         } finally {
@@ -489,12 +490,22 @@ final class HttpCalls {
         }
     }
 
-    private static int positive(Object value, int fallback) {
-        int parsed = Values.integer(value, fallback);
+    /** 规则没写 {@code timeout_ms} 时返回 null，读超时改用剩余的能力 deadline。 */
+    private static Long timeoutLimit(Object value) {
+        if (value == null) {
+            return null;
+        }
+        int parsed = Values.integer(value, -1);
         if (parsed <= 0) {
             throw problem(ErrorCode.RULE_MISMATCH, "timeout_ms 无效");
         }
-        return parsed;
+        return (long) parsed;
+    }
+
+    static final String STEP_TIMEOUT = "步骤超时";
+
+    static String upstreamStatus(int status) {
+        return "上游状态码 " + status;
     }
 
     private static long remainingMillis(long deadlineNanos) {

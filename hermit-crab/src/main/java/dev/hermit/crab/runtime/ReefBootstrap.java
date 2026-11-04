@@ -112,8 +112,9 @@ public final class ReefBootstrap {
 
     /**
      * {@code GET /agent/conches/manifest} with the new URL, token, and this instance id.
-     * 401 becomes 400. A connection failure or timeout becomes 502. Any other HTTP status
-     * means Reef answered, so the token was not rejected.
+     * 2xx and 304 continue. 401 and 403 become 400 {@link #REJECTED_TOKEN}. Any other HTTP
+     * status becomes 400 and names that status. A connection failure or timeout becomes 502.
+     * Redirects are not followed.
      */
     public static void probe(Document document, UUID instanceId) {
         HttpClient client = HttpClient.newBuilder()
@@ -128,9 +129,14 @@ public final class ReefBootstrap {
                 .build();
         try {
             HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
-            if (response.statusCode() == 401) {
+            int status = response.statusCode();
+            if (status == 401 || status == 403) {
                 throw new ReefBootstrapException(400, ErrorCode.INVALID_INPUT, REJECTED_TOKEN);
             }
+            if (status == 304 || (status >= 200 && status <= 299)) {
+                return;
+            }
+            throw new ReefBootstrapException(400, ErrorCode.INVALID_INPUT, notReef(status));
         } catch (ReefBootstrapException ex) {
             throw ex;
         } catch (InterruptedException ex) {
@@ -139,6 +145,11 @@ public final class ReefBootstrap {
         } catch (IOException ex) {
             throw new ReefBootstrapException(502, ErrorCode.UPSTREAM_ERROR, UNREACHABLE);
         }
+    }
+
+    /** Message for a manifest response that is neither 2xx, 304, 401, nor 403. */
+    public static String notReef(int status) {
+        return "reef url did not answer as Reef (HTTP " + status + ")";
     }
 
     public static void write(CrabPaths paths, Document document, Instant importedAt) {

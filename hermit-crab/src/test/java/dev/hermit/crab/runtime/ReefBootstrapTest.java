@@ -3,7 +3,9 @@ package dev.hermit.crab.runtime;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.io.PrintStream;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -24,6 +26,7 @@ import java.util.Set;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.sun.net.httpserver.HttpServer;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -73,6 +76,71 @@ class ReefBootstrapTest {
             assertThat(down.path("error").path("code").asText()).isEqualTo("UPSTREAM_ERROR");
             assertThat(down.path("error").path("message").asText()).isEqualTo("cannot reach reef");
             assertThat(Files.exists(temp.resolve("reef-bootstrap.json"))).isFalse();
+        }
+    }
+
+    @Test
+    void probeAcceptsManifestSuccessAndLeavesTheFileUntouchedOnOtherStatuses() throws Exception {
+        HttpServer html = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        html.createContext("/agent/conches/manifest", exchange -> {
+            byte[] page = "<html><body>not reef</body></html>".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+            exchange.sendResponseHeaders(404, page.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(page);
+            }
+        });
+        html.start();
+        try (FakeReef reef = new FakeReef(); CrabServer server = server(CrabConfig.defaults().withListen("127.0.0.1", 0))) {
+            reef.expectToken(TOKEN);
+            PublicKey key = reef.keys().getPublic();
+            String payload = bootstrap(reef, TOKEN, key).toString();
+            Path file = temp.resolve("reef-bootstrap.json");
+
+            reef.manifestStatus(403);
+            Reply forbidden = post(server, payload, 400);
+            assertThat(forbidden.path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(forbidden.path("error").path("message").asText()).isEqualTo("reef rejected the token");
+            assertThat(Files.exists(file)).isFalse();
+
+            reef.manifestStatus(404);
+            Reply missing = post(server, payload, 400);
+            assertThat(missing.path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(missing.path("error").path("message").asText())
+                    .isEqualTo("reef url did not answer as Reef (HTTP 404)");
+            assertThat(Files.exists(file)).isFalse();
+
+            reef.manifestStatus(500);
+            Reply broken = post(server, payload, 400);
+            assertThat(broken.path("error").path("message").asText())
+                    .isEqualTo("reef url did not answer as Reef (HTTP 500)");
+            assertThat(Files.exists(file)).isFalse();
+
+            reef.manifestStatus(201);
+            Reply created = post(server, payload, 200);
+            assertThat(created.path("data").path("source").asText()).isEqualTo("BOOTSTRAP");
+            assertThat(Files.isRegularFile(file)).isTrue();
+
+            reef.manifestStatus(304);
+            Reply notModified = post(server, payload, 200);
+            assertThat(notModified.path("success").asBoolean()).isTrue();
+            byte[] kept = Files.readAllBytes(file);
+
+            ObjectNode htmlBootstrap = bootstrap(reef, TOKEN, key);
+            ((ObjectNode) htmlBootstrap.get("reef")).put("url", "http://127.0.0.1:" + html.getAddress().getPort());
+            Reply htmlPage = post(server, htmlBootstrap.toString(), 400);
+            assertThat(htmlPage.path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(htmlPage.path("error").path("message").asText())
+                    .isEqualTo("reef url did not answer as Reef (HTTP 404)");
+            assertThat(Files.readAllBytes(file)).isEqualTo(kept);
+
+            reef.redirectManifest();
+            Reply redirect = post(server, payload, 400);
+            assertThat(redirect.path("error").path("message").asText())
+                    .isEqualTo("reef url did not answer as Reef (HTTP 302)");
+            assertThat(Files.readAllBytes(file)).isEqualTo(kept);
+        } finally {
+            html.stop(0);
         }
     }
 

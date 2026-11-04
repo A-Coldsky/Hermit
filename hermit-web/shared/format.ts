@@ -80,15 +80,35 @@ export function millis(value: number | string | null | undefined): string {
   return number >= 1000 ? `${(number / 1000).toFixed(2)} s` : `${Math.round(number)} ms`
 }
 
+/**
+ * 短标签只在 message 还没把这件事说出来时才加在前面。
+ * 「没有权限」与「无权限」、「会话已失效」与「会话失效」算同一句，避免「无权限：没有权限执行这个操作」。
+ * message 是另一句说明时仍保留标签，例如「能力已停用：该能力已在本机停用…」。
+ */
 export function errorText(error: unknown): string {
   if (error instanceof ApiError) {
     const label = errorCodeLabels[error.code ?? '']
-    return label && label !== error.message ? `${label}：${error.message}` : error.message
+    if (!label || messageCoversLabel(label, error.message)) {
+      return error.message
+    }
+    return `${label}：${error.message}`
   }
   if (error instanceof Error) {
     return error.message
   }
   return '操作失败'
+}
+
+function messageCoversLabel(label: string, message: string): boolean {
+  if (message.includes(label)) {
+    return true
+  }
+  const foldedLabel = foldErrorPhrase(label)
+  return foldedLabel.length > 0 && foldErrorPhrase(message).includes(foldedLabel)
+}
+
+function foldErrorPhrase(value: string): string {
+  return value.replace(/没有/g, '无').replace(/已/g, '')
 }
 
 export function notifyError(error: unknown): void {

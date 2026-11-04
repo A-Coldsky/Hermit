@@ -30,7 +30,7 @@ Crab 在回环连接上，`GET /console/**` 除 `/console/api/**` 与 `/console/
 
 Reef 的查询参数、路径变量或请求头无法转换成声明类型，或缺少必填项时，`GlobalExceptionHandler` 返回 400 `INVALID_INPUT`。`message` 为 `字段 字段名 无效`（多个字段按字典序用逗号连接，例如 `字段 page, size 无效`），不回显原始参数值，也不把该异常记成 500。例如 `GET /api/admin/audit?size=abc` 的 message 是 `字段 size 无效`。数字越界、空原因等由各接口自己返回 400，message 为 `输入无效`。Bean 校验失败（如超长口令）message 为 `请求校验未通过`。请求体读不成目标类型（坏 JSON、无法识别的枚举值）message 为 `请求体无法解析`，不回显正文。路径不接受该方法时 405，错误码仍是 `INVALID_INPUT`，message 为 `不支持该请求方法`。上传缺少 `file`、空文件或坏 ZIP 仍是 422，message 为 `输入无效`。YAML 解析失败仍是 422，message 为解析器原文；语义校验失败仍是 422，message 为 `输入无效`，明细在 `data`。
 
-Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常。响应信封仍带 `traceId`。默认 message：401 `UNAUTHORIZED` 为 `未登录或登录已过期`，403 `FORBIDDEN` 为 `没有权限执行这个操作`，404 `NOT_FOUND` 为 `资源不存在`，500 `INTERNAL` 为 `服务器内部错误`。登录失败仍是 `authentication failed`，不走这句默认文案。
+Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常。响应信封仍带 `traceId`。默认 message：401 `UNAUTHORIZED` 为 `未登录或登录已过期`，403 `FORBIDDEN` 为 `没有权限执行这个操作`，404 `NOT_FOUND` 为 `资源不存在`，500 `INTERNAL` 为 `服务器内部错误`。登录失败仍是 `authentication failed`，不走这句默认文案。控制台错误提示在 message 已经表达该错误码时只显示 message，因此这三句不会再变成「无权限：没有权限执行这个操作」「不存在：资源不存在」或「内部错误：服务器内部错误」。message 是另一句说明时仍加短标签。
 
 ## Reef 管理与分发
 
@@ -173,7 +173,7 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 测试登录仍会尝试登录，不看暂停旗标。只有登录成功（`recordAuthSuccess`）才清掉暂停和失败计数。失败、缺配置、缺凭证或无法解密都保持暂停，下一次能力调用仍直接返回「该账号已暂停自动登录」。页面应读这些字段显示「已暂停」和恢复方法，不要只看 `needsConfiguration`。
 
-`GET /console/api/audit` 的 `data` 为 `{entries, page, limit, total}`。`entries` 按 `at`、`id` 从新到旧。空白的 `conch` 或 `account` 表示不过滤。`page` 小于 1，或大到无法分页，返回 400 `INVALID_INPUT`，`message` 为「页码超出范围。」。`limit` 不在 1 到 200，返回 `INVALID_INPUT`，`message` 仍是 `limit is out of range`。
+`GET /console/api/audit` 的 `data` 为 `{entries, page, limit, total}`。`entries` 按 `at`、`id` 从新到旧。空白的 `conch` 或 `account` 表示不过滤。`page` 小于 1、不是整数，或大到无法分页，返回 400 `INVALID_INPUT`，`message` 为「页码超出范围。」。`limit` 小于 1、不是整数或不在 1 到 200，返回 `INVALID_INPUT`，`message` 为「每页条数超出范围。」。`conch` 含 `/`、`\`、控制字符或长于 256 时，`message` 为「规则包名称无效。」。
 
 每一行只有谁、做了什么、何时：
 
@@ -240,7 +240,7 @@ mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 `catalog` 打印目录缓存，一行一个包：`包名 版本`，后面按情况接 `subscribed`、`installed 版本`、`disabled`、`local-conflict`、`update-available 清单版本`，最后是标题。缓存还没有时没有输出，退出 0。`subscribe` 成功时打印 `包名 版本 KIND`；这一轮结果里没有该包时打印 `包名 subscribed`。`unsubscribe` 成功时打印包名。`update` 成功时打印 `包名 版本`。它用的是最近一次同步的清单，不会在这条命令里再拉 Reef。未配置 `reef.url` 时 `catalog`、`subscribe` 和 `update` 与 `sync` 一样在 stderr 打印 `reef.url is not configured` 并退出 1。`unsubscribe` 在未配置 Reef 时仍可用。超过 200 字或含换行的错误被收成 `invalid input`。
 
-`audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。每一行是 `时间 actor action origin conch account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
+`audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。`--page` 小于 1、不是整数，或大到无法分页时，stderr 为「页码超出范围。」。`--limit` 小于 1、不是整数或大于 200 时，stderr 为「每页条数超出范围。」。选项没有值时为「缺少 --page 的值。」这种句子，同一选项写两次为「--page 重复了。」。非法 `conch` 过滤为「规则包名称无效。」。每一行是 `时间 actor action origin conch account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
 
 `config get` 只读取已经加载的规则包。注册表里没有这个名字时，stderr 打印 `本机没有这个规则包`，名字符合 `^[a-z][a-z0-9_]{1,63}$` 时再接 `: 名字`，退出 1，不会把空配置当成成功。已加载但还没有保存过配置时没有输出，退出 0。指定的 key 尚未设置时仍是 stderr `config key is not set`，退出 1。
 

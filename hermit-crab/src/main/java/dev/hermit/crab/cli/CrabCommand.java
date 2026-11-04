@@ -681,41 +681,41 @@ public final class CrabCommand {
                 return 1;
             }
             if (i + 1 >= args.length || args[i + 1].startsWith("--")) {
-                err.println("option value is required");
+                err.println("缺少 " + arg + " 的值。");
                 return 1;
             }
             String value = args[++i];
             switch (arg) {
                 case "--conch" -> {
                     if (conch != null) {
-                        err.println("duplicate option");
+                        err.println(arg + " 重复了。");
                         return 1;
                     }
                     conch = value;
                 }
                 case "--account" -> {
                     if (account != null) {
-                        err.println("duplicate option");
+                        err.println(arg + " 重复了。");
                         return 1;
                     }
                     account = value;
                 }
                 case "--limit" -> {
                     if (limit != null) {
-                        err.println("duplicate option");
+                        err.println(arg + " 重复了。");
                         return 1;
                     }
-                    limit = optionInt(value, "limit", err);
+                    limit = optionInt(value, AuditLog.LIMIT_OUT_OF_RANGE, err);
                     if (limit == null) {
                         return 1;
                     }
                 }
                 case "--page" -> {
                     if (page != null) {
-                        err.println("duplicate option");
+                        err.println(arg + " 重复了。");
                         return 1;
                     }
-                    page = optionInt(value, "page", err);
+                    page = optionInt(value, AuditLog.PAGE_OUT_OF_RANGE, err);
                     if (page == null) {
                         return 1;
                     }
@@ -738,16 +738,17 @@ public final class CrabCommand {
         });
     }
 
-    private static Integer optionInt(String value, String label, PrintStream err) {
+    /** {@code message} is the Chinese sentence printed for a non-integer or a value below 1. */
+    private static Integer optionInt(String value, String message, PrintStream err) {
         try {
             int parsed = Integer.parseInt(value);
             if (parsed < 1) {
-                err.println(label + " is out of range");
+                err.println(message);
                 return null;
             }
             return parsed;
         } catch (NumberFormatException ex) {
-            err.println(label + " is out of range");
+            err.println(message);
             return null;
         }
     }

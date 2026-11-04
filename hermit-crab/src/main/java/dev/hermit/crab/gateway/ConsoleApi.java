@@ -959,9 +959,9 @@ final class ConsoleApi {
         if (raw == null || raw.isBlank()) {
             return AuditLog.DEFAULT_LIMIT;
         }
-        int limit = positive(raw, -1, "limit is out of range");
+        int limit = positive(raw, -1, AuditLog.LIMIT_OUT_OF_RANGE);
         if (limit < 1 || limit > AuditLog.MAX_LIMIT) {
-            throw new IllegalArgumentException("limit is out of range");
+            throw new IllegalArgumentException(AuditLog.LIMIT_OUT_OF_RANGE);
         }
         return limit;
     }

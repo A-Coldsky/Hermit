@@ -288,12 +288,43 @@ class CliTest {
                 stdout(),
                 stderr(bad));
         assertThat(code).isEqualTo(1);
-        assertThat(bad.toString(StandardCharsets.UTF_8)).contains("limit is out of range");
+        assertThat(bad.toString(StandardCharsets.UTF_8)).contains("每页条数超出范围。");
 
         for (byte[] blob : ciphertexts(root)) {
             SecretChecks.absent(text, Base64.getEncoder().encodeToString(blob));
             SecretChecks.absent(text, HexFormat.of().formatHex(blob));
         }
+    }
+
+    @Test
+    void auditListRejectsBadPagesAndLimitsInChinese() {
+        Function<String, String> env = env(temp.resolve("audit-range"));
+        assertThat(auditErr(env, "audit", "list", "--page", "0")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "-1")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "1.5")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "abc")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "0")).isEqualTo("每页条数超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "-5")).isEqualTo("每页条数超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "abc")).isEqualTo("每页条数超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page")).isEqualTo("缺少 --page 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit")).isEqualTo("缺少 --limit 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--conch")).isEqualTo("缺少 --conch 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--account")).isEqualTo("缺少 --account 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "--limit", "1")).isEqualTo("缺少 --page 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "1", "--page", "2")).isEqualTo("--page 重复了。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "1", "--limit", "2")).isEqualTo("--limit 重复了。\n");
+        assertThat(auditErr(env, "audit", "list", "--conch", "a", "--conch", "b")).isEqualTo("--conch 重复了。\n");
+        assertThat(auditErr(env, "audit", "list", "--account", "a", "--account", "b")).isEqualTo("--account 重复了。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "201")).isEqualTo("每页条数超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "2147483647")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--conch", "oa/extra")).isEqualTo("规则包名称无效。\n");
+    }
+
+    private static String auditErr(Function<String, String> env, String... args) {
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(args, env, InputStream.nullInputStream(), stdout(), stderr(err));
+        assertThat(code).isEqualTo(1);
+        return err.toString(StandardCharsets.UTF_8);
     }
 
     @Test

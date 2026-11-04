@@ -190,6 +190,70 @@ final class SyncStore {
         });
     }
 
+    /**
+     * Reason already audited for this conch, so a later sync of the same failure does not
+     * append another row. Empty after the package loads or the subscription is removed.
+     */
+    Optional<String> repairNotice(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return Optional.empty();
+        }
+        return Db.transaction(dataSource, connection -> Optional.ofNullable(readRepairNotices(connection).get(conch)));
+    }
+
+    void saveRepairNotice(String conch, String reason) {
+        if (conch == null || conch.isBlank() || reason == null || reason.isBlank()) {
+            return;
+        }
+        Db.transaction(dataSource, connection -> {
+            Map<String, String> notices = readRepairNotices(connection);
+            notices.put(conch, reason);
+            upsertState(connection, "repair_notices", RepairNotices.encode(notices));
+            return null;
+        });
+    }
+
+    void clearRepairNotice(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return;
+        }
+        Db.transaction(dataSource, connection -> {
+            Map<String, String> notices = readRepairNotices(connection);
+            if (notices.remove(conch) == null) {
+                return null;
+            }
+            writeRepairNotices(connection, notices);
+            return null;
+        });
+    }
+
+    /**
+     * Forgets that this subscription installed a package. Unsubscribe calls this so the next
+     * subscribe is a first install. A lost pointer does not.
+     */
+    void clearInstallHistory(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return;
+        }
+        Db.transaction(dataSource, connection -> {
+            try (PreparedStatement installed = connection.prepareStatement(
+                    "DELETE FROM installed_versions WHERE conch = ?")) {
+                installed.setString(1, conch);
+                installed.executeUpdate();
+            }
+            try (PreparedStatement previous = connection.prepareStatement(
+                    "DELETE FROM conch_previous WHERE conch = ?")) {
+                previous.setString(1, conch);
+                previous.executeUpdate();
+            }
+            Map<String, String> notices = readRepairNotices(connection);
+            if (notices.remove(conch) != null) {
+                writeRepairNotices(connection, notices);
+            }
+            return null;
+        });
+    }
+
     void clearPrevious(String conch) {
         Db.transaction(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
@@ -306,6 +370,22 @@ final class SyncStore {
         } catch (IllegalArgumentException ex) {
             return right.compareTo(left);
         }
+    }
+
+    private static Map<String, String> readRepairNotices(Connection connection) throws SQLException {
+        return RepairNotices.decode(optionalString(connection,
+                "SELECT \"value\" FROM sync_state WHERE name = 'repair_notices'").orElse(null));
+    }
+
+    private static void writeRepairNotices(Connection connection, Map<String, String> notices) throws SQLException {
+        if (notices == null || notices.isEmpty()) {
+            try (PreparedStatement delete = connection.prepareStatement(
+                    "DELETE FROM sync_state WHERE name = 'repair_notices'")) {
+                delete.executeUpdate();
+            }
+            return;
+        }
+        upsertState(connection, "repair_notices", RepairNotices.encode(notices));
     }
 
     private static void upsertState(Connection connection, String name, String value) throws SQLException {

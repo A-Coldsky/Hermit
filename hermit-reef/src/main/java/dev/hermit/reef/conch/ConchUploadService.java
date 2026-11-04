@@ -19,8 +19,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class ConchUploadService {
 
-    static final String VERSION_EXISTS = "conch version already exists";
-    static final String VERSION_NOT_GREATER = "version is not greater than the highest existing version";
+    static final String VERSION_EXISTS = "该规则包版本已存在";
+    static final String VERSION_NOT_GREATER = "版本必须高于已有的最高版本";
 
     private static final String YAML_ENTRY = "conch.yaml";
 

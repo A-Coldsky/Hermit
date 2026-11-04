@@ -11,7 +11,15 @@ public enum ErrorCode {
     ACCOUNT_NOT_FOUND,
     FORBIDDEN,
     NOT_FOUND,
-    /** Reef 已停用该 Conch。Crab 同步后不再执行它。 */
+    /**
+     * 本机已关掉该能力（控制台开关或 {@code config.yml} 的 {@code capabilities.disabled}）。
+     * HTTP 404。能力不存在仍是 {@code NOT_FOUND}。
+     */
+    CAPABILITY_DISABLED,
+    /**
+     * 停用墓碑还在，且注册表里已经没有这份规则包。HTTP 409。
+     * 已加载的停用包仍可调用，不使用这个码。
+     */
     CONCH_DISABLED,
     /**
      * 同一 Idempotency-Key 在有效期内换了请求体。HTTP 409，与 {@code NOT_CONFIGURED}、

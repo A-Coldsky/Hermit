@@ -260,26 +260,26 @@ class AdminApiTest {
         mockMvc.perform(get("/api/admin/audit").param("size", bad).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value("invalid input: size"))
+                .andExpect(jsonPath("$.error.message").value("字段 size 无效"))
                 .andExpect(content().string(not(containsString(bad))));
         mockMvc.perform(get("/api/admin/audit").param("page", bad).header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value("invalid input: page"))
+                .andExpect(jsonPath("$.error.message").value("字段 page 无效"))
                 .andExpect(content().string(not(containsString(bad))));
         mockMvc.perform(post("/api/admin/alerts/" + bad + "/ack").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value("invalid input: id"))
+                .andExpect(jsonPath("$.error.message").value("字段 id 无效"))
                 .andExpect(content().string(not(containsString(bad))));
         mockMvc.perform(get("/api/admin/probe-required").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value("invalid input: widget"));
+                .andExpect(jsonPath("$.error.message").value("字段 widget 无效"));
         mockMvc.perform(get("/api/admin/probe-required").param("widget", bad)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.message").value("invalid input: widget"))
+                .andExpect(jsonPath("$.error.message").value("字段 widget 无效"))
                 .andExpect(content().string(not(containsString(bad))));
         mockMvc.perform(get("/api/admin/audit").param("size", "0").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isBadRequest())
@@ -311,7 +311,7 @@ class AdminApiTest {
                         .content(credentials(TestSecrets.USERNAME, tooLong)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value("invalid input"))
+                .andExpect(jsonPath("$.error.message").value("请求校验未通过"))
                 .andExpect(content().string(not(org.hamcrest.Matchers.containsString(tooLong))));
     }
 
@@ -323,7 +323,7 @@ class AdminApiTest {
                         .content("{\"username\":\"reef-admin\",\"password\":\"" + TestSecrets.PASSWORD))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value("invalid input"))
+                .andExpect(jsonPath("$.error.message").value("请求体无法解析"))
                 .andExpect(content().string(not(org.hamcrest.Matchers.containsString(TestSecrets.PASSWORD))));
         mockMvc.perform(post("/api/admin/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -339,14 +339,14 @@ class AdminApiTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
-                .andExpect(jsonPath("$.error.message").value("unauthorized"))
+                .andExpect(jsonPath("$.error.message").value("未登录或登录已过期"))
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.traceId").value("trace-from-caller"));
         mockMvc.perform(post("/anything").header(TraceIds.HEADER, "trace-from-caller"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
-                .andExpect(jsonPath("$.error.message").value("unauthorized"))
+                .andExpect(jsonPath("$.error.message").value("未登录或登录已过期"))
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.traceId").value("trace-from-caller"));
         String page = mockMvc.perform(get("/anything").header(TraceIds.HEADER, "trace-from-caller"))
@@ -363,7 +363,7 @@ class AdminApiTest {
         mockMvc.perform(get("/api/other").header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"))
-                .andExpect(jsonPath("$.error.message").value("forbidden"));
+                .andExpect(jsonPath("$.error.message").value("没有权限执行这个操作"));
     }
 
     @Test
@@ -372,13 +372,14 @@ class AdminApiTest {
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get("/api/admin/login").header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
                 .andExpect(status().isMethodNotAllowed())
-                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("不支持该请求方法"));
         mockMvc.perform(get("/api/admin/boom")
                         .header(TraceIds.HEADER, TRACE)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.error.code").value("INTERNAL"))
-                .andExpect(jsonPath("$.error.message").value("internal error"))
+                .andExpect(jsonPath("$.error.message").value("服务器内部错误"))
                 .andExpect(jsonPath("$.traceId").value(TRACE))
                 .andExpect(content().string(not(org.hamcrest.Matchers.containsString("boom-internal-sentinel"))))
                 .andExpect(content().string(not(org.hamcrest.Matchers.containsString("IllegalStateException"))));
@@ -427,7 +428,7 @@ class AdminApiTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
-                .andExpect(jsonPath("$.error.message").value("not found"))
+                .andExpect(jsonPath("$.error.message").value("资源不存在"))
                 .andExpect(jsonPath("$.traceId").value(TRACE))
                 .andExpect(jsonPath("$.timestamp").doesNotExist())
                 .andExpect(jsonPath("$.path").doesNotExist())
@@ -463,7 +464,8 @@ class AdminApiTest {
 
         mockMvc.perform(get("/api/admin/retention/purge").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isMethodNotAllowed())
-                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("不支持该请求方法"));
         mockMvc.perform(post("/api/admin/retention/purge").header(TraceIds.HEADER, TRACE))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));

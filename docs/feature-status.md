@@ -121,4 +121,4 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 
 2026-11-04 合入 origin/main（#63 Reef 管理页面）后，引导探测只接受清单的 2xx 与 304。以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 150、hermit-crab 261、hermit-it 1，失败/错误/跳过均为 0；Vitest 94（16 个文件），`vue-tsc` 通过。Java 小计 455，连同 Vitest 合计 549。这是当前整棵树的计数。401 与 403 为 400 `reef rejected the token`。404、500、302，以及返回 HTML 的 404，为 400 `reef url did not answer as Reef (HTTP n)`，不写 `reef-bootstrap.json`，已有文件也不替换。201 与 304 可以导入。未改 hermit-reef。未在浏览器点选，未启动 MySQL 或 Compose。
 
-2026-11-04 Crab 控制台「连接 Reef」与上报设置页面：新增 Vitest 4 项（导入前检查、提交与连接信息、替换确认与令牌被拒提示、关闭上报）。只改前端与文档。未在浏览器点选，文件选择只测了粘贴路径。
+2026-11-04 Crab 控制台「连接 Reef」与上报设置页面：新增 Vitest 4 项（导入前检查、提交与连接信息、替换确认与令牌被拒提示、关闭上报），合计 Vitest 98（17 个文件），`vue-tsc` 与两端构建通过。只改前端与文档。未在浏览器点选，文件选择只测了粘贴路径。

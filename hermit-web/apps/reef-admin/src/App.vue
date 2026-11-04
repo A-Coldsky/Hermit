@@ -1,28 +1,45 @@
 <script setup lang="ts">
-import { Bell, Box, DataLine, Document, House, Key, SwitchButton } from '@element-plus/icons-vue'
+import { ArrowDown, Bell, Box, DataLine, Document, House, Key, Tickets, User } from '@element-plus/icons-vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import PasswordDialog from './components/PasswordDialog.vue'
 import { useRouter } from 'vue-router'
 import AppLayout, { type NavItem } from '@shared/components/AppLayout.vue'
 import { api } from './api'
-import { session, signOut } from './auth'
+import { isAdmin, session, setRole, signOut } from './auth'
 import { openAlerts, refreshOpenAlerts } from './alerts'
 
 const router = useRouter()
 const timer = ref<number>()
+
+const passwordOpen = ref(false)
 
 const items = computed<NavItem[]>(() => [
   { to: '/', label: '概览', icon: House },
   { to: '/conches', label: '规则包目录', icon: Box },
   { to: '/tide', label: 'Tide 统计', icon: DataLine },
   { to: '/alerts', label: '告警', icon: Bell, badge: openAlerts.value },
-  { to: '/audit', label: '审计日志', icon: Document },
+  { to: '/tokens', label: '我的令牌', icon: Tickets },
+  ...(isAdmin.value
+    ? [
+        { to: '/users', label: '用户管理', icon: User },
+        { to: '/audit', label: '审计日志', icon: Document },
+      ]
+    : []),
   { to: '/settings', label: '签名公钥', icon: Key },
 ])
+
+const roleLabel = computed(() => (session.role === 'ADMIN' ? '管理员' : session.role === 'USER' ? '普通用户' : ''))
+
+function onCommand(command: string) {
+  if (command === 'password') passwordOpen.value = true
+  else if (command === 'logout') logout()
+}
 
 onMounted(async () => {
   try {
     const me = await api.me()
     session.user = me.username
+    setRole(me.role)
   } catch {
     // 401 已在客户端里处理
   }
@@ -41,11 +58,29 @@ function logout() {
 <template>
   <AppLayout product="Reef" subtitle="Hermit 管理端" :items="items">
     <template #topbar>
-      <span class="hm-muted">{{ session.user }}</span>
-      <el-button :icon="SwitchButton" text @click="logout">退出</el-button>
+      <el-dropdown trigger="click" @command="onCommand">
+        <el-button text data-test="account-menu">
+          {{ session.user }}
+          <el-tag v-if="roleLabel" size="small" effect="plain" :type="isAdmin ? 'primary' : 'info'" class="role">{{ roleLabel }}</el-tag>
+          <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+        </el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="password">修改密码</el-dropdown-item>
+            <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      <PasswordDialog v-model="passwordOpen" />
     </template>
     <template #sidebar-foot>
       <span>发布签名规则包 · 回收运行指标</span>
     </template>
   </AppLayout>
 </template>
+
+<style scoped>
+.role {
+  margin-left: 6px;
+}
+</style>

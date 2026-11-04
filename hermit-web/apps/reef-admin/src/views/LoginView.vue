@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { errorText } from '@shared/format'
 import { ApiError } from '@shared/http'
 import { api } from '../api'
-import { signIn } from '../auth'
+import { setRole, signIn } from '../auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -23,6 +23,11 @@ async function submit() {
   try {
     const result = await api.login(form.username, form.password)
     signIn(result.token, result.expiresAt, form.username)
+    try {
+      setRole((await api.me()).role)
+    } catch {
+      // 角色稍后由外壳页面再取
+    }
     const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/') ? route.query.redirect : '/'
     await router.replace(redirect)
   } catch (error) {

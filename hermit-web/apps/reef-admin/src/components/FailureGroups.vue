@@ -16,6 +16,7 @@ defineProps<{ groups: FailureGroup[]; showConch?: boolean; loading?: boolean }>(
             <code>{{ item.traceId }}</code>
             <el-button link :icon="CopyDocument" @click="copyText(item.traceId, 'traceId 已复制')" />
             <span>{{ item.summary ?? '（无摘要）' }}</span>
+            <span v-if="item.owner" class="hm-muted">· {{ item.owner }}</span>
           </li>
         </ul>
         <p class="hm-muted hint">在对应 Crab 的控制台「调用记录」里用 traceId 查看完整步骤。</p>

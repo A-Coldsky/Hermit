@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isAdmin } from '../auth'
 import { ArrowRight, Grid, List, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -46,7 +47,7 @@ onMounted(load)
   <div>
     <PageHeader title="规则包目录" description="每个规则包描述一个老系统的登录方式与可调用能力">
       <el-button :icon="Refresh" @click="load">刷新</el-button>
-      <el-button type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
+      <el-button v-if="isAdmin" type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
     </PageHeader>
 
     <div class="hm-toolbar bar">
@@ -92,8 +93,8 @@ onMounted(load)
       <div v-else-if="!loading" class="hm-card empty">
         <template v-if="conches.length">没有匹配「{{ keyword }}」的规则包</template>
         <template v-else>
-          <span>还没有规则包，先上传一个 YAML</span>
-          <el-button type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
+          <span>{{ isAdmin ? '还没有规则包，先上传一个 YAML' : '还没有规则包，等管理员上传' }}</span>
+          <el-button v-if="isAdmin" type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
         </template>
       </div>
     </template>

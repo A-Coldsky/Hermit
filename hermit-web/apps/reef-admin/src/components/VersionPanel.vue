@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isAdmin } from '../auth'
 import { CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, reactive, ref } from 'vue'
@@ -141,14 +142,14 @@ async function runDiff() {
         </template>
       </el-table-column>
       <el-table-column prop="pullCount" label="拉取" width="80" align="right" />
-      <el-table-column label="操作" width="280">
+      <el-table-column label="操作" :width="isAdmin ? 280 : 160">
         <template #default="{ row }">
           <el-button link type="primary" @click="showYaml(row)">YAML</el-button>
           <el-button link type="primary" :disabled="versions.length < 2" @click="openDiff(row)">对比</el-button>
           <el-tooltip v-if="disabled && row.status === 'UPLOADED'" content="规则包已停用，先启用再发布">
             <span class="off">发布</span>
           </el-tooltip>
-          <el-button v-else-if="row.status === 'UPLOADED'" link type="primary" :loading="busy === row.version" @click="publish(row)">
+          <el-button v-else-if="row.status === 'UPLOADED' && isAdmin" link type="primary" :loading="busy === row.version" @click="publish(row)">
             发布
           </el-button>
         </template>

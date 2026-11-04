@@ -58,7 +58,7 @@ public record CrabConfig(
     }
 
     public static CrabConfig defaults() {
-        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 300, List.of(), Map.of(), 60, 10, 3, List.of());
+        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 1800, List.of(), Map.of(), 60, 10, 3, List.of());
     }
 
     public EngineSettings engineSettings() {

@@ -20,7 +20,7 @@ class CrabEntrypointTest {
         Result result = run(Map.of());
         assertThat(result.status).as(result.err).isZero();
         String config = Files.readString(temp.resolve("home/config.yml"));
-        assertThat(config).doesNotContain("url:").contains("interval_seconds: 300");
+        assertThat(config).doesNotContain("url:").contains(generatedReport());
     }
 
     @Test
@@ -32,7 +32,7 @@ class CrabEntrypointTest {
         assertThat(result.status).as(result.err).isZero();
         assertThat(result.err).doesNotContain("reef.pub");
         String config = Files.readString(home.resolve("config.yml"));
-        assertThat(config).doesNotContain("url:").contains("interval_seconds: 300");
+        assertThat(config).doesNotContain("url:").contains(generatedReport());
         assertThat(Files.getPosixFilePermissions(home.resolve("reef-bootstrap.json"))).containsExactlyInAnyOrder(
                 PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
     }
@@ -105,6 +105,16 @@ class CrabEntrypointTest {
     }
 
     private record Result(int status, String out, String err) {
+    }
+
+    private static String generatedReport() {
+        return """
+                sync:
+                  interval_seconds: 300
+                report:
+                  enabled: true
+                  interval_seconds: 1800
+                """;
     }
 
     private static final class SetExec {

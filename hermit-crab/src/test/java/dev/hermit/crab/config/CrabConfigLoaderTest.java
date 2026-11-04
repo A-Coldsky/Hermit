@@ -24,7 +24,7 @@ class CrabConfigLoaderTest {
         assertThat(config.serverPort()).isEqualTo(7777);
         assertThat(config.syncIntervalSeconds()).isEqualTo(300);
         assertThat(config.reportEnabled()).isTrue();
-        assertThat(config.reportIntervalSeconds()).isEqualTo(300);
+        assertThat(config.reportIntervalSeconds()).isEqualTo(1800);
         assertThat(config.capabilityTimeoutSeconds()).isEqualTo(60);
         assertThat(config.sessionIdleMinutes()).isEqualTo(10);
         assertThat(config.maxLoginFailures()).isEqualTo(3);
@@ -96,5 +96,14 @@ class CrabConfigLoaderTest {
                 .isInstanceOf(ConfigFileException.class)
                 .hasMessageContaining("report.interval_seconds")
                 .hasMessageContaining("out of range");
+
+        Files.writeString(file, """
+                report:
+                  enabled: true
+                """);
+        CrabConfig omitted = CrabConfigLoader.load(file);
+        assertThat(omitted.reportEnabled()).isTrue();
+        assertThat(omitted.reportIntervalSeconds()).isEqualTo(1800);
+        assertThat(omitted.syncIntervalSeconds()).isEqualTo(300);
     }
 }

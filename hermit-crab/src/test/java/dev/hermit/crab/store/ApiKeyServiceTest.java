@@ -153,6 +153,53 @@ class ApiKeyServiceTest {
         assertThat(combined.permits(null, "list", true)).isFalse();
     }
 
+    @Test
+    void explicitAllMatchesEmptySetsAndRejectsABlankCreate() {
+        assertThat(ApiKeyScope.MISSING_SCOPE.length()).isLessThanOrEqualTo(200);
+        assertThat(ApiKeyScope.ALL_EXCLUDES_NAMES.length()).isLessThanOrEqualTo(200);
+        ApiKeyScope wide = ApiKeyScope.explicit(true, Set.of(), Set.of(), true);
+        assertThat(wide.all()).isTrue();
+        assertThat(wide.grantsAllOfficial()).isTrue();
+        assertThat(wide.conches()).isEmpty();
+        assertThat(wide.actions()).isEmpty();
+        ApiKeyPrincipal principal = principal(wide);
+        assertThat(principal.scope()).isEqualTo(wide);
+        assertThat(principal.permits("oa", "list", true)).isTrue();
+        assertThat(principal.permits("oa", "delete", false)).isFalse();
+
+        assertThatThrownBy(() -> ApiKeyScope.explicit(false, Set.of(), Set.of(), false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(ApiKeyScope.MISSING_SCOPE);
+        assertThatThrownBy(() -> ApiKeyScope.explicit(true, Set.of("oa"), Set.of(), false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(ApiKeyScope.ALL_EXCLUDES_NAMES);
+        assertThatThrownBy(() -> new ApiKeyScope(Set.of("oa"), Set.of(), false, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(ApiKeyScope.ALL_EXCLUDES_NAMES);
+    }
+
+    @Test
+    void legacyScopeJsonWithoutAllStillPermitsEveryOfficialConch() throws Exception {
+        CreatedApiKey created = fixture.apiKeys.create("legacy", new ApiKeyScope(Set.of("oa"), Set.of(), false), "cli");
+        try (Connection connection = fixture.dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "UPDATE api_keys SET scope_json = ? WHERE id = ?")) {
+            statement.setString(1, "{\"conches\":[],\"actions\":[],\"readOnlyOnly\":false}");
+            statement.setString(2, created.id());
+            assertThat(statement.executeUpdate()).isEqualTo(1);
+        }
+        ApiKeyPrincipal principal = fixture.apiKeys.authenticate(created.plaintext()).orElseThrow();
+        assertThat(principal.scope().all()).isFalse();
+        assertThat(principal.scope().grantsAllOfficial()).isTrue();
+        assertThat(principal.permits("legacy_oa", "list_todo", false)).isTrue();
+        assertThat(principal.permits("other", "submit", true)).isTrue();
+        assertThat(fixture.apiKeys.list())
+                .filteredOn(summary -> summary.id().equals(created.id()))
+                .singleElement()
+                .extracting(ApiKeySummary::scope)
+                .isEqualTo(principal.scope());
+    }
+
     private static Instant lastUsedAt(ApiKeyService apiKeys, String id) {
         return apiKeys.list().stream()
                 .filter(summary -> summary.id().equals(id))

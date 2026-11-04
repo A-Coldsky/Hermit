@@ -13,7 +13,7 @@
 | `server.port` | `7777` | 0–65535；0 分配随机端口，主要用于测试 |
 | `sync.interval_seconds` | `300` | 正整数，周期同步；启动另有一次异步同步 |
 | `report.enabled` | `true` | 是否记录/发送运行上报；关闭不影响本地调用日志。控制台 `PUT /console/api/reports/settings` 写在 H2，覆盖这里的值 |
-| `report.interval_seconds` | `300` | 整数，最小 60；小于 60 拒绝加载。发送失败还有退避。控制台设置同样至少 60 秒，并覆盖这里的值 |
+| `report.interval_seconds` | `1800` | 整数，最小 60；小于 60 拒绝加载。发送失败还有退避。控制台设置同样至少 60 秒，并覆盖这里的值。已经写在 config.yml 或 schema 13 里的间隔保持原值 |
 | `capabilities.disabled` | `[]` | `conch.action` 列表，与数据库禁用状态取并集 |
 | `aliases` | `{}` | URL 路径 → `conch.action`；不可占用 api/console/mcp/openapi 路径 |
 | `mcp.allowed_origins` | `[]` | 额外允许访问 `/mcp` 的浏览器 Origin。没有 `Origin` 的客户端仍允许。本机源站见下方 |
@@ -30,7 +30,7 @@ reef:
   public_key: reef.pub
 server: {host: 127.0.0.1, port: 7777}
 sync: {interval_seconds: 300}
-report: {enabled: true, interval_seconds: 300}
+report: {enabled: true, interval_seconds: 1800}
 capabilities:
   disabled: [legacy_oa.submit_leave]
 aliases:
@@ -67,9 +67,9 @@ mcp:
 
 路径变量不会自动挂载文件，需要 Compose override 的只读 bind mount 或 `docker run --mount`。主密钥文件格式沿用 `data/master.key` 的 Base64 文本，不能填原始二进制密钥。
 
-`$HERMIT_HOME/reef-bootstrap.json` 存在时，入口把该文件设为 POSIX 0600，不要求 `HERMIT_REEF_URL` / `HERMIT_REEF_AGENT_TOKEN`，也不为公钥做管理员登录。缺少 `config.yml` 时只写入 server、sync 和 report（上报间隔 300 秒），不把环境变量中的 URL 或令牌复制进去。Java 启动时用引导文件覆盖 config.yml 里的 `reef.url`、`reef.token` 和 `reef.public_key`。
+`$HERMIT_HOME/reef-bootstrap.json` 存在时，入口把该文件设为 POSIX 0600，不要求 `HERMIT_REEF_URL` / `HERMIT_REEF_AGENT_TOKEN`，也不为公钥做管理员登录。缺少 `config.yml` 时只写入 server、sync 和 report（上报间隔 1800 秒），不把环境变量中的 URL 或令牌复制进去。Java 启动时用引导文件覆盖 config.yml 里的 `reef.url`、`reef.token` 和 `reef.public_key`。
 
-URL 与令牌都已设置、且没有引导文件时，行为与以前相同：仅在缺少 `config.yml` 时初始化公钥和配置。先保留现有 `reef.pub`，其次复制指定公钥，否则用管理员登录取得 `/api/admin/signing-key`。从远端引导公钥需要可信的 HTTPS 连接；后续启动不自动轮换公钥。已有配置但缺少/损坏公钥时，应恢复可信公钥，不能期待脚本重新登录修复。新生成的 `report.interval_seconds` 为 300。
+URL 与令牌都已设置、且没有引导文件时，行为与以前相同：仅在缺少 `config.yml` 时初始化公钥和配置。先保留现有 `reef.pub`，其次复制指定公钥，否则用管理员登录取得 `/api/admin/signing-key`。从远端引导公钥需要可信的 HTTPS 连接；后续启动不自动轮换公钥。已有配置但缺少/损坏公钥时，应恢复可信公钥，不能期待脚本重新登录修复。新生成的 `report.interval_seconds` 为 1800。已有 config.yml 里的间隔不会被入口改写。
 
 URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 `config.yml` 时生成一份不含 `reef` 的配置，控制台之后可以导入引导文件。已经写过 `reef` 的旧 `config.yml` 会保留，Java 继续使用其中的 URL、令牌和公钥；入口只检查 `server.host` 与 `server.port`。
 

@@ -95,7 +95,7 @@ GET  /api/{conch}/{action}?param=value
 POST /api/{conch}/{action}           JSON object body
 ```
 
-使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。空 conches/actions 集合表示不限对应维度。`conches` 里的每个名字必须是当前已加载的规则包，或仍在停用墓碑 `disabled_conches` 里的名字；未知名字创建时返回 `INVALID_INPUT`，并在 message 里列出这些名字。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。停用墓碑只放行规则包名，不放行该包上已经卸下的能力。CLI `apikey create --conches` / `--actions` 使用同一规则。
+使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。已经入库的空 `conches` 在 `ApiKeyPrincipal` 里仍表示不按包名限制，空 `actions` 仍表示不按能力名限制；本地包另由 `Invoker` 要求名字出现在 `conches` 里。新 Key 不能再靠留空得到这个范围。`conches` 里的每个名字必须是当前已加载的规则包，或仍在停用墓碑 `disabled_conches` 里的名字；未知名字创建时返回 `INVALID_INPUT`，并在 message 里列出这些名字。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。停用墓碑只放行规则包名，不放行该包上已经卸下的能力。CLI `apikey create --all` / `--conches` / `--actions` 使用同一规则。
 
 POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，有效期 24 小时，另存请求体的 SHA-256（小写十六进制，schema 10 的 `idempotency.body_sha256`）。摘要是网关读到的原始字节，不是规范化 JSON：空格或字段顺序不同算另一个请求体。相同键且摘要相同，回放第一次的响应（含旧 traceId），响应头 `Idempotent-Replayed: true`，不再执行。摘要不同返回 409 `IDEMPOTENCY_CONFLICT`，message 为 `Idempotency-Key was already used with a different request body`，不执行、不覆盖已存响应。升级前写入、摘要为 null 的行也无法证明请求体相同，重放同样是这个冲突，直到 24 小时过期。键仍不包含 API Key 身份或规则版本。
 
@@ -111,9 +111,9 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | TIMEOUT | 504 |
 | INTERNAL | 500 |
 
-缺必填、类型无法转换，或数值超出参数声明的 `minimum` / `maximum`，都返回 `INVALID_INPUT`。运行时不会把负页码或过大的 `pageSize` 夹进范围内再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。
+缺必填、类型无法转换，数值超出参数声明的 `minimum` / `maximum`，或请求里多了未声明字段，都返回 `INVALID_INPUT`。入参 JSON Schema 带 `additionalProperties: false`，运行时不会把负页码、过大的 `pageSize` 或多余字段改成合法值再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。MCP 在这次校验前去掉账号选择：直接工具去掉 `account`，能力入参已经占用 `account` 时去掉 `_account`；目录模式的 `call_capability` 把 `account` 放在能力参数外面。账号选择因此不会被当成未声明字段。
 
-本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为 `not found`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`。
+本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为 `not found`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`，message 为「没有这个工具，或当前 API Key 看不到它。」。直接模式的 hint 只建议 `tools/list`，不提到 `search_capabilities`；目录模式的 hint 可以建议 `tools/list` 和 `search_capabilities`。若调用已经进入 `Invoker` 后才发现能力被关掉，MCP 的 `code` 与 HTTP 同为 `CAPABILITY_DISABLED`，hint 说明到控制台重新启用，或从 `capabilities.disabled` 里去掉。
 
 `CONCH_DISABLED` 在墓碑还在、注册表已经没有这份包时，`message` 为「Reef 已停用该规则包，本机没有可调用的副本。」。Reef 的 Agent 清单没有停用标志：`ConchDistributionService` 的当前行只列出可分发的包，已停用、从未发布和已撤回的名字都不在清单里，Crab 也读不到 `hermit_conch_availability`。因此 Crab 只在下面这条契约下写 `disabled_conches`：本机注册表里已经有这份包、本机已订阅、来源是 OFFICIAL，并且这次同步的清单里没有这个名字。墓碑是「Reef 已停用」标记。已安装版本留在注册表里，`current` 保留，版本文件、账号和凭证都保留。HTTP 与 MCP 仍经 `Invoker` 调用，权限、能力开关、账号和凭证检查不变。墓碑存在期间，同步不下载、不重试、不重装该包，也不把它算作可重试失败。同步结果里它只出现一行 `kind=DISABLED`、`reason=DISABLED`，`version` 是本机保留的版本，名字不进入 `removed`。随后的 304 原始结果不再带这一行，控制台读取时仍按墓碑投影成一行 `DISABLED`，`removed` 里仍然没有它。`disabled_at` 只记第一次看到缺席的时间，后来的同步不刷新，也不再写第二条审计。
 
@@ -132,7 +132,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | GET | `/conches`、`/conches/{conch}` | 已加载规则/字段声明/能力状态。列表项含 `subscribed`、`needsConfiguration`、`loginPaused`、`source`、`reefDisabled`、`reefDisabledAt`、`updateAvailable`、`latestVersion`、`newRequiredCredentials`；详情同样含这三项。`updateAvailable` 为 true 表示最近一次同步的清单版本高于已安装版本，且 `min_crab_version` 允许安装。`latestVersion` 是清单版本；本地包，以及清单里已经没有的停用包，为 null。`newRequiredCredentials` 是清单要求、但当前已安装文档未要求的凭证名，已排序。目录里没有该行时这三项为 false、null、空数组。`source` 为 `LOCAL` 或 `REEF`。`reefDisabled` 为 true 时本机仍保留已安装版本并可调用，`reefDisabledAt` 是本机第一次记下停用墓碑的 ISO-8601 时间；未停用时 `reefDisabled` 为 false，`reefDisabledAt` 为 null。本地包这两项为 false 和 null |
 | GET | `/catalog` | 最近一次成功清单。`{conches, syncedAt, configured}`。未配置 Reef 时 `configured` 为 false，`conches` 为空。每项含 `conch`、`version`、`title`、`description`、`capabilityCount`、`subscribed`、`installed`、`installedVersion`、`disabled`、`localConflict`、`updateAvailable`、`latestVersion`、`newRequiredCredentials`。`disabled` 与停用墓碑一致。名字已经离开清单缓存、墓碑还在时仍补一行：`disabled` 为 true，`version` 为 null（Reef 没有在发布的版本），`installedVersion` 是本机保留的版本。`localConflict` 表示该名字已是本机本地包 |
 | POST | `/conches/{conch}/subscription` | 订阅并立即同步。返回 `{conch, subscribed: true, outcome}`。`outcome` 与同步结果里的一行相同，清单未提到该包时为 JSON `null`。与本地包重名是 409，错误码仍是 `INVALID_INPUT`。第一次订阅安装 Reef 当前版本 |
-| POST | `/conches/{conch}/update` | 按最近一次同步的清单安装更高版本，不重新拉取清单。返回 `{conch, outcome}`。成功时 `outcome.kind` 为 `INSTALLED`。未安装、未订阅、不在目录里是 404；本地包、版本不更高、清单与包不一致、`min_crab_version` 过高是 409 `INVALID_INPUT`；Reef 已停用是 409 `CONCH_DISABLED`，不下载。本机仍加载时 `message` 为「Reef 已停用该规则包，不再下载。」；墓碑还在但本机文件已经丢失、注册表没有这份包时，`message` 为「Reef 已停用该规则包，本机没有可调用的副本。」。CLI `update` 打印同样的 message。默认账号缺少新版本新增的必填凭证时 409 `NOT_CONFIGURED`，`message` 为 `missing credentials for update: a, b`（名字已排序）。这时验过签的包已经写进版本目录，`current` 和注册表不变；补上凭证后再调用一次才会切换。没有默认账号时不拦。已经声明过、只是从可选变成必填的名字，可以在更新前写入 |
+| POST | `/conches/{conch}/update` | 按最近一次同步的清单安装更高版本，不重新拉取清单。返回 `{conch, outcome}`。成功时 `outcome.kind` 为 `INSTALLED`；注册表没有这份曾经安装的包、且最新已安装 zip 仍能验签时为 `REPAIRED`，`reason` 为 `RESTORED`，`version` 是重新载入的版本，不下载，`current` 不跳到更高的清单版本。zip 验签失败则下载清单版本，成功时仍是 `INSTALLED`。未安装、未订阅、不在目录里是 404；本地包、版本不更高、清单与包不一致、`min_crab_version` 过高是 409 `INVALID_INPUT`；Reef 已停用是 409 `CONCH_DISABLED`，不下载。本机仍加载时 `message` 为「Reef 已停用该规则包，不再下载。」；墓碑还在但本机文件已经丢失、注册表没有这份包时，`message` 为「Reef 已停用该规则包，本机没有可调用的副本。」。CLI `update` 打印同样的 message。默认账号缺少新版本新增的必填凭证时 409 `NOT_CONFIGURED`，`message` 为 `missing credentials for update: a, b`（名字已排序）。这时验过签的包已经写进版本目录，`current` 和注册表不变；补上凭证后再调用一次才会切换。没有默认账号时不拦。已经声明过、只是从可选变成必填的名字，可以在更新前写入 |
 | DELETE | `/conches/{conch}/subscription` | 退订。返回 `{conch, subscribed: false}` |
 | GET / POST | `/conches/{conch}/accounts` | 列表 / `{name}` 创建。账号行见下方字段 |
 | DELETE | `/conches/{conch}/accounts/{account}` | 删除账号/凭证并使会话失效 |
@@ -141,7 +141,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | POST | `/conches/{conch}/accounts/{account}/test-login` | 测试登录。成功才解除自动登录暂停；失败、缺凭证或无法解密都不解除。不写调用记录 |
 | GET / PUT | `/conches/{conch}/config` | 配置声明/值 / `{字段:字符串}`；空字符串清除覆盖 |
 | POST | `/capabilities/{conch}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
-| GET / POST | `/apikeys` | 列表 / `{name,conches,actions,readOnly}`；新 Key 仅返回一次 plaintext。只接受这四个字段。嵌套 `scope` 或其他未知字段是 400 `INVALID_INPUT`，message 为 `unknown field: …`，不会当成空范围。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载（含本地包）或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建。不写 `conches` / `actions`，或写成空数组，仍表示全部正式包，不包含本地包 |
+| GET / POST | `/apikeys` | 列表 / 创建。创建体 `{name, readOnly, all, conches, actions}`。`name` 必填。`readOnly` 与 `all` 缺省为 false，必须是布尔。`conches`、`actions` 缺省或 `[]` 都是空集合。只接受这五个字段。嵌套 `scope` 或其他未知字段是 400 `INVALID_INPUT`，message 为 `unknown field: …`。`all` 不是 true 且两个集合都空：400，message 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`。`all: true` 再带非空 `conches` 或 `actions`：400，message 为 `all 为 true 时不能同时填写 conches 或 actions`。`all: true` 保存空集合，表示全部正式包的全部能力，不含本地包；`readOnly: true` 仍只放行只读能力。只写 `conches` 或只写 `actions` 时 `scope.all` 为 false。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载（含本地包）或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建。新 Key 仅返回一次 plaintext。响应与列表的 `scope` 都是 `{all, conches, actions, readOnly}`。`all` 为 true 表示两个集合都空（全部正式包）。早于该字段、两个集合都空的旧行仍可调用，读出来的 `all` 也是 true，不迁移 |
 | DELETE | `/apikeys/{id}` | 撤销 |
 | GET | `/calls`、`/calls/{traceId}` | `conch`、`action`、`channel`、`limit` 查询及步骤摘要。每行含 `source`（`LOCAL` 或 `REEF`，规则包来源）和 `channel`（`HTTP` 对外 OpenAPI、`MCP`、`CONSOLE`）。`channel` 省略或空白表示不筛选；其他值 400 `INVALID_INPUT`，message 为 `channel is invalid`，不回显参数值。当前只有 HTTP 与 MCP 会写入；控制台没有执行能力的路径，测试登录不写调用记录，所以没有 `CONSOLE` 行，但筛选 `CONSOLE` 仍是空列表而不是 400。schema 11 给旧行默认 `HTTP`。`limit` 省略时 100，最大 500；小于 1 或大于 500 为 400。控制台调用记录页显式传 100，概览显式传 200。CLI 没有调用记录列表命令。`action` 可以是库存的能力名，或 `conch.action`（按第一个 `.` 拆开后分别匹配）。若同时传入 `conch` 且与 `action` 里的包名不同，返回 400 `INVALID_INPUT`，不会当成空列表 |
 | GET | `/audit` | 配置审计，新的在前。参数 `conch`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
@@ -149,7 +149,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |
 | GET | `/reef` | 当前生效的 Reef 连接。`{configured, source, url, owner, tokenName, tokenPrefix, publicKeyFingerprint, instanceId, importedAt}`。`source` 为 `BOOTSTRAP`、`CONFIG`，或未配置时的 JSON `null`。`tokenPrefix` 只在令牌长于 12 个字符时返回前 12 个字符，否则为 `null`。`publicKeyFingerprint` 是公钥 X.509 SubjectPublicKeyInfo 的 SHA-256，小写十六进制。响应没有令牌明文 |
 | POST | `/reef/bootstrap` | 导入引导 JSON，正文不超过 64 KiB。校验通过后探测 `GET /agent/conches/manifest`，写入 `$HERMIT_HOME/reef-bootstrap.json`（POSIX 0600），并在本进程热更新 URL、令牌和公钥，然后触发一次同步。成功时响应与 `GET /reef` 相同。非法 JSON、未知字段或公钥不是 Ed25519 PEM 为 400 `INVALID_INPUT`。清单只有 2xx 或 304 才继续写入。401 与 403 为 400 `INVALID_INPUT`，`message` 为 `reef rejected the token`。其他 HTTP 状态（含 404、5xx，以及返回 HTML 的错误页）为 400 `INVALID_INPUT`，`message` 为 `reef url did not answer as Reef (HTTP <状态码>)`，不写引导文件，已有文件也不替换。连不上或超时为 502 `UPSTREAM_ERROR`，`message` 为 `cannot reach reef`。本机已有正式包的 `current` 指针且新公钥与当前公钥不同（含当前没有公钥）为 409 `CONFLICT`，`message` 为 `public key differs from installed conches`。同一把公钥可以改 URL 和令牌。控制台请求体仍有 1 MB 上限，超过该上限时 message 为 `request body too large` |
-| GET / PUT | `/reports/settings` | `{enabled, intervalSeconds}`。没有 schema 13 的行时读 config.yml。PUT 两个字段都必填，`intervalSeconds` 为不小于 60 的整数，未知字段 400 `INVALID_INPUT`。写入覆盖 config.yml，并立刻作用于本进程。关闭上报不清空未发送队列；再次开启后仍按原保留策略发送 |
+| GET / PUT | `/reports/settings` | `{enabled, intervalSeconds}`。没有 schema 13 的行时读 config.yml。两者都缺省时 `enabled` 为 true，`intervalSeconds` 为 1800。PUT 两个字段都必填，`intervalSeconds` 为不小于 60 的整数，未知字段 400 `INVALID_INPUT`。写入覆盖 config.yml，并立刻作用于本进程。已写入的间隔保持原值。关闭上报不清空未发送队列；再次开启后仍按原保留策略发送 |
 | GET | `/reports/preview` | 待发送批次和丢弃数。上报关闭或尚未连接 Reef 时 409 `NOT_CONFIGURED`，`message` 为「上报未开启，或尚未连接 Reef。」 |
 | POST | `/reports/send` | 手动发送，返回 attempted/accepted/status。上报关闭或尚未连接 Reef 时 409 `NOT_CONFIGURED`，`message` 与预览相同。批次为空时不发 HTTP |
 | POST | `/local-conches` | 导入。`multipart/form-data` 字段 `file`，或 `text/yaml`、`application/yaml`、`application/x-yaml` 正文。成功 `{conch, version, replaced, warnings}`。校验失败 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`。与正式包或订阅重名是 409，错误码仍是 `INVALID_INPUT` |
@@ -182,7 +182,7 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 | `id` | 行 id |
 | `at` | 时间 |
 | `actor` | `cli`、`console` 或 `sync` |
-| `action` | 动作名，例如 `CREDENTIALS_WRITTEN`、`CONFIG_PUT`、`CAPABILITY_DISABLED`、`REEF_CONCH_DISABLED`、`REEF_CONCH_ENABLED` |
+| `action` | 动作名，例如 `CREDENTIALS_WRITTEN`、`CONFIG_PUT`、`CAPABILITY_DISABLED`、`REEF_CONCH_DISABLED`、`REEF_CONCH_ENABLED`、`CONCH_REPAIR_REQUIRED` |
 | `origin` | `OFFICIAL` 或 `LOCAL`。API Key、debug、`SYNC_REQUESTED`，以及凭证声明变更，为 JSON `null`。`REEF_CONCH_DISABLED` 与 `REEF_CONCH_ENABLED` 为 `OFFICIAL` |
 | `conch` | 相关 Conch；没有则为 `null` |
 | `account` | 账号类事件的账号。配置、能力开关、API Key、debug、同步和凭证声明变更为 `null` |
@@ -194,16 +194,16 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 退订删除订阅行，从注册表移除，删除 `current`，并清掉已有墓碑。退订不新写墓碑，也不写 `REEF_CONCH_ENABLED`。账号、凭证、配置和版本目录保留。此后调用是 `NOT_FOUND`。已经进入引擎的请求仍使用当时的授权快照。
 
-`CONCH_SUBSCRIBED` 与 `CONCH_UNSUBSCRIBED` 的审计 target 是 `OFFICIAL/{conch}`，因此读取时 origin 为 `OFFICIAL`、conch 为包名、account 为空。detail 只有包名，不是 JSON，所以 `fields` 为空。响应仍不返回 detail 原文。`REEF_CONCH_DISABLED` 在本机第一次看到已订阅正式包从清单消失时由 actor `sync` 写一条，target 同样是 `OFFICIAL/{conch}`，detail 是包名。`REEF_CONCH_ENABLED` 在清单再次列出该名字、墓碑被清掉时写一条，actor、target 和 detail 相同。后来的同步不重复这两条。退订只写 `CONCH_UNSUBSCRIBED`。
+`CONCH_SUBSCRIBED` 与 `CONCH_UNSUBSCRIBED` 的审计 target 是 `OFFICIAL/{conch}`，因此读取时 origin 为 `OFFICIAL`、conch 为包名、account 为空。detail 只有包名，不是 JSON，所以 `fields` 为空。响应仍不返回 detail 原文。`REEF_CONCH_DISABLED` 在本机第一次看到已订阅正式包从清单消失时由 actor `sync` 写一条，target 同样是 `OFFICIAL/{conch}`，detail 是包名。`REEF_CONCH_ENABLED` 在清单再次列出该名字、墓碑被清掉时写一条，actor、target 和 detail 相同。后来的同步不重复这两条。退订只写 `CONCH_UNSUBSCRIBED`。`CONCH_REPAIR_REQUIRED` 在同步发现已订阅、曾经安装、但注册表没有这份包时由 actor `sync` 写一条，target 为 `OFFICIAL/{conch}`。detail 是 `{"reason":"..."}`。读取时丢弃未知键，所以 `fields` 为空；原因以同步结果的 `reason` 为准。同一原因在包重新载入或退订之前不重复写。
 
-同步结果里每个 Conch 有 `conch`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`UPDATE_AVAILABLE`、`SKIPPED_OLDER`、`SKIPPED_LOCAL`、`NOT_SUBSCRIBED`、`REJECTED`、`DISABLED` 之一。已订阅且已安装的正式包，清单版本更高时为 `UPDATE_AVAILABLE`，`version` 是本机已安装版本，不下载。清单版本更低时为 `SKIPPED_OLDER`，同样不下载、不降级。`min_crab_version` 高于本机 Crab 时为 `SKIPPED_MIN_VERSION`，不下载。清单里的名字已经是本机本地包时为 `SKIPPED_LOCAL`，不下载、不覆盖，也不写入 ETag 快照。`NOT_SUBSCRIBED` 表示清单里有这个包，但本机未订阅，因此没有下载。Reef 把已订阅且已安装的正式包从清单去掉时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是本机保留的版本，名字不出现在 `removed`。`DISABLED` 不可重试，并把它的本机版本写入 ETag 快照，因此 `current` 仍匹配时后续同步可以 304，且不会下载。随后的 304 原始结果不再带这行，控制台读取时仍按墓碑投影成一行 `DISABLED`，`removed` 里仍然没有它。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
+同步结果里每个 Conch 有 `conch`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`UPDATE_AVAILABLE`、`SKIPPED_OLDER`、`SKIPPED_LOCAL`、`NOT_SUBSCRIBED`、`REJECTED`、`DISABLED`、`REPAIR_REQUIRED`、`REPAIRED` 之一。已订阅且已安装的正式包，清单版本更高时为 `UPDATE_AVAILABLE`，`version` 是本机已安装版本，不下载。清单版本更低时为 `SKIPPED_OLDER`，同样不下载、不降级。`min_crab_version` 高于本机 Crab 时为 `SKIPPED_MIN_VERSION`，不下载。清单里的名字已经是本机本地包时为 `SKIPPED_LOCAL`，不下载、不覆盖，也不写入 ETag 快照。`NOT_SUBSCRIBED` 表示清单里有这个包，但本机未订阅，因此没有下载。已订阅且 `installed_versions` 有记录、注册表没有这份正式包时，这一行为 `REPAIR_REQUIRED`，不下载。`version` 是上次安装且能解析的版本，不是清单上的更高版本：指针丢失、版本无法解析或路径不安全时取安装记录里最新且能解析的版本，否则取 `current` 上能解析的版本。`reason` 为 `POINTER_MISSING`、`VERSION_INVALID`、`PACKAGE_MISSING`、`NOT_LOADED`、`ZIP_TOO_LARGE`、`PATH_UNSAFE`、`MANIFEST_ENTRY_MISMATCH`，或 `PackageReason` 的名字。`REPAIR_REQUIRED` 可重试，发现它的那次同步不记 ETag，`notModified` 为 false。`GET /console/api/sync` 经 `visibleStatus` 读取：记下的 304 即使没有 Conch 行，仍会补上 `REPAIR_REQUIRED`，这时响应里的 `notModified` 可以仍为 true，不能单凭它显示「已是最新」。包已重新载入时去掉过期的修复行。停用墓碑不另补修复行。`REPAIRED` 只出现在手动更新重新载入本机 zip 时，定时同步不会产生它，也不可重试。Reef 把已订阅且已安装的正式包从清单去掉时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是本机保留的版本，名字不出现在 `removed`。`DISABLED` 不可重试，并把它的本机版本写入 ETag 快照，因此 `current` 仍匹配时后续同步可以 304，且不会下载。随后的 304 原始结果不再带这行，控制台读取时仍按墓碑投影成一行 `DISABLED`，`removed` 里仍然没有它。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
 
 
 清单再次列出该名字时，Crab 清掉停用墓碑并写一条 `REEF_CONCH_ENABLED`，然后按普通更新处理。版本与已安装版本相同则 `SKIPPED_SAME`，不重新下载。更高版本记 `UPDATE_AVAILABLE`，不自动安装。更低版本记 `SKIPPED_OLDER`。账号、凭证和配置在停用期间不删除。本地包不写墓碑，同步也不覆盖、不删除它们。
 
-手动更新使用最近一次成功同步留下的目录缓存，不在更新请求里再拉清单。它先下载并验签，再用验过的包计算新增必填凭证。目录里的 `requiredCredentials` 若存在且与验过的包不一致，拒绝安装，reason 为 `MANIFEST_ENTRY_MISMATCH`。旧缓存没有这个字段时不当成不一致。默认账号是 `AccountStore.resolve(OFFICIAL, conch, empty)`。没有默认账号就不检查凭证。某个名字在保险库里有字段（密文打不开也算有）即视为已填。缺的名字会让这次更新停在版本目录里，不改 `current`。凭证写入接受已安装文档声明的字段，也接受一份已暂存、且重新验签通过的更高版本所声明的字段；两边都声明时用已安装的那份做形状检查。控制台「写完后必填都在」仍只看已安装文档。第二次更新再次验签，默认账号已经具备每个新增必填名时才切换。成功切换写一条 `CONCH_UPDATED`，actor 为 `console` 或 `cli`，target 为 `OFFICIAL/{conch}`，detail 为 `{"from","to"}`。上报开启时另入队一条 reason 为 `MANUAL_UPDATE` 的版本变化。`pull_count` 在这次下载成功时加 1，包括随后因缺凭证而没有切换的那次。
+手动更新使用最近一次成功同步留下的目录缓存，不在更新请求里再拉清单。注册表里仍有这份包、且清单版本更高时，它先下载并验签，再用验过的包计算新增必填凭证。注册表没有这份曾经安装的包时，先用本机记录里最新一份 zip 验签：通过则重新载入并写回 `current`，返回的 `outcome.kind` 为 `REPAIRED`。这次不写 `CONCH_UPDATED`，版本没有变化，也不入队 `MANUAL_UPDATE`。不通过才下载清单版本；下载成功写 `CONCH_UPDATED`，只有记下的版本和清单版本不同才入队 `MANUAL_UPDATE`。同版本因缺少新增必填凭证而停住时不覆盖已记录的 zip，避免稍后的重新载入绕过凭证检查。目录里的 `requiredCredentials` 若存在且与验过的包不一致，拒绝安装，reason 为 `MANIFEST_ENTRY_MISMATCH`。旧缓存没有这个字段时不当成不一致。默认账号是 `AccountStore.resolve(OFFICIAL, conch, empty)`。没有默认账号就不检查凭证。某个名字在保险库里有字段（密文打不开也算有）即视为已填。缺的名字会让这次更新停在版本目录里，不改 `current`。凭证写入接受已安装文档声明的字段，也接受一份已暂存、且重新验签通过的更高版本所声明的字段；两边都声明时用已安装的那份做形状检查。控制台「写完后必填都在」仍只看已安装文档。第二次更新再次验签，默认账号已经具备每个新增必填名时才切换。成功切换写一条 `CONCH_UPDATED`，actor 为 `console` 或 `cli`，target 为 `OFFICIAL/{conch}`，detail 为 `{"from","to"}`。上报开启时另入队一条 reason 为 `MANUAL_UPDATE` 的版本变化。`pull_count` 在这次下载成功时加 1，包括随后因缺凭证而没有切换的那次。
 
-`RULE_MISMATCH` 不再切换版本，也不再写 `pinned_rollbacks`。schema 12 删掉这张表。成功的正式调用仍写入 `version_success`，版本保留用来保护最近一次成功的版本。`mismatch_streak` 表还在，不再写入。`rollback_queue` 只在手动更新成功、且上报开启时写入。
+`RULE_MISMATCH` 不再切换版本，也不再写 `pinned_rollbacks`。schema 12 删掉这张表。成功的正式调用仍写入 `version_success`，版本保留用来保护最近一次成功的版本。`mismatch_streak` 表还在，不再写入。`rollback_queue` 只在手动更新把版本换成另一个版本、且上报开启时写入。重新载入同一份已验签的 zip 不写这条。
 
 ## CLI
 
@@ -226,14 +226,14 @@ config get <conch> [key]
 config set <conch> <key> <value>
 config unset <conch> <key>
 audit list [--conch NAME] [--account NAME] [--limit N] [--page N]
-apikey create <name> [--conches a,b] [--actions conch.action] [--read-only]
+apikey create <name> [--all] [--conches a,b] [--actions conch.action] [--read-only]
 apikey list
 apikey revoke <id>
 local import <file>
 local reload
 local delete <conch>
 local export <conch> [--out file]
-mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
+mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
 普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。不带参数，或参数只有 `--help` / `-h`，把用法打到 stdout，退出 0。未知命令，以及子命令参数不够，仍把同一段用法打到 stderr，退出 1。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
@@ -244,7 +244,7 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 `config get` 只读取已经加载的规则包。注册表里没有这个名字时，stderr 打印 `本机没有这个规则包`，名字符合 `^[a-z][a-z0-9_]{1,63}$` 时再接 `: 名字`，退出 1，不会把空配置当成成功。已加载但还没有保存过配置时没有输出，退出 0。指定的 key 尚未设置时仍是 stderr `config key is not set`，退出 1。
 
-`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为 `unknown option`，不会建出全范围 Key。不传 `--conches` / `--actions` 与控制台不写这两个字段相同：全部正式包，不含本地包。`apikey list` 在 id、前缀和名字之后按库存原样打印 `conches=`、`actions=`、`read-only=true|false`。多个名字按字典序用逗号连接，空集合打印 `-`，不另写一个「全部」标记。已吊销的行末再加 `revoked`。明文只在 `create` 时打印一次，列表只有前 8 个字符的前缀。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
+`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为 `unknown option`，不会建出全范围 Key。必须带 `--all`，或非空的 `--conches` / `--actions`。`--all` 是全部正式包的全部能力，不含本地包，可与 `--read-only` 同用；再带 `--conches` 或 `--actions` 则退出 1，stderr 为 `all 为 true 时不能同时填写 conches 或 actions`。什么都不带时退出 1，stderr 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`，不写库。`--from-env` 只属于 `credential set`。用在 `apikey create`（即使同时有 `--all`）、`apikey list` 或 `apikey revoke` 上会打印用法并退出 1，不创建 Key，也不读取该变量的值。`apikey list` 在 id、前缀和名字之后打印 `all=true|false`。`all=true` 表示两个集合都空：`--all` 新建的 Key，以及早于该字段、库存里没有 `all` 的空范围旧行。这一行不打印 `conches=` 和 `actions=`，不用 `-` 表示全部。`all=false` 时再打印 `conches=`、`actions=`，多个名字按字典序用逗号连接，空的那一维打印 `-`。然后始终打印 `read-only=true|false`。已吊销的行末再加 `revoked`。明文只在 `create` 时打印一次，列表只有前 8 个字符的前缀。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
 
 ## MCP
 
@@ -257,12 +257,13 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 - 非 `initialize` 的 POST，以及 GET、DELETE：带了 `MCP-Protocol-Version` 且不是 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` 时返回 HTTP 400。不带该头时不拒绝，继续使用该会话在 `initialize` 里协商到的版本。多个版本头同样拒绝。已支持但和会话不一致的版本头放行，不改写会话版本。
 - `initialize` 不看 `MCP-Protocol-Version` 头。请求体里的 `protocolVersion` 不在支持列表时，响应仍返回一个支持的版本（当前 `2025-11-25`）。是否改为直接拒绝只由 `McpTransportPolicy.NEGOTIATE_UNKNOWN_PROTOCOL` 决定，当前为协商。
 
-- 可见能力不超过 40 个时，直接工具名 `conch__action`。本地包的直接工具说明、资源说明、`list_systems` 里该包的说明，以及 `describe_capability` 的说明，都以 `[本地] ` 开头。使用指南里也会标明这是本地包。空 `conches` 的 Key 仍能看见这些工具；调用时 `Invoker` 返回 403 `FORBIDDEN`。显式写出包名的 Key 可以调用。
+- 可见能力不超过 40 个时，直接工具名 `conch__action`。本地包的直接工具说明、资源说明、`list_systems` 里该包的说明，以及 `describe_capability` 的说明，都以 `[本地] ` 开头。使用指南里也会标明这是本地包。`all: true` 以及旧的空 `conches` Key 仍能看见这些工具；调用时 `Invoker` 返回 403 `FORBIDDEN`。显式写出包名的 Key 可以调用。
 - 超过 40 个时，提供 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个目录工具。
 - 目录模式调用非只读能力需要支持 elicitation 且保持 SSE，明确确认后执行；直接模式没有同样的服务端确认步骤，客户端应依据工具注解交互。
 - guide resource 为 `hermit://conches/{conch}/guide`，由说明、参数、示例生成。
 - 规则更新/能力开关变化推送列表变更通知。
-- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。
+- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。这个字段在校验前拿掉。直接工具的 `inputSchema` 与能力入参一样设置 `additionalProperties: false`，并声明账号选择，所以账号不是多余字段。
+- `tools/call` 不传 `Idempotency-Key`。同键回放只在 HTTP POST。
 
 协议级失败是 JSON-RPC error，不使用能力 API 的 success/error envelope。`error.code` 是 JSON-RPC 整数；`error.data.code` 是稳定字符串，`error.data.hint` 是下一步。HTTP 401 的 body 同样是这个 JSON-RPC 错误。
 
@@ -277,11 +278,11 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 | `Origin` 不在允许范围 | 403 | -32003 | `ORIGIN_REJECTED`。不创建会话。没有 `Origin` 仍允许 |
 | 非 `initialize` 的 `MCP-Protocol-Version` 不受支持 | 400 | -32600 | `UNSUPPORTED_PROTOCOL`。去掉该头，或改成上面四个版本之一 |
 
-工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。
+工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,traceId,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`CAPABILITY_DISABLED`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。`traceId` 与这次响应的 `X-Hermit-Trace` 相同；若这次调用写了调用记录，记录里也是这个编号。协议错误的 `error.data` 同样带 `traceId`，并与该头相同。成功的 JSON-RPC 响应也写 `X-Hermit-Trace`，不把 `traceId` 放进业务结果。
 
 成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。直接工具的 `outputSchema` 只列 Conch `output` 的字段名和说明，不带类型约束，因为模板渲染不会把提取值转换成声明类型；目录工具的 `outputSchema` 带类型。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
 
-stdio 是对运行中 Crab 的桥接，不单独启动执行器。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr。HTTP 401 时先把 Crab 返回的 JSON-RPC 错误写到 stdout，再在 stderr 打印 `authentication failed`，退出码 1。响应没有可解析的 `error` 对象时，stdout 仍写一条 `jsonrpc: 2.0`、`error.code` 为 `-32001`、message 为 `authentication failed` 的对象，`id` 取自本次请求；然后退出：
+stdio 是对运行中 Crab 的桥接，不单独启动执行器。`mcp-stdio --help` 把默认 URL、环境变量 `HERMIT_API_KEY` 和 `--account` 打到 stdout，退出 0，不要求已经设置 Key，也不连接 Crab。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr。未设置 Key、URL 不是 http/https、Crab 没有在监听时，stderr 分别是中文的「未设置环境变量 HERMIT_API_KEY…」「URL 不合法…」「Crab 没有运行…」。未设置 Key 与非法 URL 退出 1，连不上退出 2。HTTP 401 时先把 Crab 返回的 JSON-RPC 错误写到 stdout，再在 stderr 打印 `authentication failed`，退出码 1。鉴权发生在读 body 之前，响应里的 `id` 为 null；stdio 若能解析出这次请求的 id，就填回去，已有非空 id 时不改。响应没有可解析的 `error` 对象时，stdout 仍写一条 `jsonrpc: 2.0`、`error.code` 为 `-32001`、message 为 `authentication failed` 的对象，`id` 取自本次请求；然后退出：
 
 ```bash
 export HERMIT_API_KEY='调用端安全保存的APIKey'

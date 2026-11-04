@@ -55,6 +55,7 @@ public record Action(
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", Collections.unmodifiableMap(properties));
+        schema.put("additionalProperties", false);
         if (!required.isEmpty()) {
             schema.put("required", List.copyOf(required));
         }

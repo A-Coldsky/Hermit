@@ -407,7 +407,8 @@ class Phase1AcceptanceTest {
     }
 
     private String createApiKey(String base) throws Exception {
-        JsonNode created = console(base, "POST", "/console/api/apikeys", "{\"name\":\"caller\"}");
+        JsonNode created = console(base, "POST", "/console/api/apikeys", "{\"name\":\"caller\",\"all\":true}");
+        assertThat(created.path("data").path("scope").path("all").asBoolean()).isTrue();
         String plaintext = created.path("data").path("plaintext").asText();
         assertThat(plaintext).startsWith("hk_");
         return plaintext;

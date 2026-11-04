@@ -3,8 +3,8 @@ package dev.hermit.crab.sync;
 import java.util.Optional;
 
 /**
- * A manual update that installed the catalog version. {@code fromVersion} is the version that
- * was current before the switch. {@code toVersion} is the version now installed.
+ * A manual update. {@code fromVersion} and {@code toVersion} are set when the catalog version
+ * replaced a different installed version. Reloading a verified zip leaves both null.
  */
 public record UpdateResult(
         ConchOutcome outcome,

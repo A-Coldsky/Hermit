@@ -52,6 +52,8 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   REEF_CONCH_DISABLED: { text: 'Reef 停用（失效）', tone: 'warning' },
   REEF_CONCH_ENABLED: { text: 'Reef 重新启用', tone: 'success' },
   CONCH_UPDATED: { text: '更新规则包', tone: 'success' },
+  REEF_BOOTSTRAPPED: { text: '连接 Reef', tone: 'success' },
+  REPORT_SETTINGS_CHANGED: { text: '修改上报设置', tone: 'info' },
 }
 
 export const syncReasonLabels: Record<string, string> = {
@@ -84,4 +86,13 @@ export const actorLabels: Record<string, string> = {
   console: '控制台',
   sync: '同步',
   migration: '升级迁移',
+}
+
+export function reefImportErrorText(message: string): string | null {
+  if (message === 'reef rejected the token') return 'Reef 拒绝了这把令牌：可能已被吊销、所属用户被禁用，或 JSON 被改过。请在 Reef 重新生成'
+  if (message === 'cannot reach reef') return '连不上 Reef：确认 JSON 里的地址能从本机访问，Reef 正在运行'
+  if (message === 'public key differs from installed conches')
+    return '这个 Reef 的签名公钥和本机已装的正式规则包不一致。要换到另一个 Reef，先取消订阅全部正式规则包'
+  if (message.startsWith('reef url did not answer as Reef')) return 'JSON 里的地址不是 Reef：请检查地址是否填错（端口、路径）'
+  return null
 }

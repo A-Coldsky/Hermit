@@ -8,13 +8,48 @@ import StatCard from '@shared/components/StatCard.vue'
 import TraceId from '@shared/components/TraceId.vue'
 import { ApiError } from '@shared/http'
 import { errorCodeLabels, millis, notifyError } from '@shared/format'
-import { api, type ReportBatch } from '../api'
+import { api, type ReportBatch, type ReportSettings } from '../api'
 
 const loading = ref(true)
 const sending = ref(false)
 const configured = ref(true)
 const batch = ref<ReportBatch | null>(null)
 const dropped = ref(0)
+const settings = ref<ReportSettings | null>(null)
+const draft = ref<ReportSettings>({ enabled: true, intervalSeconds: 300 })
+const savingSettings = ref(false)
+const settingsChanged = computed(
+  () =>
+    !!settings.value &&
+    (settings.value.enabled !== draft.value.enabled || settings.value.intervalSeconds !== draft.value.intervalSeconds),
+)
+
+async function loadSettings() {
+  try {
+    settings.value = await api.reportSettings()
+    draft.value = { ...settings.value }
+  } catch (error) {
+    notifyError(error)
+  }
+}
+
+async function saveSettings() {
+  savingSettings.value = true
+  try {
+    settings.value = await api.updateReportSettings({ ...draft.value })
+    draft.value = { ...settings.value }
+    ElMessage.success(settings.value.enabled ? `上报已开启，每 ${minutes(settings.value.intervalSeconds)} 发送一次` : '上报已关闭，不再记录和发送')
+    await load()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    savingSettings.value = false
+  }
+}
+
+function minutes(seconds: number): string {
+  return seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`
+}
 
 const callTotal = computed(() => batch.value?.counts.reduce((n, c) => n + c.success + c.failure, 0) ?? 0)
 const empty = computed(
@@ -58,19 +93,52 @@ async function send() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadSettings()
+})
 </script>
 
 <template>
   <div v-loading="loading" class="reports">
-    <PageHeader title="上报预览" description="下次发给 Reef 的内容。只包含计数、耗时和失败摘要，不包含请求参数、返回数据或凭证">
+    <PageHeader title="上报" description="上报开关与下次发给 Reef 的内容。只包含计数、耗时和失败摘要，不包含请求参数、返回数据或凭证">
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!configured || empty" @click="send">立即上报</el-button>
     </PageHeader>
 
+    <div class="hm-card settings" data-test="report-settings">
+      <div class="hm-card-title"><span>上报设置</span></div>
+      <div v-if="settings" class="settings-row">
+        <el-switch v-model="draft.enabled" active-text="上报到 Reef" data-test="report-enabled" />
+        <div class="interval">
+          <span class="hm-muted">每</span>
+          <el-input-number
+            v-model="draft.intervalSeconds"
+            :min="60"
+            :step="60"
+            step-strictly
+            :disabled="!draft.enabled"
+            controls-position="right"
+            data-test="report-interval"
+          />
+          <span class="hm-muted">秒发送一次</span>
+        </div>
+        <el-button type="primary" :disabled="!settingsChanged" :loading="savingSettings" data-test="report-save" @click="saveSettings">保存</el-button>
+      </div>
+      <p class="hm-muted hint">
+        关闭后不再记录也不发送，本机调用记录不受影响，立即生效。调用计数先在内存里累计、约 30 秒写一次本地库，Crab 异常退出可能丢最近 30 秒的计数。
+      </p>
+    </div>
+
     <div v-if="!configured" class="hm-card off">
-      <strong>没有启用上报</strong>
-      <span class="hm-muted">在 config.yml 里配置 reef.url 并设置 report.enabled: true 后重启 Crab。</span>
+      <template v-if="settings && !settings.enabled">
+        <strong>上报已关闭</strong>
+        <span class="hm-muted">需要时在上面打开。</span>
+      </template>
+      <template v-else>
+        <strong>还没有连接 Reef</strong>
+        <span class="hm-muted">在<router-link to="/reef">连接 Reef</router-link>导入初始化 JSON 后开始上报。</span>
+      </template>
     </div>
 
     <template v-else-if="batch">
@@ -173,5 +241,27 @@ onMounted(load)
   gap: 8px;
   padding: 48px 20px;
   text-align: center;
+}
+.settings {
+  margin-bottom: 16px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.interval {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings .hint {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 </style>

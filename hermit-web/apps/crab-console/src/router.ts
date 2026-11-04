@@ -16,6 +16,7 @@ export const router = createRouter({
         { path: 'calls', name: 'calls', component: () => import('./views/CallsView.vue') },
         { path: 'audit', name: 'audit', component: () => import('./views/AuditView.vue') },
         { path: 'reports', name: 'reports', component: () => import('./views/ReportsView.vue') },
+        { path: 'reef', name: 'reef', component: () => import('./views/ReefView.vue') },
         { path: 'shells', redirect: '/conches' },
         { path: 'shells/:conch', redirect: (to) => `/conches/${encodeURIComponent(String(to.params.conch))}` },
         {

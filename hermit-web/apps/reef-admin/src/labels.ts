@@ -75,8 +75,10 @@ export function isoDaysAgo(days: number): string {
 
 export const versionChangeReasons: Record<string, string> = {
   MANUAL_UPDATE: '使用者手动更新',
-  RULE_MISMATCH: '旧版本的自动回退',
+  RULE_MISMATCH: '规则失配（旧版 Crab 记录，现在失配只上报不切换版本）',
 }
+
+export const pullCountHint = '只计 Crab 成功下载的已发布包，不按实例去重'
 
 export const roleLabels: Record<string, string> = {
   ADMIN: '管理员',

@@ -165,12 +165,13 @@ describe('本地规则包', () => {
     expect(buttons(wrapper, '取消订阅')).toHaveLength(0)
   })
 
-  it('Reef 停用后详情提示失效但仍可调用，列表带「已失效」', async () => {
+  it('Reef 停用后详情提示停用但仍可调用，列表带「Reef 已停用」', async () => {
     crab.conch.mockResolvedValue({ ...detail('REEF'), reefDisabled: true, reefDisabledAt: '2026-10-30T00:00:00Z' })
     const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
     await flushPromises()
     const alert = page.find('[data-test="reef-disabled"]')
-    expect(alert.text()).toContain('已失效')
+    expect(alert.text()).toContain('Reef 已停用')
+    expect(alert.text()).not.toContain('失效')
     expect(alert.text()).toContain('仍可正常调用')
     expect(alert.text()).toContain('不能再更新')
 
@@ -181,8 +182,19 @@ describe('本地规则包', () => {
     })
     const list = await mountPage(ConchesView)
     await flushPromises()
-    expect(list.find('.reef-off').text()).toBe('已失效')
+    expect(list.find('.reef-off').text()).toBe('Reef 已停用')
     expect(list.text()).toContain('可用：可以通过 OpenAPI 和 MCP 调用')
+  })
+
+  it('有新版本时详情横幅用提示色，更新按钮是默认尺寸', async () => {
+    crab.conch.mockResolvedValue({ ...detail('REEF'), updateAvailable: true, latestVersion: '1.1.0', newRequiredCredentials: [] })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    const banner = page.findAll('.el-alert').find((a) => a.text().includes('Reef 有新版本 v1.1.0'))!
+    expect(banner.classes()).toContain('el-alert--warning')
+    const button = banner.get('.update-btn')
+    expect(button.text()).toContain('更新到 v1.1.0')
+    expect(button.classes()).not.toContain('el-button--small')
   })
 
   it('Reef 包详情只有取消订阅', async () => {

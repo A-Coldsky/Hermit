@@ -28,9 +28,9 @@ Reef 的 GET 页面（不是 `/api/**`、`/agent/**`、`/assets/**`）一律返�
 
 Crab 在回环连接上，`GET /console/**` 除 `/console/api/**` 与 `/console/assets/**` 外返回同一份 `index.html`（包括 `/console/audit` 和未登记的深链）。非回环仍是 403。`/console/api/**` 需要控制台头：没有头是 403，有头但路径不存在是 404 `NOT_FOUND` 信封。`GET /console/shells` 与 `GET /console/shells/**` 302 到 `/console/conches`（固定地址，不保留后面的名字）。页面加载后，未知路径显示「页面不存在」；前端把 `shells` 与 `shells/:conch` 转到 `/conches`。其它方法打到未登记的 `/console/**` 仍是 JSON `NOT_FOUND`。未匹配的网关路径（不是 `/api/{conch}/{action}` 或已登记别名）同样是 404 信封。`traceId` 同时出现在响应体和 `X-Hermit-Trace`。
 
-Reef 的查询参数、路径变量或请求头无法转换成声明类型，或缺少必填项时，`GlobalExceptionHandler` 返回 400 `INVALID_INPUT`。`message` 为 `invalid input: 字段名`（多个字段用逗号连接），不回显原始参数值，也不把该异常记成 500。例如 `GET /api/admin/audit?size=abc` 的 message 是 `invalid input: size`。数字越界仍由各接口自己返回 400，message 为 `invalid input`。上传缺少 `file` 仍是 422。
+Reef 的查询参数、路径变量或请求头无法转换成声明类型，或缺少必填项时，`GlobalExceptionHandler` 返回 400 `INVALID_INPUT`。`message` 为 `字段 字段名 无效`（多个字段按字典序用逗号连接，例如 `字段 page, size 无效`），不回显原始参数值，也不把该异常记成 500。例如 `GET /api/admin/audit?size=abc` 的 message 是 `字段 size 无效`。数字越界、空原因等由各接口自己返回 400，message 为 `输入无效`。Bean 校验失败（如超长口令）message 为 `请求校验未通过`。请求体读不成目标类型（坏 JSON、无法识别的枚举值）message 为 `请求体无法解析`，不回显正文。路径不接受该方法时 405，错误码仍是 `INVALID_INPUT`，message 为 `不支持该请求方法`。上传缺少 `file`、空文件或坏 ZIP 仍是 422，message 为 `输入无效`。YAML 解析失败仍是 422，message 为解析器原文；语义校验失败仍是 422，message 为 `输入无效`，明细在 `data`。
 
-Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常，响应正文仍只有 `INTERNAL`。
+Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常。响应信封仍带 `traceId`。默认 message：401 `UNAUTHORIZED` 为 `未登录或登录已过期`，403 `FORBIDDEN` 为 `没有权限执行这个操作`，404 `NOT_FOUND` 为 `资源不存在`，500 `INTERNAL` 为 `服务器内部错误`。登录失败仍是 `authentication failed`，不走这句默认文案。
 
 ## Reef 管理与分发
 
@@ -40,24 +40,24 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | --- | --- | --- |
 | POST | `/login` | `{username,password}`；失败锁定窗口 15 分钟，阈值 5 次 |
 | GET | `/me` | `{username, role}`。`role` 为 `ADMIN` 或 `USER` |
-| POST | `/me/password` | `{oldPassword, newPassword}`。旧口令不对是 400，message 为 `old password does not match`。`Cache-Control: no-store`。改口令不使已发出的 JWT 失效 |
+| POST | `/me/password` | `{oldPassword, newPassword}`。旧口令不对是 400，message 为 `当前密码不正确`。`Cache-Control: no-store`。改口令不使已发出的 JWT 失效 |
 | GET | `/users` | 仅 `ADMIN`。`[{username, role, disabled, createdAt, tokenCount}]`。`tokenCount` 是未吊销的库内令牌数；该用户若是当前配置令牌的归属人（id 最小的 `ADMIN`）且配置了令牌，再加 1。不返回口令或令牌明文 |
-| POST | `/users` | 仅 `ADMIN`。`{username, password, role}`。用户名非空、最长 128，口令规则与登录相同。重复用户名 409，message 为 `username already exists`。不支持删除，只能禁用。`Cache-Control: no-store` |
-| PATCH | `/users/{username}` | 仅 `ADMIN`。`{role?, disabled?}`，至少给一个。不能取消最后一个启用中的 `ADMIN`，409，message 为 `at least one enabled administrator is required`。不能改自己的角色，也不能禁用自己，409，message 为 `cannot change your own role or disabled flag`。自己就是最后一个启用中的管理员时，先返回前一条。空对象 400 `invalid input`。不存在 404 |
-| POST | `/users/{username}/password` | 仅 `ADMIN`。`{password}`，重置别人的口令。重置自己是 400，message 为 `cannot reset your own password`。`Cache-Control: no-store`。审计 `USER_PASSWORD_RESET`，detail 只有用户名 |
+| POST | `/users` | 仅 `ADMIN`。`{username, password, role}`。用户名非空、最长 128，口令规则与登录相同。重复用户名 409，message 为 `用户名已存在`。不支持删除，只能禁用。`Cache-Control: no-store` |
+| PATCH | `/users/{username}` | 仅 `ADMIN`。`{role?, disabled?}`，至少给一个。不能取消最后一个启用中的 `ADMIN`，409，message 为 `至少要保留一个启用中的管理员`。不能改自己的角色，也不能禁用自己，409，message 为 `不能修改自己的角色或禁用自己`。自己就是最后一个启用中的管理员时，先返回前一条。空对象 400，message 为 `输入无效`。不存在 404，message 为 `资源不存在` |
+| POST | `/users/{username}/password` | 仅 `ADMIN`。`{password}`，重置别人的口令。重置自己是 400，message 为 `不能重置自己的密码，请用右上角「修改密码」`。`Cache-Control: no-store`。审计 `USER_PASSWORD_RESET`，detail 只有用户名 |
 | GET | `/tokens` | 自己的令牌。`ADMIN` 加 `?all=true` 看全部；`USER` 即使带 `all=true` 也只看自己。项为 `{id, owner, name, prefix, createdAt, lastUsedAt, revokedAt, source}`。`source` 为 `DATABASE` 或 `CONFIG`。配置令牌是只读项：`id`、`prefix` 和时间为 null，`name` 为 `HERMIT_REEF_AGENT_TOKEN`，不能删除。已吊销的库内令牌仍列出。响应和审计都不含明文 |
 | POST | `/tokens` | `{name}`，非空，最长 64。`USER` 和 `ADMIN` 都可以给自己签发。返回 `{token, secret, publicKey}`。`secret` 是 `hat_` 加 32 个随机字节的 base64url（无填充），只出现在这一次响应里。库里只存 SHA-256 的小写十六进制。`publicKey` 与 `GET /signing-key` 的 PEM 相同。`Cache-Control: no-store`。审计 `AGENT_TOKEN_CREATED`，detail 含 id、name、prefix、owner |
-| DELETE | `/tokens/{id}` | 归属人或 `ADMIN` 吊销。重复吊销仍是 200，只在第一次写 `AGENT_TOKEN_REVOKED`。别人的令牌 403 `forbidden`。不存在 404。配置令牌没有 id，不能从这里吊销 |
+| DELETE | `/tokens/{id}` | 归属人或 `ADMIN` 吊销。重复吊销仍是 200，只在第一次写 `AGENT_TOKEN_REVOKED`。别人的令牌 403，message 为 `没有权限执行这个操作`。不存在 404，message 为 `资源不存在`。配置令牌没有 id，不能从这里吊销 |
 | GET | `/crabs` | `[{owner, instanceId, tokenName, firstSeenAt, lastSeenAt, crabVersion}]`。`USER` 只看自己的。配置令牌记下的行 `tokenName` 为 null。同一（令牌，实例）在进程内 60 秒最多写一次 `last_used_at` 和 `last_seen_at`；重启后重新计。`crabVersion` 在实例行上最长 32 个字符，上报原文更长时截断；失败报告仍保留最多 64 个字符 |
 | GET | `/signing-key` | `data.publicKey` PEM；不提供私钥 |
-| POST | `/conches` | multipart 字段 `file`，YAML 或仅含 conch.yaml 的 ZIP；上传及解包 YAML 限 1 MiB |
+| POST | `/conches` | multipart 字段 `file`，YAML 或仅含 conch.yaml 的 ZIP；上传及解包 YAML 限 1 MiB。同一规则包版本已存在时 409 `CONFLICT`，message 为 `该规则包版本已存在`。版本不高于该包已有的最高版本时 409 `CONFLICT`，message 为 `版本必须高于已有的最高版本` |
 | GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null。两项都带 `pullCount`（long，JSON 数字）：该规则包全部版本成功下载次数之和，含尚未发布的版本 |
 | GET | `/conches/{conch}/versions` | 版本列表，每项含 `warningCount`、`warnings` 校验警告明细，以及 `pullCount`（该版本成功下载次数，long） |
 | GET | `/conches/{conch}/versions/{version}/yaml` | YAML 原文 |
-| GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `invalid input`。少于两个版本时 400 `INVALID_INPUT`，message 为 `at least two versions are required to diff`。名字不合法仍是 404 |
-| POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。必须严格高于当前已发布版本；没有当前版本时可以发布。不高于时 409，`message` 为 `published version must be higher than the current version`。已经发布过的版本仍是 409，`message` 为 `only an uploaded version can be published`。Conch 已停用时 409，`message` 为 `conch is disabled`（先于版本比较） |
-| POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `conch is already disabled` |
-| POST | `/conches/{conch}/enable` | `{reason}`，规则与停用相同。未停用时 409，`message` 为 `conch is not disabled`。启用原因只写入审计 |
+| GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `版本对比需要同时提供 from 和 to`。少于两个版本时 400 `INVALID_INPUT`，message 为 `至少需要两个版本才能对比`。名字不合法仍是 404 |
+| POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。必须严格高于当前已发布版本；没有当前版本时可以发布。不高于时 409，`message` 为 `发布版本必须高于当前已发布版本`。已经发布过的版本仍是 409，`message` 为 `只能发布已上传、尚未发布的版本`。Conch 已停用时 409，`message` 为 `规则包已停用`（先于版本比较） |
+| POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `规则包已经停用` |
+| POST | `/conches/{conch}/enable` | `{reason}`，规则与停用相同。未停用时 409，`message` 为 `规则包尚未停用`。启用原因只写入审计 |
 | GET | `/tide/summary` | conch/from/to/bucket |
 | GET | `/tide/failures` | conch/version/action/from/to |
 | GET | `/tide/compare` | conch/versions（逗号分隔版本） |
@@ -75,7 +75,7 @@ Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400
 
 配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。协议须为 `http` 或 `https`，空字符串不推送；其他协议或没有协议时进程拒绝启动。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 
-停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布。坏掉的发布用一个更高版本替换，不再提供管理员回滚。`POST /api/admin/conches/{conch}/rollback` 没有对应接口。页面的 GET 兜底匹配所有路径，所以这个 POST 是 405 `INVALID_INPUT`；对同一路径发 GET 则是 404 `NOT_FOUND`。拉取次数不进入清单，下载成功不会改变 ETag。
+停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布。坏掉的发布用一个更高版本替换，不再提供管理员回滚。`POST /api/admin/conches/{conch}/rollback` 没有对应接口。页面的 GET 兜底匹配所有路径，所以这个 POST 是 405 `INVALID_INPUT`，message 为 `不支持该请求方法`；对同一路径发 GET 则是 404 `NOT_FOUND`。拉取次数不进入清单，下载成功不会改变 ETag。
 
 Agent 路由：
 

@@ -267,7 +267,9 @@ public final class ConchSync {
                 throw new UpdateException(404, ErrorCode.NOT_FOUND, SubscriptionException.NOT_SUBSCRIBED);
             }
             if (disabledConches.contains(conch)) {
-                throw new UpdateException(409, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE);
+                // Tombstone means Reef stopped distributing. Do not download, whether or not
+                // the local files are still loaded.
+                throw new UpdateException(409, ErrorCode.CONCH_DISABLED, disabledUpdateMessage(conch));
             }
             ReefClient.CatalogEntry entry = cached(conch).orElseThrow(() ->
                     new UpdateException(404, ErrorCode.NOT_FOUND, SubscriptionException.NOT_IN_CATALOG));
@@ -333,6 +335,14 @@ public final class ConchSync {
                     "{\"from\":\"" + installedText + "\",\"to\":\"" + entry.version() + "\"}");
             return new UpdateResult(activated.outcome(), activated.change(), installedText, entry.version());
         }
+    }
+
+    /** Caller holds the sync lock. A missing registry entry means the local copy is gone. */
+    private String disabledUpdateMessage(String conch) {
+        if (registry.find(conch).isEmpty()) {
+            return DisabledConches.CALL_MESSAGE;
+        }
+        return DisabledConches.UPDATE_MESSAGE;
     }
 
     /**

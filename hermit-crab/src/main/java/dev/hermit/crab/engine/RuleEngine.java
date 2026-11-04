@@ -393,13 +393,7 @@ public final class RuleEngine {
                         outcome.status(),
                         outcome.extractCount()));
                 // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
-                if (!auth && lostSession(outcome)) {
-                    throw new SessionLost();
-                }
-                if (!auth && outcome.status() != null && outcome.status() == 400) {
-                    throw new StepFailure(
-                            ErrorCode.INVALID_INPUT, UPSTREAM_INPUT_REJECTED, i, step.type(), logs);
-                }
+                rejectCapabilityStatus(auth, outcome, i, step.type(), logs);
             } catch (RuleProblem ex) {
                 ErrorCode code = ex.code;
                 String summary = ex.summary;
@@ -552,6 +546,33 @@ public final class RuleEngine {
             return uri;
         } catch (IllegalArgumentException ex) {
             throw new RuleProblem(ErrorCode.INTERNAL, "base_url 无效", null, null, null);
+        }
+    }
+
+    /**
+     * 能力请求在提取之前处理最终状态。400、401/403 和登录重定向保持原映射。
+     * 其它非 2xx 不再进入 extract/assert，避免把 404 页面抽成空列表。
+     */
+    private static void rejectCapabilityStatus(
+            boolean auth,
+            Outcome outcome,
+            int index,
+            String type,
+            List<StepLog> logs
+    ) {
+        if (auth || outcome.status() == null) {
+            return;
+        }
+        if (lostSession(outcome)) {
+            throw new SessionLost();
+        }
+        int status = outcome.status();
+        if (status == 400) {
+            throw new StepFailure(ErrorCode.INVALID_INPUT, UPSTREAM_INPUT_REJECTED, index, type, logs);
+        }
+        if (status < 200 || status >= 300) {
+            throw new StepFailure(
+                    ErrorCode.UPSTREAM_ERROR, HttpCalls.upstreamStatus(status), index, type, logs);
         }
     }
 

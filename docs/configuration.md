@@ -17,7 +17,7 @@
 | `capabilities.disabled` | `[]` | `conch.action` 列表，与数据库禁用状态取并集 |
 | `aliases` | `{}` | URL 路径 → `conch.action`；不可占用 api/console/mcp/openapi 路径 |
 | `mcp.allowed_origins` | `[]` | 额外允许访问 `/mcp` 的浏览器 Origin。没有 `Origin` 的客户端仍允许。本机源站见下方 |
-| `engine.capability_timeout_seconds` | `60` | 正整数；当前不能可靠限制慢速响应的总时间，见审计 A03 |
+| `engine.capability_timeout_seconds` | `60` | 正整数。能力执行的总 deadline，到点返回 `TIMEOUT`。未写步骤 `timeout_ms` 时，上游空闲读也停在这个 deadline，不再先用 15 秒。规则写了更短的 `timeout_ms` 时，空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。持续慢速输出会在 deadline 被取消。TCP 连接一直挂起没有单独回归 |
 | `engine.session_idle_minutes` | `10` | 空闲超过此阈值且配置 alive_check 时检测会话 |
 | `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；只有测试登录成功才解除，失败不会清掉暂停 |
 

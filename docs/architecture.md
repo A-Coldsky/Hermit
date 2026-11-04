@@ -84,7 +84,7 @@ sequenceDiagram
   I-->>C: API envelope / MCP result
 ```
 
-同一 `(origin, conch, account)` 由公平锁串行执行；不同账号可并行。执行能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。
+同一 `(origin, conch, account)` 由公平锁串行执行；不同账号可并行。执行能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。其它非 2xx 在提取前是 `UPSTREAM_ERROR`，message 带状态码。未写 `timeout_ms` 的空闲读停在能力 deadline，到点是 `TIMEOUT`；步骤自己的 `timeout_ms` 更短时是 `UPSTREAM_ERROR`「步骤超时」。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。
 
 ## 页面路由
 

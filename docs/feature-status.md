@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Conch 模型/严格解析/语义校验/版本差异 | 已实现 | common parse/validate；对应测试齐全，部分步骤错误在运行时检查 |
 | 模板、内置过滤器、输入 Schema | 已实现 | TemplateEngine/InputPreparer；不提供完整最终输出 Schema 验证 |
-| HTTP 请求、登录、alive_check、Cookie 会话 | 已实现，有缺陷 | RuleEngine/HttpCalls/SessionManager。能力请求的上游 HTTP 400 为 `INVALID_INPUT`；401/403 与登录重定向为会话失效（幂等重放一次，否则 `SESSION_EXPIRED`），不计入回滚。选择器失配等仍是 `RULE_MISMATCH`，不会切换已安装版本。慢速响应的总 deadline 仍不可靠 |
+| HTTP 请求、登录、alive_check、Cookie 会话 | 已实现 | RuleEngine/HttpCalls/SessionManager。能力请求的上游 HTTP 400 为 `INVALID_INPUT`；401/403 与登录重定向为会话失效（幂等重放一次，否则 `SESSION_EXPIRED`），不计入回滚。其它非 2xx（含非登录页的 302、404、409）在提取前是 `UPSTREAM_ERROR`，message 为「上游状态码 N」，不会抽成空列表。2xx 上的状态断言不一致仍是 `RULE_MISMATCH`，不会切换已安装版本。登录步骤仍走 assert，失败是 `AUTH_FAILED`。未写 `timeout_ms` 时读超时等于剩余能力 deadline；写了则到点为 `UPSTREAM_ERROR`「步骤超时」。持续慢速输出在 deadline 返回 `TIMEOUT`。TCP 连接挂起没有单独回归 |
 | CSS/XPath/JSONPath/regex 提取 | 已实现 | Extractors + EngineUnitTest/LegacyOaEngineTest |
 | assert/set/script | 已实现 | StepRunner/ScriptStep。断言失败给出下一步中文说明，不以「assert 未通过」开头，也不写入凭证或 Cookie 值。脚本 Java 隔离和时间/结果限制有测试，无进程级内存隔离 |
 | 多账号/默认账号/凭证/配置 | 已实现 | ConchAdmin + store；credentials 加密只写。主密钥文件缺失且已有密文时拒绝启动，不另造新密钥；密钥对不上时账号 `credentialsUnreadable`，调用 `NOT_CONFIGURED` |
@@ -122,3 +122,5 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 2026-11-04 合入 origin/main（#63 Reef 管理页面）后，引导探测只接受清单的 2xx 与 304。以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 43、hermit-reef 150、hermit-crab 261、hermit-it 1，失败/错误/跳过均为 0；Vitest 94（16 个文件），`vue-tsc` 通过。Java 小计 455，连同 Vitest 合计 549。这是当前整棵树的计数。401 与 403 为 400 `reef rejected the token`。404、500、302，以及返回 HTML 的 404，为 400 `reef url did not answer as Reef (HTTP n)`，不写 `reef-bootstrap.json`，已有文件也不替换。201 与 304 可以导入。未改 hermit-reef。未在浏览器点选，未启动 MySQL 或 Compose。
 
 2026-11-04 Crab 控制台「连接 Reef」与上报设置页面：新增 Vitest 4 项（导入前检查、提交与连接信息、替换确认与令牌被拒提示、关闭上报），合计 Vitest 98（17 个文件），`vue-tsc` 与两端构建通过。只改前端与文档。未在浏览器点选，文件选择只测了粘贴路径。
+
+2026-11-04 能力请求的非 2xx 与步骤读超时，以 JDK 17.0.20.1 执行 `./mvnw -pl hermit-crab -am test -Dhermit.web.skip=true` 通过。Surefire：hermit-common 43、hermit-crab 266，失败/错误为 0；hermit-crab 跳过 1（`ConsoleUiTest` 因跳过前端资源，classpath 没有控制台 `index.html`）。未跑 hermit-reef、hermit-it 和 Vitest。没有新增错误码。能力请求遇到 404、409 或非登录页 302 时为 `UPSTREAM_ERROR`，message 为「上游状态码 N」，不再抽成空列表。400、401、403 与登录重定向保持原映射；2xx 上的状态断言不一致仍是 `RULE_MISMATCH`；登录步骤仍走 assert。未写 `timeout_ms` 时，能力超时 60 秒、上游 40 秒后返回会成功；写了 `timeout_ms: 15000` 时约 15 秒返回 `UPSTREAM_ERROR`「步骤超时」。`capability_timeout` 2 秒仍是 `TIMEOUT`。持续慢速输出仍在 deadline 返回 `TIMEOUT`。TCP 连接一直挂起没有单独回归。未在浏览器点选，未启动 MySQL 或 Compose。

@@ -81,9 +81,9 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 | set | 设置后续步骤/输出使用的变量 |
 | script | Rhino JavaScript，对 vars 运算并 return 结果；可指定 into |
 
-request 的 path 与 url 必须二选一，form 与 json 互斥。默认 GET、UTF-8、15,000ms、不跟随重定向；响应最多 5 MiB。解码优先 Content-Type charset，其次 HTML meta，再使用步骤 encoding。开启重定向最多 5 跳，只允许同源；Cookie 由账号客户端管理，规则不能自行覆盖 Cookie 头。
+request 的 path 与 url 必须二选一，form 与 json 互斥。默认 GET、UTF-8、不跟随重定向；响应最多 5 MiB。未写 `timeout_ms` 时，空闲读超时等于剩余的能力 deadline（`engine.capability_timeout_seconds`，默认 60 秒），不再固定 15 秒，到点是 `TIMEOUT`。写了 `timeout_ms` 时使用该毫秒数，且不超过剩余 deadline；更短的空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。解码优先 Content-Type charset，其次 HTML meta，再使用步骤 encoding。开启重定向最多 5 跳，只允许同源；Cookie 由账号客户端管理，规则不能自行覆盖 Cookie 头。跟完仍停在 3xx（例如超过 5 跳，或跨源停住）时，能力请求按该状态返回 `UPSTREAM_ERROR`，不会把跳转响应当成成功。
 
-能力请求返回 HTTP 400 时，引擎以 `INVALID_INPUT` 结束，不把响应交给后续 extract/assert，也不切换已安装版本。HTTP 401 与 403 视为会话失效，处理方式与重定向到登录页相同，因此读操作不会在会话失效时返回成功的空列表。登录步骤里的这些状态码仍交给 assert。`cookie_exists` 失败时，登录结果说明「登录未建立会话：上游没有发回会话 Cookie」，并提示核对用户名和密码；凭证正确时重新测试登录，或检查登录页是否已改版。`contains`、`not_contains`、`header_exists`、`not_redirected_to` 和 `status` 失败时同样是下一步说明，不以「assert 未通过」开头，文案不包含断言原文、凭证或 Cookie。`status` 写出期望和实际状态码。其它未期望的状态（例如期望 200 实际 404）仍是 `RULE_MISMATCH`。失配不会把 Crab 切回旧版本。响应体不会写入错误文案。
+能力请求返回 HTTP 400 时，引擎以 `INVALID_INPUT` 结束，不把响应交给后续 extract/assert，也不切换已安装版本。HTTP 401 与 403 视为会话失效，处理方式与重定向到登录页相同，因此读操作不会在会话失效时返回成功的空列表。其它非 2xx（含不是登录页的 302、404、409，以及 500 及以上）同样在提取之前结束，错误码是 `UPSTREAM_ERROR`，message 为「上游状态码 N」。没有状态断言的读取（例如 `list_todo`）遇到 404 或 409 时，不会把错误页抽成空列表再返回成功。登录步骤不走上述映射，这些状态码仍交给 assert，失败是 `AUTH_FAILED`。`cookie_exists` 失败时，登录结果说明「登录未建立会话：上游没有发回会话 Cookie」，并提示核对用户名和密码；凭证正确时重新测试登录，或检查登录页是否已改版。`contains`、`not_contains`、`header_exists`、`not_redirected_to` 和 `status` 失败时同样是下一步说明，不以「assert 未通过」开头，文案不包含断言原文、凭证或 Cookie。`status` 写出期望和实际状态码。能力请求里它只看得到 2xx，期望与实际不一致（例如期望 201、实际 200）仍是 `RULE_MISMATCH`。失配不会把 Crab 切回旧版本。响应体不会写入错误文案。故意读取 4xx 正文的能力请求不再成立。
 
 ```yaml
 steps:
@@ -96,7 +96,7 @@ steps:
   - assert: {status: 200}
 ```
 
-CSS/各提取器的详细参数看 [Extractors](../hermit-crab/src/main/java/dev/hermit/crab/engine/Extractors.java) 与 `LegacyOaEngineTest`；request 失败会形成步骤索引、类型和错误摘要。总 deadline 目前存在慢速响应漏洞，不能作为可靠的硬时间边界。
+CSS/各提取器的详细参数看 [Extractors](../hermit-crab/src/main/java/dev/hermit/crab/engine/Extractors.java) 与 `LegacyOaEngineTest`；request 失败会形成步骤索引、类型和错误摘要。持续慢速输出会在能力 deadline 被取消并返回 `TIMEOUT`。TCP 连接一直挂起没有单独回归。
 
 ## 模板、输出与脚本
 

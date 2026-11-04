@@ -276,22 +276,95 @@ class LegacyOaEngineTest {
     }
 
     @Test
-    void unexpected404RemainsRuleMismatch() throws Exception {
+    void listTodo404And409AreUpstreamErrorsNotEmptyLists() throws Exception {
         try (Running running = Running.start()) {
-            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("status_conch", "missing", """
-                    - request: { method: GET, path: /missing-page }
-                    - assert: { status: 200 }
+            running.fixture.todoStatus(404);
+            ExecutionResult missing = running.list("alice", EngineTestSupport.PASSWORD, Map.of());
+            assertUpstreamStatus(missing, 404);
+            assertThat(running.fixture.count("GET", "/todo/list.aspx")).isEqualTo(1);
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
+        }
+        try (Running running = Running.start()) {
+            running.fixture.todoStatus(409);
+            ExecutionResult conflict = running.list("alice", EngineTestSupport.PASSWORD, Map.of());
+            assertUpstreamStatus(conflict, 409);
+            assertThat(running.fixture.count("GET", "/todo/list.aspx")).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void nonLoginRedirectOnListTodoIsUpstreamError() throws Exception {
+        try (Running running = Running.start()) {
+            running.fixture.todoRedirect("/not-login");
+            ExecutionResult result = running.list("alice", EngineTestSupport.PASSWORD, Map.of());
+            assertUpstreamStatus(result, 302);
+            assertThat(result.error().code()).isNotEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(running.fixture.count("GET", "/todo/list.aspx")).isEqualTo(1);
+            assertThat(running.fixture.count("GET", "/not-login")).isZero();
+            assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void statusAssertOn2xxRemainsRuleMismatch() throws Exception {
+        try (Running running = Running.start()) {
+            running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("status_conch", "created", """
+                    - request: { method: GET, path: /echo.aspx }
+                    - assert: { status: 201 }
                     """, true)));
-            ExecutionResult result = running.execute("status_conch", "missing", "alice");
+            ExecutionResult result = running.execute("status_conch", "created", "alice");
+            assertThat(result.success()).isFalse();
+            assertThat(result.data()).isNull();
             assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
             assertThat(result.error().summary())
-                    .contains("404")
+                    .contains("201")
                     .contains("200")
                     .contains("请核对")
                     .doesNotStartWith("assert 未通过")
                     .doesNotContain("assert 未通过")
                     .doesNotContain(EngineTestSupport.PASSWORD);
             assertThat(result.error().failedStepType()).isEqualTo("assert");
+        }
+    }
+
+    @Test
+    void login404StillReachesTheAssert() throws Exception {
+        try (Running running = Running.start()) {
+            running.registry.put(ConchParser.parse("""
+                    conch: login_status
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    title: 标题
+                    description: 说明
+                    credentials:
+                      username: { type: text, required: true }
+                      password: { type: secret, required: true }
+                    auth:
+                      steps:
+                        - request: { method: GET, path: /missing-page }
+                        - assert: { status: 200 }
+                    actions:
+                      ping:
+                        title: 能力
+                        description: 说明
+                        output:
+                          value: { type: string, description: 结果, value: ok }
+                        examples:
+                          - input: {}
+                            output: { value: ok }
+                        notes: 注意
+                        steps:
+                          - request: { method: GET, path: /echo.aspx }
+                    """));
+            ExecutionResult result = running.execute("login_status", "ping", "alice");
+            assertThat(result.success()).isFalse();
+            assertThat(result.data()).isNull();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            assertThat(result.error().summary()).contains("404").contains("200");
+            assertThat(result.error().failedStepType()).isEqualTo("assert");
+            assertThat(running.fixture.count("GET", "/missing-page")).isEqualTo(1);
+            assertThat(running.fixture.count("GET", "/echo.aspx")).isZero();
         }
     }
 
@@ -451,7 +524,8 @@ class LegacyOaEngineTest {
                     - assert: { status: 302 }
                     """, true)));
             ExecutionResult result = running.execute("away_conch", "away", "alice");
-            assertThat(result.success()).isTrue();
+            assertUpstreamStatus(result, 302);
+            assertThat(result.error().failedStepType()).isEqualTo("request");
             assertThat(running.fixture.count("GET", "/away")).isEqualTo(1);
             assertThat(result.durationMillis()).isLessThan(1_500);
         }
@@ -464,7 +538,7 @@ class LegacyOaEngineTest {
                     - request: { method: GET, path: /loop, follow_redirects: true }
                     """, true)));
             ExecutionResult result = running.execute("loop_conch", "loop", "alice");
-            assertThat(result.success()).isTrue();
+            assertUpstreamStatus(result, 302);
             assertThat(running.fixture.count("GET", "/loop")).isEqualTo(6);
 
             running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("once_conch", "once", """
@@ -662,6 +736,16 @@ class LegacyOaEngineTest {
             assertThat(running.fixture.count("POST", "/login.aspx")).isEqualTo(1);
             assertThat(running.fixture.count("GET", "/todo/list.aspx")).isEqualTo(1);
         }
+    }
+
+    private static void assertUpstreamStatus(ExecutionResult result, int status) {
+        assertThat(result.success()).isFalse();
+        assertThat(result.data()).isNull();
+        assertThat(result.error().code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
+        assertThat(result.error().message()).isEqualTo(HttpCalls.upstreamStatus(status));
+        assertThat(result.error().message()).doesNotContain("empty-list-marker");
+        assertThat(result.error().failedStepType()).isEqualTo("request");
+        assertThat(result.stepLogs()).extracting(StepLog::type).containsExactly("request");
     }
 
     private static void installTaskConch(Running running) {

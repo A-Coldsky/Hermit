@@ -1,6 +1,7 @@
 import { flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { deferred, mountPage } from './helpers'
+import { setRole } from '../apps/reef-admin/src/auth'
 
 const reef = vi.hoisted(() => ({
   conches: vi.fn(),
@@ -33,6 +34,7 @@ const reefConch = {
 }
 
 beforeEach(() => {
+  setRole('ADMIN')
   vi.clearAllMocks()
 })
 

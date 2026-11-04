@@ -1,8 +1,9 @@
 import { flushPromises } from '@vue/test-utils'
 import { ElMessageBox } from 'element-plus'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConchVersion } from '../apps/reef-admin/src/api'
 import { mountPage } from './helpers'
+import { setRole } from '../apps/reef-admin/src/auth'
 
 const reef = vi.hoisted(() => ({ diff: vi.fn(), publish: vi.fn() }))
 
@@ -25,6 +26,8 @@ function version(overrides: Partial<ConchVersion>): ConchVersion {
     ...overrides,
   }
 }
+
+beforeEach(() => setRole('ADMIN'))
 
 afterEach(() => {
   document.body.innerHTML = ''

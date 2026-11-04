@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isAdmin } from '../auth'
 import { CircleClose, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, reactive, ref, watch } from 'vue'
@@ -112,7 +113,7 @@ watch(() => props.conch, load, { immediate: true })
         <el-tag v-if="detail?.disabled" type="danger" effect="light" round class="off">已停用</el-tag>
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
-      <template v-if="detail">
+      <template v-if="detail && isAdmin">
         <el-button v-if="detail.disabled" type="primary" plain :icon="VideoPlay" @click="openAvailability">启用</el-button>
         <el-button v-else type="danger" plain :icon="CircleClose" @click="openAvailability">停用</el-button>
       </template>

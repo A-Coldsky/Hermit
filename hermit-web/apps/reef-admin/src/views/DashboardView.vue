@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isAdmin } from '../auth'
 import { Bell, Box, CircleCheckFilled, DataLine, Refresh, Upload, Warning } from '@element-plus/icons-vue'
 import { computed, onMounted, ref } from 'vue'
 import BarChart from '@shared/components/BarChart.vue'
@@ -7,7 +8,7 @@ import StatCard from '@shared/components/StatCard.vue'
 import { notifyError, percent, relativeTime } from '@shared/format'
 import { api, type Alert, type RollbackEvent, type ConchSummary, type TideSummary } from '../api'
 import { refreshOpenAlerts } from '../alerts'
-import { alertKindLabels, isoDaysAgo, versionChangeReasons } from '../labels'
+import { alertKindLabels, crabLabel, isoDaysAgo, versionChangeReasons } from '../labels'
 import { toBars, totals } from '../tide'
 
 const loading = ref(true)
@@ -49,7 +50,7 @@ onMounted(load)
   <div v-loading="loading">
     <PageHeader title="概览" description="最近 7 天的规则包发布与调用情况">
       <el-button :icon="Refresh" @click="load">刷新</el-button>
-      <el-button type="primary" :icon="Upload" @click="$router.push('/conches/upload')">上传规则包</el-button>
+      <el-button v-if="isAdmin" type="primary" :icon="Upload" @click="$router.push('/conches/upload')">上传规则包</el-button>
     </PageHeader>
 
     <div class="hm-grid cols-4">
@@ -121,7 +122,9 @@ onMounted(load)
         <el-table-column label="原因" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">{{ versionChangeReasons[row.reason] ?? row.reason }}</template>
         </el-table-column>
-        <el-table-column prop="instanceId" label="Crab 实例" min-width="140" show-overflow-tooltip />
+        <el-table-column label="Crab" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">{{ crabLabel(row) }}</template>
+        </el-table-column>
         <el-table-column label="时间" width="120">
           <template #default="{ row }">{{ relativeTime(row.occurredAt) }}</template>
         </el-table-column>

@@ -43,6 +43,8 @@ public final class Invoker {
     private static final Logger LOG = Logger.getLogger(Invoker.class.getName());
     private static final int NAME_LIMIT = 256;
     public static final String IDEMPOTENCY_CONFLICT = "Idempotency-Key was already used with a different request body";
+    /** A loaded capability turned off locally. Distinct from a missing action ({@code NOT_FOUND}). */
+    public static final String CAPABILITY_DISABLED_MESSAGE = "该能力已在本机停用，调用前需要重新启用。";
     /** Power of two. Distinct keys share a stripe; stripes are not removed after a request. */
     static final int IDEMPOTENCY_STRIPES = 64;
 
@@ -154,8 +156,11 @@ public final class Invoker {
             return done(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE, null);
         }
         Action capability = doc == null ? null : doc.actions().get(action);
-        if (doc == null || capability == null || disabled.disabled(conch, action)) {
+        if (doc == null || capability == null) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
+        }
+        if (disabled.disabled(conch, action)) {
+            return done(traceId, ErrorCode.CAPABILITY_DISABLED, CAPABILITY_DISABLED_MESSAGE, null);
         }
         Origin origin = registry.origin(conch);
         if (origin == null) {

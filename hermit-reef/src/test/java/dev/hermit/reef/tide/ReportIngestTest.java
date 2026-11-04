@@ -144,7 +144,7 @@ class ReportIngestTest {
             JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
             assertThat(body.get("success").asBoolean()).isFalse();
             assertThat(body.get("error").get("code").asText()).isEqualTo("INVALID_INPUT");
-            assertThat(body.get("error").get("message").asText()).isEqualTo("invalid input");
+            assertThat(body.get("error").get("message").asText()).isEqualTo("输入无效");
             assertThat(result.getResponse().getContentAsString()).doesNotContain("bob");
             assertThat(storedRows()).isZero();
         }

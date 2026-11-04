@@ -55,8 +55,8 @@ public class GlobalExceptionHandler {
             RequestRejectedException.class
     })
     public ResponseEntity<ApiResponse<Void>> invalidInput(Exception ex, HttpServletRequest request) {
-        // 校验失败、坏 JSON、被防火墙拒绝的头，异常消息里可能有请求内容，不能写进日志或响应。
-        return fail(HttpStatus.BAD_REQUEST, ReefErrorCode.INVALID_INPUT, ReefErrorCode.INVALID_INPUT.message(), request);
+        // 异常消息里可能有请求内容，不能写进日志或响应。只按类型给固定短句。
+        return fail(HttpStatus.BAD_REQUEST, ReefErrorCode.INVALID_INPUT, invalidInputMessage(ex), request);
     }
 
     // 类型转换失败和缺参的异常文本里带有原始值，响应只写字段名，不能记成 500。
@@ -75,7 +75,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<ApiResponse<Void>> methodNotAllowed(HttpRequestMethodNotSupportedException ex,
             HttpServletRequest request) {
-        return fail(HttpStatus.METHOD_NOT_ALLOWED, ReefErrorCode.INVALID_INPUT, ReefErrorCode.INVALID_INPUT.message(),
+        return fail(HttpStatus.METHOD_NOT_ALLOWED, ReefErrorCode.INVALID_INPUT, ReefErrorCode.METHOD_NOT_ALLOWED,
                 request);
     }
 
@@ -90,9 +90,19 @@ public class GlobalExceptionHandler {
         return fail(HttpStatus.INTERNAL_SERVER_ERROR, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message(), request);
     }
 
+    static String invalidInputMessage(Exception ex) {
+        if (ex instanceof MethodArgumentNotValidException) {
+            return ReefErrorCode.VALIDATION_FAILED;
+        }
+        if (ex instanceof HttpMessageNotReadableException) {
+            return ReefErrorCode.UNREADABLE_BODY;
+        }
+        return ReefErrorCode.INVALID_INPUT.message();
+    }
+
     static String invalidParameterMessage(Exception ex) {
         if (ex instanceof MethodArgumentNotValidException) {
-            return ReefErrorCode.INVALID_INPUT.message();
+            return ReefErrorCode.VALIDATION_FAILED;
         }
         if (ex instanceof MethodArgumentTypeMismatchException mismatch) {
             return named(mismatch.getName());
@@ -178,7 +188,7 @@ public class GlobalExceptionHandler {
         if (safe == null) {
             return ReefErrorCode.INVALID_INPUT.message();
         }
-        return ReefErrorCode.INVALID_INPUT.message() + ": " + safe;
+        return fieldMessage(safe);
     }
 
     private static String namedAll(List<String> fields) {
@@ -203,7 +213,11 @@ public class GlobalExceptionHandler {
             }
             joined.append(field);
         }
-        return ReefErrorCode.INVALID_INPUT.message() + ": " + joined;
+        return fieldMessage(joined.toString());
+    }
+
+    private static String fieldMessage(String fields) {
+        return "字段 " + fields + " 无效";
     }
 
     private static String safeField(String field) {

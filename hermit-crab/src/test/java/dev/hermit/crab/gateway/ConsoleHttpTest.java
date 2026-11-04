@@ -1,6 +1,7 @@
 package dev.hermit.crab.gateway;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 
 import dev.hermit.crab.config.CrabConfig;
@@ -58,8 +59,12 @@ class ConsoleHttpTest {
             TestServer.Reply preview = server.console("GET", "/console/api/reports/preview", null, true);
             assertThat(preview.status()).isEqualTo(409);
             assertThat(preview.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(preview.json().path("error").path("message").asText())
+                    .isEqualTo(ConsoleApi.REPORTS_NOT_CONFIGURED);
             TestServer.Reply send = server.console("POST", "/console/api/reports/send", "{}", true);
             assertThat(send.status()).isEqualTo(409);
+            assertThat(send.json().path("error").path("message").asText())
+                    .isEqualTo(ConsoleApi.REPORTS_NOT_CONFIGURED);
 
             TestServer.Reply enabled = server.console(
                     "POST", "/console/api/capabilities/legacy_oa/list_todo/enable", "{}", true);
@@ -68,7 +73,14 @@ class ConsoleHttpTest {
             TestServer.Reply hidden = server.call(
                     "GET", "/api/legacy_oa/list_todo", server.apiKey.plaintext(), "alice", null, null);
             assertThat(hidden.status()).isEqualTo(404);
-            assertThat(hidden.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(hidden.json().path("error").path("code").asText()).isEqualTo("CAPABILITY_DISABLED");
+            assertThat(hidden.json().path("error").path("message").asText())
+                    .isEqualTo("该能力已在本机停用，调用前需要重新启用。");
+            TestServer.Reply missingAction = server.call(
+                    "GET", "/api/legacy_oa/no_such_action", server.apiKey.plaintext(), "alice", null, null);
+            assertThat(missingAction.status()).isEqualTo(404);
+            assertThat(missingAction.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(missingAction.json().path("error").path("message").asText()).isEqualTo("not found");
 
             TestServer.Reply debug = server.console("POST", "/console/api/debug", "{\"enabled\":true}", true);
             assertThat(debug.status()).isEqualTo(200);
@@ -92,8 +104,31 @@ class ConsoleHttpTest {
             TestServer.Reply missing = server.call(
                     "POST", "/api/legacy_oa/save_note", server.apiKey.plaintext(), "alice", null, "{\"text\":\"hello\"}");
             assertThat(missing.status()).isEqualTo(404);
+            assertThat(missing.json().path("error").path("code").asText()).isEqualTo("CAPABILITY_DISABLED");
+            assertThat(missing.json().path("error").path("message").asText())
+                    .isEqualTo("该能力已在本机停用，调用前需要重新启用。");
             TestServer.Reply openapi = server.call("GET", "/openapi.json", null, null, null, null);
             assertThat(openapi.body()).doesNotContain("save_note");
+        }
+    }
+
+    @Test
+    void unloadedDisabledConchExplainsInChineseAndStaysNotFoundWhenTheTombstoneIsAbsent() throws Exception {
+        try (TestServer server = TestServer.open(temp.resolve("gone"), PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
+            server.configureAccount("alice");
+            server.runtime.registry().remove("legacy_oa");
+            TestServer.Reply absent = server.call(
+                    "GET", "/api/legacy_oa/list_todo", server.apiKey.plaintext(), "alice", null, null);
+            assertThat(absent.status()).isEqualTo(404);
+            assertThat(absent.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+
+            server.runtime.disabledConches().mark("legacy_oa", "1.0.0", Instant.parse("2026-10-30T00:00:00Z"));
+            TestServer.Reply blocked = server.call(
+                    "GET", "/api/legacy_oa/list_todo", server.apiKey.plaintext(), "alice", null, null);
+            assertThat(blocked.status()).isEqualTo(409);
+            assertThat(blocked.json().path("error").path("code").asText()).isEqualTo("CONCH_DISABLED");
+            assertThat(blocked.json().path("error").path("message").asText())
+                    .isEqualTo("Reef 已停用该规则包，本机没有可调用的副本。");
         }
     }
 }

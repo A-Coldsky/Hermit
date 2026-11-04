@@ -81,11 +81,11 @@ URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 
 
 | 配置 | 默认/说明 |
 | --- | --- |
-| `hermit.reef.data-dir` / `HERMIT_REEF_DATA_DIR` | `./reef-data`，存数据库文件、包与密钥 |
+| `hermit.reef.data-dir` / `HERMIT_REEF_DATA_DIR` | `./reef-data`，存数据库文件、包与密钥。未配置时用这个默认值。空串或纯空白在创建 `db`、`conches`、`keys` 之前拒绝启动，message 为 `hermit.reef.data-dir must not be blank`，不会把空串解析成进程工作目录 |
 | `hermit.reef.agent-token` / `HERMIT_REEF_AGENT_TOKEN` | 默认空。空表示没有配置令牌；库里还有未吊销令牌时，Agent 请求用那些令牌。两者都没有时启动打一条警告，并拒绝所有 `/agent/**` |
 | `HERMIT_REEF_ADMIN_USER` / `HERMIT_REEF_ADMIN_PASSWORD` | 首次空库创建管理员；已有管理员不重设口令 |
 | `hermit.reef.jwt-ttl` | `8h`，JWT 有 60 秒时钟容差 |
-| `hermit.reef.latest-crab-version` / `crab-download-url` | 默认空；提供版本提示，不自动下载/升级 Crab |
+| `hermit.reef.latest-crab-version` / `crab-download-url` | 默认空。空的 `latest-crab-version` 表示不提示升级。非空时必须是 semver（`MAJOR.MINOR.PATCH`，可带预发布后缀，不接受 `+` build metadata），否则拒绝启动并点名 `hermit.reef.latest-crab-version`。只提供版本提示，不自动下载或升级 Crab |
 | `hermit.reef.report-retention-days` | `90`，用于 `hermit_failure_reports` / `hermit_rollback_events` 的清理 |
 | `hermit.reef.retention-cron` / `HERMIT_REEF_RETENTION_CRON` | `0 0 3 * * *`。Spring 六段 cron（含秒），时区固定 UTC，默认每天 03:00。空白或无法解析的表达式拒绝启动。手动触发见 `POST /api/admin/retention/purge` |
 | `logging.pattern.level` | `%5p [%X{traceId}]`。请求处理期间 MDC 的 `traceId` 会出现在每条日志上，与响应里的值相同 |
@@ -94,6 +94,10 @@ URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 
 | `spring.flyway.table` / `SPRING_FLYWAY_TABLE` | `hermit_flyway_schema_history`。Compose 的 Reef 服务写了同一环境变量，MySQL 与默认 H2 共用这张历史表 |
 | `server.port` | Spring Boot 默认 8080 |
 | `server.compression.*` | 默认开启，仅对 ≥ 2KB 的 HTML/CSS/JS/SVG 做 gzip，接口 JSON 不压缩；Compose 中 Nginx 另有 gzip。Crab 由 Javalin 默认 gzip（≥ 1500 字节） |
+
+`hermit.reef.data-dir` 的空白检查发生在创建子目录之前，与 `ReefProperties` 使用同一句 `hermit.reef.data-dir must not be blank`。未设置该配置时仍是 `./reef-data`。
+
+`latest-crab-version` 为空白时，`GET /agent/version` 不带升级提示。非空时按规则包同一套 semver 解析：`1.2.3` 与 `1.2.3-alpha.1` 可以通过，`abc`、`1.2`、`v1.0.0` 和 `1.2.3+build` 会拒绝启动。
 
 配置令牌归 id 最小的 `ADMIN`（含已禁用的账号，但该账号已禁用时这个令牌不再通过）。把它降成 `USER` 之后，归属改到下一个 id 最小的 `ADMIN`。明文只在 `POST /api/admin/tokens` 的响应里出现一次，丢失后吊销再签发。Reef 保存 SHA-256 十六进制，`token_prefix` 是明文的前 12 个字符。同一（令牌，实例）60 秒内只更新一次 `last_used_at` 和 `hermit_crab_instances.last_seen_at`，节流表在进程内存里，重启后重新计。实例上的 `crab_version` 最长 32 个字符，上报里更长的版本只在这一列截断。
 
@@ -111,12 +115,14 @@ Tide 配置位于 `hermit.reef.tide`：
 | `baseline-window-days` | 7 |
 | `surge-window-minutes` / `surge-min-count` | 15 / 10 |
 | `quiet-hours` / `dedup-hours` | 24 / 6 |
-| `webhook-url` | 空，设置后发送告警通知 |
+| `webhook-url` | 空。空字符串不推送。非空时协议必须是 `http` 或 `https`；`ftp://` 或没有协议的值拒绝启动，异常信息点名 `hermit.reef.tide.webhook-url` |
 | `evaluate-cron` | `0 */5 * * * *`，每 5 分钟评估 |
 
 启动时校验这些数。`new-version-min-calls`、`baseline-window-days`、`surge-window-minutes`、`surge-min-count`、`dedup-hours` 必须 ≥ 1，写成 0 或负数会拒绝启动，异常信息带对应配置键。`regression-delta`、`no-baseline-failure-rate`、`quiet-hours` 必须 ≥ 0；负数拒绝，0 合法。`quiet-hours=0` 表示没有发布静默。静默看最近的发布时间，也看历史审计里 `action='ROLLBACK'` 的旧行。新的管理操作不再写 `ROLLBACK`。
 
 具体阈值比较和发布静默以 `AlertService` 为准。去重按 `(kind, conch, conch_version)`，窗口从告警 `created_at` 起算 `dedup-hours`。窗口内已有告警（不论是否已确认）就不再新建，也不再发 webhook。确认不重新计时，也不把剩余时间清掉。失败次数在窗口内继续上涨不会提前再报。`created_at` 早于或等于 `now - dedup-hours` 之后，条件仍然成立才新建下一条并再次通知。未确认但已超出窗口的旧告警同样不再抑制。
+
+`webhook-url` 为空白时不发送。非空值的协议必须是 `http` 或 `https`（忽略大小写），例如 `https://hooks.example/tide`。`ftp://example` 和 `example.com` 会拒绝启动，异常信息包含 `hermit.reef.tide.webhook-url`。
 
 Webhook 在新建告警并提交后 POST JSON，字段为 `id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。`id` 是 `hermit_alerts` 主键。`adminUrl` 是管理端告警页路径。Reef 自身没有对外源站配置：Crab 的 `reef.url` / `HERMIT_REEF_URL` 只存在于 Crab，不会传进 Reef，因此这里只写相对路径 `/alerts`。接收方按自己打开 Reef 的源站拼接，例如源站是 `https://reef.example` 时链接为 `https://reef.example/alerts`。超时 5 秒，失败只记日志，不重试，不影响告警落库。没有独立持久化重试队列。
 

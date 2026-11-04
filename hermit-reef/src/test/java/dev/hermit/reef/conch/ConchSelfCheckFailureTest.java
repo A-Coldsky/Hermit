@@ -115,7 +115,7 @@ class ConchSelfCheckFailureTest {
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("INTERNAL"))
-                .andExpect(jsonPath("$.error.message").value("internal error"))
+                .andExpect(jsonPath("$.error.message").value("服务器内部错误"))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();

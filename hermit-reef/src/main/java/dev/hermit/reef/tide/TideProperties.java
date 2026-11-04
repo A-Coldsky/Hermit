@@ -2,6 +2,7 @@ package dev.hermit.reef.tide;
 
 import jakarta.annotation.PostConstruct;
 import java.math.BigDecimal;
+import java.util.Locale;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -36,6 +37,39 @@ public class TideProperties {
         requireAtLeast(surgeWindowMinutes, 1, "hermit.reef.tide.surge-window-minutes must be positive");
         requireAtLeast(surgeMinCount, 1, "hermit.reef.tide.surge-min-count must be positive");
         requireAtLeast(dedupHours, 1, "hermit.reef.tide.dedup-hours must be positive");
+        validateWebhookUrl();
+    }
+
+    private void validateWebhookUrl() {
+        if (webhookUrl == null || webhookUrl.isBlank()) {
+            return;
+        }
+        webhookUrl = webhookUrl.trim();
+        String scheme = schemeBeforeSlashes(webhookUrl);
+        if (!"http".equals(scheme) && !"https".equals(scheme)) {
+            throw invalidWebhookUrl();
+        }
+    }
+
+    /** 协议名，取 `://` 之前的字母。没有这一段时返回空串。 */
+    private static String schemeBeforeSlashes(String value) {
+        int separator = value.indexOf("://");
+        if (separator <= 0) {
+            return "";
+        }
+        String scheme = value.substring(0, separator);
+        for (int i = 0; i < scheme.length(); i++) {
+            char c = scheme.charAt(i);
+            boolean letter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+            if (!letter) {
+                return "";
+            }
+        }
+        return scheme.toLowerCase(Locale.ROOT);
+    }
+
+    private static IllegalStateException invalidWebhookUrl() {
+        return new IllegalStateException("hermit.reef.tide.webhook-url must be an http or https URL");
     }
 
     private static void requireAtLeast(int value, int minimum, String message) {

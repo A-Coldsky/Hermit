@@ -199,6 +199,7 @@ class ReefBootstrapTest {
                 assertThat(disabled.path("data").path("intervalSeconds").asInt()).isEqualTo(120);
                 Reply preview = send(server, "GET", "/console/api/reports/preview", null);
                 assertThat(preview.path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+                assertThat(preview.path("error").path("message").asText()).isEqualTo("上报未开启，或尚未连接 Reef。");
                 Reply enabled = send(server, "PUT", "/console/api/reports/settings",
                         "{\"enabled\":true,\"intervalSeconds\":60}");
                 assertThat(enabled.path("data").path("enabled").asBoolean()).isTrue();

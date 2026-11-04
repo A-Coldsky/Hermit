@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /**
  * Forwards newline-delimited JSON-RPC to a running Crab {@code /mcp}. The API key is read only
@@ -33,6 +34,21 @@ import com.fasterxml.jackson.databind.JsonNode;
 public final class McpStdio {
     private static final Duration CONNECT = Duration.ofSeconds(2);
     private static final Duration REQUEST = Duration.ofSeconds(60);
+    static final String HELP = """
+            mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
+
+            把标准输入上的 MCP JSON-RPC 转发到正在运行的 Crab /mcp。
+            协议消息写到标准输出，诊断写到标准错误。
+
+              --url URL        Crab 的 MCP 地址，默认 http://127.0.0.1:7777/mcp
+              --account NAME   可选。作为请求头 X-Hermit-Account 选择账号
+              --help           打印本说明并退出
+
+            环境变量 HERMIT_API_KEY：Crab 签发的 API Key，不要写在命令行上。
+            """;
+    static final String KEY_MISSING = "未设置环境变量 HERMIT_API_KEY。请在 Crab 控制台或用 CLI apikey create 签发后写入该变量。";
+    static final String CRAB_NOT_RUNNING = "Crab 没有运行。请先启动 Crab，再连接 MCP。";
+    static final String URL_INVALID = "URL 不合法。请使用 http 或 https 地址，例如 http://127.0.0.1:7777/mcp。";
 
     private final Object stdoutLock = new Object();
     private final AtomicInteger exit = new AtomicInteger();
@@ -40,6 +56,11 @@ public final class McpStdio {
     private volatile boolean sseStarted;
 
     public int run(String[] args, Function<String, String> env, InputStream in, PrintStream out, PrintStream err) {
+        if (helpRequested(args)) {
+            out.print(HELP);
+            out.flush();
+            return 0;
+        }
         String url = "http://127.0.0.1:7777/mcp";
         String accountName = null;
         for (int i = 1; i < args.length; i++) {
@@ -62,19 +83,19 @@ public final class McpStdio {
         }
         String key = env.apply("HERMIT_API_KEY");
         if (key == null || key.isBlank()) {
-            err.println("HERMIT_API_KEY is not set");
+            err.println(KEY_MISSING);
             return 1;
         }
         URI uri;
         try {
             uri = URI.create(url);
         } catch (IllegalArgumentException ex) {
-            err.println("invalid url");
+            err.println(URL_INVALID);
             return 1;
         }
         String scheme = uri.getScheme();
         if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-            err.println("invalid url");
+            err.println(URL_INVALID);
             return 1;
         }
         String account = accountName;
@@ -116,7 +137,7 @@ public final class McpStdio {
             return exit.get();
         } catch (Exception ex) {
             if (connectFailure(ex)) {
-                err.println("crab is not running");
+                err.println(CRAB_NOT_RUNNING);
                 return 2;
             }
             err.println(ex.getClass().getName());
@@ -138,7 +159,7 @@ public final class McpStdio {
             return false;
         } catch (IOException ex) {
             if (connectFailure(ex)) {
-                err.println("crab is not running");
+                err.println(CRAB_NOT_RUNNING);
                 exit.compareAndSet(0, 2);
                 return false;
             }
@@ -192,7 +213,7 @@ public final class McpStdio {
             exit.compareAndSet(0, 1);
         } catch (IOException ex) {
             if (connectFailure(ex)) {
-                err.println("crab is not running");
+                err.println(CRAB_NOT_RUNNING);
                 exit.compareAndSet(0, 2);
                 return;
             }
@@ -305,12 +326,46 @@ public final class McpStdio {
     static String authenticationStdout(byte[] body, String requestLine) {
         String trimmed = body == null ? "" : new String(body, StandardCharsets.UTF_8).trim();
         if (jsonRpcError(trimmed)) {
-            return trimmed;
+            return fillNullId(trimmed, requestLine);
         }
         JsonNode id = requestId(requestLine);
         String idJson = id == null || id.isNull() ? "null" : McpJson.write(id);
         return "{\"jsonrpc\":\"2.0\",\"id\":" + idJson
                 + ",\"error\":{\"code\":" + McpErrors.AUTH_RPC + ",\"message\":\"authentication failed\"}}";
+    }
+
+    private static boolean helpRequested(String[] args) {
+        if (args == null) {
+            return false;
+        }
+        for (int i = 1; i < args.length; i++) {
+            if ("--help".equals(args[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 服务端鉴权发生在读 body 之前，401 的 id 是 null。能解析出本次请求 id 时补上。 */
+    private static String fillNullId(String body, String requestLine) {
+        JsonNode requestId = requestId(requestLine);
+        if (requestId == null) {
+            return body;
+        }
+        try {
+            JsonNode node = McpJson.tree(body.getBytes(StandardCharsets.UTF_8));
+            if (!node.isObject()) {
+                return body;
+            }
+            JsonNode id = node.get("id");
+            if (id != null && !id.isNull()) {
+                return body;
+            }
+            ((ObjectNode) node).set("id", requestId);
+            return McpJson.write(node);
+        } catch (RuntimeException ex) {
+            return body;
+        }
     }
 
     private static boolean jsonRpcError(String body) {

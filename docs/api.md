@@ -95,7 +95,7 @@ GET  /api/{conch}/{action}?param=value
 POST /api/{conch}/{action}           JSON object body
 ```
 
-使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。空 conches/actions 集合表示不限对应维度。`conches` 里的每个名字必须是当前已加载的规则包，或仍在停用墓碑 `disabled_conches` 里的名字；未知名字创建时返回 `INVALID_INPUT`，并在 message 里列出这些名字。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。停用墓碑只放行规则包名，不放行该包上已经卸下的能力。CLI `apikey create --conches` / `--actions` 使用同一规则。
+使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。已经入库的空 `conches` 在 `ApiKeyPrincipal` 里仍表示不按包名限制，空 `actions` 仍表示不按能力名限制；本地包另由 `Invoker` 要求名字出现在 `conches` 里。新 Key 不能再靠留空得到这个范围。`conches` 里的每个名字必须是当前已加载的规则包，或仍在停用墓碑 `disabled_conches` 里的名字；未知名字创建时返回 `INVALID_INPUT`，并在 message 里列出这些名字。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。停用墓碑只放行规则包名，不放行该包上已经卸下的能力。CLI `apikey create --all` / `--conches` / `--actions` 使用同一规则。
 
 POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，有效期 24 小时，另存请求体的 SHA-256（小写十六进制，schema 10 的 `idempotency.body_sha256`）。摘要是网关读到的原始字节，不是规范化 JSON：空格或字段顺序不同算另一个请求体。相同键且摘要相同，回放第一次的响应（含旧 traceId），响应头 `Idempotent-Replayed: true`，不再执行。摘要不同返回 409 `IDEMPOTENCY_CONFLICT`，message 为 `Idempotency-Key was already used with a different request body`，不执行、不覆盖已存响应。升级前写入、摘要为 null 的行也无法证明请求体相同，重放同样是这个冲突，直到 24 小时过期。键仍不包含 API Key 身份或规则版本。
 
@@ -139,7 +139,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | POST | `/conches/{conch}/accounts/{account}/test-login` | 测试登录。成功才解除自动登录暂停；失败、缺凭证或无法解密都不解除。不写调用记录 |
 | GET / PUT | `/conches/{conch}/config` | 配置声明/值 / `{字段:字符串}`；空字符串清除覆盖 |
 | POST | `/capabilities/{conch}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
-| GET / POST | `/apikeys` | 列表 / `{name,conches,actions,readOnly}`；新 Key 仅返回一次 plaintext。只接受这四个字段。嵌套 `scope` 或其他未知字段是 400 `INVALID_INPUT`，message 为 `unknown field: …`，不会当成空范围。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载（含本地包）或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建。不写 `conches` / `actions`，或写成空数组，仍表示全部正式包，不包含本地包 |
+| GET / POST | `/apikeys` | 列表 / 创建。创建体 `{name, readOnly, all, conches, actions}`。`name` 必填。`readOnly` 与 `all` 缺省为 false，必须是布尔。`conches`、`actions` 缺省或 `[]` 都是空集合。只接受这五个字段。嵌套 `scope` 或其他未知字段是 400 `INVALID_INPUT`，message 为 `unknown field: …`。`all` 不是 true 且两个集合都空：400，message 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`。`all: true` 再带非空 `conches` 或 `actions`：400，message 为 `all 为 true 时不能同时填写 conches 或 actions`。`all: true` 保存空集合，表示全部正式包的全部能力，不含本地包；`readOnly: true` 仍只放行只读能力。只写 `conches` 或只写 `actions` 时 `scope.all` 为 false。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载（含本地包）或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建。新 Key 仅返回一次 plaintext。响应与列表的 `scope` 都是 `{all, conches, actions, readOnly}`。`all` 为 true 表示两个集合都空（全部正式包）。早于该字段、两个集合都空的旧行仍可调用，读出来的 `all` 也是 true，不迁移 |
 | DELETE | `/apikeys/{id}` | 撤销 |
 | GET | `/calls`、`/calls/{traceId}` | `conch`、`action`、`channel`、`limit` 查询及步骤摘要。每行含 `source`（`LOCAL` 或 `REEF`，规则包来源）和 `channel`（`HTTP` 对外 OpenAPI、`MCP`、`CONSOLE`）。`channel` 省略或空白表示不筛选；其他值 400 `INVALID_INPUT`，message 为 `channel is invalid`，不回显参数值。当前只有 HTTP 与 MCP 会写入；控制台没有执行能力的路径，测试登录不写调用记录，所以没有 `CONSOLE` 行，但筛选 `CONSOLE` 仍是空列表而不是 400。schema 11 给旧行默认 `HTTP`。`limit` 省略时 100，最大 500；小于 1 或大于 500 为 400。控制台调用记录页显式传 100，概览显式传 200。CLI 没有调用记录列表命令。`action` 可以是库存的能力名，或 `conch.action`（按第一个 `.` 拆开后分别匹配）。若同时传入 `conch` 且与 `action` 里的包名不同，返回 400 `INVALID_INPUT`，不会当成空列表 |
 | GET | `/audit` | 配置审计，新的在前。参数 `conch`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
@@ -147,7 +147,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |
 | GET | `/reef` | 当前生效的 Reef 连接。`{configured, source, url, owner, tokenName, tokenPrefix, publicKeyFingerprint, instanceId, importedAt}`。`source` 为 `BOOTSTRAP`、`CONFIG`，或未配置时的 JSON `null`。`tokenPrefix` 只在令牌长于 12 个字符时返回前 12 个字符，否则为 `null`。`publicKeyFingerprint` 是公钥 X.509 SubjectPublicKeyInfo 的 SHA-256，小写十六进制。响应没有令牌明文 |
 | POST | `/reef/bootstrap` | 导入引导 JSON，正文不超过 64 KiB。校验通过后探测 `GET /agent/conches/manifest`，写入 `$HERMIT_HOME/reef-bootstrap.json`（POSIX 0600），并在本进程热更新 URL、令牌和公钥，然后触发一次同步。成功时响应与 `GET /reef` 相同。非法 JSON、未知字段或公钥不是 Ed25519 PEM 为 400 `INVALID_INPUT`。清单只有 2xx 或 304 才继续写入。401 与 403 为 400 `INVALID_INPUT`，`message` 为 `reef rejected the token`。其他 HTTP 状态（含 404、5xx，以及返回 HTML 的错误页）为 400 `INVALID_INPUT`，`message` 为 `reef url did not answer as Reef (HTTP <状态码>)`，不写引导文件，已有文件也不替换。连不上或超时为 502 `UPSTREAM_ERROR`，`message` 为 `cannot reach reef`。本机已有正式包的 `current` 指针且新公钥与当前公钥不同（含当前没有公钥）为 409 `CONFLICT`，`message` 为 `public key differs from installed conches`。同一把公钥可以改 URL 和令牌。控制台请求体仍有 1 MB 上限，超过该上限时 message 为 `request body too large` |
-| GET / PUT | `/reports/settings` | `{enabled, intervalSeconds}`。没有 schema 13 的行时读 config.yml。PUT 两个字段都必填，`intervalSeconds` 为不小于 60 的整数，未知字段 400 `INVALID_INPUT`。写入覆盖 config.yml，并立刻作用于本进程。关闭上报不清空未发送队列；再次开启后仍按原保留策略发送 |
+| GET / PUT | `/reports/settings` | `{enabled, intervalSeconds}`。没有 schema 13 的行时读 config.yml。两者都缺省时 `enabled` 为 true，`intervalSeconds` 为 1800。PUT 两个字段都必填，`intervalSeconds` 为不小于 60 的整数，未知字段 400 `INVALID_INPUT`。写入覆盖 config.yml，并立刻作用于本进程。已写入的间隔保持原值。关闭上报不清空未发送队列；再次开启后仍按原保留策略发送 |
 | GET | `/reports/preview` | 待发送批次和丢弃数。上报关闭或未配置 Reef 时 409 `NOT_CONFIGURED` |
 | POST | `/reports/send` | 手动发送，返回 attempted/accepted/status。上报关闭或未配置 Reef 时 409 `NOT_CONFIGURED`。批次为空时不发 HTTP |
 | POST | `/local-conches` | 导入。`multipart/form-data` 字段 `file`，或 `text/yaml`、`application/yaml`、`application/x-yaml` 正文。成功 `{conch, version, replaced, warnings}`。校验失败 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`。与正式包或订阅重名是 409，错误码仍是 `INVALID_INPUT` |
@@ -223,7 +223,7 @@ config get <conch> [key]
 config set <conch> <key> <value>
 config unset <conch> <key>
 audit list [--conch NAME] [--account NAME] [--limit N] [--page N]
-apikey create <name> [--conches a,b] [--actions conch.action] [--read-only]
+apikey create <name> [--all] [--conches a,b] [--actions conch.action] [--read-only]
 apikey list
 apikey revoke <id>
 local import <file>
@@ -239,7 +239,7 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 `audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。每一行是 `时间 actor action origin conch account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
 
-`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为 `unknown option`，不会建出全范围 Key。不传 `--conches` / `--actions` 与控制台不写这两个字段相同：全部正式包，不含本地包。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
+`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为 `unknown option`，不会建出全范围 Key。必须带 `--all`，或非空的 `--conches` / `--actions`。`--all` 是全部正式包的全部能力，不含本地包，可与 `--read-only` 同用；再带 `--conches` 或 `--actions` 则退出 1，stderr 为 `all 为 true 时不能同时填写 conches 或 actions`。什么都不带时退出 1，stderr 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`，不写库。`--from-env` 只属于 `credential set`。用在 `apikey create`（即使同时有 `--all`）、`apikey list` 或 `apikey revoke` 上会打印用法并退出 1，不创建 Key，也不读取该变量的值。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
 
 ## MCP
 
@@ -252,7 +252,7 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 - 非 `initialize` 的 POST，以及 GET、DELETE：带了 `MCP-Protocol-Version` 且不是 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` 时返回 HTTP 400。不带该头时不拒绝，继续使用该会话在 `initialize` 里协商到的版本。多个版本头同样拒绝。已支持但和会话不一致的版本头放行，不改写会话版本。
 - `initialize` 不看 `MCP-Protocol-Version` 头。请求体里的 `protocolVersion` 不在支持列表时，响应仍返回一个支持的版本（当前 `2025-11-25`）。是否改为直接拒绝只由 `McpTransportPolicy.NEGOTIATE_UNKNOWN_PROTOCOL` 决定，当前为协商。
 
-- 可见能力不超过 40 个时，直接工具名 `conch__action`。本地包的直接工具说明、资源说明、`list_systems` 里该包的说明，以及 `describe_capability` 的说明，都以 `[本地] ` 开头。使用指南里也会标明这是本地包。空 `conches` 的 Key 仍能看见这些工具；调用时 `Invoker` 返回 403 `FORBIDDEN`。显式写出包名的 Key 可以调用。
+- 可见能力不超过 40 个时，直接工具名 `conch__action`。本地包的直接工具说明、资源说明、`list_systems` 里该包的说明，以及 `describe_capability` 的说明，都以 `[本地] ` 开头。使用指南里也会标明这是本地包。`all: true` 以及旧的空 `conches` Key 仍能看见这些工具；调用时 `Invoker` 返回 403 `FORBIDDEN`。显式写出包名的 Key 可以调用。
 - 超过 40 个时，提供 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个目录工具。
 - 目录模式调用非只读能力需要支持 elicitation 且保持 SSE，明确确认后执行；直接模式没有同样的服务端确认步骤，客户端应依据工具注解交互。
 - guide resource 为 `hermit://conches/{conch}/guide`，由说明、参数、示例生成。

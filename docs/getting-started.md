@@ -74,7 +74,7 @@ sync:
   interval_seconds: 300
 report:
   enabled: true
-  interval_seconds: 300
+  interval_seconds: 1800
 ```
 
 `reef.pub` 相对 `HERMIT_HOME` 解析。也可以不手写 `reef.url`、`reef.token` 和 `reef.public_key`，启动后用控制台 `POST /console/api/reef/bootstrap` 或 CLI `reef import <file>` 导入引导 JSON。文件落在 `$HERMIT_HOME/reef-bootstrap.json`，存在时覆盖配置文件里的这三项。引导 JSON 的字段见[接口参考](api.md)。配置写好后：

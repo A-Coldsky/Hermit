@@ -165,9 +165,12 @@ public class LocalConchBehaviorTest {
             runtime.setCapabilityDisabled("local_ping", "ping", false, Actors.CLI);
 
             CreatedApiKey openKey = runtime.admin().createApiKey("all", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+            CreatedApiKey explicitKey = runtime.admin().createApiKey(
+                    "explicit", ApiKeyScope.explicit(true, Set.of(), Set.of(), false), Actors.CLI);
             CreatedApiKey namedKey = runtime.admin().createApiKey(
                     "named", new ApiKeyScope(Set.of("local_ping", "official_ping"), Set.of(), false), Actors.CLI);
             ApiKeyPrincipal openPrincipal = runtime.apiKeys().authenticate(openKey.plaintext()).orElseThrow();
+            ApiKeyPrincipal explicitPrincipal = runtime.apiKeys().authenticate(explicitKey.plaintext()).orElseThrow();
             ApiKeyPrincipal namedPrincipal = runtime.apiKeys().authenticate(namedKey.plaintext()).orElseThrow();
             ReportQueue reports = new ReportQueue(
                     new ReportSettings(true, URI.create("http://127.0.0.1:9/"), Optional.empty(), UUID.randomUUID(), "1.0.0"),
@@ -178,6 +181,12 @@ public class LocalConchBehaviorTest {
             InvokeOutcome denied = runtime.invoker().invoke(
                     openPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-deny");
             assertThat(denied.status()).isEqualTo(403);
+            InvokeOutcome explicitLocal = runtime.invoker().invoke(
+                    explicitPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-explicit-local");
+            assertThat(explicitLocal.status()).isEqualTo(403);
+            InvokeOutcome explicitOfficial = runtime.invoker().invoke(
+                    explicitPrincipal, "official_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-explicit-official");
+            assertThat(explicitOfficial.status()).isEqualTo(200);
             InvokeOutcome local = runtime.invoker().invoke(
                     namedPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-local");
             assertThat(local.status()).isEqualTo(200);

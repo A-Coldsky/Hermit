@@ -192,7 +192,7 @@ class ReefBootstrapTest {
 
                 Reply settings = send(server, "GET", "/console/api/reports/settings", null);
                 assertThat(settings.path("data").path("enabled").asBoolean()).isTrue();
-                assertThat(settings.path("data").path("intervalSeconds").asInt()).isEqualTo(300);
+                assertThat(settings.path("data").path("intervalSeconds").asInt()).isEqualTo(1800);
                 Reply disabled = send(server, "PUT", "/console/api/reports/settings",
                         "{\"enabled\":false,\"intervalSeconds\":120}");
                 assertThat(disabled.path("data").path("enabled").asBoolean()).isFalse();

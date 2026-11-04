@@ -20,6 +20,7 @@ import java.util.function.Function;
 import dev.hermit.common.pkg.Ed25519Keys;
 import dev.hermit.common.pkg.ConchPackage;
 import dev.hermit.crab.CrabMain;
+import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.CrabDatabase;
 import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.DatabaseInUseException;
@@ -365,6 +366,109 @@ class CliTest {
         ByteArrayOutputStream listed = new ByteArrayOutputStream();
         assertThat(run(env, InputStream.nullInputStream(), listed, "apikey", "list")).isZero();
         assertThat(listed.toString(StandardCharsets.UTF_8)).doesNotContain("wide");
+    }
+
+    @Test
+    void apiKeyCreateRequiresAllOrANamedScope() throws Exception {
+        Path root = temp.resolve("explicit-scope");
+        installLegacy(root);
+        Function<String, String> env = env(root);
+
+        ByteArrayOutputStream emptyErr = new ByteArrayOutputStream();
+        ByteArrayOutputStream emptyOut = new ByteArrayOutputStream();
+        int empty = new CrabCommand().run(
+                new String[] {"apikey", "create", "open"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(emptyOut),
+                stderr(emptyErr));
+        assertThat(empty).isEqualTo(1);
+        assertThat(emptyErr.toString(StandardCharsets.UTF_8)).contains(ApiKeyScope.MISSING_SCOPE);
+        assertThat(emptyOut.toString(StandardCharsets.UTF_8)).doesNotContain("id ");
+
+        ByteArrayOutputStream mixedErr = new ByteArrayOutputStream();
+        int mixed = new CrabCommand().run(
+                new String[] {"apikey", "create", "mixed", "--all", "--conches", "legacy_oa"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(mixedErr));
+        assertThat(mixed).isEqualTo(1);
+        assertThat(mixedErr.toString(StandardCharsets.UTF_8)).contains(ApiKeyScope.ALL_EXCLUDES_NAMES);
+
+        ByteArrayOutputStream created = new ByteArrayOutputStream();
+        int ok = new CrabCommand().run(
+                new String[] {"apikey", "create", "wide", "--all", "--read-only"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(created),
+                stderr(new ByteArrayOutputStream()));
+        assertThat(ok).isZero();
+        assertThat(created.toString(StandardCharsets.UTF_8)).contains("id ");
+        try (CrabDatabase database = new CrabDatabase(new CrabPaths(root));
+             Connection connection = database.dataSource().getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT scope_json FROM api_keys WHERE name = ?")) {
+            statement.setString(1, "wide");
+            try (ResultSet resultSet = statement.executeQuery()) {
+                assertThat(resultSet.next()).isTrue();
+                assertThat(resultSet.getString(1)).contains("\"all\":true").contains("\"readOnlyOnly\":true");
+            }
+        }
+
+        ByteArrayOutputStream listed = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), listed, "apikey", "list")).isZero();
+        String keys = listed.toString(StandardCharsets.UTF_8);
+        assertThat(keys).contains("wide").doesNotContain("open").doesNotContain("mixed");
+    }
+
+    @Test
+    void fromEnvSetsACredentialAndDoesNotCreateAnApiKey() throws Exception {
+        Path root = temp.resolve("from-env");
+        installLegacy(root);
+        assertThat(run(env(root), InputStream.nullInputStream(), "account", "add", "legacy_oa", "alice")).isZero();
+        Function<String, String> env = name -> switch (name) {
+            case "HERMIT_HOME" -> root.toString();
+            case "OA_PASSWORD" -> PASSWORD;
+            default -> null;
+        };
+        ByteArrayOutputStream credentialErr = new ByteArrayOutputStream();
+        int wrote = new CrabCommand().run(
+                new String[] {"credential", "set", "legacy_oa", "alice", "password", "--from-env", "OA_PASSWORD"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(credentialErr));
+        assertThat(wrote).as(credentialErr.toString(StandardCharsets.UTF_8)).isZero();
+        SecretChecks.absent(credentialErr.toString(StandardCharsets.UTF_8), PASSWORD);
+
+        ByteArrayOutputStream keyErr = new ByteArrayOutputStream();
+        ByteArrayOutputStream keyOut = new ByteArrayOutputStream();
+        int created = new CrabCommand().run(
+                new String[] {"apikey", "create", "from-env", "--from-env", "OA_PASSWORD"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(keyOut),
+                stderr(keyErr));
+        assertThat(created).isEqualTo(1);
+        assertThat(keyOut.toString(StandardCharsets.UTF_8)).doesNotContain("id ");
+        assertThat(keyErr.toString(StandardCharsets.UTF_8)).contains("usage:");
+        SecretChecks.absent(keyErr.toString(StandardCharsets.UTF_8), PASSWORD);
+        SecretChecks.absent(keyOut.toString(StandardCharsets.UTF_8), PASSWORD);
+
+        int withAll = new CrabCommand().run(
+                new String[] {"apikey", "create", "from-env-all", "--all", "--from-env", "OA_PASSWORD"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(new ByteArrayOutputStream()));
+        assertThat(withAll).isEqualTo(1);
+
+        ByteArrayOutputStream listed = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), listed, "apikey", "list")).isZero();
+        String keys = listed.toString(StandardCharsets.UTF_8);
+        assertThat(keys).doesNotContain("from-env");
+        SecretChecks.absent(keys, PASSWORD);
     }
 
     @Test

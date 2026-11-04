@@ -1,0 +1,222 @@
+package dev.hermit.reef.admin;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.hermit.reef.audit.AuditAction;
+import dev.hermit.reef.audit.AuditService;
+import dev.hermit.reef.config.ReefProperties;
+import dev.hermit.reef.web.ApiException;
+import dev.hermit.reef.web.ReefErrorCode;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class AdminUsers {
+
+    public static final String LAST_ENABLED_ADMIN = "at least one enabled administrator is required";
+    public static final String CANNOT_CHANGE_SELF = "cannot change your own role or disabled flag";
+    public static final String USERNAME_EXISTS = "username already exists";
+    public static final String CANNOT_RESET_OWN_PASSWORD = "cannot reset your own password";
+    public static final String OLD_PASSWORD_MISMATCH = "old password does not match";
+
+    private final JdbcTemplate jdbc;
+    private final PasswordEncoder passwordEncoder;
+    private final AuditService auditService;
+    private final Clock clock;
+    private final ObjectMapper objectMapper;
+    private final ReefProperties properties;
+
+    public AdminUsers(JdbcTemplate jdbc, PasswordEncoder passwordEncoder, AuditService auditService, Clock clock,
+            ObjectMapper objectMapper, ReefProperties properties) {
+        this.jdbc = jdbc;
+        this.passwordEncoder = passwordEncoder;
+        this.auditService = auditService;
+        this.clock = clock;
+        this.objectMapper = objectMapper;
+        this.properties = properties;
+    }
+
+    public AdminAccount find(String username) {
+        return jdbc.query(
+                "SELECT id, username, password_hash, disabled, role, created_at FROM hermit_admin_users "
+                        + "WHERE username = ?",
+                rs -> rs.next() ? map(rs) : null,
+                username);
+    }
+
+    /**
+     * id 最小的 ADMIN，含已禁用。配置令牌归这个人；没有 ADMIN 时返回 null。
+     */
+    public AdminAccount initialAdmin() {
+        return jdbc.query(
+                "SELECT id, username, password_hash, disabled, role, created_at FROM hermit_admin_users "
+                        + "WHERE role = 'ADMIN' ORDER BY id LIMIT 1",
+                rs -> rs.next() ? map(rs) : null);
+    }
+
+    public List<UserSummary> list() {
+        List<AdminAccount> accounts = jdbc.query(
+                "SELECT id, username, password_hash, disabled, role, created_at FROM hermit_admin_users ORDER BY id",
+                (rs, rowNum) -> map(rs));
+        return accounts.stream().map(this::summarize).toList();
+    }
+
+    @Transactional
+    public UserSummary create(String actor, String username, String password, AdminRole role) {
+        if (role == null) {
+            throw ApiException.invalidInput();
+        }
+        if (find(username) != null) {
+            throw conflict(USERNAME_EXISTS);
+        }
+        Instant now = clock.instant();
+        try {
+            jdbc.update(
+                    "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled, role) "
+                            + "VALUES (?, ?, ?, FALSE, ?)",
+                    username,
+                    passwordEncoder.encode(password),
+                    Timestamp.from(now),
+                    role.name());
+        } catch (DataIntegrityViolationException ex) {
+            throw conflict(USERNAME_EXISTS);
+        }
+        auditService.record(actor, AuditAction.USER_CREATED, null, null, detail(Map.of(
+                "username", username,
+                "role", role.name())));
+        return summarize(find(username));
+    }
+
+    @Transactional
+    public UserSummary update(String actor, String username, AdminRole requestedRole, Boolean requestedDisabled) {
+        if (requestedRole == null && requestedDisabled == null) {
+            throw ApiException.invalidInput();
+        }
+        AdminAccount target = lockByUsername(username);
+        if (target == null) {
+            throw notFound();
+        }
+        AdminRole role = requestedRole == null ? target.role() : requestedRole;
+        boolean disabled = requestedDisabled == null ? target.disabled() : requestedDisabled;
+        boolean wasEnabledAdmin = target.role() == AdminRole.ADMIN && !target.disabled();
+        boolean willBeEnabledAdmin = role == AdminRole.ADMIN && !disabled;
+        if (wasEnabledAdmin && !willBeEnabledAdmin && lockEnabledAdmins() <= 1) {
+            throw conflict(LAST_ENABLED_ADMIN);
+        }
+        if (actor.equals(target.username()) && (role != AdminRole.ADMIN || disabled)) {
+            throw conflict(CANNOT_CHANGE_SELF);
+        }
+        jdbc.update(
+                "UPDATE hermit_admin_users SET role = ?, disabled = ? WHERE id = ?",
+                role.name(),
+                disabled,
+                target.id());
+        auditService.record(actor, AuditAction.USER_UPDATED, null, null, detail(Map.of(
+                "username", target.username(),
+                "role", role.name(),
+                "disabled", disabled)));
+        return summarize(find(target.username()));
+    }
+
+    @Transactional
+    public UserSummary changePassword(String username, String oldPassword, String newPassword) {
+        AdminAccount user = find(username);
+        if (user == null || user.disabled()) {
+            throw new ApiException(401, ReefErrorCode.UNAUTHORIZED, ReefErrorCode.UNAUTHORIZED.message());
+        }
+        if (!passwordEncoder.matches(oldPassword, user.passwordHash())) {
+            throw new ApiException(400, ReefErrorCode.INVALID_INPUT, OLD_PASSWORD_MISMATCH);
+        }
+        jdbc.update(
+                "UPDATE hermit_admin_users SET password_hash = ? WHERE id = ?",
+                passwordEncoder.encode(newPassword),
+                user.id());
+        auditService.record(username, AuditAction.PASSWORD_CHANGED, null, null,
+                detail(Map.of("username", username)));
+        return summarize(find(username));
+    }
+
+    @Transactional
+    public UserSummary resetPassword(String actor, String username, String newPassword) {
+        if (actor.equals(username)) {
+            throw new ApiException(400, ReefErrorCode.INVALID_INPUT, CANNOT_RESET_OWN_PASSWORD);
+        }
+        AdminAccount user = find(username);
+        if (user == null) {
+            throw notFound();
+        }
+        jdbc.update(
+                "UPDATE hermit_admin_users SET password_hash = ? WHERE id = ?",
+                passwordEncoder.encode(newPassword),
+                user.id());
+        auditService.record(actor, AuditAction.USER_PASSWORD_RESET, null, null,
+                detail(Map.of("username", username)));
+        return summarize(user);
+    }
+
+    private UserSummary summarize(AdminAccount account) {
+        Integer active = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM hermit_agent_tokens WHERE user_id = ? AND revoked_at IS NULL",
+                Integer.class,
+                account.id());
+        int tokens = active == null ? 0 : active;
+        AdminAccount initial = initialAdmin();
+        if (properties.configuredAgentToken() != null && initial != null && initial.id() == account.id()) {
+            tokens++;
+        }
+        return new UserSummary(account.username(), account.role(), account.disabled(), account.createdAt(), tokens);
+    }
+
+    private AdminAccount lockByUsername(String username) {
+        return jdbc.query(
+                "SELECT id, username, password_hash, disabled, role, created_at FROM hermit_admin_users "
+                        + "WHERE username = ? FOR UPDATE",
+                rs -> rs.next() ? map(rs) : null,
+                username);
+    }
+
+    private int lockEnabledAdmins() {
+        List<Long> ids = jdbc.query(
+                "SELECT id FROM hermit_admin_users WHERE role = 'ADMIN' AND disabled = FALSE FOR UPDATE",
+                (rs, rowNum) -> rs.getLong("id"));
+        return ids.size();
+    }
+
+    private AdminAccount map(ResultSet rs) throws SQLException {
+        return new AdminAccount(
+                rs.getLong("id"),
+                rs.getString("username"),
+                rs.getString("password_hash"),
+                rs.getBoolean("disabled"),
+                AdminRole.valueOf(rs.getString("role")),
+                rs.getTimestamp("created_at").toInstant());
+    }
+
+    private String detail(Map<String, ?> values) {
+        Map<String, Object> ordered = new LinkedHashMap<>(values);
+        try {
+            return objectMapper.writeValueAsString(ordered);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("audit detail", ex);
+        }
+    }
+
+    private static ApiException conflict(String message) {
+        return new ApiException(409, ReefErrorCode.CONFLICT, message);
+    }
+
+    private static ApiException notFound() {
+        return new ApiException(404, ReefErrorCode.NOT_FOUND, ReefErrorCode.NOT_FOUND.message());
+    }
+}

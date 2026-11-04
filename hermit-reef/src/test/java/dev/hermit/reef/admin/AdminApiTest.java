@@ -134,7 +134,8 @@ class AdminApiTest {
 
         mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.username").value(TestSecrets.USERNAME));
+                .andExpect(jsonPath("$.data.username").value(TestSecrets.USERNAME))
+                .andExpect(jsonPath("$.data.role").value("ADMIN"));
         mockMvc.perform(get("/api/admin/me"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().doesNotExist(HttpHeaders.LOCATION));

@@ -1,6 +1,6 @@
 package dev.hermit.reef.security;
 
-import dev.hermit.reef.config.ReefProperties;
+import dev.hermit.reef.admin.AgentTokenService;
 import dev.hermit.reef.web.ApiResponseWriter;
 import java.time.Clock;
 import org.springframework.context.annotation.Bean;
@@ -39,8 +39,8 @@ public class SecurityConfig {
 
     @Bean
     @Order(1)
-    SecurityFilterChain agentChain(HttpSecurity http, ReefProperties properties, ApiResponseWriter writer)
-            throws Exception {
+    SecurityFilterChain agentChain(HttpSecurity http, ApiResponseWriter writer, AgentTokenService tokens,
+            AgentPresence presence) throws Exception {
         return http
                 .securityMatcher("/agent/**")
                 .csrf(AbstractHttpConfigurer::disable)
@@ -49,13 +49,14 @@ public class SecurityConfig {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
-                .addFilterBefore(new AgentAccessFilter(properties, writer), AuthorizationFilter.class)
+                .addFilterBefore(new AgentAccessFilter(writer, tokens, presence), AuthorizationFilter.class)
                 .build();
     }
 
     @Bean
     @Order(2)
-    SecurityFilterChain apiChain(HttpSecurity http, JwtDecoder jwtDecoder, ApiAuthenticationEntryPoint entryPoint,
+    SecurityFilterChain apiChain(HttpSecurity http, JwtDecoder jwtDecoder,
+            ReefJwtAuthenticationConverter jwtAuthenticationConverter, ApiAuthenticationEntryPoint entryPoint,
             ApiAccessDeniedHandler denied) throws Exception {
         return http
                 .securityMatcher("/api/**")
@@ -67,10 +68,26 @@ public class SecurityConfig {
                 .exceptionHandling(errors -> errors.authenticationEntryPoint(entryPoint).accessDeniedHandler(denied))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/admin/login").permitAll()
-                        .requestMatchers("/api/admin/**").authenticated()
+                        // USER 只能读目录、Tide、告警，以及改自己的口令和令牌。其余 /api/admin 要 ADMIN。
+                        .requestMatchers(HttpMethod.GET, "/api/admin/me").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.POST, "/api/admin/me/password").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/signing-key").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/conches").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/conches/*").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/conches/*/versions").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/conches/*/versions/*/yaml")
+                        .hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/conches/*/diff").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/tide/**").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/alerts").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/tokens").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.POST, "/api/admin/tokens").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.DELETE, "/api/admin/tokens/*").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.GET, "/api/admin/crabs").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth -> oauth
-                        .jwt(jwt -> jwt.decoder(jwtDecoder))
+                        .jwt(jwt -> jwt.decoder(jwtDecoder).jwtAuthenticationConverter(jwtAuthenticationConverter))
                         .authenticationEntryPoint(entryPoint)
                         .accessDeniedHandler(denied))
                 .build();

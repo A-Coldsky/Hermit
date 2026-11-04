@@ -87,10 +87,13 @@ public class TideQueryService {
         String versionFilter = blankToNull(version);
         String actionFilter = blankToNull(action);
         List<FailureRow> rows = jdbc.query(
-                "SELECT id, conch, conch_version, action, step_index, step_type, error_code, summary, trace_id "
-                        + "FROM hermit_failure_reports WHERE occurred_at >= ? AND occurred_at < ? "
-                        + "AND (? IS NULL OR conch = ?) AND (? IS NULL OR conch_version = ?) "
-                        + "AND (? IS NULL OR action = ?) ORDER BY occurred_at DESC, id DESC",
+                "SELECT f.id, f.conch, f.conch_version, f.action, f.step_index, f.step_type, f.error_code, "
+                        + "f.summary, f.trace_id, u.username AS owner "
+                        + "FROM hermit_failure_reports f "
+                        + "LEFT JOIN hermit_admin_users u ON u.id = f.owner_user_id "
+                        + "WHERE f.occurred_at >= ? AND f.occurred_at < ? "
+                        + "AND (? IS NULL OR f.conch = ?) AND (? IS NULL OR f.conch_version = ?) "
+                        + "AND (? IS NULL OR f.action = ?) ORDER BY f.occurred_at DESC, f.id DESC",
                 (rs, rowNum) -> new FailureRow(
                         rs.getString("conch"),
                         rs.getString("conch_version"),
@@ -99,7 +102,8 @@ public class TideQueryService {
                         rs.getString("step_type"),
                         rs.getString("error_code"),
                         rs.getString("summary"),
-                        rs.getString("trace_id")),
+                        rs.getString("trace_id"),
+                        rs.getString("owner")),
                 Timestamp.from(range.from()),
                 Timestamp.from(range.to()),
                 conchFilter,
@@ -112,11 +116,11 @@ public class TideQueryService {
         for (FailureRow row : rows) {
             FailureAccum accum = grouped.computeIfAbsent(
                     new FailureKey(row.conch(), row.conchVersion(), row.action(), row.stepIndex(), row.stepType(),
-                            row.errorCode()),
+                            row.errorCode(), row.owner()),
                     key -> new FailureAccum());
             accum.count++;
             if (accum.recent.size() < RECENT_SUMMARIES) {
-                accum.recent.add(new FailureSample(row.summary(), row.traceId()));
+                accum.recent.add(new FailureSample(row.summary(), row.traceId(), row.owner()));
             }
         }
         List<FailureGroup> groups = new ArrayList<>();
@@ -130,6 +134,7 @@ public class TideQueryService {
                     key.stepIndex(),
                     key.stepType(),
                     key.errorCode(),
+                    key.owner(),
                     accum.count,
                     List.copyOf(accum.recent)));
         }
@@ -137,7 +142,8 @@ public class TideQueryService {
                 .thenComparing(FailureGroup::conch, Comparator.nullsFirst(Comparator.naturalOrder()))
                 .thenComparing(FailureGroup::conchVersion, Comparator.nullsFirst(Comparator.naturalOrder()))
                 .thenComparing(FailureGroup::action, Comparator.nullsFirst(Comparator.naturalOrder()))
-                .thenComparing(FailureGroup::errorCode, Comparator.nullsFirst(Comparator.naturalOrder())));
+                .thenComparing(FailureGroup::errorCode, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparing(FailureGroup::owner, Comparator.nullsFirst(Comparator.naturalOrder())));
         return new FailureDrilldown(List.copyOf(groups));
     }
 
@@ -171,9 +177,11 @@ public class TideQueryService {
         TimeRange range = range(from, to);
         String conchFilter = blankToNull(conch);
         List<RollbackItem> events = jdbc.query(
-                "SELECT id, instance_id, conch, from_version, to_version, reason, occurred_at, received_at "
-                        + "FROM hermit_rollback_events WHERE occurred_at >= ? AND occurred_at < ? "
-                        + "AND (? IS NULL OR conch = ?) ORDER BY occurred_at DESC, id DESC",
+                "SELECT e.id, e.instance_id, e.conch, e.from_version, e.to_version, e.reason, e.occurred_at, "
+                        + "e.received_at, u.username AS owner FROM hermit_rollback_events e "
+                        + "LEFT JOIN hermit_admin_users u ON u.id = e.owner_user_id "
+                        + "WHERE e.occurred_at >= ? AND e.occurred_at < ? "
+                        + "AND (? IS NULL OR e.conch = ?) ORDER BY e.occurred_at DESC, e.id DESC",
                 (rs, rowNum) -> new RollbackItem(
                         rs.getLong("id"),
                         rs.getString("instance_id"),
@@ -182,7 +190,8 @@ public class TideQueryService {
                         rs.getString("to_version"),
                         rs.getString("reason"),
                         rs.getTimestamp("occurred_at").toInstant(),
-                        rs.getTimestamp("received_at").toInstant()),
+                        rs.getTimestamp("received_at").toInstant(),
+                        rs.getString("owner")),
                 Timestamp.from(range.from()),
                 Timestamp.from(range.to()),
                 conchFilter,
@@ -302,7 +311,8 @@ public class TideQueryService {
             String stepType,
             String errorCode,
             String summary,
-            String traceId) {
+            String traceId,
+            String owner) {
     }
 
     private record FailureKey(
@@ -311,7 +321,8 @@ public class TideQueryService {
             String action,
             Integer stepIndex,
             String stepType,
-            String errorCode) {
+            String errorCode,
+            String owner) {
     }
 
     private static final class FailureAccum {

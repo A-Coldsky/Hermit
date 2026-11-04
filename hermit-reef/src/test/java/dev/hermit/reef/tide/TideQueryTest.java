@@ -105,6 +105,7 @@ class TideQueryTest {
         assertThat(point.get("failureRate").decimalValue()).isEqualByComparingTo("0.25");
         assertThat(point.get("avgMillis").decimalValue()).isEqualByComparingTo("12.000");
         assertThat(point.get("p95Millis").asLong()).isEqualTo(40);
+        assertThat(point.has("owner")).isFalse();
         assertThat(summary.get("data").get("p95Note").asText()).isEqualTo(TideSummary.P95_NOTE);
 
         JsonNode failures = admin(get("/api/admin/tide/failures")
@@ -119,12 +120,15 @@ class TideQueryTest {
         assertThat(group.get("count").asLong()).isEqualTo(1);
         assertThat(group.get("recent").get(0).get("summary").asText()).isEqualTo("状态码 302");
         assertThat(group.get("recent").get(0).get("traceId").asText()).isEqualTo("t1");
+        assertThat(group.get("owner").asText()).isEqualTo(TestSecrets.USERNAME);
+        assertThat(group.get("recent").get(0).get("owner").asText()).isEqualTo(TestSecrets.USERNAME);
 
         JsonNode rollbacks = admin(get("/api/admin/tide/rollbacks")
                 .param("from", DAY.toString())
                 .param("to", "2026-06-02T00:00:00Z"));
         assertThat(rollbacks.get("data").get("events").get(0).get("reason").asText()).isEqualTo("RULE_MISMATCH");
         assertThat(rollbacks.get("data").get("events").get(0).get("fromVersion").asText()).isEqualTo("1.0.1");
+        assertThat(rollbacks.get("data").get("events").get(0).get("owner").asText()).isEqualTo(TestSecrets.USERNAME);
     }
 
     @Test
@@ -196,6 +200,7 @@ class TideQueryTest {
         assertThat(texts(groups.get(0).get("recent"), "traceId")).containsExactly("up-5", "up-4", "up-3", "up-2", "up-1");
         assertThat(groups.get(1).get("count").asLong()).isEqualTo(2);
         assertThat(groups.get(1).get("conch").asText()).isEqualTo("legacy_oa");
+        assertThat(groups.get(0).get("owner").isNull()).isTrue();
 
         JsonNode filtered = admin(get("/api/admin/tide/failures")
                 .param("version", "1.0.0")

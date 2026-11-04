@@ -368,6 +368,231 @@ class CliTest {
     }
 
     @Test
+    void helpGoesToStdoutAndUnknownCommandExits() {
+        ByteArrayOutputStream helpOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream helpErr = new ByteArrayOutputStream();
+        int help = new CrabCommand().run(
+                new String[] {"--help"},
+                env(temp),
+                InputStream.nullInputStream(),
+                stdout(helpOut),
+                stderr(helpErr));
+        assertThat(help).isZero();
+        assertThat(helpOut.toString(StandardCharsets.UTF_8)).contains("usage:").contains("crab apikey list").contains("crab --help");
+        assertThat(helpErr.toString(StandardCharsets.UTF_8)).isEmpty();
+
+        ByteArrayOutputStream shortOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream shortErr = new ByteArrayOutputStream();
+        int shorthand = new CrabCommand().run(
+                new String[] {"-h"},
+                env(temp),
+                InputStream.nullInputStream(),
+                stdout(shortOut),
+                stderr(shortErr));
+        assertThat(shorthand).isZero();
+        assertThat(shortOut.toString(StandardCharsets.UTF_8)).contains("usage:");
+        assertThat(shortErr.toString(StandardCharsets.UTF_8)).isEmpty();
+
+        ByteArrayOutputStream bareOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream bareErr = new ByteArrayOutputStream();
+        int bare = new CrabCommand().run(
+                new String[0],
+                env(temp),
+                InputStream.nullInputStream(),
+                stdout(bareOut),
+                stderr(bareErr));
+        assertThat(bare).isZero();
+        assertThat(bareOut.toString(StandardCharsets.UTF_8)).isEqualTo(helpOut.toString(StandardCharsets.UTF_8));
+        assertThat(bareErr.toString(StandardCharsets.UTF_8)).isEmpty();
+
+        ByteArrayOutputStream unknownOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream unknownErr = new ByteArrayOutputStream();
+        int unknown = new CrabCommand().run(
+                new String[] {"nosuch"},
+                env(temp),
+                InputStream.nullInputStream(),
+                stdout(unknownOut),
+                stderr(unknownErr));
+        assertThat(unknown).isEqualTo(1);
+        assertThat(unknownOut.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(unknownErr.toString(StandardCharsets.UTF_8)).isEqualTo(helpOut.toString(StandardCharsets.UTF_8));
+
+        ByteArrayOutputStream extraOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream extraErr = new ByteArrayOutputStream();
+        int extra = new CrabCommand().run(
+                new String[] {"--help", "serve"},
+                env(temp),
+                InputStream.nullInputStream(),
+                stdout(extraOut),
+                stderr(extraErr));
+        assertThat(extra).isEqualTo(1);
+        assertThat(extraOut.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(extraErr.toString(StandardCharsets.UTF_8)).contains("usage:");
+        assertThat(temp.resolve("data")).doesNotExist();
+    }
+
+    @Test
+    void configGetRejectsUnknownConchAndPrintsStoredValues() throws Exception {
+        Path root = temp.resolve("config");
+        installLegacy(root);
+        Function<String, String> env = env(root);
+
+        ByteArrayOutputStream missingOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream missingErr = new ByteArrayOutputStream();
+        int missing = new CrabCommand().run(
+                new String[] {"config", "get", "no_such_pack"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(missingOut),
+                stderr(missingErr));
+        assertThat(missing).isEqualTo(1);
+        assertThat(missingOut.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(missingErr.toString(StandardCharsets.UTF_8)).isEqualTo("本机没有这个规则包: no_such_pack" + System.lineSeparator());
+
+        ByteArrayOutputStream missingKeyErr = new ByteArrayOutputStream();
+        int missingKey = new CrabCommand().run(
+                new String[] {"config", "get", "no_such_pack", "base_url"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(missingKeyErr));
+        assertThat(missingKey).isEqualTo(1);
+        assertThat(missingKeyErr.toString(StandardCharsets.UTF_8)).contains("本机没有这个规则包").doesNotContain("config key is not set");
+
+        ByteArrayOutputStream oddErr = new ByteArrayOutputStream();
+        int odd = new CrabCommand().run(
+                new String[] {"config", "get", "Not A Name\nsecret"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(oddErr));
+        assertThat(odd).isEqualTo(1);
+        assertThat(oddErr.toString(StandardCharsets.UTF_8)).isEqualTo("本机没有这个规则包" + System.lineSeparator());
+
+        ByteArrayOutputStream empty = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), empty, "config", "get", "legacy_oa")).isZero();
+        assertThat(empty.toString(StandardCharsets.UTF_8)).isEmpty();
+
+        String configValue = "http://oa.example/cli-config-value";
+        assertThat(run(env, InputStream.nullInputStream(), "config", "set", "legacy_oa", "base_url", configValue)).isZero();
+        ByteArrayOutputStream listed = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), listed, "config", "get", "legacy_oa")).isZero();
+        assertThat(listed.toString(StandardCharsets.UTF_8)).isEqualTo("base_url=" + configValue + System.lineSeparator());
+        ByteArrayOutputStream one = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), one, "config", "get", "legacy_oa", "base_url")).isZero();
+        assertThat(one.toString(StandardCharsets.UTF_8)).isEqualTo(configValue + System.lineSeparator());
+
+        ByteArrayOutputStream unsetErr = new ByteArrayOutputStream();
+        int unset = new CrabCommand().run(
+                new String[] {"config", "get", "legacy_oa", "missing_key"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(unsetErr));
+        assertThat(unset).isEqualTo(1);
+        assertThat(unsetErr.toString(StandardCharsets.UTF_8)).contains("config key is not set");
+
+        Path home = temp.resolve("local-config");
+        Files.createDirectories(home);
+        Path file = home.resolve("in.yaml");
+        Files.writeString(file, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_ping", "1.0.0"));
+        assertThat(run(env(home), InputStream.nullInputStream(), "local", "import", file.toString())).isZero();
+        ByteArrayOutputStream localOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream localErr = new ByteArrayOutputStream();
+        int local = new CrabCommand().run(
+                new String[] {"config", "get", "local_ping"},
+                env(home),
+                InputStream.nullInputStream(),
+                stdout(localOut),
+                stderr(localErr));
+        assertThat(local).as(localErr.toString(StandardCharsets.UTF_8)).isZero();
+        assertThat(localOut.toString(StandardCharsets.UTF_8)).isEmpty();
+    }
+
+    @Test
+    void apiKeyListPrintsScopeAndReadOnlyWithoutTheSecret() throws Exception {
+        Path root = temp.resolve("key-list");
+        installLegacy(root);
+        Function<String, String> env = env(root);
+        try (CrabDatabase database = new CrabDatabase(new CrabPaths(root));
+             Connection connection = database.dataSource().getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "INSERT INTO disabled_conches (conch, version, disabled_at) VALUES (?, ?, CURRENT_TIMESTAMP)")) {
+            statement.setString(1, "other_oa");
+            statement.setString(2, "1.0.0");
+            statement.executeUpdate();
+        }
+
+        ByteArrayOutputStream created = new ByteArrayOutputStream();
+        ByteArrayOutputStream createErr = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {
+                    "apikey", "create", "scoped",
+                    "--read-only",
+                    "--conches", "other_oa,legacy_oa",
+                    "--actions", "legacy_oa.list_todo"
+                },
+                env,
+                InputStream.nullInputStream(),
+                stdout(created),
+                stderr(createErr));
+        assertThat(code).as(createErr.toString(StandardCharsets.UTF_8)).isZero();
+        String id = null;
+        String prefix = null;
+        String secret = null;
+        for (String line : created.toString(StandardCharsets.UTF_8).split("\\R")) {
+            if (line.startsWith("id ")) {
+                id = line.substring(3);
+            } else if (line.startsWith("prefix ")) {
+                prefix = line.substring("prefix ".length());
+            } else if (!line.isEmpty()) {
+                secret = line;
+            }
+        }
+        assertThat(id).isNotBlank();
+        assertThat(prefix).hasSize(8);
+        assertThat(secret).startsWith(prefix).hasSizeGreaterThan(prefix.length());
+
+        ByteArrayOutputStream openOut = new ByteArrayOutputStream();
+        int open = new CrabCommand().run(
+                new String[] {"apikey", "create", "open"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(openOut),
+                stderr(new ByteArrayOutputStream()));
+        assertThat(open).isZero();
+        String openId = null;
+        for (String line : openOut.toString(StandardCharsets.UTF_8).split("\\R")) {
+            if (line.startsWith("id ")) {
+                openId = line.substring(3);
+            }
+        }
+        assertThat(run(env, InputStream.nullInputStream(), "apikey", "revoke", openId)).isZero();
+
+        ByteArrayOutputStream listed = new ByteArrayOutputStream();
+        ByteArrayOutputStream listErr = new ByteArrayOutputStream();
+        int listedCode = new CrabCommand().run(
+                new String[] {"apikey", "list"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(listed),
+                stderr(listErr));
+        assertThat(listedCode).isZero();
+        assertThat(listErr.toString(StandardCharsets.UTF_8)).isEmpty();
+        String text = listed.toString(StandardCharsets.UTF_8);
+        String scoped = lineContaining(text, " scoped ");
+        String revoked = lineContaining(text, " open ");
+        assertThat(scoped).contains("conches=legacy_oa,other_oa")
+                .contains("actions=legacy_oa.list_todo")
+                .contains("read-only=true")
+                .doesNotContain("revoked");
+        assertThat(revoked).contains("conches=-").contains("actions=-").contains("read-only=false").endsWith("revoked");
+        assertThat(text).contains(prefix);
+        SecretChecks.absent(text, secret);
+        SecretChecks.absent(listErr.toString(StandardCharsets.UTF_8), secret);
+    }
+
+    @Test
     void syncWithoutReefUrlExits() {
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = new CrabCommand().run(
@@ -378,6 +603,10 @@ class CliTest {
                 stderr(err));
         assertThat(code).isEqualTo(1);
         assertThat(err.toString(StandardCharsets.UTF_8)).contains("reef.url is not configured");
+    }
+
+    private static String lineContaining(String text, String token) {
+        return text.lines().filter(line -> line.contains(token)).findFirst().orElse("");
     }
 
     private static List<byte[]> ciphertexts(Path root) throws Exception {

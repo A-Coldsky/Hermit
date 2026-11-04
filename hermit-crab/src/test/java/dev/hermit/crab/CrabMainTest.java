@@ -14,14 +14,16 @@ class CrabMainTest {
 
     @Test
     void emptyArgsPrintsUsageWithoutExiting() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = new CrabCommand().run(
                 new String[0],
                 name -> null,
                 InputStream.nullInputStream(),
-                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
+                new PrintStream(out, true, StandardCharsets.UTF_8),
                 new PrintStream(err, true, StandardCharsets.UTF_8));
-        assertThat(code).isEqualTo(1);
-        assertThat(err.toString(StandardCharsets.UTF_8)).contains("crab serve");
+        assertThat(code).isZero();
+        assertThat(out.toString(StandardCharsets.UTF_8)).contains("crab serve").contains("usage:");
+        assertThat(err.toString(StandardCharsets.UTF_8)).isEmpty();
     }
 }

@@ -137,7 +137,10 @@ class ConsoleAuditTest {
 
             assertThat(server.console("GET", "/console/api/audit?limit=0", null, true).status()).isEqualTo(400);
             assertThat(server.console("GET", "/console/api/audit?limit=201", null, true).status()).isEqualTo(400);
-            assertThat(server.console("GET", "/console/api/audit?page=0", null, true).status()).isEqualTo(400);
+            TestServer.Reply pageZero = server.console("GET", "/console/api/audit?page=0", null, true);
+            assertThat(pageZero.status()).isEqualTo(400);
+            assertThat(pageZero.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(pageZero.json().path("error").path("message").asText()).isEqualTo("页码超出范围。");
             TestServer.Reply badAccount = server.console("GET", "/console/api/audit?account=bad%20name", null, true);
             assertThat(badAccount.status()).isEqualTo(400);
             assertThat(badAccount.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");

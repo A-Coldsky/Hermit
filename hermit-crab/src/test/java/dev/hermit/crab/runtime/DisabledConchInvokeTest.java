@@ -75,9 +75,19 @@ class DisabledConchInvokeTest {
                     principal, CONCH, ACTION, Map.of(), Optional.empty(), Optional.empty(), "capability-off");
             assertThat(capability.status()).isEqualTo(404);
             assertThat(new String(capability.body(), StandardCharsets.UTF_8))
-                    .contains("NOT_FOUND")
+                    .contains("CAPABILITY_DISABLED")
+                    .contains(Invoker.CAPABILITY_DISABLED_MESSAGE)
+                    .doesNotContain("NOT_FOUND")
+                    .doesNotContain("not found")
                     .doesNotContain("CONCH_DISABLED")
                     .doesNotContain(MARKER);
+            InvokeOutcome absent = invoker.invoke(
+                    principal, CONCH, "no_such", Map.of(), Optional.empty(), Optional.empty(), "missing-action");
+            assertThat(absent.status()).isEqualTo(404);
+            assertThat(new String(absent.body(), StandardCharsets.UTF_8))
+                    .contains("NOT_FOUND")
+                    .contains("not found")
+                    .doesNotContain("CAPABILITY_DISABLED");
             capabilityOff[0] = false;
 
             ApiKeyPrincipal narrow = new ApiKeyPrincipal(
@@ -95,6 +105,8 @@ class DisabledConchInvokeTest {
             assertThat(blocked.status()).isEqualTo(409);
             assertThat(new String(blocked.body(), StandardCharsets.UTF_8))
                     .contains("CONCH_DISABLED")
+                    .contains(DisabledConches.CALL_MESSAGE)
+                    .doesNotContain("conch disabled")
                     .doesNotContain(MARKER);
         }
     }

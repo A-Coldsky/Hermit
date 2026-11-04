@@ -209,7 +209,7 @@ sync:
   interval_seconds: 300
 report:
   enabled: true
-  interval_seconds: 300
+  interval_seconds: 1800
 EOF
     } > "$tmp_config"
     mv "$tmp_config" "$home/config.yml"

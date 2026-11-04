@@ -303,16 +303,18 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of("apiKeys", rows));
     }
 
-    private static final Set<String> API_KEY_FIELDS = Set.of("name", "readOnly", "conches", "actions");
+    private static final Set<String> API_KEY_FIELDS = Set.of("name", "readOnly", "all", "conches", "actions");
 
     private static void createApiKey(CrabRuntime runtime, Context ctx) throws Exception {
         JsonNode body = object(ctx);
         rejectUnknownFields(body, API_KEY_FIELDS);
         String name = requiredText(body, "name");
         boolean readOnly = bool(body, "readOnly", false);
+        boolean all = bool(body, "all", false);
         Set<String> conches = stringSet(body.get("conches"));
         Set<String> actions = stringSet(body.get("actions"));
-        CreatedApiKey created = runtime.admin().createApiKey(name, new ApiKeyScope(conches, actions, readOnly), Actors.CONSOLE);
+        CreatedApiKey created = runtime.admin().createApiKey(
+                name, ApiKeyScope.explicit(all, conches, actions, readOnly), Actors.CONSOLE);
         LinkedHashMap<String, Object> data = new LinkedHashMap<>();
         data.put("id", created.id());
         data.put("name", created.name());
@@ -864,6 +866,7 @@ final class ConsoleApi {
 
     private static Map<String, Object> scope(ApiKeyScope scope) {
         LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("all", scope.grantsAllOfficial());
         row.put("conches", scope.conches());
         row.put("actions", scope.actions());
         row.put("readOnly", scope.readOnlyOnly());

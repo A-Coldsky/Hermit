@@ -37,15 +37,19 @@ class ConsoleHttpTest {
             SecretChecks.absent(names.body(), PASSWORD);
 
             TestServer.Reply created = server.console(
-                    "POST", "/console/api/apikeys", "{\"name\":\"desk\",\"readOnly\":true}", true);
+                    "POST", "/console/api/apikeys", "{\"name\":\"desk\",\"readOnly\":true,\"all\":true}", true);
             assertThat(created.status()).isEqualTo(200);
+            assertThat(created.json().path("data").path("scope").path("all").asBoolean()).isTrue();
+            assertThat(created.json().path("data").path("scope").path("readOnly").asBoolean()).isTrue();
             String plaintext = created.json().path("data").path("plaintext").asText();
             if (!plaintext.startsWith("hk_") || plaintext.length() < 20) {
                 throw new AssertionError("create response did not include an api key plaintext");
             }
             TestServer.Reply listed = server.console("GET", "/console/api/apikeys", null, true);
             SecretChecks.absent(listed.body(), plaintext);
+            assertThat(listed.json().path("data").path("apiKeys").get(0).path("scope").path("all").asBoolean()).isTrue();
             assertThat(listed.json().path("data").path("apiKeys").get(1).path("prefix").asText()).hasSize(8);
+            assertThat(listed.json().path("data").path("apiKeys").get(1).path("scope").path("all").asBoolean()).isTrue();
 
             TestServer.Reply sync = server.console("POST", "/console/api/sync", "{}", true);
             assertThat(sync.status()).isEqualTo(409);

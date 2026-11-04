@@ -80,7 +80,7 @@ npm run dev:reef
 | 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等冲突与同体回放、本机限制、调用渠道、MCP 模式与 SSE、stdio 401 的 JSON-RPC |
 | CLI | `CliTest` | 未知包 `config get` 退出 1；`apikey list` 打印范围、只读和吊销且不明文；`--help` 与无参数把用法打到 stdout 并退出 0，未知命令退出 1 |
 | 前端 | `loading-empty.test.ts`、`copy.test.ts`、`theme.test.ts`、`version-panel.test.ts`、`bar-chart.test.ts` | 初始加载、说明文案、浅色/暗色颜色映射、版本警告详情和图表刻度 |
-| 同步/上报 | `ConchSyncTest`、`SubscriptionTest`、`InstalledConchesTest`、`RuleMismatchStaysTest`、`ReportSenderTest`、`CrabWiringTest`、`SyncExceptionTest` | ETag、订阅安装、手动更新、失败重试、验签、失配不切换版本、Reef 不可达、定时任务 |
+| 同步/上报 | `ConchSyncTest`、`ConchRepairTest`、`SubscriptionTest`、`InstalledConchesTest`、`RuleMismatchStaysTest`、`ReportSenderTest`、`CrabWiringTest`、`SyncExceptionTest` | ETag、订阅安装、手动更新、丢失安装不下载、失败重试、验签、失配不切换版本、Reef 不可达、定时任务 |
 | 验收 | [Phase1AcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/Phase1AcceptanceTest.java) | 独立 Reef + Crab + 模拟 OA，发布后手动更新、失配不回退、反馈与敏感数据检查 |
 
 Java 结果位于各模块 `target/surefire-reports/`。2026-10-16 同步到 `48daca7` 后完整 verify：common 41、Reef 97、Crab 170、验收 1，共 309 项 Java 测试，以及 4 个前端测试文件中的 18 项 Vitest 测试均通过，无失败或跳过。没有 JaCoCo 配置，测试条数不是行/分支覆盖率。

@@ -75,6 +75,9 @@ class EngineUnitTest {
 
         InvalidInput missing = assertInvalid(preparer, action, Map.of());
         assertThat(missing.getMessage()).contains("name");
+
+        InvalidInput extra = assertInvalid(preparer, action, Map.of("name", "alice", "nope", "leak-me"));
+        assertThat(extra.getMessage()).contains("nope").doesNotContain("leak-me");
     }
 
     @Test

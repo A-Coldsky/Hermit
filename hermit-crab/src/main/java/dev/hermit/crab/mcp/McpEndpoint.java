@@ -42,6 +42,7 @@ public final class McpEndpoint {
 
     private static final Logger LOG = Logger.getLogger(McpEndpoint.class.getName());
     private static final String SESSION_HEADER = "Mcp-Session-Id";
+    private static final String TRACE = "hermit.mcp.traceId";
     private static final McpSchema.ServerCapabilities CAPABILITIES = McpSchema.ServerCapabilities.builder()
             .tools(true)
             .resources(false, true)
@@ -461,16 +462,27 @@ public final class McpEndpoint {
     }
 
     private void callTool(Context ctx, ApiKeyPrincipal principal, JsonNode id, JsonNode params, McpSession session) {
+        String traceId = trace(ctx);
         try {
-            writeResult(ctx, id, calls.call(principal, session, headerAccount(ctx), params), session);
+            writeResult(ctx, id, calls.call(principal, session, headerAccount(ctx), params, traceId), session);
         } catch (McpProtocolException ex) {
             writeRpcError(ctx, id, McpErrors.invalidParams(), session);
         }
     }
 
     private static void writeAuthFailure(Context ctx, McpErrors.Failure failure) {
-        ctx.header("X-Hermit-Trace", UUID.randomUUID().toString());
         writeRpcError(ctx, null, failure, null);
+    }
+
+    /** 同一次 MCP HTTP 请求的调用编号，和 HTTP 网关的 {@code X-Hermit-Trace} 是同一类标识。 */
+    private static String trace(Context ctx) {
+        Object value = ctx.attribute(TRACE);
+        if (value instanceof String text && !text.isBlank()) {
+            return text;
+        }
+        String created = UUID.randomUUID().toString();
+        ctx.attribute(TRACE, created);
+        return created;
     }
 
     private static void writeResult(Context ctx, JsonNode id, Object result, McpSession session) {
@@ -499,6 +511,7 @@ public final class McpEndpoint {
         ObjectNode data = McpJson.mapper().createObjectNode();
         data.put("code", failure.code());
         data.put("hint", failure.hint());
+        data.put("traceId", trace(ctx));
         error.set("data", data);
         envelope.set("error", error);
         writeJson(ctx, failure.status(), envelope, session);
@@ -507,6 +520,7 @@ public final class McpEndpoint {
     private static void writeJson(Context ctx, int status, ObjectNode envelope, McpSession session) {
         ctx.status(status);
         ctx.contentType("application/json; charset=utf-8");
+        ctx.header("X-Hermit-Trace", trace(ctx));
         if (session != null) {
             ctx.header(SESSION_HEADER, session.id);
         }

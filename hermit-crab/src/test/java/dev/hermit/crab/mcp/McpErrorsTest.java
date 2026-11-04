@@ -12,4 +12,16 @@ class McpErrorsTest {
         assertThat(upstream).contains("修改参数").doesNotContain("inputSchema");
         assertThat(McpErrors.toolHint("INVALID_INPUT", "字段 page 超出范围")).contains("inputSchema");
     }
+
+    @Test
+    void unknownToolHintDependsOnWhetherSearchExists() {
+        String direct = McpErrors.toolHint("NOT_FOUND", McpErrors.UNKNOWN_TOOL, false);
+        assertThat(direct).contains("tools/list").doesNotContain("search_capabilities");
+        String directory = McpErrors.toolHint("NOT_FOUND", McpErrors.UNKNOWN_TOOL, true);
+        assertThat(directory).contains("tools/list").contains("search_capabilities");
+        assertThat(McpErrors.toolHint("CAPABILITY_DISABLED", "该能力已在本机停用，调用前需要重新启用。"))
+                .contains("控制台")
+                .contains("capabilities.disabled")
+                .doesNotContain("search_capabilities");
+    }
 }

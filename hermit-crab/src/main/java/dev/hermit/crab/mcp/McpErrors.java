@@ -27,6 +27,8 @@ final class McpErrors {
     static final String INTERNAL = "INTERNAL";
     static final String ORIGIN_REJECTED = "ORIGIN_REJECTED";
     static final String UNSUPPORTED_PROTOCOL = "UNSUPPORTED_PROTOCOL";
+    /** 工具名不存在，或当前 Key 的目录里看不到。 */
+    static final String UNKNOWN_TOOL = "没有这个工具，或当前 API Key 看不到它。";
 
     private McpErrors() {
     }
@@ -177,6 +179,13 @@ final class McpErrors {
     }
 
     static String toolHint(String code, String message) {
+        return toolHint(code, message, false);
+    }
+
+    /**
+     * 直接模式没有 {@code search_capabilities}。目录模式才建议用它和 {@code tools/list} 查找能力。
+     */
+    static String toolHint(String code, String message, boolean directory) {
         if ("FORBIDDEN".equals(code)) {
             if (McpCalls.NO_CONFIRM.equals(message)) {
                 return "客户端需在 initialize 中声明 elicitation，并保持 GET /mcp 的 SSE 连接后再执行写操作。";
@@ -190,7 +199,10 @@ final class McpErrors {
             case "INVALID_INPUT" -> message != null && message.contains("HTTP 400")
                     ? "上游没有接受这次输入。请按该系统的要求修改参数后重试。"
                     : "按工具 inputSchema 修正参数后重试。缺必填、类型错误或超出 minimum/maximum 都会被拒绝，不会改成合法值。";
-            case "NOT_FOUND" -> "确认能力名，或用 tools/list、search_capabilities 查看当前 Key 可见的能力。";
+            case "NOT_FOUND" -> directory
+                    ? "确认能力名，或用 tools/list、search_capabilities 查看当前 Key 可见的能力。"
+                    : "确认能力名，或用 tools/list 查看当前 Key 可见的能力。";
+            case "CAPABILITY_DISABLED" -> "在 Crab 控制台重新启用该能力，或从 config.yml 的 capabilities.disabled 里去掉后再调用。";
             case "CONCH_DISABLED" -> "该规则包已在 Reef 停用，且本机没有可调用的已安装版本。管理员重新启用后同步即可装回；已安装的版本仍可调用。";
             case "ACCOUNT_NOT_FOUND" -> "在 Crab 控制台或 CLI 为该规则包创建账号，或改用已有账号名。";
             case "NOT_CONFIGURED" -> "在 Crab 控制台补齐该规则包的配置和凭证。";

@@ -334,6 +334,8 @@ final class McpCatalog {
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", properties);
+        // 账号选择是声明过的字段。能力入参本身也拒绝未声明字段，校验前会先把这里的账号选择拿掉。
+        schema.put("additionalProperties", false);
         Object required = action.inputJsonSchema().get("required");
         if (required instanceof List<?> names && !names.isEmpty()) {
             schema.put("required", List.copyOf(names));

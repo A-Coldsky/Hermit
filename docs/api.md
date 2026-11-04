@@ -111,9 +111,9 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | TIMEOUT | 504 |
 | INTERNAL | 500 |
 
-缺必填、类型无法转换，或数值超出参数声明的 `minimum` / `maximum`，都返回 `INVALID_INPUT`。运行时不会把负页码或过大的 `pageSize` 夹进范围内再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。
+缺必填、类型无法转换，数值超出参数声明的 `minimum` / `maximum`，或请求里多了未声明字段，都返回 `INVALID_INPUT`。入参 JSON Schema 带 `additionalProperties: false`，运行时不会把负页码、过大的 `pageSize` 或多余字段改成合法值再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。MCP 在这次校验前去掉账号选择：直接工具去掉 `account`，能力入参已经占用 `account` 时去掉 `_account`；目录模式的 `call_capability` 把 `account` 放在能力参数外面。账号选择因此不会被当成未声明字段。
 
-本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为 `not found`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`。
+本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为 `not found`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`，message 为「没有这个工具，或当前 API Key 看不到它。」。直接模式的 hint 只建议 `tools/list`，不提到 `search_capabilities`；目录模式的 hint 可以建议 `tools/list` 和 `search_capabilities`。若调用已经进入 `Invoker` 后才发现能力被关掉，MCP 的 `code` 与 HTTP 同为 `CAPABILITY_DISABLED`，hint 说明到控制台重新启用，或从 `capabilities.disabled` 里去掉。
 
 `CONCH_DISABLED` 在墓碑还在、注册表已经没有这份包时，`message` 为「Reef 已停用该规则包，本机没有可调用的副本。」。Reef 的 Agent 清单没有停用标志：`ConchDistributionService` 的当前行只列出可分发的包，已停用、从未发布和已撤回的名字都不在清单里，Crab 也读不到 `hermit_conch_availability`。因此 Crab 只在下面这条契约下写 `disabled_conches`：本机注册表里已经有这份包、本机已订阅、来源是 OFFICIAL，并且这次同步的清单里没有这个名字。墓碑是「Reef 已停用」标记。已安装版本留在注册表里，`current` 保留，版本文件、账号和凭证都保留。HTTP 与 MCP 仍经 `Invoker` 调用，权限、能力开关、账号和凭证检查不变。墓碑存在期间，同步不下载、不重试、不重装该包，也不把它算作可重试失败。同步结果里它只出现一行 `kind=DISABLED`、`reason=DISABLED`，`version` 是本机保留的版本，名字不进入 `removed`。随后的 304 原始结果不再带这一行，控制台读取时仍按墓碑投影成一行 `DISABLED`，`removed` 里仍然没有它。`disabled_at` 只记第一次看到缺席的时间，后来的同步不刷新，也不再写第二条审计。
 
@@ -233,7 +233,7 @@ local import <file>
 local reload
 local delete <conch>
 local export <conch> [--out file]
-mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
+mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
 普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。不带参数，或参数只有 `--help` / `-h`，把用法打到 stdout，退出 0。未知命令，以及子命令参数不够，仍把同一段用法打到 stderr，退出 1。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
@@ -262,7 +262,8 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 - 目录模式调用非只读能力需要支持 elicitation 且保持 SSE，明确确认后执行；直接模式没有同样的服务端确认步骤，客户端应依据工具注解交互。
 - guide resource 为 `hermit://conches/{conch}/guide`，由说明、参数、示例生成。
 - 规则更新/能力开关变化推送列表变更通知。
-- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。
+- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。这个字段在校验前拿掉。直接工具的 `inputSchema` 与能力入参一样设置 `additionalProperties: false`，并声明账号选择，所以账号不是多余字段。
+- `tools/call` 不传 `Idempotency-Key`。同键回放只在 HTTP POST。
 
 协议级失败是 JSON-RPC error，不使用能力 API 的 success/error envelope。`error.code` 是 JSON-RPC 整数；`error.data.code` 是稳定字符串，`error.data.hint` 是下一步。HTTP 401 的 body 同样是这个 JSON-RPC 错误。
 
@@ -277,11 +278,11 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 | `Origin` 不在允许范围 | 403 | -32003 | `ORIGIN_REJECTED`。不创建会话。没有 `Origin` 仍允许 |
 | 非 `initialize` 的 `MCP-Protocol-Version` 不受支持 | 400 | -32600 | `UNSUPPORTED_PROTOCOL`。去掉该头，或改成上面四个版本之一 |
 
-工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。
+工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,traceId,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`CAPABILITY_DISABLED`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。`traceId` 与这次响应的 `X-Hermit-Trace` 相同；若这次调用写了调用记录，记录里也是这个编号。协议错误的 `error.data` 同样带 `traceId`，并与该头相同。成功的 JSON-RPC 响应也写 `X-Hermit-Trace`，不把 `traceId` 放进业务结果。
 
 成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。直接工具的 `outputSchema` 只列 Conch `output` 的字段名和说明，不带类型约束，因为模板渲染不会把提取值转换成声明类型；目录工具的 `outputSchema` 带类型。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
 
-stdio 是对运行中 Crab 的桥接，不单独启动执行器。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr。HTTP 401 时先把 Crab 返回的 JSON-RPC 错误写到 stdout，再在 stderr 打印 `authentication failed`，退出码 1。响应没有可解析的 `error` 对象时，stdout 仍写一条 `jsonrpc: 2.0`、`error.code` 为 `-32001`、message 为 `authentication failed` 的对象，`id` 取自本次请求；然后退出：
+stdio 是对运行中 Crab 的桥接，不单独启动执行器。`mcp-stdio --help` 把默认 URL、环境变量 `HERMIT_API_KEY` 和 `--account` 打到 stdout，退出 0，不要求已经设置 Key，也不连接 Crab。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr。未设置 Key、URL 不是 http/https、Crab 没有在监听时，stderr 分别是中文的「未设置环境变量 HERMIT_API_KEY…」「URL 不合法…」「Crab 没有运行…」。未设置 Key 与非法 URL 退出 1，连不上退出 2。HTTP 401 时先把 Crab 返回的 JSON-RPC 错误写到 stdout，再在 stderr 打印 `authentication failed`，退出码 1。鉴权发生在读 body 之前，响应里的 `id` 为 null；stdio 若能解析出这次请求的 id，就填回去，已有非空 id 时不改。响应没有可解析的 `error` 对象时，stdout 仍写一条 `jsonrpc: 2.0`、`error.code` 为 `-32001`、message 为 `authentication failed` 的对象，`id` 取自本次请求；然后退出：
 
 ```bash
 export HERMIT_API_KEY='调用端安全保存的APIKey'

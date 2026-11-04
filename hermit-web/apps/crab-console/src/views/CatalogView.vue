@@ -164,7 +164,7 @@ onMounted(load)
                 已安装 v{{ row.installedVersion }}
               </el-tag>
               <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="mono">有新版本 v{{ row.latestVersion }}</el-tag>
-              <el-tag v-if="row.disabled" type="warning" effect="plain" size="small">已失效（Reef 停用），本机仍可调用</el-tag>
+              <el-tag v-if="row.disabled" type="warning" effect="plain" size="small">Reef 已停用，本机仍可调用</el-tag>
             </div>
           </template>
         </el-table-column>

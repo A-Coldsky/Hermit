@@ -7,6 +7,7 @@ import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
 import { formatTime, notifyError, relativeTime } from '@shared/format'
 import { api, type ConchSummary } from '../api'
+import { pullCountHint } from '../labels'
 
 const router = useRouter()
 const loading = ref(true)
@@ -82,7 +83,7 @@ onMounted(load)
           </div>
           <div class="foot hm-muted">
             <span><b class="num">{{ row.capabilityCount }}</b> 个能力</span>
-            <span title="Crab 成功下载规则包的次数，各版本合计"><b class="num">{{ row.pullCount }}</b> 次拉取</span>
+            <span :title="`${pullCountHint}，各版本合计`">拉取次数 <b class="num">{{ row.pullCount }}</b></span>
             <span>{{ row.owner ?? '未填负责人' }}</span>
             <span class="spacer" />
             <span>{{ row.publishedAt ? `${relativeTime(row.publishedAt)}发布` : '' }}</span>
@@ -121,7 +122,9 @@ onMounted(load)
           </template>
         </el-table-column>
         <el-table-column prop="capabilityCount" label="能力数" width="90" align="right" />
-        <el-table-column prop="pullCount" label="拉取次数" width="100" align="right" />
+        <el-table-column prop="pullCount" label="拉取次数" width="100" align="right">
+          <template #header><span :title="`${pullCountHint}，各版本合计`">拉取次数</span></template>
+        </el-table-column>
         <el-table-column label="负责人" width="140">
           <template #default="{ row }">{{ row.owner ?? '—' }}</template>
         </el-table-column>

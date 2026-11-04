@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,12 +21,16 @@ final class ReefClient {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
 
-    private final SyncSettings settings;
+    private final AtomicReference<SyncSettings> settings;
     private final HttpClient client;
 
-    ReefClient(SyncSettings settings, HttpClient client) {
+    ReefClient(AtomicReference<SyncSettings> settings, HttpClient client) {
         this.settings = settings;
         this.client = client;
+    }
+
+    private SyncSettings settings() {
+        return settings.get();
     }
 
     ManifestFetch manifest(String ifNoneMatch) {
@@ -96,9 +101,9 @@ final class ReefClient {
     private HttpRequest.Builder get(URI uri) {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                 .timeout(REQUEST_TIMEOUT)
-                .header("X-Hermit-Instance", settings.instanceId().toString())
+                .header("X-Hermit-Instance", settings().instanceId().toString())
                 .GET();
-        settings.token().ifPresent(token -> builder.header("X-Hermit-Token", token));
+        settings().token().ifPresent(token -> builder.header("X-Hermit-Token", token));
         return builder;
     }
 
@@ -114,7 +119,7 @@ final class ReefClient {
     }
 
     private URI endpoint(String path) {
-        String text = settings.reefUrl().toString();
+        String text = settings().reefUrl().toString();
         if (!text.endsWith("/")) {
             text = text + "/";
         }

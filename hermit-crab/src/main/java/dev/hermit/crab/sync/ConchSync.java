@@ -15,10 +15,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -52,7 +54,7 @@ public final class ConchSync {
 
     private static final Logger LOG = Logger.getLogger(ConchSync.class.getName());
 
-    private final SyncSettings settings;
+    private final AtomicReference<SyncSettings> settings;
     private final CrabPaths paths;
     private final ConchRegistry registry;
     private final CredentialVault vault;
@@ -111,7 +113,7 @@ public final class ConchSync {
             DisabledConches disabledConches,
             boolean loadDisabled
     ) {
-        this.settings = settings;
+        this.settings = new AtomicReference<>(settings);
         this.paths = paths;
         this.registry = registry;
         this.vault = vault;
@@ -127,11 +129,29 @@ public final class ConchSync {
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
-        this.reef = new ReefClient(settings, client);
+        this.reef = new ReefClient(this.settings, client);
     }
 
     public DisabledConches disabledConches() {
         return disabledConches;
+    }
+
+    public SyncSettings currentSettings() {
+        return settings.get();
+    }
+
+    /**
+     * Replaces the Reef URL, token, and public key. Waits for an in-progress sync to finish
+     * so a download is not verified with a different key than the one that started the sync.
+     */
+    public void retarget(SyncSettings next) {
+        synchronized (this) {
+            settings.set(Objects.requireNonNull(next, "settings"));
+        }
+    }
+
+    private SyncSettings settings() {
+        return settings.get();
     }
 
     /**
@@ -597,7 +617,7 @@ public final class ConchSync {
         if (!started.compareAndSet(false, true)) {
             return;
         }
-        long delay = Math.max(1L, settings.interval().toMillis());
+        long delay = Math.max(1L, settings().interval().toMillis());
         executor.scheduleWithFixedDelay(this::runScheduled, delay, delay, TimeUnit.MILLISECONDS);
     }
 
@@ -849,7 +869,7 @@ public final class ConchSync {
         }
         VerifiedConch verified;
         try {
-            verified = ConchPackage.readVerified(download.body(), settings.reefKey());
+            verified = ConchPackage.readVerified(download.body(), settings().reefKey());
         } catch (PackageVerificationException ex) {
             return Fetched.rejected(rejected(entry, ex.reason().name()));
         }
@@ -885,7 +905,7 @@ public final class ConchSync {
             if (!Files.isRegularFile(zip) || Files.isSymbolicLink(zip) || Files.size(zip) > ConchFiles.MAX_ZIP_BYTES) {
                 return Optional.empty();
             }
-            VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings.reefKey());
+            VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings().reefKey());
             ConchManifest manifest = verified.manifest();
             if (!conch.equals(manifest.conch())
                     || !latest.equals(manifest.version())
@@ -998,7 +1018,7 @@ public final class ConchSync {
             if (!Files.isRegularFile(zip) || Files.isSymbolicLink(zip) || Files.size(zip) > ConchFiles.MAX_ZIP_BYTES) {
                 return false;
             }
-            VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings.reefKey());
+            VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings().reefKey());
             if (!conch.equals(verified.manifest().conch()) || !version.equals(verified.manifest().version())) {
                 return false;
             }
@@ -1103,7 +1123,7 @@ public final class ConchSync {
         if (message == null || message.isBlank()) {
             return "conch sync failed";
         }
-        String token = settings.token().orElse(null);
+        String token = settings().token().orElse(null);
         if (token != null && message.contains(token)) {
             return message.replace(token, "[redacted]");
         }

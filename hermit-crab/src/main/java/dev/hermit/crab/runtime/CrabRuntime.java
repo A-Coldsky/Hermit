@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -20,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
@@ -36,10 +38,13 @@ import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.engine.ConchRegistry;
+import dev.hermit.crab.report.LiveReportSettings;
 import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.report.ReportSender;
 import dev.hermit.crab.report.ReportSettings;
+import dev.hermit.crab.report.ReportSettingsStore;
 import dev.hermit.crab.secure.CredentialCipher;
+import dev.hermit.crab.secure.KnownSecrets;
 import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.secure.MasterKeyException;
 import dev.hermit.crab.secure.MasterKeyProvider;
@@ -108,24 +113,37 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final ConchAdmin admin;
     private final LocalConches localConches;
     private final String instanceId;
+    private final KnownSecrets knownSecrets = KnownSecrets.empty();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean prepared = new AtomicBoolean();
+    private final AtomicBoolean serving = new AtomicBoolean();
+    private final Object lifecycle = new Object();
     private PublicKey reefKey;
     private ConchSync conchSync;
+    private LiveReportSettings liveReport;
     private ReportQueue reportQueue;
     private ReportSender reportSender;
+    private volatile boolean reportEnabled;
+    private volatile int reportIntervalSeconds;
     /** Last completed sync, from startup, the timer, or a manual request. Sync threads write; HTTP threads read. */
     private volatile SyncReport lastSync;
     private ScheduledExecutorService scheduler;
+    private ScheduledExecutorService syncScheduler;
+    private ScheduledExecutorService reportScheduler;
+    private ScheduledExecutorService memoryScheduler;
+    private ScheduledFuture<?> reportSendTask;
 
     public interface ExecutionListener {
         void onResult(Invocation invocation, ExecutionResult result);
     }
 
     private CrabRuntime(CrabPaths paths, CrabConfig config, Function<String, String> environment, Clock clock) {
+        config = ReefBootstrap.overlay(paths, config);
         this.paths = paths;
         this.config = config;
         this.clock = clock;
+        this.reportEnabled = config.reportEnabled();
+        this.reportIntervalSeconds = config.reportIntervalSeconds();
         this.database = new CrabDatabase(paths);
         byte[] masterKey;
         try {
@@ -148,7 +166,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.apiKeys = new ApiKeyService(database.dataSource());
         this.settings = config.engineSettings();
         this.sessions = new SessionManager(new EncryptedSessionPersistence(database.dataSource(), cipher), settings, clock);
-        this.engine = new RuleEngine(registry, sessions, settings);
+        this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
         this.callLogs = new CallLogStore(database.dataSource(), clock);
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());
@@ -162,6 +180,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.subscriptions = new Subscriptions(database.dataSource());
         this.invoker = new Invoker(
                 registry, accounts, vault, conchConfig, engine, callLogs, idempotency, this, disabledConches);
+        this.invoker.bindKnownSecrets(knownSecrets);
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(paths, registry, database.dataSource());
@@ -252,6 +271,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return;
         }
         this.reefKey = ReefPublicKeys.read(config.reefPublicKey(), paths.root());
+        ReportSettingsStore.Saved saved = new ReportSettingsStore(database.dataSource()).read().orElse(null);
+        if (saved != null) {
+            reportEnabled = saved.enabled();
+            reportIntervalSeconds = saved.intervalSeconds();
+        }
+        if (config.reefToken() != null && !config.reefToken().isBlank()) {
+            knownSecrets.add(config.reefToken());
+        }
         if (config.reefUrl() == null) {
             return;
         }
@@ -261,21 +288,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         URI reefUrl = reefUri(config.reefUrl());
         UUID instance = UUID.fromString(instanceId);
         Optional<String> token = Optional.ofNullable(config.reefToken()).filter(value -> !value.isBlank());
-        SyncSettings syncSettings = new SyncSettings(
-                reefUrl, token, reefKey, Duration.ofSeconds(config.syncIntervalSeconds()), instance);
-        ConchSync sync = new ConchSync(
-                syncSettings, paths, registry, vault, database.dataSource(), clock, disabledConches);
-        sync.onReport(this::rememberCompletedSync);
-        this.conchSync = sync;
-        admin.bindStagedDeclarations(sync::stagedDeclaration);
-        ReportSettings reportSettings = new ReportSettings(
-                config.reportEnabled(), reefUrl, token, instance, CrabVersion.CURRENT.toString());
-        this.reportQueue = new ReportQueue(reportSettings, database.dataSource(), clock);
-        invoker.bindHooks(reportQueue);
-        invoker.bindVersionSuccess(database.dataSource(), clock);
-        if (config.reportEnabled()) {
-            this.reportSender = new ReportSender(reportSettings, reportQueue, clock);
-        }
+        attachReef(reefUrl, token, reefKey, Duration.ofSeconds(config.syncIntervalSeconds()), instance);
     }
 
     public LoadReport loadInstalledConches() {
@@ -310,7 +323,106 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     public boolean reportsConfigured() {
-        return config.reportEnabled() && reportSender != null;
+        return reportEnabled && reportSender != null;
+    }
+
+    public Map<String, Object> reefStatus() {
+        prepare();
+        return reefView(ReefBootstrap.readStored(paths).orElse(null));
+    }
+
+    /**
+     * Validates the bootstrap file, checks the token against Reef, then writes it and applies
+     * the new URL, token, and public key in this process. A sync failure after the write does
+     * not undo the import.
+     */
+    public Map<String, Object> importBootstrap(byte[] body, String actor) {
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
+            throw new IllegalArgumentException("actor must be cli or console");
+        }
+        if (body == null) {
+            throw new ReefBootstrapException(400, ErrorCode.INVALID_INPUT, "invalid bootstrap");
+        }
+        if (body.length > ReefBootstrap.MAX_BYTES) {
+            throw new ReefBootstrapException(400, ErrorCode.INVALID_INPUT, "bootstrap is larger than 64 KiB");
+        }
+        ReefBootstrap.Document document = ReefBootstrap.parseImport(body);
+        ReefBootstrap.probe(document, UUID.fromString(instanceId));
+        prepare();
+        if (hasInstalledPointer() && !ReefBootstrap.sameKey(reefKey, document.publicKey())) {
+            throw new ReefBootstrapException(409, ErrorCode.CONFLICT, ReefBootstrap.KEY_CONFLICT);
+        }
+        ReefBootstrap.write(paths, document, clock.instant());
+        knownSecrets.add(document.token());
+        applyImportedReef(document);
+        LinkedHashMap<String, Object> detail = new LinkedHashMap<>();
+        detail.put("url", document.url());
+        if (document.owner() != null) {
+            detail.put("owner", document.owner());
+        }
+        if (document.tokenName() != null) {
+            detail.put("tokenName", document.tokenName());
+        }
+        String prefix = ReefBootstrap.tokenPrefix(document.token());
+        if (prefix != null) {
+            detail.put("tokenPrefix", prefix);
+        }
+        AuditLog.record(
+                database.dataSource(), actor, AuditKind.REEF_BOOTSTRAPPED, "reef", ApiJson.write(detail));
+        try {
+            syncOnce(null);
+        } catch (RuntimeException ex) {
+            LOG.warning("bootstrap sync failed: " + ex.getClass().getName());
+        }
+        if (serving.get()) {
+            synchronized (lifecycle) {
+                ensureSyncLoop(false);
+                ensureReportLoops();
+            }
+        }
+        return reefStatus();
+    }
+
+    public Map<String, Object> reportSettings() {
+        prepare();
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("enabled", reportEnabled);
+        body.put("intervalSeconds", reportIntervalSeconds);
+        return body;
+    }
+
+    public Map<String, Object> updateReportSettings(boolean enabled, int intervalSeconds, String actor) {
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
+            throw new IllegalArgumentException("actor must be cli or console");
+        }
+        if (intervalSeconds < 60) {
+            throw new IllegalArgumentException("report.interval_seconds must be at least 60");
+        }
+        prepare();
+        new ReportSettingsStore(database.dataSource()).write(enabled, intervalSeconds, clock.instant());
+        this.reportEnabled = enabled;
+        this.reportIntervalSeconds = intervalSeconds;
+        LiveReportSettings live = liveReport;
+        if (live != null) {
+            ReportSettings current = live.get();
+            live.set(new ReportSettings(
+                    enabled, current.reefUrl(), current.token(), current.instanceId(), current.crabVersion()));
+        }
+        if (serving.get()) {
+            synchronized (lifecycle) {
+                rescheduleReportSend();
+            }
+        }
+        LinkedHashMap<String, Object> detail = new LinkedHashMap<>();
+        detail.put("enabled", enabled);
+        detail.put("intervalSeconds", intervalSeconds);
+        AuditLog.record(
+                database.dataSource(),
+                actor,
+                AuditKind.REPORT_SETTINGS_CHANGED,
+                "report",
+                ApiJson.write(detail));
+        return reportSettings();
     }
 
     public Optional<SyncReport> lastSync() {
@@ -474,13 +586,47 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public void startBackground() {
         purgeExpired();
-        if (scheduler == null) {
-            scheduler = Executors.newSingleThreadScheduledExecutor(task -> {
-                Thread thread = new Thread(task, "hermit-crab-retention");
-                thread.setDaemon(true);
-                return thread;
-            });
-            scheduler.scheduleWithFixedDelay(this::safePurge, 1, 1, TimeUnit.HOURS);
+        synchronized (lifecycle) {
+            if (scheduler == null) {
+                scheduler = scheduler("hermit-crab-retention");
+                scheduler.scheduleWithFixedDelay(this::safePurge, 1, 1, TimeUnit.HOURS);
+            }
+        }
+    }
+
+    /** Starts retention, sync, and report loops. Safe to call once after HTTP is listening. */
+    public void startServing() {
+        if (closed.get()) {
+            throw new IllegalStateException("runtime is closed");
+        }
+        prepare();
+        synchronized (lifecycle) {
+            if (!serving.compareAndSet(false, true)) {
+                return;
+            }
+            startBackground();
+            ensureSyncLoop(true);
+            ensureReportLoops();
+        }
+    }
+
+    /** Stops background loops without closing the database. Used when server startup fails. */
+    void abandonServing() {
+        synchronized (lifecycle) {
+            serving.set(false);
+            ScheduledFuture<?> task = reportSendTask;
+            if (task != null) {
+                task.cancel(false);
+            }
+            reportSendTask = null;
+            stopScheduler(reportScheduler);
+            reportScheduler = null;
+            stopScheduler(syncScheduler);
+            syncScheduler = null;
+            stopScheduler(memoryScheduler);
+            memoryScheduler = null;
+            stopScheduler(scheduler);
+            scheduler = null;
         }
     }
 
@@ -495,8 +641,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        if (scheduler != null) {
-            scheduler.shutdownNow();
+        abandonServing();
+        ReportQueue queue = reportQueue;
+        if (queue != null) {
+            try {
+                queue.flushMemory();
+            } catch (RuntimeException ex) {
+                LOG.warning("report memory flush failed: " + ex.getClass().getName());
+            }
         }
         sessions.close();
         database.close();
@@ -548,6 +700,161 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return false;
         } catch (IOException ex) {
             throw new UncheckedIOException("cannot list installed conches", ex);
+        }
+    }
+
+    private void attachReef(URI reefUrl, Optional<String> token, PublicKey key, Duration interval, UUID instance) {
+        SyncSettings syncSettings = new SyncSettings(reefUrl, token, key, interval, instance);
+        ConchSync sync = new ConchSync(
+                syncSettings, paths, registry, vault, database.dataSource(), clock, disabledConches);
+        sync.onReport(this::rememberCompletedSync);
+        this.conchSync = sync;
+        admin.bindStagedDeclarations(sync::stagedDeclaration);
+        ReportSettings reportSettings = new ReportSettings(
+                reportEnabled, reefUrl, token, instance, CrabVersion.CURRENT.toString());
+        this.liveReport = new LiveReportSettings(reportSettings);
+        this.reportQueue = new ReportQueue(liveReport, database.dataSource(), clock);
+        invoker.bindHooks(reportQueue);
+        invoker.bindVersionSuccess(database.dataSource(), clock);
+        this.reportSender = new ReportSender(liveReport, reportQueue, clock);
+        this.reefKey = key;
+    }
+
+    private void applyImportedReef(ReefBootstrap.Document document) {
+        URI reefUrl = reefUri(document.url());
+        UUID instance = UUID.fromString(instanceId);
+        Optional<String> token = Optional.of(document.token());
+        if (conchSync == null) {
+            attachReef(reefUrl, token, document.publicKey(), Duration.ofSeconds(config.syncIntervalSeconds()), instance);
+            return;
+        }
+        SyncSettings current = conchSync.currentSettings();
+        conchSync.retarget(new SyncSettings(
+                reefUrl, token, document.publicKey(), current.interval(), current.instanceId()));
+        this.reefKey = document.publicKey();
+        ReportSettings next = new ReportSettings(
+                reportEnabled, reefUrl, token, instance, CrabVersion.CURRENT.toString());
+        if (liveReport == null) {
+            this.liveReport = new LiveReportSettings(next);
+            this.reportQueue = new ReportQueue(liveReport, database.dataSource(), clock);
+            invoker.bindHooks(reportQueue);
+            invoker.bindVersionSuccess(database.dataSource(), clock);
+            this.reportSender = new ReportSender(liveReport, reportQueue, clock);
+        } else {
+            liveReport.set(next);
+            if (reportSender == null) {
+                this.reportSender = new ReportSender(liveReport, reportQueue, clock);
+            }
+        }
+    }
+
+    private Map<String, Object> reefView(ReefBootstrap.Document stored) {
+        String url = null;
+        String token = null;
+        PublicKey key = reefKey;
+        String source = null;
+        if (conchSync != null) {
+            SyncSettings current = conchSync.currentSettings();
+            url = current.reefUrl().toString();
+            token = current.token().orElse(null);
+            key = current.reefKey();
+            source = stored == null ? "CONFIG" : "BOOTSTRAP";
+        } else if (config.reefUrl() != null) {
+            url = config.reefUrl();
+            token = config.reefToken();
+            source = stored == null ? "CONFIG" : "BOOTSTRAP";
+        }
+        if (stored != null && "BOOTSTRAP".equals(source)) {
+            url = stored.url();
+            if (token == null) {
+                token = stored.token();
+            }
+            if (key == null) {
+                key = stored.publicKey();
+            }
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("configured", url != null);
+        body.put("source", source);
+        body.put("url", url);
+        body.put("owner", stored == null ? null : stored.owner());
+        body.put("tokenName", stored == null ? null : stored.tokenName());
+        body.put("tokenPrefix", ReefBootstrap.tokenPrefix(token));
+        body.put("publicKeyFingerprint", ReefBootstrap.fingerprint(key));
+        body.put("instanceId", instanceId);
+        body.put("importedAt", stored == null ? null : stored.importedAt());
+        return body;
+    }
+
+    private void ensureSyncLoop(boolean immediate) {
+        if (conchSync == null || closed.get()) {
+            return;
+        }
+        if (syncScheduler == null) {
+            syncScheduler = scheduler("hermit-crab-sync");
+            conchSync.start(syncScheduler);
+        }
+        if (immediate) {
+            syncScheduler.execute(this::syncQuietly);
+        }
+    }
+
+    private void ensureReportLoops() {
+        if (closed.get()) {
+            return;
+        }
+        if (reportQueue != null && memoryScheduler == null) {
+            memoryScheduler = scheduler("hermit-crab-report-memory");
+            long seconds = ReportQueue.MEMORY_FLUSH_INTERVAL.toSeconds();
+            memoryScheduler.scheduleWithFixedDelay(this::flushMemoryQuietly, seconds, seconds, TimeUnit.SECONDS);
+        }
+        rescheduleReportSend();
+    }
+
+    private void rescheduleReportSend() {
+        if (!serving.get() || reportSender == null || closed.get()) {
+            return;
+        }
+        if (reportScheduler == null) {
+            reportScheduler = scheduler("hermit-crab-report");
+        }
+        ScheduledFuture<?> previous = reportSendTask;
+        if (previous != null) {
+            previous.cancel(false);
+        }
+        long seconds = Math.max(60L, reportIntervalSeconds);
+        reportSendTask = reportScheduler.scheduleWithFixedDelay(this::flushQuietly, seconds, seconds, TimeUnit.SECONDS);
+    }
+
+    private void flushMemoryQuietly() {
+        ReportQueue queue = reportQueue;
+        if (queue == null) {
+            return;
+        }
+        try {
+            queue.flushMemory();
+        } catch (RuntimeException ex) {
+            LOG.warning("report memory flush failed: " + ex.getClass().getName());
+        }
+    }
+
+    private static ScheduledExecutorService scheduler(String name) {
+        return Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, name);
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    private static void stopScheduler(ScheduledExecutorService executor) {
+        if (executor == null) {
+            return;
+        }
+        executor.shutdownNow();
+        try {
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
         }
     }
 

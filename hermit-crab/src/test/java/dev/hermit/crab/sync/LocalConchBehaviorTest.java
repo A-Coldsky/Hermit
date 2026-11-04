@@ -187,6 +187,7 @@ public class LocalConchBehaviorTest {
 
             assertThat(callSource(runtime, "trace-local")).containsExactly("LOCAL", "LOCAL");
             assertThat(callSource(runtime, "trace-official")).containsExactly("OFFICIAL", "REEF");
+            reports.flushMemory();
             assertThat(hourlyConches(runtime)).contains("official_ping").doesNotContain("local_ping");
             assertThat(reportConches(runtime)).doesNotContain("local_ping");
         }

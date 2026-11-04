@@ -26,6 +26,7 @@ import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.DeclaredSettings;
+import dev.hermit.crab.runtime.ReefBootstrapException;
 import dev.hermit.crab.runtime.StatusCodes;
 import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.report.FlushResult;
@@ -90,6 +91,10 @@ final class ConsoleApi {
         post(app, "/console/api/conches/{conch}/subscription", ctx -> subscribe(runtime, ctx));
         post(app, "/console/api/conches/{conch}/update", ctx -> update(runtime, ctx));
         delete(app, "/console/api/conches/{conch}/subscription", ctx -> unsubscribe(runtime, ctx));
+        get(app, "/console/api/reef", ctx -> reef(runtime, ctx));
+        post(app, "/console/api/reef/bootstrap", ctx -> importReef(runtime, ctx));
+        get(app, "/console/api/reports/settings", ctx -> reportSettings(runtime, ctx));
+        put(app, "/console/api/reports/settings", ctx -> updateReportSettings(runtime, ctx));
         get(app, "/console/api/reports/preview", ctx -> reportPreview(runtime, ctx));
         post(app, "/console/api/reports/send", ctx -> reportSend(runtime, ctx));
         post(app, "/console/api/local-conches", ctx -> importLocal(runtime, ctx));
@@ -522,6 +527,36 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, body);
     }
 
+    private static void reef(CrabRuntime runtime, Context ctx) {
+        GatewayResponses.writeData(ctx, runtime.reefStatus());
+    }
+
+    private static void importReef(CrabRuntime runtime, Context ctx) throws Exception {
+        GatewayResponses.writeData(ctx, runtime.importBootstrap(RequestBodies.read(ctx.req()), Actors.CONSOLE));
+    }
+
+    private static void reportSettings(CrabRuntime runtime, Context ctx) {
+        GatewayResponses.writeData(ctx, runtime.reportSettings());
+    }
+
+    private static void updateReportSettings(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = ApiJson.tree(RequestBodies.read(ctx.req()));
+        if (body == null || !body.isObject()) {
+            throw new IllegalArgumentException("invalid report settings");
+        }
+        rejectUnknownFields(body, Set.of("enabled", "intervalSeconds"));
+        JsonNode enabled = body.get("enabled");
+        JsonNode interval = body.get("intervalSeconds");
+        if (enabled == null || !enabled.isBoolean()) {
+            throw new IllegalArgumentException("enabled is required");
+        }
+        if (interval == null || !interval.isIntegralNumber() || !interval.canConvertToInt()) {
+            throw new IllegalArgumentException("intervalSeconds is required");
+        }
+        GatewayResponses.writeData(ctx, runtime.updateReportSettings(
+                enabled.booleanValue(), interval.intValue(), Actors.CONSOLE));
+    }
+
     private static void reportPreview(CrabRuntime runtime, Context ctx) {
         if (!runtime.reportsConfigured()) {
             GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "reports are not configured");
@@ -629,6 +664,8 @@ final class ConsoleApi {
                             false);
                     return;
                 }
+                GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
+            } catch (ReefBootstrapException ex) {
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
             } catch (SubscriptionException ex) {
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), clientMessage(ex));

@@ -21,7 +21,7 @@ public final class ReportSender {
     private static final Logger LOG = Logger.getLogger(ReportSender.class.getName());
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
 
-    private final ReportSettings settings;
+    private final LiveReportSettings settings;
     private final ReportQueue queue;
     private final Clock clock;
     private final HttpClient client;
@@ -29,10 +29,14 @@ public final class ReportSender {
     private Instant notBefore = Instant.EPOCH;
 
     public ReportSender(ReportSettings settings, ReportQueue queue) {
-        this(settings, queue, Clock.systemUTC());
+        this(new LiveReportSettings(settings), queue, Clock.systemUTC());
     }
 
     public ReportSender(ReportSettings settings, ReportQueue queue, Clock clock) {
+        this(new LiveReportSettings(settings), queue, clock);
+    }
+
+    public ReportSender(LiveReportSettings settings, ReportQueue queue, Clock clock) {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.queue = Objects.requireNonNull(queue, "queue");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -40,6 +44,10 @@ public final class ReportSender {
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
+    }
+
+    private ReportSettings settings() {
+        return settings.get();
     }
 
     public FlushResult flushOnce() {
@@ -51,7 +59,7 @@ public final class ReportSender {
     }
 
     public ReportPreview preview() {
-        if (!settings.enabled()) {
+        if (!settings().enabled()) {
             return new ReportPreview(emptyBatch(), queue.dropped());
         }
         ReportQueue.Pending pending = queue.peek();
@@ -59,14 +67,14 @@ public final class ReportSender {
     }
 
     private FlushResult send(boolean force) {
-        if (!settings.enabled()) {
-            return FlushResult.skipped();
-        }
         synchronized (this) {
+            ReportQueue.Pending pending = queue.flushAndPeek();
+            if (!settings().enabled()) {
+                return FlushResult.skipped();
+            }
             if (!force && clock.instant().isBefore(notBefore)) {
                 return FlushResult.skipped();
             }
-            ReportQueue.Pending pending = queue.peek();
             if (pending.isEmpty()) {
                 return FlushResult.skipped();
             }
@@ -99,9 +107,9 @@ public final class ReportSender {
         HttpRequest.Builder builder = HttpRequest.newBuilder(endpoint("agent/reports"))
                 .timeout(REQUEST_TIMEOUT)
                 .header("Content-Type", "application/json")
-                .header("X-Hermit-Instance", settings.instanceId().toString())
+                .header("X-Hermit-Instance", settings().instanceId().toString())
                 .POST(HttpRequest.BodyPublishers.ofString(json));
-        settings.token().ifPresent(token -> builder.header("X-Hermit-Token", token));
+        settings().token().ifPresent(token -> builder.header("X-Hermit-Token", token));
         HttpResponse<Void> response = client.send(builder.build(), HttpResponse.BodyHandlers.discarding());
         return response.statusCode();
     }
@@ -114,8 +122,8 @@ public final class ReportSender {
 
     private ReportBatch emptyBatch() {
         return new ReportBatch(
-                settings.instanceId().toString(),
-                settings.crabVersion(),
+                settings().instanceId().toString(),
+                settings().crabVersion(),
                 clock.instant(),
                 List.of(),
                 List.of(),
@@ -123,7 +131,7 @@ public final class ReportSender {
     }
 
     private URI endpoint(String path) {
-        String text = settings.reefUrl().toString();
+        String text = settings().reefUrl().toString();
         if (!text.endsWith("/")) {
             text = text + "/";
         }

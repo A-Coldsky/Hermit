@@ -87,7 +87,7 @@ class Phase1AcceptanceTest {
                           interval_seconds: 1
                         report:
                           enabled: true
-                          interval_seconds: 1
+                          interval_seconds: 60
                         """.formatted(reefBase, AGENT_TOKEN, pub.toAbsolutePath()));
                 Function<String, String> env = name -> "HERMIT_HOME".equals(name) ? crabHome.toString() : null;
                 try (CrabServer crab = CrabServer.start(env)) {

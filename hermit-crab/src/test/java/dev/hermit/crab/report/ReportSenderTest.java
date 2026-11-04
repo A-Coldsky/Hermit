@@ -200,6 +200,52 @@ class ReportSenderTest {
     }
 
     @Test
+    void doesNotPostAnEmptyBatchAndFlushesMemoryCountsBeforeSend() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-06-01T00:30:00Z"));
+        try (FakeReef reef = new FakeReef(); CrabDatabase database = database()) {
+            ReportSettings settings = settings(reef, true, Optional.empty());
+            ReportQueue queue = new ReportQueue(settings, database.dataSource(), clock);
+            ReportSender sender = new ReportSender(settings, queue, clock);
+
+            assertThat(sender.flushOnce().attempted()).isFalse();
+            assertThat(reef.reportBodies()).isEmpty();
+            assertThat(reef.paths()).noneMatch("/agent/reports"::equals);
+
+            queue.record("legacy_oa", "1.0.0", "list_todo", success());
+            assertThat(count(database, "hourly_counts")).isZero();
+            assertThat(sender.flushOnce().accepted()).isTrue();
+            assertThat(reef.reportBodies()).hasSize(1);
+            assertThat(count(database, "hourly_counts")).isEqualTo(1);
+            assertThat(ReportJson.readBatch(reef.reportBodies().get(0)).counts().get(0).success()).isEqualTo(1);
+
+            assertThat(sender.flushOnce().attempted()).isFalse();
+            assertThat(reef.reportBodies()).hasSize(1);
+        }
+    }
+
+    @Test
+    void disablingLeavesQueuedWorkAndALaterEnableSendsIt() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-06-01T00:30:00Z"));
+        try (FakeReef reef = new FakeReef(); CrabDatabase database = database()) {
+            LiveReportSettings live = new LiveReportSettings(settings(reef, true, Optional.empty()));
+            ReportQueue queue = new ReportQueue(live, database.dataSource(), clock);
+            ReportSender sender = new ReportSender(live, queue, clock);
+            queue.record("legacy_oa", "1.0.0", "list_todo", failure("trace-hold"));
+            ReportSettings disabled = settings(reef, false, Optional.empty());
+            live.set(disabled);
+            queue.record("legacy_oa", "1.0.0", "list_todo", failure("trace-ignored"));
+            assertThat(sender.flushOnce().attempted()).isFalse();
+            assertThat(reef.reportBodies()).isEmpty();
+            assertThat(count(database, "report_queue")).isEqualTo(1);
+            live.set(settings(reef, true, Optional.empty()));
+            assertThat(sender.flushOnce().accepted()).isTrue();
+            assertThat(reef.reportBodies()).hasSize(1);
+            assertThat(ReportJson.readBatch(reef.reportBodies().get(0)).failures()).singleElement()
+                    .satisfies(row -> assertThat(row.traceId()).isEqualTo("trace-hold"));
+        }
+    }
+
+    @Test
     void disabledReportingWritesNothing() throws Exception {
         try (FakeReef reef = new FakeReef(); CrabDatabase database = database()) {
             ReportSettings settings = settings(reef, false, Optional.empty());

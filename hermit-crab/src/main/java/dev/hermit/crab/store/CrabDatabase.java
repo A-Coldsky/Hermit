@@ -50,6 +50,9 @@ import dev.hermit.common.validate.ConchValidator;
  * It runs when its own row is missing, including a database that already recorded version 11,
  * and does not rewrite the version-3 {@code CREATE TABLE}. The mismatch streak table stays
  * and is no longer written.
+ * Version 13 adds {@code report_settings}, a single row that overrides {@code report.enabled}
+ * and {@code report.interval_seconds} from config.yml. It runs when its own row is missing
+ * and does not rewrite earlier tables. An empty table means the YAML values still apply.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Before the first official release these statements may be edited in
@@ -157,6 +160,10 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 12)) {
                 applyV12(connection);
                 insertVersion(connection, 12);
+            }
+            if (!applied(connection, 13)) {
+                applyV13(connection);
+                insertVersion(connection, 13);
             }
             return null;
         });
@@ -567,6 +574,17 @@ public final class CrabDatabase implements AutoCloseable {
 
     private static void applyV12(Connection connection) throws SQLException {
         execute(connection, "DROP TABLE IF EXISTS pinned_rollbacks");
+    }
+
+    private static void applyV13(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS report_settings (
+                    id INT PRIMARY KEY,
+                    enabled BOOLEAN NOT NULL,
+                    interval_seconds INT NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+                )
+                """);
     }
 
     private static boolean applied(Connection connection, int version) throws SQLException {

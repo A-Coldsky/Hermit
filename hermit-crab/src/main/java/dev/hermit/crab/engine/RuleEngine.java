@@ -24,6 +24,7 @@ import dev.hermit.common.model.Step;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
 import dev.hermit.common.template.TemplateException;
+import dev.hermit.crab.secure.KnownSecrets;
 import dev.hermit.crab.secure.Redactor;
 
 public final class RuleEngine {
@@ -40,6 +41,7 @@ public final class RuleEngine {
     private final ConchRegistry registry;
     private final SessionManager sessions;
     private final EngineSettings settings;
+    private final KnownSecrets knownSecrets;
     private final TemplateEngine templates;
     private final FilterRegistry filters;
     private final InputPreparer inputs = new InputPreparer();
@@ -50,9 +52,19 @@ public final class RuleEngine {
     }
 
     public RuleEngine(ConchRegistry registry, SessionManager sessions, EngineSettings settings) {
+        this(registry, sessions, settings, KnownSecrets.empty());
+    }
+
+    public RuleEngine(
+            ConchRegistry registry,
+            SessionManager sessions,
+            EngineSettings settings,
+            KnownSecrets knownSecrets
+    ) {
         this.registry = registry;
         this.sessions = sessions;
         this.settings = settings;
+        this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
         this.filters = FilterRegistry.defaults();
         this.templates = new TemplateEngine(filters);
         this.steps = new StepRunner(templates, filters);
@@ -495,8 +507,8 @@ public final class RuleEngine {
                 request.traceId());
     }
 
-    private static Redactor redactor(Map<String, String> credentials, List<String> cookies) {
-        LinkedHashSet<String> secrets = new LinkedHashSet<>();
+    private Redactor redactor(Map<String, String> credentials, List<String> cookies) {
+        LinkedHashSet<String> secrets = new LinkedHashSet<>(knownSecrets.copy());
         if (credentials != null) {
             for (String value : credentials.values()) {
                 if (value != null) {

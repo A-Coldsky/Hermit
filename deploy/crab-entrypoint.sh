@@ -1,12 +1,15 @@
 #!/bin/sh
 # Crab 容器入口。控制台继续只听 127.0.0.1，不在这里放开回环限制。
 # /bin/sh 在 eclipse-temurin 上是 dash，脚本保持 POSIX。
+# 已有 $HERMIT_HOME/reef-bootstrap.json 时不再要求 Reef 环境变量，也不再为公钥做管理员登录。
+# 环境变量和引导文件都没有时仍然启动，控制台可以之后导入引导文件。
 set -eu
 
 home="${HERMIT_HOME:-/var/lib/hermit}"
 port="${HERMIT_CRAB_PORT:-7777}"
 reef_url="${HERMIT_REEF_URL:-}"
 reef_url="${reef_url%/}"
+bootstrap="$home/reef-bootstrap.json"
 
 case "$port" in
     ''|*[!0-9]*)
@@ -18,16 +21,24 @@ if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
     echo "HERMIT_CRAB_PORT 必须是 1 到 65535 的整数" >&2
     exit 1
 fi
-if [ -z "$reef_url" ]; then
-    echo "必须设置 HERMIT_REEF_URL。" >&2
-    exit 1
+
+# 和 Reef 的入口一样：去掉空白后为空就不算配置了令牌。写进 config.yml 的仍是原始值，两边才能对上。
+token_compact=$(printf '%s' "${HERMIT_REEF_AGENT_TOKEN:-}" | tr -d '[:space:]')
+has_bootstrap=0
+if [ -f "$bootstrap" ]; then
+    has_bootstrap=1
 fi
 
-# 和 Reef 的入口一样：去掉空白后为空就不启动。写进 config.yml 的仍是原始值，两边才能对上。
-token_compact=$(printf '%s' "${HERMIT_REEF_AGENT_TOKEN:-}" | tr -d '[:space:]')
-if [ -z "$token_compact" ]; then
-    echo "必须设置 HERMIT_REEF_AGENT_TOKEN，空令牌不会启动 Crab。" >&2
-    exit 1
+# 只给了 URL 或只给了令牌、又没有引导文件时，仍然拒绝启动。两者都空则允许，交给控制台导入。
+if [ "$has_bootstrap" -eq 0 ]; then
+    if [ -z "$reef_url" ] && [ -n "$token_compact" ]; then
+        echo "必须设置 HERMIT_REEF_URL。" >&2
+        exit 1
+    fi
+    if [ -n "$reef_url" ] && [ -z "$token_compact" ]; then
+        echo "必须设置 HERMIT_REEF_AGENT_TOKEN，空令牌不会启动 Crab。" >&2
+        exit 1
+    fi
 fi
 
 mkdir -p "$home/data"
@@ -40,15 +51,6 @@ yaml_quote() {
     fi
     escaped=$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')
     printf '"%s"' "$escaped"
-}
-
-quoted_url=$(yaml_quote "$reef_url") || {
-    echo "HERMIT_REEF_URL 无法写入 config.yml" >&2
-    exit 1
-}
-quoted_token=$(yaml_quote "$HERMIT_REEF_AGENT_TOKEN") || {
-    echo "HERMIT_REEF_AGENT_TOKEN 无法写入 config.yml" >&2
-    exit 1
 }
 
 require_line() {
@@ -192,24 +194,14 @@ else
     fi
 fi
 
-if [ ! -f "$home/config.yml" ]; then
-    if is_pem "$home/reef.pub"; then
-        :
-    elif [ -n "${HERMIT_REEF_PUBLIC_KEY_FILE:-}" ]; then
-        copy_pub "$HERMIT_REEF_PUBLIC_KEY_FILE"
-    else
-        fetch_pub
-    fi
-    if ! is_pem "$home/reef.pub"; then
-        echo "reef.pub 不是 PEM" >&2
-        exit 1
-    fi
+write_config() {
+    reef_block=$1
     tmp_config=$(mktemp)
-    cat > "$tmp_config" <<EOF
-reef:
-  url: ${quoted_url}
-  token: ${quoted_token}
-  public_key: reef.pub
+    {
+        if [ -n "$reef_block" ]; then
+            printf '%s\n' "$reef_block"
+        fi
+        cat <<EOF
 server:
   host: "127.0.0.1"
   port: ${port}
@@ -217,17 +209,66 @@ sync:
   interval_seconds: 300
 report:
   enabled: true
-  interval_seconds: 60
+  interval_seconds: 300
 EOF
+    } > "$tmp_config"
     mv "$tmp_config" "$home/config.yml"
     chmod 600 "$home/config.yml"
     echo "wrote ${home}/config.yml"
-fi
+}
 
-require_line "  url: ${quoted_url}" "config.yml 里的 reef.url 和 HERMIT_REEF_URL 不一致。删掉数据卷里的 config.yml 后再启动（reef.pub 和 data/ 会保留）。"
-require_line "  token: ${quoted_token}" "config.yml 里的 reef.token 和 HERMIT_REEF_AGENT_TOKEN 不一致。Crab 必须和 Reef 用同一令牌。删掉数据卷里的 config.yml 后再启动（reef.pub 和 data/ 会保留）。"
-require_line '  host: "127.0.0.1"' "config.yml 的 server.host 必须是 127.0.0.1。控制台只允许回环访问，容器里不会关掉这个限制。"
-require_line "  port: ${port}" "config.yml 里的 server.port 和 HERMIT_CRAB_PORT 不一致。改成同一个端口，或删掉 config.yml 后再启动。"
+require_listen() {
+    require_line '  host: "127.0.0.1"' "config.yml 的 server.host 必须是 127.0.0.1。控制台只允许回环访问，容器里不会关掉这个限制。"
+    require_line "  port: ${port}" "config.yml 里的 server.port 和 HERMIT_CRAB_PORT 不一致。改成同一个端口，或删掉 config.yml 后再启动。"
+}
+
+if [ "$has_bootstrap" -eq 1 ]; then
+    chmod 600 "$bootstrap"
+    if [ ! -f "$home/config.yml" ]; then
+        # 令牌留在引导文件里。新生成的 config.yml 不复制环境变量中的 URL 或令牌。
+        write_config ""
+    else
+        require_listen
+    fi
+elif [ -n "$reef_url" ] && [ -n "$token_compact" ]; then
+    quoted_url=$(yaml_quote "$reef_url") || {
+        echo "HERMIT_REEF_URL 无法写入 config.yml" >&2
+        exit 1
+    }
+    quoted_token=$(yaml_quote "$HERMIT_REEF_AGENT_TOKEN") || {
+        echo "HERMIT_REEF_AGENT_TOKEN 无法写入 config.yml" >&2
+        exit 1
+    }
+    if [ ! -f "$home/config.yml" ]; then
+        if is_pem "$home/reef.pub"; then
+            :
+        elif [ -n "${HERMIT_REEF_PUBLIC_KEY_FILE:-}" ]; then
+            copy_pub "$HERMIT_REEF_PUBLIC_KEY_FILE"
+        else
+            fetch_pub
+        fi
+        if ! is_pem "$home/reef.pub"; then
+            echo "reef.pub 不是 PEM" >&2
+            exit 1
+        fi
+        write_config "reef:
+  url: ${quoted_url}
+  token: ${quoted_token}
+  public_key: reef.pub"
+    else
+        require_line "  url: ${quoted_url}" "config.yml 里的 reef.url 和 HERMIT_REEF_URL 不一致。删掉数据卷里的 config.yml 后再启动（reef.pub 和 data/ 会保留）。"
+        require_line "  token: ${quoted_token}" "config.yml 里的 reef.token 和 HERMIT_REEF_AGENT_TOKEN 不一致。Crab 必须和 Reef 用同一令牌。删掉数据卷里的 config.yml 后再启动（reef.pub 和 data/ 会保留）。"
+        require_listen
+    fi
+else
+    # 没有 Reef 环境变量，也没有引导文件。缺配置时生成一份不含 reef 的 config.yml。
+    # 已经写过 reef 的旧配置保留，由 Java 继续使用。
+    if [ ! -f "$home/config.yml" ]; then
+        write_config ""
+    else
+        require_listen
+    fi
+fi
 
 chown -R hermit:hermit "$home"
 chmod 700 "$home"

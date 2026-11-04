@@ -74,10 +74,10 @@ sync:
   interval_seconds: 300
 report:
   enabled: true
-  interval_seconds: 60
+  interval_seconds: 300
 ```
 
-`reef.pub` 相对 `HERMIT_HOME` 解析。配置写好后：
+`reef.pub` 相对 `HERMIT_HOME` 解析。也可以不手写 `reef.url`、`reef.token` 和 `reef.public_key`，启动后用控制台 `POST /console/api/reef/bootstrap` 或 CLI `reef import <file>` 导入引导 JSON。文件落在 `$HERMIT_HOME/reef-bootstrap.json`，存在时覆盖配置文件里的这三项。引导 JSON 的字段见[接口参考](api.md)。配置写好后：
 
 ```bash
 chmod 600 "$HERMIT_HOME/config.yml"
@@ -155,7 +155,7 @@ docker compose --profile client up -d --build
 docker compose --profile client logs -f crab
 ```
 
-Crab 通过宿主机 Nginx 端口访问 Reef，与 Reef 共用 `.env` 中的 `HERMIT_REEF_AGENT_TOKEN`。首次启动会用管理员账号登录 Reef，取得签名公钥，生成 `/var/lib/hermit/config.yml`。本机控制台为 `http://127.0.0.1:7777/console/`，端口可用 `HERMIT_CRAB_PORT` 设置。
+Crab 通过宿主机 Nginx 端口访问 Reef，与 Reef 共用 `.env` 中的 `HERMIT_REEF_AGENT_TOKEN`。没有 `reef-bootstrap.json` 时，首次启动会用管理员账号登录 Reef，取得签名公钥，生成 `/var/lib/hermit/config.yml`。数据卷里已经有引导文件时，入口不再要求这两个环境变量，也不为公钥登录。两者都没有时 Crab 仍会启动，控制台可以之后导入。本机控制台为 `http://127.0.0.1:7777/console/`，端口可用 `HERMIT_CRAB_PORT` 设置。
 
 在另一台 Linux 客户端机器上只部署 Crab，先在该机器的 `.env` 中设置 `HERMIT_REEF_URL`、与 Reef 相同的 Agent token，以及首次公钥引导所需的管理员账号/口令：
 
@@ -166,4 +166,4 @@ docker compose -f docker-compose.crab.yml logs -f crab
 
 也可挂载可信公钥并指定 `HERMIT_REEF_PUBLIC_KEY_FILE`，避免首次登录取公钥；变量填写容器内路径，仍需额外配置文件挂载。已有 `reef.pub` 会被保留，不会自动信任远端的新公钥。连接远端 Reef 的公钥引导依赖可信的 HTTPS 连接和管理员凭据。
 
-两个 Crab Compose 方案都使用 host 网络和回环监听；不要同时运行并占用相同端口/数据卷。本说明按 Linux 宿主机使用，macOS/Windows 本地开发可使用前面的 Java 启动流程；本次未验证 Docker Desktop 的网络行为。已有配置与环境变量不一致时入口脚本会拒绝启动，完整配置、卷保留、更新和备份恢复见[配置与运维](configuration.md)。
+两个 Crab Compose 方案都使用 host 网络和回环监听；不要同时运行并占用相同端口/数据卷。本说明按 Linux 宿主机使用，macOS/Windows 本地开发可使用前面的 Java 启动流程；本次未验证 Docker Desktop 的网络行为。用环境变量提供了 URL 和令牌、且没有引导文件时，已有配置与环境变量不一致会拒绝启动。完整配置、卷保留、更新和备份恢复见[配置与运维](configuration.md)。

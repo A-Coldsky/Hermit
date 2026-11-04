@@ -18,5 +18,10 @@ public enum ErrorCode {
      * {@code CONCH_DISABLED} 共用状态码，靠错误码区分。
      */
     IDEMPOTENCY_CONFLICT,
+    /**
+     * 本机已安装正式规则包时，不能换成另一把 Reef 公钥。HTTP 409。
+     * 与本地包重名仍用 {@code INVALID_INPUT}，不用这个码。
+     */
+    CONFLICT,
     INTERNAL
 }

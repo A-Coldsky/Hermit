@@ -24,5 +24,9 @@ public enum AuditKind {
     /** Reef first dropped a subscribed official conch from the manifest. */
     REEF_CONCH_DISABLED,
     /** Reef listed that conch again and the disable tombstone was cleared. */
-    REEF_CONCH_ENABLED
+    REEF_CONCH_ENABLED,
+    /** A console or CLI import wrote {@code reef-bootstrap.json} and applied it. Detail has no token. */
+    REEF_BOOTSTRAPPED,
+    /** Console changed report enabled/interval. Detail is the new settings, with no secrets. */
+    REPORT_SETTINGS_CHANGED
 }

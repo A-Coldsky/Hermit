@@ -5,6 +5,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 import javax.sql.DataSource;
@@ -54,6 +56,20 @@ public final class Subscriptions {
                 insert.executeUpdate();
             }
             return true;
+        });
+    }
+
+    public List<String> names() {
+        return Db.transaction(dataSource, connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT conch FROM subscriptions ORDER BY conch");
+                 ResultSet resultSet = statement.executeQuery()) {
+                List<String> names = new ArrayList<>();
+                while (resultSet.next()) {
+                    names.add(resultSet.getString(1));
+                }
+                return names;
+            }
         });
     }
 

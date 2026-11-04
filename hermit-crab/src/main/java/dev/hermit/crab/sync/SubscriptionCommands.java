@@ -61,6 +61,9 @@ public final class SubscriptionCommands {
             synchronized (ConchFileLocks.of(conch)) {
                 registry.remove(conch);
                 ConchFiles.clearCurrent(paths, conch);
+                // Drop the install record so a later subscribe installs the manifest again.
+                // A lost pointer while still subscribed leaves the record in place.
+                new SyncStore(dataSource).clearInstallHistory(conch);
             }
         }
         disabledConches.clear(conch);

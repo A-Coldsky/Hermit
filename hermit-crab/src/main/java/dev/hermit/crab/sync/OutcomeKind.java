@@ -27,5 +27,17 @@ public enum OutcomeKind {
      */
     SKIPPED_LOCAL,
     /** Reef listed the conch, and this Crab has not subscribed, so it was not downloaded. */
-    NOT_SUBSCRIBED
+    NOT_SUBSCRIBED,
+    /**
+     * A subscribed conch has an install record, but it is not in the registry: the current
+     * pointer is missing, its version cannot be parsed, or the package failed to verify or load.
+     * Sync did not download. {@code version} is the last installed version when that is known,
+     * not the manifest version. {@code reason} says which check failed.
+     */
+    REPAIR_REQUIRED,
+    /**
+     * A manual update reloaded the newest installed zip after it verified.
+     * {@code version} is that version. {@code current} was not moved to a higher manifest version.
+     */
+    REPAIRED
 }

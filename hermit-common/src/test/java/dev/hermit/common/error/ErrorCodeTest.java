@@ -19,6 +19,7 @@ class ErrorCodeTest {
                 ErrorCode.ACCOUNT_NOT_FOUND,
                 ErrorCode.FORBIDDEN,
                 ErrorCode.NOT_FOUND,
+                ErrorCode.CAPABILITY_DISABLED,
                 ErrorCode.CONCH_DISABLED,
                 ErrorCode.IDEMPOTENCY_CONFLICT,
                 ErrorCode.CONFLICT,

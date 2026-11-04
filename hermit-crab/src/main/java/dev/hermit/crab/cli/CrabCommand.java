@@ -21,6 +21,7 @@ import java.util.function.Function;
 
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParseException;
+import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.config.ConfigFileException;
 import dev.hermit.crab.config.CrabConfig;
@@ -58,6 +59,7 @@ import dev.hermit.crab.store.DatabaseInUseException;
 public final class CrabCommand {
     private static final String USAGE = """
             usage:
+              crab --help
               crab serve
               crab sync
               crab reef import <file>
@@ -127,9 +129,9 @@ public final class CrabCommand {
 
     private int dispatch(String[] args, Function<String, String> env, InputStream in, PrintStream out, PrintStream err)
             throws Exception {
-        if (args.length == 0) {
-            err.print(USAGE);
-            return 1;
+        if (args.length == 0 || isHelpRequest(args)) {
+            out.print(USAGE);
+            return 0;
         }
         return switch (args[0]) {
             case "serve" -> serve(args, env, out, err);
@@ -486,6 +488,10 @@ public final class CrabCommand {
                 String key = args.length == 4 ? args[3] : null;
                 yield withRuntime(env, runtime -> {
                     runtime.loadInstalledConches();
+                    if (runtime.registry().find(conch).isEmpty()) {
+                        err.println(missingConch(conch));
+                        return 1;
+                    }
                     Map<String, String> stored = runtime.admin().storedConfig(conch);
                     if (key == null) {
                         for (String name : new TreeSet<>(stored.keySet())) {
@@ -744,6 +750,41 @@ public final class CrabCommand {
         }
     }
 
+    private static boolean isHelpRequest(String[] args) {
+        return args.length == 1 && ("--help".equals(args[0]) || "-h".equals(args[0]));
+    }
+
+    /** Installed conches only. The name is echoed when it matches the conch name rule. */
+    private static String missingConch(String conch) {
+        if (ConchValidator.isConchName(conch)) {
+            return "本机没有这个规则包: " + conch;
+        }
+        return "本机没有这个规则包";
+    }
+
+    /**
+     * Stored scope, printed as stored. An empty set is {@code -}; this line does not
+     * invent an "all" flag. The plaintext key is not on {@link ApiKeySummary}.
+     */
+    private static String formatApiKey(ApiKeySummary key) {
+        ApiKeyScope scope = key.scope();
+        String line = key.id() + " " + key.prefix() + " " + key.name()
+                + " conches=" + joinScope(scope.conches())
+                + " actions=" + joinScope(scope.actions())
+                + " read-only=" + scope.readOnlyOnly();
+        if (key.revokedAt() != null) {
+            line += " revoked";
+        }
+        return line;
+    }
+
+    private static String joinScope(Set<String> names) {
+        if (names == null || names.isEmpty()) {
+            return "-";
+        }
+        return String.join(",", new TreeSet<>(names));
+    }
+
     private static String formatAudit(AuditLog.Entry entry) {
         String fields = entry.fields().isEmpty() ? "-" : String.join(",", entry.fields());
         return String.join(" ",
@@ -778,8 +819,7 @@ public final class CrabCommand {
                 }
                 yield withRuntime(env, runtime -> {
                     for (ApiKeySummary key : runtime.admin().listApiKeys()) {
-                        out.println(key.id() + " " + key.prefix() + " " + key.name()
-                                + (key.revokedAt() == null ? "" : " revoked"));
+                        out.println(formatApiKey(key));
                     }
                     return 0;
                 });

@@ -339,14 +339,14 @@ class AdminApiTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
-                .andExpect(jsonPath("$.error.message").value("unauthorized"))
+                .andExpect(jsonPath("$.error.message").value("未登录或登录已过期"))
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.traceId").value("trace-from-caller"));
         mockMvc.perform(post("/anything").header(TraceIds.HEADER, "trace-from-caller"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
-                .andExpect(jsonPath("$.error.message").value("unauthorized"))
+                .andExpect(jsonPath("$.error.message").value("未登录或登录已过期"))
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.traceId").value("trace-from-caller"));
         String page = mockMvc.perform(get("/anything").header(TraceIds.HEADER, "trace-from-caller"))
@@ -363,7 +363,7 @@ class AdminApiTest {
         mockMvc.perform(get("/api/other").header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"))
-                .andExpect(jsonPath("$.error.message").value("forbidden"));
+                .andExpect(jsonPath("$.error.message").value("没有权限执行这个操作"));
     }
 
     @Test
@@ -379,7 +379,7 @@ class AdminApiTest {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken()))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.error.code").value("INTERNAL"))
-                .andExpect(jsonPath("$.error.message").value("internal error"))
+                .andExpect(jsonPath("$.error.message").value("服务器内部错误"))
                 .andExpect(jsonPath("$.traceId").value(TRACE))
                 .andExpect(content().string(not(org.hamcrest.Matchers.containsString("boom-internal-sentinel"))))
                 .andExpect(content().string(not(org.hamcrest.Matchers.containsString("IllegalStateException"))));
@@ -428,7 +428,7 @@ class AdminApiTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
-                .andExpect(jsonPath("$.error.message").value("not found"))
+                .andExpect(jsonPath("$.error.message").value("资源不存在"))
                 .andExpect(jsonPath("$.traceId").value(TRACE))
                 .andExpect(jsonPath("$.timestamp").doesNotExist())
                 .andExpect(jsonPath("$.path").doesNotExist())

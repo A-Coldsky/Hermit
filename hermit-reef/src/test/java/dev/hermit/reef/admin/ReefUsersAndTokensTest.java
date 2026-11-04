@@ -170,7 +170,7 @@ class ReefUsersAndTokensTest {
             mockMvc.perform(request.header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.error.code").value("FORBIDDEN"))
-                    .andExpect(jsonPath("$.error.message").value("forbidden"));
+                    .andExpect(jsonPath("$.error.message").value("没有权限执行这个操作"));
         }
 
         mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
@@ -210,7 +210,7 @@ class ReefUsersAndTokensTest {
                                 "newPassword", CHANGED_PASSWORD))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value(AdminUsers.OLD_PASSWORD_MISMATCH));
+                .andExpect(jsonPath("$.error.message").value("当前密码不正确"));
         mockMvc.perform(post("/api/admin/me/password")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -234,7 +234,7 @@ class ReefUsersAndTokensTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"password\":\"" + RESET_PASSWORD + "\"}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.message").value(AdminUsers.CANNOT_RESET_OWN_PASSWORD));
+                .andExpect(jsonPath("$.error.message").value("不能重置自己的密码，请用右上角「修改密码」"));
         mockMvc.perform(post("/api/admin/users/" + USER_NAME + "/password")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + refreshed)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -260,13 +260,13 @@ class ReefUsersAndTokensTest {
                         .content("{\"disabled\":true}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("CONFLICT"))
-                .andExpect(jsonPath("$.error.message").value(AdminUsers.LAST_ENABLED_ADMIN));
+                .andExpect(jsonPath("$.error.message").value("至少要保留一个启用中的管理员"));
         mockMvc.perform(patch("/api/admin/users/" + TestSecrets.USERNAME)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"role\":\"USER\"}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(AdminUsers.LAST_ENABLED_ADMIN));
+                .andExpect(jsonPath("$.error.message").value("至少要保留一个启用中的管理员"));
 
         createUser(admin, OTHER_ADMIN, OTHER_PASSWORD, "ADMIN");
         mockMvc.perform(patch("/api/admin/users/" + TestSecrets.USERNAME)
@@ -274,7 +274,7 @@ class ReefUsersAndTokensTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"role\":\"USER\"}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(AdminUsers.CANNOT_CHANGE_SELF));
+                .andExpect(jsonPath("$.error.message").value("不能修改自己的角色或禁用自己"));
 
         mockMvc.perform(patch("/api/admin/users/" + OTHER_ADMIN)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
@@ -287,7 +287,7 @@ class ReefUsersAndTokensTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"disabled\":true}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(AdminUsers.LAST_ENABLED_ADMIN));
+                .andExpect(jsonPath("$.error.message").value("至少要保留一个启用中的管理员"));
         assertThat(jdbc.queryForObject(
                 "SELECT role FROM hermit_admin_users WHERE username = ?", String.class, TestSecrets.USERNAME))
                 .isEqualTo("ADMIN");
@@ -305,7 +305,7 @@ class ReefUsersAndTokensTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(userBody(USER_NAME, OTHER_PASSWORD, "USER")))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(AdminUsers.USERNAME_EXISTS));
+                .andExpect(jsonPath("$.error.message").value("用户名已存在"));
         MvcResult rejectedResult = mockMvc.perform(post("/api/admin/users")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -397,7 +397,7 @@ class ReefUsersAndTokensTest {
         mockMvc.perform(delete("/api/admin/tokens/" + issued.id())
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error.message").value("forbidden"));
+                .andExpect(jsonPath("$.error.message").value("没有权限执行这个操作"));
         agent(issued.secret(), INSTANCE).andExpect(status().isOk());
 
         mockMvc.perform(delete("/api/admin/tokens/" + userToken.id())

@@ -230,7 +230,7 @@ class ConchApiTest {
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_UPLOADED));
+                .andExpect(jsonPath("$.error.message").value("只能发布已上传、尚未发布的版本"));
 
         String firstEtag = manifestEtag("1.0.0");
         byte[] firstZip = download("1.0.0");
@@ -300,7 +300,7 @@ class ConchApiTest {
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_UPLOADED));
+                .andExpect(jsonPath("$.error.message").value("只能发布已上传、尚未发布的版本"));
 
         upload(withVersion(sample, "1.2.0"));
         mockMvc.perform(agent("/agent/conches/legacy_oa/1.2.0"))
@@ -312,7 +312,7 @@ class ConchApiTest {
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.1.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_UPLOADED));
+                .andExpect(jsonPath("$.error.message").value("只能发布已上传、尚未发布的版本"));
 
         Integer publishes = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM hermit_audit_log WHERE action = 'PUBLISH'", Integer.class);
@@ -456,18 +456,18 @@ class ConchApiTest {
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.DISABLED));
+                .andExpect(jsonPath("$.error.message").value("规则包已停用"));
         assertThat(json(upload(withVersion(sample, "1.1.0"))).get("success").asBoolean()).isTrue();
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.1.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.DISABLED));
+                .andExpect(jsonPath("$.error.message").value("规则包已停用"));
         mockMvc.perform(post("/api/admin/conches/legacy_oa/disable")
                         .header(HttpHeaders.AUTHORIZATION, bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"again\"}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.ALREADY_DISABLED));
+                .andExpect(jsonPath("$.error.message").value("规则包已经停用"));
 
         mockMvc.perform(post("/api/admin/conches/legacy_oa/enable")
                         .header(HttpHeaders.AUTHORIZATION, bearer())
@@ -493,7 +493,7 @@ class ConchApiTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"not disabled\"}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.NOT_DISABLED));
+                .andExpect(jsonPath("$.error.message").value("规则包尚未停用"));
     }
 
     @Test
@@ -542,7 +542,7 @@ class ConchApiTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("CONFLICT"))
-                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_HIGHER));
+                .andExpect(jsonPath("$.error.message").value("发布版本必须高于当前已发布版本"));
         manifestEtag("1.1.0");
     }
 

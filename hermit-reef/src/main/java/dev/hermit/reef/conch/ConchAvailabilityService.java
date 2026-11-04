@@ -20,9 +20,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ConchAvailabilityService {
 
-    public static final String DISABLED = "conch is disabled";
-    public static final String ALREADY_DISABLED = "conch is already disabled";
-    public static final String NOT_DISABLED = "conch is not disabled";
+    public static final String DISABLED = "规则包已停用";
+    public static final String ALREADY_DISABLED = "规则包已经停用";
+    public static final String NOT_DISABLED = "规则包尚未停用";
     public static final int MAX_REASON_LENGTH = 500;
 
     private final ConchRepository conches;

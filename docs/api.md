@@ -208,6 +208,7 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 命令前缀为 `java -cp "$CP" dev.hermit.crab.CrabMain`，CP 准备见[快速开始](getting-started.md)。
 
 ```text
+--help
 serve
 sync
 reef import <file>
@@ -233,13 +234,15 @@ local export <conch> [--out file]
 mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
-普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
+普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。不带参数，或参数只有 `--help` / `-h`，把用法打到 stdout，退出 0。未知命令，以及子命令参数不够，仍把同一段用法打到 stderr，退出 1。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
 
 `catalog` 打印目录缓存，一行一个包：`包名 版本`，后面按情况接 `subscribed`、`installed 版本`、`disabled`、`local-conflict`、`update-available 清单版本`，最后是标题。缓存还没有时没有输出，退出 0。`subscribe` 成功时打印 `包名 版本 KIND`；这一轮结果里没有该包时打印 `包名 subscribed`。`unsubscribe` 成功时打印包名。`update` 成功时打印 `包名 版本`。它用的是最近一次同步的清单，不会在这条命令里再拉 Reef。未配置 `reef.url` 时 `catalog`、`subscribe` 和 `update` 与 `sync` 一样在 stderr 打印 `reef.url is not configured` 并退出 1。`unsubscribe` 在未配置 Reef 时仍可用。超过 200 字或含换行的错误被收成 `invalid input`。
 
 `audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。每一行是 `时间 actor action origin conch account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
 
-`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为 `unknown option`，不会建出全范围 Key。不传 `--conches` / `--actions` 与控制台不写这两个字段相同：全部正式包，不含本地包。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
+`config get` 只读取已经加载的规则包。注册表里没有这个名字时，stderr 打印 `本机没有这个规则包`，名字符合 `^[a-z][a-z0-9_]{1,63}$` 时再接 `: 名字`，退出 1，不会把空配置当成成功。已加载但还没有保存过配置时没有输出，退出 0。指定的 key 尚未设置时仍是 stderr `config key is not set`，退出 1。
+
+`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为 `unknown option`，不会建出全范围 Key。不传 `--conches` / `--actions` 与控制台不写这两个字段相同：全部正式包，不含本地包。`apikey list` 在 id、前缀和名字之后按库存原样打印 `conches=`、`actions=`、`read-only=true|false`。多个名字按字典序用逗号连接，空集合打印 `-`，不另写一个「全部」标记。已吊销的行末再加 `revoked`。明文只在 `create` 时打印一次，列表只有前 8 个字符的前缀。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
 
 ## MCP
 

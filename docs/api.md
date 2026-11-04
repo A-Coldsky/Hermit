@@ -28,9 +28,9 @@ Reef 的 GET 页面（不是 `/api/**`、`/agent/**`、`/assets/**`）一律返�
 
 Crab 在回环连接上，`GET /console/**` 除 `/console/api/**` 与 `/console/assets/**` 外返回同一份 `index.html`（包括 `/console/audit` 和未登记的深链）。非回环仍是 403。`/console/api/**` 需要控制台头：没有头是 403，有头但路径不存在是 404 `NOT_FOUND` 信封。`GET /console/shells` 与 `GET /console/shells/**` 302 到 `/console/conches`（固定地址，不保留后面的名字）。页面加载后，未知路径显示「页面不存在」；前端把 `shells` 与 `shells/:conch` 转到 `/conches`。其它方法打到未登记的 `/console/**` 仍是 JSON `NOT_FOUND`。未匹配的网关路径（不是 `/api/{conch}/{action}` 或已登记别名）同样是 404 信封。`traceId` 同时出现在响应体和 `X-Hermit-Trace`。
 
-Reef 的查询参数、路径变量或请求头无法转换成声明类型，或缺少必填项时，`GlobalExceptionHandler` 返回 400 `INVALID_INPUT`。`message` 为 `invalid input: 字段名`（多个字段用逗号连接），不回显原始参数值，也不把该异常记成 500。例如 `GET /api/admin/audit?size=abc` 的 message 是 `invalid input: size`。数字越界仍由各接口自己返回 400，message 为 `invalid input`。上传缺少 `file` 仍是 422。
+Reef 的查询参数、路径变量或请求头无法转换成声明类型，或缺少必填项时，`GlobalExceptionHandler` 返回 400 `INVALID_INPUT`。`message` 为 `字段 字段名 无效`（多个字段按字典序用逗号连接，例如 `字段 page, size 无效`），不回显原始参数值，也不把该异常记成 500。例如 `GET /api/admin/audit?size=abc` 的 message 是 `字段 size 无效`。数字越界、空原因等由各接口自己返回 400，message 为 `输入无效`。Bean 校验失败（如超长口令）message 为 `请求校验未通过`。请求体读不成目标类型（坏 JSON、无法识别的枚举值）message 为 `请求体无法解析`，不回显正文。路径不接受该方法时 405，错误码仍是 `INVALID_INPUT`，message 为 `不支持该请求方法`。上传缺少 `file`、空文件或坏 ZIP 仍是 422，message 为 `输入无效`。YAML 解析失败仍是 422，message 为解析器原文；语义校验失败仍是 422，message 为 `输入无效`，明细在 `data`。
 
-Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常，响应正文仍只有 `INTERNAL`。
+Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常。响应信封仍带 `traceId`。默认 message：401 `UNAUTHORIZED` 为 `未登录或登录已过期`，403 `FORBIDDEN` 为 `没有权限执行这个操作`，404 `NOT_FOUND` 为 `资源不存在`，500 `INTERNAL` 为 `服务器内部错误`。登录失败仍是 `authentication failed`，不走这句默认文案。
 
 ## Reef 管理与分发
 
@@ -40,24 +40,24 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | --- | --- | --- |
 | POST | `/login` | `{username,password}`；失败锁定窗口 15 分钟，阈值 5 次 |
 | GET | `/me` | `{username, role}`。`role` 为 `ADMIN` 或 `USER` |
-| POST | `/me/password` | `{oldPassword, newPassword}`。旧口令不对是 400，message 为 `old password does not match`。`Cache-Control: no-store`。改口令不使已发出的 JWT 失效 |
+| POST | `/me/password` | `{oldPassword, newPassword}`。旧口令不对是 400，message 为 `当前密码不正确`。`Cache-Control: no-store`。改口令不使已发出的 JWT 失效 |
 | GET | `/users` | 仅 `ADMIN`。`[{username, role, disabled, createdAt, tokenCount}]`。`tokenCount` 是未吊销的库内令牌数；该用户若是当前配置令牌的归属人（id 最小的 `ADMIN`）且配置了令牌，再加 1。不返回口令或令牌明文 |
-| POST | `/users` | 仅 `ADMIN`。`{username, password, role}`。用户名非空、最长 128，口令规则与登录相同。重复用户名 409，message 为 `username already exists`。不支持删除，只能禁用。`Cache-Control: no-store` |
-| PATCH | `/users/{username}` | 仅 `ADMIN`。`{role?, disabled?}`，至少给一个。不能取消最后一个启用中的 `ADMIN`，409，message 为 `at least one enabled administrator is required`。不能改自己的角色，也不能禁用自己，409，message 为 `cannot change your own role or disabled flag`。自己就是最后一个启用中的管理员时，先返回前一条。空对象 400 `invalid input`。不存在 404 |
-| POST | `/users/{username}/password` | 仅 `ADMIN`。`{password}`，重置别人的口令。重置自己是 400，message 为 `cannot reset your own password`。`Cache-Control: no-store`。审计 `USER_PASSWORD_RESET`，detail 只有用户名 |
+| POST | `/users` | 仅 `ADMIN`。`{username, password, role}`。用户名非空、最长 128，口令规则与登录相同。重复用户名 409，message 为 `用户名已存在`。不支持删除，只能禁用。`Cache-Control: no-store` |
+| PATCH | `/users/{username}` | 仅 `ADMIN`。`{role?, disabled?}`，至少给一个。不能取消最后一个启用中的 `ADMIN`，409，message 为 `至少要保留一个启用中的管理员`。不能改自己的角色，也不能禁用自己，409，message 为 `不能修改自己的角色或禁用自己`。自己就是最后一个启用中的管理员时，先返回前一条。空对象 400，message 为 `输入无效`。不存在 404，message 为 `资源不存在` |
+| POST | `/users/{username}/password` | 仅 `ADMIN`。`{password}`，重置别人的口令。重置自己是 400，message 为 `不能重置自己的密码，请用右上角「修改密码」`。`Cache-Control: no-store`。审计 `USER_PASSWORD_RESET`，detail 只有用户名 |
 | GET | `/tokens` | 自己的令牌。`ADMIN` 加 `?all=true` 看全部；`USER` 即使带 `all=true` 也只看自己。项为 `{id, owner, name, prefix, createdAt, lastUsedAt, revokedAt, source}`。`source` 为 `DATABASE` 或 `CONFIG`。配置令牌是只读项：`id`、`prefix` 和时间为 null，`name` 为 `HERMIT_REEF_AGENT_TOKEN`，不能删除。已吊销的库内令牌仍列出。响应和审计都不含明文 |
 | POST | `/tokens` | `{name}`，非空，最长 64。`USER` 和 `ADMIN` 都可以给自己签发。返回 `{token, secret, publicKey}`。`secret` 是 `hat_` 加 32 个随机字节的 base64url（无填充），只出现在这一次响应里。库里只存 SHA-256 的小写十六进制。`publicKey` 与 `GET /signing-key` 的 PEM 相同。`Cache-Control: no-store`。审计 `AGENT_TOKEN_CREATED`，detail 含 id、name、prefix、owner |
-| DELETE | `/tokens/{id}` | 归属人或 `ADMIN` 吊销。重复吊销仍是 200，只在第一次写 `AGENT_TOKEN_REVOKED`。别人的令牌 403 `forbidden`。不存在 404。配置令牌没有 id，不能从这里吊销 |
+| DELETE | `/tokens/{id}` | 归属人或 `ADMIN` 吊销。重复吊销仍是 200，只在第一次写 `AGENT_TOKEN_REVOKED`。别人的令牌 403，message 为 `没有权限执行这个操作`。不存在 404，message 为 `资源不存在`。配置令牌没有 id，不能从这里吊销 |
 | GET | `/crabs` | `[{owner, instanceId, tokenName, firstSeenAt, lastSeenAt, crabVersion}]`。`USER` 只看自己的。配置令牌记下的行 `tokenName` 为 null。同一（令牌，实例）在进程内 60 秒最多写一次 `last_used_at` 和 `last_seen_at`；重启后重新计。`crabVersion` 在实例行上最长 32 个字符，上报原文更长时截断；失败报告仍保留最多 64 个字符 |
 | GET | `/signing-key` | `data.publicKey` PEM；不提供私钥 |
-| POST | `/conches` | multipart 字段 `file`，YAML 或仅含 conch.yaml 的 ZIP；上传及解包 YAML 限 1 MiB |
+| POST | `/conches` | multipart 字段 `file`，YAML 或仅含 conch.yaml 的 ZIP；上传及解包 YAML 限 1 MiB。同一规则包版本已存在时 409 `CONFLICT`，message 为 `该规则包版本已存在`。版本不高于该包已有的最高版本时 409 `CONFLICT`，message 为 `版本必须高于已有的最高版本` |
 | GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null。两项都带 `pullCount`（long，JSON 数字）：该规则包全部版本成功下载次数之和，含尚未发布的版本 |
 | GET | `/conches/{conch}/versions` | 版本列表，每项含 `warningCount`、`warnings` 校验警告明细，以及 `pullCount`（该版本成功下载次数，long） |
 | GET | `/conches/{conch}/versions/{version}/yaml` | YAML 原文 |
-| GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `invalid input`。少于两个版本时 400 `INVALID_INPUT`，message 为 `at least two versions are required to diff`。名字不合法仍是 404 |
-| POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。必须严格高于当前已发布版本；没有当前版本时可以发布。不高于时 409，`message` 为 `published version must be higher than the current version`。已经发布过的版本仍是 409，`message` 为 `only an uploaded version can be published`。Conch 已停用时 409，`message` 为 `conch is disabled`（先于版本比较） |
-| POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `conch is already disabled` |
-| POST | `/conches/{conch}/enable` | `{reason}`，规则与停用相同。未停用时 409，`message` 为 `conch is not disabled`。启用原因只写入审计 |
+| GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `版本对比需要同时提供 from 和 to`。少于两个版本时 400 `INVALID_INPUT`，message 为 `至少需要两个版本才能对比`。名字不合法仍是 404 |
+| POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。必须严格高于当前已发布版本；没有当前版本时可以发布。不高于时 409，`message` 为 `发布版本必须高于当前已发布版本`。已经发布过的版本仍是 409，`message` 为 `只能发布已上传、尚未发布的版本`。Conch 已停用时 409，`message` 为 `规则包已停用`（先于版本比较） |
+| POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `规则包已经停用` |
+| POST | `/conches/{conch}/enable` | `{reason}`，规则与停用相同。未停用时 409，`message` 为 `规则包尚未停用`。启用原因只写入审计 |
 | GET | `/tide/summary` | conch/from/to/bucket |
 | GET | `/tide/failures` | conch/version/action/from/to |
 | GET | `/tide/compare` | conch/versions（逗号分隔版本） |
@@ -75,7 +75,7 @@ Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400
 
 配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。协议须为 `http` 或 `https`，空字符串不推送；其他协议或没有协议时进程拒绝启动。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 
-停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布。坏掉的发布用一个更高版本替换，不再提供管理员回滚。`POST /api/admin/conches/{conch}/rollback` 没有对应接口。页面的 GET 兜底匹配所有路径，所以这个 POST 是 405 `INVALID_INPUT`；对同一路径发 GET 则是 404 `NOT_FOUND`。拉取次数不进入清单，下载成功不会改变 ETag。
+停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布。坏掉的发布用一个更高版本替换，不再提供管理员回滚。`POST /api/admin/conches/{conch}/rollback` 没有对应接口。页面的 GET 兜底匹配所有路径，所以这个 POST 是 405 `INVALID_INPUT`，message 为 `不支持该请求方法`；对同一路径发 GET 则是 404 `NOT_FOUND`。拉取次数不进入清单，下载成功不会改变 ETag。
 
 Agent 路由：
 
@@ -111,9 +111,9 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | TIMEOUT | 504 |
 | INTERNAL | 500 |
 
-缺必填、类型无法转换，或数值超出参数声明的 `minimum` / `maximum`，都返回 `INVALID_INPUT`。运行时不会把负页码或过大的 `pageSize` 夹进范围内再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。
+缺必填、类型无法转换，数值超出参数声明的 `minimum` / `maximum`，或请求里多了未声明字段，都返回 `INVALID_INPUT`。入参 JSON Schema 带 `additionalProperties: false`，运行时不会把负页码、过大的 `pageSize` 或多余字段改成合法值再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。MCP 在这次校验前去掉账号选择：直接工具去掉 `account`，能力入参已经占用 `account` 时去掉 `_account`；目录模式的 `call_capability` 把 `account` 放在能力参数外面。账号选择因此不会被当成未声明字段。
 
-本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为 `not found`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`。
+本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为 `not found`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`，message 为「没有这个工具，或当前 API Key 看不到它。」。直接模式的 hint 只建议 `tools/list`，不提到 `search_capabilities`；目录模式的 hint 可以建议 `tools/list` 和 `search_capabilities`。若调用已经进入 `Invoker` 后才发现能力被关掉，MCP 的 `code` 与 HTTP 同为 `CAPABILITY_DISABLED`，hint 说明到控制台重新启用，或从 `capabilities.disabled` 里去掉。
 
 `CONCH_DISABLED` 在墓碑还在、注册表已经没有这份包时，`message` 为「Reef 已停用该规则包，本机没有可调用的副本。」。Reef 的 Agent 清单没有停用标志：`ConchDistributionService` 的当前行只列出可分发的包，已停用、从未发布和已撤回的名字都不在清单里，Crab 也读不到 `hermit_conch_availability`。因此 Crab 只在下面这条契约下写 `disabled_conches`：本机注册表里已经有这份包、本机已订阅、来源是 OFFICIAL，并且这次同步的清单里没有这个名字。墓碑是「Reef 已停用」标记。已安装版本留在注册表里，`current` 保留，版本文件、账号和凭证都保留。HTTP 与 MCP 仍经 `Invoker` 调用，权限、能力开关、账号和凭证检查不变。墓碑存在期间，同步不下载、不重试、不重装该包，也不把它算作可重试失败。同步结果里它只出现一行 `kind=DISABLED`、`reason=DISABLED`，`version` 是本机保留的版本，名字不进入 `removed`。随后的 304 原始结果不再带这一行，控制台读取时仍按墓碑投影成一行 `DISABLED`，`removed` 里仍然没有它。`disabled_at` 只记第一次看到缺席的时间，后来的同步不刷新，也不再写第二条审计。
 
@@ -132,7 +132,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | GET | `/conches`、`/conches/{conch}` | 已加载规则/字段声明/能力状态。列表项含 `subscribed`、`needsConfiguration`、`loginPaused`、`source`、`reefDisabled`、`reefDisabledAt`、`updateAvailable`、`latestVersion`、`newRequiredCredentials`；详情同样含这三项。`updateAvailable` 为 true 表示最近一次同步的清单版本高于已安装版本，且 `min_crab_version` 允许安装。`latestVersion` 是清单版本；本地包，以及清单里已经没有的停用包，为 null。`newRequiredCredentials` 是清单要求、但当前已安装文档未要求的凭证名，已排序。目录里没有该行时这三项为 false、null、空数组。`source` 为 `LOCAL` 或 `REEF`。`reefDisabled` 为 true 时本机仍保留已安装版本并可调用，`reefDisabledAt` 是本机第一次记下停用墓碑的 ISO-8601 时间；未停用时 `reefDisabled` 为 false，`reefDisabledAt` 为 null。本地包这两项为 false 和 null |
 | GET | `/catalog` | 最近一次成功清单。`{conches, syncedAt, configured}`。未配置 Reef 时 `configured` 为 false，`conches` 为空。每项含 `conch`、`version`、`title`、`description`、`capabilityCount`、`subscribed`、`installed`、`installedVersion`、`disabled`、`localConflict`、`updateAvailable`、`latestVersion`、`newRequiredCredentials`。`disabled` 与停用墓碑一致。名字已经离开清单缓存、墓碑还在时仍补一行：`disabled` 为 true，`version` 为 null（Reef 没有在发布的版本），`installedVersion` 是本机保留的版本。`localConflict` 表示该名字已是本机本地包 |
 | POST | `/conches/{conch}/subscription` | 订阅并立即同步。返回 `{conch, subscribed: true, outcome}`。`outcome` 与同步结果里的一行相同，清单未提到该包时为 JSON `null`。与本地包重名是 409，错误码仍是 `INVALID_INPUT`。第一次订阅安装 Reef 当前版本 |
-| POST | `/conches/{conch}/update` | 按最近一次同步的清单安装更高版本，不重新拉取清单。返回 `{conch, outcome}`。成功时 `outcome.kind` 为 `INSTALLED`。未安装、未订阅、不在目录里是 404；本地包、版本不更高、清单与包不一致、`min_crab_version` 过高是 409 `INVALID_INPUT`；Reef 已停用是 409 `CONCH_DISABLED`，不下载。本机仍加载时 `message` 为「Reef 已停用该规则包，不再下载。」；墓碑还在但本机文件已经丢失、注册表没有这份包时，`message` 为「Reef 已停用该规则包，本机没有可调用的副本。」。CLI `update` 打印同样的 message。默认账号缺少新版本新增的必填凭证时 409 `NOT_CONFIGURED`，`message` 为 `missing credentials for update: a, b`（名字已排序）。这时验过签的包已经写进版本目录，`current` 和注册表不变；补上凭证后再调用一次才会切换。没有默认账号时不拦。已经声明过、只是从可选变成必填的名字，可以在更新前写入 |
+| POST | `/conches/{conch}/update` | 按最近一次同步的清单安装更高版本，不重新拉取清单。返回 `{conch, outcome}`。成功时 `outcome.kind` 为 `INSTALLED`；注册表没有这份曾经安装的包、且最新已安装 zip 仍能验签时为 `REPAIRED`，`reason` 为 `RESTORED`，`version` 是重新载入的版本，不下载，`current` 不跳到更高的清单版本。zip 验签失败则下载清单版本，成功时仍是 `INSTALLED`。未安装、未订阅、不在目录里是 404；本地包、版本不更高、清单与包不一致、`min_crab_version` 过高是 409 `INVALID_INPUT`；Reef 已停用是 409 `CONCH_DISABLED`，不下载。本机仍加载时 `message` 为「Reef 已停用该规则包，不再下载。」；墓碑还在但本机文件已经丢失、注册表没有这份包时，`message` 为「Reef 已停用该规则包，本机没有可调用的副本。」。CLI `update` 打印同样的 message。默认账号缺少新版本新增的必填凭证时 409 `NOT_CONFIGURED`，`message` 为 `missing credentials for update: a, b`（名字已排序）。这时验过签的包已经写进版本目录，`current` 和注册表不变；补上凭证后再调用一次才会切换。没有默认账号时不拦。已经声明过、只是从可选变成必填的名字，可以在更新前写入 |
 | DELETE | `/conches/{conch}/subscription` | 退订。返回 `{conch, subscribed: false}` |
 | GET / POST | `/conches/{conch}/accounts` | 列表 / `{name}` 创建。账号行见下方字段 |
 | DELETE | `/conches/{conch}/accounts/{account}` | 删除账号/凭证并使会话失效 |
@@ -182,7 +182,7 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 | `id` | 行 id |
 | `at` | 时间 |
 | `actor` | `cli`、`console` 或 `sync` |
-| `action` | 动作名，例如 `CREDENTIALS_WRITTEN`、`CONFIG_PUT`、`CAPABILITY_DISABLED`、`REEF_CONCH_DISABLED`、`REEF_CONCH_ENABLED` |
+| `action` | 动作名，例如 `CREDENTIALS_WRITTEN`、`CONFIG_PUT`、`CAPABILITY_DISABLED`、`REEF_CONCH_DISABLED`、`REEF_CONCH_ENABLED`、`CONCH_REPAIR_REQUIRED` |
 | `origin` | `OFFICIAL` 或 `LOCAL`。API Key、debug、`SYNC_REQUESTED`，以及凭证声明变更，为 JSON `null`。`REEF_CONCH_DISABLED` 与 `REEF_CONCH_ENABLED` 为 `OFFICIAL` |
 | `conch` | 相关 Conch；没有则为 `null` |
 | `account` | 账号类事件的账号。配置、能力开关、API Key、debug、同步和凭证声明变更为 `null` |
@@ -194,16 +194,16 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 退订删除订阅行，从注册表移除，删除 `current`，并清掉已有墓碑。退订不新写墓碑，也不写 `REEF_CONCH_ENABLED`。账号、凭证、配置和版本目录保留。此后调用是 `NOT_FOUND`。已经进入引擎的请求仍使用当时的授权快照。
 
-`CONCH_SUBSCRIBED` 与 `CONCH_UNSUBSCRIBED` 的审计 target 是 `OFFICIAL/{conch}`，因此读取时 origin 为 `OFFICIAL`、conch 为包名、account 为空。detail 只有包名，不是 JSON，所以 `fields` 为空。响应仍不返回 detail 原文。`REEF_CONCH_DISABLED` 在本机第一次看到已订阅正式包从清单消失时由 actor `sync` 写一条，target 同样是 `OFFICIAL/{conch}`，detail 是包名。`REEF_CONCH_ENABLED` 在清单再次列出该名字、墓碑被清掉时写一条，actor、target 和 detail 相同。后来的同步不重复这两条。退订只写 `CONCH_UNSUBSCRIBED`。
+`CONCH_SUBSCRIBED` 与 `CONCH_UNSUBSCRIBED` 的审计 target 是 `OFFICIAL/{conch}`，因此读取时 origin 为 `OFFICIAL`、conch 为包名、account 为空。detail 只有包名，不是 JSON，所以 `fields` 为空。响应仍不返回 detail 原文。`REEF_CONCH_DISABLED` 在本机第一次看到已订阅正式包从清单消失时由 actor `sync` 写一条，target 同样是 `OFFICIAL/{conch}`，detail 是包名。`REEF_CONCH_ENABLED` 在清单再次列出该名字、墓碑被清掉时写一条，actor、target 和 detail 相同。后来的同步不重复这两条。退订只写 `CONCH_UNSUBSCRIBED`。`CONCH_REPAIR_REQUIRED` 在同步发现已订阅、曾经安装、但注册表没有这份包时由 actor `sync` 写一条，target 为 `OFFICIAL/{conch}`。detail 是 `{"reason":"..."}`。读取时丢弃未知键，所以 `fields` 为空；原因以同步结果的 `reason` 为准。同一原因在包重新载入或退订之前不重复写。
 
-同步结果里每个 Conch 有 `conch`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`UPDATE_AVAILABLE`、`SKIPPED_OLDER`、`SKIPPED_LOCAL`、`NOT_SUBSCRIBED`、`REJECTED`、`DISABLED` 之一。已订阅且已安装的正式包，清单版本更高时为 `UPDATE_AVAILABLE`，`version` 是本机已安装版本，不下载。清单版本更低时为 `SKIPPED_OLDER`，同样不下载、不降级。`min_crab_version` 高于本机 Crab 时为 `SKIPPED_MIN_VERSION`，不下载。清单里的名字已经是本机本地包时为 `SKIPPED_LOCAL`，不下载、不覆盖，也不写入 ETag 快照。`NOT_SUBSCRIBED` 表示清单里有这个包，但本机未订阅，因此没有下载。Reef 把已订阅且已安装的正式包从清单去掉时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是本机保留的版本，名字不出现在 `removed`。`DISABLED` 不可重试，并把它的本机版本写入 ETag 快照，因此 `current` 仍匹配时后续同步可以 304，且不会下载。随后的 304 原始结果不再带这行，控制台读取时仍按墓碑投影成一行 `DISABLED`，`removed` 里仍然没有它。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
+同步结果里每个 Conch 有 `conch`、`version`、`kind`、`reason`，整份结果另有 `error`（`null` 或 `{code,message}`）。`kind` 为 `INSTALLED`、`SKIPPED_SAME`、`SKIPPED_MIN_VERSION`、`UPDATE_AVAILABLE`、`SKIPPED_OLDER`、`SKIPPED_LOCAL`、`NOT_SUBSCRIBED`、`REJECTED`、`DISABLED`、`REPAIR_REQUIRED`、`REPAIRED` 之一。已订阅且已安装的正式包，清单版本更高时为 `UPDATE_AVAILABLE`，`version` 是本机已安装版本，不下载。清单版本更低时为 `SKIPPED_OLDER`，同样不下载、不降级。`min_crab_version` 高于本机 Crab 时为 `SKIPPED_MIN_VERSION`，不下载。清单里的名字已经是本机本地包时为 `SKIPPED_LOCAL`，不下载、不覆盖，也不写入 ETag 快照。`NOT_SUBSCRIBED` 表示清单里有这个包，但本机未订阅，因此没有下载。已订阅且 `installed_versions` 有记录、注册表没有这份正式包时，这一行为 `REPAIR_REQUIRED`，不下载。`version` 是上次安装且能解析的版本，不是清单上的更高版本：指针丢失、版本无法解析或路径不安全时取安装记录里最新且能解析的版本，否则取 `current` 上能解析的版本。`reason` 为 `POINTER_MISSING`、`VERSION_INVALID`、`PACKAGE_MISSING`、`NOT_LOADED`、`ZIP_TOO_LARGE`、`PATH_UNSAFE`、`MANIFEST_ENTRY_MISMATCH`，或 `PackageReason` 的名字。`REPAIR_REQUIRED` 可重试，发现它的那次同步不记 ETag，`notModified` 为 false。`GET /console/api/sync` 经 `visibleStatus` 读取：记下的 304 即使没有 Conch 行，仍会补上 `REPAIR_REQUIRED`，这时响应里的 `notModified` 可以仍为 true，不能单凭它显示「已是最新」。包已重新载入时去掉过期的修复行。停用墓碑不另补修复行。`REPAIRED` 只出现在手动更新重新载入本机 zip 时，定时同步不会产生它，也不可重试。Reef 把已订阅且已安装的正式包从清单去掉时，这一行的 `kind` 为 `DISABLED`，`reason` 为 `DISABLED`，`version` 是本机保留的版本，名字不出现在 `removed`。`DISABLED` 不可重试，并把它的本机版本写入 ETag 快照，因此 `current` 仍匹配时后续同步可以 304，且不会下载。随后的 304 原始结果不再带这行，控制台读取时仍按墓碑投影成一行 `DISABLED`，`removed` 里仍然没有它。Reef 不可达时 POST 返回 502 `UPSTREAM_ERROR`，`message` 写明原因和下一步；GET 记下这次失败，不再返回上次成功。Reef 已经返回 HTTP 状态时，手动同步仍是 500 `INTERNAL`，状态保留上次成功。
 
 
 清单再次列出该名字时，Crab 清掉停用墓碑并写一条 `REEF_CONCH_ENABLED`，然后按普通更新处理。版本与已安装版本相同则 `SKIPPED_SAME`，不重新下载。更高版本记 `UPDATE_AVAILABLE`，不自动安装。更低版本记 `SKIPPED_OLDER`。账号、凭证和配置在停用期间不删除。本地包不写墓碑，同步也不覆盖、不删除它们。
 
-手动更新使用最近一次成功同步留下的目录缓存，不在更新请求里再拉清单。它先下载并验签，再用验过的包计算新增必填凭证。目录里的 `requiredCredentials` 若存在且与验过的包不一致，拒绝安装，reason 为 `MANIFEST_ENTRY_MISMATCH`。旧缓存没有这个字段时不当成不一致。默认账号是 `AccountStore.resolve(OFFICIAL, conch, empty)`。没有默认账号就不检查凭证。某个名字在保险库里有字段（密文打不开也算有）即视为已填。缺的名字会让这次更新停在版本目录里，不改 `current`。凭证写入接受已安装文档声明的字段，也接受一份已暂存、且重新验签通过的更高版本所声明的字段；两边都声明时用已安装的那份做形状检查。控制台「写完后必填都在」仍只看已安装文档。第二次更新再次验签，默认账号已经具备每个新增必填名时才切换。成功切换写一条 `CONCH_UPDATED`，actor 为 `console` 或 `cli`，target 为 `OFFICIAL/{conch}`，detail 为 `{"from","to"}`。上报开启时另入队一条 reason 为 `MANUAL_UPDATE` 的版本变化。`pull_count` 在这次下载成功时加 1，包括随后因缺凭证而没有切换的那次。
+手动更新使用最近一次成功同步留下的目录缓存，不在更新请求里再拉清单。注册表里仍有这份包、且清单版本更高时，它先下载并验签，再用验过的包计算新增必填凭证。注册表没有这份曾经安装的包时，先用本机记录里最新一份 zip 验签：通过则重新载入并写回 `current`，返回的 `outcome.kind` 为 `REPAIRED`。这次不写 `CONCH_UPDATED`，版本没有变化，也不入队 `MANUAL_UPDATE`。不通过才下载清单版本；下载成功写 `CONCH_UPDATED`，只有记下的版本和清单版本不同才入队 `MANUAL_UPDATE`。同版本因缺少新增必填凭证而停住时不覆盖已记录的 zip，避免稍后的重新载入绕过凭证检查。目录里的 `requiredCredentials` 若存在且与验过的包不一致，拒绝安装，reason 为 `MANIFEST_ENTRY_MISMATCH`。旧缓存没有这个字段时不当成不一致。默认账号是 `AccountStore.resolve(OFFICIAL, conch, empty)`。没有默认账号就不检查凭证。某个名字在保险库里有字段（密文打不开也算有）即视为已填。缺的名字会让这次更新停在版本目录里，不改 `current`。凭证写入接受已安装文档声明的字段，也接受一份已暂存、且重新验签通过的更高版本所声明的字段；两边都声明时用已安装的那份做形状检查。控制台「写完后必填都在」仍只看已安装文档。第二次更新再次验签，默认账号已经具备每个新增必填名时才切换。成功切换写一条 `CONCH_UPDATED`，actor 为 `console` 或 `cli`，target 为 `OFFICIAL/{conch}`，detail 为 `{"from","to"}`。上报开启时另入队一条 reason 为 `MANUAL_UPDATE` 的版本变化。`pull_count` 在这次下载成功时加 1，包括随后因缺凭证而没有切换的那次。
 
-`RULE_MISMATCH` 不再切换版本，也不再写 `pinned_rollbacks`。schema 12 删掉这张表。成功的正式调用仍写入 `version_success`，版本保留用来保护最近一次成功的版本。`mismatch_streak` 表还在，不再写入。`rollback_queue` 只在手动更新成功、且上报开启时写入。
+`RULE_MISMATCH` 不再切换版本，也不再写 `pinned_rollbacks`。schema 12 删掉这张表。成功的正式调用仍写入 `version_success`，版本保留用来保护最近一次成功的版本。`mismatch_streak` 表还在，不再写入。`rollback_queue` 只在手动更新把版本换成另一个版本、且上报开启时写入。重新载入同一份已验签的 zip 不写这条。
 
 ## CLI
 
@@ -233,7 +233,7 @@ local import <file>
 local reload
 local delete <conch>
 local export <conch> [--out file]
-mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
+mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
 普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。不带参数，或参数只有 `--help` / `-h`，把用法打到 stdout，退出 0。未知命令，以及子命令参数不够，仍把同一段用法打到 stderr，退出 1。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
@@ -262,7 +262,8 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 - 目录模式调用非只读能力需要支持 elicitation 且保持 SSE，明确确认后执行；直接模式没有同样的服务端确认步骤，客户端应依据工具注解交互。
 - guide resource 为 `hermit://conches/{conch}/guide`，由说明、参数、示例生成。
 - 规则更新/能力开关变化推送列表变更通知。
-- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。
+- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。这个字段在校验前拿掉。直接工具的 `inputSchema` 与能力入参一样设置 `additionalProperties: false`，并声明账号选择，所以账号不是多余字段。
+- `tools/call` 不传 `Idempotency-Key`。同键回放只在 HTTP POST。
 
 协议级失败是 JSON-RPC error，不使用能力 API 的 success/error envelope。`error.code` 是 JSON-RPC 整数；`error.data.code` 是稳定字符串，`error.data.hint` 是下一步。HTTP 401 的 body 同样是这个 JSON-RPC 错误。
 
@@ -277,11 +278,11 @@ mcp-stdio [--url http://127.0.0.1:7777/mcp] [--account NAME]
 | `Origin` 不在允许范围 | 403 | -32003 | `ORIGIN_REJECTED`。不创建会话。没有 `Origin` 仍允许 |
 | 非 `initialize` 的 `MCP-Protocol-Version` 不受支持 | 400 | -32600 | `UNSUPPORTED_PROTOCOL`。去掉该头，或改成上面四个版本之一 |
 
-工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。
+工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,traceId,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`CAPABILITY_DISABLED`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。`traceId` 与这次响应的 `X-Hermit-Trace` 相同；若这次调用写了调用记录，记录里也是这个编号。协议错误的 `error.data` 同样带 `traceId`，并与该头相同。成功的 JSON-RPC 响应也写 `X-Hermit-Trace`，不把 `traceId` 放进业务结果。
 
 成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。直接工具的 `outputSchema` 只列 Conch `output` 的字段名和说明，不带类型约束，因为模板渲染不会把提取值转换成声明类型；目录工具的 `outputSchema` 带类型。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
 
-stdio 是对运行中 Crab 的桥接，不单独启动执行器。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr。HTTP 401 时先把 Crab 返回的 JSON-RPC 错误写到 stdout，再在 stderr 打印 `authentication failed`，退出码 1。响应没有可解析的 `error` 对象时，stdout 仍写一条 `jsonrpc: 2.0`、`error.code` 为 `-32001`、message 为 `authentication failed` 的对象，`id` 取自本次请求；然后退出：
+stdio 是对运行中 Crab 的桥接，不单独启动执行器。`mcp-stdio --help` 把默认 URL、环境变量 `HERMIT_API_KEY` 和 `--account` 打到 stdout，退出 0，不要求已经设置 Key，也不连接 Crab。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr。未设置 Key、URL 不是 http/https、Crab 没有在监听时，stderr 分别是中文的「未设置环境变量 HERMIT_API_KEY…」「URL 不合法…」「Crab 没有运行…」。未设置 Key 与非法 URL 退出 1，连不上退出 2。HTTP 401 时先把 Crab 返回的 JSON-RPC 错误写到 stdout，再在 stderr 打印 `authentication failed`，退出码 1。鉴权发生在读 body 之前，响应里的 `id` 为 null；stdio 若能解析出这次请求的 id，就填回去，已有非空 id 时不改。响应没有可解析的 `error` 对象时，stdout 仍写一条 `jsonrpc: 2.0`、`error.code` 为 `-32001`、message 为 `authentication failed` 的对象，`id` 取自本次请求；然后退出：
 
 ```bash
 export HERMIT_API_KEY='调用端安全保存的APIKey'

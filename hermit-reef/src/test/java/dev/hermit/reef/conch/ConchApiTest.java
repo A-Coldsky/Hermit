@@ -136,6 +136,7 @@ class ConchApiTest {
                 ConchDoc doc = ConchParser.parse(new String(yaml, StandardCharsets.UTF_8));
                 ValidationResult expected = ConchValidator.validate(doc, ConchValidator.Context.of(null));
                 assertThat(expected.errors()).isNotEmpty();
+                assertThat(body.get("error").get("message").asText()).isEqualTo("输入无效");
                 assertCodes(body.get("data").get("errors"), expected.errors().stream().map(issue -> issue.code()).toList());
                 assertCodes(body.get("data").get("warnings"), expected.warnings().stream().map(issue -> issue.code()).toList());
             } catch (ConchParseException ex) {
@@ -160,11 +161,14 @@ class ConchApiTest {
         assertThat(Files.readAllBytes(DATA.resolve("conches/legacy_oa/1.0.0/conch.yaml"))).isEqualTo(sample);
 
         JsonNode duplicate = json(upload(sample));
+        assertThat(ConchUploadService.VERSION_EXISTS).isEqualTo("该规则包版本已存在");
+        assertThat(ConchUploadService.VERSION_NOT_GREATER).isEqualTo("版本必须高于已有的最高版本");
         assertThat(duplicate.get("error").get("code").asText()).isEqualTo("CONFLICT");
-        assertThat(duplicate.get("error").get("message").asText()).isEqualTo(ConchUploadService.VERSION_EXISTS);
+        assertThat(duplicate.get("error").get("message").asText()).isEqualTo("该规则包版本已存在");
 
         JsonNode lower = json(upload(withVersion(sample, "0.9.0")));
-        assertThat(lower.get("error").get("message").asText()).isEqualTo(ConchUploadService.VERSION_NOT_GREATER);
+        assertThat(lower.get("error").get("code").asText()).isEqualTo("CONFLICT");
+        assertThat(lower.get("error").get("message").asText()).isEqualTo("版本必须高于已有的最高版本");
 
         JsonNode prerelease = json(upload(withVersion(sample, "1.0.0-rc.1")));
         assertThat(prerelease.get("error").get("message").asText()).isEqualTo(ConchUploadService.VERSION_NOT_GREATER);
@@ -226,7 +230,7 @@ class ConchApiTest {
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_UPLOADED));
+                .andExpect(jsonPath("$.error.message").value("只能发布已上传、尚未发布的版本"));
 
         String firstEtag = manifestEtag("1.0.0");
         byte[] firstZip = download("1.0.0");
@@ -289,13 +293,14 @@ class ConchApiTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"version\":\"1.0.0\"}"))
                 .andExpect(status().isMethodNotAllowed())
-                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("不支持该请求方法"));
         assertThat(download("1.1.0")).isNotEmpty();
         assertThat(ConchPackage.readVerified(download("1.0.0"), publicKey).manifest().version()).isEqualTo("1.0.0");
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_UPLOADED));
+                .andExpect(jsonPath("$.error.message").value("只能发布已上传、尚未发布的版本"));
 
         upload(withVersion(sample, "1.2.0"));
         mockMvc.perform(agent("/agent/conches/legacy_oa/1.2.0"))
@@ -307,7 +312,7 @@ class ConchApiTest {
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.1.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_UPLOADED));
+                .andExpect(jsonPath("$.error.message").value("只能发布已上传、尚未发布的版本"));
 
         Integer publishes = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM hermit_audit_log WHERE action = 'PUBLISH'", Integer.class);
@@ -320,11 +325,13 @@ class ConchApiTest {
     @Test
     void diffDefaultsToTheTwoHighestSemverVersions() throws Exception {
         byte[] sample = sample();
+        assertThat(ConchCatalogService.DIFF_NEEDS_TWO_VERSIONS).isEqualTo("至少需要两个版本才能对比");
+        assertThat(ConchCatalogService.DIFF_NEEDS_BOTH_ENDS).isEqualTo("版本对比需要同时提供 from 和 to");
         assertThat(upload(sample).getResponse().getStatus()).isEqualTo(200);
         mockMvc.perform(get("/api/admin/conches/legacy_oa/diff").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value(ConchCatalogService.DIFF_NEEDS_TWO_VERSIONS));
+                .andExpect(jsonPath("$.error.message").value("至少需要两个版本才能对比"));
 
         assertThat(upload(withVersion(sample, "1.2.0")).getResponse().getStatus()).isEqualTo(200);
         assertThat(upload(withOtp(withVersion(sample, "1.10.0"))).getResponse().getStatus()).isEqualTo(200);
@@ -334,12 +341,13 @@ class ConchApiTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value("invalid input"));
+                .andExpect(jsonPath("$.error.message").value("版本对比需要同时提供 from 和 to"));
         mockMvc.perform(get("/api/admin/conches/legacy_oa/diff")
                         .param("to", "1.10.0")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.message").value("invalid input"));
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("版本对比需要同时提供 from 和 to"));
 
         mockMvc.perform(get("/api/admin/conches/legacy_oa/diff").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isOk())
@@ -349,7 +357,10 @@ class ConchApiTest {
 
     @Test
     void rejectsBadZipsEmptyFilesAndOversizeUploads() throws Exception {
-        assertThat(upload(new byte[0]).getResponse().getStatus()).isEqualTo(422);
+        MvcResult empty = upload(new byte[0]);
+        assertThat(empty.getResponse().getStatus()).isEqualTo(422);
+        assertThat(json(empty).get("error").get("code").asText()).isEqualTo("INVALID_INPUT");
+        assertThat(json(empty).get("error").get("message").asText()).isEqualTo("输入无效");
         assertThat(upload(new byte[ConchPaths.MAX_UPLOAD_BYTES + 1]).getResponse().getStatus()).isEqualTo(422);
         assertThat(upload(zip("dir/conch.yaml", sample())).getResponse().getStatus()).isEqualTo(422);
         assertThat(upload(zip(new String[] {"conch.yaml", "readme.txt"}, sample(), "nope".getBytes(StandardCharsets.UTF_8)))
@@ -359,13 +370,14 @@ class ConchApiTest {
         mockMvc.perform(get("/api/admin/conches/legacy_oa/diff").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value(ConchCatalogService.DIFF_NEEDS_TWO_VERSIONS));
+                .andExpect(jsonPath("$.error.message").value("至少需要两个版本才能对比"));
         mockMvc.perform(post("/api/admin/conches/legacy_oa/rollback")
                         .header(HttpHeaders.AUTHORIZATION, bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isMethodNotAllowed())
-                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("不支持该请求方法"));
         mockMvc.perform(post("/api/admin/conches/missing/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isNotFound());
@@ -393,7 +405,9 @@ class ConchApiTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"  \"}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.error.message").value("输入无效"));
         mockMvc.perform(post("/api/admin/conches/legacy_oa/disable")
                         .header(HttpHeaders.AUTHORIZATION, bearer())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -442,18 +456,18 @@ class ConchApiTest {
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.DISABLED));
+                .andExpect(jsonPath("$.error.message").value("规则包已停用"));
         assertThat(json(upload(withVersion(sample, "1.1.0"))).get("success").asBoolean()).isTrue();
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.1.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.DISABLED));
+                .andExpect(jsonPath("$.error.message").value("规则包已停用"));
         mockMvc.perform(post("/api/admin/conches/legacy_oa/disable")
                         .header(HttpHeaders.AUTHORIZATION, bearer())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"again\"}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.ALREADY_DISABLED));
+                .andExpect(jsonPath("$.error.message").value("规则包已经停用"));
 
         mockMvc.perform(post("/api/admin/conches/legacy_oa/enable")
                         .header(HttpHeaders.AUTHORIZATION, bearer())
@@ -479,7 +493,7 @@ class ConchApiTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"not disabled\"}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.message").value(ConchAvailabilityService.NOT_DISABLED));
+                .andExpect(jsonPath("$.error.message").value("规则包尚未停用"));
     }
 
     @Test
@@ -528,7 +542,7 @@ class ConchApiTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("CONFLICT"))
-                .andExpect(jsonPath("$.error.message").value(ConchPublishService.PUBLISH_NOT_HIGHER));
+                .andExpect(jsonPath("$.error.message").value("发布版本必须高于当前已发布版本"));
         manifestEtag("1.1.0");
     }
 

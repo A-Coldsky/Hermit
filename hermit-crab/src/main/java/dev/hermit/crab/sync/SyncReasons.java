@@ -15,6 +15,15 @@ public final class SyncReasons {
     public static final String REGISTRY_REJECTED = "REGISTRY_REJECTED";
     public static final String CREDENTIAL_DELETE_FAILED = "CREDENTIAL_DELETE_FAILED";
     public static final String PACKAGE_MISSING = "PACKAGE_MISSING";
+    /** The current pointer file is missing or not a regular file. */
+    public static final String POINTER_MISSING = "POINTER_MISSING";
+    /**
+     * The installed zip verifies, but this process has not loaded it. Sync will not download
+     * until a manual update reloads it.
+     */
+    public static final String NOT_LOADED = "NOT_LOADED";
+    /** Manual update reloaded a verified installed zip and did not switch versions. */
+    public static final String RESTORED = "RESTORED";
     public static final String DISABLED = "DISABLED";
     public static final String DISABLE_FAILED = "DISABLE_FAILED";
     /** Manifest entry left untouched because a local conch already uses that name. */

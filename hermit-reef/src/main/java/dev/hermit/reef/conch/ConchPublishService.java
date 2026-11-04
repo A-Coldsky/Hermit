@@ -19,8 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ConchPublishService {
 
-    static final String PUBLISH_NOT_UPLOADED = "only an uploaded version can be published";
-    static final String PUBLISH_NOT_HIGHER = "published version must be higher than the current version";
+    static final String PUBLISH_NOT_UPLOADED = "只能发布已上传、尚未发布的版本";
+    static final String PUBLISH_NOT_HIGHER = "发布版本必须高于当前已发布版本";
 
     private static final Logger log = LoggerFactory.getLogger(ConchPublishService.class);
 

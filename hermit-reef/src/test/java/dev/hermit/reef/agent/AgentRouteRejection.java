@@ -61,7 +61,7 @@ abstract class AgentRouteRejection {
         assertThat(arbitrary.getResponse().getContentAsString())
                 .isEqualTo(missing.getResponse().getContentAsString())
                 .contains("\"code\":\"UNAUTHORIZED\"")
-                .contains("\"message\":\"unauthorized\"")
+                .contains("\"message\":\"未登录或登录已过期\"")
                 .contains("\"traceId\":\"" + TRACE + "\"");
     }
 

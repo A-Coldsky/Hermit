@@ -6,7 +6,7 @@ defineProps<{
   label: string
   value: string | number
   hint?: string
-  tone?: 'default' | 'warn' | 'danger' | 'ok'
+  tone?: 'default' | 'neutral' | 'warn' | 'danger' | 'ok'
   icon?: Component
   to?: RouteLocationRaw
 }>()
@@ -40,6 +40,11 @@ defineProps<{
 .stat.ok {
   --tone: var(--hm-success);
   --tone-soft: var(--el-color-success-light-9);
+}
+
+.stat.neutral {
+  --tone: var(--hm-muted);
+  --tone-soft: var(--el-color-info-light-9);
 }
 
 .stat.warn {

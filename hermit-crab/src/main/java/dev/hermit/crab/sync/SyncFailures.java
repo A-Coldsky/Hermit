@@ -3,6 +3,7 @@ package dev.hermit.crab.sync;
 /**
  * A round may record the manifest ETag only when every conch outcome is safe to skip next time.
  * Reasons that are not an explicit permanent rejection stay retryable, including ones added later.
+ * {@link OutcomeKind#REPAIR_REQUIRED} stays retryable so a 304 cannot hide a package that is not loaded.
  */
 final class SyncFailures {
 
@@ -15,7 +16,8 @@ final class SyncFailures {
         }
         return switch (outcome.kind()) {
             case INSTALLED, SKIPPED_SAME, SKIPPED_MIN_VERSION, UPDATE_AVAILABLE, SKIPPED_OLDER, DISABLED,
-                    SKIPPED_LOCAL, NOT_SUBSCRIBED -> false;
+                    SKIPPED_LOCAL, NOT_SUBSCRIBED, REPAIRED -> false;
+            case REPAIR_REQUIRED -> true;
             case REJECTED -> !permanent(outcome.reason());
         };
     }

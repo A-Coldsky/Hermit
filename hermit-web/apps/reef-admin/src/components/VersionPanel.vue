@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, reactive, ref } from 'vue'
 import { copyText, formatTime, notifyError } from '@shared/format'
 import { api, type ConchDiff, type ConchVersion } from '../api'
-import { versionStatusLabels } from '../labels'
+import { pullCountHint, versionStatusLabels } from '../labels'
 import DiffSummary from './DiffSummary.vue'
 import IssueList from './IssueList.vue'
 
@@ -141,7 +141,9 @@ async function runDiff() {
           <span v-else class="hm-muted">0</span>
         </template>
       </el-table-column>
-      <el-table-column prop="pullCount" label="拉取" width="80" align="right" />
+      <el-table-column prop="pullCount" label="拉取次数" width="96" align="right">
+        <template #header><span :title="pullCountHint">拉取次数</span></template>
+      </el-table-column>
       <el-table-column label="操作" :width="isAdmin ? 280 : 160">
         <template #default="{ row }">
           <el-button link type="primary" @click="showYaml(row)">YAML</el-button>

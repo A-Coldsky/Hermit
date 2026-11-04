@@ -123,7 +123,7 @@ class ConchConcurrencyTest {
                         try {
                             publishService.publish(TestSecrets.USERNAME, "legacy_oa", "1.1.0");
                         } catch (ApiException ex) {
-                            if (ex.status() != 409 || !ConchAvailabilityService.DISABLED.equals(ex.getMessage())) {
+                            if (ex.status() != 409 || !"规则包已停用".equals(ex.getMessage())) {
                                 throw ex;
                             }
                         }
@@ -210,7 +210,7 @@ class ConchConcurrencyTest {
         try {
             publishService.publish(TestSecrets.USERNAME, "legacy_oa", version);
         } catch (ApiException ex) {
-            if (ex.status() != 409 || !ConchPublishService.PUBLISH_NOT_HIGHER.equals(ex.getMessage())) {
+            if (ex.status() != 409 || !"发布版本必须高于当前已发布版本".equals(ex.getMessage())) {
                 throw ex;
             }
         }

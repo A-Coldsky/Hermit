@@ -83,7 +83,7 @@ describe('版本表警告列', () => {
     const wrapper = await mountPage(VersionPanel, { props: { conch: 'legacy_oa', versions: [version({ pullCount: 7 })] } })
     await flushPromises()
     const headers = wrapper.findAll('.el-table__header th').map((th) => th.text())
-    const column = headers.indexOf('拉取')
+    const column = headers.indexOf('拉取次数')
     expect(column).toBeGreaterThan(-1)
     const cells = wrapper.findAll('.el-table__body tr')[0].findAll('td').map((td) => td.text())
     expect(cells[column]).toBe('7')

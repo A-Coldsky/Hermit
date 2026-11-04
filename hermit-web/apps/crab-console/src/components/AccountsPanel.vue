@@ -5,6 +5,7 @@ import { reactive, ref } from 'vue'
 import JsonBlock from '@shared/components/JsonBlock.vue'
 import { ApiError } from '@shared/http'
 import { errorCodeLabels, errorText, notifyError } from '@shared/format'
+import { useNarrow } from '@shared/narrow'
 import { api, type Account, type CredentialField } from '../api'
 import CredentialDialog from './CredentialDialog.vue'
 
@@ -14,6 +15,7 @@ const emit = defineEmits<{ changed: [] }>()
 const creating = reactive({ open: false, name: '', saving: false })
 const editing = reactive({ open: false, account: '' })
 const busy = ref<string | null>(null)
+const narrow = useNarrow()
 const testResult = reactive({
   open: false,
   account: '',
@@ -156,12 +158,14 @@ function editCredentials(account: Account) {
           <span v-else class="hm-muted">正常</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="300" align="right" fixed="right">
+      <el-table-column label="操作" :width="narrow ? 96 : 300" align="right" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" :disabled="!credentials.length" @click="editCredentials(row)">填写凭证</el-button>
-          <el-button link type="primary" :loading="busy === row.name" @click="testLogin(row)">测试登录</el-button>
-          <el-button v-if="!row.default" link @click="makeDefault(row)">设为默认</el-button>
-          <el-button link type="danger" @click="remove(row)">删除</el-button>
+          <div class="ops" :class="{ stacked: narrow }">
+            <el-button link type="primary" :disabled="!credentials.length" @click="editCredentials(row)">填写凭证</el-button>
+            <el-button link type="primary" :loading="busy === row.name" @click="testLogin(row)">测试登录</el-button>
+            <el-button v-if="!row.default" link @click="makeDefault(row)">设为默认</el-button>
+            <el-button link type="danger" @click="remove(row)">删除</el-button>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -242,5 +246,16 @@ div.note {
 .data {
   text-align: left;
   max-width: 480px;
+}
+
+.ops.stacked {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.ops.stacked .el-button + .el-button {
+  margin-left: 0;
 }
 </style>

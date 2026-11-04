@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import TimeText from '@shared/components/TimeText.vue'
-import { versionChangeReasons } from '../labels'
+import { crabLabel, versionChangeReasons } from '../labels'
 import { DataLine, Refresh, RefreshLeft, Warning, WarningFilled } from '@element-plus/icons-vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import BarChart from '@shared/components/BarChart.vue'
@@ -136,7 +136,9 @@ watch([range, conch], load, { immediate: true })
         <el-table-column label="原因" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">{{ versionChangeReasons[row.reason] ?? row.reason }}</template>
         </el-table-column>
-        <el-table-column prop="instanceId" label="Crab 实例" min-width="160" show-overflow-tooltip />
+        <el-table-column label="Crab" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ crabLabel(row) }}</template>
+        </el-table-column>
         <el-table-column label="发生时间" width="230">
           <template #default="{ row }"><TimeText :value="row.occurredAt" /></template>
         </el-table-column>

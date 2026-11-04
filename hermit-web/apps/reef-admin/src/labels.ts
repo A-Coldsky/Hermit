@@ -13,6 +13,12 @@ export const auditActionLabels: Record<string, string> = {
   DISABLE: '停用',
   ENABLE: '启用',
   RETENTION_PURGE: '清理过期数据',
+  USER_CREATED: '新建用户',
+  USER_UPDATED: '修改用户',
+  USER_PASSWORD_RESET: '重置密码',
+  PASSWORD_CHANGED: '修改密码',
+  AGENT_TOKEN_CREATED: '生成令牌',
+  AGENT_TOKEN_REVOKED: '吊销令牌',
 }
 
 export const versionStatusLabels: Record<string, string> = {
@@ -70,4 +76,26 @@ export function isoDaysAgo(days: number): string {
 export const versionChangeReasons: Record<string, string> = {
   MANUAL_UPDATE: '使用者手动更新',
   RULE_MISMATCH: '旧版本的自动回退',
+}
+
+export const roleLabels: Record<string, string> = {
+  ADMIN: '管理员',
+  USER: '普通用户',
+}
+
+const userErrorTexts: Record<string, string> = {
+  'at least one enabled administrator is required': '至少要保留一个启用中的管理员',
+  'cannot change your own role or disabled flag': '不能修改自己的角色或禁用自己',
+  'username already exists': '用户名已存在',
+  'cannot reset your own password': '不能重置自己的密码，请用右上角「修改密码」',
+  'old password does not match': '当前密码不正确',
+}
+
+export function userErrorText(message: string): string | null {
+  return userErrorTexts[message] ?? null
+}
+
+/** Reef 按「令牌所属用户 + 实例号」区分 Crab；旧数据没有用户。 */
+export function crabLabel(row: { owner?: string | null; instanceId: string }): string {
+  return row.owner ? `${row.owner} · ${row.instanceId}` : row.instanceId
 }

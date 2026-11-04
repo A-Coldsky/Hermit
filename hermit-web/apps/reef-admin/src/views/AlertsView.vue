@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isAdmin } from '../auth'
 import { Check, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { onMounted, ref, watch } from 'vue'
@@ -102,6 +103,7 @@ onMounted(() => load())
         <el-table-column label="处理" min-width="200">
           <template #default="{ row }">
             <span v-if="row.acknowledgedAt" class="hm-muted">{{ row.acknowledgedBy }} 于 {{ formatTime(row.acknowledgedAt) }} 确认</span>
+            <span v-else-if="!isAdmin" class="hm-muted">待管理员确认</span>
             <el-button v-else type="primary" plain size="small" :icon="Check" :loading="acking === row.id" @click="ack(row)">
               确认
             </el-button>

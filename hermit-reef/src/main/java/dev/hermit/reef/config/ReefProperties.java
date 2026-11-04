@@ -1,5 +1,6 @@
 package dev.hermit.reef.config;
 
+import dev.hermit.common.version.SemVer;
 import jakarta.annotation.PostConstruct;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -8,6 +9,8 @@ import org.springframework.scheduling.support.CronExpression;
 
 @ConfigurationProperties(prefix = "hermit.reef")
 public class ReefProperties {
+
+    static final String BLANK_DATA_DIR_MESSAGE = "hermit.reef.data-dir must not be blank";
 
     private String dataDir = "./reef-data";
     private String agentToken = "";
@@ -20,7 +23,7 @@ public class ReefProperties {
     @PostConstruct
     void validate() {
         if (dataDir == null || dataDir.isBlank()) {
-            throw new IllegalStateException("hermit.reef.data-dir must not be blank");
+            throw new IllegalStateException(BLANK_DATA_DIR_MESSAGE);
         }
         if (jwtTtl == null || jwtTtl.isZero() || jwtTtl.isNegative()) {
             throw new IllegalStateException("hermit.reef.jwt-ttl must be positive");
@@ -30,6 +33,13 @@ public class ReefProperties {
         }
         if (retentionCron == null || retentionCron.isBlank() || !CronExpression.isValidExpression(retentionCron)) {
             throw new IllegalStateException("hermit.reef.retention-cron must be a valid cron expression");
+        }
+        if (latestCrabVersion != null && !latestCrabVersion.isBlank()) {
+            try {
+                SemVer.parse(latestCrabVersion);
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalStateException("hermit.reef.latest-crab-version must be a semver");
+            }
         }
         // 空配置令牌不在这里警告。库准备好之后由 AgentTokenWarnings 判断还有没有可用令牌。
     }

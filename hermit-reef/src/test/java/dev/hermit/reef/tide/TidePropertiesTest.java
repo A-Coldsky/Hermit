@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -83,5 +84,58 @@ class TidePropertiesTest {
         assertThatThrownBy(missingRate::validate)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("no-baseline-failure-rate");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "ftp://example",
+            "FTP://example/hook",
+            "example.com",
+            "example.com/hook",
+            "//hooks.example/hook",
+            "file:///tmp/hook",
+            "/alerts"
+    })
+    void webhookWithoutHttpOrHttpsFailsStartup(String url) {
+        runner.withPropertyValues("hermit.reef.tide.webhook-url=" + url).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure())
+                    .rootCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("hermit.reef.tide.webhook-url");
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "https://",
+            "https://hooks.example/tide",
+            "http://hooks.example/tide",
+            "HTTPS://hooks.example/tide",
+            "http://127.0.0.1:9/hook",
+            "https://[::1]/hook"
+    })
+    void httpAndHttpsWebhooksStart(String url) {
+        runner.withPropertyValues("hermit.reef.tide.webhook-url=" + url).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(TideProperties.class).webhookUrlOrNull()).isEqualTo(url);
+        });
+    }
+
+    @Test
+    void blankWebhookStillMeansNoPush() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(TideProperties.class).webhookUrlOrNull()).isNull();
+        });
+        runner.withPropertyValues("hermit.reef.tide.webhook-url=").run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(TideProperties.class).webhookUrlOrNull()).isNull();
+        });
+
+        TideProperties spaces = new TideProperties();
+        spaces.setWebhookUrl("   ");
+        spaces.validate();
+        assertThat(spaces.webhookUrlOrNull()).isNull();
     }
 }

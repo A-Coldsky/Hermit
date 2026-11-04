@@ -9,6 +9,8 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -74,6 +76,65 @@ class ReefPropertiesTest {
         runner.withPropertyValues("hermit.reef.retention-cron=0 30 4 * * *").run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context.getBean(ReefProperties.class).getRetentionCron()).isEqualTo("0 30 4 * * *");
+        });
+    }
+
+    @Test
+    void blankDataDirUsesTheSameMessageAsDirectoryCreation() {
+        ReefProperties blank = new ReefProperties();
+        blank.setDataDir("   ");
+        assertThatThrownBy(blank::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(ReefProperties.BLANK_DATA_DIR_MESSAGE);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"abc", "1.2", "v1.0.0", "1.0.0+build"})
+    void latestCrabVersionMustBeSemver(String version) {
+        assertThatThrownBy(() -> {
+            ReefProperties properties = new ReefProperties();
+            properties.setLatestCrabVersion(version);
+            properties.validate();
+        }).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("hermit.reef.latest-crab-version");
+
+        runner.withPropertyValues("hermit.reef.latest-crab-version=" + version).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure())
+                    .rootCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("hermit.reef.latest-crab-version");
+        });
+    }
+
+    @Test
+    void blankLatestCrabVersionStillMeansNoUpgradeHint() {
+        ReefProperties defaults = new ReefProperties();
+        defaults.validate();
+        assertThat(defaults.latestCrabVersionOrNull()).isNull();
+
+        ReefProperties spaces = new ReefProperties();
+        spaces.setLatestCrabVersion("   ");
+        spaces.validate();
+        assertThat(spaces.latestCrabVersionOrNull()).isNull();
+
+        ReefProperties current = new ReefProperties();
+        current.setLatestCrabVersion("1.2.3");
+        current.validate();
+        assertThat(current.latestCrabVersionOrNull()).isEqualTo("1.2.3");
+
+        ReefProperties prerelease = new ReefProperties();
+        prerelease.setLatestCrabVersion("1.2.3-alpha.1");
+        prerelease.validate();
+        assertThat(prerelease.latestCrabVersionOrNull()).isEqualTo("1.2.3-alpha.1");
+
+        runner.withPropertyValues("hermit.reef.latest-crab-version=").run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(ReefProperties.class).latestCrabVersionOrNull()).isNull();
+        });
+        runner.withPropertyValues("hermit.reef.latest-crab-version=1.2.3").run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(ReefProperties.class).latestCrabVersionOrNull()).isEqualTo("1.2.3");
         });
     }
 

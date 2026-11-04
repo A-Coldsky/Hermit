@@ -60,6 +60,9 @@ import io.javalin.http.UploadedFile;
  * {@code X-Hermit-Console: 1}. No API key is accepted or required.
  */
 final class ConsoleApi {
+    /** Preview and manual send when reports are off or Reef is not connected. HTTP 409. */
+    static final String REPORTS_NOT_CONFIGURED = "上报未开启，或尚未连接 Reef。";
+
     private ConsoleApi() {
     }
 
@@ -559,7 +562,7 @@ final class ConsoleApi {
 
     private static void reportPreview(CrabRuntime runtime, Context ctx) {
         if (!runtime.reportsConfigured()) {
-            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "reports are not configured");
+            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, REPORTS_NOT_CONFIGURED);
             return;
         }
         GatewayResponses.writeData(ctx, runtime.reportSender().preview());
@@ -567,7 +570,7 @@ final class ConsoleApi {
 
     private static void reportSend(CrabRuntime runtime, Context ctx) {
         if (!runtime.reportsConfigured()) {
-            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "reports are not configured");
+            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, REPORTS_NOT_CONFIGURED);
             return;
         }
         FlushResult result = runtime.reportSender().confirmAndSend();
@@ -945,7 +948,7 @@ final class ConsoleApi {
     }
 
     private static int pageNumber(Context ctx) {
-        return positive(ctx.queryParam("page"), 1, "page is out of range");
+        return positive(ctx.queryParam("page"), 1, AuditLog.PAGE_OUT_OF_RANGE);
     }
 
     private static int auditLimit(Context ctx) {

@@ -108,6 +108,8 @@ class CrabWiringTest {
                 HttpResponse<String> preview = send(http, server.port(), "GET", "/console/api/reports/preview", null);
                 assertThat(preview.statusCode()).isEqualTo(409);
                 assertThat(JSON.readTree(preview.body()).path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+                assertThat(JSON.readTree(preview.body()).path("error").path("message").asText())
+                        .isEqualTo("上报未开启，或尚未连接 Reef。");
 
                 HttpResponse<String> sync = send(http, server.port(), "POST", "/console/api/sync", "{}");
                 assertThat(sync.statusCode()).as(sync.body()).isEqualTo(200);

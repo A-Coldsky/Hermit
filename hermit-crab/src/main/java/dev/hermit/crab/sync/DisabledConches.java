@@ -20,11 +20,22 @@ import dev.hermit.crab.store.Db;
  * the installed package stays loaded and callable. {@code disabled_at} is the first time Crab
  * saw the absence and is not refreshed on later syncs. Rows survive restart. A call returns
  * {@code CONCH_DISABLED} only when the name is tombstoned and the registry no longer has it.
+ * That call, and a manual update in the same state, use {@link #CALL_MESSAGE} and do not download.
+ * A manual update while the package is still loaded uses {@link #UPDATE_MESSAGE} and also does not download.
  */
 public final class DisabledConches {
 
-    /** Stable call message. The error code is {@code CONCH_DISABLED}. */
-    public static final String CALL_MESSAGE = "conch disabled";
+    /**
+     * HTTP/MCP call, and manual update, when the tombstone remains and the registry has no package.
+     * The error code is {@code CONCH_DISABLED}.
+     */
+    public static final String CALL_MESSAGE = "Reef 已停用该规则包，本机没有可调用的副本。";
+
+    /**
+     * Manual update when the tombstone remains and the package is still loaded.
+     * The error code is {@code CONCH_DISABLED}. This path does not download.
+     */
+    public static final String UPDATE_MESSAGE = "Reef 已停用该规则包，不再下载。";
 
     private final DataSource dataSource;
     private final Set<String> names = ConcurrentHashMap.newKeySet();

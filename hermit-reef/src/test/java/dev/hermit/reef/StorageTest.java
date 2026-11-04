@@ -83,7 +83,9 @@ class StorageTest {
                 "HERMIT_HOURLY_COUNTS",
                 "HERMIT_ROLLBACK_EVENTS",
                 "HERMIT_ALERTS",
-                "HERMIT_CONCH_AVAILABILITY");
+                "HERMIT_CONCH_AVAILABILITY",
+                "HERMIT_AGENT_TOKENS",
+                "HERMIT_CRAB_INSTANCES");
         Integer applied = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '1' AND \"success\" = TRUE",
                 Integer.class);
@@ -92,10 +94,37 @@ class StorageTest {
                 "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '5' AND \"success\" = TRUE",
                 Integer.class);
         assertThat(pullCountMigration).isEqualTo(1);
+        Integer usersMigration = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '6' AND \"success\" = TRUE",
+                Integer.class);
+        assertThat(usersMigration).isEqualTo(1);
         assertThat(indexNames()).contains(
                 "idx_hermit_failure_reports_conch_version_occurred",
                 "idx_hermit_failure_reports_received_at",
-                "idx_hermit_hourly_counts_conch_hour");
+                "idx_hermit_hourly_counts_conch_hour",
+                "idx_hermit_agent_tokens_user",
+                "uk_hermit_agent_tokens_hash");
+    }
+
+    @Test
+    void roleDefaultsToAdminAndRejectsOtherValues() {
+        jdbc.update(
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                "role-default",
+                "not-a-real-hash",
+                Timestamp.from(clock.instant()));
+        assertThat(jdbc.queryForObject(
+                "SELECT role FROM hermit_admin_users WHERE username = ?",
+                String.class,
+                "role-default")).isEqualTo("ADMIN");
+        assertThatThrownBy(() -> jdbc.update(
+                "UPDATE hermit_admin_users SET role = 'NO' WHERE username = ?",
+                "role-default")).isInstanceOf(DataAccessException.class);
+        Integer ownerColumn = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'PUBLIC' "
+                        + "AND TABLE_NAME = 'HERMIT_FAILURE_REPORTS' AND UPPER(COLUMN_NAME) = 'OWNER_USER_ID'",
+                Integer.class);
+        assertThat(ownerColumn).isEqualTo(1);
     }
 
     @Test

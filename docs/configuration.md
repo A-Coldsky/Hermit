@@ -82,7 +82,7 @@ URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 
 | 配置 | 默认/说明 |
 | --- | --- |
 | `hermit.reef.data-dir` / `HERMIT_REEF_DATA_DIR` | `./reef-data`，存数据库文件、包与密钥 |
-| `hermit.reef.agent-token` / `HERMIT_REEF_AGENT_TOKEN` | 默认空；空时拒绝所有 Agent 请求 |
+| `hermit.reef.agent-token` / `HERMIT_REEF_AGENT_TOKEN` | 默认空。空表示没有配置令牌；库里还有未吊销令牌时，Agent 请求用那些令牌。两者都没有时启动打一条警告，并拒绝所有 `/agent/**` |
 | `HERMIT_REEF_ADMIN_USER` / `HERMIT_REEF_ADMIN_PASSWORD` | 首次空库创建管理员；已有管理员不重设口令 |
 | `hermit.reef.jwt-ttl` | `8h`，JWT 有 60 秒时钟容差 |
 | `hermit.reef.latest-crab-version` / `crab-download-url` | 默认空；提供版本提示，不自动下载/升级 Crab |
@@ -94,6 +94,12 @@ URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 
 | `spring.flyway.table` / `SPRING_FLYWAY_TABLE` | `hermit_flyway_schema_history`。Compose 的 Reef 服务写了同一环境变量，MySQL 与默认 H2 共用这张历史表 |
 | `server.port` | Spring Boot 默认 8080 |
 | `server.compression.*` | 默认开启，仅对 ≥ 2KB 的 HTML/CSS/JS/SVG 做 gzip，接口 JSON 不压缩；Compose 中 Nginx 另有 gzip。Crab 由 Javalin 默认 gzip（≥ 1500 字节） |
+
+配置令牌归 id 最小的 `ADMIN`（含已禁用的账号，但该账号已禁用时这个令牌不再通过）。把它降成 `USER` 之后，归属改到下一个 id 最小的 `ADMIN`。明文只在 `POST /api/admin/tokens` 的响应里出现一次，丢失后吊销再签发。Reef 保存 SHA-256 十六进制，`token_prefix` 是明文的前 12 个字符。同一（令牌，实例）60 秒内只更新一次 `last_used_at` 和 `hermit_crab_instances.last_seen_at`，节流表在进程内存里，重启后重新计。实例上的 `crab_version` 最长 32 个字符，上报里更长的版本只在这一列截断。
+
+启动警告只在配置令牌为空白，并且 `hermit_agent_tokens` 里没有 `revoked_at IS NULL` 的行时出现。已经吊销的行不算可用令牌。`docker-compose.yml` 里 Reef 的入口仍会在 `HERMIT_REEF_AGENT_TOKEN` 去掉空白后为空时直接退出；那是容器入口的检查，Java 进程本身允许只靠库内令牌启动。
+
+Flyway `V6__users_and_agent_tokens.sql` 给 `hermit_admin_users` 增加 `role`（已有行默认为 `ADMIN`，检查约束 `ck_hermit_admin_users_role` 只允许 `ADMIN` / `USER`），并新建 `hermit_agent_tokens`、`hermit_crab_instances`。失败报告、小时计数和版本切换各增加可空的 `owner_user_id`。没有外键。已经跑过 V5 的库启动时补这些对象，不必为 V6 重建。V1–V4 的就地改写仍然要求重建更早的库，见下面。
 
 Tide 配置位于 `hermit.reef.tide`：
 
@@ -160,7 +166,7 @@ Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，F
 - Compose 默认 Nginx 仅 HTTP，部署到不可信网络前配置 HTTPS 入口；管理员口令、JWT、Agent token 需要传输保护。
 - Crab 控制台按连接回环地址授权；不能将 `/console/**` 无保护转发到公网，回环反向代理会改变实际来源的信任含义。
 - 仓库 Crab 容器方案按 Linux host 网络使用；不应改成普通端口映射来绕过控制台的回环校验。macOS/Windows 可直接运行 Java，本次未验证 Docker Desktop 网络行为。
-- Reef 的 token 是共享令牌，不是每实例独立证书；实例 UUID 是标识，不能替代鉴权。
+- Reef 的配置令牌是可选的共享令牌，另外每个用户可以签发自己的 Agent 令牌。实例 UUID 是标识，不能替代鉴权；Crab 的身份是用户加上 `instanceId`。
 - 规则签名证明发布来源与完整性，不证明规则业务正确；上线新规则仍要针对老系统验收。
 - `config` 的 `type: secret` 会被校验拒绝；秘密必须放 `credentials`。
 

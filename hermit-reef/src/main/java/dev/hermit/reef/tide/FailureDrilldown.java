@@ -11,10 +11,11 @@ public record FailureDrilldown(List<FailureGroup> groups) {
             Integer stepIndex,
             String stepType,
             String errorCode,
+            String owner,
             long count,
             List<FailureSample> recent) {
     }
 
-    public record FailureSample(String summary, String traceId) {
+    public record FailureSample(String summary, String traceId, String owner) {
     }
 }

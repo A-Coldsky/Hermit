@@ -64,7 +64,8 @@ public class AdminBootstrap implements ApplicationRunner {
 
     private void create(String username, String password) {
         jdbc.update(
-                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled) VALUES (?, ?, ?, FALSE)",
+                "INSERT INTO hermit_admin_users (username, password_hash, created_at, disabled, role) "
+                        + "VALUES (?, ?, ?, FALSE, 'ADMIN')",
                 username,
                 passwordEncoder.encode(password),
                 Timestamp.from(clock.instant()));

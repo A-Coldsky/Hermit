@@ -1,4 +1,4 @@
 package dev.hermit.reef.admin;
 
-public record MeResponse(String username) {
+public record MeResponse(String username, AdminRole role) {
 }

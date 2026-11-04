@@ -1,5 +1,6 @@
 package dev.hermit.reef.admin;
 
+import dev.hermit.reef.web.ApiException;
 import dev.hermit.reef.web.ApiResponse;
 import dev.hermit.reef.web.ReefErrorCode;
 import dev.hermit.reef.web.TraceIds;
@@ -22,9 +23,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminAuthController {
 
     private final LoginService loginService;
+    private final AdminUsers users;
 
-    public AdminAuthController(LoginService loginService) {
+    public AdminAuthController(LoginService loginService, AdminUsers users) {
         this.loginService = loginService;
+        this.users = users;
     }
 
     @PostMapping("/login")
@@ -41,6 +44,10 @@ public class AdminAuthController {
     @GetMapping("/me")
     public ApiResponse<MeResponse> me(HttpServletRequest request) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        return ApiResponse.ok(new MeResponse(authentication.getName()), TraceIds.current(request));
+        AdminAccount account = users.find(authentication.getName());
+        if (account == null || account.disabled()) {
+            throw new ApiException(401, ReefErrorCode.UNAUTHORIZED, ReefErrorCode.UNAUTHORIZED.message());
+        }
+        return ApiResponse.ok(new MeResponse(account.username(), account.role()), TraceIds.current(request));
     }
 }

@@ -25,15 +25,17 @@ public class LoginService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuditService auditService;
+    private final AdminUsers users;
     private final Clock clock;
     private final String dummyHash;
 
     public LoginService(JdbcTemplate jdbc, PasswordEncoder passwordEncoder, JwtService jwtService,
-            AuditService auditService, Clock clock) {
+            AuditService auditService, AdminUsers users, Clock clock) {
         this.jdbc = jdbc;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.auditService = auditService;
+        this.users = users;
         this.clock = clock;
         // 用户不存在时也做一次 BCrypt，避免响应时间暴露账号是否存在。
         this.dummyHash = passwordEncoder.encode("dummy-password-not-used-for-login");
@@ -42,7 +44,7 @@ public class LoginService {
     @Transactional
     public Optional<LoginResponse> login(String username, String password) {
         Instant now = clock.instant();
-        AdminUser user = find(username);
+        AdminAccount user = users.find(username);
         boolean locked = failureCount(username, now) >= MAX_FAILURES;
         String hash = user == null ? dummyHash : user.passwordHash();
         boolean passwordMatches = passwordEncoder.matches(password, hash);
@@ -60,20 +62,8 @@ public class LoginService {
             return Optional.empty();
         }
         auditService.record(username, AuditAction.LOGIN_SUCCESS, null, null, null);
-        IssuedJwt issued = jwtService.issue(username);
+        IssuedJwt issued = jwtService.issue(username, user.role());
         return Optional.of(new LoginResponse(issued.token(), issued.expiresAt()));
-    }
-
-    private AdminUser find(String username) {
-        return jdbc.query(
-                "SELECT password_hash, disabled FROM hermit_admin_users WHERE username = ?",
-                rs -> {
-                    if (!rs.next()) {
-                        return null;
-                    }
-                    return new AdminUser(rs.getString("password_hash"), rs.getBoolean("disabled"));
-                },
-                username);
     }
 
     private int failureCount(String username, Instant now) {
@@ -84,8 +74,5 @@ public class LoginService {
                 username,
                 Timestamp.from(cutoff));
         return count == null ? 0 : count;
-    }
-
-    private record AdminUser(String passwordHash, boolean disabled) {
     }
 }

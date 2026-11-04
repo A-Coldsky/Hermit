@@ -135,8 +135,25 @@ class ConsoleAuditTest {
             assertThat(empty.json().path("data").path("entries")).isEmpty();
             assertThat(empty.json().path("data").path("total").asLong()).isZero();
 
-            assertThat(server.console("GET", "/console/api/audit?limit=0", null, true).status()).isEqualTo(400);
-            assertThat(server.console("GET", "/console/api/audit?limit=201", null, true).status()).isEqualTo(400);
+            TestServer.Reply limitZero = server.console("GET", "/console/api/audit?limit=0", null, true);
+            assertThat(limitZero.status()).isEqualTo(400);
+            assertThat(limitZero.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(limitZero.json().path("error").path("message").asText()).isEqualTo("每页条数超出范围。");
+            TestServer.Reply limitHigh = server.console("GET", "/console/api/audit?limit=201", null, true);
+            assertThat(limitHigh.status()).isEqualTo(400);
+            assertThat(limitHigh.json().path("error").path("message").asText()).isEqualTo("每页条数超出范围。");
+            TestServer.Reply limitText = server.console("GET", "/console/api/audit?limit=abc", null, true);
+            assertThat(limitText.status()).isEqualTo(400);
+            assertThat(limitText.json().path("error").path("message").asText()).isEqualTo("每页条数超出范围。");
+            TestServer.Reply pageText = server.console("GET", "/console/api/audit?page=abc", null, true);
+            assertThat(pageText.status()).isEqualTo(400);
+            assertThat(pageText.json().path("error").path("message").asText()).isEqualTo("页码超出范围。");
+            TestServer.Reply pageHuge = server.console("GET", "/console/api/audit?page=2147483647", null, true);
+            assertThat(pageHuge.status()).isEqualTo(400);
+            assertThat(pageHuge.json().path("error").path("message").asText()).isEqualTo("页码超出范围。");
+            TestServer.Reply badConch = server.console("GET", "/console/api/audit?conch=oa/extra", null, true);
+            assertThat(badConch.status()).isEqualTo(400);
+            assertThat(badConch.json().path("error").path("message").asText()).isEqualTo("规则包名称无效。");
             TestServer.Reply pageZero = server.console("GET", "/console/api/audit?page=0", null, true);
             assertThat(pageZero.status()).isEqualTo(400);
             assertThat(pageZero.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
@@ -144,6 +161,8 @@ class ConsoleAuditTest {
             TestServer.Reply badAccount = server.console("GET", "/console/api/audit?account=bad%20name", null, true);
             assertThat(badAccount.status()).isEqualTo(400);
             assertThat(badAccount.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(badAccount.json().path("error").path("message").asText())
+                    .isEqualTo("账号名只能包含字母、数字、下划线和连字符，长度 1 到 64。");
             SecretChecks.absent(badAccount.body(), PASSWORD);
         }
         for (byte[] blob : ciphertexts(root)) {

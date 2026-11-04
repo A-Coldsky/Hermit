@@ -47,7 +47,7 @@ class CliTest {
                 stdout(),
                 stderr(err));
         assertThat(code).isEqualTo(1);
-        assertThat(err.toString(StandardCharsets.UTF_8)).contains("credential values must not be passed as arguments");
+        assertThat(err.toString(StandardCharsets.UTF_8)).contains("凭证不能写在命令行参数里。");
         SecretChecks.absent(err.toString(StandardCharsets.UTF_8), PASSWORD);
         assertThat(temp.resolve("data").resolve("crab.mv.db")).doesNotExist();
     }
@@ -288,12 +288,48 @@ class CliTest {
                 stdout(),
                 stderr(bad));
         assertThat(code).isEqualTo(1);
-        assertThat(bad.toString(StandardCharsets.UTF_8)).contains("limit is out of range");
+        assertThat(bad.toString(StandardCharsets.UTF_8)).contains("每页条数超出范围。");
 
         for (byte[] blob : ciphertexts(root)) {
             SecretChecks.absent(text, Base64.getEncoder().encodeToString(blob));
             SecretChecks.absent(text, HexFormat.of().formatHex(blob));
         }
+    }
+
+    @Test
+    void auditListRejectsBadPagesAndLimitsInChinese() {
+        Function<String, String> env = env(temp.resolve("audit-range"));
+        assertThat(auditErr(env, "audit", "list", "--page", "0")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "-1")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "1.5")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "abc")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "0")).isEqualTo("每页条数超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "-5")).isEqualTo("每页条数超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "abc")).isEqualTo("每页条数超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page")).isEqualTo("缺少 --page 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit")).isEqualTo("缺少 --limit 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--conch")).isEqualTo("缺少 --conch 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--account")).isEqualTo("缺少 --account 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "--limit", "1")).isEqualTo("缺少 --page 的值。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "1", "--page", "2")).isEqualTo("--page 重复了。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "1", "--limit", "2")).isEqualTo("--limit 重复了。\n");
+        assertThat(auditErr(env, "audit", "list", "--conch", "a", "--conch", "b")).isEqualTo("--conch 重复了。\n");
+        assertThat(auditErr(env, "audit", "list", "--account", "a", "--account", "b")).isEqualTo("--account 重复了。\n");
+        assertThat(auditErr(env, "audit", "list", "--limit", "201")).isEqualTo("每页条数超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--page", "2147483647")).isEqualTo("页码超出范围。\n");
+        assertThat(auditErr(env, "audit", "list", "--conch", "oa/extra")).isEqualTo("规则包名称无效。\n");
+        assertThat(auditErr(env, "audit", "list", "--account", "bad name"))
+                .isEqualTo("账号名只能包含字母、数字、下划线和连字符，长度 1 到 64。\n");
+        assertThat(auditErr(env, "audit", "nosuch")).startsWith("用法：\n").contains("crab audit list").doesNotContain("usage:");
+        assertThat(auditErr(env, "audit")).startsWith("用法：\n").doesNotContain("usage:");
+        assertThat(auditErr(env, "apikey", "create", "wide", "--conches")).isEqualTo("缺少 --conches 的值。\n");
+    }
+
+    private static String auditErr(Function<String, String> env, String... args) {
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(args, env, InputStream.nullInputStream(), stdout(), stderr(err));
+        assertThat(code).isEqualTo(1);
+        return err.toString(StandardCharsets.UTF_8);
     }
 
     @Test
@@ -360,7 +396,7 @@ class CliTest {
                 stdout(out),
                 stderr(err));
         assertThat(code).isEqualTo(1);
-        assertThat(err.toString(StandardCharsets.UTF_8)).contains("unknown option");
+        assertThat(err.toString(StandardCharsets.UTF_8)).isEqualTo("不认识的选项 --scope。\n");
         assertThat(out.toString(StandardCharsets.UTF_8)).doesNotContain("id ");
 
         ByteArrayOutputStream listed = new ByteArrayOutputStream();
@@ -454,7 +490,7 @@ class CliTest {
                 stderr(keyErr));
         assertThat(created).isEqualTo(1);
         assertThat(keyOut.toString(StandardCharsets.UTF_8)).doesNotContain("id ");
-        assertThat(keyErr.toString(StandardCharsets.UTF_8)).contains("usage:");
+        assertThat(keyErr.toString(StandardCharsets.UTF_8)).contains("用法：");
         SecretChecks.absent(keyErr.toString(StandardCharsets.UTF_8), PASSWORD);
         SecretChecks.absent(keyOut.toString(StandardCharsets.UTF_8), PASSWORD);
 
@@ -484,7 +520,7 @@ class CliTest {
                 stdout(helpOut),
                 stderr(helpErr));
         assertThat(help).isZero();
-        assertThat(helpOut.toString(StandardCharsets.UTF_8)).contains("usage:").contains("crab apikey list").contains("crab --help");
+        assertThat(helpOut.toString(StandardCharsets.UTF_8)).startsWith("用法：\n").contains("crab apikey list").contains("crab --help").doesNotContain("usage:");
         assertThat(helpErr.toString(StandardCharsets.UTF_8)).isEmpty();
 
         ByteArrayOutputStream shortOut = new ByteArrayOutputStream();
@@ -496,7 +532,7 @@ class CliTest {
                 stdout(shortOut),
                 stderr(shortErr));
         assertThat(shorthand).isZero();
-        assertThat(shortOut.toString(StandardCharsets.UTF_8)).contains("usage:");
+        assertThat(shortOut.toString(StandardCharsets.UTF_8)).startsWith("用法：\n");
         assertThat(shortErr.toString(StandardCharsets.UTF_8)).isEmpty();
 
         ByteArrayOutputStream bareOut = new ByteArrayOutputStream();
@@ -533,7 +569,7 @@ class CliTest {
                 stderr(extraErr));
         assertThat(extra).isEqualTo(1);
         assertThat(extraOut.toString(StandardCharsets.UTF_8)).isEmpty();
-        assertThat(extraErr.toString(StandardCharsets.UTF_8)).contains("usage:");
+        assertThat(extraErr.toString(StandardCharsets.UTF_8)).startsWith("用法：\n");
         assertThat(temp.resolve("data")).doesNotExist();
     }
 

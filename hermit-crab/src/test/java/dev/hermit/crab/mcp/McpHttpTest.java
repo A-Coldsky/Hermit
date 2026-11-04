@@ -516,6 +516,7 @@ class McpHttpTest {
                     new PrintStream(rejectedOut, true, StandardCharsets.UTF_8),
                     new PrintStream(rejectedErr, true, StandardCharsets.UTF_8));
             assertThat(rejected).isEqualTo(1);
+            assertThat(rejectedErr.toString(StandardCharsets.UTF_8)).isEqualTo("多余的参数。\n");
             SecretChecks.absent(rejectedOut.toString(StandardCharsets.UTF_8), server.apiKey.plaintext());
             SecretChecks.absent(rejectedErr.toString(StandardCharsets.UTF_8), server.apiKey.plaintext());
 
@@ -594,6 +595,26 @@ class McpHttpTest {
         assertThat(badUrl).isEqualTo(1);
         assertThat(urlErr.toString(StandardCharsets.UTF_8)).isEqualTo(McpStdio.URL_INVALID + System.lineSeparator());
         SecretChecks.absent(urlErr.toString(StandardCharsets.UTF_8), "not-a-real-key");
+
+        ByteArrayOutputStream optionErr = new ByteArrayOutputStream();
+        int missingOption = new CrabCommand().run(
+                new String[] {"mcp-stdio", "--url"},
+                name -> null,
+                InputStream.nullInputStream(),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
+                new PrintStream(optionErr, true, StandardCharsets.UTF_8));
+        assertThat(missingOption).isEqualTo(1);
+        assertThat(optionErr.toString(StandardCharsets.UTF_8)).isEqualTo("缺少 --url 的值。\n");
+
+        ByteArrayOutputStream unknownErr = new ByteArrayOutputStream();
+        int unknownOption = new CrabCommand().run(
+                new String[] {"mcp-stdio", "--scope", "legacy_oa"},
+                name -> null,
+                InputStream.nullInputStream(),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
+                new PrintStream(unknownErr, true, StandardCharsets.UTF_8));
+        assertThat(unknownOption).isEqualTo(1);
+        assertThat(unknownErr.toString(StandardCharsets.UTF_8)).isEqualTo("不认识的选项 --scope。\n");
 
         String request = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"initialize\",\"params\":{}}";
         String filled = McpStdio.authenticationStdout(

@@ -15,6 +15,10 @@ public final class AuditLog {
     public static final int MAX_LIMIT = 200;
     /** {@code page} below 1, or too large to page. HTTP 400 {@code INVALID_INPUT}. */
     public static final String PAGE_OUT_OF_RANGE = "页码超出范围。";
+    /** {@code limit} outside 1..{@link #MAX_LIMIT}. HTTP 400 {@code INVALID_INPUT}. */
+    public static final String LIMIT_OUT_OF_RANGE = "每页条数超出范围。";
+    /** Conch filter is too long, or contains a slash, backslash, or control character. */
+    public static final String CONCH_INVALID = "规则包名称无效。";
 
     private AuditLog() {
     }
@@ -43,7 +47,7 @@ public final class AuditLog {
             throw new IllegalArgumentException(PAGE_OUT_OF_RANGE);
         }
         if (limit < 1 || limit > MAX_LIMIT) {
-            throw new IllegalArgumentException("limit is out of range");
+            throw new IllegalArgumentException(LIMIT_OUT_OF_RANGE);
         }
         int offset;
         try {
@@ -61,7 +65,7 @@ public final class AuditLog {
             return null;
         }
         if (conch.length() > 256 || conch.indexOf('/') >= 0 || conch.indexOf('\\') >= 0 || hasControl(conch)) {
-            throw new IllegalArgumentException("conch is invalid");
+            throw new IllegalArgumentException(CONCH_INVALID);
         }
         return conch;
     }

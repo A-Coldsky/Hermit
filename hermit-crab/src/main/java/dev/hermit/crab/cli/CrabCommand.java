@@ -58,7 +58,7 @@ import dev.hermit.crab.store.DatabaseInUseException;
  */
 public final class CrabCommand {
     private static final String USAGE = """
-            usage:
+            用法：
               crab --help
               crab serve
               crab sync
@@ -92,19 +92,19 @@ public final class CrabCommand {
             err.println(DatabaseInUseException.MESSAGE);
             return 2;
         } catch (ConchRejectedException ex) {
-            err.println("conch was rejected");
+            err.println("规则包未通过校验。");
             for (ValidationIssue issue : ex.issues()) {
                 err.println(issue.code() + " " + issue.path());
             }
             return 1;
         } catch (ConchParseException ex) {
-            err.println("installed conch could not be parsed");
+            err.println("已安装的规则包无法解析。");
             return 1;
         } catch (ConfigFileException ex) {
             err.println(ex.getMessage());
             return 1;
         } catch (AccountNotFoundException ex) {
-            err.println(ex.account() == null ? "no default account" : "account not found");
+            err.println(ex.account() == null ? "没有默认账号。" : "没有这个账号。");
             return 1;
         } catch (MasterKeyException ex) {
             err.println(clientMessage(ex));
@@ -162,25 +162,25 @@ public final class CrabCommand {
         }
         Path file = Path.of(args[2]);
         if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-            err.println("bootstrap file cannot be read");
+            err.println("读不到引导文件。");
             return 1;
         }
         long size;
         try {
             size = Files.size(file);
         } catch (IOException ex) {
-            err.println("bootstrap file cannot be read");
+            err.println("读不到引导文件。");
             return 1;
         }
         if (size > ReefBootstrap.MAX_BYTES) {
-            err.println("bootstrap is larger than 64 KiB");
+            err.println("引导文件不能超过 64 KiB。");
             return 1;
         }
         byte[] body;
         try {
             body = Files.readAllBytes(file);
         } catch (IOException ex) {
-            err.println("bootstrap file cannot be read");
+            err.println("读不到引导文件。");
             return 1;
         }
         return withRuntime(env, runtime -> {
@@ -431,7 +431,7 @@ public final class CrabCommand {
             return 1;
         }
         if (parsed.positionals.size() > 5) {
-            err.println("credential values must not be passed as arguments");
+            err.println("凭证不能写在命令行参数里。");
             return 1;
         }
         if (parsed.positionals.size() != 5 || parsed.readOnly || parsed.all
@@ -447,11 +447,11 @@ public final class CrabCommand {
             runtime.loadInstalledConches();
             ConchDoc doc = runtime.registry().find(conch).orElse(null);
             if (doc == null) {
-                err.println("conch is not installed");
+                err.println("本机没有这个规则包。");
                 return 1;
             }
             if (!runtime.admin().declaresCredential(doc, field)) {
-                err.println("unknown credential field");
+                err.println("不认识的凭证字段。");
                 return 1;
             }
             String secret = parsed.fromEnv == null ? readSecret(in, err) : envSecret(env, parsed.fromEnv, err);
@@ -462,7 +462,7 @@ public final class CrabCommand {
                 runtime.admin().writeCredentials(doc, account, Map.of(field, secret), Actors.CLI);
             } catch (RuntimeException ex) {
                 if (ex.getMessage() != null && ex.getMessage().contains(secret)) {
-                    err.println("invalid credential");
+                    err.println("凭证无效。");
                     return 1;
                 }
                 throw ex;
@@ -562,11 +562,11 @@ public final class CrabCommand {
         }
         Path file = Path.of(args[2]);
         if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-            err.println("yaml file is required");
+            err.println("请提供 YAML 文件。");
             return 1;
         }
         if (Files.size(file) > LocalConches.MAX_BYTES) {
-            err.println("yaml exceeds 1 MiB");
+            err.println("YAML 不能超过 1 MiB。");
             return 1;
         }
         byte[] raw = Files.readAllBytes(file);
@@ -632,12 +632,12 @@ public final class CrabCommand {
         if (outFile != null) {
             Path target = Path.of(outFile);
             if (Files.isSymbolicLink(target)) {
-                err.println("output path is a symlink");
+                err.println("输出路径不能是符号链接。");
                 return 1;
             }
             Path parent = target.toAbsolutePath().getParent();
             if (parent != null && !Files.isDirectory(parent)) {
-                err.println("output directory is missing");
+                err.println("输出目录不存在。");
                 return 1;
             }
         }
@@ -649,7 +649,7 @@ public final class CrabCommand {
                     out.write(export.bytes());
                     out.flush();
                 } catch (IOException ex) {
-                    err.println("output file was not written");
+                    err.println("没有写完输出文件。");
                     return 1;
                 }
                 return 0;
@@ -657,7 +657,7 @@ public final class CrabCommand {
             try {
                 Files.write(Path.of(outFile), export.bytes());
             } catch (IOException ex) {
-                err.println("output file was not written");
+                err.println("没有写完输出文件。");
                 return 1;
             }
             out.println(Path.of(outFile));
@@ -681,41 +681,41 @@ public final class CrabCommand {
                 return 1;
             }
             if (i + 1 >= args.length || args[i + 1].startsWith("--")) {
-                err.println("option value is required");
+                err.println("缺少 " + arg + " 的值。");
                 return 1;
             }
             String value = args[++i];
             switch (arg) {
                 case "--conch" -> {
                     if (conch != null) {
-                        err.println("duplicate option");
+                        err.println(arg + " 重复了。");
                         return 1;
                     }
                     conch = value;
                 }
                 case "--account" -> {
                     if (account != null) {
-                        err.println("duplicate option");
+                        err.println(arg + " 重复了。");
                         return 1;
                     }
                     account = value;
                 }
                 case "--limit" -> {
                     if (limit != null) {
-                        err.println("duplicate option");
+                        err.println(arg + " 重复了。");
                         return 1;
                     }
-                    limit = optionInt(value, "limit", err);
+                    limit = optionInt(value, AuditLog.LIMIT_OUT_OF_RANGE, err);
                     if (limit == null) {
                         return 1;
                     }
                 }
                 case "--page" -> {
                     if (page != null) {
-                        err.println("duplicate option");
+                        err.println(arg + " 重复了。");
                         return 1;
                     }
-                    page = optionInt(value, "page", err);
+                    page = optionInt(value, AuditLog.PAGE_OUT_OF_RANGE, err);
                     if (page == null) {
                         return 1;
                     }
@@ -738,16 +738,17 @@ public final class CrabCommand {
         });
     }
 
-    private static Integer optionInt(String value, String label, PrintStream err) {
+    /** {@code message} is the Chinese sentence printed for a non-integer or a value below 1. */
+    private static Integer optionInt(String value, String message, PrintStream err) {
         try {
             int parsed = Integer.parseInt(value);
             if (parsed < 1) {
-                err.println(label + " is out of range");
+                err.println(message);
                 return null;
             }
             return parsed;
         } catch (NumberFormatException ex) {
-            err.println(label + " is out of range");
+            err.println(message);
             return null;
         }
     }
@@ -880,12 +881,12 @@ public final class CrabCommand {
     }
 
     private static String readSecret(InputStream in, PrintStream err) throws IOException {
-        err.println("credential:");
+        err.println("凭证：");
         Console console = System.console();
         if (console != null && in == System.in) {
             char[] chars = console.readPassword();
             if (chars == null || chars.length == 0) {
-                err.println("credential value is required");
+                err.println("请提供凭证值。");
                 return null;
             }
             try {
@@ -896,7 +897,7 @@ public final class CrabCommand {
         }
         String line = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8)).readLine();
         if (line == null || line.isEmpty()) {
-            err.println("credential value is required");
+            err.println("请提供凭证值。");
             return null;
         }
         return line;
@@ -905,11 +906,11 @@ public final class CrabCommand {
     private static String envSecret(Function<String, String> env, String name, PrintStream err) {
         String value = env.apply(name);
         if (value == null) {
-            err.println("environment variable is not set");
+            err.println("环境变量没有设置。");
             return null;
         }
         if (value.isEmpty()) {
-            err.println("credential value is required");
+            err.println("请提供凭证值。");
             return null;
         }
         return value;
@@ -930,7 +931,7 @@ public final class CrabCommand {
             }
             if ("--from-env".equals(arg) || "--conches".equals(arg) || "--actions".equals(arg)) {
                 if (i + 1 >= args.length || args[i + 1].startsWith("--")) {
-                    err.println("option value is required");
+                    err.println("缺少 " + arg + " 的值。");
                     return null;
                 }
                 String value = args[++i];
@@ -948,7 +949,7 @@ public final class CrabCommand {
                 continue;
             }
             if (arg.startsWith("--")) {
-                err.println("unknown option");
+                err.println("不认识的选项 " + arg + "。");
                 return null;
             }
             positionals.add(arg);
@@ -981,7 +982,7 @@ public final class CrabCommand {
             runtime.loadInstalledConches();
             ConchDoc doc = runtime.registry().find(conch).orElse(null);
             if (doc == null) {
-                err.println("conch is not installed");
+                err.println("本机没有这个规则包。");
                 return 1;
             }
             return task.run(runtime, doc);
@@ -1001,7 +1002,7 @@ public final class CrabCommand {
     private static String clientMessage(RuntimeException ex) {
         String message = ex.getMessage();
         if (message == null || message.length() > 200 || message.indexOf('\n') >= 0) {
-            return "invalid input";
+            return "输入无效。";
         }
         return message;
     }

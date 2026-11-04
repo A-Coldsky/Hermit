@@ -20,9 +20,12 @@ final class Checks {
         return conch;
     }
 
+    /** Shown when an account name is missing or outside {@code [A-Za-z0-9_-]{1,64}}. */
+    static final String ACCOUNT_NAME_INVALID = "账号名只能包含字母、数字、下划线和连字符，长度 1 到 64。";
+
     static String account(String account) {
         if (account == null || !ACCOUNT_NAME.matcher(account).matches()) {
-            throw new IllegalArgumentException("account name must match [A-Za-z0-9_-]{1,64}");
+            throw new IllegalArgumentException(ACCOUNT_NAME_INVALID);
         }
         return account;
     }

@@ -191,15 +191,21 @@ class ConfigAuditReadTest {
         assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, "oa", null, 0, 10))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("页码超出范围。");
+        assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, "oa", null, Integer.MAX_VALUE, 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("页码超出范围。");
+        assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, "oa", null, 1, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("每页条数超出范围。");
         assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, "oa", null, 1, 201))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("limit is out of range");
+                .hasMessage("每页条数超出范围。");
         assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, "oa/extra", null, 1, 10))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("conch is invalid");
+                .hasMessage("规则包名称无效。");
         assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, null, "bad name", 1, 10))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("account name");
+                .hasMessage("账号名只能包含字母、数字、下划线和连字符，长度 1 到 64。");
     }
 
     private static AuditLog.Entry find(AuditLog.Page page, String action, String account) {

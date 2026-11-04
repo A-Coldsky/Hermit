@@ -75,7 +75,7 @@ public final class CrabCommand {
               crab config set <conch> <key> <value>
               crab config unset <conch> <key>
               crab audit list [--conch NAME] [--account NAME] [--limit N] [--page N]
-              crab apikey create <name> [--conches a,b] [--actions conch.action] [--read-only]
+              crab apikey create <name> [--all] [--conches a,b] [--actions conch.action] [--read-only]
               crab apikey list
               crab apikey revoke <id>
               crab local import <file>
@@ -410,7 +410,8 @@ public final class CrabCommand {
         }
         String verb = parsed.positionals.get(1);
         if ("list".equals(verb)) {
-            if (parsed.positionals.size() != 4 || parsed.fromEnv != null || parsed.readOnly || parsed.conches != null) {
+            if (parsed.positionals.size() != 4 || parsed.fromEnv != null || parsed.readOnly || parsed.all
+                    || parsed.conches != null) {
                 err.print(USAGE);
                 return 1;
             }
@@ -433,7 +434,8 @@ public final class CrabCommand {
             err.println("credential values must not be passed as arguments");
             return 1;
         }
-        if (parsed.positionals.size() != 5 || parsed.readOnly || parsed.conches != null || parsed.actions != null) {
+        if (parsed.positionals.size() != 5 || parsed.readOnly || parsed.all
+                || parsed.conches != null || parsed.actions != null) {
             err.print(USAGE);
             return 1;
         }
@@ -763,15 +765,21 @@ public final class CrabCommand {
     }
 
     /**
-     * Stored scope, printed as stored. An empty set is {@code -}; this line does not
-     * invent an "all" flag. The plaintext key is not on {@link ApiKeySummary}.
+     * One list line. Full official access prints {@code all=true} and omits the empty
+     * conch and action sets. A narrower key prints {@code all=false} with those sets;
+     * an empty dimension is {@code -}. {@code all} follows {@link ApiKeyScope#grantsAllOfficial()},
+     * so a stored row that omits the flag still shows full access. The plaintext key is
+     * not on {@link ApiKeySummary}.
      */
     private static String formatApiKey(ApiKeySummary key) {
         ApiKeyScope scope = key.scope();
         String line = key.id() + " " + key.prefix() + " " + key.name()
-                + " conches=" + joinScope(scope.conches())
-                + " actions=" + joinScope(scope.actions())
-                + " read-only=" + scope.readOnlyOnly();
+                + " all=" + scope.grantsAllOfficial();
+        if (!scope.grantsAllOfficial()) {
+            line += " conches=" + joinScope(scope.conches())
+                    + " actions=" + joinScope(scope.actions());
+        }
+        line += " read-only=" + scope.readOnlyOnly();
         if (key.revokedAt() != null) {
             line += " revoked";
         }
@@ -813,7 +821,8 @@ public final class CrabCommand {
         String verb = parsed.positionals.get(1);
         return switch (verb) {
             case "list" -> {
-                if (parsed.positionals.size() != 2 || parsed.fromEnv != null || parsed.conches != null || parsed.actions != null || parsed.readOnly) {
+                if (parsed.positionals.size() != 2 || parsed.fromEnv != null || parsed.conches != null
+                        || parsed.actions != null || parsed.readOnly || parsed.all) {
                     err.print(USAGE);
                     yield 1;
                 }
@@ -825,7 +834,8 @@ public final class CrabCommand {
                 });
             }
             case "revoke" -> {
-                if (parsed.positionals.size() != 3 || parsed.fromEnv != null || parsed.conches != null || parsed.actions != null || parsed.readOnly) {
+                if (parsed.positionals.size() != 3 || parsed.fromEnv != null || parsed.conches != null
+                        || parsed.actions != null || parsed.readOnly || parsed.all) {
                     err.print(USAGE);
                     yield 1;
                 }
@@ -844,12 +854,18 @@ public final class CrabCommand {
                 String name = parsed.positionals.get(2);
                 Set<String> conches = parsed.conches == null ? Set.of() : parsed.conches;
                 Set<String> actions = parsed.actions == null ? Set.of() : parsed.actions;
+                ApiKeyScope scope;
+                try {
+                    scope = ApiKeyScope.explicit(parsed.all, conches, actions, parsed.readOnly);
+                } catch (IllegalArgumentException ex) {
+                    err.println(clientMessage(ex));
+                    yield 1;
+                }
                 yield withRuntime(env, runtime -> {
-                    if (!actions.isEmpty() || !conches.isEmpty()) {
+                    if (!scope.conches().isEmpty() || !scope.actions().isEmpty()) {
                         runtime.loadInstalledConches();
                     }
-                    CreatedApiKey created = runtime.admin().createApiKey(
-                            name, new ApiKeyScope(conches, actions, parsed.readOnly), Actors.CLI);
+                    CreatedApiKey created = runtime.admin().createApiKey(name, scope, Actors.CLI);
                     out.println("id " + created.id());
                     out.println("prefix " + created.prefix());
                     out.println(created.plaintext());
@@ -905,8 +921,13 @@ public final class CrabCommand {
         Set<String> conches = null;
         Set<String> actions = null;
         boolean readOnly = false;
+        boolean all = false;
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
+            if ("--all".equals(arg)) {
+                all = true;
+                continue;
+            }
             if ("--from-env".equals(arg) || "--conches".equals(arg) || "--actions".equals(arg)) {
                 if (i + 1 >= args.length || args[i + 1].startsWith("--")) {
                     err.println("option value is required");
@@ -932,7 +953,7 @@ public final class CrabCommand {
             }
             positionals.add(arg);
         }
-        return new Parsed(positionals, fromEnv, conches, actions, readOnly);
+        return new Parsed(positionals, fromEnv, conches, actions, readOnly, all);
     }
 
     private static Set<String> split(String value) {
@@ -990,7 +1011,8 @@ public final class CrabCommand {
             String fromEnv,
             Set<String> conches,
             Set<String> actions,
-            boolean readOnly
+            boolean readOnly,
+            boolean all
     ) {
     }
 

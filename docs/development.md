@@ -77,8 +77,8 @@ npm run dev:reef
 | Tide | `ReportIngestTest`、`TideQueryTest`、`AlertEvaluationTest`、`TidePropertiesTest` | 上报校验、失败去重、聚合与告警、阈值负值拒绝 |
 | 执行 | `EngineUnitTest`、`LegacyOaEngineTest`、`ScriptStepTest` | 模拟 OA、登录隔离、编码/提取、脚本 |
 | 数据 | `SecretFlowTest`、`CredentialCipherTest`、`MasterKeyProviderTest`、`*StoreTest` | 加密、绑定、账户、主密钥、日志 |
-| 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等冲突与同体回放、本机限制、调用渠道、MCP 模式与 SSE、未知工具 hint、traceId、多余入参、stdio `--help` 与 401 的请求 id |
-| CLI | `CliTest` | 未知包 `config get` 退出 1；`apikey list` 打印范围、只读和吊销且不明文；`--help` 与无参数把用法打到 stdout 并退出 0，未知命令退出 1 |
+| 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest` | 作用域、幂等冲突与同体回放、本机限制、调用渠道、MCP 模式与 SSE、未知工具 hint、traceId、多余入参、stdio `--help` 与 401 的 JSON-RPC 请求 id |
+| CLI | `CliTest` | 未知包 `config get` 退出 1；`apikey list` 对全部正式包打印 `all=true`（不打印 `conches=-`），有限范围打印名字、只读和吊销且不明文；`--help` 与无参数把用法打到 stdout 并退出 0，未知命令退出 1 |
 | 前端 | `loading-empty.test.ts`、`copy.test.ts`、`theme.test.ts`、`version-panel.test.ts`、`bar-chart.test.ts` | 初始加载、说明文案、浅色/暗色颜色映射、版本警告详情和图表刻度 |
 | 同步/上报 | `ConchSyncTest`、`ConchRepairTest`、`SubscriptionTest`、`InstalledConchesTest`、`RuleMismatchStaysTest`、`ReportSenderTest`、`CrabWiringTest`、`SyncExceptionTest` | ETag、订阅安装、手动更新、丢失安装不下载、失败重试、验签、失配不切换版本、Reef 不可达、定时任务 |
 | 验收 | [Phase1AcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/Phase1AcceptanceTest.java) | 独立 Reef + Crab + 模拟 OA，发布后手动更新、失配不回退、反馈与敏感数据检查 |

@@ -80,6 +80,7 @@ class ConsoleConfigTest {
                     "{\"name\":\"reader\",\"actions\":[\"legacy_oa.list_todo\"],\"readOnly\":true}",
                     true);
             assertThat(created.status()).isEqualTo(200);
+            assertThat(created.json().path("data").path("scope").path("all").asBoolean()).isFalse();
             assertThat(created.json().path("data").path("scope").path("actions").get(0).asText())
                     .isEqualTo("legacy_oa.list_todo");
 
@@ -95,6 +96,7 @@ class ConsoleConfigTest {
             TestServer.Reply installed = server.console(
                     "POST", "/console/api/apikeys", "{\"name\":\"scoped\",\"conches\":[\"legacy_oa\"]}", true);
             assertThat(installed.status()).isEqualTo(200);
+            assertThat(installed.json().path("data").path("scope").path("all").asBoolean()).isFalse();
 
             TestServer.Reply unknown = server.console(
                     "POST", "/console/api/apikeys", "{\"name\":\"ghost-pack\",\"conches\":[\"no_such_pack\"]}", true);
@@ -154,12 +156,46 @@ class ConsoleConfigTest {
 
             TestServer.Reply open = server.console(
                     "POST", "/console/api/apikeys", "{\"name\":\"open-reef\"}", true);
-            assertThat(open.status()).isEqualTo(200);
-            assertThat(open.json().path("data").path("scope").path("conches")).isEmpty();
-            assertThat(open.json().path("data").path("scope").path("actions")).isEmpty();
+            assertThat(open.status()).isEqualTo(400);
+            assertThat(open.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(open.json().path("error").path("message").asText())
+                    .isEqualTo(dev.hermit.crab.store.ApiKeyScope.MISSING_SCOPE);
+
+            TestServer.Reply emptyArrays = server.console(
+                    "POST",
+                    "/console/api/apikeys",
+                    "{\"name\":\"empty-arrays\",\"conches\":[],\"actions\":[],\"all\":false}",
+                    true);
+            assertThat(emptyArrays.status()).isEqualTo(400);
+            assertThat(emptyArrays.json().path("error").path("message").asText())
+                    .isEqualTo(dev.hermit.crab.store.ApiKeyScope.MISSING_SCOPE);
+
+            TestServer.Reply mixed = server.console(
+                    "POST",
+                    "/console/api/apikeys",
+                    "{\"name\":\"mixed-all\",\"all\":true,\"conches\":[\"legacy_oa\"]}",
+                    true);
+            assertThat(mixed.status()).isEqualTo(400);
+            assertThat(mixed.json().path("error").path("message").asText())
+                    .isEqualTo(dev.hermit.crab.store.ApiKeyScope.ALL_EXCLUDES_NAMES);
+
+            TestServer.Reply badAll = server.console(
+                    "POST", "/console/api/apikeys", "{\"name\":\"bad-all\",\"all\":\"yes\"}", true);
+            assertThat(badAll.status()).isEqualTo(400);
+            assertThat(badAll.json().path("error").path("message").asText()).isEqualTo("all must be a boolean");
+
+            TestServer.Reply createdAll = server.console(
+                    "POST", "/console/api/apikeys", "{\"name\":\"open-reef\",\"all\":true,\"readOnly\":true}", true);
+            assertThat(createdAll.status()).isEqualTo(200);
+            assertThat(createdAll.json().path("data").path("scope").path("all").asBoolean()).isTrue();
+            assertThat(createdAll.json().path("data").path("scope").path("conches")).isEmpty();
+            assertThat(createdAll.json().path("data").path("scope").path("actions")).isEmpty();
+            assertThat(createdAll.json().path("data").path("scope").path("readOnly").asBoolean()).isTrue();
 
             TestServer.Reply afterRejects = server.console("GET", "/console/api/apikeys", null, true);
-            assertThat(names(afterRejects)).contains("open-reef").doesNotContain("nested", "extra");
+            assertThat(names(afterRejects))
+                    .contains("open-reef")
+                    .doesNotContain("nested", "extra", "empty-arrays", "mixed-all", "bad-all");
         }
     }
 

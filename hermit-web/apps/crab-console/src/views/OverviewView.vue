@@ -225,7 +225,7 @@ onMounted(load)
           <el-icon :size="22"><Connection /></el-icon>
           <div>
             <strong>没有配置 Reef，只使用本地规则包。</strong>
-            <div class="hm-muted">在 config.yml 设置 reef.url 和 reef.public_key 后重启 Crab。</div>
+            <div class="hm-muted">在<router-link to="/reef">连接 Reef</router-link>导入 Reef 管理页生成的初始化 JSON，不用重启。</div>
           </div>
         </div>
         <div v-else-if="!loading" class="state">

@@ -19,6 +19,12 @@ public enum AuditKind {
     CONCH_UNSUBSCRIBED,
     /** A console or CLI user installed a higher catalog version. Detail has {@code from} and {@code to}. */
     CONCH_UPDATED,
+    /**
+     * Sync refused to download a previously installed conch that is not loaded.
+     * Detail is {@code {"reason":"..."}} with no secrets. One row per reason until the conch
+     * loads again or is unsubscribed.
+     */
+    CONCH_REPAIR_REQUIRED,
     LOCAL_CONCH_IMPORTED,
     LOCAL_CONCH_DELETED,
     /** Reef first dropped a subscribed official conch from the manifest. */

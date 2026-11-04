@@ -90,6 +90,9 @@ class ConchSyncTest {
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_OLDER, SyncReasons.OLDER_MANIFEST))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.DISABLED, SyncReasons.DISABLED))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT))).isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.REPAIR_REQUIRED, SyncReasons.POINTER_MISSING))).isTrue();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.REPAIR_REQUIRED, "BAD_SIGNATURE"))).isTrue();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.REPAIRED, SyncReasons.RESTORED))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.INSTALLED, "HTTP_500"))).isFalse();
     }
 

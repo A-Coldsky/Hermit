@@ -153,8 +153,9 @@ export interface FailureGroup {
   stepIndex: number | null
   stepType: string | null
   errorCode: string
+  owner: string | null
   count: number
-  recent: { summary: string | null; traceId: string }[]
+  recent: { summary: string | null; traceId: string; owner: string | null }[]
 }
 
 export interface VersionStats {
@@ -173,6 +174,43 @@ export interface RollbackEvent {
   reason: string
   occurredAt: string
   receivedAt: string
+  owner: string | null
+}
+
+export type AdminRole = 'ADMIN' | 'USER'
+
+export interface AdminUser {
+  username: string
+  role: AdminRole
+  disabled: boolean
+  createdAt: string
+  tokenCount: number
+}
+
+export interface AgentToken {
+  id: number | null
+  owner: string
+  name: string
+  prefix: string | null
+  createdAt: string | null
+  lastUsedAt: string | null
+  revokedAt: string | null
+  source: 'DATABASE' | 'CONFIG'
+}
+
+export interface IssuedAgentToken {
+  token: AgentToken
+  secret: string
+  publicKey: string
+}
+
+export interface CrabInstance {
+  owner: string
+  instanceId: string
+  tokenName: string | null
+  firstSeenAt: string
+  lastSeenAt: string
+  crabVersion: string | null
 }
 
 export interface Alert {
@@ -212,8 +250,23 @@ export interface PurgeCounts {
 export const api = {
   login: (username: string, password: string) =>
     http.post<{ token: string; expiresAt: string }>('/api/admin/login', { username, password }),
-  me: () => http.get<{ username: string }>('/api/admin/me'),
+  me: () => http.get<{ username: string; role: AdminRole }>('/api/admin/me'),
+  changePassword: (oldPassword: string, newPassword: string) =>
+    http.post<AdminUser>('/api/admin/me/password', { oldPassword, newPassword }),
   signingKey: () => http.get<{ publicKey: string }>('/api/admin/signing-key'),
+
+  users: () => http.get<AdminUser[]>('/api/admin/users'),
+  createUser: (username: string, password: string, role: AdminRole) =>
+    http.post<AdminUser>('/api/admin/users', { username, password, role }),
+  updateUser: (username: string, body: { role?: AdminRole; disabled?: boolean }) =>
+    http.patch<AdminUser>(`/api/admin/users/${seg(username)}`, body),
+  resetPassword: (username: string, password: string) =>
+    http.post<AdminUser>(`/api/admin/users/${seg(username)}/password`, { password }),
+
+  tokens: (all = false) => http.get<AgentToken[]>('/api/admin/tokens', all ? { all: true } : undefined),
+  createToken: (name: string) => http.post<IssuedAgentToken>('/api/admin/tokens', { name }),
+  revokeToken: (id: number) => http.del<AgentToken>(`/api/admin/tokens/${id}`),
+  crabs: () => http.get<CrabInstance[]>('/api/admin/crabs'),
 
   conches: () => http.get<ConchSummary[]>('/api/admin/conches'),
   conch: (conch: string) => http.get<ConchDetail>(`/api/admin/conches/${seg(conch)}`),

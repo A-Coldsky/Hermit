@@ -3,6 +3,8 @@ package dev.hermit.reef.tide;
 import dev.hermit.common.report.ReportBatch;
 import dev.hermit.common.report.ReportJson;
 import dev.hermit.reef.security.AgentAccessFilter;
+import dev.hermit.reef.security.AgentPresence;
+import dev.hermit.reef.security.AgentPrincipal;
 import dev.hermit.reef.web.ApiResponse;
 import dev.hermit.reef.web.TraceIds;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,9 +19,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class ReportController {
 
     private final ReportIngestService ingestService;
+    private final AgentPresence presence;
 
-    public ReportController(ReportIngestService ingestService) {
+    public ReportController(ReportIngestService ingestService, AgentPresence presence) {
         this.ingestService = ingestService;
+        this.presence = presence;
     }
 
     @PostMapping("/agent/reports")
@@ -32,7 +36,11 @@ public class ReportController {
             throw TideErrors.unprocessable();
         }
         ReportRules.check(batch, request.getHeader(AgentAccessFilter.INSTANCE_HEADER));
-        return ApiResponse.ok(ingestService.ingest(batch), TraceIds.current(request));
+        AgentPrincipal principal = AgentAccessFilter.principal(request);
+        Long ownerUserId = principal == null ? null : principal.userId();
+        ReportAccepted accepted = ingestService.ingest(batch, ownerUserId);
+        presence.noteCrabVersion(principal, batch.instanceId(), batch.crabVersion());
+        return ApiResponse.ok(accepted, TraceIds.current(request));
     }
 
     private static byte[] readBody(HttpServletRequest request) throws IOException {

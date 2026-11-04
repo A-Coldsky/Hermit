@@ -13,6 +13,7 @@ public record RollbackList(List<RollbackItem> events) {
             String toVersion,
             String reason,
             Instant occurredAt,
-            Instant receivedAt) {
+            Instant receivedAt,
+            String owner) {
     }
 }

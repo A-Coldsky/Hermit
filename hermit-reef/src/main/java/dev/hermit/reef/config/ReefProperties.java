@@ -3,18 +3,11 @@ package dev.hermit.reef.config;
 import jakarta.annotation.PostConstruct;
 import java.nio.file.Path;
 import java.time.Duration;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.scheduling.support.CronExpression;
 
 @ConfigurationProperties(prefix = "hermit.reef")
 public class ReefProperties {
-
-    static final String BLANK_AGENT_TOKEN = "hermit.reef.agent-token is blank. All /agent/** requests will be rejected. "
-            + "Set HERMIT_REEF_AGENT_TOKEN.";
-
-    private static final Logger log = LoggerFactory.getLogger(ReefProperties.class);
 
     private String dataDir = "./reef-data";
     private String agentToken = "";
@@ -38,9 +31,7 @@ public class ReefProperties {
         if (retentionCron == null || retentionCron.isBlank() || !CronExpression.isValidExpression(retentionCron)) {
             throw new IllegalStateException("hermit.reef.retention-cron must be a valid cron expression");
         }
-        if (configuredAgentToken() == null) {
-            log.warn(BLANK_AGENT_TOKEN);
-        }
+        // 空配置令牌不在这里警告。库准备好之后由 AgentTokenWarnings 判断还有没有可用令牌。
     }
 
     public Path dataDirectory() {

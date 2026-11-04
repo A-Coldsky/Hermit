@@ -6,9 +6,9 @@
 
 | 接口 | 认证 |
 | --- | --- |
-| Reef `/api/admin/login` | username/password；成功返回 data.token、data.expiresAt |
-| Reef 其他 `/api/admin/**` | `Authorization: Bearer <JWT>` |
-| Reef `/agent/**` | `X-Hermit-Instance: <UUID>` 和 `X-Hermit-Token: <共享令牌>`；未配令牌也拒绝 |
+| Reef `/api/admin/login` | username/password；成功返回 data.token、data.expiresAt。JWT 带 `role`（`ADMIN` 或 `USER`）。每次请求按数据库里的当前角色授权，不看 JWT 里的 `role` |
+| Reef 其他 `/api/admin/**` | `Authorization: Bearer <JWT>`。`USER` 可以读规则包、Tide、告警，并管理自己的口令和 Agent 令牌；其余管理写操作、审计、清理和用户管理是 403 `FORBIDDEN`。账号已禁用时已发出的 JWT 也是 401 |
+| Reef `/agent/**` | `X-Hermit-Instance: <UUID>` 和 `X-Hermit-Token`。令牌可以是配置里的 `HERMIT_REEF_AGENT_TOKEN`，或某个用户签发且未吊销的 Agent 令牌。该用户已禁用时，他的令牌全部 401。配置令牌归 id 最小的 `ADMIN`；这个管理员被禁用则配置令牌也 401。库里还没有任何 `ADMIN` 时，配置令牌仍可通过，上报的 owner 为空，也不记 Crab 实例 |
 | Crab `/api/**`、别名、`/mcp` | `Authorization: Bearer <API Key>` 或 `X-Hermit-Key` |
 | Crab `/console/api/**` | 实际连接来源必须回环地址，且 `X-Hermit-Console: 1` |
 | Crab `/console/` | 页面请求来源必须回环地址；页面 JS 再加控制台头 |
@@ -39,7 +39,16 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | 方法 | 路径 | 输入/用途 |
 | --- | --- | --- |
 | POST | `/login` | `{username,password}`；失败锁定窗口 15 分钟，阈值 5 次 |
-| GET | `/me` | 当前身份 |
+| GET | `/me` | `{username, role}`。`role` 为 `ADMIN` 或 `USER` |
+| POST | `/me/password` | `{oldPassword, newPassword}`。旧口令不对是 400，message 为 `old password does not match`。`Cache-Control: no-store`。改口令不使已发出的 JWT 失效 |
+| GET | `/users` | 仅 `ADMIN`。`[{username, role, disabled, createdAt, tokenCount}]`。`tokenCount` 是未吊销的库内令牌数；该用户若是当前配置令牌的归属人（id 最小的 `ADMIN`）且配置了令牌，再加 1。不返回口令或令牌明文 |
+| POST | `/users` | 仅 `ADMIN`。`{username, password, role}`。用户名非空、最长 128，口令规则与登录相同。重复用户名 409，message 为 `username already exists`。不支持删除，只能禁用。`Cache-Control: no-store` |
+| PATCH | `/users/{username}` | 仅 `ADMIN`。`{role?, disabled?}`，至少给一个。不能取消最后一个启用中的 `ADMIN`，409，message 为 `at least one enabled administrator is required`。不能改自己的角色，也不能禁用自己，409，message 为 `cannot change your own role or disabled flag`。自己就是最后一个启用中的管理员时，先返回前一条。空对象 400 `invalid input`。不存在 404 |
+| POST | `/users/{username}/password` | 仅 `ADMIN`。`{password}`，重置别人的口令。重置自己是 400，message 为 `cannot reset your own password`。`Cache-Control: no-store`。审计 `USER_PASSWORD_RESET`，detail 只有用户名 |
+| GET | `/tokens` | 自己的令牌。`ADMIN` 加 `?all=true` 看全部；`USER` 即使带 `all=true` 也只看自己。项为 `{id, owner, name, prefix, createdAt, lastUsedAt, revokedAt, source}`。`source` 为 `DATABASE` 或 `CONFIG`。配置令牌是只读项：`id`、`prefix` 和时间为 null，`name` 为 `HERMIT_REEF_AGENT_TOKEN`，不能删除。已吊销的库内令牌仍列出。响应和审计都不含明文 |
+| POST | `/tokens` | `{name}`，非空，最长 64。`USER` 和 `ADMIN` 都可以给自己签发。返回 `{token, secret, publicKey}`。`secret` 是 `hat_` 加 32 个随机字节的 base64url（无填充），只出现在这一次响应里。库里只存 SHA-256 的小写十六进制。`publicKey` 与 `GET /signing-key` 的 PEM 相同。`Cache-Control: no-store`。审计 `AGENT_TOKEN_CREATED`，detail 含 id、name、prefix、owner |
+| DELETE | `/tokens/{id}` | 归属人或 `ADMIN` 吊销。重复吊销仍是 200，只在第一次写 `AGENT_TOKEN_REVOKED`。别人的令牌 403 `forbidden`。不存在 404。配置令牌没有 id，不能从这里吊销 |
+| GET | `/crabs` | `[{owner, instanceId, tokenName, firstSeenAt, lastSeenAt, crabVersion}]`。`USER` 只看自己的。配置令牌记下的行 `tokenName` 为 null。同一（令牌，实例）在进程内 60 秒最多写一次 `last_used_at` 和 `last_seen_at`；重启后重新计。`crabVersion` 在实例行上最长 32 个字符，上报原文更长时截断；失败报告仍保留最多 64 个字符 |
 | GET | `/signing-key` | `data.publicKey` PEM；不提供私钥 |
 | POST | `/conches` | multipart 字段 `file`，YAML 或仅含 conch.yaml 的 ZIP；上传及解包 YAML 限 1 MiB |
 | GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null。两项都带 `pullCount`（long，JSON 数字）：该规则包全部版本成功下载次数之和，含尚未发布的版本 |
@@ -56,9 +65,13 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | GET | `/alerts` | status |
 | POST | `/alerts/{id}/ack` | 确认告警 |
 | GET | `/audit` | 管理操作审计。`conch` 可选；`page` 默认 1；`size` 默认 20，最大 200。小于 1 或 `size` 大于 200 为 400。非数字见上面的参数类型错误 |
-| POST | `/retention/purge` | 立即清理过期失败报告、回滚事件和锁定窗口外的登录失败。`data` 为 `{failureReports, rollbackEvents, loginFailures}`。写入审计 `RETENTION_PURGE`，detail 为同样的三个计数。需要管理员 JWT |
+| POST | `/retention/purge` | 立即清理过期失败报告、回滚事件和锁定窗口外的登录失败。`data` 为 `{failureReports, rollbackEvents, loginFailures}`。写入审计 `RETENTION_PURGE`，detail 为同样的三个计数。需要 `ADMIN` JWT。`USER` 为 403 |
 
 Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。确认告警只记下确认人和时间，不结束去重窗口：同一 `(kind, conch, conch_version)` 自 `created_at` 起 `dedup-hours` 内不再新建。窗口过后条件仍成立才会再出现一条。失败次数上涨不会提前打破这个窗口。
+
+失败分组、分组里的样本，以及版本切换事件带 `owner`（用户名）。旧数据没有归属，`owner` 为 null。同一组的 `owner` 相同；不同用户的失败会拆成两组。小时汇总 `series` 不加 `owner`。`hermit_failure_reports`、`hermit_hourly_counts`、`hermit_rollback_events` 各有可空的 `owner_user_id`，不进主键。小时计数更新时用 `COALESCE`，后来的空归属不会清掉已经记下的用户。
+
+用户和令牌审计还有 `USER_CREATED`、`USER_UPDATED`、`USER_PASSWORD_RESET`、`PASSWORD_CHANGED`、`AGENT_TOKEN_CREATED`、`AGENT_TOKEN_REVOKED`。detail 是 JSON，不含口令或令牌明文。`USER` 不能读 `GET /audit`。
 
 配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 

@@ -25,12 +25,12 @@ class ReefPropertiesTest {
     }
 
     @Test
-    void blankTokenWarnsWithoutWritingTheValue() {
-        assertThat(warningTexts("")).containsExactly(ReefProperties.BLANK_AGENT_TOKEN);
-        assertThat(warningTexts(null)).containsExactly(ReefProperties.BLANK_AGENT_TOKEN);
-        List<String> whitespace = warningTexts("   ");
-        assertThat(whitespace).containsExactly(ReefProperties.BLANK_AGENT_TOKEN);
-        assertThat(whitespace.get(0)).doesNotContain("   ");
+    void blankTokenDoesNotWarnFromPropertiesOrEchoTheValue() {
+        assertThat(warningTexts("")).isEmpty();
+        assertThat(warningTexts(null)).isEmpty();
+        List<String> messages = capture("   ").stream().map(ILoggingEvent::getFormattedMessage).toList();
+        assertThat(messages).noneMatch(message -> message.contains("   "));
+        assertThat(warningTexts("   ")).isEmpty();
     }
 
     @Test

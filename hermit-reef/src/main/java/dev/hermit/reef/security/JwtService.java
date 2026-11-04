@@ -5,6 +5,7 @@ import com.nimbusds.jose.jwk.OctetSequenceKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
+import dev.hermit.reef.admin.AdminRole;
 import dev.hermit.reef.config.ReefProperties;
 import java.time.Clock;
 import java.time.Duration;
@@ -25,6 +26,7 @@ import org.springframework.stereotype.Service;
 public class JwtService {
 
     static final Duration CLOCK_SKEW = Duration.ofSeconds(60);
+    public static final String ROLE_CLAIM = "role";
 
     private final JwtEncoder encoder;
     private final ReefProperties properties;
@@ -45,11 +47,12 @@ public class JwtService {
         return decoder;
     }
 
-    public IssuedJwt issue(String username) {
+    public IssuedJwt issue(String username, AdminRole role) {
         Instant now = clock.instant();
         Instant expiresAt = now.plus(properties.getJwtTtl());
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .subject(username)
+                .claim(ROLE_CLAIM, role.name())
                 .issuedAt(now)
                 .expiresAt(expiresAt)
                 .build();

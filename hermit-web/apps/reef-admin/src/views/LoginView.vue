@@ -50,7 +50,7 @@ async function submit() {
       <p>把内网老系统包装成可调用的 OpenAPI 与 MCP 能力。在这里上传、发布和停用规则包，并查看各 Crab 回传的运行指标。</p>
       <ul class="points">
         <li><el-icon><Stamp /></el-icon><span><b>签名发布</b>每个规则包版本由 Reef 签名，Crab 验签后才安装</span></li>
-        <li><el-icon><Connection /></el-icon><span><b>分发到 Crab</b>各地 Crab 定时同步，新版本异常时自动切回旧版</span></li>
+        <li><el-icon><Connection /></el-icon><span><b>分发到 Crab</b>各地 Crab 定时同步目录，有新版本时由使用者确认后手动更新</span></li>
         <li><el-icon><DataLine /></el-icon><span><b>Tide 指标</b>按小时汇总调用量、耗时和失败样本，不含请求内容</span></li>
       </ul>
     </section>

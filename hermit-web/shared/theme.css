@@ -26,6 +26,9 @@ html:root {
   /* 浅色底上的文字要 ≥4.5:1，琥珀 --hm-accent 只用于色块和装饰。 */
   --hm-warning: #92400e;
   --hm-danger: #b91c1c;
+  /* 实色危险按钮的底色，白字要 ≥4.5:1；暗色下 --hm-danger 偏亮，不能直接当按钮底。 */
+  --hm-danger-solid: #b91c1c;
+  --hm-danger-solid-hover: #991b1b;
   --hm-brand-soft: #5eead4;
   --hm-login-from: #0f2e2f;
   --hm-login-to: #0b1620;
@@ -120,6 +123,8 @@ html.dark {
   --hm-sidebar-line: rgba(255, 255, 255, 0.05);
   --hm-warning: var(--hm-accent);
   --hm-danger: #f87171;
+  --hm-danger-solid: #dc2626;
+  --hm-danger-solid-hover: #b91c1c;
   --hm-success: #22c55e;
   --hm-topbar: rgba(21, 27, 30, 0.82);
   --hm-code-bg: #0a1214;
@@ -421,6 +426,17 @@ html.dark .el-tag--plain {
 
 html .el-tag {
   --el-tag-border-radius: 6px;
+}
+
+html .el-button--danger:not(.is-plain):not(.is-text):not(.is-link) {
+  --el-button-text-color: #ffffff;
+  --el-button-bg-color: var(--hm-danger-solid);
+  --el-button-border-color: var(--hm-danger-solid);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: var(--hm-danger-solid-hover);
+  --el-button-hover-border-color: var(--hm-danger-solid-hover);
+  --el-button-active-bg-color: var(--hm-danger-solid-hover);
+  --el-button-active-border-color: var(--hm-danger-solid-hover);
 }
 
 html .el-dialog {

@@ -45,7 +45,7 @@ async function toggle(cap: CapabilityState, enabled: string | number | boolean) 
       <el-table-column label="调用路径" min-width="220">
         <template #default="{ row }"><code>/api/{{ conch }}/{{ row.action }}</code></template>
       </el-table-column>
-      <el-table-column label="启用" width="90" align="right">
+      <el-table-column label="启用" width="72" align="right" fixed="right">
         <template #default="{ row }">
           <el-switch :model-value="!row.disabled" :loading="busy === row.action" @change="(v: string | number | boolean) => toggle(row, v)" />
         </template>

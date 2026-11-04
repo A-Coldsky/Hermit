@@ -10,6 +10,8 @@ export const outcomeLabels: Record<string, { text: string; tone: 'success' | 'in
   DISABLED: { text: 'Reef 已停用，不再更新', tone: 'warning' },
   SKIPPED_LOCAL: { text: '本地同名，未安装', tone: 'warning' },
   NOT_SUBSCRIBED: { text: '未订阅', tone: 'info' },
+  REPAIR_REQUIRED: { text: '需要修复', tone: 'warning' },
+  REPAIRED: { text: '已从本机重新载入', tone: 'success' },
 }
 
 export const sourceLabels: Record<string, string> = {
@@ -54,6 +56,7 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   CONCH_UPDATED: { text: '更新规则包', tone: 'success' },
   REEF_BOOTSTRAPPED: { text: '连接 Reef', tone: 'success' },
   REPORT_SETTINGS_CHANGED: { text: '修改上报设置', tone: 'info' },
+  CONCH_REPAIR_REQUIRED: { text: '同步发现需要修复', tone: 'warning' },
 }
 
 export const syncReasonLabels: Record<string, string> = {
@@ -73,6 +76,18 @@ export const syncReasonLabels: Record<string, string> = {
   DISABLED: 'Reef 已停用，本机版本仍可调用，不再更新',
   DISABLE_FAILED: '记录停用状态失败',
   LOCAL_KEPT: '本机已有同名本地规则包',
+  POINTER_MISSING: '本机版本指针丢失，同步不会重新下载',
+  NOT_LOADED: '本机文件还在，但这次启动没有载入',
+  RESTORED: '已重新载入本机验过签的版本',
+  BAD_SIGNATURE: '本机文件验签失败',
+  DIGEST_MISMATCH: '本机文件摘要与签名不一致',
+  UNREADABLE: '本机文件读不出来',
+  YAML_INVALID: '本机规则包 YAML 无效',
+  MANIFEST_INVALID: '本机规则包清单无效',
+  MANIFEST_MISMATCH: '本机规则包与清单不一致',
+  ENTRY_SET: '本机规则包的文件列表不对',
+  DUPLICATE_ENTRY: '本机规则包有重复文件',
+  ENTRY_TOO_LARGE: '本机规则包里有文件过大',
 }
 
 export const channelLabels: Record<string, string> = {

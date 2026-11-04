@@ -8,16 +8,18 @@ import ConchAvatar from '@shared/components/ConchAvatar.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { notifyError } from '@shared/format'
 import { api, type Catalog, type CatalogConch } from '../api'
-import { outcomeLabels } from '../labels'
+import { outcomeLabels, syncReasonLabels } from '../labels'
 import { refreshPending } from '../status'
 import { unsubscribeMessage } from '../copy'
-import { updateConch } from '../update'
+import { repairConch, updateConch } from '../update'
 
 const router = useRouter()
 const loading = ref(true)
 const syncing = ref(false)
 const busy = ref<string | null>(null)
 const catalog = ref<Catalog | null>(null)
+/** 同步标为需要修复的包。目录上的 installed/updateAvailable 看不出这种状态。 */
+const repairs = ref(new Map<string, string | null>())
 
 const rows = computed(() => catalog.value?.conches ?? [])
 const subscribedCount = computed(() => rows.value.filter((r) => r.subscribed).length)
@@ -25,7 +27,11 @@ const subscribedCount = computed(() => rows.value.filter((r) => r.subscribed).le
 async function load() {
   loading.value = true
   try {
-    catalog.value = await api.catalog()
+    const [result, status] = await Promise.all([api.catalog(), api.syncStatus().catch(() => null)])
+    catalog.value = result
+    repairs.value = new Map(
+      (status?.report?.conches ?? []).filter((s) => s.kind === 'REPAIR_REQUIRED').map((s) => [s.conch, s.reason] as const),
+    )
   } catch (error) {
     notifyError(error)
   } finally {
@@ -101,6 +107,16 @@ async function update(row: CatalogConch) {
   }
 }
 
+async function repair(row: CatalogConch) {
+  busy.value = row.conch
+  try {
+    if (await repairConch(row.conch, repairs.value.get(row.conch) ?? null)) void refreshPending()
+    await load()
+  } finally {
+    busy.value = null
+  }
+}
+
 function open(row: CatalogConch) {
   void router.push(`/conches/${encodeURIComponent(row.conch)}`)
 }
@@ -163,15 +179,26 @@ onMounted(load)
               <el-tag v-if="row.installed && !row.localConflict" type="info" effect="plain" size="small" class="mono">
                 已安装 v{{ row.installedVersion }}
               </el-tag>
-              <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="mono">有新版本 v{{ row.latestVersion }}</el-tag>
+              <el-tag
+                v-if="repairs.has(row.conch)"
+                type="danger"
+                effect="plain"
+                size="small"
+                :title="syncReasonLabels[repairs.get(row.conch) ?? ''] ?? repairs.get(row.conch) ?? ''"
+                data-test="repair-tag"
+              >
+                需要修复
+              </el-tag>
+              <el-tag v-else-if="row.updateAvailable" type="warning" effect="plain" size="small" class="mono">有新版本 v{{ row.latestVersion }}</el-tag>
               <el-tag v-if="row.disabled" type="warning" effect="plain" size="small">Reef 已停用，本机仍可调用</el-tag>
             </div>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="200" align="right" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="row.installed && !row.localConflict" link type="primary" @click="open(row)">管理</el-button>
-            <el-button v-if="row.updateAvailable" link type="primary" :loading="busy === row.conch" @click="update(row)">更新</el-button>
+            <el-button v-if="row.installed && !row.localConflict && !repairs.has(row.conch)" link type="primary" @click="open(row)">管理</el-button>
+            <el-button v-if="repairs.has(row.conch)" link type="warning" :loading="busy === row.conch" @click="repair(row)">修复</el-button>
+            <el-button v-else-if="row.updateAvailable" link type="primary" :loading="busy === row.conch" @click="update(row)">更新</el-button>
             <el-button v-if="row.subscribed" link type="danger" :loading="busy === row.conch" @click="unsubscribe(row)">取消订阅</el-button>
             <el-tooltip v-else-if="row.localConflict" content="本机已有同名本地规则包。删除本地包后才能订阅" placement="top">
               <span><el-button link type="primary" disabled>订阅</el-button></span>

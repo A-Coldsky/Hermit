@@ -216,6 +216,10 @@ export type SyncOutcomeKind =
   | 'DISABLED'
   | 'SKIPPED_LOCAL'
   | 'NOT_SUBSCRIBED'
+  /** 已订阅、装过，但本机文件或版本指针坏了。同步不下载，等使用者修复。 */
+  | 'REPAIR_REQUIRED'
+  /** 修复时重新载入了本机仍能验签的版本，没有下载。 */
+  | 'REPAIRED'
 
 export interface SyncReport {
   notModified: boolean

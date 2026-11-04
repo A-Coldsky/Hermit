@@ -121,4 +121,22 @@ describe('Crab 概览', () => {
     expect(wrapper.text()).toContain('暂未生效')
     expect(wrapper.get('[data-test="debug-switch"]').classes()).toContain('is-disabled')
   })
+
+  it('需要修复时不显示「已是最新」，列出原因和修复按钮', async () => {
+    crab.syncStatus.mockResolvedValue({
+      report: report({ conches: [{ conch: 'legacy_oa', version: '1.0.0', kind: 'REPAIR_REQUIRED', reason: 'POINTER_MISSING' }] }),
+      latestCrab: null,
+    })
+    const wrapper = await mountPage(OverviewView)
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).not.toContain('已是最新')
+    expect(text).not.toContain('REPAIR_REQUIRED')
+    const box = wrapper.get('[data-test="repairs"]')
+    expect(box.text()).toContain('1 个规则包需要修复')
+    expect(box.text()).toContain('本机版本指针丢失，同步不会重新下载')
+    expect(box.findAll('button').map((b) => b.text())).toContain('修复')
+  })
 })
+

@@ -11,6 +11,7 @@ import { errorCodeLabels, formatTime, notifyError, percent, relativeTime } from 
 import { api, type CallSummary, type CrabRelease, type DebugState, type ConchSummary, type SyncReport } from '../api'
 import { outcomeLabels, syncReasonLabels } from '../labels'
 import { refreshPending } from '../status'
+import { repairConch } from '../update'
 
 const router = useRouter()
 
@@ -32,8 +33,11 @@ const disabledInSync = computed(() => report.value?.conches.filter((s) => s.kind
 const removedOnly = computed(() => report.value?.removed.filter((name) => !disabledInSync.value.includes(name)) ?? [])
 const show = (value: number | string) => (loaded.value ? value : '—')
 const failures = computed(() => calls.value.filter((c) => !c.success).length)
+const repairs = computed(() => report.value?.conches.filter((s) => s.kind === 'REPAIR_REQUIRED') ?? [])
+const repairing = ref<string | null>(null)
 const changedConches = computed(
-  () => report.value?.conches.filter((s) => s.kind !== 'SKIPPED_SAME' && s.kind !== 'NOT_SUBSCRIBED') ?? [],
+  () =>
+    report.value?.conches.filter((s) => s.kind !== 'SKIPPED_SAME' && s.kind !== 'NOT_SUBSCRIBED' && s.kind !== 'REPAIR_REQUIRED') ?? [],
 )
 const updatable = computed(() => conches.value.filter((s) => s.updateAvailable))
 const unsubscribedCount = computed(() => report.value?.conches.filter((s) => s.kind === 'NOT_SUBSCRIBED').length ?? 0)
@@ -76,8 +80,19 @@ async function syncNow() {
     syncedAt.value = new Date().toISOString()
     const installed = report.value.conches.filter((s) => s.kind === 'INSTALLED').length
     conches.value = (await api.conches()).conches
-    const waiting = updatable.value.length ? `，${updatable.value.length} 个规则包有新版本待手动更新` : ''
-    ElMessage.success(report.value.notModified ? `Reef 目录没有变化${waiting}` : `同步完成，安装了 ${installed} 个规则包${waiting}`)
+    const waiting = [
+      repairs.value.length ? `${repairs.value.length} 个规则包需要修复` : '',
+      updatable.value.length ? `${updatable.value.length} 个规则包有新版本待手动更新` : '',
+    ]
+      .filter(Boolean)
+      .map((text) => `，${text}`)
+      .join('')
+    const message = report.value.notModified ? `Reef 目录没有变化${waiting}` : `同步完成，安装了 ${installed} 个规则包${waiting}`
+    if (repairs.value.length) {
+      ElMessage.warning(message)
+    } else {
+      ElMessage.success(message)
+    }
     void refreshPending()
   } catch (error) {
     notifyError(error)
@@ -88,6 +103,18 @@ async function syncNow() {
     }
   } finally {
     syncing.value = false
+  }
+}
+
+async function repair(conch: string, reason: string | null) {
+  repairing.value = conch
+  try {
+    if (await repairConch(conch, reason)) {
+      void refreshPending()
+      await load()
+    }
+  } finally {
+    repairing.value = null
   }
 }
 
@@ -173,6 +200,20 @@ onMounted(load)
             :title="report.error.message"
             class="notice"
           />
+          <div v-if="repairs.length" class="state warn" data-test="repairs">
+            <el-icon :size="22"><WarningFilled /></el-icon>
+            <div class="grow">
+              <strong>{{ repairs.length }} 个规则包需要修复，暂时不能调用</strong>
+              <div class="hm-muted">本机文件或版本指针出了问题，同步不会自动重新下载。修复会先重新载入本机验过签的版本。</div>
+              <ul class="repairs">
+                <li v-for="item in repairs" :key="item.conch">
+                  <span class="mono">{{ item.conch }}{{ item.version ? ` v${item.version}` : '' }}</span>
+                  <span v-if="item.reason" class="hm-muted">{{ syncReasonLabels[item.reason] ?? item.reason }}</span>
+                  <el-button size="small" type="warning" plain :loading="repairing === item.conch" @click="repair(item.conch, item.reason)">修复</el-button>
+                </li>
+              </ul>
+            </div>
+          </div>
           <div v-if="!report.error && updatable.length" class="state warn" data-test="updatable">
             <el-icon :size="22"><WarningFilled /></el-icon>
             <div>
@@ -191,7 +232,7 @@ onMounted(load)
               <div class="hm-muted">本机保留的版本仍可调用，但不会再更新。上次同步时 Reef 没有新变化</div>
             </div>
           </div>
-          <div v-else-if="report.notModified && !report.error && !updatable.length" class="state ok">
+          <div v-else-if="report.notModified && !report.error && !updatable.length && !repairs.length" class="state ok">
             <el-icon :size="22"><CircleCheckFilled /></el-icon>
             <div>
               <strong>已是最新</strong>
@@ -349,6 +390,29 @@ onMounted(load)
 .state strong {
   color: var(--hm-text);
   font-weight: 600;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.repairs {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.repairs li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.state + .state {
+  margin-top: 8px;
 }
 
 .state.ok {

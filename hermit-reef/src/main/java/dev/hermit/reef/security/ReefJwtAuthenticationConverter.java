@@ -2,6 +2,7 @@ package dev.hermit.reef.security;
 
 import dev.hermit.reef.admin.AdminAccount;
 import dev.hermit.reef.admin.AdminUsers;
+import dev.hermit.reef.web.ReefErrorCode;
 import java.util.List;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -27,7 +28,7 @@ public class ReefJwtAuthenticationConverter implements Converter<Jwt, JwtAuthent
         String username = jwt.getSubject();
         AdminAccount account = username == null ? null : users.find(username);
         if (account == null || account.disabled()) {
-            throw new BadCredentialsException("unauthorized");
+            throw new BadCredentialsException(ReefErrorCode.UNAUTHORIZED.message());
         }
         return new JwtAuthenticationToken(
                 jwt,

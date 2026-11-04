@@ -30,6 +30,10 @@ public class DataDirectoryConfiguration {
         @Override
         public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) {
             String configured = environment.getProperty("hermit.reef.data-dir", "./reef-data");
+            // Path.of("") 是当前工作目录。空串必须在建目录之前失败，不能先落到工作目录再抛权限错误。
+            if (configured == null || configured.isBlank()) {
+                throw new IllegalStateException(ReefProperties.BLANK_DATA_DIR_MESSAGE);
+            }
             try {
                 DataDirectories.create(Path.of(configured));
             } catch (IOException ex) {

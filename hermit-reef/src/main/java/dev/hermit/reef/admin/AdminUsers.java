@@ -24,11 +24,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AdminUsers {
 
-    public static final String LAST_ENABLED_ADMIN = "at least one enabled administrator is required";
-    public static final String CANNOT_CHANGE_SELF = "cannot change your own role or disabled flag";
-    public static final String USERNAME_EXISTS = "username already exists";
-    public static final String CANNOT_RESET_OWN_PASSWORD = "cannot reset your own password";
-    public static final String OLD_PASSWORD_MISMATCH = "old password does not match";
+    public static final String LAST_ENABLED_ADMIN = "至少要保留一个启用中的管理员";
+    public static final String CANNOT_CHANGE_SELF = "不能修改自己的角色或禁用自己";
+    public static final String USERNAME_EXISTS = "用户名已存在";
+    public static final String CANNOT_RESET_OWN_PASSWORD = "不能重置自己的密码，请用右上角「修改密码」";
+    public static final String OLD_PASSWORD_MISMATCH = "当前密码不正确";
 
     private final JdbcTemplate jdbc;
     private final PasswordEncoder passwordEncoder;

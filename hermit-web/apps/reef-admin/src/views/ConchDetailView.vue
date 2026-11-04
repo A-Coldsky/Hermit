@@ -13,6 +13,7 @@ import FieldTable from '../components/FieldTable.vue'
 import CapabilityList from '../components/CapabilityList.vue'
 import VersionPanel from '../components/VersionPanel.vue'
 import ConchStats from '../components/ConchStats.vue'
+import { pullCountHint } from '../labels'
 
 const props = defineProps<{ conch: string }>()
 const route = useRoute()
@@ -81,10 +82,10 @@ async function saveAvailability() {
   try {
     if (disabling) {
       await api.disableConch(props.conch, reason)
-      ElMessage.success('已停用。各 Crab 下次同步时标记为失效，已安装的版本仍可调用，但不会再更新')
+      ElMessage.success('已停用。各 Crab 下次同步时标记为「Reef 已停用」，已安装的版本仍可调用，但不会再更新')
     } else {
       await api.enableConch(props.conch, reason)
-      ElMessage.success('已启用。各 Crab 下次同步时取消失效标记；有更高版本时由使用者手动更新')
+      ElMessage.success('已启用。各 Crab 下次同步时取消停用标记；有更高版本时由使用者手动更新')
     }
     availability.open = false
     await load()
@@ -128,7 +129,7 @@ watch(() => props.conch, load, { immediate: true })
     <template v-else>
       <el-alert v-if="detail?.disabled" type="error" :closable="false" show-icon class="notice" title="这个规则包已停用">
         <template #default>
-          <div>各 Crab 同步后把它标记为失效：已安装的版本仍可调用，但不会再下载或更新。启用后，Crab 下次同步时取消失效标记，有更高版本时由使用者手动更新。停用期间可以上传新版本，但不能发布。</div>
+          <div>各 Crab 同步后把它标记为「Reef 已停用」：已安装的版本仍可调用，但不会再下载或更新。启用后，Crab 下次同步时取消停用标记，有更高版本时由使用者手动更新。停用期间可以上传新版本，但不能发布。</div>
           <div class="reason">
             <template v-if="detail.disabledReason">原因：{{ detail.disabledReason }} · </template>
             {{ detail.disabledBy ?? '—' }} 于 {{ formatTime(detail.disabledAt) }} 停用
@@ -192,8 +193,8 @@ watch(() => props.conch, load, { immediate: true })
                 <div><strong>{{ capabilityCount }}</strong><span class="hm-muted">能力</span></div>
                 <div><strong>{{ credentialCount }}</strong><span class="hm-muted">凭证字段</span></div>
                 <div><strong>{{ configCount }}</strong><span class="hm-muted">配置项</span></div>
-                <div title="Crab 成功下载这个规则包的次数，各版本合计">
-                  <strong>{{ detail.pullCount }}</strong><span class="hm-muted">次拉取</span>
+                <div :title="`${pullCountHint}，各版本合计`">
+                  <strong>{{ detail.pullCount }}</strong><span class="hm-muted">拉取次数</span>
                 </div>
               </div>
             </div>
@@ -229,9 +230,9 @@ watch(() => props.conch, load, { immediate: true })
     </template>
 
     <el-dialog v-model="availability.open" :title="detail?.disabled ? `启用 ${conch}` : `停用 ${conch}`" width="480px">
-      <p v-if="detail?.disabled" class="hm-muted">启用后，各 Crab 下次同步时取消失效标记。本机版本低于当前发布版本 v{{ detail.version }} 时，Crab 上显示「有新版本」，由使用者手动更新。</p>
+      <p v-if="detail?.disabled" class="hm-muted">启用后，各 Crab 下次同步时取消停用标记。本机版本低于当前发布版本 v{{ detail.version }} 时，Crab 上显示「有新版本」，由使用者手动更新。</p>
       <p v-else class="hm-muted">
-        停用后，各 Crab 下次同步时把它标记为失效。已安装的版本仍可调用，但 Crab 不会再下载新版本；还没安装的 Crab 也装不上。启用后恢复正常更新。
+        停用后，各 Crab 下次同步时把它标记为「Reef 已停用」。已安装的版本仍可调用，但 Crab 不会再下载新版本；还没安装的 Crab 也装不上。启用后恢复正常更新。
       </p>
       <div class="required-label">原因 <span class="star">*</span><span class="hm-muted">必填，会记入审计日志</span></div>
       <el-input

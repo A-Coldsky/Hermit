@@ -71,7 +71,7 @@ watch([range, conch], load, { immediate: true })
 
     <div class="hm-grid cols-4">
       <StatCard label="调用次数" :value="sum.calls" :icon="DataLine" />
-      <StatCard label="失败次数" :value="sum.failures" :tone="sum.failures ? 'warn' : 'ok'" :icon="WarningFilled" />
+      <StatCard label="失败次数" :value="sum.failures" :tone="sum.failures ? 'danger' : 'neutral'" :icon="WarningFilled" />
       <StatCard label="失败率" :value="percent(sum.rate)" :tone="sum.rate > 0.1 ? 'danger' : sum.rate > 0.02 ? 'warn' : 'ok'" :icon="Warning" />
       <StatCard label="版本切换" :value="rollbacks.length" hint="Crab 使用者手动更新规则包的次数" :icon="RefreshLeft" />
     </div>

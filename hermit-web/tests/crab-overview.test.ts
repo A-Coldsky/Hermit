@@ -84,9 +84,10 @@ describe('Crab 概览', () => {
 
     const text = wrapper.text()
     expect(text).not.toContain('已是最新')
-    expect(text).toContain('1 个规则包已失效（Reef 已停用）')
+    expect(text).toContain('1 个规则包 Reef 已停用')
     expect(text).toContain('本机保留的版本仍可调用')
-    expect(text).toContain('已失效，不再更新')
+    expect(text).toContain('Reef 已停用，不再更新')
+    expect(text).not.toContain('已失效')
     expect(text).not.toContain('不能调用')
     expect(text).not.toContain('已移除')
   })
@@ -97,5 +98,27 @@ describe('Crab 概览', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('已是最新')
+  })
+
+  it('目录 304 但有包可更新时不显示「已是最新」，并列出可更新的包', async () => {
+    crab.conches.mockResolvedValue({
+      conches: [summary({ updateAvailable: true, latestVersion: '1.2.0' }), summary({ conch: 'crm', updateAvailable: false })],
+    })
+    crab.syncStatus.mockResolvedValue({ report: report({ notModified: true }), latestCrab: null })
+    const wrapper = await mountPage(OverviewView)
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).not.toContain('已是最新')
+    expect(wrapper.get('[data-test="updatable"]').text()).toContain('1 个规则包有新版本，需要手动更新')
+    expect(wrapper.get('[data-test="updatable"]').text()).toContain('legacy_oa v1.2.0')
+  })
+
+  it('调试开关不可拨，并标明暂未生效', async () => {
+    const wrapper = await mountPage(OverviewView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂未生效')
+    expect(wrapper.get('[data-test="debug-switch"]').classes()).toContain('is-disabled')
   })
 })

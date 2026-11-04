@@ -35,6 +35,7 @@ const failures = computed(() => calls.value.filter((c) => !c.success).length)
 const changedConches = computed(
   () => report.value?.conches.filter((s) => s.kind !== 'SKIPPED_SAME' && s.kind !== 'NOT_SUBSCRIBED') ?? [],
 )
+const updatable = computed(() => conches.value.filter((s) => s.updateAvailable))
 const unsubscribedCount = computed(() => report.value?.conches.filter((s) => s.kind === 'NOT_SUBSCRIBED').length ?? 0)
 
 async function loadSync() {
@@ -74,8 +75,9 @@ async function syncNow() {
     latestCrab.value = report.value.latestCrab
     syncedAt.value = new Date().toISOString()
     const installed = report.value.conches.filter((s) => s.kind === 'INSTALLED').length
-    ElMessage.success(report.value.notModified ? 'Reef 上没有新版本' : `同步完成，安装了 ${installed} 个规则包`)
     conches.value = (await api.conches()).conches
+    const waiting = updatable.value.length ? `，${updatable.value.length} 个规则包有新版本待手动更新` : ''
+    ElMessage.success(report.value.notModified ? `Reef 目录没有变化${waiting}` : `同步完成，安装了 ${installed} 个规则包${waiting}`)
     void refreshPending()
   } catch (error) {
     notifyError(error)
@@ -86,15 +88,6 @@ async function syncNow() {
     }
   } finally {
     syncing.value = false
-  }
-}
-
-async function toggleDebug(enabled: string | number | boolean) {
-  try {
-    debug.value = await api.setDebug(Boolean(enabled))
-    ElMessage.success(debug.value.enabled ? '已开启调试开关' : '已关闭调试开关')
-  } catch (error) {
-    notifyError(error)
   }
 }
 
@@ -180,14 +173,25 @@ onMounted(load)
             :title="report.error.message"
             class="notice"
           />
+          <div v-if="!report.error && updatable.length" class="state warn" data-test="updatable">
+            <el-icon :size="22"><WarningFilled /></el-icon>
+            <div>
+              <strong>{{ updatable.length }} 个规则包有新版本，需要手动更新</strong>
+              <div>
+                <router-link v-for="s in updatable" :key="s.conch" :to="`/conches/${encodeURIComponent(s.conch)}`" class="mono pending">
+                  {{ s.conch }} v{{ s.latestVersion }}
+                </router-link>
+              </div>
+            </div>
+          </div>
           <div v-if="report.notModified && !report.error && disabledInSync.length" class="state warn">
             <el-icon :size="22"><WarningFilled /></el-icon>
             <div>
-              <strong>{{ disabledInSync.length }} 个规则包已失效（Reef 已停用）</strong>
+              <strong>{{ disabledInSync.length }} 个规则包 Reef 已停用</strong>
               <div class="hm-muted">本机保留的版本仍可调用，但不会再更新。上次同步时 Reef 没有新变化</div>
             </div>
           </div>
-          <div v-else-if="report.notModified && !report.error" class="state ok">
+          <div v-else-if="report.notModified && !report.error && !updatable.length" class="state ok">
             <el-icon :size="22"><CircleCheckFilled /></el-icon>
             <div>
               <strong>已是最新</strong>
@@ -240,11 +244,11 @@ onMounted(load)
       <div class="hm-card">
         <div class="hm-card-title">
           <span>调试开关</span>
-          <el-tag type="info" effect="plain" size="small">未接入调用记录</el-tag>
+          <el-tag type="info" effect="plain" size="small">暂未生效</el-tag>
         </div>
         <div class="debug">
-          <el-switch :model-value="debug.enabled" active-text="开启" @change="toggleDebug" />
-          <p class="hm-muted">当前版本只保存开关状态，不影响调用记录，也不会额外记录请求或返回内容。开启 24 小时后自动关闭。</p>
+          <el-switch :model-value="debug.enabled" active-text="开启" disabled data-test="debug-switch" />
+          <p class="hm-muted">调试采集还没有接通，暂时不能开启。它不影响调用记录，也不会额外记录请求或返回内容。</p>
           <p v-if="debug.enabled && debug.expiresAt">
             <el-icon><Warning /></el-icon>
             将于 {{ formatTime(debug.expiresAt) }} 自动关闭

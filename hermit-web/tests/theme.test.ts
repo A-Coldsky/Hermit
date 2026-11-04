@@ -110,6 +110,21 @@ describe('暗色语义色', () => {
     expect(contrast(danger, resolve('--el-color-danger-light-9', dark))).toBeGreaterThanOrEqual(4.5)
   })
 
+  it.each([
+    ['浅色', vars],
+    ['暗色', dark],
+  ])('%s实色危险按钮白字对比度不低于 4.5:1', (_name, from) => {
+    for (const token of ['--hm-danger-solid', '--hm-danger-solid-hover']) {
+      expect(contrast('#ffffff', resolve(token, from))).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('实色危险按钮用 --hm-danger-solid，plain/text/link 不受影响', () => {
+    expect(css).toMatch(
+      /html \.el-button--danger:not\(\.is-plain\):not\(\.is-text\):not\(\.is-link\) \{[^}]*--el-button-bg-color: var\(--hm-danger-solid\);/,
+    )
+  })
+
   it('暗色 plain 标签边框跟随文字色', () => {
     expect(css).toMatch(/html\.dark \.el-tag--plain \{\s*--el-tag-border-color: currentColor;/)
   })

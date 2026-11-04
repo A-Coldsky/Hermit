@@ -12,7 +12,7 @@ const keys = ref<ApiKey[]>([])
 const showRevoked = ref(false)
 const conchDetails = ref<ConchDetail[]>([])
 
-const form = reactive({ open: false, saving: false, name: '', readOnly: true, conches: [] as string[], actions: [] as string[] })
+const form = reactive({ open: false, saving: false, name: '', readOnly: true, all: false, conches: [] as string[], actions: [] as string[] })
 const created = ref<CreatedApiKey | null>(null)
 
 const localNames = computed(() => conchDetails.value.filter((s) => s.source === 'LOCAL').map((s) => s.conch))
@@ -55,7 +55,7 @@ async function loadConches() {
 }
 
 function openCreate() {
-  Object.assign(form, { open: true, name: '', readOnly: true, conches: [], actions: [] })
+  Object.assign(form, { open: true, name: '', readOnly: true, all: false, conches: [], actions: [] })
   void loadConches()
 }
 
@@ -64,15 +64,16 @@ async function create() {
     ElMessage.warning('请填写名称')
     return
   }
+  const validActions = new Set(actionOptions.value.flatMap((g) => g.options.map((o) => o.value)))
+  const actions = form.all ? [] : form.actions.filter((a) => validActions.has(a))
+  const conches = form.all ? [] : form.conches
+  if (!form.all && !conches.length && !actions.length) {
+    ElMessage.warning('请选择允许的规则包或能力，或改选「全部权限」')
+    return
+  }
   form.saving = true
   try {
-    const validActions = new Set(actionOptions.value.flatMap((g) => g.options.map((o) => o.value)))
-    created.value = await api.createApiKey({
-      name: form.name.trim(),
-      readOnly: form.readOnly,
-      conches: form.conches,
-      actions: form.actions.filter((a) => validActions.has(a)),
-    })
+    created.value = await api.createApiKey({ name: form.name.trim(), readOnly: form.readOnly, all: form.all, conches, actions })
     form.open = false
     await load()
   } catch (error) {
@@ -134,8 +135,14 @@ onMounted(load)
           <template #default="{ row }">
             <div class="scope">
               <el-tag v-if="row.scope.readOnly" size="small" type="success" effect="plain">仅只读能力</el-tag>
-              <span><span class="hm-muted">规则包：</span><span class="mono">{{ scopeText(row.scope.conches, '全部 Reef 规则包') }}</span></span>
-              <span><span class="hm-muted">能力：</span><span class="mono">{{ scopeText(row.scope.actions, '全部') }}</span></span>
+              <template v-if="row.scope.all">
+                <el-tag size="small" type="danger" effect="plain" data-test="scope-all">全部权限</el-tag>
+                <span class="hm-muted">全部 Reef 规则包的全部能力，不含本地包</span>
+              </template>
+              <template v-else>
+                <span><span class="hm-muted">规则包：</span><span class="mono">{{ scopeText(row.scope.conches, '不限') }}</span></span>
+                <span><span class="hm-muted">能力：</span><span class="mono">{{ scopeText(row.scope.actions, '所选规则包的全部能力') }}</span></span>
+              </template>
             </div>
           </template>
         </el-table-column>
@@ -162,18 +169,29 @@ onMounted(load)
         <el-form-item>
           <el-checkbox v-model="form.readOnly">只允许调用只读能力</el-checkbox>
         </el-form-item>
-        <el-form-item label="允许的规则包">
-          <el-select v-model="form.conches" multiple clearable placeholder="不选表示全部 Reef 规则包" class="full">
+        <el-form-item label="范围" required>
+          <el-radio-group v-model="form.all" data-test="scope-mode">
+            <el-radio :value="false">指定规则包或能力</el-radio>
+            <el-radio :value="true">全部权限</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-alert v-if="form.all" type="error" :closable="false" show-icon title="全部权限风险较高" class="risk" data-test="scope-all-risk">
+          <div>这把 Key 可以调用本机全部 Reef 规则包的全部能力，以后新订阅的规则包也自动包含；本地规则包仍要单独授权。</div>
+          <div v-if="!form.readOnly"><strong>没有勾选「只允许调用只读能力」，会修改数据的能力也能调用。</strong></div>
+          <div>Key 泄露时影响面最大。只给信任的调用方，能指定范围时尽量指定。</div>
+        </el-alert>
+        <el-form-item v-if="!form.all" label="允许的规则包">
+          <el-select v-model="form.conches" multiple clearable placeholder="不选表示按下面的能力限定" class="full">
             <el-option v-for="s in conchDetails" :key="s.conch" :label="conchLabel(s)" :value="s.conch">
               <span>{{ conchLabel(s) }}</span>
               <el-tag v-if="s.source === 'LOCAL'" type="info" effect="plain" size="small" class="tag">本地</el-tag>
             </el-option>
           </el-select>
           <p v-if="localNames.length && !form.conches.length" class="hint" data-test="local-hint">
-            不选只覆盖 Reef 规则包。本地规则包（{{ localNames.join('、') }}）要在这里明确选中才能调用。
+            本地规则包（{{ localNames.join('、') }}）要在这里明确选中才能调用。
           </p>
         </el-form-item>
-        <el-form-item label="允许的能力">
+        <el-form-item v-if="!form.all" label="允许的能力">
           <el-select v-model="form.actions" multiple clearable filterable placeholder="不选表示所选规则包的全部能力" class="full">
             <el-option-group v-for="group in actionOptions" :key="group.label" :label="group.label">
               <el-option v-for="option in group.options" :key="option.value" :label="option.label" :value="option.value">
@@ -210,6 +228,11 @@ onMounted(load)
 
 .tag {
   margin-left: 6px;
+}
+
+.risk {
+  margin-bottom: 18px;
+  line-height: 1.6;
 }
 
 .scope {

@@ -7,6 +7,7 @@ import { mountPage } from './helpers'
 const crab = vi.hoisted(() => ({
   catalog: vi.fn(),
   sync: vi.fn(),
+  syncStatus: vi.fn(),
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   update: vi.fn(),
@@ -63,6 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   document.body.innerHTML = ''
   crab.conches.mockResolvedValue({ conches: [] })
+  crab.syncStatus.mockResolvedValue({ report: null, latestCrab: null })
   crab.accounts.mockResolvedValue({ accounts: [] })
   crab.config.mockResolvedValue({ fields: {} })
 })
@@ -292,3 +294,39 @@ describe('手动更新', () => {
     expect(list.find('.update-note').text()).toContain('token')
   })
 })
+
+describe('需要修复的规则包', () => {
+  const repairReport = {
+    notModified: true,
+    conches: [{ conch: 'legacy_oa', version: '1.0.0', kind: 'REPAIR_REQUIRED', reason: 'POINTER_MISSING' }],
+    removed: [],
+    credentialChanges: [],
+    latestCrab: null,
+    error: null,
+  }
+
+  it('目录标出需要修复，只给修复入口，修复后提示从本机重新载入', async () => {
+    crab.catalog.mockResolvedValue({
+      configured: true,
+      syncedAt: '2026-11-04T00:00:00Z',
+      conches: [entry({ subscribed: true, installed: true, installedVersion: '1.0.0', updateAvailable: true, latestVersion: '1.1.0' })],
+    })
+    crab.syncStatus.mockResolvedValue({ report: repairReport, latestCrab: null })
+    crab.update.mockResolvedValue({ outcome: { conch: 'legacy_oa', version: '1.0.0', kind: 'REPAIRED', reason: 'RESTORED' } })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const success = vi.spyOn(ElMessage, 'success')
+    const wrapper = await mountPage(CatalogView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="repair-tag"]').text()).toBe('需要修复')
+    expect(wrapper.text()).not.toContain('有新版本 v1.1.0')
+    expect(buttons(wrapper, '更新')).toHaveLength(0)
+    expect(buttons(wrapper, '管理')).toHaveLength(0)
+
+    await buttons(wrapper, '修复')[0].trigger('click')
+    await flushPromises()
+    expect(crab.update).toHaveBeenCalledWith('legacy_oa')
+    expect(success).toHaveBeenCalledWith('legacy_oa 已从本机重新载入 v1.0.0')
+  })
+})
+

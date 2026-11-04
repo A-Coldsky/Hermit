@@ -22,6 +22,51 @@ export interface UpdateTarget {
   newRequiredCredentials: string[]
 }
 
+/**
+ * 修复同步标为 REPAIR_REQUIRED 的包。本机文件仍能验签就重新载入，不下载；验签失败才安装 Reef 当前版本。
+ * 返回是否已恢复可调用。
+ */
+export async function repairConch(conch: string, reason: string | null): Promise<boolean> {
+  const why = reason ? `原因：${syncReasonLabels[reason] ?? reason}。` : ''
+  try {
+    await ElMessageBox.confirm(
+      `${why}先重新载入本机验过签的版本；本机文件验签不通过时，改为下载 Reef 当前发布的版本，可能比原来的版本高。`,
+      `修复 ${conch}`,
+      { confirmButtonText: '修复', cancelButtonText: '暂不修复', type: 'warning' },
+    )
+  } catch {
+    return false
+  }
+  try {
+    const result = await api.update(conch)
+    const kind = result.outcome?.kind
+    const version = result.outcome?.version ? ` v${result.outcome.version}` : ''
+    if (kind === 'REPAIRED') {
+      ElMessage.success(`${conch} 已从本机重新载入${version}`)
+      return true
+    }
+    if (!kind || kind === 'INSTALLED') {
+      ElMessage.success(`${conch} 本机文件不可用，已重新安装 Reef 版本${version}`)
+      return true
+    }
+    const label = outcomeLabels[kind]?.text ?? kind
+    const detail = result.outcome?.reason ? `：${syncReasonLabels[result.outcome.reason] ?? result.outcome.reason}` : ''
+    ElMessage.warning(`${conch} 没有修复（${label}${detail}）`)
+    return false
+  } catch (error) {
+    const missing = missingCredentials(error)
+    if (missing) {
+      ElMessage.warning({
+        message: `Reef 版本已下载，但默认账号还缺凭证：${missing.join('、')}。在账号里补齐后再点「修复」。`,
+        duration: 8000,
+      })
+    } else {
+      notifyError(error)
+    }
+    return false
+  }
+}
+
 /** 确认后安装最近一次同步看到的更高版本。返回是否已切换。 */
 export async function updateConch(target: UpdateTarget): Promise<boolean> {
   const from = target.installedVersion ? `v${target.installedVersion}` : '当前版本'

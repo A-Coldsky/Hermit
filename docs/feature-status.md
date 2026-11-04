@@ -144,3 +144,5 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 2026-11-04 合入 origin/main（#65 界面修复、#72 丢失安装不下载）后，功能状态同时保留 MCP 引导与 `REPAIR_REQUIRED`。以 JDK 21.0.12.1（编译目标 17）再执行 `./mvnw -pl hermit-crab -am test -Dhermit.web.skip=true` 通过。Surefire：hermit-common 43、hermit-crab 277，失败 0、错误 0，hermit-crab 跳过 1（原有 `ConsoleUiTest`）。`ConchRepairTest` 9 项。未跑 hermit-reef、hermit-it 与 Vitest。
 
 2026-11-04 合入 origin/main（#72 丢失安装不下载，以及随后的 #71 MCP 引导、未知工具、traceId 与未声明入参）后，文档冲突按两边保留：上报缺省间隔仍是 1800，`apikey list` 仍打印 `all=true`。JDK 17.0.20.1 执行 `./mvnw -B -pl hermit-crab -am test -Dhermit.web.skip=true`：hermit-common 43（失败/错误/跳过 0），hermit-crab 281（失败 0、错误 0、跳过 1，仍是 `ConsoleUiTest`）。未跑 hermit-reef、hermit-it、Vitest，未在浏览器点选。
+
+2026-11-04 评估 b8cd760 的控制台提示（前端）：同步结果 `REPAIR_REQUIRED` 在概览列出原因与「修复」按钮，不再显示「已是最新」；可订阅目录标「需要修复」，只给修复入口，修复走 `POST /console/api/conches/{conch}/update`，`REPAIRED` 提示从本机重新载入。新增验签类原因、`CONCH_REPAIR_REQUIRED` 审计与 `CAPABILITY_DISABLED`（能力已停用）的中文标签。创建 API Key 必须选「指定规则包或能力」或「全部权限」；选全部权限时显示风险提示，未勾只读时额外说明会修改数据的能力也能调用；列表按 `scope.all` 标「全部权限」。Vitest 114（19 个文件）、`vue-tsc` 与 Crab 构建通过。依赖 #72、#73 的后端字段；未在浏览器点选

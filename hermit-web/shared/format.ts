@@ -113,6 +113,7 @@ export const errorCodeLabels: Record<string, string> = {
   TIMEOUT: '超时',
   NOT_CONFIGURED: '待配置',
   CONCH_DISABLED: '规则包已停用',
+  CAPABILITY_DISABLED: '能力已停用',
   ACCOUNT_NOT_FOUND: '账号不存在',
   FORBIDDEN: '无权限',
   NOT_FOUND: '不存在',

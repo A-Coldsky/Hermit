@@ -22,8 +22,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class ConchCatalogService {
 
-    /** Both version parameters omitted, and this conch has fewer than two stored versions. */
-    public static final String DIFF_NEEDS_TWO_VERSIONS = "at least two versions are required to diff";
+    /** 只给了 from、to 其中一端。 */
+    public static final String DIFF_NEEDS_BOTH_ENDS = "版本对比需要同时提供 from 和 to";
+
+    /** from 与 to 都没给，并且这个规则包不足两个版本。 */
+    public static final String DIFF_NEEDS_TWO_VERSIONS = "至少需要两个版本才能对比";
 
     private final ConchRepository repository;
     private final ConchAvailabilityRepository availability;
@@ -109,7 +112,7 @@ public class ConchCatalogService {
         boolean fromBlank = from == null || from.isBlank();
         boolean toBlank = to == null || to.isBlank();
         if (fromBlank != toBlank) {
-            throw ApiException.invalidInput();
+            throw new ApiException(400, ReefErrorCode.INVALID_INPUT, DIFF_NEEDS_BOTH_ENDS);
         }
         if (fromBlank) {
             List<VersionRow> ranked = new ArrayList<>(rowsOf(conch));

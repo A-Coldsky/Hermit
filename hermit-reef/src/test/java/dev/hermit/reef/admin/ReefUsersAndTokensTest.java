@@ -312,7 +312,7 @@ class ReefUsersAndTokensTest {
                         .content(userBody("rooted", USER_PASSWORD, "ROOT")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
-                .andExpect(jsonPath("$.error.message").value("invalid input"))
+                .andExpect(jsonPath("$.error.message").value("请求体无法解析"))
                 .andReturn();
         String rejected = rejectedResult.getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(rejected).doesNotContain(USER_PASSWORD).doesNotContain("ROOT");

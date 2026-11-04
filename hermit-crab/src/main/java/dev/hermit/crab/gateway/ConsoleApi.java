@@ -1009,10 +1009,10 @@ final class ConsoleApi {
         try {
             limit = Integer.parseInt(raw);
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("limit is out of range");
+            throw new IllegalArgumentException(AuditLog.LIMIT_OUT_OF_RANGE);
         }
         if (limit < 1 || limit > CallLogStore.LIST_LIMIT) {
-            throw new IllegalArgumentException("limit is out of range");
+            throw new IllegalArgumentException(AuditLog.LIMIT_OUT_OF_RANGE);
         }
         return limit;
     }

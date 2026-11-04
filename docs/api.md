@@ -143,7 +143,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | POST | `/capabilities/{conch}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
 | GET / POST | `/apikeys` | 列表 / 创建。创建体 `{name, readOnly, all, conches, actions}`。`name` 必填。`readOnly` 与 `all` 缺省为 false，必须是布尔。`conches`、`actions` 缺省或 `[]` 都是空集合。只接受这五个字段。嵌套 `scope` 或其他未知字段是 400 `INVALID_INPUT`，message 为 `unknown field: …`。`all` 不是 true 且两个集合都空：400，message 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`。`all: true` 再带非空 `conches` 或 `actions`：400，message 为 `all 为 true 时不能同时填写 conches 或 actions`。`all: true` 保存空集合，表示全部正式包的全部能力，不含本地包；`readOnly: true` 仍只放行只读能力。只写 `conches` 或只写 `actions` 时 `scope.all` 为 false。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载（含本地包）或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建。新 Key 仅返回一次 plaintext。响应与列表的 `scope` 都是 `{all, conches, actions, readOnly}`。`all` 为 true 表示两个集合都空（全部正式包）。早于该字段、两个集合都空的旧行仍可调用，读出来的 `all` 也是 true，不迁移 |
 | DELETE | `/apikeys/{id}` | 撤销 |
-| GET | `/calls`、`/calls/{traceId}` | `conch`、`action`、`channel`、`limit` 查询及步骤摘要。每行含 `source`（`LOCAL` 或 `REEF`，规则包来源）和 `channel`（`HTTP` 对外 OpenAPI、`MCP`、`CONSOLE`）。`channel` 省略或空白表示不筛选；其他值 400 `INVALID_INPUT`，message 为 `channel is invalid`，不回显参数值。当前只有 HTTP 与 MCP 会写入；控制台没有执行能力的路径，测试登录不写调用记录，所以没有 `CONSOLE` 行，但筛选 `CONSOLE` 仍是空列表而不是 400。schema 11 给旧行默认 `HTTP`。`limit` 省略时 100，最大 500；小于 1 或大于 500 为 400。控制台调用记录页显式传 100，概览显式传 200。CLI 没有调用记录列表命令。`action` 可以是库存的能力名，或 `conch.action`（按第一个 `.` 拆开后分别匹配）。若同时传入 `conch` 且与 `action` 里的包名不同，返回 400 `INVALID_INPUT`，不会当成空列表 |
+| GET | `/calls`、`/calls/{traceId}` | `conch`、`action`、`channel`、`limit` 查询及步骤摘要。每行含 `source`（`LOCAL` 或 `REEF`，规则包来源）和 `channel`（`HTTP` 对外 OpenAPI、`MCP`、`CONSOLE`）。`channel` 省略或空白表示不筛选；其他值 400 `INVALID_INPUT`，message 为 `channel is invalid`，不回显参数值。当前只有 HTTP 与 MCP 会写入；控制台没有执行能力的路径，测试登录不写调用记录，所以没有 `CONSOLE` 行，但筛选 `CONSOLE` 仍是空列表而不是 400。schema 11 给旧行默认 `HTTP`。`limit` 省略时 100，最大 500；小于 1、不是整数或大于 500 为 400 `INVALID_INPUT`，message 为「每页条数超出范围。」。控制台调用记录页显式传 100，概览显式传 200。CLI 没有调用记录列表命令。`action` 可以是库存的能力名，或 `conch.action`（按第一个 `.` 拆开后分别匹配）。若同时传入 `conch` 且与 `action` 里的包名不同，返回 400 `INVALID_INPUT`，不会当成空列表 |
 | GET | `/audit` | 配置审计，新的在前。参数 `conch`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
 | GET / POST | `/debug` | 读状态 / `{enabled}`；当前只存状态，24h 过期 |
 | GET / POST | `/sync` | 最近同步结果 / 触发同步 |
@@ -173,7 +173,7 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 测试登录仍会尝试登录，不看暂停旗标。只有登录成功（`recordAuthSuccess`）才清掉暂停和失败计数。失败、缺配置、缺凭证或无法解密都保持暂停，下一次能力调用仍直接返回「该账号已暂停自动登录」。页面应读这些字段显示「已暂停」和恢复方法，不要只看 `needsConfiguration`。
 
-`GET /console/api/audit` 的 `data` 为 `{entries, page, limit, total}`。`entries` 按 `at`、`id` 从新到旧。空白的 `conch` 或 `account` 表示不过滤。`page` 小于 1、不是整数，或大到无法分页，返回 400 `INVALID_INPUT`，`message` 为「页码超出范围。」。`limit` 小于 1、不是整数或不在 1 到 200，返回 `INVALID_INPUT`，`message` 为「每页条数超出范围。」。`conch` 含 `/`、`\`、控制字符或长于 256 时，`message` 为「规则包名称无效。」。
+`GET /console/api/audit` 的 `data` 为 `{entries, page, limit, total}`。`entries` 按 `at`、`id` 从新到旧。空白的 `conch` 或 `account` 表示不过滤。`page` 小于 1、不是整数，或大到无法分页，返回 400 `INVALID_INPUT`，`message` 为「页码超出范围。」。`limit` 小于 1、不是整数或不在 1 到 200，返回 `INVALID_INPUT`，`message` 为「每页条数超出范围。」。`conch` 含 `/`、`\`、控制字符或长于 256 时，`message` 为「规则包名称无效。」。`account` 不是 1 到 64 位的字母、数字、下划线或连字符时，`message` 为「账号名只能包含字母、数字、下划线和连字符，长度 1 到 64。」。
 
 每一行只有谁、做了什么、何时：
 
@@ -236,15 +236,15 @@ local export <conch> [--out file]
 mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
-普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。不带参数，或参数只有 `--help` / `-h`，把用法打到 stdout，退出 0。未知命令，以及子命令参数不够，仍把同一段用法打到 stderr，退出 1。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
+普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。不带参数，或参数只有 `--help` / `-h`，把用法打到 stdout，退出 0。未知命令，以及子命令参数不够，仍把同一段用法打到 stderr，退出 1。这段用法以「用法：」开头，后面仍是英文命令和选项名。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
 
-`catalog` 打印目录缓存，一行一个包：`包名 版本`，后面按情况接 `subscribed`、`installed 版本`、`disabled`、`local-conflict`、`update-available 清单版本`，最后是标题。缓存还没有时没有输出，退出 0。`subscribe` 成功时打印 `包名 版本 KIND`；这一轮结果里没有该包时打印 `包名 subscribed`。`unsubscribe` 成功时打印包名。`update` 成功时打印 `包名 版本`。它用的是最近一次同步的清单，不会在这条命令里再拉 Reef。未配置 `reef.url` 时 `catalog`、`subscribe` 和 `update` 与 `sync` 一样在 stderr 打印 `reef.url is not configured` 并退出 1。`unsubscribe` 在未配置 Reef 时仍可用。超过 200 字或含换行的错误被收成 `invalid input`。
+`catalog` 打印目录缓存，一行一个包：`包名 版本`，后面按情况接 `subscribed`、`installed 版本`、`disabled`、`local-conflict`、`update-available 清单版本`，最后是标题。缓存还没有时没有输出，退出 0。`subscribe` 成功时打印 `包名 版本 KIND`；这一轮结果里没有该包时打印 `包名 subscribed`。`unsubscribe` 成功时打印包名。`update` 成功时打印 `包名 版本`。它用的是最近一次同步的清单，不会在这条命令里再拉 Reef。未配置 `reef.url` 时 `catalog`、`subscribe` 和 `update` 与 `sync` 一样在 stderr 打印 `reef.url is not configured` 并退出 1。`unsubscribe` 在未配置 Reef 时仍可用。超过 200 字或含换行的错误被收成「输入无效。」。
 
-`audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。`--page` 小于 1、不是整数，或大到无法分页时，stderr 为「页码超出范围。」。`--limit` 小于 1、不是整数或大于 200 时，stderr 为「每页条数超出范围。」。选项没有值时为「缺少 --page 的值。」这种句子，同一选项写两次为「--page 重复了。」。非法 `conch` 过滤为「规则包名称无效。」。每一行是 `时间 actor action origin conch account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
+`audit list` 与 `GET /console/api/audit` 是同一份投影，新的在前。`--limit` 默认 50、最大 200，`--page` 从 1 开始。`--page` 小于 1、不是整数，或大到无法分页时，stderr 为「页码超出范围。」。`--limit` 小于 1、不是整数或大于 200 时，stderr 为「每页条数超出范围。」。选项没有值时为「缺少 --page 的值。」这种句子，同一选项写两次为「--page 重复了。」。非法 `conch` 过滤为「规则包名称无效。」。非法账号名为「账号名只能包含字母、数字、下划线和连字符，长度 1 到 64。」。`audit` 后面不是 `list`，或带了不认识的参数时，stderr 是同一段以「用法：」开头的用法。每一行是 `时间 actor action origin conch account 字段名`，空值打印 `-`，多个字段名用逗号连接。不打印配置值、凭证明文或密文。
 
 `config get` 只读取已经加载的规则包。注册表里没有这个名字时，stderr 打印 `本机没有这个规则包`，名字符合 `^[a-z][a-z0-9_]{1,63}$` 时再接 `: 名字`，退出 1，不会把空配置当成成功。已加载但还没有保存过配置时没有输出，退出 0。指定的 key 尚未设置时仍是 stderr `config key is not set`，退出 1。
 
-`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为 `unknown option`，不会建出全范围 Key。必须带 `--all`，或非空的 `--conches` / `--actions`。`--all` 是全部正式包的全部能力，不含本地包，可与 `--read-only` 同用；再带 `--conches` 或 `--actions` 则退出 1，stderr 为 `all 为 true 时不能同时填写 conches 或 actions`。什么都不带时退出 1，stderr 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`，不写库。`--from-env` 只属于 `credential set`。用在 `apikey create`（即使同时有 `--all`）、`apikey list` 或 `apikey revoke` 上会打印用法并退出 1，不创建 Key，也不读取该变量的值。`apikey list` 在 id、前缀和名字之后打印 `all=true|false`。`all=true` 表示两个集合都空：`--all` 新建的 Key，以及早于该字段、库存里没有 `all` 的空范围旧行。这一行不打印 `conches=` 和 `actions=`，不用 `-` 表示全部。`all=false` 时再打印 `conches=`、`actions=`，多个名字按字典序用逗号连接，空的那一维打印 `-`。然后始终打印 `read-only=true|false`。已吊销的行末再加 `revoked`。明文只在 `create` 时打印一次，列表只有前 8 个字符的前缀。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
+`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为「不认识的选项 --scope。」，不会建出全范围 Key。缺少选项值时 stderr 为「缺少 --conches 的值。」这种句子。必须带 `--all`，或非空的 `--conches` / `--actions`。`--all` 是全部正式包的全部能力，不含本地包，可与 `--read-only` 同用；再带 `--conches` 或 `--actions` 则退出 1，stderr 为 `all 为 true 时不能同时填写 conches 或 actions`。什么都不带时退出 1，stderr 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`，不写库。`--from-env` 只属于 `credential set`。用在 `apikey create`（即使同时有 `--all`）、`apikey list` 或 `apikey revoke` 上会打印用法并退出 1，不创建 Key，也不读取该变量的值。`apikey list` 在 id、前缀和名字之后打印 `all=true|false`。`all=true` 表示两个集合都空：`--all` 新建的 Key，以及早于该字段、库存里没有 `all` 的空范围旧行。这一行不打印 `conches=` 和 `actions=`，不用 `-` 表示全部。`all=false` 时再打印 `conches=`、`actions=`，多个名字按字典序用逗号连接，空的那一维打印 `-`。然后始终打印 `read-only=true|false`。已吊销的行末再加 `revoked`。明文只在 `create` 时打印一次，列表只有前 8 个字符的前缀。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
 
 ## MCP
 
@@ -282,7 +282,7 @@ mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。直接工具的 `outputSchema` 只列 Conch `output` 的字段名和说明，不带类型约束，因为模板渲染不会把提取值转换成声明类型；目录工具的 `outputSchema` 带类型。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
 
-stdio 是对运行中 Crab 的桥接，不单独启动执行器。`mcp-stdio --help` 把默认 URL、环境变量 `HERMIT_API_KEY` 和 `--account` 打到 stdout，退出 0，不要求已经设置 Key，也不连接 Crab。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr。未设置 Key、URL 不是 http/https、Crab 没有在监听时，stderr 分别是中文的「未设置环境变量 HERMIT_API_KEY…」「URL 不合法…」「Crab 没有运行…」。未设置 Key 与非法 URL 退出 1，连不上退出 2。HTTP 401 时先把 Crab 返回的 JSON-RPC 错误写到 stdout，再在 stderr 打印 `authentication failed`，退出码 1。鉴权发生在读 body 之前，响应里的 `id` 为 null；stdio 若能解析出这次请求的 id，就填回去，已有非空 id 时不改。响应没有可解析的 `error` 对象时，stdout 仍写一条 `jsonrpc: 2.0`、`error.code` 为 `-32001`、message 为 `authentication failed` 的对象，`id` 取自本次请求；然后退出：
+stdio 是对运行中 Crab 的桥接，不单独启动执行器。`mcp-stdio --help` 把默认 URL、环境变量 `HERMIT_API_KEY` 和 `--account` 打到 stdout，退出 0，不要求已经设置 Key，也不连接 Crab。通过 `HERMIT_API_KEY` 提供 Key，stdout 仅协议消息，诊断走 stderr。未设置 Key、URL 不是 http/https、Crab 没有在监听时，stderr 分别是中文的「未设置环境变量 HERMIT_API_KEY…」「URL 不合法…」「Crab 没有运行…」。缺少 `--url` 或 `--account` 的值时是「缺少 --url 的值。」，不认识的选项是「不认识的选项 --scope。」，多出来的位置参数是「多余的参数。」，不回显参数内容。未设置 Key 与非法 URL 退出 1，连不上退出 2。HTTP 401 时先把 Crab 返回的 JSON-RPC 错误写到 stdout，再在 stderr 打印 `authentication failed`，退出码 1。鉴权发生在读 body 之前，响应里的 `id` 为 null；stdio 若能解析出这次请求的 id，就填回去，已有非空 id 时不改。响应没有可解析的 `error` 对象时，stdout 仍写一条 `jsonrpc: 2.0`、`error.code` 为 `-32001`、message 为 `authentication failed` 的对象，`id` 取自本次请求；然后退出：
 
 ```bash
 export HERMIT_API_KEY='调用端安全保存的APIKey'

@@ -84,7 +84,14 @@ class CallLogQueryTest {
 
             TestServer.Reply tooMany = server.console("GET", "/console/api/calls?limit=501", null, true);
             assertThat(tooMany.status()).isEqualTo(400);
-            assertThat(tooMany.json().path("error").path("message").asText()).isEqualTo("limit is out of range");
+            assertThat(tooMany.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(tooMany.json().path("error").path("message").asText()).isEqualTo("每页条数超出范围。");
+            TestServer.Reply limitZero = server.console("GET", "/console/api/calls?limit=0", null, true);
+            assertThat(limitZero.status()).isEqualTo(400);
+            assertThat(limitZero.json().path("error").path("message").asText()).isEqualTo("每页条数超出范围。");
+            TestServer.Reply limitText = server.console("GET", "/console/api/calls?limit=abc", null, true);
+            assertThat(limitText.status()).isEqualTo(400);
+            assertThat(limitText.json().path("error").path("message").asText()).isEqualTo("每页条数超出范围。");
         }
     }
 

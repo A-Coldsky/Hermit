@@ -67,7 +67,7 @@ public final class McpStdio {
             String arg = args[i];
             if ("--url".equals(arg) || "--account".equals(arg)) {
                 if (i + 1 >= args.length || args[i + 1].startsWith("--")) {
-                    err.println("option value is required");
+                    err.println("缺少 " + arg + " 的值。");
                     return 1;
                 }
                 String value = args[++i];
@@ -78,7 +78,7 @@ public final class McpStdio {
                 }
                 continue;
             }
-            err.println(arg.startsWith("--") ? "unknown option" : "unexpected argument");
+            err.println(arg.startsWith("--") ? "不认识的选项 " + arg + "。" : "多余的参数。");
             return 1;
         }
         String key = env.apply("HERMIT_API_KEY");

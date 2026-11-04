@@ -205,7 +205,7 @@ class ConfigAuditReadTest {
                 .hasMessage("规则包名称无效。");
         assertThatThrownBy(() -> AuditLog.page(fixture.dataSource, null, "bad name", 1, 10))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("account name");
+                .hasMessage("账号名只能包含字母、数字、下划线和连字符，长度 1 到 64。");
     }
 
     private static AuditLog.Entry find(AuditLog.Page page, String action, String account) {

@@ -155,7 +155,8 @@ class AccountStoreTest {
         assertThat(fixture.accounts.create(Origin.OFFICIAL, "oa", "A_b-1", "cli").account()).isEqualTo("A_b-1");
         assertThat(fixture.accounts.create(Origin.OFFICIAL, "oa", "a".repeat(64), "cli").account()).hasSize(64);
         Throwable thrown = catchThrowable(() -> fixture.accounts.create(Origin.OFFICIAL, "erp", "bad name", "cli"));
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class);
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("账号名只能包含字母、数字、下划线和连字符，长度 1 到 64。");
         SecretChecks.absent(thrown, "bad name");
         assertThatThrownBy(() -> fixture.accounts.create(Origin.OFFICIAL, "erp", "a".repeat(65), "cli"))
                 .isInstanceOf(IllegalArgumentException.class);

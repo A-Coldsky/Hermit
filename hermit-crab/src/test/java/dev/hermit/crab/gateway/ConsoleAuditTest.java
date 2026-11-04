@@ -161,6 +161,8 @@ class ConsoleAuditTest {
             TestServer.Reply badAccount = server.console("GET", "/console/api/audit?account=bad%20name", null, true);
             assertThat(badAccount.status()).isEqualTo(400);
             assertThat(badAccount.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(badAccount.json().path("error").path("message").asText())
+                    .isEqualTo("账号名只能包含字母、数字、下划线和连字符，长度 1 到 64。");
             SecretChecks.absent(badAccount.body(), PASSWORD);
         }
         for (byte[] blob : ciphertexts(root)) {

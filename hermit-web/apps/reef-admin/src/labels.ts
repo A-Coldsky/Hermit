@@ -93,8 +93,9 @@ const userErrorTexts: Record<string, string> = {
   'old password does not match': '当前密码不正确',
 }
 
+/** Reef 用户管理的中文 message 原样显示，不再拼错误码标签；旧版 Reef 的英文 message 仍按表翻译。 */
 export function userErrorText(message: string): string | null {
-  return userErrorTexts[message] ?? null
+  return userErrorTexts[message] ?? (/[\u4e00-\u9fff]/.test(message) ? message : null)
 }
 
 /** Reef 按「令牌所属用户 + 实例号」区分 Crab；旧数据没有用户。 */

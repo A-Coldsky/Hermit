@@ -59,3 +59,12 @@ describe('失败次数统计卡', () => {
     expect(card.classes()).toContain('danger')
   })
 })
+
+describe('Reef 用户管理错误', () => {
+  it('中文 message 原样显示，旧版英文 message 仍翻译', async () => {
+    const { userErrorText } = await import('../apps/reef-admin/src/labels')
+    expect(userErrorText('用户名已存在')).toBe('用户名已存在')
+    expect(userErrorText('username already exists')).toBe('用户名已存在')
+    expect(userErrorText('something else')).toBeNull()
+  })
+})

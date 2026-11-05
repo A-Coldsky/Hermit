@@ -62,7 +62,7 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 
 ## MCP 上游包
 
-`driver: mcp` 描述上游 MCP 服务。这一版只解析、校验、比较版本和签名。Crab 不会连接 `upstream.url`，也不会把 action 转成上游 `tools/call`。`transport` 只接受 `streamable_http`。`stdio` 与 `local_ref` 都拒绝，包里不能带要在 Crab 上执行的命令。
+`driver: mcp` 描述上游 MCP 服务。`transport` 只接受 `streamable_http`。`stdio` 与 `local_ref` 都拒绝，包里不能带要在 Crab 上执行的命令。Crab 对 `auth.type: headers` 按 Streamable HTTP 转发：渲染 `upstream.headers`，按账号复用会话，把 action 转成上游 `tools/call`。`oauth` 调用返回尚未连接。登录、令牌刷新和工具列表刷新还没有。Reef 从包内读出上游和工具表，不连接上游。
 
 ```yaml
 conch: vendor_crm
@@ -85,11 +85,11 @@ actions:
     examples:
       - input: {}
         output: {}
-    notes: 只校验，不调用。
+    notes: 只读查询。
     related: [search_customer]
 ```
 
-不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。`actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`。还没有 action 的本地骨架不在本批放行。`tools.include` / `exclude` 会保存，只准备给以后的刷新过滤；能调用的名字仍只有 `actions`，而且现在也不会调用。
+不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。`actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`。还没有 action 的本地骨架不在本批放行。`tools.include` / `exclude` 会保存，只准备给以后的刷新过滤；现在能调用的名字仍只有 `actions`。
 
 `upstream.auth.type` 是 `headers` 或 `oauth`。`headers` 的请求头模板只能引用 `{{credential.*}}` 和 `{{config.*}}`，不能引用 `input`。HTTP 包允许模板里出现未声明的 `config.base_url`，mcp 请求头没有这项豁免。`oauth` 必须写 `client_id`。`scopes` 里不能有空字符串。`authorization_endpoint` 和 `token_endpoint` 可以省略；写了就必须是不带模板、用户信息和片段的 http 或 https URL。https 的主机要落在 `allowed_hosts`。http 还要和 `upstream.url` 同一源（协议、主机、端口；省略端口时 https 为 443、http 为 80）。`oauth` 不能再设置 `Authorization`。本批不发现端点，也不保存令牌。
 

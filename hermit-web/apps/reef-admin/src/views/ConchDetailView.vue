@@ -142,7 +142,7 @@ watch(() => props.conch, load, { immediate: true })
         type="info"
         :closable="false"
         show-icon
-        title="这个规则包还没有发布版本，Crab 暂时拿不到它。在「版本」里发布一个已上传的版本。"
+        :title="isAdmin ? '这个规则包还没有发布版本，Crab 暂时拿不到它。在「版本」里发布一个已上传的版本。' : '这个规则包还没有发布版本，Crab 暂时拿不到它，等管理员发布。'"
         class="notice"
       />
 
@@ -156,7 +156,7 @@ watch(() => props.conch, load, { immediate: true })
         <template #title>
           有 {{ unpublished.length }} 个新上传的版本还没发布：
           <span class="mono">{{ unpublished.map((v) => `v${v.version}`).join('、') }}</span>
-          <el-button link type="primary" class="jump" @click="tab = 'versions'">去发布</el-button>
+          <el-button v-if="isAdmin" link type="primary" class="jump" data-test="go-publish" @click="tab = 'versions'">去发布</el-button>
         </template>
       </el-alert>
 

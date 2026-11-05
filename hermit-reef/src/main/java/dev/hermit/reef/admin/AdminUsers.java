@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -36,15 +37,20 @@ public class AdminUsers {
     private final Clock clock;
     private final ObjectMapper objectMapper;
     private final ReefProperties properties;
+    private final ConfigTokenVoids configTokenVoids;
+    private final AgentTokenService agentTokens;
 
     public AdminUsers(JdbcTemplate jdbc, PasswordEncoder passwordEncoder, AuditService auditService, Clock clock,
-            ObjectMapper objectMapper, ReefProperties properties) {
+            ObjectMapper objectMapper, ReefProperties properties, ConfigTokenVoids configTokenVoids,
+            @Lazy AgentTokenService agentTokens) {
         this.jdbc = jdbc;
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
         this.clock = clock;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.configTokenVoids = configTokenVoids;
+        this.agentTokens = agentTokens;
     }
 
     public AdminAccount find(String username) {
@@ -117,6 +123,8 @@ public class AdminUsers {
         if (actor.equals(target.username()) && (role != AdminRole.ADMIN || disabled)) {
             throw conflict(CANNOT_CHANGE_SELF);
         }
+        boolean disabling = !target.disabled() && disabled;
+        boolean voidConfig = disabling && configOwner(target);
         jdbc.update(
                 "UPDATE hermit_admin_users SET role = ?, disabled = ? WHERE id = ?",
                 role.name(),
@@ -126,7 +134,22 @@ public class AdminUsers {
                 "username", target.username(),
                 "role", role.name(),
                 "disabled", disabled)));
+        if (disabling) {
+            agentTokens.revokeForDisabledUser(actor, target.id(), target.username(), voidConfig);
+        }
         return summarize(find(target.username()));
+    }
+
+    /**
+     * 签发令牌前锁住用户行，和禁用共用这把锁，避免禁用提交前又插入一把未吊销令牌。
+     */
+    @Transactional
+    public AdminAccount lockEnabled(String username) {
+        AdminAccount account = lockByUsername(username);
+        if (account == null || account.disabled()) {
+            throw new ApiException(401, ReefErrorCode.UNAUTHORIZED, ReefErrorCode.UNAUTHORIZED.message());
+        }
+        return account;
     }
 
     @Transactional
@@ -172,10 +195,19 @@ public class AdminUsers {
                 account.id());
         int tokens = active == null ? 0 : active;
         AdminAccount initial = initialAdmin();
-        if (properties.configuredAgentToken() != null && initial != null && initial.id() == account.id()) {
+        if (properties.configuredAgentToken() != null && initial != null && initial.id() == account.id()
+                && !configTokenVoids.currentIsVoided()) {
             tokens++;
         }
         return new UserSummary(account.username(), account.role(), account.disabled(), account.createdAt(), tokens);
+    }
+
+    private boolean configOwner(AdminAccount account) {
+        if (properties.configuredAgentToken() == null) {
+            return false;
+        }
+        AdminAccount initial = initialAdmin();
+        return initial != null && initial.id() == account.id();
     }
 
     private AdminAccount lockByUsername(String username) {

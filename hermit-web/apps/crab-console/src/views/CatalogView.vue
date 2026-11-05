@@ -58,7 +58,9 @@ async function subscribe(row: CatalogConch) {
     const result = await api.subscribe(row.conch)
     const kind = result.outcome?.kind
     const label = kind ? outcomeLabels[kind] : null
-    if (kind === 'INSTALLED' || kind === 'SKIPPED_SAME') {
+    if (!result.subscribed) {
+      ElMessage.warning(`没有订阅 ${row.conch}：Reef 上当前不能订阅这个规则包`)
+    } else if (kind === 'INSTALLED' || kind === 'SKIPPED_SAME') {
       ElMessage.success(`已订阅 ${row.conch}，已安装到本机`)
     } else if (!kind) {
       ElMessage.warning(`已订阅 ${row.conch}，但这次没有安装`)

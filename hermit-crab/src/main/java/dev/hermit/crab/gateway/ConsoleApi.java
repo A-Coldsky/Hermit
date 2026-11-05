@@ -46,6 +46,7 @@ import dev.hermit.crab.sync.LocalConchException;
 import dev.hermit.crab.sync.LocalConches;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
 import dev.hermit.crab.sync.ConchOutcome;
+import dev.hermit.crab.sync.OutcomeKind;
 import dev.hermit.crab.sync.SubscriptionException;
 import dev.hermit.crab.sync.UpdateException;
 import dev.hermit.crab.sync.SyncError;
@@ -459,7 +460,7 @@ final class ConsoleApi {
             ConchOutcome outcome = runtime.subscribe(conch, Actors.CONSOLE);
             LinkedHashMap<String, Object> body = new LinkedHashMap<>();
             body.put("conch", conch);
-            body.put("subscribed", true);
+            body.put("subscribed", subscriptionHeld(runtime, conch, outcome));
             body.put("outcome", outcomeView(outcome));
             GatewayResponses.writeData(ctx, body);
         } catch (SyncException ex) {
@@ -487,6 +488,17 @@ final class ConsoleApi {
         body.put("conch", conch);
         body.put("subscribed", false);
         GatewayResponses.writeData(ctx, body);
+    }
+
+    /**
+     * {@code subscribed: true} only when the row is still there and this sync produced a result
+     * for that package. A missing outcome, or {@code NOT_SUBSCRIBED}, is not a successful subscribe.
+     */
+    private static boolean subscriptionHeld(CrabRuntime runtime, String conch, ConchOutcome outcome) {
+        if (outcome == null || outcome.kind() == OutcomeKind.NOT_SUBSCRIBED) {
+            return false;
+        }
+        return runtime.subscribed(conch);
     }
 
     private static Map<String, Object> outcomeView(ConchOutcome outcome) {

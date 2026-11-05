@@ -9,12 +9,12 @@ import java.util.Map;
 import dev.hermit.crab.secure.Redactor;
 
 /** 只替换值。Map 的键原样保留。规则与日志用的 {@link Redactor} 相同。 */
-final class OutputMask {
+public final class OutputMask {
 
     private OutputMask() {
     }
 
-    static Object apply(Object value, Redactor redactor) {
+    public static Object apply(Object value, Redactor redactor) {
         return walk(value, redactor);
     }
 

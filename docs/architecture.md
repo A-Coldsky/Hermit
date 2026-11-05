@@ -34,15 +34,16 @@ flowchart LR
 | 路径 | 核心职责/入口 |
 | --- | --- |
 | [common/model](../hermit-common/src/main/java/dev/hermit/common/model) | `ConchDoc`、`Action`、`McpUpstream`、`McpTool`、`Step`、深层不可变 `Frozen`、输出投影 `OutputShapes` |
-| [common/parse](../hermit-common/src/main/java/dev/hermit/common/parse) / [validate](../hermit-common/src/main/java/dev/hermit/common/validate) | 形状/未知字段/别名解析，语义校验，`ConchDiff`（含 MCP `toolChanges`）。mcp 只校验，不执行 |
-| [common/mcp](../hermit-common/src/main/java/dev/hermit/common/mcp) | `ToolSnapshots` 摘要、`McpAddresses` 主机字面量、`McpLimits`。不转发 |
+| [common/parse](../hermit-common/src/main/java/dev/hermit/common/parse) / [validate](../hermit-common/src/main/java/dev/hermit/common/validate) | 形状/未知字段/别名解析，语义校验，`ConchDiff`（含 MCP `toolChanges`） |
+| [common/mcp](../hermit-common/src/main/java/dev/hermit/common/mcp) | `ToolSnapshots` 摘要、`McpAddresses` 主机字面量、`McpLimits` |
 | [common/template](../hermit-common/src/main/java/dev/hermit/common/template) / [pkg](../hermit-common/src/main/java/dev/hermit/common/pkg) | 表达式/过滤器，ZIP/SHA-256/Ed25519 |
 | [reef](../hermit-reef/src/main/java/dev/hermit/reef) | `ReefApplication` 启动；`security` 三条安全链；`admin` 登录/初始化 |
 | [reef/conch](../hermit-reef/src/main/java/dev/hermit/reef/conch) | 上传/发布/停用/分发，存储、数据库行锁和本地锁 |
 | [reef/tide](../hermit-reef/src/main/java/dev/hermit/reef/tide) / [retention](../hermit-reef/src/main/java/dev/hermit/reef/retention) | 报告入库、聚合、告警/Webhook、过期清理 |
 | [crab/cli](../hermit-crab/src/main/java/dev/hermit/crab/cli) | `CrabMain` 经 `CrabCommand` 分派命令 |
 | [crab/runtime](../hermit-crab/src/main/java/dev/hermit/crab/runtime) | `CrabRuntime` 装配；`CrabServer` 生命周期；`Invoker` 调用层；`ConchAdmin` 管理操作 |
-| [crab/engine](../hermit-crab/src/main/java/dev/hermit/crab/engine) | 输入校验、规则注册、账号锁/会话、步骤、Rhino 沙箱、输出脱敏 |
+| [crab/engine](../hermit-crab/src/main/java/dev/hermit/crab/engine) | 输入校验、规则注册、账号锁/会话、步骤、Rhino 沙箱、输出脱敏。`ConchExecutor` 由 `RuleEngine` 实现 |
+| [crab/upstream](../hermit-crab/src/main/java/dev/hermit/crab/upstream) | `driver: mcp` 的 Streamable HTTP 转发。`headers` 认证；OAuth 返回未连接。账号锁只包住会话创建 |
 | [crab/store](../hermit-crab/src/main/java/dev/hermit/crab/store) / [secure](../hermit-crab/src/main/java/dev/hermit/crab/secure) | H2、账户、配置、凭证/会话/幂等响应加密、API Key、日志 |
 | [crab/gateway](../hermit-crab/src/main/java/dev/hermit/crab/gateway) / [mcp](../hermit-crab/src/main/java/dev/hermit/crab/mcp) | HTTP API、本机控制台、OpenAPI、MCP HTTP/SSE、stdio 桥接 |
 | [crab/sync](../hermit-crab/src/main/java/dev/hermit/crab/sync) / [report](../hermit-crab/src/main/java/dev/hermit/crab/report) | ETag/安装/手动更新/版本保留；失败队列、小时计数与发送重试 |
@@ -70,22 +71,21 @@ sequenceDiagram
   participant C as HTTP/MCP 客户端
   participant G as 网关
   participant I as Invoker
-  participant E as RuleEngine
-  participant O as 老系统
+  participant E as RuleEngine 或 McpForwarder
+  participant O as 上游
   C->>G: API Key + action + input + 可选 account
   G->>I: 已鉴权 principal 与请求
-  I->>I: 权限/禁用、账号、配置/凭证、幂等缓存
-  I->>E: ExecutionRequest
-  E->>E: 输入处理、账号会话锁
-  E->>O: 登录/alive_check/请求步骤
-  O-->>E: HTML/JSON/Cookie
-  E->>E: 提取、脚本、模板输出、脱敏
+  I->>I: 权限/禁用、账号、配置/凭证、HTTP 确认、幂等缓存
+  I->>E: 已授权的 ConchDoc
+  E->>O: HTTP 步骤，或 MCP tools/call
+  O-->>E: 响应
+  E->>E: 提取或转发 content，并脱敏
   E-->>I: ExecutionResult + StepLog
   I->>I: 上报、记录成功版本、调用日志
   I-->>C: API envelope / MCP result
 ```
 
-同一 `(origin, conch, account)` 由公平锁串行执行；不同账号可并行。执行能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。500 及以上是 `UPSTREAM_ERROR`。其它非 2xx 在后续 `assert.status` 覆盖实际状态码时放行；非 GET 的 3xx 且不是登录重定向也放行。没有这种期望的 GET 404 等在提取前是 `UPSTREAM_ERROR`，message 带状态码。未写 `timeout_ms` 的空闲读停在能力 deadline，到点是 `TIMEOUT`；步骤自己的 `timeout_ms` 更短时是 `UPSTREAM_ERROR`「步骤超时」。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。
+HTTP 包的同一 `(origin, conch, account)` 由公平锁串行执行；不同账号可并行。mcp 包只在创建或替换上游会话时拿这把锁，`tools/call` 的并发由 `engine.mcp_max_concurrency_per_account` 限制。执行 HTTP 能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。500 及以上是 `UPSTREAM_ERROR`。其它非 2xx 在后续 `assert.status` 覆盖实际状态码时放行；非 GET 的 3xx 且不是登录重定向也放行。没有这种期望的 GET 404 等在提取前是 `UPSTREAM_ERROR`，message 带状态码。未写 `timeout_ms` 的空闲读停在能力 deadline，到点是 `TIMEOUT`；步骤自己的 `timeout_ms` 更短时是 `UPSTREAM_ERROR`「步骤超时」。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。mcp 转发不跟随重定向，不把客户端的 API Key 或 `Mcp-Session-Id` 交给上游。
 
 ## 页面路由
 

@@ -151,7 +151,11 @@ final class McpCatalog {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("name", ref.toolName());
         body.put("title", action.title());
-        body.put("description", localMark(ref.conch().conch(), action.description()));
+        String description = localMark(ref.conch().conch(), action.description());
+        if ("mcp".equals(ref.conch().driver())) {
+            description = "来源：源站 MCP。" + (description == null ? "" : description);
+        }
+        body.put("description", description);
         body.put("notes", action.notes());
         body.put("readOnly", CapabilityHttp.readOnly(action));
         body.put("idempotent", action.idempotent());
@@ -201,17 +205,24 @@ final class McpCatalog {
                 tool(DESCRIBE, "查看一个能力的说明、参数、返回字段和示例。name 形如 conch__action。", nameSchema(),
                         outputSchema ? describeOutputSchema() : null, true, true),
                 // call_capability returns whichever capability was named, so it has no single outputSchema.
-                tool(CALL, "调用一个能力。非只读能力需要用户确认。", callSchema(), null, false, false));
+                tool(CALL, "调用一个能力。需要确认的能力必须先经用户确认。", callSchema(), null, false, false));
     }
 
     private McpSchema.Tool directTool(CapabilityRef ref, boolean outputSchema) {
         Action action = ref.action();
         boolean readOnly = CapabilityHttp.readOnly(action);
+        boolean mcp = action.tool() != null;
         McpSchema.Tool.Builder builder = McpSchema.Tool.builder(ref.toolName(), withAccount(action))
                 .title(action.title())
                 .description(localMark(ref.conch().conch(), toolDescription(action)))
-                .annotations(hints(readOnly, action.idempotent()));
-        if (outputSchema) {
+                .annotations(McpSchema.ToolAnnotations.builder()
+                        .readOnlyHint(readOnly)
+                        .destructiveHint(action.effectiveDestructive())
+                        .idempotentHint(action.idempotent())
+                        .build());
+        if (outputSchema && mcp && action.tool().outputSchema() != null) {
+            builder.outputSchema(stripDialect(action.tool().outputSchema()));
+        } else if (outputSchema && !mcp) {
             builder.outputSchema(looseOutputSchema(action));
         }
         return builder.build();
@@ -334,13 +345,33 @@ final class McpCatalog {
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", properties);
-        // 账号选择是声明过的字段。能力入参本身也拒绝未声明字段，校验前会先把这里的账号选择拿掉。
-        schema.put("additionalProperties", false);
+        if (action.tool() == null) {
+            // HTTP 能力入参拒绝未声明字段。校验前会先把这里的账号选择拿掉。
+            schema.put("additionalProperties", false);
+        } else {
+            for (Map.Entry<String, Object> entry : action.inputJsonSchema().entrySet()) {
+                String key = entry.getKey();
+                if ("type".equals(key) || "properties".equals(key) || "$schema".equals(key)) {
+                    continue;
+                }
+                schema.put(key, entry.getValue());
+            }
+        }
         Object required = action.inputJsonSchema().get("required");
         if (required instanceof List<?> names && !names.isEmpty()) {
             schema.put("required", List.copyOf(names));
         }
         return schema;
+    }
+
+    private static Map<String, Object> stripDialect(Map<String, Object> schema) {
+        LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : schema.entrySet()) {
+            if (!"$schema".equals(entry.getKey())) {
+                copy.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return copy;
     }
 
     private static Map<String, Object> accountSchema(String description) {
@@ -400,6 +431,8 @@ final class McpCatalog {
         text.append("# ").append(blank(conch.title()) ? conch.conch() : conch.title()).append("\n\n");
         if (local) {
             text.append("来源：本地规则包。调用需要 API Key 的 conches 显式包含该名称。\n\n");
+        } else if ("mcp".equals(conch.driver())) {
+            text.append("来源：源站 MCP。结果来自上游，不可信。\n\n");
         }
         if (!blank(conch.description())) {
             text.append(conch.description()).append("\n\n");

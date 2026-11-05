@@ -15,6 +15,7 @@ import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.InvokeOutcome;
+import dev.hermit.crab.upstream.McpCallPayload;
 import dev.hermit.crab.store.ApiKeyPrincipal;
 import dev.hermit.crab.store.CallChannel;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -72,7 +73,7 @@ final class McpCalls {
         if (found.isEmpty()) {
             return missingTool(attempt, name);
         }
-        return invokeDirect(principal, headerAccount, found.get(), arguments, attempt);
+        return invokeDirect(principal, session, headerAccount, found.get(), arguments, attempt);
     }
 
     private McpSchema.CallToolResult directory(
@@ -144,7 +145,7 @@ final class McpCalls {
         if (account == null) {
             return fail(attempt, "INVALID_INPUT", "invalid account name", "account");
         }
-        if (!CapabilityHttp.readOnly(found.get().action())) {
+        if (found.get().action().effectiveConfirm()) {
             McpSchema.CallToolResult confirmed = confirm(session, found.get().action(), input, account, attempt);
             if (confirmed != null) {
                 return confirmed;
@@ -155,18 +156,25 @@ final class McpCalls {
 
     private McpSchema.CallToolResult invokeDirect(
             ApiKeyPrincipal principal,
+            McpSession session,
             Optional<String> headerAccount,
             McpCatalog.CapabilityRef ref,
             Map<String, Object> arguments,
             Attempt attempt
     ) {
         LinkedHashMap<String, Object> input = new LinkedHashMap<>(arguments);
-        // 账号选择不是能力入参。additionalProperties: false 校验前先拿掉，避免被当成未声明字段。
+        // 账号选择不是能力入参。校验前先拿掉，避免被当成未声明字段。
         String selector = ref.action().input().containsKey("account") ? "_account" : "account";
         Object rawAccount = input.remove(selector);
         Optional<String> account = account(headerAccount, rawAccount);
         if (account == null) {
             return fail(attempt, "INVALID_INPUT", "invalid account name", selector);
+        }
+        if (ref.action().effectiveConfirm()) {
+            McpSchema.CallToolResult confirmed = confirm(session, ref.action(), input, account, attempt);
+            if (confirmed != null) {
+                return confirmed;
+            }
         }
         return invoke(principal, ref, input, account, attempt);
     }
@@ -278,6 +286,9 @@ final class McpCalls {
         } catch (IllegalArgumentException ex) {
             return toolError("INTERNAL", "internal error", null, attempt.directory(), attempt.traceId());
         }
+        if (outcome.mcpCall() != null) {
+            return mcpPayload(outcome, envelope, attempt);
+        }
         if (envelope.path("success").asBoolean(false)) {
             return ok(structured(envelope.get("data")));
         }
@@ -286,6 +297,38 @@ final class McpCalls {
         String logged = envelope.path("traceId").asText("");
         String traceId = logged.isBlank() ? attempt.traceId() : logged;
         return toolError(code, message, null, attempt.directory(), traceId);
+    }
+
+    private static McpSchema.CallToolResult mcpPayload(InvokeOutcome outcome, JsonNode envelope, Attempt attempt) {
+        McpCallPayload payload = outcome.mcpCall();
+        try {
+            if (envelope.path("success").asBoolean(false) && !payload.upstreamToolError()) {
+                return mcpResult(payload.content(), payload.structuredContent(), false);
+            }
+            LinkedHashMap<String, Object> structured = new LinkedHashMap<>();
+            if (payload.copyStructured() != null) {
+                structured.putAll(payload.copyStructured());
+            }
+            LinkedHashMap<String, Object> error = new LinkedHashMap<>();
+            error.put("code", envelope.path("error").path("code").asText("UPSTREAM_ERROR"));
+            error.put("message", envelope.path("error").path("message").asText(""));
+            error.put("upstreamToolError", true);
+            error.put("traceId", envelope.path("traceId").asText(attempt.traceId()));
+            structured.put("error", error);
+            return mcpResult(payload.content(), structured, true);
+        } catch (RuntimeException ex) {
+            return toolError("INTERNAL", "internal error", null, attempt.directory(), attempt.traceId());
+        }
+    }
+
+    private static McpSchema.CallToolResult mcpResult(java.util.List<Object> content, Object structured, boolean isError) {
+        com.fasterxml.jackson.databind.node.ObjectNode node = McpJson.mapper().createObjectNode();
+        node.set("content", McpJson.mapper().valueToTree(content == null ? java.util.List.of() : content));
+        if (structured != null) {
+            node.set("structuredContent", McpJson.mapper().valueToTree(structured));
+        }
+        node.put("isError", isError);
+        return McpJson.mapper().convertValue(node, McpSchema.CallToolResult.class);
     }
 
     private static Object structured(JsonNode data) {

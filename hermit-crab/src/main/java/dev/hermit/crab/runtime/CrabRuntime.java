@@ -37,6 +37,7 @@ import dev.hermit.crab.engine.EngineSettings;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionManager;
+import dev.hermit.crab.upstream.McpForwarder;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.report.LiveReportSettings;
 import dev.hermit.crab.report.ReportQueue;
@@ -101,6 +102,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final EngineSettings settings;
     private final SessionManager sessions;
     private final RuleEngine engine;
+    private final McpForwarder mcpForwarder;
     private final CallLogStore callLogs;
     private final IdempotencyStore idempotency;
     private final CapabilitySwitchStore switches;
@@ -170,6 +172,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.settings = config.engineSettings();
         this.sessions = new SessionManager(new EncryptedSessionPersistence(database.dataSource(), cipher), settings, clock);
         this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
+        this.mcpForwarder = new McpForwarder(
+                sessions, knownSecrets, settings.capabilityTimeout(), config.mcpMaxConcurrencyPerAccount());
         this.callLogs = new CallLogStore(database.dataSource(), clock);
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());
@@ -186,6 +190,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.invoker = new Invoker(
                 registry, accounts, vault, conchConfig, engine, callLogs, idempotency, this, disabledConches);
         this.invoker.bindKnownSecrets(knownSecrets);
+        this.invoker.bindMcpForwarder(mcpForwarder);
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(paths, registry, database.dataSource());
@@ -194,6 +199,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             String initialPassword = environment == null ? null : environment.apply(ConsolePassword.ENV);
             this.consolePassword.applyInitial(initialPassword);
         } catch (RuntimeException ex) {
+            this.mcpForwarder.close();
             this.database.close();
             throw ex;
         }
@@ -688,6 +694,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 LOG.warning("report memory flush failed: " + ex.getClass().getName());
             }
         }
+        mcpForwarder.close();
         sessions.close();
         database.close();
     }

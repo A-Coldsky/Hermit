@@ -58,8 +58,10 @@ async function subscribe(row: CatalogConch) {
     const result = await api.subscribe(row.conch)
     const kind = result.outcome?.kind
     const label = kind ? outcomeLabels[kind] : null
-    if (!kind || kind === 'INSTALLED' || kind === 'SKIPPED_SAME') {
+    if (kind === 'INSTALLED' || kind === 'SKIPPED_SAME') {
       ElMessage.success(`已订阅 ${row.conch}，已安装到本机`)
+    } else if (!kind) {
+      ElMessage.warning(`已订阅 ${row.conch}，但这次没有安装`)
     } else {
       const reason = result.outcome?.reason ? `：${result.outcome.reason}` : ''
       ElMessage.warning(`已订阅 ${row.conch}，但这次没有安装（${label?.text ?? kind}${reason}）`)

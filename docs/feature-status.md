@@ -163,3 +163,5 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 2026-11-05 禁用用户即吊销其库内 Agent 令牌，配置令牌可从管理接口作废。合入 origin/main（#77 样例、#78 丢弃未发布版本）后，以 JDK 17.0.20.1 执行 `./mvnw -pl hermit-reef -am test -Dhermit.web.skip=true` 通过。Surefire：hermit-common 44（失败/错误/跳过 0），hermit-reef 181（失败 0、错误 0、跳过 1，仍是 `AdminUiPackagedTest`，跳过前端资源后 classpath 没有管理端 `index.html`）。其中 `ReefUsersAndTokensTest` 16 项。未跑 hermit-crab、hermit-it 和 Vitest，没有跑完整 `verify`。未改 Vue。未启动 MySQL 或 Compose，也未在浏览器点选。Flyway 新增 V7 `hermit_voided_config_tokens`，不改 V1–V6。禁用与签发令牌都锁同一用户行；没有单独压测并发。同一（令牌，实例）60 秒内的重复访问不会改实例归属。
 
 2026-11-05 Reef 上传与丢弃（前端）：上传页选好 YAML 后先停在本地，点「上传并校验」才上传，取消不发请求；待发布版本在上传页和版本表都有「丢弃」，确认后调用 `DELETE /api/admin/conches/{conch}/versions/{version}`；审计动作 `DISCARD` 显示为「丢弃」。规则包详情的「去发布」只对 ADMIN 显示，USER 看到「等管理员发布」。目录加载中不显示「共 0 个」。USER 打开管理员页面被送回概览时提示「没有权限执行这个操作」。Vitest 127（20 个文件）与 `vue-tsc` 通过。未在浏览器点选。
+
+2026-11-05 Reef 令牌页面（前端）：禁用用户的确认框写明名下令牌会被吊销、重新启用账号不会恢复，要重新生成并在 Crab 上重新导入；被禁用的是配置令牌归属人时点名 `HERMIT_REEF_AGENT_TOKEN` 会一起作废。启用成功提示旧令牌不会恢复。令牌页上 ADMIN 可以「作废」配置令牌（`POST /api/admin/tokens/config/revoke`），确认框说明要在 Reef 配置里换新值才能恢复；已作废的配置令牌显示「已作废」。Crab 实例同一实例号只有一行由后端保证。Vitest 与 `vue-tsc` 通过。未在浏览器点选。

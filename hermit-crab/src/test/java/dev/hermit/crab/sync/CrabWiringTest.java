@@ -7,6 +7,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -19,12 +21,14 @@ import javax.sql.DataSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import dev.hermit.common.pkg.Ed25519Keys;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.CrabServer;
+import dev.hermit.crab.runtime.ReefBootstrap;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.CrabPaths;
@@ -234,6 +238,107 @@ class CrabWiringTest {
                 JsonNode recovered = syncData(http, server.port());
                 assertThat(recovered.path("report").path("error").isNull()).isTrue();
                 assertThat(recovered.path("report").path("conches").toString()).doesNotContain("UPSTREAM_ERROR");
+            }
+        }
+    }
+
+    @Test
+    void manifestUnauthorizedIs401AndTheSyncStatusKeepsThatFailure() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            CrabConfig config = config(reef.base().toString(), Ed25519Keys.writePublicPem(reef.keys().getPublic()), false)
+                    .withListen("127.0.0.1", 0);
+            CrabPaths paths = new CrabPaths(temp.resolve("token-rejected"));
+            CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null);
+            TestSubscriptions.grantKnown(runtime.dataSource());
+            try (CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+                awaitSyncReport(http, server.port());
+                reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+
+                HttpResponse<String> first = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(first.statusCode()).as(first.body()).isEqualTo(200);
+                JsonNode installed = JSON.readTree(first.body()).path("data");
+                assertThat(installed.path("notModified").asBoolean()).isFalse();
+                assertThat(installed.path("error").isNull()).isTrue();
+                assertThat(installed.path("conches").get(0).path("kind").asText()).isEqualTo("INSTALLED");
+
+                HttpResponse<String> unchanged = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(unchanged.statusCode()).as(unchanged.body()).isEqualTo(200);
+                assertThat(JSON.readTree(unchanged.body()).path("data").path("notModified").asBoolean()).isTrue();
+                assertThat(JSON.readTree(unchanged.body()).path("data").path("error").isNull()).isTrue();
+
+                ObjectNode bootstrap = JSON.createObjectNode();
+                bootstrap.put("kind", "hermit-crab-bootstrap");
+                bootstrap.put("version", 1);
+                ObjectNode reefNode = bootstrap.putObject("reef");
+                reefNode.put("url", reef.base().toString());
+                reefNode.put("token", "hat_office_pc_token_0123456789");
+                reefNode.put("publicKey", Ed25519Keys.writePublicPem(reef.keys().getPublic()));
+                bootstrap.put("owner", "alice");
+                bootstrap.put("tokenName", "办公室 PC");
+                bootstrap.put("createdAt", "2026-11-04T04:00:00Z");
+                runtime.importBootstrap(JSON.writeValueAsBytes(bootstrap), Actors.CONSOLE);
+                Path file = ReefBootstrap.file(paths);
+                byte[] kept = Files.readAllBytes(file);
+                HttpResponse<String> connected = send(http, server.port(), "GET", "/console/api/reef", null);
+                assertThat(connected.statusCode()).isEqualTo(200);
+                assertThat(JSON.readTree(connected.body()).path("data").path("configured").asBoolean()).isTrue();
+                assertThat(JSON.readTree(connected.body()).path("data").path("source").asText()).isEqualTo("BOOTSTRAP");
+
+                HttpResponse<String> still = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(still.statusCode()).as(still.body()).isEqualTo(200);
+                assertThat(JSON.readTree(still.body()).path("data").path("notModified").asBoolean()).isTrue();
+
+                reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+                HttpResponse<String> moved = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(moved.statusCode()).as(moved.body()).isEqualTo(200);
+                assertThat(JSON.readTree(moved.body()).path("data").path("notModified").asBoolean()).isFalse();
+                JsonNode previous = syncData(http, server.port());
+                assertThat(previous.path("report").path("error").isNull()).isTrue();
+                assertThat(previous.path("report").path("conches").toString()).contains("legacy_oa");
+
+                reef.manifestStatus(500);
+                HttpResponse<String> broken = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(broken.statusCode()).as(broken.body()).isEqualTo(500);
+                assertThat(JSON.readTree(broken.body()).path("error").path("code").asText()).isEqualTo("INTERNAL");
+                assertThat(JSON.readTree(broken.body()).path("error").path("message").asText()).isEqualTo("internal error");
+                assertThat(broken.body()).doesNotContain("无法连接").doesNotContain(SyncException.TOKEN_REJECTED);
+                assertThat(syncData(http, server.port())).isEqualTo(previous);
+                assertThat(Files.readAllBytes(file)).isEqualTo(kept);
+
+                for (int status : List.of(401, 403)) {
+                    reef.manifestStatus(status);
+                    HttpResponse<String> rejected = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                    JsonNode body = JSON.readTree(rejected.body());
+                    assertThat(rejected.statusCode()).as(rejected.body()).isEqualTo(401);
+                    assertThat(body.path("success").asBoolean()).isFalse();
+                    assertThat(body.path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
+                    assertThat(body.path("error").path("message").asText()).isEqualTo(SyncException.TOKEN_REJECTED);
+                    assertThat(rejected.body()).doesNotContain("internal error");
+
+                    JsonNode recorded = syncData(http, server.port());
+                    assertThat(recorded.path("report").path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
+                    assertThat(recorded.path("report").path("error").path("message").asText())
+                            .isEqualTo(SyncException.TOKEN_REJECTED);
+                    assertThat(recorded.path("report").path("notModified").asBoolean()).isFalse();
+                    assertThat(recorded.path("report").path("conches").size()).isZero();
+                    assertThat(recorded.path("report").toString()).doesNotContain("legacy_oa");
+                    assertThat(recorded.path("latestCrab").isNull()).isTrue();
+                    assertThat(Files.readAllBytes(file)).isEqualTo(kept);
+
+                    HttpResponse<String> reefStatus = send(http, server.port(), "GET", "/console/api/reef", null);
+                    JsonNode connection = JSON.readTree(reefStatus.body()).path("data");
+                    assertThat(reefStatus.statusCode()).isEqualTo(200);
+                    assertThat(connection.path("configured").asBoolean()).isTrue();
+                    assertThat(connection.path("source").asText()).isEqualTo("BOOTSTRAP");
+                }
+
+                reef.manifestStatus(200);
+                HttpResponse<String> recovered = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(recovered.statusCode()).as(recovered.body()).isEqualTo(200);
+                assertThat(JSON.readTree(recovered.body()).path("data").path("notModified").asBoolean()).isTrue();
+                assertThat(syncData(http, server.port()).path("report").path("error").isNull()).isTrue();
+                assertThat(Files.readAllBytes(file)).isEqualTo(kept);
             }
         }
     }

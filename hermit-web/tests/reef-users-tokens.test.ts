@@ -14,6 +14,7 @@ const reef = vi.hoisted(() => ({
   crabs: vi.fn(),
   createToken: vi.fn(),
   revokeToken: vi.fn(),
+  voidConfigToken: vi.fn(),
   users: vi.fn(),
   updateUser: vi.fn(),
 }))
@@ -144,5 +145,93 @@ describe('用户管理', () => {
     expect(error).toHaveBeenCalledWith('至少要保留一个启用中的管理员')
     confirm.mockRestore()
     error.mockRestore()
+  })
+
+  it('禁用确认写明令牌会吊销、启用不恢复，配置令牌归属人点名配置令牌', async () => {
+    setRole('ADMIN')
+    session.user = 'bob'
+    reef.users.mockResolvedValue([
+      { username: 'root', role: 'ADMIN', disabled: false, createdAt: '2026-11-01T00:00:00Z', tokenCount: 2 },
+      { username: 'bob', role: 'ADMIN', disabled: false, createdAt: '2026-11-02T00:00:00Z', tokenCount: 0 },
+    ])
+    reef.tokens.mockResolvedValue([
+      { ...issued.token, id: null, owner: 'root', name: 'HERMIT_REEF_AGENT_TOKEN', prefix: null, source: 'CONFIG' },
+    ])
+    reef.updateUser.mockResolvedValue({})
+    const { ElMessageBox } = await import('element-plus')
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+
+    const wrapper = await mountPage(UsersView)
+    await flushPromises()
+    await wrapper.findAll('tr button').filter((b) => b.text() === '禁用')[0].trigger('click')
+    await flushPromises()
+
+    const message = String(confirm.mock.calls[0][0])
+    expect(message).not.toContain('之后可以重新启用')
+    expect(message).toContain('重新启用账号也不会恢复')
+    expect(message).toContain('HERMIT_REEF_AGENT_TOKEN')
+    expect(reef.tokens).toHaveBeenCalledWith(true)
+    expect(reef.updateUser).toHaveBeenCalledWith('root', { disabled: true })
+    confirm.mockRestore()
+  })
+
+  it('启用成功提示旧令牌不会回来', async () => {
+    setRole('ADMIN')
+    session.user = 'root'
+    reef.users.mockResolvedValue([
+      { username: 'root', role: 'ADMIN', disabled: false, createdAt: '2026-11-01T00:00:00Z', tokenCount: 0 },
+      { username: 'alice', role: 'USER', disabled: true, createdAt: '2026-11-02T00:00:00Z', tokenCount: 0 },
+    ])
+    reef.updateUser.mockResolvedValue({})
+    const success = vi.spyOn(ElMessage, 'success')
+    const wrapper = await mountPage(UsersView)
+    await flushPromises()
+    await wrapper.findAll('tr button').filter((b) => b.text() === '启用')[0].trigger('click')
+    await flushPromises()
+    expect(reef.updateUser).toHaveBeenCalledWith('alice', { disabled: false })
+    expect(String(success.mock.calls[0][0])).toContain('不会恢复')
+    success.mockRestore()
+  })
+})
+
+describe('配置令牌作废', () => {
+  it('ADMIN 可以作废配置令牌，确认后调用作废接口；普通令牌仍是吊销', async () => {
+    setRole('ADMIN')
+    reef.tokens.mockResolvedValue([
+      { ...issued.token, id: null, owner: 'root', name: 'HERMIT_REEF_AGENT_TOKEN', prefix: null, source: 'CONFIG' },
+      issued.token,
+    ])
+    reef.voidConfigToken.mockResolvedValue({})
+    const { ElMessageBox } = await import('element-plus')
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = await mountPage(TokensView)
+    await flushPromises()
+
+    expect(wrapper.findAll('button').filter((b) => b.text() === '吊销')).toHaveLength(1)
+    await wrapper.get('[data-test="void-config"]').trigger('click')
+    await flushPromises()
+    expect(String(confirm.mock.calls[0][0])).toContain('HERMIT_REEF_AGENT_TOKEN')
+    expect(reef.voidConfigToken).toHaveBeenCalledTimes(1)
+    expect(reef.revokeToken).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+
+  it('已作废的配置令牌显示已作废，没有按钮', async () => {
+    setRole('ADMIN')
+    reef.tokens.mockResolvedValue([
+      {
+        ...issued.token,
+        id: null,
+        owner: 'root',
+        name: 'HERMIT_REEF_AGENT_TOKEN',
+        prefix: null,
+        source: 'CONFIG',
+        revokedAt: '2026-11-05T02:00:00Z',
+      },
+    ])
+    const wrapper = await mountPage(TokensView)
+    await flushPromises()
+    expect(wrapper.text()).toContain('已作废')
+    expect(wrapper.find('[data-test="void-config"]').exists()).toBe(false)
   })
 })

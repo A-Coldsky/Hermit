@@ -85,7 +85,8 @@ class StorageTest {
                 "HERMIT_ALERTS",
                 "HERMIT_CONCH_AVAILABILITY",
                 "HERMIT_AGENT_TOKENS",
-                "HERMIT_CRAB_INSTANCES");
+                "HERMIT_CRAB_INSTANCES",
+                "HERMIT_VOIDED_CONFIG_TOKENS");
         Integer applied = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '1' AND \"success\" = TRUE",
                 Integer.class);
@@ -98,6 +99,10 @@ class StorageTest {
                 "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '6' AND \"success\" = TRUE",
                 Integer.class);
         assertThat(usersMigration).isEqualTo(1);
+        Integer voidedConfigMigration = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM \"hermit_flyway_schema_history\" WHERE \"version\" = '7' AND \"success\" = TRUE",
+                Integer.class);
+        assertThat(voidedConfigMigration).isEqualTo(1);
         assertThat(indexNames()).contains(
                 "idx_hermit_failure_reports_conch_version_occurred",
                 "idx_hermit_failure_reports_received_at",

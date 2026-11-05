@@ -29,7 +29,7 @@ public record SyncReport(
         error = error == null ? Optional.empty() : error;
     }
 
-    /** A completed attempt that could not reach Reef. Conch rows are empty so the previous success is not shown. */
+    /** A completed attempt that did not return a catalog. Conch rows are empty so the previous success is not shown. */
     public static SyncReport failed(SyncError error) {
         return new SyncReport(false, List.of(), List.of(), List.of(), Optional.empty(), Optional.of(error));
     }

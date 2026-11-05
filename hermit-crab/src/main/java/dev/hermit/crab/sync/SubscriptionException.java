@@ -8,10 +8,10 @@ import dev.hermit.common.error.ErrorCode;
  */
 public final class SubscriptionException extends RuntimeException {
     public static final String LOCAL_CONFLICT = "与本机本地规则包同名";
-    public static final String NOT_IN_CATALOG = "conch is not in the catalog";
-    public static final String NOT_SUBSCRIBED = "not subscribed";
-    public static final String NAME_INVALID = "conch name is invalid";
-    public static final String NOT_CONFIGURED = "sync is not configured";
+    public static final String NOT_IN_CATALOG = "Reef 上当前不能订阅这个规则包。";
+    public static final String NOT_SUBSCRIBED = "还没有订阅这个规则包。";
+    public static final String NAME_INVALID = "规则包名称无效。";
+    public static final String NOT_CONFIGURED = "尚未连接 Reef，无法同步。";
 
     private final int status;
     private final ErrorCode code;

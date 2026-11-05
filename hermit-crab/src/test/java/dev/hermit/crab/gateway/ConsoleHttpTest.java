@@ -6,6 +6,7 @@ import java.util.List;
 
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.store.Actors;
+import dev.hermit.crab.sync.SubscriptionException;
 import dev.hermit.crab.testing.SecretChecks;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -54,8 +55,12 @@ class ConsoleHttpTest {
             TestServer.Reply sync = server.console("POST", "/console/api/sync", "{}", true);
             assertThat(sync.status()).isEqualTo(409);
             assertThat(sync.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(sync.json().path("error").path("message").asText())
+                    .isEqualTo(SubscriptionException.NOT_CONFIGURED);
             TestServer.Reply syncStatus = server.console("GET", "/console/api/sync", null, true);
             assertThat(syncStatus.status()).isEqualTo(409);
+            assertThat(syncStatus.json().path("error").path("message").asText())
+                    .isEqualTo(SubscriptionException.NOT_CONFIGURED);
             TestServer.Reply preview = server.console("GET", "/console/api/reports/preview", null, true);
             assertThat(preview.status()).isEqualTo(409);
             assertThat(preview.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");

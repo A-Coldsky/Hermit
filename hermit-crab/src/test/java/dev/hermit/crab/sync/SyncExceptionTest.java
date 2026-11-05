@@ -6,6 +6,7 @@ import java.net.ConnectException;
 import java.net.UnknownHostException;
 import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpTimeoutException;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -46,6 +47,17 @@ class SyncExceptionTest {
     @Test
     void httpStatusFromReefIsNotAnUnreachableError() {
         assertThat(new SyncException(SyncReasons.http(500)).clientError()).isEmpty();
+        assertThat(new SyncException(SyncReasons.http(404)).clientError()).isEmpty();
         assertThat(new SyncException("manifest rejected").clientError()).isEmpty();
+    }
+
+    @Test
+    void manifestUnauthorizedIsAuthFailedAndNotUnreachable() {
+        for (int status : List.of(401, 403)) {
+            SyncError rejected = new SyncException(SyncReasons.http(status)).clientError().orElseThrow();
+            assertThat(rejected.code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            assertThat(rejected.message()).isEqualTo(SyncException.TOKEN_REJECTED);
+            assertThat(rejected.message()).doesNotContain("无法连接").doesNotContain("HTTP_");
+        }
     }
 }

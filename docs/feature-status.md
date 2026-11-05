@@ -167,3 +167,5 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 2026-11-05 Reef 上传与丢弃（前端）：上传页选好 YAML 后先停在本地，点「上传并校验」才上传，取消不发请求；待发布版本在上传页和版本表都有「丢弃」，确认后调用 `DELETE /api/admin/conches/{conch}/versions/{version}`；审计动作 `DISCARD` 显示为「丢弃」。规则包详情的「去发布」只对 ADMIN 显示，USER 看到「等管理员发布」。目录加载中不显示「共 0 个」。USER 打开管理员页面被送回概览时提示「没有权限执行这个操作」。Vitest 127（20 个文件）与 `vue-tsc` 通过。未在浏览器点选。
 
 2026-11-05 Reef 令牌页面（前端）：禁用用户的确认框写明名下令牌会被吊销、重新启用账号不会恢复，要重新生成并在 Crab 上重新导入；被禁用的是配置令牌归属人时点名 `HERMIT_REEF_AGENT_TOKEN` 会一起作废。启用成功提示旧令牌不会恢复。令牌页上 ADMIN 可以「作废」配置令牌（`POST /api/admin/tokens/config/revoke`），确认框说明要在 Reef 配置里换新值才能恢复；已作废的配置令牌显示「已作废」。Crab 实例同一实例号只有一行由后端保证。Vitest 与 `vue-tsc` 通过。未在浏览器点选。
+
+2026-11-05 Crab「连接 Reef」页（前端）：读取 `GET /console/api/sync`，最近一次同步的 `report.error.code` 为 `AUTH_FAILED` 时不再显示「已连接 Reef」，改为红色状态，主文案用接口 message（「令牌已失效，请重新导入引导文件。」），并提示在 Reef「我的令牌」重新生成后在本页重新导入；连接详情照常列出。其他同步错误仍显示已连接。重新导入成功后清掉这条状态。Vitest 与 `vue-tsc` 通过。未在浏览器点选。

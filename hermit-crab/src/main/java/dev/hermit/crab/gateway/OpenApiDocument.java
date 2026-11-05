@@ -101,19 +101,34 @@ public final class OpenApiDocument {
 
     private static List<Map<String, Object>> parameters(Action action, HttpMethod method) {
         ArrayList<Map<String, Object>> parameters = new ArrayList<>();
-        parameters.add(parameter("X-Hermit-Account", "header", false, Map.of("type", "string")));
+        parameters.add(parameter("X-Hermit-Account", "header", false, Map.of(
+                "type", "string",
+                "description", "可选。选择该规则包的命名账号，省略时使用默认账号。")));
+        String selector = CrabHttpServer.accountQueryName(action, method);
+        Map<String, Object> properties = method == HttpMethod.GET
+                ? map(action.inputJsonSchema().get("properties"))
+                : Map.of();
+        if (!properties.containsKey(selector)) {
+            parameters.add(accountQuery(selector));
+        }
         if (method == HttpMethod.POST) {
             parameters.add(parameter("Idempotency-Key", "header", false, Map.of("type", "string", "maxLength", 128)));
         }
         if (method == HttpMethod.GET) {
-            Map<String, Object> schema = action.inputJsonSchema();
-            Map<String, Object> properties = map(schema.get("properties"));
-            Set<String> required = stringSet(schema.get("required"));
+            Set<String> required = stringSet(action.inputJsonSchema().get("required"));
             for (Map.Entry<String, Object> property : properties.entrySet()) {
                 parameters.add(parameter(property.getKey(), "query", required.contains(property.getKey()), property.getValue()));
             }
         }
         return List.copyOf(parameters);
+    }
+
+    private static Map<String, Object> accountQuery(String name) {
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "string");
+        schema.put("description", "可选。选择该规则包的命名账号。省略时使用默认账号。与请求头 X-Hermit-Account 相同则使用该账号，不同则拒绝。");
+        schema.put("pattern", "^[A-Za-z0-9_-]{1,64}$");
+        return parameter(name, "query", false, schema);
     }
 
     private static Map<String, Object> parameter(String name, String in, boolean required, Object schema) {

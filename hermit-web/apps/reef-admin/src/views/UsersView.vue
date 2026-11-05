@@ -85,18 +85,32 @@ async function changeRole(user: AdminUser, role: AdminRole) {
 }
 
 async function toggleDisabled(user: AdminUser) {
-  if (!user.disabled) {
-    try {
-      await ElMessageBox.confirm(
-        `禁用后 ${user.username} 不能登录，名下 ${user.tokenCount} 把令牌立即失效，使用这些令牌的 Crab 会停止同步和上报。之后可以重新启用。`,
-        `禁用 ${user.username}`,
-        { confirmButtonText: '禁用', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
-      )
-    } catch {
-      return
-    }
+  if (user.disabled) {
+    await update(user, { disabled: false }, `已启用 ${user.username}。禁用时吊销的令牌不会恢复，需要重新生成`)
+    return
   }
-  await update(user, { disabled: !user.disabled }, user.disabled ? `已启用 ${user.username}` : `已禁用 ${user.username}`)
+  const ownsConfig = await ownsConfigToken(user.username)
+  const config = ownsConfig
+    ? '配置令牌 HERMIT_REEF_AGENT_TOKEN 也归他，会一起作废，只有在 Reef 配置里换一串新值才能恢复。'
+    : ''
+  try {
+    await ElMessageBox.confirm(
+      `禁用后 ${user.username} 不能登录，名下 ${user.tokenCount} 把令牌会被吊销，使用这些令牌的 Crab 会停止同步和上报。${config}重新启用账号也不会恢复这些令牌，需要重新生成并在 Crab 上重新导入。`,
+      `禁用 ${user.username}`,
+      { confirmButtonText: '禁用并吊销令牌', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
+    )
+  } catch {
+    return
+  }
+  await update(user, { disabled: true }, `已禁用 ${user.username}，名下令牌已吊销`)
+}
+
+async function ownsConfigToken(username: string): Promise<boolean> {
+  try {
+    return (await api.tokens(true)).some((t) => t.source === 'CONFIG' && t.owner === username && !t.revokedAt)
+  } catch {
+    return false
+  }
 }
 
 async function update(user: AdminUser, body: { role?: AdminRole; disabled?: boolean }, success: string) {

@@ -5,6 +5,7 @@ public enum AuditAction {
     LOGIN_FAILURE,
     UPLOAD,
     PUBLISH,
+    DISCARD,
     DISABLE,
     ENABLE,
     RETENTION_PURGE,

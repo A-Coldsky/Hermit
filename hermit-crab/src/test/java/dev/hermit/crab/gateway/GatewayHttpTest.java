@@ -18,6 +18,8 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.store.Actors;
@@ -156,6 +158,7 @@ class GatewayHttpTest {
                     "GET", "/api/legacy_oa/list_todo", server.apiKey.plaintext(), "nobody", null, null);
             assertThat(unknown.status()).isEqualTo(404);
             assertThat(unknown.json().path("error").path("code").asText()).isEqualTo("ACCOUNT_NOT_FOUND");
+            assertThat(unknown.json().path("error").path("message").asText()).isEqualTo("没有这个账号。");
 
             TestServer.Reply noKey = server.call("GET", "/api/legacy_oa/list_todo", null, null, null, null);
             assertThat(noKey.status()).isEqualTo(401);
@@ -239,6 +242,205 @@ class GatewayHttpTest {
             Logger.getLogger("").removeHandler(logs);
         }
         assertDatabaseHides(temp, PASSWORD, apiKeyPlaintext);
+    }
+
+    @Test
+    void accountQueryParameterSelectsTheAccountAndDoesNotEnterInput() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("account-query"), PASSWORD, config)) {
+            server.configureAccount("alice");
+            server.configureAccount("bob");
+            String key = server.apiKey.plaintext();
+
+            TestServer.Reply bob = server.call(
+                    "GET", "/api/legacy_oa/list_todo?account=bob", key, null, null, null);
+            assertThat(bob.status()).isEqualTo(200);
+            assertThat(bob.json().path("success").asBoolean()).isTrue();
+            assertThat(bob.json().path("error").path("message").asText()).doesNotContain("输入无效");
+            assertThat(callAccount(server, "legacy_oa", "list_todo")).isEqualTo("bob");
+            assertThat(callOrigin(server, "legacy_oa", "list_todo")).isEqualTo("OFFICIAL");
+            assertThat(cookieOwner(server.fixture, "/todo/list.aspx", "bob")).isTrue();
+            assertThat(cookieOwner(server.fixture, "/todo/list.aspx", "alice")).isFalse();
+
+            TestServer.Reply paged = server.call(
+                    "GET", "/api/legacy_oa/list_todo?page=1&account=bob", key, null, null, null);
+            assertThat(paged.status()).isEqualTo(200);
+            assertThat(callAccount(server, "legacy_oa", "list_todo")).isEqualTo("bob");
+
+            TestServer.Reply headerOnly = server.call(
+                    "GET", "/api/legacy_oa/list_todo?page=1", key, "alice", null, null);
+            assertThat(headerOnly.status()).isEqualTo(200);
+            assertThat(callAccount(server, "legacy_oa", "list_todo")).isEqualTo("alice");
+            assertThat(cookieOwner(server.fixture, "/todo/list.aspx", "alice")).isTrue();
+
+            int lists = server.fixture.count("GET", "/todo/list.aspx");
+            TestServer.Reply unknown = server.call(
+                    "GET", "/api/legacy_oa/list_todo?account=nobody", key, null, null, null);
+            assertThat(unknown.status()).isEqualTo(404);
+            assertThat(unknown.json().path("error").path("code").asText()).isEqualTo("ACCOUNT_NOT_FOUND");
+            assertThat(unknown.json().path("error").path("message").asText()).isEqualTo("没有这个账号。");
+            assertThat(unknown.json().path("error").path("message").asText()).doesNotContain("输入无效");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists);
+
+            TestServer.Reply conflict = server.call(
+                    "GET", "/api/legacy_oa/list_todo?page=1&account=bob", key, "alice", null, null);
+            assertThat(conflict.status()).isEqualTo(400);
+            assertThat(conflict.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(conflict.json().path("error").path("message").asText())
+                    .isEqualTo("请求头 X-Hermit-Account 与查询参数 account 不一致。");
+            assertThat(conflict.json().path("data").isNull()).isTrue();
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists);
+
+            TestServer.Reply agreed = server.call(
+                    "GET", "/api/legacy_oa/list_todo?account=bob", key, "bob", null, null);
+            assertThat(agreed.status()).isEqualTo(200);
+            assertThat(callAccount(server, "legacy_oa", "list_todo")).isEqualTo("bob");
+
+            TestServer.Reply blankQuery = server.call(
+                    "GET", "/api/legacy_oa/list_todo?page=1&account=", key, "bob", null, null);
+            assertThat(blankQuery.status()).isEqualTo(200);
+            assertThat(callAccount(server, "legacy_oa", "list_todo")).isEqualTo("bob");
+
+            TestServer.Reply defaultAccount = server.call(
+                    "GET", "/api/legacy_oa/list_todo?page=1&account=", key, null, null, null);
+            assertThat(defaultAccount.status()).isEqualTo(200);
+            assertThat(callAccount(server, "legacy_oa", "list_todo")).isEqualTo("alice");
+
+            lists = server.fixture.count("GET", "/todo/list.aspx");
+            TestServer.Reply posted = server.call(
+                    "POST", "/api/legacy_oa/save_note?account=bob", key, null, null, "{\"text\":\"hello\"}");
+            assertThat(posted.status()).isEqualTo(200);
+            assertThat(posted.json().path("data").path("saved").asBoolean()).isTrue();
+            assertThat(callAccount(server, "legacy_oa", "save_note")).isEqualTo("bob");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists + 1);
+
+            lists = server.fixture.count("GET", "/todo/list.aspx");
+            TestServer.Reply postConflict = server.call(
+                    "POST", "/api/legacy_oa/save_note?account=bob", key, "alice", null, "{\"text\":\"hello\"}");
+            assertThat(postConflict.status()).isEqualTo(400);
+            assertThat(postConflict.json().path("error").path("message").asText())
+                    .isEqualTo("请求头 X-Hermit-Account 与查询参数 account 不一致。");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists);
+
+            server.runtime.disabledConches().mark("other", "1.0.0", Instant.parse("2026-10-30T00:00:00Z"));
+            var limited = server.runtime.admin().createApiKey(
+                    "narrow", new ApiKeyScope(Set.of("other"), Set.of(), false), Actors.CLI);
+            lists = server.fixture.count("GET", "/todo/list.aspx");
+            TestServer.Reply forbidden = server.call(
+                    "GET", "/api/legacy_oa/list_todo?account=bob", limited.plaintext(), null, null, null);
+            assertThat(forbidden.status()).isEqualTo(403);
+            assertThat(forbidden.json().path("error").path("code").asText()).isEqualTo("FORBIDDEN");
+            TestServer.Reply forbiddenConflict = server.call(
+                    "GET", "/api/legacy_oa/list_todo?account=bob", limited.plaintext(), "alice", null, null);
+            assertThat(forbiddenConflict.status()).isEqualTo(403);
+            assertThat(forbiddenConflict.json().path("error").path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists);
+
+            TestServer.Reply openapi = server.call("GET", "/openapi.json", null, null, null, null);
+            JsonNode listTodo = openapi.json().path("paths").path("/api/legacy_oa/list_todo").path("get");
+            JsonNode account = queryParameter(listTodo, "account");
+            assertThat(account.path("required").asBoolean()).isFalse();
+            assertThat(account.path("schema").path("description").asText()).contains("命名账号");
+            assertThat(headerParameter(listTodo, "X-Hermit-Account")).isNotNull();
+            JsonNode save = openapi.json().path("paths").path("/api/legacy_oa/save_note").path("post");
+            assertThat(queryParameter(save, "account").path("in").asText()).isEqualTo("query");
+
+            server.runtime.registry().put(ConchParser.parse("""
+                    conch: account_conch
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    base_url: "http://127.0.0.1:9"
+                    title: 账号字段
+                    description: 能力入参占用 account。
+                    credentials: {}
+                    actions:
+                      lookup:
+                        title: 按业务账号查询
+                        description: 查询一个业务账号。
+                        input:
+                          account: { type: string, required: true, description: 业务账号 }
+                        steps:
+                          - set:
+                              seen: "{{input.account}}"
+                        output:
+                          seen: { type: string, description: 回显的业务账号 }
+                        examples:
+                          - input: { account: biz }
+                            output: { seen: biz }
+                        notes: 选择 Hermit 账号时用 _account
+                        idempotent: true
+                        mcp: { read_only: true }
+                      echo:
+                        title: 回显正文
+                        description: 正文里的 account 是业务字段。
+                        method: POST
+                        input:
+                          account: { type: string, required: true, description: 业务账号 }
+                        steps:
+                          - set:
+                              seen: "{{input.account}}"
+                        output:
+                          seen: { type: string, description: 回显的业务账号 }
+                        examples:
+                          - input: { account: biz }
+                            output: { seen: biz }
+                        notes: 查询参数选择 Hermit 账号。
+                        mcp: { read_only: false }
+                    """));
+            server.runtime.admin().createAccount("account_conch", "alice", Actors.CLI);
+            server.runtime.admin().createAccount("account_conch", "bob", Actors.CLI);
+
+            TestServer.Reply looked = server.call(
+                    "GET", "/api/account_conch/lookup?account=biz&_account=bob", key, null, null, null);
+            assertThat(looked.status()).isEqualTo(200);
+            assertThat(looked.json().path("data").path("seen").asText()).isEqualTo("biz");
+            assertThat(callAccount(server, "account_conch", "lookup")).isEqualTo("bob");
+
+            TestServer.Reply lookedDefault = server.call(
+                    "GET", "/api/account_conch/lookup?account=biz", key, null, null, null);
+            assertThat(lookedDefault.status()).isEqualTo(200);
+            assertThat(lookedDefault.json().path("data").path("seen").asText()).isEqualTo("biz");
+            assertThat(callAccount(server, "account_conch", "lookup")).isEqualTo("alice");
+
+            int lookups = server.runtime.callLogs().list("account_conch", "lookup", 20).size();
+            TestServer.Reply lookupConflict = server.call(
+                    "GET", "/api/account_conch/lookup?account=biz&_account=bob", key, "alice", null, null);
+            assertThat(lookupConflict.status()).isEqualTo(400);
+            assertThat(lookupConflict.json().path("error").path("message").asText())
+                    .isEqualTo("请求头 X-Hermit-Account 与查询参数 _account 不一致。");
+            assertThat(server.runtime.callLogs().list("account_conch", "lookup", 20)).hasSize(lookups);
+
+            TestServer.Reply echoed = server.call(
+                    "POST", "/api/account_conch/echo?account=bob", key, null, null, "{\"account\":\"biz\"}");
+            assertThat(echoed.status()).isEqualTo(200);
+            assertThat(echoed.json().path("data").path("seen").asText()).isEqualTo("biz");
+            assertThat(callAccount(server, "account_conch", "echo")).isEqualTo("bob");
+
+            TestServer.Reply documented = server.call("GET", "/openapi.json", null, null, null, null);
+            JsonNode lookup = documented.json().path("paths").path("/api/account_conch/lookup").path("get");
+            assertThat(queryParameter(lookup, "account").path("required").asBoolean()).isTrue();
+            assertThat(queryParameter(lookup, "_account").path("required").asBoolean()).isFalse();
+            assertThat(queryParameter(lookup, "_account").path("schema").path("description").asText()).contains("命名账号");
+            JsonNode echo = documented.json().path("paths").path("/api/account_conch/echo").path("post");
+            assertThat(queryParameter(echo, "account").path("required").asBoolean()).isFalse();
+            assertThat(echo.path("requestBody").path("content").path("application/json")
+                    .path("schema").path("properties").has("account")).isTrue();
+
+            server.runtime.setCapabilityDisabled("legacy_oa", "list_todo", true, Actors.CLI);
+            lists = server.fixture.count("GET", "/todo/list.aspx");
+            TestServer.Reply disabled = server.call(
+                    "GET", "/api/legacy_oa/list_todo?account=bob", key, null, null, null);
+            assertThat(disabled.status()).isEqualTo(404);
+            assertThat(disabled.json().path("error").path("code").asText()).isEqualTo("CAPABILITY_DISABLED");
+            assertThat(disabled.json().path("error").path("message").asText())
+                    .isEqualTo(dev.hermit.crab.runtime.Invoker.CAPABILITY_DISABLED_MESSAGE);
+            TestServer.Reply disabledConflict = server.call(
+                    "GET", "/api/legacy_oa/list_todo?account=bob", key, "alice", null, null);
+            assertThat(disabledConflict.status()).isEqualTo(404);
+            assertThat(disabledConflict.json().path("error").path("code").asText()).isEqualTo("CAPABILITY_DISABLED");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(lists);
+        }
     }
 
     @Test
@@ -336,6 +538,35 @@ class GatewayHttpTest {
         java.net.http.HttpResponse<String> response = server.http.send(
                 request, java.net.http.HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         return new TestServer.Reply(response.statusCode(), response.body(), response.headers().map());
+    }
+
+    private static String callAccount(TestServer server, String conch, String action) {
+        return server.runtime.callLogs().list(conch, action, 5).get(0).account();
+    }
+
+    private static String callOrigin(TestServer server, String conch, String action) {
+        return server.runtime.callLogs().list(conch, action, 5).get(0).origin();
+    }
+
+    private static JsonNode queryParameter(JsonNode operation, String name) {
+        return parameter(operation, name, "query");
+    }
+
+    private static JsonNode headerParameter(JsonNode operation, String name) {
+        return parameter(operation, name, "header");
+    }
+
+    private static JsonNode parameter(JsonNode operation, String name, String location) {
+        JsonNode found = null;
+        int seen = 0;
+        for (JsonNode parameter : operation.path("parameters")) {
+            if (name.equals(parameter.path("name").asText()) && location.equals(parameter.path("in").asText())) {
+                found = parameter;
+                seen++;
+            }
+        }
+        assertThat(seen).as(name + " in " + location).isEqualTo(1);
+        return found;
     }
 
     private static boolean cookieOwner(LegacyOaFixture fixture, String path, String owner) {

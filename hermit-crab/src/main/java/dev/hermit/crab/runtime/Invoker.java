@@ -45,6 +45,13 @@ public final class Invoker {
     public static final String IDEMPOTENCY_CONFLICT = "Idempotency-Key was already used with a different request body";
     /** A loaded capability turned off locally. Distinct from a missing action ({@code NOT_FOUND}). */
     public static final String CAPABILITY_DISABLED_MESSAGE = "该能力已在本机停用，调用前需要重新启用。";
+    /** Named account is missing. HTTP and MCP share this sentence. */
+    public static final String ACCOUNT_NOT_FOUND_MESSAGE = "没有这个账号。";
+    /**
+     * Selector is not {@code [A-Za-z0-9_-]{1,64}}. The HTTP gateway uses this exact sentence to
+     * tell a header/query conflict from an earlier permission or capability rejection.
+     */
+    public static final String INVALID_ACCOUNT_NAME = "invalid account name";
     /** Power of two. Distinct keys share a stripe; stripes are not removed after a request. */
     static final int IDEMPOTENCY_STRIPES = 64;
 
@@ -180,9 +187,9 @@ public final class Invoker {
             if (ex.account() == null && accounts.list(origin, conch).isEmpty()) {
                 return done(traceId, ErrorCode.NOT_CONFIGURED, "no account configured", null);
             }
-            return done(traceId, ErrorCode.ACCOUNT_NOT_FOUND, "account not found", null);
+            return done(traceId, ErrorCode.ACCOUNT_NOT_FOUND, ACCOUNT_NOT_FOUND_MESSAGE, null);
         } catch (IllegalArgumentException ex) {
-            return done(traceId, ErrorCode.INVALID_INPUT, "invalid account name", null);
+            return done(traceId, ErrorCode.INVALID_INPUT, INVALID_ACCOUNT_NAME, null);
         }
         Map<String, String> stored = config.all(origin, conch);
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);

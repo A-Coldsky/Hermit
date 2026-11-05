@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.Map;
 
+import dev.hermit.crab.testing.SecretChecks;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -79,11 +80,51 @@ class CrabEntrypointTest {
         assertThat(bad.err).contains("server.port");
     }
 
+    @Test
+    void consolePasswordStaysInTheEnvironmentAndOutOfConfig() throws Exception {
+        String password = "console-entry-secret";
+        String runuser = """
+                #!/bin/sh
+                printf '%s' "$HERMIT_CONSOLE_PASSWORD" > "$HERMIT_HOME/passed-password"
+                exit 0
+                """;
+        Result result = run(Map.of("HERMIT_CONSOLE_PASSWORD", password), runuser);
+        assertThat(result.status).as(result.err).isZero();
+        SecretChecks.absent(result.out, password);
+        SecretChecks.absent(result.err, password);
+        SecretChecks.absent(Files.readString(temp.resolve("home/config.yml")), password);
+        String passed = Files.readString(temp.resolve("home/passed-password"));
+        if (!password.equals(passed)) {
+            throw new AssertionError("entrypoint did not leave the console password in the process environment");
+        }
+    }
+
+    @Test
+    void blankConsolePasswordIsUnset() throws Exception {
+        String runuser = """
+                #!/bin/sh
+                if [ "${HERMIT_CONSOLE_PASSWORD+x}" = x ]; then
+                  printf set > "$HERMIT_HOME/passed-password"
+                else
+                  printf unset > "$HERMIT_HOME/passed-password"
+                fi
+                exit 0
+                """;
+        Result result = run(Map.of("HERMIT_CONSOLE_PASSWORD", "   "), runuser);
+        assertThat(result.status).as(result.err).isZero();
+        assertThat(Files.readString(temp.resolve("home/passed-password"))).isEqualTo("unset");
+        assertThat(Files.readString(temp.resolve("home/config.yml"))).doesNotContain("HERMIT_CONSOLE_PASSWORD");
+    }
+
     private Result run(Map<String, String> extra) throws Exception {
+        return run(extra, "#!/bin/sh\nexit 0\n");
+    }
+
+    private Result run(Map<String, String> extra, String runuser) throws Exception {
         Path bin = temp.resolve("bin");
         Files.createDirectories(bin);
         Files.writeString(bin.resolve("chown"), "#!/bin/sh\nexit 0\n");
-        Files.writeString(bin.resolve("runuser"), "#!/bin/sh\nexit 0\n");
+        Files.writeString(bin.resolve("runuser"), runuser);
         Files.setPosixFilePermissions(bin.resolve("chown"), SetExec.EXEC);
         Files.setPosixFilePermissions(bin.resolve("runuser"), SetExec.EXEC);
         Path script = Path.of("../deploy/crab-entrypoint.sh");

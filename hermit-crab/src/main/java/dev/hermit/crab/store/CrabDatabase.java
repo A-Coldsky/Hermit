@@ -53,6 +53,10 @@ import dev.hermit.common.validate.ConchValidator;
  * Version 13 adds {@code report_settings}, a single row that overrides {@code report.enabled}
  * and {@code report.interval_seconds} from config.yml. It runs when its own row is missing
  * and does not rewrite earlier tables. An empty table means the YAML values still apply.
+ * Version 14 adds {@code console_password} (one row: salt, hash, iterations, updated_at)
+ * and {@code console_login_failures} (failed_at only). It runs when its own row is missing
+ * and does not rewrite versions 1–13. The console password is not stored in config.yml.
+ * Later versions must not edit {@link #applyV14}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Before the first official release these statements may be edited in
@@ -164,6 +168,12 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 13)) {
                 applyV13(connection);
                 insertVersion(connection, 13);
+            }
+            // Version 15 may already be recorded. Do not gate version 14 on MAX(version),
+            // and do not rewrite this CREATE TABLE from a later migration.
+            if (!applied(connection, 14)) {
+                applyV14(connection);
+                insertVersion(connection, 14);
             }
             return null;
         });
@@ -583,6 +593,23 @@ public final class CrabDatabase implements AutoCloseable {
                     enabled BOOLEAN NOT NULL,
                     interval_seconds INT NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+                )
+                """);
+    }
+
+    private static void applyV14(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS console_password (
+                    id INT PRIMARY KEY,
+                    salt BLOB NOT NULL,
+                    hash BLOB NOT NULL,
+                    iterations INT NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+                )
+                """);
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS console_login_failures (
+                    failed_at TIMESTAMP WITH TIME ZONE NOT NULL
                 )
                 """);
     }

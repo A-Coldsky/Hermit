@@ -135,11 +135,56 @@ class RuntimeStoreTest {
         try (StoreFixture fixture = StoreFixture.open(temp.resolve("debug"))) {
             MutableClock clock = new MutableClock(Instant.parse("2026-10-12T00:00:00Z"));
             DebugStateStore debug = new DebugStateStore(fixture.dataSource, clock);
+            assertThatThrownBy(() -> debug.setEnabled(true, Actors.RETENTION))
+                    .isInstanceOf(IllegalArgumentException.class);
             assertThat(debug.setEnabled(true, "console").enabled()).isTrue();
+            clock.advance(Duration.ofHours(23));
+            debug.expire();
+            assertThat(debug.get().enabled()).isTrue();
+            assertThat(retentionAudits(fixture)).isEmpty();
+
+            clock.advance(Duration.ofHours(1));
+            debug.expire();
+            assertThat(debug.get().enabled()).isFalse();
+            assertThat(debug.get().expiresAt()).isNull();
+            assertThat(retentionAudits(fixture)).containsExactly(Actors.RETENTION);
+            String page = dev.hermit.crab.runtime.ApiJson.write(AuditLog.page(fixture.dataSource, null, null, 1, 20));
+            assertThat(page).doesNotContain("enabled");
+
+            debug.expire();
+            assertThat(retentionAudits(fixture)).containsExactly(Actors.RETENTION);
+            try (var connection = fixture.dataSource.getConnection();
+                 var statement = connection.prepareStatement(
+                         "SELECT detail FROM config_audit WHERE actor = ?")) {
+                statement.setString(1, Actors.RETENTION);
+                try (var resultSet = statement.executeQuery()) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getString(1)).isEqualTo("{\"enabled\":false}");
+                    assertThat(resultSet.next()).isFalse();
+                }
+            }
+        }
+    }
+
+    @Test
+    void debugGetExpiresAndAuditsWithRetention() {
+        try (StoreFixture fixture = StoreFixture.open(temp.resolve("debug-get"))) {
+            MutableClock clock = new MutableClock(Instant.parse("2026-10-12T00:00:00Z"));
+            DebugStateStore debug = new DebugStateStore(fixture.dataSource, clock);
+            debug.setEnabled(true, Actors.CONSOLE);
             clock.advance(Duration.ofHours(24));
             assertThat(debug.get().enabled()).isFalse();
             assertThat(debug.get().expiresAt()).isNull();
+            assertThat(retentionAudits(fixture)).containsExactly(Actors.RETENTION);
         }
+    }
+
+    private static List<String> retentionAudits(StoreFixture fixture) {
+        return AuditLog.page(fixture.dataSource, null, null, 1, 20).entries().stream()
+                .filter(entry -> "DEBUG_CHANGED".equals(entry.action()))
+                .map(AuditLog.Entry::actor)
+                .filter(Actors.RETENTION::equals)
+                .toList();
     }
 
     private static CallLogStore.NewCall call(String traceId, String conch, String action) {

@@ -4,6 +4,7 @@ import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.cookie.BasicCookieStore;
@@ -54,6 +55,20 @@ final class StepRunner {
             URI base,
             long deadlineNanos
     ) {
+        return run(step, vars, expectPrefix, client, afterExchange, cookies, base, deadlineNanos, false);
+    }
+
+    Outcome run(
+            Step step,
+            Map<String, Object> vars,
+            String expectPrefix,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            BasicCookieStore cookies,
+            URI base,
+            long deadlineNanos,
+            boolean capture
+    ) {
         Object rendered = "script".equals(step.type())
                 ? renderScript(step.def(), vars)
                 : templates.render(step.def(), vars);
@@ -62,11 +77,11 @@ final class StepRunner {
             throw new RuleProblem(ErrorCode.RULE_MISMATCH, "步骤定义无效", null, null, null);
         }
         return switch (step.type()) {
-            case "request" -> request(spec, vars, expectPrefix, client, afterExchange, base, deadlineNanos);
-            case "extract" -> extract(spec, vars);
-            case "assert" -> check(spec, vars, cookies);
-            case "set" -> set(spec, vars);
-            case "script" -> scripts.run(spec, vars, deadlineNanos);
+            case "request" -> request(spec, vars, expectPrefix, client, afterExchange, base, deadlineNanos, capture);
+            case "extract" -> extract(spec, vars, capture);
+            case "assert" -> check(spec, vars, cookies, capture);
+            case "set" -> set(spec, vars, capture);
+            case "script" -> script(spec, vars, deadlineNanos, capture);
             default -> throw new RuleProblem(
                     ErrorCode.RULE_MISMATCH, "不支持的步骤类型 " + step.type(), null, null, null);
         };
@@ -92,29 +107,84 @@ final class StepRunner {
             CloseableHttpClient client,
             Runnable afterExchange,
             URI base,
-            long deadlineNanos
+            long deadlineNanos,
+            boolean capture
     ) {
-        HttpResult result = HttpCalls.execute(spec, client, afterExchange, base, expectPrefix, deadlineNanos);
+        HttpResult result;
+        try {
+            result = HttpCalls.execute(spec, client, afterExchange, base, expectPrefix, deadlineNanos);
+        } catch (RuleProblem ex) {
+            if (capture) {
+                DevTraceScope.stash(DevTraceDraft.requestPiece(
+                        spec, ex.method, ex.path, ex.status, null, null));
+            }
+            throw ex;
+        }
         vars.put("response", result.view());
-        return new Outcome(result.method(), result.path(), result.status(), null, result.sessionLost());
+        if (!capture) {
+            return new Outcome(result.method(), result.path(), result.status(), null, result.sessionLost());
+        }
+        return new Outcome(
+                result.method(),
+                result.path(),
+                result.status(),
+                null,
+                result.sessionLost(),
+                DevTraceDraft.requestPiece(
+                        spec, result.method(), result.path(), result.status(), result.headers(), result.body()));
     }
 
-    private Outcome extract(Map<String, Object> spec, Map<String, Object> vars) {
+    private Outcome extract(Map<String, Object> spec, Map<String, Object> vars, boolean capture) {
+        Map<String, Object> before = capture ? new LinkedHashMap<>(vars) : null;
         int count = Extractors.apply(spec, vars, filters, templates);
-        return new Outcome(null, null, null, count, false);
+        if (!capture) {
+            return new Outcome(null, null, null, count, false);
+        }
+        return new Outcome(null, null, null, count, false,
+                DevTraceDraft.extractPiece(spec, count, changed(before, vars)));
     }
 
-    private Outcome set(Map<String, Object> spec, Map<String, Object> vars) {
+    private Outcome set(Map<String, Object> spec, Map<String, Object> vars, boolean capture) {
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
             if (ConchRegistry.RESERVED.contains(entry.getKey())) {
                 throw new RuleProblem(ErrorCode.RULE_MISMATCH, "不能写入保留变量", null, null, null);
             }
             vars.put(entry.getKey(), entry.getValue());
         }
-        return new Outcome(null, null, null, null, false);
+        if (!capture) {
+            return new Outcome(null, null, null, null, false);
+        }
+        return new Outcome(null, null, null, null, false, DevTraceDraft.variablePiece("set", spec));
     }
 
-    private Outcome check(Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies) {
+    private Outcome script(Map<String, Object> spec, Map<String, Object> vars, long deadlineNanos, boolean capture) {
+        Map<String, Object> before = capture ? new LinkedHashMap<>(vars) : null;
+        Outcome outcome = scripts.run(spec, vars, deadlineNanos);
+        if (!capture) {
+            return outcome;
+        }
+        return new Outcome(outcome.method(), outcome.path(), outcome.status(), outcome.extractCount(),
+                outcome.sessionLost(), DevTraceDraft.variablePiece("script", changed(before, vars)));
+    }
+
+    private static Map<String, Object> changed(Map<String, Object> before, Map<String, Object> after) {
+        LinkedHashMap<String, Object> changed = new LinkedHashMap<>();
+        if (after == null) {
+            return changed;
+        }
+        for (Map.Entry<String, Object> entry : after.entrySet()) {
+            if (ConchRegistry.RESERVED.contains(entry.getKey())) {
+                continue;
+            }
+            if (before == null || !before.containsKey(entry.getKey())
+                    || !Objects.equals(before.get(entry.getKey()), entry.getValue())) {
+                changed.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return changed;
+    }
+
+    private Outcome check(Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies, boolean capture) {
         Object response = vars.get("response");
         Map<String, Object> map = Values.map(response);
         if (map == null || !map.containsKey("status")) {
@@ -151,7 +221,10 @@ final class StepRunner {
                 default -> fail("未知的 assert 键");
             }
         }
-        return new Outcome(null, null, null, null, false);
+        if (!capture) {
+            return new Outcome(null, null, null, null, false);
+        }
+        return new Outcome(null, null, null, null, false, DevTraceDraft.assertPiece(spec, true));
     }
 
     private static void checkStatus(Object expected, int actual) {
@@ -234,5 +307,15 @@ final class StepRunner {
     }
 }
 
-record Outcome(String method, String path, Integer status, Integer extractCount, boolean sessionLost) {
+record Outcome(
+        String method,
+        String path,
+        Integer status,
+        Integer extractCount,
+        boolean sessionLost,
+        Map<String, Object> capture
+) {
+    Outcome(String method, String path, Integer status, Integer extractCount, boolean sessionLost) {
+        this(method, path, status, extractCount, sessionLost, null);
+    }
 }

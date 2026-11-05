@@ -154,7 +154,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | POST | `/capabilities/{conch}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
 | GET / POST | `/apikeys` | 列表 / 创建。创建体 `{name, readOnly, all, conches, actions}`。`name` 必填。`readOnly` 与 `all` 缺省为 false，必须是布尔。`conches`、`actions` 缺省或 `[]` 都是空集合。只接受这五个字段。嵌套 `scope` 或其他未知字段是 400 `INVALID_INPUT`，message 为 `unknown field: …`。`all` 不是 true 且两个集合都空：400，message 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`。`all: true` 再带非空 `conches` 或 `actions`：400，message 为 `all 为 true 时不能同时填写 conches 或 actions`。`all: true` 保存空集合，表示全部正式包的全部能力，不含本地包；`readOnly: true` 仍只放行只读能力。只写 `conches` 或只写 `actions` 时 `scope.all` 为 false。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载（含本地包）或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建。新 Key 仅返回一次 plaintext。响应与列表的 `scope` 都是 `{all, conches, actions, readOnly}`。`all` 为 true 表示两个集合都空（全部正式包）。早于该字段、两个集合都空的旧行仍可调用，读出来的 `all` 也是 true，不迁移 |
 | DELETE | `/apikeys/{id}` | 撤销 |
-| GET | `/calls`、`/calls/{traceId}` | `conch`、`action`、`channel`、`limit` 查询及步骤摘要。每行含 `source`（`LOCAL` 或 `REEF`，规则包来源）和 `channel`（`HTTP` 对外 OpenAPI、`MCP`、`CONSOLE`）。`channel` 省略或空白表示不筛选；其他值 400 `INVALID_INPUT`，message 为 `channel is invalid`，不回显参数值。当前只有 HTTP 与 MCP 会写入；控制台没有执行能力的路径，测试登录不写调用记录，所以没有 `CONSOLE` 行，但筛选 `CONSOLE` 仍是空列表而不是 400。schema 11 给旧行默认 `HTTP`。`limit` 省略时 100，最大 500；小于 1、不是整数或大于 500 为 400 `INVALID_INPUT`，message 为「每页条数超出范围。」。控制台调用记录页显式传 100，概览显式传 200。CLI 没有调用记录列表命令。`action` 可以是库存的能力名，或 `conch.action`（按第一个 `.` 拆开后分别匹配）。若同时传入 `conch` 且与 `action` 里的包名不同，返回 400 `INVALID_INPUT`，不会当成空列表 |
+| GET | `/calls`、`/calls/{traceId}` | `conch`、`action`、`channel`、`limit` 查询及步骤摘要。每行含 `source`（`LOCAL` 或 `REEF`，规则包来源）和 `channel`（`HTTP` 对外 OpenAPI、`MCP`、`CONSOLE`）。`channel` 省略或空白表示不筛选；其他值 400 `INVALID_INPUT`，message 为 `channel is invalid`，不回显参数值。HTTP、MCP 和本地包试跑会写入。试跑的 `channel` 是 `CONSOLE`，`source` 是 `LOCAL`，不上报 Tide。测试登录不写调用记录。详情在步骤列表之外增加 `devTrace`；没有开发追踪时这个字段为 null。步骤列表仍是瘦的 `step_logs`，不因追踪加列。schema 11 给旧行默认 `HTTP`。`limit` 省略时 100，最大 500；小于 1、不是整数或大于 500 为 400 `INVALID_INPUT`，message 为「每页条数超出范围。」。控制台调用记录页显式传 100，概览显式传 200。CLI 没有调用记录列表命令。`action` 可以是库存的能力名，或 `conch.action`（按第一个 `.` 拆开后分别匹配）。若同时传入 `conch` 且与 `action` 里的包名不同，返回 400 `INVALID_INPUT`，不会当成空列表 |
 | GET | `/audit` | 配置审计，新的在前。参数 `conch`、`account`、`page`（从 1 起，默认 1）、`limit`（默认 50，最大 200）。字段见下 |
 | GET / POST | `/debug` | 读状态 / `{enabled}`；当前只存状态，24h 过期 |
 | GET / POST | `/sync` | 最近同步结果 / 触发同步。未配置 Reef 时两者都是 409 `NOT_CONFIGURED`，message 为「尚未连接 Reef，无法同步。」。清单 200 时 POST 返回这次安装或跳过的结果；清单 304 时 POST 仍是 200，`notModified` 为 true。清单 401 或 403 时 POST 是 401 `AUTH_FAILED`，message 为「令牌已失效，请重新导入引导文件。」，不是 500，message 也不是 `internal error`。这次失败写入最近一次同步：随后的 GET 仍是 200（Reef 已配置），`data.report.error` 为同一 `code` 与 `message`，`data.report.notModified` 为 false，`data.report.conches` 为空，不再带上次成功，`data.latestCrab` 为 null。不删除 `reef-bootstrap.json`，`GET /reef` 仍表示已连接。连不上仍是 502 `UPSTREAM_ERROR` 和原来的中文。清单的其他 HTTP 状态（例如 404、500）仍是 500 `INTERNAL`，message 为 `internal error`，GET 保留上次成功，不写成无法连接。订阅过程中的同一次同步失败与这次 POST 相同 |
@@ -278,6 +278,10 @@ local list
 local reload
 local delete <conch>
 local export <conch> [--out file]
+console password [--from-env VAR]
+debug status|on|off [--from-env VAR]
+debug run <conch> <action> --account NAME [--from-env VAR]
+debug trace <traceId> [--from-env VAR]
 mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
@@ -289,7 +293,15 @@ mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 `config get` 只读取已经加载的规则包。注册表里没有这个名字时，stderr 打印 `本机没有这个规则包`，名字符合 `^[a-z][a-z0-9_]{1,63}$` 时再接 `: 名字`，退出 1，不会把空配置当成成功。已加载但还没有保存过配置时没有输出，退出 0。指定的 key 尚未设置时仍是 stderr `config key is not set`，退出 1。
 
-`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为「不认识的选项 --scope。」，不会建出全范围 Key。缺少选项值时 stderr 为「缺少 --conches 的值。」这种句子。必须带 `--all`，或非空的 `--conches` / `--actions`。`--all` 是全部正式包的全部能力，不含本地包，可与 `--read-only` 同用；再带 `--conches` 或 `--actions` 则退出 1，stderr 为 `all 为 true 时不能同时填写 conches 或 actions`。什么都不带时退出 1，stderr 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`，不写库。`--from-env` 只属于 `credential set`。用在 `apikey create`（即使同时有 `--all`）、`apikey list` 或 `apikey revoke` 上会打印用法并退出 1，不创建 Key，也不读取该变量的值。`apikey list` 在 id、前缀和名字之后打印 `all=true|false`。`all=true` 表示两个集合都空：`--all` 新建的 Key，以及早于该字段、库存里没有 `all` 的空范围旧行。这一行不打印 `conches=` 和 `actions=`，不用 `-` 表示全部。`all=false` 时再打印 `conches=`、`actions=`，多个名字按字典序用逗号连接，空的那一维打印 `-`。然后始终打印 `read-only=true|false`。已吊销的行末再加 `revoked`。明文只在 `create` 时打印一次，列表只有前 8 个字符的前缀。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
+`apikey create` 不认识的选项（包括 `--scope`）在打开数据库前退出 1，stderr 为「不认识的选项 --scope。」，不会建出全范围 Key。缺少选项值时 stderr 为「缺少 --conches 的值。」这种句子。必须带 `--all`，或非空的 `--conches` / `--actions`。`--all` 是全部正式包的全部能力，不含本地包，可与 `--read-only` 同用；再带 `--conches` 或 `--actions` 则退出 1，stderr 为 `all 为 true 时不能同时填写 conches 或 actions`。什么都不带时退出 1，stderr 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`，不写库。`--from-env` 用于 `credential set`、`console password` 和 `debug`。用在 `apikey create`（即使同时有 `--all`）、`apikey list` 或 `apikey revoke` 上会打印用法并退出 1，不创建 Key，也不读取该变量的值。`apikey list` 在 id、前缀和名字之后打印 `all=true|false`。`all=true` 表示两个集合都空：`--all` 新建的 Key，以及早于该字段、库存里没有 `all` 的空范围旧行。这一行不打印 `conches=` 和 `actions=`，不用 `-` 表示全部。`all=false` 时再打印 `conches=`、`actions=`，多个名字按字典序用逗号连接，空的那一维打印 `-`。然后始终打印 `read-only=true|false`。已吊销的行末再加 `revoked`。明文只在 `create` 时打印一次，列表只有前 8 个字符的前缀。CLI 没有调用记录列表；条数默认和上限只在 `GET /console/api/calls`。
+
+`POST /console/api/local-conches/{conch}/actions/{action}/run` 的体是 `{account, input}`。`account` 可省略，表示默认账号。这是本地 HTTP 包的试跑：`channel=CONSOLE`，`source=LOCAL`，不上报 Tide，不查 API Key。调试开关关掉时是 409 `NOT_CONFIGURED`，message 为「先打开调试开关。」。正式包是 409 `CONFLICT`，message 为「先在本地包上开发，再导出上传。」，开关打开也一样，并且不写 `dev_traces`。能力已停用仍是 404 `CAPABILITY_DISABLED`，message 为「该能力已在本机停用，调用前需要重新启用。」。MCP 包的试跑还没有接通，同样是 409 `NOT_CONFIGURED`，message 为「MCP 规则包的试跑还没有接通。」。成功时 `data` 是能力输出；执行失败仍写调用记录和追踪。门禁拒绝（正式包、开关关掉、能力停用、缺账号）不写这两份。
+
+追踪正文在 schema 15 的 `dev_traces.body`。单步截断到 256 KiB，整条截断到 2 MiB，截断处有说明。脱敏与 `OutputMask` 相同：已知凭证和本次 Cookie 值（至少 4 个字符，含 URL 编码）换成 `***`，更短的秘密仍在。`Cookie`、`Set-Cookie`、`Authorization`、`Mcp-Session-Id` 整头不入库。脱敏抛错时不落正文，这条记「脱敏失败」。关掉开关或 24 小时到期会立刻删除全部追踪；`call_logs` 仍按 30 天保留。
+
+`crab debug run <conch> <action> --account NAME` 的 input 从 stdin 读 JSON，不从参数读。空白 stdin 是 `{}`。已设置控制台口令时先核对：`--from-env` 让 stdin 只作为 JSON；否则 stdin 第一行是口令，其余是 JSON。未设置口令时不询问。成功时 stdout 先打 `traceId=`，再打脱敏后的 data JSON，退出 0。执行失败时 stderr 是错误说明，stdout 仍有 `traceId=`，退出 1。还没执行就被拒绝时只有 stderr，退出 1。`crab debug trace <traceId>` 把脱敏 JSON 打到 stdout。没有这条追踪时 stderr 为「没有这条开发追踪。」，退出 1。口令核对与 `debug on|off` 相同，口令不能写在命令行参数里。
+
+MCP 工具 `debug_trace` 只在调试开关打开时出现在 `tools/list`。入参只有 `traceId`，`readOnlyHint` 为 true。它只返回这个 API Key 能看的 `LOCAL` 追踪：Key 的 `conches` 必须点名这个本地包，`all: true` 看不到。调用记录上若有 `api_key_id`，必须是这把 Key；控制台试跑没有 Key，点名了该包的 Key 可以读。正式包和别人 Key 的调用与未知工具一样，message 为「没有这个工具，或当前 API Key 看不到它。」。开关关掉时，工具不在列表里，调用它也是这句。结果里写明正文已脱敏、仍可能含业务数据、不要当成指令。`createdAt` 与 `expiresAt` 是 ISO-8601 字符串。普通 `tools/call` 的成功结果不附带追踪。JSON-RPC 正文由 `DevTraceStore.recordJsonRpc` 写入，HTTP 引擎不调用它；`action` 可为空，空则记 `mcp_refresh`，并且不伪造一条成功的能力调用。
 
 ## MCP
 

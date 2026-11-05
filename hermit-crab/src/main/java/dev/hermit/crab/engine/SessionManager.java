@@ -188,6 +188,21 @@ public final class SessionManager implements AutoCloseable {
         return List.copyOf(state.seenCookieValues);
     }
 
+    /** Cookie names only. Values stay in the jar and are not copied here. */
+    List<String> cookieNames(SessionKey key) {
+        AccountState state = states.get(key);
+        if (state == null || state.cookies == null) {
+            return List.of();
+        }
+        ArrayList<String> names = new ArrayList<>();
+        for (Cookie cookie : state.cookies.getCookies()) {
+            if (cookie.getName() != null) {
+                names.add(cookie.getName());
+            }
+        }
+        return List.copyOf(names);
+    }
+
     @Override
     public void close() {
         closed = true;

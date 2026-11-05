@@ -1,5 +1,6 @@
 package dev.hermit.crab.mcp;
 
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -10,6 +11,8 @@ import java.util.concurrent.TimeoutException;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.crab.engine.DevTraceDraft;
 import dev.hermit.crab.sync.DisabledConches;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
@@ -18,6 +21,9 @@ import dev.hermit.crab.runtime.InvokeOutcome;
 import dev.hermit.crab.upstream.McpCallPayload;
 import dev.hermit.crab.store.ApiKeyPrincipal;
 import dev.hermit.crab.store.CallChannel;
+import dev.hermit.crab.store.CallLogStore;
+import dev.hermit.crab.store.DevTraceStore;
+import dev.hermit.crab.store.Origin;
 import io.modelcontextprotocol.spec.McpSchema;
 
 final class McpCalls {
@@ -66,6 +72,12 @@ final class McpCalls {
             return fail(attempt, "INVALID_INPUT", "name is required");
         }
         Map<String, Object> arguments = request.arguments() == null ? Map.of() : request.arguments();
+        if (McpCatalog.DEBUG_TRACE.equals(name)) {
+            if (!runtime.debug().get().enabled()) {
+                return missingTool(attempt, name);
+            }
+            return readTrace(principal, arguments, attempt);
+        }
         if (attempt.directory()) {
             return directory(principal, session, headerAccount, name, arguments, attempt);
         }
@@ -235,6 +247,71 @@ final class McpCalls {
             }
         }
         return fail(attempt, "NOT_FOUND", "not found");
+    }
+
+    private McpSchema.CallToolResult readTrace(
+            ApiKeyPrincipal principal,
+            Map<String, Object> arguments,
+            Attempt attempt
+    ) {
+        if (arguments.size() != 1 || !arguments.containsKey("traceId")) {
+            return fail(attempt, "INVALID_INPUT", arguments.containsKey("traceId")
+                    ? "unknown field"
+                    : "traceId is required");
+        }
+        Object raw = arguments.get("traceId");
+        if (!(raw instanceof String traceId) || traceId.isBlank()) {
+            return fail(attempt, "INVALID_INPUT", "traceId is required");
+        }
+        DevTraceStore.Trace trace = runtime.devTraces().find(traceId).orElse(null);
+        if (trace == null || !visible(principal, trace)) {
+            return fail(attempt, "NOT_FOUND", "not found");
+        }
+        Object devTrace;
+        try {
+            devTrace = ApiJson.objectMap(trace.body().getBytes(StandardCharsets.UTF_8));
+        } catch (RuntimeException ex) {
+            return fail(attempt, "NOT_FOUND", "not found");
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("traceId", trace.traceId());
+        body.put("conch", trace.conch());
+        body.put("account", trace.account());
+        body.put("action", trace.action());
+        body.put("note", DevTraceDraft.UNTRUSTED_NOTE);
+        body.put("untrusted", true);
+        body.put("createdAt", trace.createdAt() == null ? null : trace.createdAt().toString());
+        body.put("expiresAt", trace.expiresAt() == null ? null : trace.expiresAt().toString());
+        body.put("devTrace", devTrace);
+        return ok(body);
+    }
+
+    /**
+     * Local traces only. A call recorded under another API key is hidden.
+     * Console trials have no key, so any key that names this local conch may read them.
+     * {@code all: true} does not name local conches and cannot read them.
+     */
+    private boolean visible(ApiKeyPrincipal principal, DevTraceStore.Trace trace) {
+        if (trace.origin() != Origin.LOCAL || principal == null || principal.scope() == null) {
+            return false;
+        }
+        if (!principal.scope().conches().contains(trace.conch())) {
+            return false;
+        }
+        CallLogStore.CallDetail detail = runtime.callLogs().findByTraceId(trace.traceId()).orElse(null);
+        if (detail != null && detail.call().apiKeyId() != null
+                && !detail.call().apiKeyId().equals(principal.id())) {
+            return false;
+        }
+        if (DevTraceStore.MCP_REFRESH_ACTION.equals(trace.action())) {
+            return true;
+        }
+        ConchDoc doc = runtime.registry().find(trace.conch()).orElse(null);
+        Action action = doc == null ? null : doc.actions().get(trace.action());
+        if (action == null) {
+            return !principal.scope().readOnlyOnly();
+        }
+        return principal.permits(trace.conch(), trace.action(), CapabilityHttp.readOnly(action));
     }
 
     private static String longestConchPrefix(String toolName, Set<String> conches) {

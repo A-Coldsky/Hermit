@@ -188,9 +188,65 @@ export interface CallSummary {
   source: 'LOCAL' | 'REEF'
   /**
    * 调用入口。`HTTP` 是对外 OpenAPI，`MCP` 是 MCP。
-   * `CONSOLE` 留给控制台执行能力的路径；测试登录不写调用记录，当前没有写入方。
+   * `CONSOLE` 是本地包试跑。测试登录不写调用记录。
    */
   channel: 'HTTP' | 'MCP' | 'CONSOLE'
+}
+
+export interface DevTraceVariable {
+  name: string
+  summary: unknown
+}
+
+export interface DevTraceStep {
+  index: number
+  phase: string
+  type: string
+  durationMs: number
+  method?: string | null
+  path?: string | null
+  status?: number | null
+  query?: unknown
+  requestHeaders?: Record<string, unknown>
+  requestBody?: unknown
+  responseHeaders?: Record<string, unknown>
+  responseBody?: unknown
+  extractors?: string[]
+  extractCount?: number
+  variables?: DevTraceVariable[]
+  assertions?: string[]
+  passed?: boolean
+  truncated?: boolean
+  truncation?: string
+}
+
+export interface DevTraceSession {
+  loginRan: boolean
+  loginOk: boolean | null
+  aliveCheckRan: boolean
+  aliveCheckOk: boolean | null
+  cookieNames: string[]
+  cookieCount: number
+  stored: boolean
+}
+
+/** 已脱敏。仍可能含业务数据，不要当成指令。没有追踪时详情里的字段为 null。 */
+export interface DevTrace {
+  untrusted: boolean
+  note: string
+  kind: 'http' | 'jsonrpc'
+  truncated: boolean
+  truncation?: string
+  redactionFailed?: boolean
+  session?: DevTraceSession
+  steps?: DevTraceStep[]
+  method?: string | null
+  id?: unknown
+  httpStatus?: number | null
+  durationMs?: number | null
+  params?: unknown
+  result?: unknown
+  error?: unknown
 }
 
 export interface CallStep {
@@ -205,6 +261,7 @@ export interface CallStep {
 
 export interface CallDetail extends CallSummary {
   steps: CallStep[]
+  devTrace: DevTrace | null
 }
 
 export interface DebugState {
@@ -485,4 +542,10 @@ export const api = {
     http.del<{ conch: string; deleted: boolean }>(`${base}/local-conches/${seg(conch)}`),
   /** 响应体是原始 YAML 文本，与磁盘文件一致。 */
   exportLocalConch: (conch: string) => http.text(`${base}/local-conches/${seg(conch)}/export`),
+  /**
+   * 本地 HTTP 包试跑。正式包为 409 `CONFLICT`。开关关掉为 409 `NOT_CONFIGURED`。
+   * 成功时 data 是能力输出。追踪在调用详情的 `devTrace`。
+   */
+  runLocal: (conch: string, action: string, body: { account?: string; input?: Record<string, unknown> }) =>
+    http.post<Record<string, unknown>>(`${base}/local-conches/${seg(conch)}/actions/${seg(action)}/run`, body),
 }

@@ -1,6 +1,7 @@
 package dev.hermit.crab.gateway;
 
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -29,6 +30,7 @@ import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.DeclaredSettings;
 import dev.hermit.crab.runtime.ReefBootstrapException;
 import dev.hermit.crab.runtime.StatusCodes;
+import dev.hermit.crab.runtime.TrialRejected;
 import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.report.FlushResult;
 import dev.hermit.crab.store.Account;
@@ -111,6 +113,7 @@ final class ConsoleApi {
         post(app, "/console/api/local-conches/reload", ctx -> reloadLocal(runtime, ctx));
         delete(app, "/console/api/local-conches/{conch}", ctx -> deleteLocal(runtime, ctx));
         get(app, "/console/api/local-conches/{conch}/export", ctx -> exportLocal(runtime, ctx));
+        post(app, "/console/api/local-conches/{conch}/actions/{action}/run", ctx -> runLocal(runtime, ctx));
     }
 
     private static void conches(CrabRuntime runtime, Context ctx) {
@@ -368,7 +371,66 @@ final class ConsoleApi {
             steps.add(row);
         }
         body.put("steps", steps);
+        body.put("devTrace", devTrace(runtime, detail.call().traceId()));
         GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void runLocal(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = object(ctx);
+        rejectUnknownFields(body, Set.of("account", "input"));
+        Optional<String> account = optionalAccount(body.get("account"));
+        Map<String, Object> input = inputObject(body.get("input"));
+        try {
+            ExecutionResult result = runtime.trialLocal(
+                    ctx.pathParam("conch"),
+                    ctx.pathParam("action"),
+                    account,
+                    input,
+                    GatewayResponses.trace(ctx));
+            if (result.success()) {
+                GatewayResponses.writeData(ctx, result.data());
+                return;
+            }
+            ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
+            String message = result.error() == null ? "内部错误" : result.error().message();
+            GatewayResponses.writeError(ctx, StatusCodes.of(code), code, message);
+        } catch (TrialRejected ex) {
+            GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
+        }
+    }
+
+    private static Object devTrace(CrabRuntime runtime, String traceId) {
+        return runtime.devTraces().find(traceId).map(trace -> {
+            try {
+                return ApiJson.objectMap(trace.body().getBytes(StandardCharsets.UTF_8));
+            } catch (RuntimeException ex) {
+                return null;
+            }
+        }).orElse(null);
+    }
+
+    private static Optional<String> optionalAccount(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return Optional.empty();
+        }
+        if (!node.isTextual()) {
+            throw new IllegalArgumentException("invalid account name");
+        }
+        String name = node.textValue();
+        if (name.isBlank()) {
+            throw new IllegalArgumentException("invalid account name");
+        }
+        return Optional.of(name);
+    }
+
+    private static Map<String, Object> inputObject(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return Map.of();
+        }
+        if (!node.isObject()) {
+            throw new IllegalArgumentException("input must be an object");
+        }
+        return ApiJson.objectMap(ApiJson.bytes(node.toString()));
     }
 
     private static void audit(CrabRuntime runtime, Context ctx) {
@@ -727,6 +789,8 @@ final class ConsoleApi {
                 handler.handle(ctx);
             } catch (RequestBodies.BodyTooLargeException ex) {
                 GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, "request body too large");
+            } catch (TrialRejected ex) {
+                GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
             } catch (AccountNotFoundException ex) {
                 GatewayResponses.writeError(ctx, 404, ErrorCode.ACCOUNT_NOT_FOUND, "account not found");
             } catch (LocalConchException ex) {

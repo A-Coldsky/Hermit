@@ -7,8 +7,9 @@ import java.util.Optional;
 import dev.hermit.common.error.ErrorCode;
 
 /**
- * Maps Reef transport failures to a stable console error. HTTP status from a Reef that did answer
- * stays on the internal sync message so a bad manifest is not reported as "unreachable".
+ * Maps Reef transport failures, and a manifest 401 or 403, to a stable console error. Any other
+ * HTTP status from a Reef that did answer stays on the internal sync message, so a bad manifest
+ * is not reported as unreachable or as an expired token.
  */
 final class SyncErrors {
 
@@ -22,6 +23,9 @@ final class SyncErrors {
         String detail = ex.getMessage();
         if ("reef request interrupted".equals(detail)) {
             return Optional.of(upstream("同步被中断。请稍后再次同步。"));
+        }
+        if (SyncReasons.http(401).equals(detail) || SyncReasons.http(403).equals(detail)) {
+            return Optional.of(new SyncError(ErrorCode.AUTH_FAILED, SyncException.TOKEN_REJECTED));
         }
         if (!"reef request failed".equals(detail)) {
             return Optional.empty();

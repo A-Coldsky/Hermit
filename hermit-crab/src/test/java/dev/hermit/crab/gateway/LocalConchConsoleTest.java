@@ -97,6 +97,93 @@ class LocalConchConsoleTest {
         }
     }
 
+    @Test
+    void overwriteNeedsConfirmAndBrokenPackageStaysListedUntilDelete() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("confirm"), PASSWORD, config)) {
+            byte[] yaml = LocalConchBehaviorTest.ping("local_ping", "1.0.0").getBytes(StandardCharsets.UTF_8);
+            HttpResponse<String> imported = post(
+                    server, "/console/api/local-conches", "text/yaml; charset=utf-8", yaml);
+            assertThat(imported.statusCode()).isEqualTo(200);
+            Path installed = server.paths.localConches().resolve("local_ping.yaml");
+            byte[] stored = Files.readAllBytes(installed);
+
+            byte[] next = LocalConchBehaviorTest.ping("local_ping", "1.1.0").getBytes(StandardCharsets.UTF_8);
+            HttpResponse<String> denied = post(
+                    server, "/console/api/local-conches", "text/yaml", next);
+            assertThat(denied.statusCode()).isEqualTo(409);
+            assertThat(denied.body()).contains("\"success\":false");
+            assertThat(denied.body()).contains("\"code\":\"CONFLICT\"");
+            assertThat(denied.body()).contains("将覆盖已有的本地规则包 local_ping。确认后再导入。");
+            assertThat(denied.body()).contains("\"conch\":\"local_ping\"");
+            assertThat(denied.body()).contains("\"confirm\":true");
+            assertThat(Files.readAllBytes(installed)).isEqualTo(stored);
+            assertThat(server.runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
+
+            HttpResponse<String> badFlag = post(
+                    server, "/console/api/local-conches?confirm=yes", "text/yaml", next);
+            assertThat(badFlag.statusCode()).isEqualTo(400);
+            assertThat(badFlag.body()).contains("confirm 只能是 true 或 false。");
+            assertThat(Files.readAllBytes(installed)).isEqualTo(stored);
+
+            HttpResponse<String> confirmed = post(
+                    server, "/console/api/local-conches?confirm=true", "text/yaml", next);
+            assertThat(confirmed.statusCode()).isEqualTo(200);
+            assertThat(confirmed.body()).contains("\"replaced\":true").contains("\"version\":\"1.1.0\"");
+            assertThat(server.runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.1.0");
+
+            Files.writeString(installed, ":\n");
+            TestServer.Reply reloaded = server.console("POST", "/console/api/local-conches/reload", "", true);
+            assertThat(reloaded.status()).isEqualTo(200);
+            assertThat(reloaded.body()).contains("\"file\":\"local_ping.yaml\"");
+            assertThat(reloaded.body()).contains("\"ok\":false");
+            assertThat(reloaded.body()).contains("文件 local_ping.yaml");
+            assertThat(reloaded.body()).contains("规则包 local_ping");
+            assertThat(reloaded.body()).contains("无法解析");
+            assertThat(reloaded.body()).doesNotContain("conch validation failed");
+            assertThat(reloaded.body()).doesNotContain("file name does not match conch");
+
+            TestServer.Reply loaded = server.console("GET", "/console/api/conches", null, true);
+            assertThat(loaded.status()).isEqualTo(200);
+            assertThat(loaded.body()).doesNotContain("\"conch\":\"local_ping\"");
+            assertThat(server.runtime.registry().find("local_ping")).isEmpty();
+
+            TestServer.Reply listed = server.console("GET", "/console/api/local-conches", null, true);
+            assertThat(listed.status()).isEqualTo(200);
+            assertThat(listed.body()).contains("\"conch\":\"local_ping\"");
+            assertThat(listed.body()).contains("\"file\":\"local_ping.yaml\"");
+            assertThat(listed.body()).contains("\"version\":null");
+            assertThat(listed.body()).contains("\"loaded\":false");
+            assertThat(listed.body()).contains("\"broken\":true");
+            assertThat(listed.body()).contains("文件 local_ping.yaml");
+            assertThat(listed.body()).contains("规则包 local_ping");
+            assertThat(listed.body()).contains("无法解析");
+
+            TestServer.Reply exported = server.console("GET", "/console/api/local-conches/local_ping/export", null, true);
+            assertThat(exported.status()).isEqualTo(404);
+
+            TestServer.Reply removed = server.console("DELETE", "/console/api/local-conches/local_ping", null, true);
+            assertThat(removed.status()).isEqualTo(200);
+            assertThat(removed.body()).contains("\"conch\":\"local_ping\"").contains("\"deleted\":true");
+            assertThat(installed).doesNotExist();
+            TestServer.Reply afterDelete = server.console("GET", "/console/api/local-conches", null, true);
+            assertThat(afterDelete.body()).doesNotContain("\"conch\":\"local_ping\"");
+
+            HttpResponse<String> restored = post(
+                    server, "/console/api/local-conches", "text/yaml", yaml);
+            assertThat(restored.statusCode()).isEqualTo(200);
+            assertThat(restored.body()).contains("\"replaced\":false").contains("\"version\":\"1.0.0\"");
+            server.runtime.admin().createAccount("local_ping", "alice", Actors.CLI);
+            CreatedApiKey named = server.runtime.admin().createApiKey(
+                    "named", new ApiKeyScope(Set.of("local_ping"), Set.of(), false), Actors.CLI);
+            TestServer.Reply allowed = server.call("GET", "/api/local_ping/ping", named.plaintext(), null, null, null);
+            assertThat(allowed.status()).isEqualTo(200);
+
+            TestServer.Reply missing = server.console("DELETE", "/console/api/local-conches/missing_ping", null, true);
+            assertThat(missing.status()).isEqualTo(404);
+        }
+    }
+
     private static HttpResponse<String> post(TestServer server, String path, String type, byte[] body) throws Exception {
         return server.http.send(
                 HttpRequest.newBuilder(URI.create(server.base() + path))

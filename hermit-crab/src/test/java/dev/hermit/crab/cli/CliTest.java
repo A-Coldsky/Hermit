@@ -347,7 +347,7 @@ class CliTest {
                 stdout(imported),
                 stderr(err));
         assertThat(code).isZero();
-        assertThat(imported.toString(StandardCharsets.UTF_8)).contains("local_ping 1.0.0 imported");
+        assertThat(imported.toString(StandardCharsets.UTF_8)).contains("local_ping 1.0.0 已导入");
         assertThat(run(env(home), InputStream.nullInputStream(), "account", "add", "local_ping", "alice")).isZero();
         try (CrabDatabase database = new CrabDatabase(new CrabPaths(home));
              Connection connection = database.dataSource().getConnection();
@@ -381,6 +381,70 @@ class CliTest {
         assertThat(run(env(home), InputStream.nullInputStream(), deleted, "local", "delete", "local_two")).isZero();
         assertThat(deleted.toString(StandardCharsets.UTF_8)).contains("local_two deleted");
         assertThat(dir.resolve("local_two.yaml")).doesNotExist();
+    }
+
+    @Test
+    void localReplaceFlagAndBrokenPackageStayVisible() throws Exception {
+        Path home = temp.resolve("local-replace");
+        Files.createDirectories(home);
+        Path file = home.resolve("in.yaml");
+        Files.writeString(file, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_ping", "1.0.0"));
+        Function<String, String> env = env(home);
+        assertThat(run(env, InputStream.nullInputStream(), "local", "import", file.toString())).isZero();
+
+        Files.writeString(file, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_ping", "1.2.0"));
+        ByteArrayOutputStream deniedErr = new ByteArrayOutputStream();
+        ByteArrayOutputStream deniedOut = new ByteArrayOutputStream();
+        int denied = new CrabCommand().run(
+                new String[] {"local", "import", file.toString()},
+                env,
+                InputStream.nullInputStream(),
+                stdout(deniedOut),
+                stderr(deniedErr));
+        assertThat(denied).isEqualTo(1);
+        assertThat(deniedErr.toString(StandardCharsets.UTF_8)).isEqualTo("将覆盖已有的本地规则包 local_ping。确认后再导入。\n");
+        assertThat(deniedOut.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(Files.readString(home.resolve("local-conches").resolve("local_ping.yaml"))).contains("version: 1.0.0");
+
+        ByteArrayOutputStream replaced = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), replaced, "local", "import", "--replace", file.toString())).isZero();
+        assertThat(replaced.toString(StandardCharsets.UTF_8)).contains("local_ping 1.2.0 已覆盖");
+        assertThat(replaced.toString(StandardCharsets.UTF_8)).doesNotContain("replaced");
+
+        Files.writeString(home.resolve("local-conches").resolve("local_ping.yaml"), ":\n");
+        ByteArrayOutputStream reloaded = new ByteArrayOutputStream();
+        ByteArrayOutputStream reloadErr = new ByteArrayOutputStream();
+        int reload = new CrabCommand().run(
+                new String[] {"local", "reload"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(reloaded),
+                stderr(reloadErr));
+        assertThat(reload).isZero();
+        assertThat(reloaded.toString(StandardCharsets.UTF_8)).contains("local_ping.yaml local_ping - 未载入");
+        String reason = reloadErr.toString(StandardCharsets.UTF_8);
+        assertThat(reason).contains("文件 local_ping.yaml").contains("规则包 local_ping").contains("无法解析");
+        assertThat(reason).doesNotContain("file name does not match conch").doesNotContain("conch validation failed");
+
+        ByteArrayOutputStream listed = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), listed, "local", "list")).isZero();
+        String list = listed.toString(StandardCharsets.UTF_8);
+        assertThat(list).contains("local_ping - local_ping.yaml 未载入");
+        assertThat(list).contains("文件 local_ping.yaml").contains("规则包 local_ping").contains("无法解析");
+
+        ByteArrayOutputStream removed = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), removed, "local", "delete", "local_ping")).isZero();
+        assertThat(removed.toString(StandardCharsets.UTF_8)).contains("local_ping deleted");
+        assertThat(home.resolve("local-conches").resolve("local_ping.yaml")).doesNotExist();
+
+        Files.writeString(file, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_ping", "1.0.2"));
+        ByteArrayOutputStream imported = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), imported, "local", "import", file.toString())).isZero();
+        assertThat(imported.toString(StandardCharsets.UTF_8)).contains("local_ping 1.0.2 已导入");
+        ByteArrayOutputStream after = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), after, "local", "list")).isZero();
+        assertThat(after.toString(StandardCharsets.UTF_8)).contains("local_ping 1.0.2 local_ping.yaml");
+        assertThat(after.toString(StandardCharsets.UTF_8)).doesNotContain("未载入");
     }
 
     @Test

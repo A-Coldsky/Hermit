@@ -27,8 +27,9 @@ public enum ErrorCode {
      */
     IDEMPOTENCY_CONFLICT,
     /**
-     * 本机已安装正式规则包时，不能换成另一把 Reef 公钥。HTTP 409。
-     * 与本地包重名仍用 {@code INVALID_INPUT}，不用这个码。
+     * HTTP 409。用于两处：已安装正式规则包时不能换成另一把 Reef 公钥；
+     * 导入本地包时目标已存在、但没有确认覆盖。
+     * 与正式包或订阅重名仍用 {@code INVALID_INPUT}，不用这个码。
      */
     CONFLICT,
     INTERNAL

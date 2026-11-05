@@ -156,10 +156,43 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | GET / PUT | `/reports/settings` | `{enabled, intervalSeconds}`。没有 schema 13 的行时读 config.yml。两者都缺省时 `enabled` 为 true，`intervalSeconds` 为 1800。PUT 两个字段都必填，`intervalSeconds` 为不小于 60 的整数，未知字段 400 `INVALID_INPUT`。写入覆盖 config.yml，并立刻作用于本进程。已写入的间隔保持原值。关闭上报不清空未发送队列；再次开启后仍按原保留策略发送 |
 | GET | `/reports/preview` | 待发送批次和丢弃数。上报关闭或尚未连接 Reef 时 409 `NOT_CONFIGURED`，`message` 为「上报未开启，或尚未连接 Reef。」 |
 | POST | `/reports/send` | 手动发送，返回 attempted/accepted/status。上报关闭或尚未连接 Reef 时 409 `NOT_CONFIGURED`，`message` 与预览相同。批次为空时不发 HTTP |
-| POST | `/local-conches` | 导入。`multipart/form-data` 字段 `file`，或 `text/yaml`、`application/yaml`、`application/x-yaml` 正文。成功 `{conch, version, replaced, warnings}`。校验失败 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`。与正式包或订阅重名是 409，错误码仍是 `INVALID_INPUT` |
-| POST | `/local-conches/reload` | 按 `local-conches/` 目录增删改。`{results:[{file, conch, version, ok, issues}]}` |
-| DELETE | `/local-conches/{conch}` | 删除本地包文件和注册表项，保留账号与凭证。非本地包 404 |
-| GET | `/local-conches/{conch}/export` | `application/yaml`，`Content-Disposition: attachment; filename="{conch}-{version}.yaml"`，正文与磁盘文件相同 |
+| GET | `/local-conches` | 本机本地包，含未能载入的。见下方字段。已载入的包仍在 `GET /conches`；未能载入的不在那里，也不能调用 |
+| POST | `/local-conches` | 导入。`multipart/form-data` 字段 `file`，或 `text/yaml`、`application/yaml`、`application/x-yaml` 正文。查询参数 `confirm`：缺省、空白或 `false` 表示不确认，`true` 表示确认覆盖（大小写不敏感）。其它值 400 `INVALID_INPUT`，message 为 `confirm 只能是 true 或 false。`。成功 `{conch, version, replaced, warnings}`。目标已是本地包、坏包，或同名 yaml 已存在时，未确认是 409 `CONFLICT`，不写文件；`confirm=true` 才覆盖。校验失败 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，message 为 `规则包校验失败`。与正式包或订阅重名是 409，错误码仍是 `INVALID_INPUT`，确认参数不能绕过 |
+| POST | `/local-conches/reload` | 按 `local-conches/` 目录增删改。`{results:[{file, conch, version, ok, issues}]}`。失败时 `ok` 为 false，`issues[0].message` 用中文写明文件、包和原因。文件名不是合法包名时 `conch` 为 null。解析成功但未载入时 `version` 仍是文件里的版本，不表示已经安装 |
+| DELETE | `/local-conches/{conch}` | 删除本地包文件。已载入的同时移出注册表；只是坏包的删掉 yaml 和列表中的记录。返回 `{conch, deleted: true}`。账号与凭证保留。删完后同名可以不带 `confirm` 再导入。不是本地包、也不是坏包时 404。正式包 404，不删文件 |
+| GET | `/local-conches/{conch}/export` | 仅已载入的本地包。`application/yaml`，`Content-Disposition: attachment; filename="{conch}-{version}.yaml"`，正文与磁盘文件相同。坏包 404 |
+
+`GET /console/api/local-conches` 的 `data.conches` 按包名排序。每一项：
+
+| 字段 | 已载入 | 未能载入 |
+| --- | --- | --- |
+| `conch` | 包名 | 文件名去掉 `.yaml` 后的合法包名 |
+| `file` | `{conch}.yaml` | 目录里的文件名 |
+| `version` | 已载入版本 | JSON `null`。不保留上一版，也不把坏文件里的版本当作已安装 |
+| `loaded` | true | false |
+| `broken` | false | true |
+| `reason` | JSON `null` | 中文一句，含文件名、包名和原因 |
+
+文件名不是 `^[a-z][a-z0-9_]{1,63}$` 时，不会出现在这个列表里。重新加载结果仍会带上该文件，`conch` 为 null，`issues[0].message` 写明原因。符号链接同样只出现在重新加载结果里，不进这个列表，删除接口也不会把它当成坏包。
+
+未能载入时注册表里没有这份包，HTTP/MCP 调用是 404。不另存上一份好文件。进程重启后磁盘上若仍是坏文件，启动结果与重新加载相同：不能调用，列表里仍在。文件从目录消失后再加载，包被卸下，列表里也不再有它。其它坏文件不会卸掉已经载入的好包。坏包名字在删掉之前订阅同名正式包会 409，message 为「与本机本地规则包同名」。
+
+覆盖确认的 409 正文（错误码是 `CONFLICT`）：
+
+```json
+{
+  "success": false,
+  "data": { "conch": "local_ping", "confirm": true },
+  "error": {
+    "code": "CONFLICT",
+    "message": "将覆盖已有的本地规则包 local_ping。确认后再导入。"
+  }
+}
+```
+
+`data.confirm === true` 表示这次必须确认。重试时在同一个 URL 上加查询参数 `confirm=true`（正文仍是 YAML 或 multipart `file`）。CLI 对应 `--replace`；没有该参数时退出 1，stderr 是同一句 message，已安装文件的字节不变。成功时 stdout 为 `包名 版本 已导入` 或 `包名 版本 已覆盖`。
+
+`crab local list` 一行一个包。已载入是 `包名 版本 文件名`。未能载入是 `包名 - 文件名 未载入 ` 接上面的 `reason`。`crab local reload` 成功行仍是 `文件 包名 版本 ok`；失败行是 `文件 包名 - 未载入`（没有合法包名时包名位置为 `-`），中文原因在 stderr。重新加载即使有失败文件也退出 0。`crab local delete` 对坏包同样打印 `包名 deleted` 并退出 0。
 
 Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。概览待配置按它计数。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。
 
@@ -194,7 +227,7 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 
 响应不含 `detail` 原文、配置值、凭证明文、密文，也不含 API Key 明文、哈希、id 或 name。debug 的 `enabled` 同样不返回。历史行的 detail 里如果还有别的键，读取时丢弃。`config_audit` 没有定期清理。
 
-新装 Crab 不订阅任何规则包。订阅只写在本机，Reef 不能代订。`POST /console/api/conches/{conch}/subscription` 要求名字合法。记账前总会再拉一次清单，不发送已保存的 ETag，目录缓存里有这个名字也不沿用。新鲜清单里没有这个名字，并且本机还没有订阅行：不插入，HTTP 404 `NOT_FOUND`，`message` 为「Reef 上当前不能订阅这个规则包。」清单分不出未发布、已停用和撤回，所以这句话不写「已停用」。本机已经有订阅行时再点一次与重复订阅相同：不插入新行，也不删除旧行，清掉 ETag 再同步。清单里有这个名字才写入订阅行（重复订阅不改 `subscribed_at` 和 actor，也不再写第二条 `CONCH_SUBSCRIBED`），然后立即同步。响应 `{conch, subscribed, outcome}`。`subscribed` 为 true 只在订阅行还在、并且这次同步给出了该包的结果时：`outcome` 不是 JSON `null`，且 `kind` 不是 `NOT_SUBSCRIBED`。否则 HTTP 仍是 200，`subscribed` 为 false；没有结果时 `outcome` 为 JSON `null`。若这次是新插入的行但同步没有给出该包的结果，删掉这一行。清单拉取在写入之前就失败时不写订阅行。已经写上订阅行之后的同步失败仍保留该行，错误与 `POST /sync` 相同。与本机 `Origin.LOCAL` 规则包同名时 HTTP 409，`code` 仍是 `INVALID_INPUT`，`message` 为「与本机本地规则包同名」。`CONFLICT` 只用于已安装正式包时拒绝更换另一把 Reef 公钥，不用于重名。导入本地包时，名字已在 `subscriptions` 里同样是 HTTP 409、`INVALID_INPUT`，`message` 为「与已订阅的规则包重名」；与已安装的正式包重名也是 409，`message` 为「与已安装的正式规则包重名」。手动更新仍用目录缓存；缓存里没有该名字时 404 `NOT_FOUND`，`message` 同样是「Reef 上当前不能订阅这个规则包。」。非法名字是 400 `INVALID_INPUT`，`message` 为「规则包名称无效。」。未订阅是 404 `NOT_FOUND`，`message` 为「还没有订阅这个规则包。」。手动更新在名字非法或未订阅时使用同样两句。Reef 未配置时目录接口 `configured` 为 false；订阅、更新和同步是 409 `NOT_CONFIGURED`，`message` 为「尚未连接 Reef，无法同步。」。
+新装 Crab 不订阅任何规则包。订阅只写在本机，Reef 不能代订。`POST /console/api/conches/{conch}/subscription` 要求名字合法。记账前总会再拉一次清单，不发送已保存的 ETag，目录缓存里有这个名字也不沿用。新鲜清单里没有这个名字，并且本机还没有订阅行：不插入，HTTP 404 `NOT_FOUND`，`message` 为「Reef 上当前不能订阅这个规则包。」清单分不出未发布、已停用和撤回，所以这句话不写「已停用」。本机已经有订阅行时再点一次与重复订阅相同：不插入新行，也不删除旧行，清掉 ETag 再同步。清单里有这个名字才写入订阅行（重复订阅不改 `subscribed_at` 和 actor，也不再写第二条 `CONCH_SUBSCRIBED`），然后立即同步。响应 `{conch, subscribed, outcome}`。`subscribed` 为 true 只在订阅行还在、并且这次同步给出了该包的结果时：`outcome` 不是 JSON `null`，且 `kind` 不是 `NOT_SUBSCRIBED`。否则 HTTP 仍是 200，`subscribed` 为 false；没有结果时 `outcome` 为 JSON `null`。若这次是新插入的行但同步没有给出该包的结果，删掉这一行。清单拉取在写入之前就失败时不写订阅行。已经写上订阅行之后的同步失败仍保留该行，错误与 `POST /sync` 相同。与本机 `Origin.LOCAL` 规则包同名，或同名坏包还没删掉时，HTTP 409，`code` 仍是 `INVALID_INPUT`，`message` 为「与本机本地规则包同名」。导入本地包时，名字已在 `subscriptions` 里同样是 HTTP 409、`INVALID_INPUT`，`message` 为「与已订阅的规则包重名」；与已安装的正式包重名也是 409，`message` 为「与已安装的正式规则包重名」。这两处重名不用 `CONFLICT`。`CONFLICT` 用于已安装正式包时拒绝更换另一把 Reef 公钥，以及本地包未确认覆盖。手动更新仍用目录缓存；缓存里没有该名字时 404 `NOT_FOUND`，`message` 同样是「Reef 上当前不能订阅这个规则包。」。非法名字是 400 `INVALID_INPUT`，`message` 为「规则包名称无效。」。未订阅是 404 `NOT_FOUND`，`message` 为「还没有订阅这个规则包。」。手动更新在名字非法或未订阅时使用同样两句。Reef 未配置时目录接口 `configured` 为 false；订阅、更新和同步是 409 `NOT_CONFIGURED`，`message` 为「尚未连接 Reef，无法同步。」。
 
 退订删除订阅行，从注册表移除，删除 `current`，并清掉已有墓碑。退订不新写墓碑，也不写 `REEF_CONCH_ENABLED`。账号、凭证、配置和版本目录保留。此后调用是 `NOT_FOUND`。已经进入引擎的请求仍使用当时的授权快照。
 
@@ -233,7 +266,8 @@ audit list [--conch NAME] [--account NAME] [--limit N] [--page N]
 apikey create <name> [--all] [--conches a,b] [--actions conch.action] [--read-only]
 apikey list
 apikey revoke <id>
-local import <file>
+local import <file> [--replace]
+local list
 local reload
 local delete <conch>
 local export <conch> [--out file]

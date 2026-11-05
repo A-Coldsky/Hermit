@@ -19,6 +19,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationCodes;
@@ -49,9 +50,22 @@ public class LocalConchBehaviorTest {
             assertThat(imported.replaced()).isFalse();
             assertThat(imported.conch()).isEqualTo("local_ping");
             runtime.admin().createAccount("local_ping", "alice", Actors.CLI);
+            byte[] stored = Files.readAllBytes(runtime.paths().localConches().resolve("local_ping.yaml"));
+
+            assertThatThrownBy(() -> runtime.localConches().importBytes(
+                    ping("local_ping", "1.1.0").getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                    .isInstanceOf(LocalConchException.class)
+                    .hasMessage("将覆盖已有的本地规则包 local_ping。确认后再导入。")
+                    .satisfies(ex -> {
+                        LocalConchException failure = (LocalConchException) ex;
+                        assertThat(failure.status()).isEqualTo(409);
+                        assertThat(failure.code()).isEqualTo(ErrorCode.CONFLICT);
+                    });
+            assertThat(Files.readAllBytes(runtime.paths().localConches().resolve("local_ping.yaml"))).isEqualTo(stored);
+            assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
 
             LocalConches.ImportResult replaced = runtime.localConches().importBytes(
-                    ping("local_ping", "1.1.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+                    ping("local_ping", "1.1.0").getBytes(StandardCharsets.UTF_8), Actors.CLI, true);
             assertThat(replaced.replaced()).isTrue();
             assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.1.0");
             assertThat(runtime.admin().listAccounts("local_ping")).extracting(account -> account.account())
@@ -62,11 +76,19 @@ public class LocalConchBehaviorTest {
                     ping("official_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI))
                     .isInstanceOf(LocalConchException.class)
                     .hasMessage("与已安装的正式规则包重名")
-                    .extracting(ex -> ((LocalConchException) ex).status())
-                    .isEqualTo(409);
+                    .satisfies(ex -> {
+                        LocalConchException failure = (LocalConchException) ex;
+                        assertThat(failure.status()).isEqualTo(409);
+                        assertThat(failure.code()).isEqualTo(ErrorCode.INVALID_INPUT);
+                    });
+            assertThatThrownBy(() -> runtime.localConches().importBytes(
+                    ping("official_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI, true))
+                    .isInstanceOf(LocalConchException.class)
+                    .hasMessage("与已安装的正式规则包重名");
 
             assertThatThrownBy(() -> runtime.localConches().importBytes(secretConfig(), Actors.CLI))
                     .isInstanceOf(LocalConchException.class)
+                    .hasMessage("规则包校验失败")
                     .satisfies(ex -> {
                         LocalConchException failure = (LocalConchException) ex;
                         assertThat(failure.status()).isEqualTo(400);
@@ -120,6 +142,19 @@ public class LocalConchBehaviorTest {
             assertThat(runtime.registry().find("broken")).isEmpty();
             assertThat(runtime.registry().find("renamed")).isEmpty();
             assertThat(runtime.registry().find("linked_ping")).isEmpty();
+            assertThat(runtime.localConches().packages())
+                    .anyMatch(pkg -> "local_ping".equals(pkg.conch()) && pkg.loaded() && !pkg.broken());
+            assertThat(runtime.localConches().packages())
+                    .anyMatch(pkg -> "broken".equals(pkg.conch()) && pkg.broken()
+                            && pkg.reason().contains("broken.yaml")
+                            && pkg.reason().contains("broken")
+                            && pkg.reason().contains("无法解析"));
+            assertThat(runtime.localConches().packages())
+                    .anyMatch(pkg -> "renamed".equals(pkg.conch()) && pkg.broken()
+                            && pkg.reason().contains("renamed.yaml")
+                            && pkg.reason().contains("local_ping")
+                            && pkg.reason().contains("与文件名不一致"));
+            assertThat(runtime.localConches().packages()).noneMatch(pkg -> "linked_ping".equals(pkg.conch()));
 
             runtime.admin().createAccount("local_ping", "alice", Actors.CLI);
             Files.writeString(dir.resolve("local_ping.yaml"), ping("local_ping", "1.0.0").replace("只在本机。", "仍是这一版。"));
@@ -134,11 +169,14 @@ public class LocalConchBehaviorTest {
             assertThat(results).anyMatch(row -> "local_two.yaml".equals(row.file()) && row.ok());
             assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.2.0");
             assertThat(runtime.registry().origin("local_two")).isEqualTo(Origin.LOCAL);
+            assertThat(runtime.localConches().packages()).noneMatch(pkg -> "broken".equals(pkg.conch()));
+            assertThat(runtime.localConches().packages()).anyMatch(pkg -> "renamed".equals(pkg.conch()) && pkg.broken());
             assertThat(auditCount(runtime, "LOCAL_CONCH_IMPORTED")).isGreaterThan(imported);
 
             Files.delete(dir.resolve("local_ping.yaml"));
             runtime.localConches().reload(Actors.CLI);
             assertThat(runtime.registry().find("local_ping")).isEmpty();
+            assertThat(runtime.localConches().packages()).noneMatch(pkg -> "local_ping".equals(pkg.conch()));
             assertThat(accountOrigins(runtime, "local_ping")).containsExactly("LOCAL");
             assertThat(auditCount(runtime, "LOCAL_CONCH_DELETED")).isPositive();
 
@@ -199,6 +237,160 @@ public class LocalConchBehaviorTest {
             reports.flushMemory();
             assertThat(hourlyConches(runtime)).contains("official_ping").doesNotContain("local_ping");
             assertThat(reportConches(runtime)).doesNotContain("local_ping");
+        }
+    }
+
+    @Test
+    void brokenFileIsListedNotCallableAndCanBeReimported() throws Exception {
+        Path root = temp.resolve("broken-reload");
+        try (CrabRuntime runtime = open(root)) {
+            runtime.localConches().importBytes(ping("local_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            runtime.localConches().importBytes(ping("local_two", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            runtime.admin().createAccount("local_ping", "alice", Actors.CLI);
+            runtime.admin().createAccount("local_two", "alice", Actors.CLI);
+            CreatedApiKey namedKey = runtime.admin().createApiKey(
+                    "named", new ApiKeyScope(Set.of("local_ping", "local_two"), Set.of(), false), Actors.CLI);
+            ApiKeyPrincipal principal = runtime.apiKeys().authenticate(namedKey.plaintext()).orElseThrow();
+            assertThat(runtime.invoker().invoke(
+                    principal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-ok")
+                    .status()).isEqualTo(200);
+
+            Path dir = runtime.paths().localConches();
+            Path pingFile = dir.resolve("local_ping.yaml");
+            Files.writeString(pingFile, ":\n");
+            int deleted = auditCount(runtime, "LOCAL_CONCH_DELETED");
+            var results = runtime.localConches().reload(Actors.CLI);
+
+            assertThat(runtime.registry().find("local_ping")).isEmpty();
+            assertThat(runtime.registry().find("local_two").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            assertThat(Files.readString(pingFile)).isEqualTo(":\n");
+            try (var children = Files.list(dir)) {
+                assertThat(children.map(path -> path.getFileName().toString()).toList())
+                        .containsExactlyInAnyOrder("local_ping.yaml", "local_two.yaml");
+            }
+            assertThat(auditCount(runtime, "LOCAL_CONCH_DELETED")).isEqualTo(deleted);
+            assertThat(results).anyMatch(row -> "local_ping.yaml".equals(row.file())
+                    && !row.ok()
+                    && "local_ping".equals(row.conch())
+                    && row.issues().get(0).message().contains("文件 local_ping.yaml")
+                    && row.issues().get(0).message().contains("规则包 local_ping")
+                    && row.issues().get(0).message().contains("无法解析")
+                    && !row.issues().get(0).message().contains("conch validation failed"));
+            LocalConches.LocalPackage broken = runtime.localConches().packages().stream()
+                    .filter(pkg -> "local_ping".equals(pkg.conch()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(broken.broken()).isTrue();
+            assertThat(broken.loaded()).isFalse();
+            assertThat(broken.version()).isNull();
+            assertThat(broken.file()).isEqualTo("local_ping.yaml");
+            assertThat(broken.reason()).contains("文件 local_ping.yaml").contains("规则包 local_ping").contains("无法解析");
+            assertThat(runtime.localConches().packages())
+                    .anyMatch(pkg -> "local_two".equals(pkg.conch()) && pkg.loaded() && "1.0.0".equals(pkg.version()));
+            assertThat(runtime.invoker().invoke(
+                    principal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-broken")
+                    .status()).isEqualTo(404);
+            assertThat(runtime.invoker().invoke(
+                    principal, "local_two", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-two")
+                    .status()).isEqualTo(200);
+            assertThatThrownBy(() -> runtime.subscribe("local_ping", Actors.CLI))
+                    .isInstanceOf(SubscriptionException.class)
+                    .hasMessage("与本机本地规则包同名");
+
+            runtime.localConches().delete("local_ping", Actors.CLI);
+            assertThat(pingFile).doesNotExist();
+            assertThat(runtime.localConches().packages()).noneMatch(pkg -> "local_ping".equals(pkg.conch()));
+            assertThat(accountOrigins(runtime, "local_ping")).containsExactly("LOCAL");
+
+            LocalConches.ImportResult again = runtime.localConches().importBytes(
+                    ping("local_ping", "1.0.1").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            assertThat(again.replaced()).isFalse();
+            assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(runtime.localConches().packages())
+                    .anyMatch(pkg -> "local_ping".equals(pkg.conch()) && pkg.loaded() && !pkg.broken());
+            assertThat(runtime.invoker().invoke(
+                    principal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-again")
+                    .status()).isEqualTo(200);
+            assertThat(runtime.admin().listAccounts("local_ping")).extracting(account -> account.account())
+                    .containsExactly("alice");
+        }
+
+        Path home = temp.resolve("broken-reload");
+        Files.writeString(home.resolve("local-conches").resolve("local_two.yaml"), ":\n");
+        try (CrabRuntime restarted = open(home)) {
+            restarted.loadInstalledConches();
+            assertThat(restarted.registry().find("local_ping")).isPresent();
+            assertThat(restarted.registry().find("local_two")).isEmpty();
+            assertThat(restarted.localConches().packages())
+                    .anyMatch(pkg -> "local_two".equals(pkg.conch()) && pkg.broken()
+                            && pkg.reason().contains("local_two.yaml")
+                            && pkg.reason().contains("无法解析"));
+            assertThat(Files.readString(home.resolve("local-conches").resolve("local_two.yaml"))).isEqualTo(":\n");
+        }
+    }
+
+    @Test
+    void mismatchedNameDoesNotOverwriteAndImportRequiresConfirm() throws Exception {
+        Path root = temp.resolve("name-mismatch");
+        try (CrabRuntime runtime = open(root)) {
+            byte[] yaml = ping("local_ping", "1.0.0").getBytes(StandardCharsets.UTF_8);
+            runtime.localConches().importBytes(yaml, Actors.CLI);
+            Path dir = runtime.paths().localConches();
+            Path installed = dir.resolve("local_ping.yaml");
+            byte[] stored = Files.readAllBytes(installed);
+            Files.writeString(dir.resolve("b.yaml"), ping("local_ping", "9.9.9"));
+            Files.writeString(dir.resolve("renamed.yaml"), ping("local_ping", "9.9.9"));
+            byte[] huge = new byte[LocalConches.MAX_BYTES + 1];
+            Files.write(dir.resolve("local_big.yaml"), huge);
+
+            var results = runtime.localConches().reload(Actors.CLI);
+            assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            assertThat(Files.readAllBytes(installed)).isEqualTo(stored);
+            assertThat(results).anyMatch(row -> "b.yaml".equals(row.file())
+                    && !row.ok()
+                    && row.conch() == null
+                    && row.issues().get(0).message().contains("文件 b.yaml")
+                    && row.issues().get(0).message().contains("规则包是 local_ping")
+                    && row.issues().get(0).message().contains("与文件名不一致")
+                    && !row.issues().get(0).message().contains("file name does not match conch"));
+            assertThat(results).anyMatch(row -> "local_big.yaml".equals(row.file()) && !row.ok()
+                    && row.issues().get(0).message().contains("文件 local_big.yaml")
+                    && row.issues().get(0).message().contains("规则包 local_big")
+                    && row.issues().get(0).message().contains("超过 1 MiB"));
+            assertThat(runtime.localConches().packages()).noneMatch(pkg -> "b".equals(pkg.conch()));
+            LocalConches.LocalPackage renamed = runtime.localConches().packages().stream()
+                    .filter(pkg -> "renamed".equals(pkg.conch()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(renamed.broken()).isTrue();
+            assertThat(renamed.reason()).contains("renamed.yaml").contains("local_ping").contains("与文件名不一致");
+            assertThat(runtime.localConches().packages())
+                    .anyMatch(pkg -> "local_big".equals(pkg.conch()) && pkg.broken()
+                            && pkg.reason().contains("超过 1 MiB"));
+            assertThat(runtime.registry().find("local_big")).isEmpty();
+            assertThat(runtime.registry().find("renamed")).isEmpty();
+
+            assertThatThrownBy(() -> runtime.localConches().importBytes(
+                    ping("local_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                    .isInstanceOf(LocalConchException.class)
+                    .hasMessage("将覆盖已有的本地规则包 local_ping。确认后再导入。")
+                    .extracting(ex -> ((LocalConchException) ex).code())
+                    .isEqualTo(ErrorCode.CONFLICT);
+            assertThat(Files.readAllBytes(installed)).isEqualTo(stored);
+            assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
+
+            LocalConches.ImportResult replaced = runtime.localConches().importBytes(
+                    ping("local_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI, true);
+            assertThat(replaced.replaced()).isTrue();
+            assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("2.0.0");
+
+            runtime.localConches().delete("renamed", Actors.CLI);
+            runtime.localConches().delete("local_big", Actors.CLI);
+            assertThat(dir.resolve("renamed.yaml")).doesNotExist();
+            assertThat(dir.resolve("local_big.yaml")).doesNotExist();
+            assertThat(runtime.localConches().packages()).noneMatch(pkg -> "renamed".equals(pkg.conch()));
+            assertThat(runtime.localConches().packages()).noneMatch(pkg -> "local_big".equals(pkg.conch()));
+            assertThat(runtime.registry().find("local_ping")).isPresent();
         }
     }
 

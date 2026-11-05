@@ -447,6 +447,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      */
     public ConchOutcome subscribe(String conch, String actor) {
         prepare();
+        if (localConches.occupies(conch) && registry.origin(conch) != Origin.LOCAL) {
+            throw new SubscriptionException(409, ErrorCode.INVALID_INPUT, SubscriptionException.LOCAL_CONFLICT);
+        }
         if (conchSync == null) {
             throw new SubscriptionException(
                     409, ErrorCode.NOT_CONFIGURED, SubscriptionException.NOT_CONFIGURED);

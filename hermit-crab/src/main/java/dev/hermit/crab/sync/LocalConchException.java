@@ -14,36 +14,71 @@ public final class LocalConchException extends RuntimeException {
     private final ErrorCode code;
     private final List<ValidationIssue> errors;
     private final List<ValidationIssue> warnings;
+    /** Non-null when import must be repeated with confirmation. The name is the package that would be overwritten. */
+    private final String replaceConch;
+    /** Package name parsed from YAML before a later check failed. Null when parsing did not reach a safe name. */
+    private final String parsedConch;
 
     private LocalConchException(
             int status,
             ErrorCode code,
             String message,
             List<ValidationIssue> errors,
-            List<ValidationIssue> warnings
+            List<ValidationIssue> warnings,
+            String replaceConch,
+            String parsedConch
     ) {
         super(message == null ? "" : message);
         this.status = status;
         this.code = code;
         this.errors = errors == null ? List.of() : List.copyOf(errors);
         this.warnings = warnings == null ? List.of() : List.copyOf(warnings);
+        this.replaceConch = replaceConch;
+        this.parsedConch = parsedConch;
     }
 
     public static LocalConchException invalid(String message) {
-        return new LocalConchException(400, ErrorCode.INVALID_INPUT, message, List.of(), List.of());
+        return new LocalConchException(400, ErrorCode.INVALID_INPUT, message, List.of(), List.of(), null, null);
     }
 
     public static LocalConchException invalid(String message, List<ValidationIssue> errors, List<ValidationIssue> warnings) {
-        return new LocalConchException(400, ErrorCode.INVALID_INPUT, message, errors, warnings);
+        return invalid(message, errors, warnings, null);
     }
 
-    /** No {@code CONFLICT} code exists. HTTP 409 with {@link ErrorCode#INVALID_INPUT}. */
+    public static LocalConchException invalid(
+            String message,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings,
+            String parsedConch
+    ) {
+        return new LocalConchException(400, ErrorCode.INVALID_INPUT, message, errors, warnings, null, parsedConch);
+    }
+
+    /**
+     * Official or subscription name clash. HTTP 409 with {@link ErrorCode#INVALID_INPUT}.
+     * Overwrite confirmation uses {@link #replaceRequired}.
+     */
     public static LocalConchException conflict(String message) {
-        return new LocalConchException(409, ErrorCode.INVALID_INPUT, message, List.of(), List.of());
+        return new LocalConchException(409, ErrorCode.INVALID_INPUT, message, List.of(), List.of(), null, null);
+    }
+
+    /**
+     * The target local package or its yaml file is already there. Nothing is written until the
+     * caller passes confirmation.
+     */
+    public static LocalConchException replaceRequired(String conch) {
+        return new LocalConchException(
+                409,
+                ErrorCode.CONFLICT,
+                "将覆盖已有的本地规则包 " + conch + "。确认后再导入。",
+                List.of(),
+                List.of(),
+                conch,
+                conch);
     }
 
     public static LocalConchException notFound() {
-        return new LocalConchException(404, ErrorCode.NOT_FOUND, "not found", List.of(), List.of());
+        return new LocalConchException(404, ErrorCode.NOT_FOUND, "not found", List.of(), List.of(), null, null);
     }
 
     public int status() {
@@ -60,6 +95,14 @@ public final class LocalConchException extends RuntimeException {
 
     public List<ValidationIssue> warnings() {
         return warnings;
+    }
+
+    public String replaceConch() {
+        return replaceConch;
+    }
+
+    public String parsedConch() {
+        return parsedConch;
     }
 
     public boolean hasIssues() {

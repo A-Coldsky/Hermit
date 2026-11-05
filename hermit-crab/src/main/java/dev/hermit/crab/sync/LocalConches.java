@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -38,6 +39,11 @@ import dev.hermit.crab.store.Origin;
 /**
  * Unsigned conches stored as {@code local-conches/{conch}.yaml}. The bytes on disk are the
  * import, including a later export. One bad file does not stop the others.
+ *
+ * <p>A file that cannot be read, fails to parse, or names a different package is not left
+ * callable and is not copied aside. When the file stem is a legal package name, that name stays
+ * listed as broken until it is deleted, and can then be imported again. Removing the file from
+ * the directory still unloads the package and drops the broken row.
  */
 public final class LocalConches {
     /** Same ceiling as Reef {@code ConchPaths.MAX_UPLOAD_BYTES}. */
@@ -50,6 +56,8 @@ public final class LocalConches {
     private final ConchRegistry registry;
     private final DataSource dataSource;
     private final Object lock = new Object();
+    /** Legal stems whose yaml failed to load. Rebuilt on startup and reload. Not callable. */
+    private final LinkedHashMap<String, BrokenLocal> broken = new LinkedHashMap<>();
 
     public LocalConches(CrabPaths paths, ConchRegistry registry, DataSource dataSource) {
         this.paths = paths;
@@ -58,6 +66,15 @@ public final class LocalConches {
     }
 
     public ImportResult importBytes(byte[] raw, String actor) {
+        return importBytes(raw, actor, false);
+    }
+
+    /**
+     * @param replace overwrite an existing local package or yaml file. Without it, an existing
+     *     target fails with {@link LocalConchException#replaceRequired(String)} and the file is
+     *     left untouched.
+     */
+    public ImportResult importBytes(byte[] raw, String actor, boolean replace) {
         String checked = actor(actor);
         if (raw == null) {
             throw LocalConchException.invalid("yaml is required");
@@ -68,14 +85,17 @@ public final class LocalConches {
         Parsed parsed = parse(raw);
         synchronized (lock) {
             rejectClash(parsed.doc().conch());
-            boolean replaced = registry.origin(parsed.doc().conch()) == Origin.LOCAL
-                    || Files.exists(yamlPath(parsed.doc().conch()), LinkOption.NOFOLLOW_LINKS);
+            boolean exists = localPackageExists(parsed.doc().conch());
+            if (exists && !replace) {
+                throw LocalConchException.replaceRequired(parsed.doc().conch());
+            }
             store(parsed.doc(), raw);
+            broken.remove(parsed.doc().conch());
             audit(checked, AuditKind.LOCAL_CONCH_IMPORTED, parsed.doc());
             return new ImportResult(
                     parsed.doc().conch(),
                     parsed.doc().version().toString(),
-                    replaced,
+                    exists,
                     parsed.warnings());
         }
     }
@@ -101,13 +121,15 @@ public final class LocalConches {
     public void delete(String conch, String actor) {
         String checked = actor(actor);
         synchronized (lock) {
-            if (registry.origin(conch) != Origin.LOCAL) {
+            if (registry.origin(conch) == Origin.OFFICIAL) {
                 throw LocalConchException.notFound();
             }
-            ConchDoc doc = registry.find(conch).orElse(null);
-            if (doc == null) {
+            boolean loaded = registry.origin(conch) == Origin.LOCAL && registry.find(conch).isPresent();
+            BrokenLocal failed = broken.get(conch);
+            if (!loaded && failed == null) {
                 throw LocalConchException.notFound();
             }
+            ConchDoc doc = loaded ? registry.find(conch).orElse(null) : null;
             Path file = yamlPath(conch);
             synchronized (ConchFileLocks.of(conch)) {
                 if (Files.isSymbolicLink(file)) {
@@ -118,9 +140,44 @@ public final class LocalConches {
                 } catch (IOException ex) {
                     throw new IllegalStateException("local conch file was not deleted");
                 }
-                registry.remove(conch);
-                audit(checked, AuditKind.LOCAL_CONCH_DELETED, doc);
+                if (loaded) {
+                    registry.remove(conch);
+                }
+                broken.remove(conch);
+                audit(checked, AuditKind.LOCAL_CONCH_DELETED, conch, doc == null ? "" : doc.version().toString());
             }
+        }
+    }
+
+    /** Loaded local packages and broken files whose stem is a legal package name, sorted by name. */
+    public List<LocalPackage> packages() {
+        synchronized (lock) {
+            TreeMap<String, LocalPackage> rows = new TreeMap<>();
+            for (Map.Entry<String, ConchDoc> entry : registry.snapshot().entrySet()) {
+                if (registry.origin(entry.getKey()) != Origin.LOCAL) {
+                    continue;
+                }
+                String name = entry.getKey();
+                rows.put(name, new LocalPackage(
+                        name, name + SUFFIX, entry.getValue().version().toString(), true, false, null));
+            }
+            for (BrokenLocal failed : broken.values()) {
+                if (rows.containsKey(failed.conch())) {
+                    continue;
+                }
+                rows.put(failed.conch(), new LocalPackage(failed.conch(), failed.file(), null, false, true, failed.reason()));
+            }
+            return List.copyOf(rows.values());
+        }
+    }
+
+    /** True when the name is a loaded local package or a broken local file. It is not callable when only broken. */
+    public boolean occupies(String conch) {
+        if (conch == null) {
+            return false;
+        }
+        synchronized (lock) {
+            return registry.origin(conch) == Origin.LOCAL || broken.containsKey(conch);
         }
     }
 
@@ -163,9 +220,10 @@ public final class LocalConches {
         Map<String, String> beforeVersions = localVersions();
         ArrayList<FileResult> results = new ArrayList<>();
         LinkedHashMap<String, ConchDoc> loaded = new LinkedHashMap<>();
+        LinkedHashMap<String, BrokenLocal> nextBroken = new LinkedHashMap<>();
         try (var children = Files.list(root)) {
             for (Path child : children.filter(path -> path.getFileName().toString().endsWith(SUFFIX)).sorted().toList()) {
-                results.add(loadFile(root, child, loaded));
+                results.add(loadFile(root, child, loaded, nextBroken));
             }
         } catch (IOException ex) {
             throw new IllegalStateException("local conch directory was not listed");
@@ -176,6 +234,8 @@ public final class LocalConches {
             }
         }
         dropMissing(loaded.keySet());
+        broken.clear();
+        broken.putAll(nextBroken);
         if (auditChanges && actor != null) {
             Map<String, String> afterVersions = localVersions();
             for (Map.Entry<String, String> entry : afterVersions.entrySet()) {
@@ -184,7 +244,7 @@ public final class LocalConches {
                 }
             }
             for (Map.Entry<String, String> entry : beforeVersions.entrySet()) {
-                if (!afterVersions.containsKey(entry.getKey())) {
+                if (!afterVersions.containsKey(entry.getKey()) && !broken.containsKey(entry.getKey())) {
                     audit(actor, AuditKind.LOCAL_CONCH_DELETED, entry.getKey(), entry.getValue());
                 }
             }
@@ -192,59 +252,116 @@ public final class LocalConches {
         return List.copyOf(results);
     }
 
-    private FileResult loadFile(Path root, Path child, Map<String, ConchDoc> loaded) {
+    private FileResult loadFile(
+            Path root,
+            Path child,
+            Map<String, ConchDoc> loaded,
+            Map<String, BrokenLocal> nextBroken
+    ) {
         String fileName = child.getFileName().toString();
         Path file = child.toAbsolutePath().normalize();
         if (!file.startsWith(root) || !root.equals(file.getParent())) {
-            return failed(fileName, null, null, issue("PATH", fileName, "path escapes local-conches"));
+            return failed(fileName, null, null, issue("PATH", fileName, sentence("文件 " + fileName + " 不在本地规则包目录里")));
         }
         if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-            return failed(fileName, null, null, issue("SYMLINK", fileName, "not a regular file"));
+            return failed(fileName, stemName(stemOf(fileName)), null,
+                    issue("SYMLINK", fileName, sentence("文件 " + fileName + " 不是普通文件")));
         }
-        String stem = fileName.substring(0, fileName.length() - SUFFIX.length());
+        String stem = stemOf(fileName);
         byte[] raw;
         try {
             if (Files.size(file) > MAX_BYTES) {
-                dropStem(stem);
-                return failed(fileName, stemName(stem), null, issue("TOO_LARGE", fileName, "yaml exceeds 1 MiB"));
+                String reason = readReason(fileName, stemName(stem), "超过 1 MiB");
+                return reject(fileName, stem, stemName(stem), null, "TOO_LARGE", reason, List.of(), nextBroken);
             }
             raw = Files.readAllBytes(file);
         } catch (IOException ex) {
-            dropStem(stem);
-            return failed(fileName, stemName(stem), null, issue("IO", fileName, "file was not read"));
+            String reason = readReason(fileName, stemName(stem), "没有读出来");
+            return reject(fileName, stem, stemName(stem), null, "IO", reason, List.of(), nextBroken);
         }
         Parsed parsed;
         try {
             parsed = parse(raw);
         } catch (LocalConchException ex) {
-            dropStem(stem);
-            String conch = ex.errors().isEmpty() ? stemName(stem) : null;
-            return new FileResult(fileName, conch, null, false, ex.errors().isEmpty()
-                    ? List.of(issue("INVALID_INPUT", fileName, ex.getMessage()))
-                    : ex.errors());
+            String reason = loadFailureReason(fileName, stemName(stem), ex);
+            String code = ex.errors().isEmpty() ? "INVALID_INPUT" : ex.errors().get(0).code();
+            return reject(fileName, stem, ex.parsedConch(), null, code, reason, ex.errors(), nextBroken);
         }
         if (!stem.equals(parsed.doc().conch())) {
-            dropStem(stem);
-            return failed(fileName, parsed.doc().conch(), parsed.doc().version().toString(),
-                    issue("NAME", fileName, "file name does not match conch"));
+            String reason = sentence("文件 " + fileName + " 里的规则包是 " + parsed.doc().conch() + "，与文件名不一致");
+            return reject(
+                    fileName,
+                    stem,
+                    parsed.doc().conch(),
+                    parsed.doc().version().toString(),
+                    "NAME",
+                    reason,
+                    List.of(),
+                    nextBroken);
         }
         synchronized (ConchFileLocks.of(parsed.doc().conch())) {
             try {
                 rejectClash(parsed.doc().conch());
             } catch (LocalConchException ex) {
+                String reason = readReason(fileName, parsed.doc().conch(), ex.getMessage());
+                if (registry.origin(parsed.doc().conch()) != Origin.OFFICIAL) {
+                    rememberBroken(stem, fileName, reason, nextBroken);
+                }
                 return failed(fileName, parsed.doc().conch(), parsed.doc().version().toString(),
-                        issue("CONFLICT", parsed.doc().conch(), ex.getMessage()));
+                        issue("CONFLICT", parsed.doc().conch(), reason));
             }
             try {
                 registry.put(parsed.doc(), Origin.LOCAL);
             } catch (ConchRejectedException ex) {
-                dropStem(stem);
-                return new FileResult(fileName, parsed.doc().conch(), parsed.doc().version().toString(), false, ex.issues());
+                String reason = readReason(fileName, parsed.doc().conch(), "未通过校验");
+                rememberBroken(stem, fileName, reason, nextBroken);
+                return new FileResult(
+                        fileName,
+                        shownConch(stem, parsed.doc().conch()),
+                        parsed.doc().version().toString(),
+                        false,
+                        failureIssues("INVALID_INPUT", fileName, reason, ex.issues()));
             }
         }
+        nextBroken.remove(parsed.doc().conch());
         loaded.put(parsed.doc().conch(), parsed.doc());
         List<ValidationIssue> warnings = parsed.warnings();
         return new FileResult(fileName, parsed.doc().conch(), parsed.doc().version().toString(), true, warnings);
+    }
+
+    private FileResult reject(
+            String fileName,
+            String stem,
+            String reportedConch,
+            String version,
+            String code,
+            String reason,
+            List<ValidationIssue> details,
+            Map<String, BrokenLocal> nextBroken
+    ) {
+        rememberBroken(stem, fileName, reason, nextBroken);
+        return new FileResult(fileName, shownConch(stem, reportedConch), version, false,
+                failureIssues(code, fileName, reason, details));
+    }
+
+    /**
+     * Drops a previously loaded local package with this stem and records it as broken.
+     * An official package of the same name is left alone. An illegal stem is only reported on the file row.
+     */
+    private void rememberBroken(String stem, String file, String reason, Map<String, BrokenLocal> nextBroken) {
+        String name = stemName(stem);
+        if (name == null || registry.origin(name) == Origin.OFFICIAL) {
+            return;
+        }
+        dropStem(name);
+        nextBroken.put(name, new BrokenLocal(name, file, reason));
+    }
+
+    private boolean localPackageExists(String conch) {
+        if (registry.origin(conch) == Origin.LOCAL || broken.containsKey(conch)) {
+            return true;
+        }
+        return Files.exists(yamlPath(conch), LinkOption.NOFOLLOW_LINKS);
     }
 
     private void dropMissing(java.util.Set<String> kept) {
@@ -296,7 +413,7 @@ public final class LocalConches {
                 registry.put(doc, Origin.LOCAL);
             } catch (ConchRejectedException ex) {
                 restore(file, previous, existed);
-                throw LocalConchException.invalid("conch validation failed", ex.issues(), List.of());
+                throw LocalConchException.invalid("规则包校验失败", ex.issues(), List.of(), doc.conch());
             } catch (RuntimeException ex) {
                 restore(file, previous, existed);
                 throw ex;
@@ -320,28 +437,29 @@ public final class LocalConches {
             doc = ConchParser.parse(yaml);
         } catch (ConchParseException ex) {
             throw LocalConchException.invalid(
-                    "conch validation failed",
+                    "规则包校验失败",
                     List.of(issue("PARSE", ex.path(), clip(ex.getMessage()))),
                     List.of());
         }
         if (!ConchValidator.isConchName(doc.conch()) || !ConchFiles.safeSegment(doc.conch())) {
             throw LocalConchException.invalid(
-                    "conch validation failed",
+                    "规则包校验失败",
                     List.of(issue("CONCH_NAME", "conch", "conch 不符合 ^[a-z][a-z0-9_]{1,63}$")),
                     List.of());
         }
         if (!ConchFiles.safeSegment(doc.version().toString())) {
             throw LocalConchException.invalid(
-                    "conch validation failed",
+                    "规则包校验失败",
                     List.of(issue("VERSION_INVALID", "version", "version is not a safe path segment")),
-                    List.of());
+                    List.of(),
+                    doc.conch());
         }
         ValidationResult result = ConchValidator.validate(
                 doc, ConchValidator.Context.of(CrabVersion.CURRENT, java.util.Set.of(
                         "request", "extract", "assert", "set", "script")));
         List<ValidationIssue> structural = registry.inspect(doc);
         if (!structural.isEmpty()) {
-            throw LocalConchException.invalid("conch validation failed", structural, result.warnings());
+            throw LocalConchException.invalid("规则包校验失败", structural, result.warnings(), doc.conch());
         }
         return new Parsed(doc, result.warnings());
     }
@@ -435,8 +553,86 @@ public final class LocalConches {
         return new ValidationIssue(code, path == null ? "" : path, clip(message));
     }
 
+    private static String stemOf(String fileName) {
+        return fileName.substring(0, fileName.length() - SUFFIX.length());
+    }
+
     private static String stemName(String stem) {
-        return ConchValidator.isConchName(stem) ? stem : null;
+        return ConchValidator.isConchName(stem) && ConchFiles.safeSegment(stem) ? stem : null;
+    }
+
+    /** The deletable package is the file stem. An illegal stem is not a package row; the reason still names the YAML. */
+    private static String shownConch(String stem, String reported) {
+        String slot = stemName(stem);
+        if (slot != null) {
+            return slot;
+        }
+        return reported != null && stemName(reported) != null && reported.equals(stem) ? reported : null;
+    }
+
+    private static String loadFailureReason(String fileName, String slot, LocalConchException ex) {
+        String inner = ex.parsedConch();
+        boolean parse = ex.errors().stream().anyMatch(issue -> "PARSE".equals(issue.code()));
+        if (parse || ex.errors().isEmpty()) {
+            String detail = ex.errors().isEmpty() ? ex.getMessage() : ex.errors().get(0).message();
+            String name = slot != null ? slot : inner;
+            if ("yaml is not valid UTF-8".equals(detail)) {
+                return readReason(fileName, name, "不是合法的 UTF-8");
+            }
+            if ("yaml is required".equals(detail)) {
+                return readReason(fileName, name, "是空的");
+            }
+            if (name == null) {
+                return sentence("文件 " + fileName + " 无法解析：" + detail);
+            }
+            return sentence("文件 " + fileName + " 的规则包 " + name + " 无法解析：" + detail);
+        }
+        if (inner != null && slot != null && !slot.equals(inner)) {
+            return sentence("文件 " + fileName + " 里的规则包是 " + inner + "，与文件名不一致，而且未通过校验");
+        }
+        String name = inner != null ? inner : slot;
+        if (name == null) {
+            return sentence("文件 " + fileName + " 未通过校验");
+        }
+        return sentence("文件 " + fileName + " 的规则包 " + name + " 未通过校验");
+    }
+
+    private static String readReason(String fileName, String conch, String what) {
+        if (conch == null) {
+            return sentence("文件 " + fileName + " " + what);
+        }
+        return sentence("文件 " + fileName + " 的规则包 " + conch + " " + what);
+    }
+
+    private static String sentence(String text) {
+        String cleaned = clip(text).trim();
+        if (cleaned.isEmpty()) {
+            return "";
+        }
+        char last = cleaned.charAt(cleaned.length() - 1);
+        if (last == '。' || last == '.' || last == '！' || last == '?' || last == '？') {
+            return cleaned;
+        }
+        return cleaned + "。";
+    }
+
+    private static List<ValidationIssue> failureIssues(
+            String code,
+            String fileName,
+            String reason,
+            List<ValidationIssue> details
+    ) {
+        ArrayList<ValidationIssue> issues = new ArrayList<>();
+        issues.add(issue(code, fileName, reason));
+        if (details != null) {
+            for (ValidationIssue detail : details) {
+                if ("PARSE".equals(detail.code()) || reason.equals(detail.message())) {
+                    continue;
+                }
+                issues.add(detail);
+            }
+        }
+        return List.copyOf(issues);
     }
 
     private static String codes(List<ValidationIssue> issues) {
@@ -471,6 +667,23 @@ public final class LocalConches {
         public FileResult {
             issues = issues == null ? List.of() : List.copyOf(issues);
         }
+    }
+
+    /**
+     * One local package. {@code broken} packages are not in the registry and cannot be called.
+     * {@code version} and {@code reason} are null when they do not apply.
+     */
+    public record LocalPackage(
+            String conch,
+            String file,
+            String version,
+            boolean loaded,
+            boolean broken,
+            String reason
+    ) {
+    }
+
+    private record BrokenLocal(String conch, String file, String reason) {
     }
 
     public record Export(String conch, String version, byte[] bytes) {

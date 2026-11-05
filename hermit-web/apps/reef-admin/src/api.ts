@@ -285,6 +285,8 @@ export const api = {
     http.post<{ conch: string; version: string }>(
       `/api/admin/conches/${seg(conch)}/versions/${seg(version)}/publish`,
     ),
+  discardVersion: (conch: string, version: string) =>
+    http.del<{ conch: string; version: string }>(`/api/admin/conches/${seg(conch)}/versions/${seg(version)}`),
   disableConch: (conch: string, reason: string) =>
     http.post<ConchAvailability>(`/api/admin/conches/${seg(conch)}/disable`, { reason }),
   enableConch: (conch: string, reason: string) =>

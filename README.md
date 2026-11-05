@@ -2,7 +2,7 @@
 
 Hermit 用声明式 YAML 规则包（Conch）描述老系统的登录、请求、数据提取和业务能力，再由部署在内网的 **Crab** 提供 HTTP API 与 MCP 接口。**Reef** 负责规则管理、签名发布、版本分发及运行反馈。
 
-规则包（Conch）不是操作系统 shell 脚本。`driver: http` 走步骤引擎。`driver: mcp` 已能解析、校验、签名，并由 Crab 按 `headers` 认证转发；OAuth 登录和工具列表刷新还没有。已接通的还有 Vue 管理页面、账号与凭证管理、按需订阅与手动更新（版本只向前）、统计与告警。实现边界见[功能状态](docs/feature-status.md)。
+规则包（Conch）不是操作系统 shell 脚本。`driver: http` 走步骤引擎。`driver: mcp` 已能解析、校验、签名，并由 Crab 按 `headers` 转发；`oauth` 在控制台登录，调试开关打开时本地包可以刷新 `tools/list`。已接通的还有 Vue 管理页面、账号与凭证管理、按需订阅与手动更新（版本只向前）、统计与告警。实现边界见[功能状态](docs/feature-status.md)。
 
 ## 从哪里开始
 

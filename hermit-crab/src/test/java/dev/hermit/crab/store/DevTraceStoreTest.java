@@ -106,6 +106,17 @@ class DevTraceStoreTest {
             assertThat(stored.body()).contains("***").contains("\"kind\":\"jsonrpc\"");
             assertThat(traces.find("rpc-official")).isEmpty();
             assertThat(calls.findByTraceId("rpc-1")).isEmpty();
+
+            traces.recordJsonRpc(new DevTraceStore.JsonRpcTrace(
+                    "rpc-1", Origin.LOCAL, "local_mcp", "", "mcp_refresh", "tools/call", 2, 200, 5L,
+                    Map.of("name", "search"), Map.of("token", "other-secret-value"), null,
+                    List.of("other-secret-value")));
+            assertThat(traces.count()).isEqualTo(1);
+            String merged = traces.find("rpc-1").orElseThrow().body();
+            assertThat(merged).contains("tools/list").contains("tools/call");
+            assertThat(merged).doesNotContain("super-secret-value").doesNotContain("other-secret-value")
+                    .doesNotContain("sess-secret-value-77");
+            assertThat(calls.findByTraceId("rpc-1")).isEmpty();
         }
     }
 

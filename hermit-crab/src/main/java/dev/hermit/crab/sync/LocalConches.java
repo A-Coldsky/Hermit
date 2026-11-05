@@ -16,7 +16,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.BooleanSupplier;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -52,17 +54,34 @@ public final class LocalConches {
     private static final Logger LOG = Logger.getLogger(LocalConches.class.getName());
     private static final String SUFFIX = ".yaml";
 
+    private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script");
+
     private final CrabPaths paths;
     private final ConchRegistry registry;
     private final DataSource dataSource;
+    private final BooleanSupplier debugEnabled;
     private final Object lock = new Object();
     /** Legal stems whose yaml failed to load. Rebuilt on startup and reload. Not callable. */
     private final LinkedHashMap<String, BrokenLocal> broken = new LinkedHashMap<>();
 
     public LocalConches(CrabPaths paths, ConchRegistry registry, DataSource dataSource) {
+        this(paths, registry, dataSource, () -> false);
+    }
+
+    /**
+     * {@code debugEnabled} 为 true 时，空 actions 的 mcp 骨架可以导入（警告，不是错误）。
+     * 正式发布校验不走这里。
+     */
+    public LocalConches(
+            CrabPaths paths,
+            ConchRegistry registry,
+            DataSource dataSource,
+            BooleanSupplier debugEnabled
+    ) {
         this.paths = paths;
         this.registry = registry;
         this.dataSource = dataSource;
+        this.debugEnabled = debugEnabled == null ? () -> false : debugEnabled;
     }
 
     public ImportResult importBytes(byte[] raw, String actor) {
@@ -311,7 +330,7 @@ public final class LocalConches {
                         issue("CONFLICT", parsed.doc().conch(), reason));
             }
             try {
-                registry.put(parsed.doc(), Origin.LOCAL);
+                registry.put(parsed.doc(), Origin.LOCAL, allowEmptyMcpActions());
             } catch (ConchRejectedException ex) {
                 String reason = readReason(fileName, parsed.doc().conch(), "未通过校验");
                 rememberBroken(stem, fileName, reason, nextBroken);
@@ -410,7 +429,7 @@ public final class LocalConches {
             }
             try {
                 atomicWrite(file, raw);
-                registry.put(doc, Origin.LOCAL);
+                registry.put(doc, Origin.LOCAL, allowEmptyMcpActions());
             } catch (ConchRejectedException ex) {
                 restore(file, previous, existed);
                 throw LocalConchException.invalid("规则包校验失败", ex.issues(), List.of(), doc.conch());
@@ -454,14 +473,28 @@ public final class LocalConches {
                     List.of(),
                     doc.conch());
         }
-        ValidationResult result = ConchValidator.validate(
-                doc, ConchValidator.Context.of(CrabVersion.CURRENT, java.util.Set.of(
-                        "request", "extract", "assert", "set", "script")));
-        List<ValidationIssue> structural = registry.inspect(doc);
+        boolean allowEmpty = allowEmptyMcpActions();
+        ValidationResult result = ConchValidator.validate(doc, validationContext(allowEmpty));
+        List<ValidationIssue> structural = registry.inspect(doc, allowEmpty);
         if (!structural.isEmpty()) {
             throw LocalConchException.invalid("规则包校验失败", structural, result.warnings(), doc.conch());
         }
         return new Parsed(doc, result.warnings());
+    }
+
+    private boolean allowEmptyMcpActions() {
+        try {
+            return debugEnabled.getAsBoolean();
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
+    private static ConchValidator.Context validationContext(boolean allowEmptyMcpActions) {
+        if (allowEmptyMcpActions) {
+            return ConchValidator.Context.allowingEmptyMcpActions(CrabVersion.CURRENT, STEP_TYPES);
+        }
+        return ConchValidator.Context.of(CrabVersion.CURRENT, STEP_TYPES);
     }
 
     private Path yamlPath(String conch) {

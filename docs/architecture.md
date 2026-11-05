@@ -43,7 +43,7 @@ flowchart LR
 | [crab/cli](../hermit-crab/src/main/java/dev/hermit/crab/cli) | `CrabMain` 经 `CrabCommand` 分派命令 |
 | [crab/runtime](../hermit-crab/src/main/java/dev/hermit/crab/runtime) | `CrabRuntime` 装配；`CrabServer` 生命周期；`Invoker` 调用层；`ConchAdmin` 管理操作 |
 | [crab/engine](../hermit-crab/src/main/java/dev/hermit/crab/engine) | 输入校验、规则注册、账号锁/会话、步骤、Rhino 沙箱、输出脱敏。`ConchExecutor` 由 `RuleEngine` 实现 |
-| [crab/upstream](../hermit-crab/src/main/java/dev/hermit/crab/upstream) | `driver: mcp` 的 Streamable HTTP 转发。`headers` 用请求头模板；`oauth` 走 PKCE，令牌在凭证库，调用前刷新。OAuth 使用单独的 HTTP 客户端，不跟随重定向。账号锁只包住会话创建 |
+| [crab/upstream](../hermit-crab/src/main/java/dev/hermit/crab/upstream) | `driver: mcp` 的 Streamable HTTP 转发。`headers` 用请求头模板；`oauth` 走 PKCE，令牌在凭证库，调用前刷新。本地刷新的 `tools/list` 走同一条令牌路径。OAuth 使用单独的 HTTP 客户端，不跟随重定向。账号锁只包住会话创建 |
 | [crab/store](../hermit-crab/src/main/java/dev/hermit/crab/store) / [secure](../hermit-crab/src/main/java/dev/hermit/crab/secure) | H2、账户、配置、凭证/会话/幂等响应加密、API Key、日志 |
 | [crab/gateway](../hermit-crab/src/main/java/dev/hermit/crab/gateway) / [mcp](../hermit-crab/src/main/java/dev/hermit/crab/mcp) | HTTP API、本机控制台、OpenAPI、MCP HTTP/SSE、stdio 桥接 |
 | [crab/sync](../hermit-crab/src/main/java/dev/hermit/crab/sync) / [report](../hermit-crab/src/main/java/dev/hermit/crab/report) | ETag/安装/手动更新/版本保留；失败队列、小时计数与发送重试 |
@@ -85,7 +85,7 @@ sequenceDiagram
   I-->>C: API envelope / MCP result
 ```
 
-HTTP 包的同一 `(origin, conch, account)` 由公平锁串行执行；不同账号可并行。mcp 包只在创建或替换上游会话时拿这把锁，`tools/call` 的并发由 `engine.mcp_max_concurrency_per_account` 限制。执行 HTTP 能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。500 及以上是 `UPSTREAM_ERROR`。其它非 2xx 在后续 `assert.status` 覆盖实际状态码时放行；非 GET 的 3xx 且不是登录重定向也放行。没有这种期望的 GET 404 等在提取前是 `UPSTREAM_ERROR`，message 带状态码。未写 `timeout_ms` 的空闲读停在能力 deadline，到点是 `TIMEOUT`；步骤自己的 `timeout_ms` 更短时是 `UPSTREAM_ERROR`「步骤超时」。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。mcp 转发不跟随重定向，不把客户端的 API Key 或 `Mcp-Session-Id` 交给上游。
+HTTP 包的同一 `(origin, conch, account)` 由公平锁串行执行；不同账号可并行。mcp 包只在创建或替换上游会话时拿这把锁，`tools/call` 的并发由 `engine.mcp_max_concurrency_per_account` 限制。执行 HTTP 能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。500 及以上是 `UPSTREAM_ERROR`。其它非 2xx 在后续 `assert.status` 覆盖实际状态码时放行；非 GET 的 3xx 且不是登录重定向也放行。没有这种期望的 GET 404 等在提取前是 `UPSTREAM_ERROR`，message 带状态码。未写 `timeout_ms` 的空闲读停在能力 deadline，到点是 `TIMEOUT`；步骤自己的 `timeout_ms` 更短时是 `UPSTREAM_ERROR`「步骤超时」。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。mcp 转发不跟随重定向，不把客户端的 API Key 或 `Mcp-Session-Id` 交给上游。调试开关打开时，本地 MCP 的 JSON-RPC 与 HTTP 步骤共用 `dev_traces`；刷新把过滤后的工具写回 `local-conches/{conch}.yaml`，不改版本，也不写调用记录。
 
 ## 页面路由
 
@@ -97,7 +97,7 @@ Reef 与 Crab 的浏览器页面都是同一份静态 `index.html`，不用请�
 | --- | --- |
 | Reef 管理员、版本元数据、审计、报告、告警、Agent 令牌 | H2 或 MySQL。业务表、索引、唯一约束、检查约束和 Flyway 历史表 `hermit_flyway_schema_history` 都以 `hermit_` 开头。[Flyway SQL](../hermit-reef/src/main/resources/db/migration) 的 V1–V4 在发布前就地改写，没有数据迁移。已有 `reef-data` 里的 H2 和 Compose MySQL 库必须重建。V5 增加 `pull_count`，V6 增加角色、令牌哈希和 Crab 实例，V7 增加 `hermit_voided_config_tokens`。这三次是新增迁移，已经跑过 V5 的库不必为它们重建 |
 | Reef YAML/包/签名密钥/JWT 密钥 | `data-dir/conches/`、`data-dir/keys/` |
-| Crab 账号、配置、API Key、日志、队列、配置审计、控制台口令哈希 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 conch/account 分页读取，响应不含凭证和配置值。控制台口令只存 schema 14 的 PBKDF2 哈希，不进 `config.yml`。schema 15 的 `dev_traces` 是本地包调试用的脱敏 JSON，不进 `config.yml`；关掉调试开关或开关到期时整表删除 |
+| Crab 账号、配置、API Key、日志、队列、配置审计、控制台口令哈希 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 conch/account 分页读取，响应不含凭证和配置值。控制台口令只存 schema 14 的 PBKDF2 哈希，不进 `config.yml`。schema 15 的 `dev_traces` 是本地 HTTP 与本地 MCP 调试用的脱敏 JSON，同一条追踪可以累加多轮 JSON-RPC，不进 `config.yml`；关掉调试开关或开关到期时整表删除。没有新增 schema 16 |
 | Crab 凭证、Cookie 会话、幂等响应 | H2 中 AES-256-GCM 密文；主密钥在环境变量或本机文件 |
 | Crab 规则及当前版本 | `HERMIT_HOME/conches/<conch>/...` |
 | API Key | 创建时返回一次明文；后续前缀和哈希查验 |

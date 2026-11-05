@@ -39,8 +39,10 @@ import dev.hermit.crab.engine.ExecutionRequest;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionManager;
+import dev.hermit.crab.upstream.McpCallPayload;
 import dev.hermit.crab.upstream.McpForwarder;
 import dev.hermit.crab.upstream.McpOAuth;
+import dev.hermit.crab.upstream.McpRefresh;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.report.LiveReportSettings;
 import dev.hermit.crab.report.ReportQueue;
@@ -193,6 +195,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.switches = new CapabilitySwitchStore(database.dataSource());
         this.debug = new DebugStateStore(database.dataSource(), clock);
         this.devTraces = new DevTraceStore(database.dataSource(), clock, debug);
+        this.mcpForwarder.bindDevTraces(devTraces);
         this.engine.bindDevTraceSink(new DevTraceBinding(debug, devTraces));
         this.consolePassword = new ConsolePassword(database.dataSource(), clock);
         this.consoleSessions = new ConsoleSessions(clock);
@@ -209,7 +212,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.invoker.bindMcpForwarder(mcpForwarder);
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
-        this.localConches = new LocalConches(paths, registry, database.dataSource());
+        this.localConches = new LocalConches(
+                paths, registry, database.dataSource(), () -> debug.get().enabled());
         this.instanceId = InstanceIds.loadOrCreate(paths);
         try {
             String initialPassword = environment == null ? null : environment.apply(ConsolePassword.ENV);
@@ -301,9 +305,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     /**
-     * Runs one local HTTP action without an API key and without reporting to Tide.
-     * The loaded document is the one passed to the engine. Official packages, a debug switch
-     * that is off, and a disabled capability are rejected before execution.
+     * Runs one local HTTP or MCP action without an API key and without reporting to Tide.
+     * Official packages, a debug switch that is off, and a disabled capability are rejected
+     * before execution. MCP does not go through {@code Invoker}, so there is no confirm header.
      */
     public ExecutionResult trialLocal(
             String conch,
@@ -313,22 +317,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             String traceId
     ) {
         String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
-        ConchDoc doc = registry.find(conch).orElse(null);
-        if (doc == null) {
-            throw new TrialRejected(404, ErrorCode.NOT_FOUND, "not found");
-        }
-        Origin origin = registry.origin(conch);
-        if (origin != Origin.LOCAL) {
-            throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地包上开发，再导出上传。");
-        }
-        if (!debug.get().enabled()) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "先打开调试开关。");
-        }
-        if ("mcp".equals(doc.driver())) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "MCP 规则包的试跑还没有接通。");
-        }
-        if (!"http".equals(doc.driver())) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "只支持 HTTP 规则包的试跑。");
+        ConchDoc doc = requireLocalDebug(conch);
+        if (!"http".equals(doc.driver()) && !"mcp".equals(doc.driver())) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "只支持 HTTP 或 MCP 规则包的试跑。");
         }
         Action capability = doc.actions().get(action);
         if (capability == null) {
@@ -337,46 +328,112 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (disabled(conch, action)) {
             throw new TrialRejected(404, ErrorCode.CAPABILITY_DISABLED, Invoker.CAPABILITY_DISABLED_MESSAGE);
         }
-        Account resolved;
-        try {
-            resolved = accounts.resolve(Origin.LOCAL, conch, account == null ? Optional.empty() : account);
-        } catch (AccountNotFoundException ex) {
-            if (ex.account() == null && accounts.list(Origin.LOCAL, conch).isEmpty()) {
-                throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "no account configured");
-            }
-            throw new TrialRejected(404, ErrorCode.ACCOUNT_NOT_FOUND, Invoker.ACCOUNT_NOT_FOUND_MESSAGE);
-        } catch (IllegalArgumentException ex) {
-            throw new TrialRejected(400, ErrorCode.INVALID_INPUT, Invoker.INVALID_ACCOUNT_NAME);
-        }
-        Map<String, String> stored = conchConfig.all(Origin.LOCAL, conch);
-        List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
-        if (!missingConfig.isEmpty()) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED,
-                    "missing config: " + String.join(", ", missingConfig));
-        }
-        List<String> missingCredentials = DeclaredSettings.missingCredentials(
-                doc, vault.fieldNames(Origin.LOCAL, conch, resolved.account()));
-        if (!missingCredentials.isEmpty()) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED,
-                    "missing credentials: " + String.join(", ", missingCredentials));
-        }
-        Map<String, String> secrets;
-        try {
-            secrets = vault.decryptForExecution(Origin.LOCAL, conch, resolved.account());
-        } catch (CredentialDecryptException ex) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE);
-        }
+        ReadyAccount ready = openAccount(doc, account);
         ExecutionRequest request = new ExecutionRequest(
                 id,
                 Origin.LOCAL,
                 doc.conch(),
                 action,
                 input == null ? Map.of() : input,
-                resolved.account(),
-                new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
-        ExecutionResult result = engine.execute(request, doc);
-        logTrial(result, secrets, doc.conch(), action, resolved.account());
-        return result;
+                ready.account(),
+                new MappedAccount(ready.secrets(), ready.config()));
+        ExecutionResult result = "mcp".equals(doc.driver())
+                ? mcpForwarder.execute(request, doc)
+                : engine.execute(request, doc);
+        logTrial(result, ready.secrets(), doc.conch(), action, ready.account());
+        return httpView(result);
+    }
+
+    /**
+     * Rewrites a local MCP package from upstream {@code tools/list}.
+     * Official packages are rejected before the debug switch. This does not write a call log.
+     */
+    public McpRefresh.Outcome refreshLocalMcp(
+            String conch,
+            Optional<String> account,
+            String actor,
+            String traceId
+    ) {
+        String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
+        ConchDoc doc = requireLocalDebug(conch);
+        if (!"mcp".equals(doc.driver())) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "只支持刷新 MCP 规则包。");
+        }
+        ReadyAccount ready = openAccount(doc, account);
+        ExecutionRequest request = new ExecutionRequest(
+                id,
+                Origin.LOCAL,
+                doc.conch(),
+                DevTraceStore.MCP_REFRESH_ACTION,
+                Map.of(),
+                ready.account(),
+                new MappedAccount(ready.secrets(), ready.config()));
+        return McpRefresh.apply(mcpForwarder, localConches, registry, doc, request, actor, clock.instant());
+    }
+
+    /** Official packages fail even when the debug switch is off. */
+    private ConchDoc requireLocalDebug(String conch) {
+        ConchDoc doc = registry.find(conch).orElse(null);
+        if (doc == null) {
+            throw new TrialRejected(404, ErrorCode.NOT_FOUND, "not found");
+        }
+        if (registry.origin(conch) != Origin.LOCAL) {
+            throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地包上开发，再导出上传。");
+        }
+        if (!debug.get().enabled()) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "先打开调试开关。");
+        }
+        return doc;
+    }
+
+    private ReadyAccount openAccount(ConchDoc doc, Optional<String> account) {
+        Account resolved;
+        try {
+            resolved = accounts.resolve(Origin.LOCAL, doc.conch(), account == null ? Optional.empty() : account);
+        } catch (AccountNotFoundException ex) {
+            if (ex.account() == null && accounts.list(Origin.LOCAL, doc.conch()).isEmpty()) {
+                throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "no account configured");
+            }
+            throw new TrialRejected(404, ErrorCode.ACCOUNT_NOT_FOUND, Invoker.ACCOUNT_NOT_FOUND_MESSAGE);
+        } catch (IllegalArgumentException ex) {
+            throw new TrialRejected(400, ErrorCode.INVALID_INPUT, Invoker.INVALID_ACCOUNT_NAME);
+        }
+        Map<String, String> stored = conchConfig.all(Origin.LOCAL, doc.conch());
+        List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
+        if (!missingConfig.isEmpty()) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED,
+                    "missing config: " + String.join(", ", missingConfig));
+        }
+        List<String> missingCredentials = DeclaredSettings.missingCredentials(
+                doc, vault.fieldNames(Origin.LOCAL, doc.conch(), resolved.account()));
+        if (!missingCredentials.isEmpty()) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED,
+                    "missing credentials: " + String.join(", ", missingCredentials));
+        }
+        Map<String, String> secrets;
+        try {
+            secrets = vault.decryptForExecution(Origin.LOCAL, doc.conch(), resolved.account());
+        } catch (CredentialDecryptException ex) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE);
+        }
+        return new ReadyAccount(resolved.account(), secrets, DeclaredSettings.mergedConfig(doc, stored));
+    }
+
+    private static ExecutionResult httpView(ExecutionResult result) {
+        if (!(result.data() instanceof McpCallPayload payload)) {
+            return result;
+        }
+        return new ExecutionResult(
+                result.success(),
+                payload.httpData(),
+                result.error(),
+                result.durationMillis(),
+                result.stepLogs(),
+                result.conchVersion(),
+                result.traceId());
+    }
+
+    private record ReadyAccount(String account, Map<String, String> secrets, Map<String, String> config) {
     }
 
     public ConsolePassword consolePassword() {

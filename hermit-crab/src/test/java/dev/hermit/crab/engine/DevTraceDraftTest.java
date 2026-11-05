@@ -135,6 +135,27 @@ class DevTraceDraftTest {
         assertThat(json).contains("hello").contains("***");
         assertThat(headerNames(ApiJson.tree(json).path("params").path("headers")))
                 .doesNotContain("Authorization", "authorization");
+        assertThat(ApiJson.tree(json).path("exchanges")).hasSize(1);
+    }
+
+    @Test
+    void jsonRpcResultIsCappedLikeOneStep() {
+        String marker = "JSONRPC-TAIL-MARKER";
+        LinkedHashMap<String, Object> fields = new LinkedHashMap<>();
+        fields.put("method", "tools/list");
+        fields.put("result", Map.of("blob", "x".repeat(300_000) + marker));
+        String json = DevTraceDraft.renderJsonRpc(fields, Redactor.of(Set.of()));
+        assertThat(json).doesNotContain(marker).contains(DevTraceDraft.STEP_NOTE);
+        assertThat(json.getBytes(StandardCharsets.UTF_8).length).isLessThanOrEqualTo(DevTraceDraft.TRACE_LIMIT);
+        JsonNode result = ApiJson.tree(json).path("result");
+        assertThat(ApiJson.write(result).getBytes(StandardCharsets.UTF_8).length)
+                .isLessThanOrEqualTo(DevTraceDraft.STEP_LIMIT);
+        String second = DevTraceDraft.renderJsonRpc(Map.of("method", "tools/call", "result", Map.of("ok", true)),
+                Redactor.of(Set.of()));
+        String merged = DevTraceDraft.mergeJsonRpc(json, second);
+        assertThat(merged).contains("tools/call").doesNotContain(marker);
+        assertThat(merged.getBytes(StandardCharsets.UTF_8).length).isLessThanOrEqualTo(DevTraceDraft.TRACE_LIMIT);
+        assertThat(ApiJson.tree(merged).path("method").asText()).isEqualTo("tools/call");
     }
 
     private static Set<String> headerNames(JsonNode headers) {

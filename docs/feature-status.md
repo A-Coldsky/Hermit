@@ -41,7 +41,7 @@
 | --- | --- | --- |
 | `health_check` | Parser/Model 接收，示例声明；无执行方 | 定义执行时机、账号选择、失败门槛，并接入发布/安装流程，或移除误导性声明 |
 | debug | 开关已读，追踪未做。`get()` 与保留任务的 `expire()` 在超过 24 小时时关掉开关，并写 `DEBUG_CHANGED`，actor 为 `retention`；审计列表仍不返回 enabled。执行引擎和调用日志仍不记正文，也不按正式包或本地包分叉。控制台开关仍不可拨，标「暂未生效」 | 本地包试跑和开发追踪 |
-| `driver: mcp` | 已解析、已校验、可签名。Reef 管理 API 和 Agent 清单从包内读出 driver、上游地址、`allowed_hosts`、快照时间和工具表，不连上游，也不新增 Flyway。不执行、不转发。`transport` 只接受 `streamable_http`；`stdio` 与 `local_ref` 拒绝。`min_crab_version` 必须 ≥ 1.1.0。`CrabVersion.CURRENT` 仍是 1.0.0，现有 Crab 载入 1.1.0 的包会因高于当前版本拒绝；Reef 上传不比当前 Crab，可以收下。空 `actions` 一律是错误。描述里的隐藏字符只警告，刷新时不剥离。`reef-admin` 的 `api.ts` 已有这些字段，页面还没有徽标和工具表 | 转发、刷新、OAuth 登录，以及 Reef / Crab 页面上的徽标和工具表留到后续批次 |
+| `driver: mcp` | 已解析、已校验、可签名。Reef 管理 API 和 Agent 清单从包内读出 driver、上游地址、`allowed_hosts`、快照时间和工具表，不连上游，也不新增 Flyway。不执行、不转发。`transport` 只接受 `streamable_http`；`stdio` 与 `local_ref` 拒绝。`min_crab_version` 必须 ≥ 1.1.0。`CrabVersion.CURRENT` 仍是 1.0.0，现有 Crab 载入 1.1.0 的包会因高于当前版本拒绝；Reef 上传不比当前 Crab，可以收下。空 `actions` 一律是错误。描述里的隐藏字符只警告，刷新时不剥离。Reef 管理端目录和详情用「原生 MCP · 源站提供」/「HTTP 规则 · Hermit 编写」区分两类包，目录可按类型筛选，MCP 包显示上游主机。详情说明工具来自源站、Hermit 只做权限管理和转发，列出上游地址、连接方式、认证方式、允许的主机、上游服务、协议版本、快照时间（标明是写进规则包的时间）和工具摘要；「工具」页是工具表（上游名称、只读、破坏性、需确认、包里记下的上游注解、参数摘要）。版本对比和上传结果列出新增、移除、变更的工具 | 转发、刷新、OAuth 登录，以及 Crab 控制台上的 MCP 展示留到后续批次 |
 | `mcp.destructive` | HTTP 工具注解仍从 readOnly/idempotent 推导，声明的 destructive 不进 `McpCatalog`。MCP 包的有效破坏性在模型上：没写时用上游布尔 `destructiveHint`，否则非只读为 true；`confirm` 缺省等于该值。版本差异用这个有效值 | 注解接入留到转发批次 |
 | Crab 升级 | Reef 提供最新版本/下载地址，Crab 展示提示。`latest-crab-version` 为空不提示升级；非空必须是 semver，否则 Reef 拒绝启动 | 无自动下载/升级器；继续手工升级或另行实现 |
 | 配置批量原子更新 | 控制台 PUT 逐字段调用 putConfig | 校验/写入失败可能部分生效；补事务行为测试 |

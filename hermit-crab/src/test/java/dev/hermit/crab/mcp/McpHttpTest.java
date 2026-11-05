@@ -141,6 +141,7 @@ class McpHttpTest {
             assertThat(unknown.json().path("result").path("isError").asBoolean()).isTrue();
             JsonNode accountError = unknown.json().path("result").path("structuredContent").path("error");
             assertThat(accountError.path("code").asText()).isEqualTo("ACCOUNT_NOT_FOUND");
+            assertThat(accountError.path("message").asText()).isEqualTo("没有这个账号。");
             assertThat(accountError.path("message").asText()).isEqualTo(toolError(unknown).path("message").asText());
             assertThat(accountError.path("hint").asText()).contains("账号");
             assertThat(unknown.body()).doesNotContain("Exception");

@@ -2,10 +2,13 @@ package dev.hermit.crab.gateway;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
@@ -18,6 +21,7 @@ import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.IdempotencyKeys;
 import dev.hermit.crab.runtime.InvokeOutcome;
+import dev.hermit.crab.runtime.Invoker;
 import dev.hermit.crab.store.ApiKeyPrincipal;
 import dev.hermit.crab.store.CallChannel;
 import io.javalin.Javalin;
@@ -31,6 +35,11 @@ import io.javalin.http.HttpResponseException;
  */
 public final class CrabHttpServer implements AutoCloseable {
     private static final Logger LOG = Logger.getLogger(CrabHttpServer.class.getName());
+    /**
+     * 不是合法账号名。头和查询参数冲突时用它走一遍 Invoker：权限、能力停用和未加载墓碑会先返回；
+     * 这些检查都通过时停在账号名校验，不执行规则，也不打上游。
+     */
+    private static final String ACCOUNT_ADMISSION_PROBE = "*";
     private static final HandlerType[] METHODS = {
             HandlerType.GET,
             HandlerType.POST,
@@ -147,8 +156,12 @@ public final class CrabHttpServer implements AutoCloseable {
         Map<String, Object> input = Map.of();
         Optional<String> idempotency = Optional.empty();
         String bodySha256 = null;
+        Optional<String> queryAccount = Optional.empty();
+        String selector = "account";
         if (enabled.isPresent() && CapabilityHttp.method(enabled.get()) == HttpMethod.GET) {
-            input = queryInput(ctx);
+            selector = accountQueryName(enabled.get(), HttpMethod.GET);
+            queryAccount = queryValue(ctx, selector);
+            input = queryInput(ctx, selector);
         } else if (enabled.isPresent() && CapabilityHttp.method(enabled.get()) == HttpMethod.POST) {
             byte[] raw;
             try {
@@ -170,11 +183,21 @@ public final class CrabHttpServer implements AutoCloseable {
                 idempotency = Optional.of(key);
                 bodySha256 = BodyDigests.sha256(raw);
             }
+            selector = accountQueryName(enabled.get(), HttpMethod.POST);
+            queryAccount = queryValue(ctx, selector);
         }
-        String account = ctx.header("X-Hermit-Account");
-        Optional<String> accountName = account == null || account.isBlank() ? Optional.empty() : Optional.of(account);
+        Optional<String> headerAccount = headerAccount(ctx);
+        ApiKeyPrincipal caller = principal.get();
+        if (headerAccount.isPresent() && queryAccount.isPresent() && !headerAccount.get().equals(queryAccount.get())) {
+            if (writeEarlierRejection(ctx, caller, conch, action)) {
+                return;
+            }
+            GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, accountMismatch(selector));
+            return;
+        }
+        Optional<String> accountName = headerAccount.isPresent() ? headerAccount : queryAccount;
         InvokeOutcome outcome = runtime.invoker().invoke(
-                principal.get(),
+                caller,
                 conch,
                 action,
                 input,
@@ -186,9 +209,73 @@ public final class CrabHttpServer implements AutoCloseable {
         GatewayResponses.writeOutcome(ctx, outcome);
     }
 
-    private static Map<String, Object> queryInput(Context ctx) {
+    /**
+     * GET 入参已经占用 {@code account} 时，查询参数改用 {@code _account}，避免把业务字段当成账号选择。
+     * POST 的正文和查询参数不在同一个位置，查询参数始终是 {@code account}。
+     */
+    static String accountQueryName(Action action, HttpMethod method) {
+        if (method == HttpMethod.GET && action.input().containsKey("account")) {
+            return "_account";
+        }
+        return "account";
+    }
+
+    static String accountMismatch(String selector) {
+        return "请求头 X-Hermit-Account 与查询参数 " + selector + " 不一致。";
+    }
+
+    /**
+     * @return 已经写过更早的拒绝（权限、能力停用、不存在）时为 true。账号名探针被拒绝时为 false，调用方再写冲突 400。
+     */
+    private boolean writeEarlierRejection(Context ctx, ApiKeyPrincipal principal, String conch, String action) {
+        InvokeOutcome gate = runtime.invoker().invoke(
+                principal,
+                conch,
+                action,
+                Map.of(),
+                Optional.of(ACCOUNT_ADMISSION_PROBE),
+                Optional.empty(),
+                null,
+                CallChannel.HTTP,
+                GatewayResponses.trace(ctx));
+        if (invalidAccountName(gate)) {
+            return false;
+        }
+        GatewayResponses.writeOutcome(ctx, gate);
+        return true;
+    }
+
+    private static boolean invalidAccountName(InvokeOutcome outcome) {
+        if (outcome.status() != 400) {
+            return false;
+        }
+        JsonNode error = ApiJson.tree(outcome.body()).path("error");
+        return ErrorCode.INVALID_INPUT.name().equals(error.path("code").asText())
+                && Invoker.INVALID_ACCOUNT_NAME.equals(error.path("message").asText());
+    }
+
+    private static Optional<String> headerAccount(Context ctx) {
+        String account = ctx.header("X-Hermit-Account");
+        if (account == null || account.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(account);
+    }
+
+    private static Optional<String> queryValue(Context ctx, String name) {
+        List<String> values = ctx.queryParamMap().get(name);
+        if (values == null || values.isEmpty() || values.get(0) == null || values.get(0).isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(values.get(0));
+    }
+
+    private static Map<String, Object> queryInput(Context ctx, String skip) {
         LinkedHashMap<String, Object> input = new LinkedHashMap<>();
-        for (Map.Entry<String, java.util.List<String>> entry : ctx.queryParamMap().entrySet()) {
+        for (Map.Entry<String, List<String>> entry : ctx.queryParamMap().entrySet()) {
+            if (skip != null && skip.equals(entry.getKey())) {
+                continue;
+            }
             if (entry.getValue() != null && !entry.getValue().isEmpty()) {
                 input.put(entry.getKey(), entry.getValue().get(0));
             }

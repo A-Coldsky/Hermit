@@ -99,7 +99,7 @@ GET  /api/{conch}/{action}?param=value
 POST /api/{conch}/{action}           JSON object body
 ```
 
-使用 action 的 effectiveMethod，方法不匹配返回 405。可选头 `X-Hermit-Account` 指定账号，省略使用默认账号。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。已经入库的空 `conches` 在 `ApiKeyPrincipal` 里仍表示不按包名限制，空 `actions` 仍表示不按能力名限制；本地包另由 `Invoker` 要求名字出现在 `conches` 里。新 Key 不能再靠留空得到这个范围。`conches` 里的每个名字必须是当前已加载的规则包，或仍在停用墓碑 `disabled_conches` 里的名字；未知名字创建时返回 `INVALID_INPUT`，并在 message 里列出这些名字。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。停用墓碑只放行规则包名，不放行该包上已经卸下的能力。CLI `apikey create --all` / `--conches` / `--actions` 使用同一规则。
+使用 action 的 effectiveMethod，方法不匹配返回 405。账号用请求头 `X-Hermit-Account` 或查询参数 `account` 选择。两个都没有时使用默认账号；只有一个时用那一个；两个都有且相同则用该账号；两个都有且不相同，并且这次调用已经通过权限、能力停用和能力是否存在这些检查时，返回 400 `INVALID_INPUT`，message 为「请求头 X-Hermit-Account 与查询参数 account 不一致。」，不调用上游。没有权限仍是 403，能力已停用或不存在仍是原来的 404。空白的头或查询参数视为没传。选出的账号在组能力入参之前拿掉，所以 `?account=` 不会因为入参 `additionalProperties: false` 变成「输入无效」。GET 的能力入参已经有字段 `account` 时，查询参数改为 `_account`，`account` 仍传给能力；这时冲突 message 点名 `_account`。POST 的查询参数始终是 `account`，JSON 正文里的同名字段仍是能力入参。未知账号是 404 `ACCOUNT_NOT_FOUND`，message 为「没有这个账号。」。HTTP 与 MCP 共用 `Invoker`，不绕过权限和能力停用检查，账号仍按 `(origin, conch, account)` 隔离。动态 `/openapi.json` 在每个能力上声明这个查询参数，并保留请求头。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。已经入库的空 `conches` 在 `ApiKeyPrincipal` 里仍表示不按包名限制，空 `actions` 仍表示不按能力名限制；本地包另由 `Invoker` 要求名字出现在 `conches` 里。新 Key 不能再靠留空得到这个范围。`conches` 里的每个名字必须是当前已加载的规则包，或仍在停用墓碑 `disabled_conches` 里的名字；未知名字创建时返回 `INVALID_INPUT`，并在 message 里列出这些名字。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。停用墓碑只放行规则包名，不放行该包上已经卸下的能力。CLI `apikey create --all` / `--conches` / `--actions` 使用同一规则。
 
 POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，有效期 24 小时，另存请求体的 SHA-256（小写十六进制，schema 10 的 `idempotency.body_sha256`）。摘要是网关读到的原始字节，不是规范化 JSON：空格或字段顺序不同算另一个请求体。相同键且摘要相同，回放第一次的响应（含旧 traceId），响应头 `Idempotent-Replayed: true`，不再执行。摘要不同返回 409 `IDEMPOTENCY_CONFLICT`，message 为 `Idempotency-Key was already used with a different request body`，不执行、不覆盖已存响应。升级前写入、摘要为 null 的行也无法证明请求体相同，重放同样是这个冲突，直到 24 小时过期。键仍不包含 API Key 身份或规则版本。
 
@@ -115,7 +115,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | TIMEOUT | 504 |
 | INTERNAL | 500 |
 
-缺必填、类型无法转换，数值超出参数声明的 `minimum` / `maximum`，或请求里多了未声明字段，都返回 `INVALID_INPUT`。入参 JSON Schema 带 `additionalProperties: false`，运行时不会把负页码、过大的 `pageSize` 或多余字段改成合法值再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。MCP 在这次校验前去掉账号选择：直接工具去掉 `account`，能力入参已经占用 `account` 时去掉 `_account`；目录模式的 `call_capability` 把 `account` 放在能力参数外面。账号选择因此不会被当成未声明字段。
+缺必填、类型无法转换，数值超出参数声明的 `minimum` / `maximum`，或请求里多了未声明字段，都返回 `INVALID_INPUT`。入参 JSON Schema 带 `additionalProperties: false`，运行时不会把负页码、过大的 `pageSize` 或多余字段改成合法值再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。MCP 在这次校验前去掉账号选择：直接工具去掉 `account`，能力入参已经占用 `account` 时去掉 `_account`；目录模式的 `call_capability` 把 `account` 放在能力参数外面。HTTP 同样在校验前拿掉账号选择：GET 去掉查询参数 `account`（入参已占用该名字时去掉 `_account`），POST 只把查询参数 `account` 当作账号，不写入 JSON 正文。MCP 的 `account` / `_account` 参数不变。账号选择因此不会被当成未声明字段。
 
 本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为 `not found`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`，message 为「没有这个工具，或当前 API Key 看不到它。」。直接模式的 hint 只建议 `tools/list`，不提到 `search_capabilities`；目录模式的 hint 可以建议 `tools/list` 和 `search_capabilities`。若调用已经进入 `Invoker` 后才发现能力被关掉，MCP 的 `code` 与 HTTP 同为 `CAPABILITY_DISABLED`，hint 说明到控制台重新启用，或从 `capabilities.disabled` 里去掉。
 
@@ -300,7 +300,7 @@ mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 - 目录模式调用非只读能力需要支持 elicitation 且保持 SSE，明确确认后执行；直接模式没有同样的服务端确认步骤，客户端应依据工具注解交互。
 - guide resource 为 `hermit://conches/{conch}/guide`，由说明、参数、示例生成。
 - 规则更新/能力开关变化推送列表变更通知。
-- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。这个字段在校验前拿掉。直接工具的 `inputSchema` 与能力入参一样设置 `additionalProperties: false`，并声明账号选择，所以账号不是多余字段。
+- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。这个字段在校验前拿掉。直接工具的 `inputSchema` 与能力入参一样设置 `additionalProperties: false`，并声明账号选择，所以账号不是多余字段。HTTP 的查询参数不改变这些工具参数。未知账号的 message 与 HTTP 同为「没有这个账号。」。
 - `tools/call` 不传 `Idempotency-Key`。同键回放只在 HTTP POST。
 
 协议级失败是 JSON-RPC error，不使用能力 API 的 success/error envelope。`error.code` 是 JSON-RPC 整数；`error.data.code` 是稳定字符串，`error.data.hint` 是下一步。HTTP 401 的 body 同样是这个 JSON-RPC 错误。

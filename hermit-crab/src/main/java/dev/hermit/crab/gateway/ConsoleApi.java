@@ -467,7 +467,7 @@ final class ConsoleApi {
             if (error == null) {
                 throw ex;
             }
-            GatewayResponses.writeError(ctx, StatusCodes.of(error.code()), error.code(), error.message());
+            writeSyncClientError(ctx, error);
         }
     }
 
@@ -516,7 +516,7 @@ final class ConsoleApi {
         try {
             Optional<SyncReport> report = runtime.syncOnce(Actors.CONSOLE);
             if (report.isEmpty()) {
-                GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "sync is not configured");
+                GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, SubscriptionException.NOT_CONFIGURED);
                 return;
             }
             GatewayResponses.writeData(ctx, syncView(runtime.conchSync().visibleStatus(report.get())));
@@ -525,13 +525,22 @@ final class ConsoleApi {
             if (error == null) {
                 throw ex;
             }
-            GatewayResponses.writeError(ctx, StatusCodes.of(error.code()), error.code(), error.message());
+            writeSyncClientError(ctx, error);
         }
+    }
+
+    /**
+     * {@link StatusCodes} maps {@link ErrorCode#AUTH_FAILED} to 422 because that is an upstream
+     * login failure. A rejected Reef token uses the same code and is HTTP 401.
+     */
+    private static void writeSyncClientError(Context ctx, SyncError error) {
+        int status = error.code() == ErrorCode.AUTH_FAILED ? 401 : StatusCodes.of(error.code());
+        GatewayResponses.writeError(ctx, status, error.code(), error.message());
     }
 
     private static void syncStatus(CrabRuntime runtime, Context ctx) {
         if (runtime.conchSync() == null) {
-            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, "sync is not configured");
+            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, SubscriptionException.NOT_CONFIGURED);
             return;
         }
         SyncReport report = runtime.lastSync().orElse(null);

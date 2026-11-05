@@ -266,6 +266,7 @@ export const api = {
   tokens: (all = false) => http.get<AgentToken[]>('/api/admin/tokens', all ? { all: true } : undefined),
   createToken: (name: string) => http.post<IssuedAgentToken>('/api/admin/tokens', { name }),
   revokeToken: (id: number) => http.del<AgentToken>(`/api/admin/tokens/${id}`),
+  voidConfigToken: () => http.post<AgentToken>('/api/admin/tokens/config/revoke'),
   crabs: () => http.get<CrabInstance[]>('/api/admin/crabs'),
 
   conches: () => http.get<ConchSummary[]>('/api/admin/conches'),

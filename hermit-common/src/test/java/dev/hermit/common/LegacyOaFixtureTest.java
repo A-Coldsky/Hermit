@@ -45,7 +45,10 @@ class LegacyOaFixtureTest {
         Action action = doc.actions().get("list_todo");
         assertThat(action.effectiveMethod()).isEqualTo(HttpMethod.GET);
         assertThat(action.outputTemplate()).isEqualTo(Map.of("items", "{{items}}"));
-        assertThat(action.related()).containsExactly("approve", "list_done");
+        assertThat(action.related()).isEmpty();
+        assertThat(new String(fixture, StandardCharsets.UTF_8))
+                .doesNotContain("approve")
+                .doesNotContain("list_done");
         assertThat(action.examples()).hasSize(1);
 
         ObjectMapper mapper = new ObjectMapper();
@@ -134,7 +137,7 @@ class LegacyOaFixtureTest {
                                 "items", Map.of(
                                         "type", "object",
                                         "properties", Map.of(
-                                                "id", Map.of("type", "string", "description", "审批单号，approve 等能力需要它"),
+                                                "id", Map.of("type", "string", "description", "审批单号"),
                                                 "title", Map.of("type", "string", "description", "审批标题"),
                                                 "applicant", Map.of("type", "string", "description", "申请人姓名"),
                                                 "date", Map.of("type", "string", "description", "提交日期，yyyy-MM-dd"))))));

@@ -24,6 +24,7 @@ import dev.hermit.crab.engine.LoginPause;
 import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
+import dev.hermit.crab.runtime.ConsoleSessions;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.DeclaredSettings;
 import dev.hermit.crab.runtime.ReefBootstrapException;
@@ -38,6 +39,7 @@ import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.ApiKeySummary;
 import dev.hermit.crab.store.CallLogStore;
 import dev.hermit.crab.store.CreatedApiKey;
+import dev.hermit.crab.store.ConsolePassword;
 import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.sync.ConchCatalog;
@@ -68,6 +70,9 @@ final class ConsoleApi {
     }
 
     static void register(io.javalin.Javalin app, CrabRuntime runtime) {
+        get(app, "/console/api/session", ctx -> session(runtime, ctx));
+        post(app, "/console/api/session", ctx -> login(runtime, ctx));
+        post(app, "/console/api/session/password", ctx -> changePassword(runtime, ctx));
         get(app, "/console/api/conches", ctx -> conches(runtime, ctx));
         get(app, "/console/api/conches/{conch}", ctx -> conch(runtime, ctx));
         get(app, "/console/api/conches/{conch}/accounts", ctx -> accounts(runtime, ctx));
@@ -391,6 +396,53 @@ final class ConsoleApi {
         body.put("limit", page.limit());
         body.put("total", page.total());
         GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void session(CrabRuntime runtime, Context ctx) {
+        boolean required = runtime.consolePassword().isSet();
+        boolean authenticated = !required || runtime.consoleSessions().valid(ctx.cookie(ConsoleSessions.COOKIE));
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("required", required);
+        body.put("authenticated", authenticated);
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void login(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = object(ctx);
+        rejectUnknownFields(body, Set.of("password"));
+        String password = textual(body, "password");
+        switch (runtime.consolePassword().verify(password)) {
+            case UNSET -> GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, ConsolePassword.UNSET_MESSAGE);
+            case REJECTED -> {
+                runtime.recordConsoleLogin(false);
+                GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, ConsolePassword.FAILURE_MESSAGE);
+            }
+            case ACCEPTED -> {
+                runtime.recordConsoleLogin(true);
+                ctx.header("Set-Cookie", ConsoleSessions.setCookie(runtime.consoleSessions().issue()));
+                GatewayResponses.writeData(ctx, Map.of("ok", true));
+            }
+        }
+    }
+
+    private static void changePassword(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = object(ctx);
+        rejectUnknownFields(body, Set.of("current", "next"));
+        if (!runtime.consolePassword().isSet()) {
+            GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, ConsolePassword.UNSET_MESSAGE);
+            return;
+        }
+        String next = textual(body, "next");
+        if (next.length() < ConsolePassword.MIN_LENGTH || next.length() > ConsolePassword.MAX_LENGTH) {
+            throw new IllegalArgumentException(ConsolePassword.LENGTH_MESSAGE);
+        }
+        String current = textual(body, "current");
+        if (runtime.consolePassword().verify(current) != ConsolePassword.Result.ACCEPTED) {
+            GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, ConsolePassword.FAILURE_MESSAGE);
+            return;
+        }
+        runtime.replaceConsolePassword(next);
+        GatewayResponses.writeData(ctx, Map.of("ok", true));
     }
 
     private static void debug(CrabRuntime runtime, Context ctx) {
@@ -975,6 +1027,14 @@ final class ConsoleApi {
             values.put(entry.getKey(), entry.getValue().textValue());
         });
         return values;
+    }
+
+    private static String textual(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || !value.isTextual()) {
+            throw new IllegalArgumentException(field + " is required");
+        }
+        return value.textValue();
     }
 
     private static String requiredText(JsonNode node, String field) {

@@ -55,7 +55,7 @@ flowchart LR
 
 1. 管理员上传 YAML，经解析和校验后保存为 `UPLOADED`，同版本受唯一性约束。
 2. `ConchPublishService` 锁定 Conch 记录。已有当前版本时，目标 semver 必须严格更高；否则 409，不切换。然后生成签名包、验签自检，标记 `PUBLISHED` 并切换当前版本。这里自检包完整性，不访问老系统。没有管理员回滚。`DELETE /api/admin/conches/{conch}/versions/{version}` 只删除 `UPLOADED`：先锁住该包的版本行，已发布则 409，不删签名 ZIP 和 YAML。成功后写审计 `DISCARD`，提交之后再删这个版本目录里的 YAML 和尚未发布时留下的 ZIP。
-3. Crab 用实例 UUID 和 Agent token 拉取带 ETag 的 manifest。新装默认不订阅任何规则包。同步只下载并安装 `subscriptions` 里的名字；清单里其余条目记 `NOT_SUBSCRIBED`，不下载、不进注册表。已经从 `local-conches/` 加载的同名包记 `SKIPPED_LOCAL`，不下载、不覆盖。成功的 HTTP 200 把清单条目（含 title、description、capabilityCount；缺省时 title 为包名、description 为空、capabilityCount 为 0）写入目录缓存。304 且本地快照仍匹配时沿用该缓存；缓存还没写过时再拉一次完整清单。
+3. Crab 用实例 UUID 和 Agent token 拉取带 ETag 的 manifest。新装默认不订阅任何规则包。同步只下载并安装 `subscriptions` 里的名字；清单里其余条目记 `NOT_SUBSCRIBED`，不下载、不进注册表。已经从 `local-conches/` 加载的同名包记 `SKIPPED_LOCAL`，不下载、不覆盖。成功的 HTTP 200 把清单条目（含 title、description、capabilityCount；缺省时 title 为包名、description 为空、capabilityCount 为 0）写入目录缓存。Reef 清单另带 `driver` 和 `upstreamHost`（URL 主机，不含端口），ETag 覆盖它们，不连接上游。Crab 解析清单时忽略不认识的字段，目录缓存仍不存这两项。304 且本地快照仍匹配时沿用该缓存；缓存还没写过时再拉一次完整清单。
 4. `ConchSync` 刷新目录。第一次订阅才下载并安装 Reef 当前版本。已经安装的正式包遇到更高清单版本记 `UPDATE_AVAILABLE`，不下载；更低版本记 `SKIPPED_OLDER`，不降级。已订阅、安装记录还在、但注册表没有这份包时，同步记 `REPAIR_REQUIRED` 且不下载。`REPAIR_REQUIRED` 可重试，不写入 ETag 快照，因此 304 不能盖住未加载；控制台读取仍会把这一行补到空的 304 上。显式更新先重新载入仍能验签的最新已安装 zip，`current` 停在该版本；验签失败才下载清单版本。注册表里仍有这份包时，手动更新才下载、验签，并在默认账号具备新增必填凭证后切换 `current` 和注册表。切换时才清理被删除的凭证声明。可重试失败不记清单 ETag。`UPDATE_AVAILABLE` 与 `SKIPPED_OLDER` 把已安装版本写入快照，因此后续同步可以 304。`NOT_SUBSCRIBED` 与 `SKIPPED_LOCAL` 都不阻止记下 ETag，也不写入 ETag 快照。`DISABLED` 也不阻止记下 ETag，并把本机保留的版本写入快照，因此 `current` 仍匹配时可以 304，且不会下载。订阅在写入订阅行之前会再拉一次清单，不看目录缓存；新鲜清单里没有这个名字且还没有订阅行则不插入并返回 404。已经订阅的名字再点一次仍清掉 ETag 再同步，避免 304 跳过安装。清单里已经没有、但本机已订阅且来源为 OFFICIAL 的已加载包写入 `disabled_conches`，注册表和 `current` 留在原地。未订阅的名字和 `Origin.LOCAL` 都留下，也不写墓碑。
 5. `RULE_MISMATCH` 进入失败报告，不切换版本。成功的正式调用由 `Invoker` 写入 `version_success`。schema 12 删除 `pinned_rollbacks`。`mismatch_streak` 不再写入。
 6. 保留最近 3 个安装过的版本，并保护当前版本、上一次成功的版本，以及这次切换之前的版本。失配不改变当前版本。
@@ -97,13 +97,13 @@ Reef 与 Crab 的浏览器页面都是同一份静态 `index.html`，不用请�
 | --- | --- |
 | Reef 管理员、版本元数据、审计、报告、告警、Agent 令牌 | H2 或 MySQL。业务表、索引、唯一约束、检查约束和 Flyway 历史表 `hermit_flyway_schema_history` 都以 `hermit_` 开头。[Flyway SQL](../hermit-reef/src/main/resources/db/migration) 的 V1–V4 在发布前就地改写，没有数据迁移。已有 `reef-data` 里的 H2 和 Compose MySQL 库必须重建。V5 增加 `pull_count`，V6 增加角色、令牌哈希和 Crab 实例，V7 增加 `hermit_voided_config_tokens`。这三次是新增迁移，已经跑过 V5 的库不必为它们重建 |
 | Reef YAML/包/签名密钥/JWT 密钥 | `data-dir/conches/`、`data-dir/keys/` |
-| Crab 账号、配置、API Key、日志、队列、配置审计 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 conch/account 分页读取，响应不含凭证和配置值 |
+| Crab 账号、配置、API Key、日志、队列、配置审计、控制台口令哈希 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 conch/account 分页读取，响应不含凭证和配置值。控制台口令只存 schema 14 的 PBKDF2 哈希，不进 `config.yml` |
 | Crab 凭证、Cookie 会话、幂等响应 | H2 中 AES-256-GCM 密文；主密钥在环境变量或本机文件 |
 | Crab 规则及当前版本 | `HERMIT_HOME/conches/<conch>/...` |
 | API Key | 创建时返回一次明文；后续前缀和哈希查验 |
 | 上报 | 错误类型/脱敏摘要、小时计数/延迟、回滚事件，不是完整请求响应 |
 
-Reef 管理 JWT、Agent 令牌（每用户哈希，外加可选的配置令牌）和签名公钥是不同用途的信任边界。Crab 在 Reef 上的身份是用户加上实例 UUID。Crab 控制台依靠真实连接地址为回环地址且 API 带 `X-Hermit-Console: 1`，没有管理员登录，不能当成可公开反向代理的远程控制台。
+Reef 管理 JWT、Agent 令牌（每用户哈希，外加可选的配置令牌）和签名公钥是不同用途的信任边界。Crab 在 Reef 上的身份是用户加上实例 UUID。Crab 控制台依靠真实连接地址为回环地址且 API 带 `X-Hermit-Console: 1`。口令未设置时没有登录。设置之后 `/console/api/**` 还要会话 Cookie `hermit_console`，只有口令、没有用户名。页面和静态资源仍不认这张 Cookie。不能当成可公开反向代理的远程控制台。
 
 ## 生命周期与扩展
 

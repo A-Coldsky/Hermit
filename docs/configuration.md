@@ -51,6 +51,12 @@ mcp:
 
 `HERMIT_MASTER_KEY` 优先于 `data/master.key`。值必须是 Base64，解码后恰好 32 字节。非法值在启动时报可读原因（不是合法 Base64，或长度不是 32 字节），不会改用文件里的密钥，也不会只打印异常类名。未设置环境变量、也没有 key-file 时：数据目录还没有凭证密文，才会创建 `data/master.key`（POSIX 0600）；已经有凭证但主密钥文件缺失，则拒绝启动并且不生成新密钥，避免旧密文变成无法打开的 500。恢复原来的 `data/master.key` 后重启即可。确认放弃旧凭证时，删除 `data` 目录中的数据库后再启动，这时才按全新安装生成主密钥，然后重新填写账号凭证。已有合法主密钥但解不开已存凭证时，进程仍会启动并在日志里提示；账号 `needsConfiguration` 为 true，`credentialsUnreadable` 为 true，调用返回 `NOT_CONFIGURED` 和「凭证无法解密，需重新配置」。把该账号的凭证字段重新写一遍后恢复。库内部支持 key-file 参数，但当前 CLI 没有暴露该选项；`HERMIT_MASTER_KEY_FILE` 是容器入口脚本的复制功能，不是 Java 配置项。不要更换密钥后期待旧凭证仍能解密。
 
+`HERMIT_CONSOLE_PASSWORD` 是可选的控制台口令。只在 Crab 库里还没有口令哈希时，于进程启动时写入一次；已经有哈希则忽略，避免每次重启都改口令。空字符串视为未设置。长度是 8 到 256 个字符。哈希是 PBKDF2-HMAC-SHA256（16 字节盐、210000 次、32 字节结果），比较用常量时间。明文和哈希都不写入 `config.yml`。容器入口同样不把这个变量抄进 `config.yml`，只把它留在进程环境里；空白值视为未设置。同一操作系统用户看得到这个环境变量，和 `HERMIT_MASTER_KEY` 一样。
+
+忘了口令时先停掉 Crab，再执行 `crab console password`。新口令从终端、无终端时的 stdin，或 `--from-env` 读入，覆盖哈希，不需要旧口令。口令不能写在命令行参数里。已设置口令时，`crab debug status`、`crab debug on` 和 `crab debug off` 先用同样的方式核对；未设置时不询问。导入、凭证、API Key 等既有命令不查这口令。
+
+未设置口令时，控制台仍只认回环地址和 `X-Hermit-Console: 1`。已设置时，除 `GET /console/api/session` 和 `POST /console/api/session` 外，`/console/api/**` 还要 Cookie `hermit_console`（HttpOnly、`SameSite=Strict`、`Path=/console`，不加 `Secure`）。会话在内存中，自签发起 12 小时绝对到期，进程重启即失效。`POST /console/api/session/password` 体为 `{current, next}`，成功后清掉本进程的内存会话。15 分钟内累计 5 次失败后锁定；第 5 次失败会记下，锁定期间不再追加失败行，因此窗口不会被继续往后推。错误口令和锁定都是 401 `AUTH_FAILED`，message 为「口令错误」。没有 Cookie 或会话过期是 401 `AUTH_FAILED`，message 为「需要控制台登录。」。`/api`、`/mcp` 和 `mcp-stdio` 不认这张 Cookie，仍只认 API Key。`index.html` 和静态资源仍只认回环地址。
+
 ## Crab 容器配置
 
 [Dockerfile.crab](../Dockerfile.crab) 将普通 jar 与运行时依赖打包，交给 [crab-entrypoint.sh](../deploy/crab-entrypoint.sh) 初始化。根 Compose 的 `client` profile 用于同机部署；[独立 Compose](../docker-compose.crab.yml) 用于另一台客户端。两者都使用 host 网络，将 `crab-data` 挂到 `/var/lib/hermit`，并固定监听 `127.0.0.1`。
@@ -66,6 +72,7 @@ mcp:
 | `HERMIT_CRAB_INSTANCE_ID` | 可选 UUID；已有实例 ID 不同则拒绝覆盖 |
 | `HERMIT_MASTER_KEY` | 非空时优先使用环境主密钥，Java 不再读取或生成 `data/master.key`；容器入口将空白值视为未配置。非法值由 Java 拒绝并说明原因 |
 | `HERMIT_MASTER_KEY_FILE` | 未使用环境主密钥时，将挂载文件复制到 `data/master.key`；已有内容不同则拒绝覆盖。目标文件不存在且卷里已有凭证时，Java 不会另造一把新密钥 |
+| `HERMIT_CONSOLE_PASSWORD` | 可选。仅当库中还没有口令哈希时，启动时哈希入库一次。不写入 config.yml。容器入口不把它抄进文件，空白视为未设置。过短或过长由 Java 拒绝启动，错误信息里没有口令 |
 
 路径变量不会自动挂载文件，需要 Compose override 的只读 bind mount 或 `docker run --mount`。主密钥文件格式沿用 `data/master.key` 的 Base64 文本，不能填原始二进制密钥。
 
@@ -158,6 +165,8 @@ schema 10 给 `idempotency` 增加可空列 `body_sha256`（原始请求体的 S
 schema 12 删除 `pinned_rollbacks`。判断依据是版本 12 这一行是否已经记下，不看 `MAX(version)`，因此已经记下更高号码、却没有版本 12 的库启动时仍会删表。版本 3 里创建这张表的语句不改写：新库先建再删。规则失配不再切换版本。`mismatch_streak` 还在，不再写入。`rollback_queue` 仍上报版本变化；手动更新成功且上报开启时 reason 为 `MANUAL_UPDATE`。
 
 schema 13 增加 `report_settings`（`id`、`enabled`、`interval_seconds`、`updated_at`）。判断依据是版本 13 这一行是否已经记下，不看 `MAX(version)`。没有 `id = 1` 的行时，`report.enabled` 与 `report.interval_seconds` 仍来自 config.yml。控制台 PUT 写入这一行后覆盖配置文件，并在本进程立即生效。关闭上报不清空 `report_queue` 或 `rollback_queue`。
+
+schema 14 增加 `console_password`（一行：`id`、`salt`、`hash`、`iterations`、`updated_at`）和 `console_login_failures`（只有 `failed_at`）。判断依据是版本 14 这一行是否已经记下，不看 `MAX(version)`，也不改 1–13 的语句。口令不在 `config.yml`。没有 `id = 1` 的行表示尚未设置口令。
 
 小时成功/失败计数和失败明细先留在内存。每 30 秒、每次发送前，以及进程正常关闭时，一起写入 H2。批次为空时不向 Reef 发 HTTP。发送的小时统计是合并后的全量，不是增量。异常退出可能丢掉尚未刷盘的最近 30 秒计数，以及还在内存里的失败明细。回滚事件仍在入队时立即写入 H2。导入的 Reef 令牌和 config.yml 里的令牌都会进入脱敏用的已知秘密列表（长度至少 4，并包含其 URL 编码）。签名校验和公钥信任根不变：已安装的正式包在下载和加载时仍用当前公钥验签。
 

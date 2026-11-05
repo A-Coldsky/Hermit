@@ -19,7 +19,7 @@ export class ApiError extends Error {
 
 export interface ClientOptions {
   headers?: () => Record<string, string>
-  onUnauthorized?: () => void
+  onUnauthorized?: (error: ApiError) => void
 }
 
 export type Query = Record<string, string | number | boolean | null | undefined>
@@ -35,37 +35,34 @@ export function createClient(options: ClientOptions = {}) {
       payload = JSON.stringify(body)
     }
     const response = await fetch(withQuery(path, query), { method, headers, body: payload })
-    if (response.status === 401) {
-      options.onUnauthorized?.()
-    }
-    const text = await response.text()
-    let parsed: Envelope<T> | null = null
-    try {
-      parsed = text ? (JSON.parse(text) as Envelope<T>) : null
-    } catch {
-      parsed = null
-    }
+    const parsed = parseEnvelope<T>(await response.text())
     if (!response.ok || !parsed || !parsed.success) {
-      throw new ApiError(
-        response.status,
-        parsed?.error?.code ?? 'INTERNAL',
-        parsed?.error?.message ?? `请求失败（HTTP ${response.status}）`,
-        parsed?.data ?? null,
-        parsed?.traceId ?? null,
-      )
+      throw fail(response.status, parsed)
     }
     return parsed.data as T
   }
 
   async function text(path: string): Promise<string> {
     const response = await fetch(path, { headers: options.headers?.() ?? {} })
-    if (response.status === 401) {
-      options.onUnauthorized?.()
-    }
+    const body = await response.text()
     if (!response.ok) {
-      throw new ApiError(response.status, 'INTERNAL', `请求失败（HTTP ${response.status}）`)
+      throw fail(response.status, parseEnvelope(body))
     }
-    return response.text()
+    return body
+  }
+
+  function fail(status: number, parsed: Envelope<unknown> | null): ApiError {
+    const error = new ApiError(
+      status,
+      parsed?.error?.code ?? 'INTERNAL',
+      parsed?.error?.message ?? `请求失败（HTTP ${status}）`,
+      parsed?.data ?? null,
+      parsed?.traceId ?? null,
+    )
+    if (status === 401) {
+      options.onUnauthorized?.(error)
+    }
+    return error
   }
 
   return {
@@ -76,6 +73,14 @@ export function createClient(options: ClientOptions = {}) {
     del: <T>(path: string) => request<T>('DELETE', path),
     upload: <T>(path: string, form: FormData) => request<T>('POST', path, form),
     text,
+  }
+}
+
+function parseEnvelope<T>(text: string): Envelope<T> | null {
+  try {
+    return text ? (JSON.parse(text) as Envelope<T>) : null
+  } catch {
+    return null
   }
 }
 

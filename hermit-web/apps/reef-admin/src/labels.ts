@@ -103,3 +103,28 @@ export function userErrorText(message: string): string | null {
 export function crabLabel(row: { owner?: string | null; instanceId: string }): string {
   return row.owner ? `${row.owner} · ${row.instanceId}` : row.instanceId
 }
+
+export const transportLabels: Record<string, string> = {
+  streamable_http: 'Streamable HTTP',
+}
+
+export const mcpAuthLabels: Record<string, string> = {
+  headers: '固定凭证请求头',
+  oauth: 'OAuth 登录',
+}
+
+export function isMcp(row: { driver?: string | null }): boolean {
+  return row.driver === 'mcp'
+}
+
+/** 上游地址的主机名。地址缺失或写错时为 null。 */
+export function upstreamHost(url: string | null | undefined): string | null {
+  if (!url) {
+    return null
+  }
+  try {
+    return new URL(url).hostname
+  } catch {
+    return null
+  }
+}

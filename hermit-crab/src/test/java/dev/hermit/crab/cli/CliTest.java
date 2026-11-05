@@ -822,6 +822,95 @@ class CliTest {
     }
 
     @Test
+    void consolePasswordGatesDebugAndNotExistingCommands() throws Exception {
+        Path root = temp.resolve("console-password");
+        Function<String, String> home = env(root);
+        String password = "cli-console-secret";
+        ByteArrayOutputStream argumentErr = new ByteArrayOutputStream();
+        int rejected = new CrabCommand().run(
+                new String[] {"console", "password", password},
+                home,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(argumentErr));
+        assertThat(rejected).isEqualTo(1);
+        assertThat(argumentErr.toString(StandardCharsets.UTF_8)).contains("口令不能写在命令行参数里。");
+        SecretChecks.absent(argumentErr.toString(StandardCharsets.UTF_8), password);
+
+        ByteArrayInputStream in = new ByteArrayInputStream((password + "\n").getBytes(StandardCharsets.UTF_8));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream setErr = new ByteArrayOutputStream();
+        int set = new CrabCommand().run(
+                new String[] {"console", "password"},
+                home,
+                in,
+                stdout(out),
+                stderr(setErr));
+        assertThat(set).isZero();
+        assertThat(out.toString(StandardCharsets.UTF_8)).contains("updated");
+        SecretChecks.absent(out.toString(StandardCharsets.UTF_8), password);
+        SecretChecks.absent(setErr.toString(StandardCharsets.UTF_8), password);
+
+        assertThat(run(home, InputStream.nullInputStream(), "apikey", "list")).isZero();
+
+        ByteArrayOutputStream missingErr = new ByteArrayOutputStream();
+        int missing = new CrabCommand().run(
+                new String[] {"debug", "on"},
+                home,
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(missingErr));
+        assertThat(missing).isEqualTo(1);
+        assertThat(missingErr.toString(StandardCharsets.UTF_8)).contains("请提供口令。");
+
+        ByteArrayOutputStream wrongErr = new ByteArrayOutputStream();
+        int wrong = new CrabCommand().run(
+                new String[] {"debug", "on", "--from-env", "DEBUG_PW"},
+                name -> switch (name) {
+                    case "HERMIT_HOME" -> root.toString();
+                    case "DEBUG_PW" -> "wrong-console-pw";
+                    default -> null;
+                },
+                InputStream.nullInputStream(),
+                stdout(),
+                stderr(wrongErr));
+        assertThat(wrong).isEqualTo(1);
+        assertThat(wrongErr.toString(StandardCharsets.UTF_8)).contains("口令错误");
+        SecretChecks.absent(wrongErr.toString(StandardCharsets.UTF_8), password);
+
+        ByteArrayOutputStream enabled = new ByteArrayOutputStream();
+        int on = new CrabCommand().run(
+                new String[] {"debug", "on", "--from-env", "DEBUG_PW"},
+                name -> switch (name) {
+                    case "HERMIT_HOME" -> root.toString();
+                    case "DEBUG_PW" -> password;
+                    default -> null;
+                },
+                InputStream.nullInputStream(),
+                stdout(enabled),
+                stderr(new ByteArrayOutputStream()));
+        assertThat(on).isZero();
+        assertThat(enabled.toString(StandardCharsets.UTF_8)).contains("enabled=true");
+        SecretChecks.absent(enabled.toString(StandardCharsets.UTF_8), password);
+
+        try (var walk = Files.walk(root)) {
+            for (Path file : walk.filter(Files::isRegularFile).toList()) {
+                SecretChecks.absent(
+                        new String(Files.readAllBytes(file), StandardCharsets.ISO_8859_1), password);
+            }
+        }
+
+        Path open = temp.resolve("debug-open");
+        ByteArrayOutputStream status = new ByteArrayOutputStream();
+        assertThat(run(env(open), InputStream.nullInputStream(), status, "debug", "status")).isZero();
+        assertThat(status.toString(StandardCharsets.UTF_8)).contains("enabled=false").contains("expiresAt=-");
+
+        ByteArrayOutputStream help = new ByteArrayOutputStream();
+        assertThat(run(env(temp.resolve("help-console")), InputStream.nullInputStream(), help, "--help")).isZero();
+        assertThat(help.toString(StandardCharsets.UTF_8)).contains("crab console password").contains("crab debug status|on|off");
+    }
+
+    @Test
     void syncWithoutReefUrlExits() {
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = new CrabCommand().run(

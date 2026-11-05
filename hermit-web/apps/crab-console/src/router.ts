@@ -1,9 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
+import { onUnauthorized } from './api'
+import { LOGIN_REQUIRED, markSignedOut, sessionGuard } from './session'
 
 export const router = createRouter({
   history: createWebHistory('/console/'),
   routes: [
+    { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
     {
       path: '/',
       component: App,
@@ -28,4 +31,17 @@ export const router = createRouter({
       ],
     },
   ],
+})
+
+router.beforeEach(sessionGuard)
+
+onUnauthorized((error) => {
+  if (error.message !== LOGIN_REQUIRED) {
+    return
+  }
+  markSignedOut()
+  const current = router.currentRoute.value
+  if (current.name !== 'login') {
+    void router.replace({ name: 'login', query: { redirect: current.fullPath } })
+  }
 })

@@ -51,6 +51,7 @@ public class ConchCatalogService {
             ConchDoc doc = readDoc(source);
             AvailabilityRow flag = flags.get(doc.conch());
             boolean disabled = flag != null && flag.disabled();
+            McpPackageView.Projection mcp = McpPackageView.of(doc);
             summaries.add(new ConchSummary(
                     doc.conch(),
                     current == null ? null : current.version(),
@@ -64,7 +65,11 @@ public class ConchCatalogService {
                     disabled ? flag.disabledAt() : null,
                     disabled ? flag.disabledBy() : null,
                     disabled ? flag.disabledReason() : null,
-                    pullTotal(rows)));
+                    pullTotal(rows),
+                    mcp.driver(),
+                    mcp.upstream(),
+                    mcp.snapshot(),
+                    mcp.tools()));
         }
         summaries.sort(Comparator.comparing(ConchSummary::conch));
         return summaries;

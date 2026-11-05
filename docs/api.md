@@ -30,7 +30,7 @@ Crab 在回环连接上，`GET /console/**` 除 `/console/api/**` 与 `/console/
 
 Reef 的查询参数、路径变量或请求头无法转换成声明类型，或缺少必填项时，`GlobalExceptionHandler` 返回 400 `INVALID_INPUT`。`message` 为 `字段 字段名 无效`（多个字段按字典序用逗号连接，例如 `字段 page, size 无效`），不回显原始参数值，也不把该异常记成 500。例如 `GET /api/admin/audit?size=abc` 的 message 是 `字段 size 无效`。数字越界、空原因等由各接口自己返回 400，message 为 `输入无效`。Bean 校验失败（如超长口令）message 为 `请求校验未通过`。请求体读不成目标类型（坏 JSON、无法识别的枚举值）message 为 `请求体无法解析`，不回显正文。路径不接受该方法时 405，错误码仍是 `INVALID_INPUT`，message 为 `不支持该请求方法`。上传缺少 `file`、空文件或坏 ZIP 仍是 422，message 为 `输入无效`。YAML 解析失败仍是 422，message 为解析器原文；语义校验失败仍是 422，message 为 `输入无效`，明细在 `data`。
 
-Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常。响应信封仍带 `traceId`。默认 message：401 `UNAUTHORIZED` 为 `未登录或登录已过期`，403 `FORBIDDEN` 为 `没有权限执行这个操作`，404 `NOT_FOUND` 为 `资源不存在`，500 `INTERNAL` 为 `服务器内部错误`。登录失败仍是 `authentication failed`，不走这句默认文案。控制台错误提示在 message 已经表达该错误码时只显示 message，因此这三句不会再变成「无权限：没有权限执行这个操作」「不存在：资源不存在」或「内部错误：服务器内部错误」。message 是另一句说明时仍加短标签。
+Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常。响应信封仍带 `traceId`。默认 message：401 `UNAUTHORIZED` 为 `未登录或登录已过期`，403 `FORBIDDEN` 为 `没有权限执行这个操作`，404 `NOT_FOUND` 为 `资源不存在`，409 `CONFLICT` 为 `状态冲突`，500 `INTERNAL` 为 `服务器内部错误`。业务接口传入自己的 message 时用那一句，不用这句默认文案。登录失败仍是 `authentication failed`，不走这句默认文案。控制台错误提示在 message 已经表达该错误码时只显示 message，因此这三句不会再变成「无权限：没有权限执行这个操作」「不存在：资源不存在」或「内部错误：服务器内部错误」。message 是另一句说明时仍加短标签。
 
 ## Reef 管理与分发
 
@@ -57,6 +57,7 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | GET | `/conches/{conch}/versions/{version}/yaml` | YAML 原文 |
 | GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `版本对比需要同时提供 from 和 to`。少于两个版本时 400 `INVALID_INPUT`，message 为 `至少需要两个版本才能对比`。名字不合法仍是 404 |
 | POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。必须严格高于当前已发布版本；没有当前版本时可以发布。不高于时 409，`message` 为 `发布版本必须高于当前已发布版本`。已经发布过的版本仍是 409，`message` 为 `只能发布已上传、尚未发布的版本`。Conch 已停用时 409，`message` 为 `规则包已停用`（先于版本比较） |
+| DELETE | `/conches/{conch}/versions/{version}` | 仅 `ADMIN`，无请求体。只删除 `status = UPLOADED` 的版本。成功 200，`data` 为 `{conch, version}`。已发布 409 `CONFLICT`，message 为 `只能丢弃已上传、尚未发布的版本`，不删除该版本的 YAML 和签名 ZIP。不存在、重复删除、版本号不是 semver，或名字不是单个路径段时 404 `NOT_FOUND`，message 为 `资源不存在`。`USER` 与未登录分别是 403、401。审计见下文 |
 | POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `规则包已经停用` |
 | POST | `/conches/{conch}/enable` | `{reason}`，规则与停用相同。未停用时 409，`message` 为 `规则包尚未停用`。启用原因只写入审计 |
 | GET | `/tide/summary` | conch/from/to/bucket |
@@ -76,7 +77,9 @@ Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400
 
 配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。协议须为 `http` 或 `https`，空字符串不推送；其他协议或没有协议时进程拒绝启动。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 
-停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布。坏掉的发布用一个更高版本替换，不再提供管理员回滚。`POST /api/admin/conches/{conch}/rollback` 没有对应接口。页面的 GET 兜底匹配所有路径，所以这个 POST 是 405 `INVALID_INPUT`，message 为 `不支持该请求方法`；对同一路径发 GET 则是 404 `NOT_FOUND`。拉取次数不进入清单，下载成功不会改变 ETag。
+停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布，仍可以丢弃 `UPLOADED`。坏掉的发布用一个更高版本替换，不再提供管理员回滚。`POST /api/admin/conches/{conch}/rollback` 没有对应接口。页面的 GET 兜底匹配所有路径，所以这个 POST 是 405 `INVALID_INPUT`，message 为 `不支持该请求方法`；对同一路径发 GET 则是 404 `NOT_FOUND`。拉取次数不进入清单，下载成功不会改变 ETag。
+
+`DELETE /api/admin/conches/{conch}/versions/{version}` 成功时写审计 `DISCARD`。`actor` 是操作者，`conch` 与 `version` 是被丢掉的那一版，`detail` 为 null。409、404 和 403 不写这条审计。删掉的是该版本目录里的 `conch.yaml`，以及这个版本还没发布时可能留下的 `package.zip`。已发布版本的 YAML、签名 ZIP 和行上的 `sha256` 保持不变，清单里的 SHA-256 也不变。这个包若已经没有任何版本，`GET /conches/{conch}/versions` 仍是 404，`GET /conches` 不再列出它；其它版本还在时，版本列表只是不再包含被丢掉的那一版。上传规则不变：新版本必须高于该包还在的最高版本。丢掉当前最高的未发布版本后，同一个版本号可以再上传；更高的版本还在时，较低的版本号不能再上传。停用期间丢弃已发布版本的 message 仍是 `只能丢弃已上传、尚未发布的版本`，不是 `规则包已停用`。
 
 Agent 路由：
 

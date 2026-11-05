@@ -66,7 +66,7 @@ import org.springframework.test.web.servlet.MvcResult;
 class ConchApiTest {
 
     static final String TOKEN = "reef-agent-token-test";
-    private static final String SAMPLE_DESCRIPTION = "公司内部审批、公告、请假系统。本规则包覆盖待办审批和请假申请。";
+    private static final String SAMPLE_DESCRIPTION = "公司内部审批、公告、请假系统。本规则包只提供待办查询。";
     private static final String INSTANCE = "123e4567-e89b-12d3-a456-426614174000";
     private static final Path DATA = TestDataDirs.create("conch-api");
 
@@ -155,8 +155,7 @@ class ConchApiTest {
         assertThat(uploaded.get("success").asBoolean()).isTrue();
         assertThat(uploaded.get("data").get("conch").asText()).isEqualTo("legacy_oa");
         assertThat(uploaded.get("data").get("version").asText()).isEqualTo("1.0.0");
-        assertCodes(uploaded.get("data").get("warnings"), List.of(
-                ValidationCodes.UNKNOWN_RELATED, ValidationCodes.UNKNOWN_RELATED));
+        assertCodes(uploaded.get("data").get("warnings"), List.of(ValidationCodes.MISSING_RELATED));
         assertThat(uploaded.get("data").get("diff").size()).isZero();
         assertThat(Files.readAllBytes(DATA.resolve("conches/legacy_oa/1.0.0/conch.yaml"))).isEqualTo(sample);
 
@@ -207,12 +206,11 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data[0].uploadedBy").value(TestSecrets.USERNAME))
                 .andExpect(jsonPath("$.data[0].current").value(false))
                 .andExpect(jsonPath("$.data[0].pullCount").value(0))
-                .andExpect(jsonPath("$.data[0].warningCount").value(2))
-                .andExpect(jsonPath("$.data[0].warnings.length()").value(2))
-                .andExpect(jsonPath("$.data[0].warnings[0].code").value(ValidationCodes.UNKNOWN_RELATED))
-                .andExpect(jsonPath("$.data[0].warnings[0].path").value("actions.list_todo.related[0]"))
-                .andExpect(jsonPath("$.data[0].warnings[0].message").value("related 指向不存在的能力 approve"))
-                .andExpect(jsonPath("$.data[0].warnings[1].message").value("related 指向不存在的能力 list_done"))
+                .andExpect(jsonPath("$.data[0].warningCount").value(1))
+                .andExpect(jsonPath("$.data[0].warnings.length()").value(1))
+                .andExpect(jsonPath("$.data[0].warnings[0].code").value(ValidationCodes.MISSING_RELATED))
+                .andExpect(jsonPath("$.data[0].warnings[0].path").value("actions.list_todo.related"))
+                .andExpect(jsonPath("$.data[0].warnings[0].message").value("缺少 related"))
                 .andExpect(jsonPath("$.data[0].publishedBy").value(nullValue()));
 
         MvcResult yaml = mockMvc.perform(get("/api/admin/conches/legacy_oa/versions/1.0.0/yaml")

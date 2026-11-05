@@ -2,7 +2,7 @@
 
 需要 JDK 17、curl、jq。以下命令从仓库根目录执行，示例适用于 macOS/Linux；Windows 的 classpath 分隔符使用 `;`。先看[工具链说明](development.md)，确保终端 `java` 也是 JDK 17。
 
-示例 `legacy_oa` 只有 `list_todo`，描述中的 `approve`、`list_done` 不在此文件内。完整自动验收使用测试中的模拟 OA：`./mvnw -B verify`。手工调用需要可访问、页面结构与示例匹配的老系统。
+示例 `legacy_oa` 只有 `list_todo`。完整自动验收使用测试中的模拟 OA：`./mvnw -B verify`。手工调用需要可访问、页面结构与示例匹配的老系统。
 
 ## 1. 构建并安装依赖
 

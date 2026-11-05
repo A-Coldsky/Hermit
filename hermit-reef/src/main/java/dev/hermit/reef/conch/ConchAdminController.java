@@ -12,6 +12,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,14 +29,17 @@ public class ConchAdminController {
     private final SigningKeyStore signingKeys;
     private final ConchUploadService uploads;
     private final ConchPublishService publishService;
+    private final ConchDiscardService discardService;
     private final ConchAvailabilityService availability;
     private final ConchCatalogService catalog;
 
     public ConchAdminController(SigningKeyStore signingKeys, ConchUploadService uploads,
-            ConchPublishService publishService, ConchAvailabilityService availability, ConchCatalogService catalog) {
+            ConchPublishService publishService, ConchDiscardService discardService,
+            ConchAvailabilityService availability, ConchCatalogService catalog) {
         this.signingKeys = signingKeys;
         this.uploads = uploads;
         this.publishService = publishService;
+        this.discardService = discardService;
         this.availability = availability;
         this.catalog = catalog;
     }
@@ -93,6 +97,12 @@ public class ConchAdminController {
     public ApiResponse<PublishResponse> publish(@PathVariable("conch") String conch,
             @PathVariable("version") String version, HttpServletRequest request) {
         return ApiResponse.ok(publishService.publish(actor(), conch, version), TraceIds.current(request));
+    }
+
+    @DeleteMapping("/conches/{conch}/versions/{version:.+}")
+    public ApiResponse<DiscardResponse> discard(@PathVariable("conch") String conch,
+            @PathVariable("version") String version, HttpServletRequest request) {
+        return ApiResponse.ok(discardService.discard(actor(), conch, version), TraceIds.current(request));
     }
 
     @PostMapping("/conches/{conch}/disable")

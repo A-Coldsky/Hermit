@@ -18,6 +18,9 @@ record UploadResponse(String conch, String version, List<ValidationIssue> warnin
 record PublishResponse(String conch, String version) {
 }
 
+record DiscardResponse(String conch, String version) {
+}
+
 record ConchAvailabilityView(
         String conch,
         boolean disabled,

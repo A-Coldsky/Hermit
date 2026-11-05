@@ -9,6 +9,12 @@ import dev.hermit.common.error.ErrorCode;
 public final class SubscriptionException extends RuntimeException {
     public static final String LOCAL_CONFLICT = "与本机本地规则包同名";
     public static final String NOT_IN_CATALOG = "conch is not in the catalog";
+    /**
+     * Subscribe refused because the fresh manifest does not list this name.
+     * The manifest cannot tell an unpublished name from a disabled one.
+     * Manual update still uses {@link #NOT_IN_CATALOG}.
+     */
+    public static final String CANNOT_SUBSCRIBE = "Reef 上当前不能订阅这个规则包。";
     public static final String NOT_SUBSCRIBED = "not subscribed";
     public static final String NAME_INVALID = "conch name is invalid";
     public static final String NOT_CONFIGURED = "sync is not configured";

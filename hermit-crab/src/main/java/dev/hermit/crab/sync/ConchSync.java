@@ -206,8 +206,11 @@ public final class ConchSync {
 
     /**
      * Subscribes, then syncs under this lock so a 304 cannot skip the install.
-     * {@code onEachReport} sees a prefetch when the catalog cache is absent, and the install sync.
-     * The caller writes one {@code SYNC_REQUESTED} audit after this returns.
+     * The manifest is fetched again before a new row is written, even when a catalog
+     * cache already exists. A name the fresh manifest does not list is not inserted.
+     * An existing subscription is left in place and still synced, matching repeat subscribe.
+     * {@code onEachReport} sees the install sync. The caller writes one {@code SYNC_REQUESTED}
+     * audit after this returns.
      */
     public ConchOutcome subscribe(String conch, String actor, Consumer<SyncReport> onEachReport) {
         if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
@@ -220,25 +223,59 @@ public final class ConchSync {
             if (registry.origin(conch) == Origin.LOCAL) {
                 throw new SubscriptionException(409, ErrorCode.INVALID_INPUT, SubscriptionException.LOCAL_CONFLICT);
             }
-            if (store.catalog().isEmpty()) {
-                SyncReport prefetched = syncOnceLocked();
-                if (onEachReport != null && prefetched != null) {
-                    onEachReport.accept(prefetched);
-                }
+            boolean already = subscriptions.contains(conch);
+            refreshCatalog();
+            boolean listed = cached(conch).isPresent();
+            if (!listed && !already) {
+                throw new SubscriptionException(404, ErrorCode.NOT_FOUND, SubscriptionException.CANNOT_SUBSCRIBE);
             }
-            if (cached(conch).isEmpty()) {
-                throw new SubscriptionException(404, ErrorCode.NOT_FOUND, SubscriptionException.NOT_IN_CATALOG);
-            }
-            if (subscriptions.record(conch, actor, clock.instant())) {
-                AuditLog.record(dataSource, actor, AuditKind.CONCH_SUBSCRIBED, "OFFICIAL/" + conch, conch);
-            }
+            boolean inserted = listed && subscriptions.record(conch, actor, clock.instant());
             store.clearEtagAndSnapshot();
-            SyncReport report = syncOnceLocked();
+            SyncReport report;
+            try {
+                report = syncOnceLocked();
+            } catch (RuntimeException ex) {
+                if (inserted) {
+                    auditSubscribed(conch, actor);
+                }
+                throw ex;
+            }
             if (onEachReport != null && report != null) {
                 onEachReport.accept(report);
             }
-            return report == null ? null : outcomeFor(report, conch);
+            ConchOutcome outcome = report == null ? null : outcomeFor(report, conch);
+            if (inserted && outcome == null) {
+                subscriptions.delete(conch);
+                return null;
+            }
+            if (inserted) {
+                auditSubscribed(conch, actor);
+            }
+            return outcome;
         }
+    }
+
+    /**
+     * Replaces the catalog cache from a manifest fetch that does not send the stored ETag.
+     * A package Reef stopped listing between syncs must not stay subscribable because the
+     * cache still has its name. Connection failures are recorded the same way as {@link #syncOnceLocked()}.
+     */
+    private void refreshCatalog() {
+        ReefClient.ManifestFetch manifest;
+        try {
+            manifest = reef.manifest(null);
+        } catch (SyncException ex) {
+            ex.clientError().ifPresent(error -> deliver(SyncReport.failed(error)));
+            throw ex;
+        }
+        if (manifest.notModified()) {
+            return;
+        }
+        store.saveCatalog(manifest.entries(), clock.instant());
+    }
+
+    private void auditSubscribed(String conch, String actor) {
+        AuditLog.record(dataSource, actor, AuditKind.CONCH_SUBSCRIBED, "OFFICIAL/" + conch, conch);
     }
 
     public void unsubscribe(String conch, String actor) {

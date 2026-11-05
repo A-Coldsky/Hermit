@@ -43,6 +43,7 @@ public class ConchDistributionService {
         List<ManifestEntry> entries = new ArrayList<>();
         for (VersionRow row : currentRows()) {
             VerifiedConch verified = verifiedPackage(row);
+            McpPackageView.Projection mcp = McpPackageView.of(verified.conchDoc());
             entries.add(new ManifestEntry(
                     verified.manifest().conch(),
                     verified.manifest().version(),
@@ -51,7 +52,9 @@ public class ConchDistributionService {
                     verified.conchDoc().title(),
                     verified.conchDoc().description(),
                     verified.conchDoc().actions().size(),
-                    requiredCredentialNames(verified.conchDoc())));
+                    requiredCredentialNames(verified.conchDoc()),
+                    mcp.driver(),
+                    mcp.upstreamHost()));
         }
         entries.sort(Comparator.comparing(ManifestEntry::conch));
         byte[] canonical;
@@ -60,7 +63,7 @@ public class ConchDistributionService {
         } catch (JsonProcessingException ex) {
             throw new ApiException(500, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message());
         }
-        // ETag 只覆盖清单数组。信封里的 traceId 每次都会变，不能拿去算标签。
+        // ETag 只覆盖清单数组，含 driver 与 upstreamHost。信封里的 traceId 每次都会变，不能拿去算标签。
         String etag = "\"" + ConchHashes.sha256(canonical) + "\"";
         if (noneMatch(ifNoneMatch, etag)) {
             return new ManifestNegotiation(true, List.of(), etag);

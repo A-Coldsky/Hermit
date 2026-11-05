@@ -105,7 +105,7 @@ actions:
 
 `snapshot` 可省略。写了就必须有能按 `Instant` 解析的 `fetched_at`、`protocol_version`，以及 64 位小写十六进制的 `tools_sha256`。`server` 可省略；写了则 `name` 和 `version` 都要有。校验不按 actions 重算 `tools_sha256`。`ToolSnapshots.toolsSha256` 只取 `tools` 数组，按 `name` 排序，键排序并去掉 `_meta`，忽略 `nextCursor`。刷新还没做，版本对比和以后的刷新共用这个算法。
 
-没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。Crab 现有 HTTP 工具注解仍从 readOnly 与 idempotent 推导，不读这个有效值。带上游工具的 action，`effectiveMethod()` 固定 POST。`inputJsonSchema()` 返回原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文；管理端还不单独列出 upstream 和工具表。
+没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。Crab 现有 HTTP 工具注解仍从 readOnly 与 idempotent 推导，不读这个有效值。带上游工具的 action，`effectiveMethod()` 固定 POST。`inputJsonSchema()` 返回原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文。管理 API 的列表和详情另外给出 `upstream`、`snapshot` 和 `tools`，字段见 [api.md](api.md)。页面还没有工具表。
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。`notes` 和 `related` 的原有警告仍在。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新时去掉这些字符不在本批。
 

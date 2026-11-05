@@ -27,6 +27,23 @@ export interface ActionChange {
   mcp: boolean
 }
 
+export interface ToolChange {
+  name: string
+  kind: 'added' | 'removed' | 'changed' | string
+  previousUpstreamName: string | null
+  upstreamName: string | null
+  previousSchemaSha256: string | null
+  schemaSha256: string | null
+  previousDescription: string | null
+  description: string | null
+  previousReadOnly: boolean | null
+  readOnly: boolean | null
+  previousDestructive: boolean | null
+  destructive: boolean | null
+  previousConfirm: boolean | null
+  confirm: boolean | null
+}
+
 export interface ConchDiff {
   addedActions: string[]
   removedActions: string[]
@@ -38,6 +55,37 @@ export interface ConchDiff {
   removedConfig: string[]
   configDefaultChanges: { name: string; before: unknown; after: unknown }[]
   newRequiredCredentials: string[]
+  toolChanges: ToolChange[]
+}
+
+/** 只含 `auth.type`。请求头模板和 OAuth 的 client_id、端点不在这个对象里。 */
+export interface McpUpstreamInfo {
+  url: string | null
+  transport: string | null
+  auth: { type: string | null } | null
+  allowedHosts: string[]
+}
+
+export interface McpSnapshotInfo {
+  /** 写入规则包的时间原文，不是 Reef 读到这份包的时间。 */
+  fetchedAt: string | null
+  protocolVersion: string | null
+  server: { name: string | null; version: string | null } | null
+  toolsSha256: string | null
+}
+
+/**
+ * 工具表的一行。`destructive` 与 `confirm` 是有效值。
+ * `schemaSha256` 按包内 schema 计算，不看 YAML 里声明的 `schema_sha256` 原文。
+ */
+export interface McpToolRow {
+  name: string
+  upstreamName: string | null
+  readOnly: boolean
+  destructive: boolean
+  confirm: boolean
+  upstreamAnnotations: Record<string, unknown>
+  schemaSha256: string
 }
 
 export interface ConchAvailability {
@@ -62,6 +110,14 @@ export interface ConchSummary {
   disabledBy: string | null
   disabledReason: string | null
   pullCount: number
+  /** 缺省或空白按 `http`。 */
+  driver: string
+  /** HTTP 包为 null。 */
+  upstream: McpUpstreamInfo | null
+  /** 包里没有 snapshot 时为 null。HTTP 包为 null。 */
+  snapshot: McpSnapshotInfo | null
+  /** HTTP 包为 null。MCP 包是工具表，可以是空数组。 */
+  tools: McpToolRow[] | null
 }
 
 export interface FieldDeclaration {
@@ -89,6 +145,7 @@ export interface Capability {
 export interface ConchDetail {
   conch: string
   version: string
+  /** 缺省或空白按 `http`。 */
   driver: string
   minCrabVersion: string
   baseUrl: string | null
@@ -105,6 +162,12 @@ export interface ConchDetail {
   disabledBy: string | null
   disabledReason: string | null
   pullCount: number
+  /** HTTP 包为 null。 */
+  upstream: McpUpstreamInfo | null
+  /** 包里没有 snapshot 时为 null。HTTP 包为 null。 */
+  snapshot: McpSnapshotInfo | null
+  /** HTTP 包为 null。MCP 包是工具表，可以是空数组。 */
+  tools: McpToolRow[] | null
 }
 
 export interface ConchVersion {

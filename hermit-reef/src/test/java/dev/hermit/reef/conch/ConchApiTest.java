@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.hermit.common.mcp.ToolSnapshots;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.parse.ConchParser;
@@ -70,6 +71,8 @@ class ConchApiTest {
 
     static final String TOKEN = "reef-agent-token-test";
     private static final String SAMPLE_DESCRIPTION = "公司内部审批、公告、请假系统。本规则包只提供待办查询。";
+    private static final String MCP_TOOLS_SHA =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     private static final String INSTANCE = "123e4567-e89b-12d3-a456-426614174000";
     private static final Path DATA = TestDataDirs.create("conch-api");
 
@@ -339,7 +342,11 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data[0].disabled").value(false))
                 .andExpect(jsonPath("$.data[0].disabledAt").value(nullValue()))
                 .andExpect(jsonPath("$.data[0].disabledBy").value(nullValue()))
-                .andExpect(jsonPath("$.data[0].disabledReason").value(nullValue()));
+                .andExpect(jsonPath("$.data[0].disabledReason").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].driver").value("http"))
+                .andExpect(jsonPath("$.data[0].upstream").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].snapshot").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].tools").value(nullValue()));
         mockMvc.perform(get("/api/admin/conches/legacy_oa").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
@@ -399,7 +406,8 @@ class ConchApiTest {
                         .param("to", "1.1.0")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.addedCredentials[0]").value("otp"));
+                .andExpect(jsonPath("$.data.addedCredentials[0]").value("otp"))
+                .andExpect(jsonPath("$.data.toolChanges").isEmpty());
 
         mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.1.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
@@ -421,6 +429,10 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data.config.base_url.default").value("http://oa.intranet.local"))
                 .andExpect(jsonPath("$.data.actions.list_todo.mcp.readOnly").value(true))
                 .andExpect(jsonPath("$.data.actions.list_todo.inputJsonSchema.type").value("object"))
+                .andExpect(jsonPath("$.data.driver").value("http"))
+                .andExpect(jsonPath("$.data.upstream").value(nullValue()))
+                .andExpect(jsonPath("$.data.snapshot").value(nullValue()))
+                .andExpect(jsonPath("$.data.tools").value(nullValue()))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
@@ -690,24 +702,36 @@ class ConchApiTest {
 
     @Test
     void manifestEntrySerializesANullDescription() throws Exception {
-        ManifestEntry entry = new ManifestEntry("legacy_oa", "1.0.0", "ab", "1.0.0", "标题", null, 0, List.of());
+        ManifestEntry entry = new ManifestEntry("legacy_oa", "1.0.0", "ab", "1.0.0", "标题", null, 0, List.of(), null, null);
         JsonNode node = objectMapper.valueToTree(entry);
         assertThat(node.get("description").isNull()).isTrue();
         assertThat(node.get("title").asText()).isEqualTo("标题");
         assertThat(node.get("capabilityCount").intValue()).isZero();
+        assertThat(node.get("driver").asText()).isEqualTo("http");
+        assertThat(node.get("upstreamHost").isNull()).isTrue();
         String withNull = etagOf(List.of(entry));
         String withText = etagOf(List.of(new ManifestEntry(
                 entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
-                entry.title(), "说明", entry.capabilityCount(), List.of())));
+                entry.title(), "说明", entry.capabilityCount(), List.of(), entry.driver(), entry.upstreamHost())));
         String renamed = etagOf(List.of(new ManifestEntry(
                 entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
-                "另一个标题", null, entry.capabilityCount(), List.of())));
+                "另一个标题", null, entry.capabilityCount(), List.of(), entry.driver(), entry.upstreamHost())));
         String moreCapabilities = etagOf(List.of(new ManifestEntry(
                 entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
-                entry.title(), null, 1, List.of("otp"))));
+                entry.title(), null, 1, List.of("otp"), entry.driver(), entry.upstreamHost())));
+        String mcpDriver = etagOf(List.of(new ManifestEntry(
+                entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
+                entry.title(), null, entry.capabilityCount(), entry.requiredCredentials(),
+                "mcp", entry.upstreamHost())));
+        String withHost = etagOf(List.of(new ManifestEntry(
+                entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
+                entry.title(), null, entry.capabilityCount(), entry.requiredCredentials(),
+                entry.driver(), "crm.intra.example.com")));
         assertThat(withText).isNotEqualTo(withNull);
         assertThat(renamed).isNotEqualTo(withNull);
         assertThat(moreCapabilities).isNotEqualTo(withNull);
+        assertThat(mcpDriver).isNotEqualTo(withNull);
+        assertThat(withHost).isNotEqualTo(withNull);
     }
 
     @Test
@@ -818,6 +842,225 @@ class ConchApiTest {
         assertThat(storedPull("legacy_oa", "1.0.0")).isZero();
     }
 
+    @Test
+    void mcpPackageExposesDriverUpstreamSnapshotToolsAndDiffWithoutCallingUpstream() throws Exception {
+        String first = mcpYaml("1.0.0", "https://crm.intra.example.com/mcp", null, "2026-11-05T03:00:00Z", """
+                  search_customer:
+                    tool: searchCustomer
+                    title: 搜索客户
+                    description: 按名称搜索客户。
+                    mcp: {expose: true, read_only: true}
+                    idempotent: true
+                    input_schema:
+                      type: object
+                      properties:
+                        q: {type: string}
+                      required: [q]
+                    output_schema: {type: object}
+                    upstream_annotations: {readOnlyHint: true}
+                  create_ticket:
+                    tool: createTicket
+                    title: 创建工单
+                    description: 为客户创建服务工单。
+                    mcp: {expose: true, read_only: false}
+                    input_schema: {type: object}
+                    upstream_annotations: {destructiveHint: true}
+                """);
+        String second = mcpYaml(
+                "1.1.0",
+                "https://Tickets.intra.example.com:8443/mcp",
+                "[Tickets.intra.example.com]",
+                "2026-11-05T04:00:00Z",
+                """
+                  search_customer:
+                    tool: findCustomer
+                    title: 搜索客户
+                    description: 按名称或手机号搜索客户。
+                    mcp: {expose: true, read_only: false}
+                    confirm: false
+                    input_schema: {type: object, properties: {name: {type: string}}}
+                  close_ticket:
+                    tool: closeTicket
+                    title: 关闭工单
+                    description: 关闭服务工单。
+                    mcp: {expose: true, read_only: false, destructive: true}
+                    input_schema: {type: object}
+                """);
+        assertThat(json(upload(first.getBytes(StandardCharsets.UTF_8))).get("success").asBoolean()).isTrue();
+
+        String listed = mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].conch").value("vendor_crm"))
+                .andExpect(jsonPath("$.data[0].version").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].driver").value("mcp"))
+                .andExpect(jsonPath("$.data[0].upstream.url").value("https://crm.intra.example.com/mcp"))
+                .andExpect(jsonPath("$.data[0].upstream.transport").value("streamable_http"))
+                .andExpect(jsonPath("$.data[0].upstream.auth.type").value("headers"))
+                .andExpect(jsonPath("$.data[0].upstream.allowedHosts[0]").value("crm.intra.example.com"))
+                .andExpect(jsonPath("$.data[0].upstream.headers").doesNotExist())
+                .andExpect(jsonPath("$.data[0].snapshot.fetchedAt").value("2026-11-05T03:00:00Z"))
+                .andExpect(jsonPath("$.data[0].snapshot.protocolVersion").value("2025-06-18"))
+                .andExpect(jsonPath("$.data[0].snapshot.server.name").value("crm-mcp"))
+                .andExpect(jsonPath("$.data[0].snapshot.server.version").value("3.2.0"))
+                .andExpect(jsonPath("$.data[0].snapshot.toolsSha256").value(MCP_TOOLS_SHA))
+                .andExpect(jsonPath("$.data[0].tools.length()").value(2))
+                .andExpect(jsonPath("$.data[0].tools[0].name").value("search_customer"))
+                .andExpect(jsonPath("$.data[0].tools[0].upstreamName").value("searchCustomer"))
+                .andExpect(jsonPath("$.data[0].tools[0].readOnly").value(true))
+                .andExpect(jsonPath("$.data[0].tools[0].destructive").value(false))
+                .andExpect(jsonPath("$.data[0].tools[0].confirm").value(false))
+                .andExpect(jsonPath("$.data[0].tools[0].upstreamAnnotations.readOnlyHint").value(true))
+                .andExpect(jsonPath("$.data[0].tools[1].name").value("create_ticket"))
+                .andExpect(jsonPath("$.data[0].tools[1].upstreamName").value("createTicket"))
+                .andExpect(jsonPath("$.data[0].tools[1].readOnly").value(false))
+                .andExpect(jsonPath("$.data[0].tools[1].destructive").value(true))
+                .andExpect(jsonPath("$.data[0].tools[1].confirm").value(true))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertNoUpstreamSecrets(listed);
+        ConchDoc firstDoc = ConchParser.parse(first);
+        String searchSha = ToolSnapshots.schemaSha256(
+                firstDoc.actions().get("search_customer").tool().inputSchema(),
+                firstDoc.actions().get("search_customer").tool().outputSchema());
+        assertThat(objectMapper.readTree(listed).get("data").get(0).get("tools").get(0).get("schemaSha256").asText())
+                .isEqualTo(searchSha);
+
+        assertThat(json(upload(second.getBytes(StandardCharsets.UTF_8))).get("success").asBoolean()).isTrue();
+        MvcResult diffResult = mockMvc.perform(get("/api/admin/conches/vendor_crm/diff")
+                        .param("from", "1.0.0")
+                        .param("to", "1.1.0")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode diff = json(diffResult).get("data");
+        ConchDoc secondDoc = ConchParser.parse(second);
+        assertThat(diff).isEqualTo(objectMapper.valueToTree(ConchDiff.between(firstDoc, secondDoc)));
+        assertThat(diff.get("toolChanges").size()).isEqualTo(3);
+        assertThat(diff.get("toolChanges").get(0).get("name").asText()).isEqualTo("search_customer");
+        assertThat(diff.get("toolChanges").get(0).get("kind").asText()).isEqualTo("changed");
+        assertThat(diff.get("toolChanges").get(0).get("previousUpstreamName").asText()).isEqualTo("searchCustomer");
+        assertThat(diff.get("toolChanges").get(0).get("upstreamName").asText()).isEqualTo("findCustomer");
+        assertThat(diff.get("toolChanges").get(1).get("kind").asText()).isEqualTo("removed");
+        assertThat(diff.get("toolChanges").get(1).get("name").asText()).isEqualTo("create_ticket");
+        assertThat(diff.get("toolChanges").get(2).get("kind").asText()).isEqualTo("added");
+        assertThat(diff.get("toolChanges").get(2).get("name").asText()).isEqualTo("close_ticket");
+        assertThat(diff.get("toolChanges").get(2).get("destructive").asBoolean()).isTrue();
+        assertThat(diff.get("toolChanges").get(2).get("confirm").asBoolean()).isTrue();
+
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(jsonPath("$.data[0].version").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].upstream.url").value("https://Tickets.intra.example.com:8443/mcp"))
+                .andExpect(jsonPath("$.data[0].upstream.allowedHosts[0]").value("Tickets.intra.example.com"))
+                .andExpect(jsonPath("$.data[0].tools[0].upstreamName").value("findCustomer"))
+                .andExpect(jsonPath("$.data[0].tools[1].name").value("close_ticket"));
+
+        mockMvc.perform(post("/api/admin/conches/vendor_crm/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/admin/conches/vendor_crm").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.0.0"))
+                .andExpect(jsonPath("$.data.driver").value("mcp"))
+                .andExpect(jsonPath("$.data.upstream.url").value("https://crm.intra.example.com/mcp"))
+                .andExpect(jsonPath("$.data.snapshot.fetchedAt").value("2026-11-05T03:00:00Z"))
+                .andExpect(jsonPath("$.data.tools.length()").value(2));
+        MvcResult firstManifest = mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].conch").value("vendor_crm"))
+                .andExpect(jsonPath("$.data[0].version").value("1.0.0"))
+                .andExpect(jsonPath("$.data[0].driver").value("mcp"))
+                .andExpect(jsonPath("$.data[0].upstreamHost").value("crm.intra.example.com"))
+                .andReturn();
+        JsonNode manifestEntry = objectMapper.readTree(firstManifest.getResponse().getContentAsString()).get("data").get(0);
+        assertThat(manifestEntry.has("upstream")).isFalse();
+        assertThat(manifestEntry.has("snapshot")).isFalse();
+        assertThat(manifestEntry.has("tools")).isFalse();
+        String firstEtag = firstManifest.getResponse().getHeader(HttpHeaders.ETAG);
+        List<ManifestEntry> firstEntries = objectMapper.convertValue(
+                objectMapper.readTree(firstManifest.getResponse().getContentAsString()).get("data"),
+                new TypeReference<List<ManifestEntry>>() {
+                });
+        assertThat(etagOf(firstEntries)).isEqualTo(firstEtag);
+        mockMvc.perform(agent("/agent/conches/manifest").header(HttpHeaders.IF_NONE_MATCH, firstEtag))
+                .andExpect(status().isNotModified());
+
+        mockMvc.perform(post("/api/admin/conches/vendor_crm/versions/1.1.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+        String detail = mockMvc.perform(get("/api/admin/conches/vendor_crm").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(jsonPath("$.data.version").value("1.1.0"))
+                .andExpect(jsonPath("$.data.upstream.url").value("https://Tickets.intra.example.com:8443/mcp"))
+                .andExpect(jsonPath("$.data.upstream.allowedHosts[0]").value("Tickets.intra.example.com"))
+                .andExpect(jsonPath("$.data.snapshot.fetchedAt").value("2026-11-05T04:00:00Z"))
+                .andExpect(jsonPath("$.data.tools.length()").value(2))
+                .andExpect(jsonPath("$.data.tools[1].name").value("close_ticket"))
+                .andExpect(jsonPath("$.data.tools[1].destructive").value(true))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        MvcResult secondManifest = mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].version").value("1.1.0"))
+                .andExpect(jsonPath("$.data[0].driver").value("mcp"))
+                .andExpect(jsonPath("$.data[0].upstreamHost").value("tickets.intra.example.com"))
+                .andReturn();
+        String secondEtag = secondManifest.getResponse().getHeader(HttpHeaders.ETAG);
+        assertThat(secondEtag).isNotEqualTo(firstEtag);
+        mockMvc.perform(agent("/agent/conches/manifest").header(HttpHeaders.IF_NONE_MATCH, firstEtag))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].upstreamHost").value("tickets.intra.example.com"));
+        assertNoUpstreamSecrets(listed);
+        assertNoUpstreamSecrets(detail);
+        assertNoUpstreamSecrets(firstManifest.getResponse().getContentAsString());
+        assertNoUpstreamSecrets(secondManifest.getResponse().getContentAsString());
+        assertNoUpstreamSecrets(diffResult.getResponse().getContentAsString());
+    }
+
+    private static String mcpYaml(
+            String version, String url, String allowedHosts, String fetchedAt, String actions) {
+        String hosts = allowedHosts == null ? "" : "  allowed_hosts: " + allowedHosts + "\n";
+        String body = actions.stripIndent().stripTrailing().replace("\n", "\n  ");
+        return """
+                conch: vendor_crm
+                version: %s
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 客户系统（源站 MCP）
+                description: 源站提供的 MCP 服务，Hermit 只做权限和转发。
+                credentials:
+                  token: {type: secret, label: 访问令牌, required: true, description: 在客户系统生成}
+                upstream:
+                  url: %s
+                  transport: streamable_http
+                  auth: {type: headers}
+                  headers:
+                    Authorization: 'Bearer {{credential.token}}'
+                  timeout_ms: 30000
+                %ssnapshot:
+                  fetched_at: %s
+                  protocol_version: 2025-06-18
+                  server: {name: crm-mcp, version: %s}
+                  tools_sha256: %s
+                actions:
+                  %s
+                """.formatted(
+                version,
+                url,
+                hosts,
+                fetchedAt,
+                "1.0.0".equals(version) ? "3.2.0" : "3.3.0",
+                MCP_TOOLS_SHA,
+                body);
+    }
+
+    private static void assertNoUpstreamSecrets(String body) {
+        assertThat(body).doesNotContain("Bearer");
+        assertThat(body).doesNotContain("credential.token");
+        assertThat(body).doesNotContain("timeout_ms");
+        assertThat(body).doesNotContain("30000");
+    }
+
     private String manifestEtag(String version) throws Exception {
         MvcResult result = mockMvc.perform(agent("/agent/conches/manifest"))
                 .andExpect(status().isOk())
@@ -857,6 +1100,8 @@ class ConchApiTest {
         assertThat(data.get(0).get("title").asText()).isEqualTo("协同办公 OA");
         assertThat(data.get(0).get("description").asText()).isEqualTo(description);
         assertThat(data.get(0).get("capabilityCount").intValue()).isEqualTo(capabilityCount);
+        assertThat(data.get(0).get("driver").asText()).isEqualTo("http");
+        assertThat(data.get(0).get("upstreamHost").isNull()).isTrue();
         assertThat(data.get(0).get("requiredCredentials")).isNotNull();
         java.util.ArrayList<String> required = new java.util.ArrayList<>();
         data.get(0).get("requiredCredentials").forEach(node -> required.add(node.asText()));
@@ -873,14 +1118,26 @@ class ConchApiTest {
                 .isNotEqualTo(etagOf(List.of(current)));
         assertThat(etagOf(List.of(new ManifestEntry(
                 current.conch(), current.version(), current.sha256(), current.minCrabVersion(),
-                current.title(), current.description(), current.capabilityCount(), List.of("otp")))))
+                current.title(), current.description(), current.capabilityCount(), List.of("otp"),
+                current.driver(), current.upstreamHost()))))
+                .isNotEqualTo(etagOf(List.of(current)));
+        assertThat(etagOf(List.of(new ManifestEntry(
+                current.conch(), current.version(), current.sha256(), current.minCrabVersion(),
+                current.title(), current.description(), current.capabilityCount(), current.requiredCredentials(),
+                "mcp", current.upstreamHost()))))
+                .isNotEqualTo(etagOf(List.of(current)));
+        assertThat(etagOf(List.of(new ManifestEntry(
+                current.conch(), current.version(), current.sha256(), current.minCrabVersion(),
+                current.title(), current.description(), current.capabilityCount(), current.requiredCredentials(),
+                current.driver(), "crm.intra.example.com"))))
                 .isNotEqualTo(etagOf(List.of(current)));
     }
 
     private static ManifestEntry shifted(ManifestEntry entry, String title, String description, int capabilityCount) {
         return new ManifestEntry(
                 entry.conch(), entry.version(), entry.sha256(), entry.minCrabVersion(),
-                title, description, capabilityCount, entry.requiredCredentials());
+                title, description, capabilityCount, entry.requiredCredentials(),
+                entry.driver(), entry.upstreamHost());
     }
 
     private void assertPullCounts(int sum, String currentVersion) throws Exception {

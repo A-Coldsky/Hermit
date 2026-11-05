@@ -13,10 +13,12 @@ import IssueList from '../components/IssueList.vue'
 const router = useRouter()
 const uploading = ref(false)
 const publishing = ref(false)
+const discarding = ref(false)
 const fileName = ref('')
+const pending = ref<File | null>(null)
 const result = ref<UploadResult | null>(null)
 const failure = ref<{ message: string; errors: ValidationIssue[]; warnings: ValidationIssue[] } | null>(null)
-const step = computed(() => (result.value ? 2 : uploading.value || failure.value ? 1 : 0))
+const step = computed(() => (result.value ? 2 : pending.value || uploading.value || failure.value ? 1 : 0))
 
 function issuesOf(data: unknown, key: 'errors' | 'warnings'): ValidationIssue[] {
   if (data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>)[key])) {
@@ -33,16 +35,30 @@ function parseIssue(data: unknown): ValidationIssue[] {
   return []
 }
 
-async function onChange(file: UploadFile) {
+function onChange(file: UploadFile) {
   if (!file.raw) {
     return
   }
   fileName.value = file.name
+  pending.value = file.raw
   result.value = null
   failure.value = null
+}
+
+function cancelPending() {
+  pending.value = null
+  fileName.value = ''
+}
+
+async function upload() {
+  const file = pending.value
+  if (!file) {
+    return
+  }
+  pending.value = null
   uploading.value = true
   try {
-    result.value = await api.upload(file.raw)
+    result.value = await api.upload(file)
     ElMessage.success(`已上传 ${result.value.conch} v${result.value.version}`)
   } catch (error) {
     if (error instanceof ApiError && error.status === 422) {
@@ -91,11 +107,38 @@ async function publish() {
     publishing.value = false
   }
 }
+
+async function discard() {
+  if (!result.value) {
+    return
+  }
+  const { conch, version } = result.value
+  try {
+    await ElMessageBox.confirm(
+      `丢弃后删除待发布的 ${conch} v${version}，同一个版本号可以重新上传。`,
+      '丢弃这个版本',
+      { confirmButtonText: '丢弃', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  discarding.value = true
+  try {
+    await api.discardVersion(conch, version)
+    ElMessage.success(`已丢弃 ${conch} v${version}`)
+    result.value = null
+    fileName.value = ''
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    discarding.value = false
+  }
+}
 </script>
 
 <template>
   <div>
-    <PageHeader title="上传规则包" description="上传 YAML 后 Reef 会校验、签名并保存为待发布版本；版本号必须是 semver，并且大于这个规则包已上传过的最高版本（不只是当前发布版本）">
+    <PageHeader title="上传规则包" description="选好 YAML 并确认上传后，Reef 会校验、签名并保存为待发布版本；版本号必须是 semver，并且大于这个规则包现存的最高版本（不只是当前发布版本）。不想发布的待发布版本可以丢弃">
       <template #crumbs>
         <router-link to="/conches">规则包目录</router-link>
         <span class="hm-muted"> / 上传</span>
@@ -104,8 +147,8 @@ async function publish() {
 
     <el-steps :active="step" finish-status="success" :process-status="failure ? 'error' : 'process'" align-center class="steps">
       <el-step title="选择 YAML" description="拖入或点击选择文件" />
-      <el-step title="校验并签名" description="检查结构、能力和字段" />
-      <el-step title="待发布" description="确认差异和警告" />
+      <el-step title="确认上传" description="校验结构、能力和字段并签名" />
+      <el-step title="待发布" description="确认差异和警告，不要就丢弃" />
       <el-step title="发布" description="新订阅直接安装，已订阅的 Crab 手动更新" />
     </el-steps>
 
@@ -128,6 +171,13 @@ async function publish() {
           </div>
         </template>
       </el-upload>
+      <div v-if="pending" class="pending" data-test="pending">
+        <span>已选择 <span class="mono">{{ fileName }}</span>，还没有上传</span>
+        <span>
+          <el-button @click="cancelPending">取消</el-button>
+          <el-button type="primary" data-test="confirm-upload" @click="upload">上传并校验</el-button>
+        </span>
+      </div>
       <div v-if="uploading" class="status">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span class="hm-muted">正在校验 {{ fileName }}…</span>
@@ -155,6 +205,7 @@ async function publish() {
           <el-tag type="info" effect="plain">待发布</el-tag>
         </span>
         <div>
+          <el-button type="danger" plain :loading="discarding" data-test="discard-upload" @click="discard">丢弃</el-button>
           <el-button @click="router.push(`/conches/${encodeURIComponent(result.conch)}`)">查看规则包</el-button>
           <el-button type="primary" :icon="Promotion" :loading="publishing" @click="publish">发布此版本</el-button>
         </div>
@@ -176,6 +227,15 @@ async function publish() {
   align-items: center;
   gap: 8px;
   color: var(--el-color-primary);
+}
+
+.pending {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .steps {

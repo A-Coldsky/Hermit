@@ -1,3 +1,4 @@
+import { ElMessage } from 'element-plus'
 import { createRouter, createWebHistory } from 'vue-router'
 import { api } from './api'
 import { session, setRole, signedIn } from './auth'
@@ -48,7 +49,10 @@ router.beforeEach(async (to) => {
         return true
       }
     }
-    if (session.role !== 'ADMIN') return { name: 'dashboard' }
+    if (session.role !== 'ADMIN') {
+      ElMessage.warning({ message: '没有权限执行这个操作', grouping: true })
+      return { name: 'dashboard' }
+    }
   }
   return true
 })

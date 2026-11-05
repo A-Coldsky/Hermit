@@ -54,7 +54,7 @@ onMounted(load)
     <div class="hm-toolbar bar">
       <el-input v-model="keyword" :prefix-icon="Search" placeholder="按名称、标题、负责人或标签筛选" clearable class="search" />
       <span class="spacer" />
-      <span class="hm-muted">共 {{ filtered.length }} 个</span>
+      <span v-if="!loading" class="hm-muted" data-test="conch-count">共 {{ filtered.length }} 个</span>
       <el-radio-group v-model="mode" size="small">
         <el-radio-button value="cards" aria-label="卡片视图"><el-icon><Grid /></el-icon></el-radio-button>
         <el-radio-button value="table" aria-label="列表视图"><el-icon><List /></el-icon></el-radio-button>

@@ -19,6 +19,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationCodes;
@@ -55,8 +56,11 @@ public class LocalConchBehaviorTest {
                     ping("local_ping", "1.1.0").getBytes(StandardCharsets.UTF_8), Actors.CLI))
                     .isInstanceOf(LocalConchException.class)
                     .hasMessage("将覆盖已有的本地规则包 local_ping。确认后再导入。")
-                    .extracting(ex -> ((LocalConchException) ex).status())
-                    .isEqualTo(409);
+                    .satisfies(ex -> {
+                        LocalConchException failure = (LocalConchException) ex;
+                        assertThat(failure.status()).isEqualTo(409);
+                        assertThat(failure.code()).isEqualTo(ErrorCode.CONFLICT);
+                    });
             assertThat(Files.readAllBytes(runtime.paths().localConches().resolve("local_ping.yaml"))).isEqualTo(stored);
             assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
 
@@ -72,8 +76,11 @@ public class LocalConchBehaviorTest {
                     ping("official_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI))
                     .isInstanceOf(LocalConchException.class)
                     .hasMessage("与已安装的正式规则包重名")
-                    .extracting(ex -> ((LocalConchException) ex).status())
-                    .isEqualTo(409);
+                    .satisfies(ex -> {
+                        LocalConchException failure = (LocalConchException) ex;
+                        assertThat(failure.status()).isEqualTo(409);
+                        assertThat(failure.code()).isEqualTo(ErrorCode.INVALID_INPUT);
+                    });
             assertThatThrownBy(() -> runtime.localConches().importBytes(
                     ping("official_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI, true))
                     .isInstanceOf(LocalConchException.class)
@@ -366,7 +373,9 @@ public class LocalConchBehaviorTest {
             assertThatThrownBy(() -> runtime.localConches().importBytes(
                     ping("local_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI))
                     .isInstanceOf(LocalConchException.class)
-                    .hasMessage("将覆盖已有的本地规则包 local_ping。确认后再导入。");
+                    .hasMessage("将覆盖已有的本地规则包 local_ping。确认后再导入。")
+                    .extracting(ex -> ((LocalConchException) ex).code())
+                    .isEqualTo(ErrorCode.CONFLICT);
             assertThat(Files.readAllBytes(installed)).isEqualTo(stored);
             assertThat(runtime.registry().find("local_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
 

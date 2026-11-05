@@ -54,7 +54,10 @@ public final class LocalConchException extends RuntimeException {
         return new LocalConchException(400, ErrorCode.INVALID_INPUT, message, errors, warnings, null, parsedConch);
     }
 
-    /** No {@code CONFLICT} code exists. HTTP 409 with {@link ErrorCode#INVALID_INPUT}. */
+    /**
+     * Official or subscription name clash. HTTP 409 with {@link ErrorCode#INVALID_INPUT}.
+     * Overwrite confirmation uses {@link #replaceRequired}.
+     */
     public static LocalConchException conflict(String message) {
         return new LocalConchException(409, ErrorCode.INVALID_INPUT, message, List.of(), List.of(), null, null);
     }
@@ -66,7 +69,7 @@ public final class LocalConchException extends RuntimeException {
     public static LocalConchException replaceRequired(String conch) {
         return new LocalConchException(
                 409,
-                ErrorCode.INVALID_INPUT,
+                ErrorCode.CONFLICT,
                 "将覆盖已有的本地规则包 " + conch + "。确认后再导入。",
                 List.of(),
                 List.of(),

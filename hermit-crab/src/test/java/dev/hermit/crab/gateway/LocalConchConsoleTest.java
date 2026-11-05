@@ -113,7 +113,7 @@ class LocalConchConsoleTest {
                     server, "/console/api/local-conches", "text/yaml", next);
             assertThat(denied.statusCode()).isEqualTo(409);
             assertThat(denied.body()).contains("\"success\":false");
-            assertThat(denied.body()).contains("\"code\":\"INVALID_INPUT\"");
+            assertThat(denied.body()).contains("\"code\":\"CONFLICT\"");
             assertThat(denied.body()).contains("将覆盖已有的本地规则包 local_ping。确认后再导入。");
             assertThat(denied.body()).contains("\"conch\":\"local_ping\"");
             assertThat(denied.body()).contains("\"confirm\":true");

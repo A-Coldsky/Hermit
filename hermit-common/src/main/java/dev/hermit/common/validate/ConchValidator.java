@@ -1,17 +1,31 @@
 package dev.hermit.common.validate;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Pattern;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import dev.hermit.common.mcp.McpAddresses;
+import dev.hermit.common.mcp.McpLimits;
+import dev.hermit.common.mcp.ToolSnapshots;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
 import dev.hermit.common.model.ConfigField;
+import dev.hermit.common.model.McpAuth;
+import dev.hermit.common.model.McpServerInfo;
+import dev.hermit.common.model.McpSnapshot;
+import dev.hermit.common.model.McpTool;
+import dev.hermit.common.model.McpUpstream;
 import dev.hermit.common.model.ParamSpec;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.Step;
@@ -30,6 +44,15 @@ public final class ConchValidator {
             "^[a-z][a-z0-9_]{1,63}$");
 
     private static final TemplateEngine TEMPLATES = new TemplateEngine();
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Pattern SHA256_HEX = Pattern.compile("^[0-9a-f]{64}$");
+    private static final Pattern DESCRIPTION_TAG = Pattern.compile(
+            "(?i)<\\s*/?\\s*(important|system|instruction|instructions)\\b");
+    private static final Pattern DESCRIPTION_IGNORE = Pattern.compile(
+            "(?i)忽略(之前|先前|以前|上面|以上)的指令"
+                    + "|ignore\\s+(all\\s+)?(previous|prior|above)\\s+instructions"
+                    + "|disregard\\s+(all\\s+)?(previous|prior)\\s+instructions");
+    private static final Pattern DESCRIPTION_URL = Pattern.compile("(?i)\\bhttps?://|\\bwww\\.");
     private static final int SCRIPT_SOURCE_LIMIT = 64 * 1024;
     private static final int SCRIPT_TIMEOUT_MAX = 5000;
     private static final Set<String> SCRIPT_KEYS = Set.of("code", "into", "timeout_ms");
@@ -50,8 +73,9 @@ public final class ConchValidator {
         if (!NAME.matcher(doc.conch()).matches()) {
             errors.add(issue(ValidationCodes.CONCH_NAME, "conch", "conch 不符合 ^[a-z][a-z0-9_]{1,63}$"));
         }
-        if (!"http".equals(doc.driver())) {
-            errors.add(issue(ValidationCodes.DRIVER, "driver", "driver 只允许 http"));
+        boolean mcp = "mcp".equals(doc.driver());
+        if (!mcp && !"http".equals(doc.driver())) {
+            errors.add(issue(ValidationCodes.DRIVER, "driver", "driver 只允许 http 或 mcp"));
         }
         if (blank(doc.title())) {
             errors.add(issue(ValidationCodes.MISSING_TITLE, "title", "缺少 title"));
@@ -71,6 +95,12 @@ public final class ConchValidator {
                         "config." + entry.getKey() + ".type",
                         "秘密要放在 credentials"));
             }
+            if (mcp && field != null && "url".equals(field.type())) {
+                errors.add(issue(
+                        ValidationCodes.MCP_UPSTREAM,
+                        "config." + entry.getKey() + ".type",
+                        "mcp 包的 config 不能使用 type: url"));
+            }
         }
         if (ctx.currentCrabVersion() != null
                 && doc.minCrabVersion().compareTo(ctx.currentCrabVersion()) > 0) {
@@ -79,6 +109,17 @@ public final class ConchValidator {
                     "min_crab_version",
                     "min_crab_version " + doc.minCrabVersion() + " 高于当前 Crab " + ctx.currentCrabVersion()));
         }
+        if (mcp) {
+            if (doc.minCrabVersion().compareTo(McpLimits.MIN_CRAB_VERSION) < 0) {
+                errors.add(issue(
+                        ValidationCodes.MIN_CRAB_VERSION,
+                        "min_crab_version",
+                        "driver 为 mcp 时 min_crab_version 必须不低于 1.1.0"));
+            }
+            validateMcp(doc, errors, warnings);
+            return new ValidationResult(errors, warnings);
+        }
+        rejectMcpOnly(doc, errors);
         if (doc.auth() != null) {
             checkSteps(doc.auth().steps(), "auth.steps", ctx, errors);
             checkPlainSteps(doc.auth(), errors);
@@ -107,6 +148,12 @@ public final class ConchValidator {
             List<ValidationIssue> warnings
     ) {
         String path = "actions." + name;
+        if (action.tool() != null) {
+            errors.add(issue(
+                    ValidationCodes.MCP_UPSTREAM,
+                    path,
+                    "只有 driver 为 mcp 时才能写 tool、input_schema、output_schema、upstream_annotations、schema_sha256 或 confirm"));
+        }
         if (!NAME.matcher(name).matches()) {
             errors.add(issue(ValidationCodes.ACTION_NAME, path, "能力名不符合 ^[a-z][a-z0-9_]{1,63}$"));
         }
@@ -451,6 +498,463 @@ public final class ConchValidator {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> cast(Map<?, ?> raw) {
         return (Map<String, Object>) raw;
+    }
+
+    private static void rejectMcpOnly(ConchDoc doc, List<ValidationIssue> errors) {
+        if (doc.upstream() != null) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "upstream", "只有 driver 为 mcp 时才能写 upstream"));
+        }
+        if (doc.tools() != null) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "tools", "只有 driver 为 mcp 时才能写 tools"));
+        }
+        if (doc.snapshot() != null) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "snapshot", "只有 driver 为 mcp 时才能写 snapshot"));
+        }
+    }
+
+    private static void validateMcp(
+            ConchDoc doc,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
+    ) {
+        if (doc.baseUrl() != null) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "base_url", "driver 为 mcp 时不能写 base_url"));
+        }
+        if (doc.auth() != null) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "auth", "driver 为 mcp 时不能写 auth"));
+        }
+        if (!doc.healthCheck().isEmpty()) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "health_check", "driver 为 mcp 时不能写 health_check"));
+        }
+        if (doc.upstream() == null) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "upstream", "缺少 upstream"));
+        } else {
+            checkUpstream(doc, doc.upstream(), errors);
+        }
+        if (doc.tools() != null) {
+            checkPatterns("tools.include", doc.tools().include(), errors);
+            checkPatterns("tools.exclude", doc.tools().exclude(), errors);
+        }
+        if (doc.snapshot() != null) {
+            checkSnapshot(doc.snapshot(), errors);
+        }
+        if (doc.actions().isEmpty()) {
+            errors.add(issue(ValidationCodes.MCP_NO_ACTIONS, "actions", "mcp 包必须至少有一个 action"));
+        }
+        for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
+            checkMcpAction(entry.getKey(), entry.getValue(), doc, errors, warnings);
+        }
+    }
+
+    private static void checkPatterns(String path, List<String> patterns, List<ValidationIssue> errors) {
+        for (int i = 0; i < patterns.size(); i++) {
+            if (patterns.get(i) == null || patterns.get(i).isBlank()) {
+                errors.add(issue(ValidationCodes.MCP_UPSTREAM, path + "[" + i + "]", "过滤模式不能为空"));
+            }
+        }
+    }
+
+    private static void checkUpstream(ConchDoc doc, McpUpstream upstream, List<ValidationIssue> errors) {
+        McpAddresses.ParseResult url = checkAddress("upstream.url", "上游地址", upstream.url(), errors);
+        if (!McpLimits.TRANSPORT.equals(upstream.transport())) {
+            errors.add(issue(
+                    ValidationCodes.MCP_UPSTREAM, "upstream.transport", "transport 只接受 streamable_http"));
+        }
+        if (upstream.timeoutMs() != null && upstream.timeoutMs() <= 0) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "upstream.timeout_ms", "timeout_ms 必须是正整数"));
+        }
+        if (upstream.allowedHosts().isEmpty()) {
+            errors.add(issue(
+                    ValidationCodes.MCP_UPSTREAM,
+                    "upstream.allowed_hosts",
+                    "allowed_hosts 为空，且无法从 upstream.url 得到主机"));
+        }
+        for (int i = 0; i < upstream.allowedHosts().size(); i++) {
+            if (!McpAddresses.validPattern(upstream.allowedHosts().get(i))) {
+                errors.add(issue(
+                        ValidationCodes.MCP_UPSTREAM,
+                        "upstream.allowed_hosts[" + i + "]",
+                        "allowed_hosts 只接受主机名、IPv6 字面量或 *.后缀"));
+            }
+        }
+        if (url.ok() && !McpAddresses.hostAllowed(url.url().host(), upstream.allowedHosts())) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "upstream.url", "主机不在 allowed_hosts 中"));
+        }
+        McpAuth auth = upstream.auth();
+        if (auth == null || (!auth.headers() && !auth.oauth())) {
+            errors.add(issue(
+                    ValidationCodes.MCP_UPSTREAM, "upstream.auth.type", "auth.type 只允许 headers 或 oauth"));
+        } else if (auth.oauth()) {
+            if (auth.clientId() == null || auth.clientId().isBlank()) {
+                errors.add(issue(
+                        ValidationCodes.MCP_UPSTREAM, "upstream.auth.client_id", "oauth 必须写 client_id"));
+            }
+            for (int i = 0; i < auth.scopes().size(); i++) {
+                if (auth.scopes().get(i) == null || auth.scopes().get(i).isBlank()) {
+                    errors.add(issue(
+                            ValidationCodes.MCP_UPSTREAM,
+                            "upstream.auth.scopes[" + i + "]",
+                            "scope 不能为空"));
+                }
+            }
+            checkEndpoint(
+                    "upstream.auth.authorization_endpoint",
+                    "授权端点",
+                    auth.authorizationEndpoint(),
+                    upstream.allowedHosts(),
+                    url,
+                    errors);
+            checkEndpoint(
+                    "upstream.auth.token_endpoint",
+                    "令牌端点",
+                    auth.tokenEndpoint(),
+                    upstream.allowedHosts(),
+                    url,
+                    errors);
+        }
+        checkHeaders(doc, upstream, errors);
+    }
+
+    private static void checkEndpoint(
+            String path,
+            String label,
+            String text,
+            List<String> allowedHosts,
+            McpAddresses.ParseResult upstream,
+            List<ValidationIssue> errors
+    ) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        McpAddresses.ParseResult parsed = checkAddress(path, label, text, errors);
+        if (!parsed.ok()) {
+            return;
+        }
+        if (!McpAddresses.hostAllowed(parsed.url().host(), allowedHosts)) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path, label + "的主机不在 allowed_hosts 中"));
+        }
+        if ("http".equals(parsed.url().scheme())
+                && (upstream == null || !upstream.ok()
+                || !"http".equals(upstream.url().scheme())
+                || !McpAddresses.sameOrigin(upstream.url(), parsed.url()))) {
+            errors.add(issue(
+                    ValidationCodes.MCP_UPSTREAM, path, label + "若使用 http，必须与 upstream.url 同一源"));
+        }
+    }
+
+    private static McpAddresses.ParseResult checkAddress(
+            String path,
+            String label,
+            String text,
+            List<ValidationIssue> errors
+    ) {
+        if (text == null || text.isBlank()) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path, "缺少" + label));
+            return new McpAddresses.ParseResult(null, McpAddresses.Problem.HOST);
+        }
+        McpAddresses.ParseResult parsed = McpAddresses.parse(text);
+        if (!parsed.ok()) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path, label + addressMessage(parsed.problem())));
+        }
+        return parsed;
+    }
+
+    private static String addressMessage(McpAddresses.Problem problem) {
+        return switch (problem) {
+            case TEMPLATE -> "不能使用模板";
+            case SYNTAX -> "不是合法的 URL";
+            case SCHEME -> "只允许 http 或 https";
+            case USERINFO -> "不能带用户信息";
+            case FRAGMENT -> "不能带片段";
+            case HOST -> "缺少主机";
+        };
+    }
+
+    private static void checkHeaders(ConchDoc doc, McpUpstream upstream, List<ValidationIssue> errors) {
+        boolean oauth = upstream.auth() != null && upstream.auth().oauth();
+        for (Map.Entry<String, String> entry : upstream.headers().entrySet()) {
+            String path = "upstream.headers." + entry.getKey();
+            String key = McpLimits.headerKey(entry.getKey());
+            if (oauth && "authorization".equals(key)) {
+                errors.add(issue(ValidationCodes.MCP_HEADER, path, "oauth 不能设置 Authorization"));
+            } else if (McpLimits.FORBIDDEN_HEADERS.contains(key)) {
+                errors.add(issue(ValidationCodes.MCP_HEADER, path, "不能设置保留头 " + entry.getKey()));
+            }
+            checkHeaderRefs(path, entry.getValue(), doc, errors);
+            checkScalar(path, entry.getKey(), entry.getValue(), errors);
+        }
+    }
+
+    private static void checkHeaderRefs(String path, String value, ConchDoc doc, List<ValidationIssue> errors) {
+        if (value == null) {
+            return;
+        }
+        try {
+            for (String ref : TEMPLATES.referencedPaths(value)) {
+                if ("input".equals(ref) || ref.startsWith("input.") || ref.startsWith("input[")) {
+                    errors.add(issue(ValidationCodes.MCP_HEADER, path, "请求头不能引用 input"));
+                    continue;
+                }
+                String credential = head(ref, "credential");
+                if (credential != null) {
+                    if (doc.credentials() == null || !doc.credentials().containsKey(credential)) {
+                        errors.add(issue(
+                                ValidationCodes.UNDECLARED_CREDENTIAL, path, "引用了未声明的凭证 " + credential));
+                    }
+                    continue;
+                }
+                String config = head(ref, "config");
+                if (config != null) {
+                    if (!doc.config().containsKey(config)) {
+                        errors.add(issue(
+                                ValidationCodes.UNDECLARED_CONFIG, path, "引用了未声明的配置 " + config));
+                    }
+                    continue;
+                }
+                errors.add(issue(ValidationCodes.MCP_HEADER, path, "请求头只能引用 credential 或 config"));
+            }
+        } catch (TemplateException ex) {
+            errors.add(issue(ValidationCodes.TEMPLATE_SYNTAX, path, ex.getMessage()));
+        }
+    }
+
+    private static void checkSnapshot(McpSnapshot snapshot, List<ValidationIssue> errors) {
+        if (snapshot.fetchedAt() == null || snapshot.fetchedAt().isBlank()) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "snapshot.fetched_at", "缺少 fetched_at"));
+        } else {
+            try {
+                Instant.parse(snapshot.fetchedAt());
+            } catch (DateTimeParseException ex) {
+                errors.add(issue(
+                        ValidationCodes.MCP_UPSTREAM, "snapshot.fetched_at", "fetched_at 必须是 UTC 时间"));
+            }
+        }
+        if (snapshot.protocolVersion() == null || snapshot.protocolVersion().isBlank()) {
+            errors.add(issue(
+                    ValidationCodes.MCP_UPSTREAM, "snapshot.protocol_version", "缺少 protocol_version"));
+        }
+        if (snapshot.toolsSha256() == null || !SHA256_HEX.matcher(snapshot.toolsSha256()).matches()) {
+            errors.add(issue(
+                    ValidationCodes.MCP_UPSTREAM,
+                    "snapshot.tools_sha256",
+                    "tools_sha256 必须是 64 位小写十六进制"));
+        }
+        McpServerInfo server = snapshot.server();
+        if (server != null) {
+            if (server.name() == null || server.name().isBlank()) {
+                errors.add(issue(ValidationCodes.MCP_UPSTREAM, "snapshot.server.name", "缺少 server.name"));
+            }
+            if (server.version() == null || server.version().isBlank()) {
+                errors.add(issue(ValidationCodes.MCP_UPSTREAM, "snapshot.server.version", "缺少 server.version"));
+            }
+        }
+    }
+
+    private static void checkMcpAction(
+            String name,
+            Action action,
+            ConchDoc doc,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
+    ) {
+        String path = "actions." + name;
+        if (!NAME.matcher(name).matches()) {
+            errors.add(issue(ValidationCodes.ACTION_NAME, path, "能力名不符合 ^[a-z][a-z0-9_]{1,63}$"));
+        }
+        if (blank(action.title())) {
+            errors.add(issue(ValidationCodes.MISSING_TITLE, path + ".title", "缺少 title"));
+        }
+        if (blank(action.description())) {
+            errors.add(issue(ValidationCodes.MISSING_DESCRIPTION, path + ".description", "缺少 description"));
+        } else {
+            checkDescription(path + ".description", action.description(), warnings);
+        }
+        if (action.method() != null) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path + ".method", "driver 为 mcp 时不能写 method"));
+        }
+        if (!action.input().isEmpty()) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path + ".input", "driver 为 mcp 时不能写 input"));
+        }
+        if (!action.output().isEmpty()) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path + ".output", "driver 为 mcp 时不能写 output"));
+        }
+        if (!action.steps().isEmpty()) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path + ".steps", "driver 为 mcp 时不能写 steps"));
+        }
+        McpTool tool = action.tool();
+        if (tool == null || tool.name() == null || tool.name().isBlank() || !validToolName(tool.name())) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path + ".tool", "缺少或无效的上游工具名 tool"));
+        }
+        if (tool == null || tool.inputSchema() == null) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path + ".input_schema", "缺少 input_schema"));
+        } else {
+            checkSchema(path + ".input_schema", "input_schema", tool.inputSchema(), errors);
+        }
+        if (tool != null && tool.outputSchema() != null) {
+            checkSchema(path + ".output_schema", "output_schema", tool.outputSchema(), errors);
+        }
+        if (tool != null) {
+            checkHint(path + ".upstream_annotations", tool, errors);
+            checkDeclaredSchemaHash(path + ".schema_sha256", tool, errors);
+        }
+        if (action.examples().isEmpty()) {
+            warnings.add(issue(ValidationCodes.MISSING_EXAMPLES, path + ".examples", "缺少 examples"));
+        }
+        if (blank(action.notes())) {
+            warnings.add(issue(ValidationCodes.MISSING_NOTES, path + ".notes", "缺少 notes"));
+        }
+        if (action.related().isEmpty()) {
+            warnings.add(issue(ValidationCodes.MISSING_RELATED, path + ".related", "缺少 related"));
+        } else {
+            for (int i = 0; i < action.related().size(); i++) {
+                String related = action.related().get(i);
+                if (!doc.actions().containsKey(related)) {
+                    warnings.add(issue(
+                            ValidationCodes.UNKNOWN_RELATED,
+                            path + ".related[" + i + "]",
+                            "related 指向不存在的能力 " + related));
+                }
+            }
+        }
+    }
+
+    private static boolean validToolName(String name) {
+        if (name == null || name.length() > 256) {
+            return false;
+        }
+        for (int i = 0; i < name.length(); ) {
+            int codePoint = name.codePointAt(i);
+            if (codePoint < 0x20 || codePoint == 0x7F || Character.isWhitespace(codePoint)) {
+                return false;
+            }
+            i += Character.charCount(codePoint);
+        }
+        return true;
+    }
+
+    private static void checkHint(String path, McpTool tool, List<ValidationIssue> errors) {
+        for (String key : List.of("readOnlyHint", "destructiveHint", "idempotentHint")) {
+            if (tool.upstreamAnnotations().containsKey(key)
+                    && !(tool.upstreamAnnotations().get(key) instanceof Boolean)) {
+                errors.add(issue(
+                        ValidationCodes.MCP_UPSTREAM, path + "." + key, key + " 必须是布尔值"));
+            }
+        }
+    }
+
+    private static void checkDeclaredSchemaHash(String path, McpTool tool, List<ValidationIssue> errors) {
+        if (tool.schemaSha256() == null) {
+            return;
+        }
+        if (!SHA256_HEX.matcher(tool.schemaSha256()).matches()) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path, "schema_sha256 必须是 64 位小写十六进制"));
+            return;
+        }
+        if (tool.inputSchema() == null) {
+            return;
+        }
+        String computed = ToolSnapshots.schemaSha256(tool.inputSchema(), tool.outputSchema());
+        if (!computed.equals(tool.schemaSha256())) {
+            errors.add(issue(
+                    ValidationCodes.MCP_UPSTREAM, path, "schema_sha256 与 input_schema、output_schema 不一致"));
+        }
+    }
+
+    private static void checkSchema(
+            String path,
+            String label,
+            Map<String, Object> schema,
+            List<ValidationIssue> errors
+    ) {
+        if (depth(schema) > McpLimits.SCHEMA_MAX_DEPTH) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path, label + " 深度超过 32"));
+        }
+        try {
+            if (JSON.writeValueAsBytes(schema).length > McpLimits.SCHEMA_MAX_BYTES) {
+                errors.add(issue(ValidationCodes.MCP_UPSTREAM, path, label + " 超过 64 KiB"));
+            }
+        } catch (JsonProcessingException ex) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, path, label + " 无法序列化"));
+        }
+        walkRefs(path, schema, errors);
+    }
+
+    private static void walkRefs(String path, Object node, List<ValidationIssue> errors) {
+        if (node instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                String child = path + "." + key;
+                if ("$ref".equals(key) && !localRef(entry.getValue())) {
+                    errors.add(issue(
+                            ValidationCodes.MCP_SCHEMA_REF, child, "schema 只允许本地 $ref（#/…）"));
+                }
+                walkRefs(child, entry.getValue(), errors);
+            }
+            return;
+        }
+        if (node instanceof List<?> list) {
+            for (int i = 0; i < list.size(); i++) {
+                walkRefs(path + "[" + i + "]", list.get(i), errors);
+            }
+        }
+    }
+
+    private static boolean localRef(Object value) {
+        return value instanceof String ref && ("#".equals(ref) || ref.startsWith("#/"));
+    }
+
+    private static int depth(Object node) {
+        if (node instanceof Map<?, ?> map) {
+            int max = 1;
+            for (Object child : map.values()) {
+                max = Math.max(max, 1 + depth(child));
+            }
+            return max;
+        }
+        if (node instanceof List<?> list) {
+            int max = 1;
+            for (Object child : list) {
+                max = Math.max(max, 1 + depth(child));
+            }
+            return max;
+        }
+        return 0;
+    }
+
+    private static void checkDescription(String path, String description, List<ValidationIssue> warnings) {
+        if (description.getBytes(StandardCharsets.UTF_8).length > McpLimits.DESCRIPTION_MAX_BYTES) {
+            warnings.add(issue(ValidationCodes.MCP_DESCRIPTION, path, "描述超过 2 KiB"));
+        }
+        if (hiddenText(description)) {
+            warnings.add(issue(ValidationCodes.MCP_DESCRIPTION, path, "描述含有控制字符、零宽字符或 ANSI 转义"));
+        }
+        if (DESCRIPTION_TAG.matcher(description).find()) {
+            warnings.add(issue(ValidationCodes.MCP_DESCRIPTION, path, "描述含有疑似指令标签"));
+        }
+        if (DESCRIPTION_IGNORE.matcher(description).find()) {
+            warnings.add(issue(ValidationCodes.MCP_DESCRIPTION, path, "描述含有「忽略之前的指令」一类句子"));
+        }
+        if (DESCRIPTION_URL.matcher(description).find()) {
+            warnings.add(issue(ValidationCodes.MCP_DESCRIPTION, path, "描述含有 URL"));
+        }
+    }
+
+    private static boolean hiddenText(String text) {
+        for (int i = 0; i < text.length(); ) {
+            int codePoint = text.codePointAt(i);
+            if (codePoint == 0x7F || (codePoint < 0x20 && codePoint != '\n' && codePoint != '\r' && codePoint != '\t')) {
+                return true;
+            }
+            switch (codePoint) {
+                case 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064,
+                        0xFEFF, 0x180E, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069:
+                    return true;
+                default:
+                    break;
+            }
+            i += Character.charCount(codePoint);
+        }
+        return false;
     }
 
     public record Context(SemVer currentCrabVersion, Set<String> supportedStepTypes) {

@@ -55,7 +55,7 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null。两项都带 `pullCount`（long，JSON 数字）：该规则包全部版本成功下载次数之和，含尚未发布的版本 |
 | GET | `/conches/{conch}/versions` | 版本列表，每项含 `warningCount`、`warnings` 校验警告明细，以及 `pullCount`（该版本成功下载次数，long） |
 | GET | `/conches/{conch}/versions/{version}/yaml` | YAML 原文 |
-| GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `版本对比需要同时提供 from 和 to`。少于两个版本时 400 `INVALID_INPUT`，message 为 `至少需要两个版本才能对比`。名字不合法仍是 404 |
+| GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `版本对比需要同时提供 from 和 to`。少于两个版本时 400 `INVALID_INPUT`，message 为 `至少需要两个版本才能对比`。名字不合法仍是 404。响应增加 `toolChanges`。HTTP 包是空数组。MCP 包列出两个已上传版本之间的工具差异，不连上游：`kind` 为 `added`、`removed` 或 `changed`，并带上游名、`schemaSha256`、描述、只读、破坏性、确认的前后值。摘要按 `ToolSnapshots.schemaSha256` 计算，不看 YAML 里声明的 `schema_sha256` 原文。只改标题，或只调 schema 键顺序，不算 `changed`。管理端还不展示 `driver`、`upstream` 或工具表 |
 | POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。必须严格高于当前已发布版本；没有当前版本时可以发布。不高于时 409，`message` 为 `发布版本必须高于当前已发布版本`。已经发布过的版本仍是 409，`message` 为 `只能发布已上传、尚未发布的版本`。Conch 已停用时 409，`message` 为 `规则包已停用`（先于版本比较） |
 | DELETE | `/conches/{conch}/versions/{version}` | 仅 `ADMIN`，无请求体。只删除 `status = UPLOADED` 的版本。成功 200，`data` 为 `{conch, version}`。已发布 409 `CONFLICT`，message 为 `只能丢弃已上传、尚未发布的版本`，不删除该版本的 YAML 和签名 ZIP。不存在、重复删除、版本号不是 semver，或名字不是单个路径段时 404 `NOT_FOUND`，message 为 `资源不存在`。`USER` 与未登录分别是 403、401。审计见下文 |
 | POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `规则包已经停用` |

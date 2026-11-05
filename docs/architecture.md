@@ -33,8 +33,9 @@ flowchart LR
 
 | 路径 | 核心职责/入口 |
 | --- | --- |
-| [common/model](../hermit-common/src/main/java/dev/hermit/common/model) | `ConchDoc`、`Action`、`Step`、深层不可变 `Frozen`、输出投影 `OutputShapes` |
-| [common/parse](../hermit-common/src/main/java/dev/hermit/common/parse) / [validate](../hermit-common/src/main/java/dev/hermit/common/validate) | 形状/未知字段/别名解析，语义校验，`ConchDiff` |
+| [common/model](../hermit-common/src/main/java/dev/hermit/common/model) | `ConchDoc`、`Action`、`McpUpstream`、`McpTool`、`Step`、深层不可变 `Frozen`、输出投影 `OutputShapes` |
+| [common/parse](../hermit-common/src/main/java/dev/hermit/common/parse) / [validate](../hermit-common/src/main/java/dev/hermit/common/validate) | 形状/未知字段/别名解析，语义校验，`ConchDiff`（含 MCP `toolChanges`）。mcp 只校验，不执行 |
+| [common/mcp](../hermit-common/src/main/java/dev/hermit/common/mcp) | `ToolSnapshots` 摘要、`McpAddresses` 主机字面量、`McpLimits`。不转发 |
 | [common/template](../hermit-common/src/main/java/dev/hermit/common/template) / [pkg](../hermit-common/src/main/java/dev/hermit/common/pkg) | 表达式/过滤器，ZIP/SHA-256/Ed25519 |
 | [reef](../hermit-reef/src/main/java/dev/hermit/reef) | `ReefApplication` 启动；`security` 三条安全链；`admin` 登录/初始化 |
 | [reef/conch](../hermit-reef/src/main/java/dev/hermit/reef/conch) | 上传/发布/停用/分发，存储、数据库行锁和本地锁 |

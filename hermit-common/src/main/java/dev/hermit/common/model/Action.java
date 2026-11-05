@@ -18,7 +18,8 @@ public record Action(
         List<Example> examples,
         String notes,
         List<String> related,
-        McpHints mcp
+        McpHints mcp,
+        McpTool tool
 ) {
     public Action {
         if (name == null || name.isEmpty()) {
@@ -32,8 +33,11 @@ public record Action(
         mcp = mcp == null ? McpHints.defaults() : mcp;
     }
 
-    /** 显式 method 优先；否则 readOnly 或 idempotent 为 GET，其余 POST。 */
+    /** 显式 method 优先；否则 readOnly 或 idempotent 为 GET，其余 POST。MCP 工具固定 POST。 */
     public HttpMethod effectiveMethod() {
+        if (tool != null) {
+            return HttpMethod.POST;
+        }
         if (method != null) {
             return method;
         }
@@ -43,7 +47,33 @@ public record Action(
         return HttpMethod.POST;
     }
 
+    /**
+     * MCP 包没写 {@code mcp.destructive} 时：上游注解有布尔 {@code destructiveHint} 就用它，否则非只读即为 true。
+     * 写了就用声明值。HTTP 能力没有上游工具，只用声明值（缺省 false）。
+     */
+    public boolean effectiveDestructive() {
+        if (tool == null || mcp.destructiveSpecified()) {
+            return mcp.destructive();
+        }
+        Object hint = tool.upstreamAnnotations().get("destructiveHint");
+        if (hint instanceof Boolean value) {
+            return value;
+        }
+        return !mcp.readOnly();
+    }
+
+    /** 没写 {@code confirm} 时等于 {@link #effectiveDestructive()}。 */
+    public boolean effectiveConfirm() {
+        if (tool != null && tool.confirm() != null) {
+            return tool.confirm();
+        }
+        return effectiveDestructive();
+    }
+
     public Map<String, Object> inputJsonSchema() {
+        if (tool != null) {
+            return tool.inputSchema() == null ? Map.of() : tool.inputSchema();
+        }
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         ArrayList<String> required = new ArrayList<>();
         for (Map.Entry<String, ParamSpec> entry : input.entrySet()) {

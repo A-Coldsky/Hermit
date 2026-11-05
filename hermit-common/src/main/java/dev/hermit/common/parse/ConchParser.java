@@ -14,6 +14,7 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 
 import org.yaml.snakeyaml.LoaderOptions;
 
+import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
@@ -21,10 +22,16 @@ import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.Example;
 import dev.hermit.common.model.HttpMethod;
+import dev.hermit.common.model.McpAuth;
 import dev.hermit.common.model.McpHints;
+import dev.hermit.common.model.McpServerInfo;
+import dev.hermit.common.model.McpSnapshot;
+import dev.hermit.common.model.McpTool;
+import dev.hermit.common.model.McpUpstream;
 import dev.hermit.common.model.ParamSpec;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.Step;
+import dev.hermit.common.model.ToolFilter;
 import dev.hermit.common.version.SemVer;
 
 public final class ConchParser {
@@ -32,20 +39,30 @@ public final class ConchParser {
     private static final Set<String> TOP_LEVEL = Set.of(
             "conch", "connector", "version", "driver", "min_crab_version", "min_agent_version",
             "base_url", "title", "description", "owner", "tags", "changelog", "credentials",
-            "config", "auth", "actions", "health_check");
+            "config", "auth", "actions", "health_check", "upstream", "tools", "snapshot");
     private static final Set<String> FIELD_TYPES = Set.of("text", "secret", "select", "url");
     private static final Set<String> CREDENTIAL_KEYS = Set.of("type", "label", "required", "description", "options");
     private static final Set<String> CONFIG_KEYS = Set.of(
             "type", "label", "required", "description", "options", "default");
     private static final Set<String> ACTION_KEYS = Set.of(
             "title", "description", "method", "input", "output", "steps", "idempotent",
-            "examples", "notes", "related", "mcp");
+            "examples", "notes", "related", "mcp", "tool", "input_schema", "output_schema",
+            "upstream_annotations", "schema_sha256", "confirm");
     private static final Set<String> PARAM_KEYS = Set.of(
             "type", "description", "default", "enum", "minimum", "maximum", "items", "required");
     private static final Set<String> AUTH_KEYS = Set.of("steps", "alive_check");
     private static final Set<String> ALIVE_KEYS = Set.of("request", "expect_not_redirect");
     private static final Set<String> MCP_KEYS = Set.of("expose", "read_only", "destructive");
     private static final Set<String> EXAMPLE_KEYS = Set.of("input", "output");
+    private static final Set<String> UPSTREAM_KEYS = Set.of(
+            "url", "transport", "auth", "headers", "timeout_ms", "allowed_hosts");
+    private static final Set<String> MCP_AUTH_HEADERS = Set.of("type");
+    private static final Set<String> MCP_AUTH_OAUTH = Set.of(
+            "type", "scopes", "client_id", "authorization_endpoint", "token_endpoint");
+    private static final Set<String> TOOL_FILTER_KEYS = Set.of("include", "exclude");
+    private static final Set<String> SNAPSHOT_KEYS = Set.of(
+            "fetched_at", "protocol_version", "server", "tools_sha256");
+    private static final Set<String> SERVER_KEYS = Set.of("name", "version");
 
     private static final YAMLMapper YAML = buildMapper();
 
@@ -90,9 +107,12 @@ public final class ConchParser {
         Auth auth = auth(node.get("auth"), "auth");
         Map<String, Action> actions = actions(node.get("actions"), "actions");
         List<Map<String, Object>> healthCheck = health(node.get("health_check"), "health_check");
+        McpUpstream upstream = upstream(node.get("upstream"), "upstream");
+        ToolFilter tools = toolFilter(node.get("tools"), "tools");
+        McpSnapshot snapshot = snapshot(node.get("snapshot"), "snapshot");
         return new ConchDoc(
                 conch, version, driver, minCrabVersion, baseUrl, title, description, owner, tags,
-                changelog, credentials, config, auth, actions, healthCheck);
+                changelog, credentials, config, auth, actions, healthCheck, upstream, tools, snapshot);
     }
 
     private static String resolveAlias(ObjectNode node, String canonical, String alias) {
@@ -249,7 +269,8 @@ public final class ConchParser {
                 examples(obj.get("examples"), child(path, "examples")),
                 text(obj.get("notes"), child(path, "notes")),
                 stringList(obj.get("related"), child(path, "related")),
-                mcp(obj.get("mcp"), child(path, "mcp")));
+                mcp(obj.get("mcp"), child(path, "mcp")),
+                mcpTool(obj, path));
     }
 
     private static HttpMethod method(JsonNode node, String path) {
@@ -328,10 +349,164 @@ public final class ConchParser {
         }
         ObjectNode obj = object(node, path);
         rejectUnknown(obj, path, MCP_KEYS);
+        boolean destructiveSpecified = obj.has("destructive") && !obj.get("destructive").isNull();
         return new McpHints(
                 bool(obj.get("expose"), child(path, "expose"), true),
                 bool(obj.get("read_only"), child(path, "read_only"), false),
-                bool(obj.get("destructive"), child(path, "destructive"), false));
+                bool(obj.get("destructive"), child(path, "destructive"), false),
+                destructiveSpecified);
+    }
+
+    private static McpUpstream upstream(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        ObjectNode obj = object(node, path);
+        rejectUnknown(obj, path, UPSTREAM_KEYS);
+        String url = text(obj.get("url"), child(path, "url"));
+        List<String> allowedHosts;
+        if (obj.has("allowed_hosts")) {
+            allowedHosts = stringList(obj.get("allowed_hosts"), child(path, "allowed_hosts"));
+        } else {
+            McpAddresses.ParseResult parsed = McpAddresses.parse(url);
+            allowedHosts = parsed.ok() ? List.of(parsed.url().host()) : List.of();
+        }
+        return new McpUpstream(
+                url,
+                text(obj.get("transport"), child(path, "transport")),
+                mcpAuth(obj.get("auth"), child(path, "auth")),
+                headers(obj.get("headers"), child(path, "headers")),
+                timeout(obj.get("timeout_ms"), child(path, "timeout_ms")),
+                allowedHosts);
+    }
+
+    private static McpAuth mcpAuth(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        ObjectNode obj = object(node, path);
+        String type = text(obj.get("type"), child(path, "type"));
+        if ("headers".equals(type)) {
+            rejectUnknown(obj, path, MCP_AUTH_HEADERS);
+            return new McpAuth(type, List.of(), null, null, null);
+        }
+        rejectUnknown(obj, path, MCP_AUTH_OAUTH);
+        if (!"oauth".equals(type)) {
+            return new McpAuth(type, List.of(), null, null, null);
+        }
+        return new McpAuth(
+                type,
+                stringList(obj.get("scopes"), child(path, "scopes")),
+                text(obj.get("client_id"), child(path, "client_id")),
+                text(obj.get("authorization_endpoint"), child(path, "authorization_endpoint")),
+                text(obj.get("token_endpoint"), child(path, "token_endpoint")));
+    }
+
+    private static Map<String, String> headers(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return Map.of();
+        }
+        if (!node.isObject()) {
+            throw new ConchParseException(path, "必须是映射");
+        }
+        LinkedHashMap<String, String> headers = new LinkedHashMap<>();
+        node.properties().forEach(entry -> {
+            String childPath = child(path, entry.getKey());
+            if (entry.getValue() == null || !entry.getValue().isTextual()) {
+                throw new ConchParseException(childPath, "必须是字符串");
+            }
+            headers.put(entry.getKey(), entry.getValue().textValue());
+        });
+        return headers;
+    }
+
+    private static Integer timeout(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        if (!node.isIntegralNumber() || !node.canConvertToInt()) {
+            throw new ConchParseException(path, "必须是整数");
+        }
+        return node.intValue();
+    }
+
+    private static ToolFilter toolFilter(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        ObjectNode obj = object(node, path);
+        rejectUnknown(obj, path, TOOL_FILTER_KEYS);
+        return new ToolFilter(
+                stringList(obj.get("include"), child(path, "include")),
+                stringList(obj.get("exclude"), child(path, "exclude")));
+    }
+
+    private static McpSnapshot snapshot(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        ObjectNode obj = object(node, path);
+        rejectUnknown(obj, path, SNAPSHOT_KEYS);
+        return new McpSnapshot(
+                text(obj.get("fetched_at"), child(path, "fetched_at")),
+                text(obj.get("protocol_version"), child(path, "protocol_version")),
+                server(obj.get("server"), child(path, "server")),
+                text(obj.get("tools_sha256"), child(path, "tools_sha256")));
+    }
+
+    private static McpServerInfo server(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        ObjectNode obj = object(node, path);
+        rejectUnknown(obj, path, SERVER_KEYS);
+        return new McpServerInfo(
+                text(obj.get("name"), child(path, "name")),
+                text(obj.get("version"), child(path, "version")));
+    }
+
+    private static McpTool mcpTool(ObjectNode obj, String path) {
+        boolean present = obj.has("tool") || obj.has("input_schema") || obj.has("output_schema")
+                || obj.has("upstream_annotations") || obj.has("schema_sha256") || obj.has("confirm");
+        if (!present) {
+            return null;
+        }
+        Map<String, Object> inputSchema = obj.has("input_schema")
+                ? schemaMap(obj.get("input_schema"), child(path, "input_schema"))
+                : null;
+        Map<String, Object> outputSchema = obj.has("output_schema")
+                ? schemaMap(obj.get("output_schema"), child(path, "output_schema"))
+                : null;
+        Map<String, Object> annotations = obj.has("upstream_annotations")
+                ? schemaMap(obj.get("upstream_annotations"), child(path, "upstream_annotations"))
+                : Map.of();
+        return new McpTool(
+                text(obj.get("tool"), child(path, "tool")),
+                inputSchema,
+                outputSchema,
+                annotations,
+                text(obj.get("schema_sha256"), child(path, "schema_sha256")),
+                confirm(obj.get("confirm"), child(path, "confirm")));
+    }
+
+    private static Map<String, Object> schemaMap(JsonNode node, String path) {
+        if (node == null || node.isNull()) {
+            throw new ConchParseException(path, "必须是映射");
+        }
+        if (!node.isObject()) {
+            throw new ConchParseException(path, "必须是映射");
+        }
+        return castMap(toTree(node, path));
+    }
+
+    private static Boolean confirm(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        if (!node.isBoolean()) {
+            throw new ConchParseException(path, "必须是布尔值");
+        }
+        return node.booleanValue();
     }
 
     private static List<Step> steps(JsonNode node, String path) {

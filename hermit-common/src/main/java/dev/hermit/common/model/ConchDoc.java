@@ -25,7 +25,10 @@ public record ConchDoc(
         Map<String, ConfigField> config,
         Auth auth,
         Map<String, Action> actions,
-        List<Map<String, Object>> healthCheck
+        List<Map<String, Object>> healthCheck,
+        McpUpstream upstream,
+        ToolFilter tools,
+        McpSnapshot snapshot
 ) {
     public ConchDoc {
         Objects.requireNonNull(conch, "conch");

@@ -22,6 +22,11 @@ public final class ValidationCodes {
     public static final String MISSING_RELATED = "MISSING_RELATED";
     public static final String UNKNOWN_RELATED = "UNKNOWN_RELATED";
     public static final String SCRIPT_STEP = "SCRIPT_STEP";
+    public static final String MCP_UPSTREAM = "MCP_UPSTREAM";
+    public static final String MCP_SCHEMA_REF = "MCP_SCHEMA_REF";
+    public static final String MCP_HEADER = "MCP_HEADER";
+    public static final String MCP_DESCRIPTION = "MCP_DESCRIPTION";
+    public static final String MCP_NO_ACTIONS = "MCP_NO_ACTIONS";
 
     private ValidationCodes() {
     }

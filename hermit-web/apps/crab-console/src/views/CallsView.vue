@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, errorCodeLabels, formatTime, millis, notifyError } from '@shared/format'
 import { api, type CallDetail, type CallSummary, type ConchSummary } from '../api'
+import DevTracePanel from '../components/DevTracePanel.vue'
 import { channelLabels, originLabels, sourceLabels, stepTypeLabels } from '../labels'
 
 const route = useRoute()
@@ -250,6 +251,7 @@ onMounted(async () => {
               </div>
             </el-timeline-item>
           </el-timeline>
+          <DevTracePanel v-if="drawer.call.devTrace" :trace="drawer.call.devTrace" />
         </template>
       </div>
     </el-drawer>

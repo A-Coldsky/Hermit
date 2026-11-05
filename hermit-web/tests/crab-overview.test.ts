@@ -6,6 +6,7 @@ const crab = vi.hoisted(() => ({
   conches: vi.fn(),
   calls: vi.fn(),
   debug: vi.fn(),
+  setDebug: vi.fn(),
   syncStatus: vi.fn(),
 }))
 
@@ -114,12 +115,13 @@ describe('Crab 概览', () => {
     expect(wrapper.get('[data-test="updatable"]').text()).toContain('legacy_oa v1.2.0')
   })
 
-  it('调试开关不可拨，并标明暂未生效', async () => {
+  it('调试开关可以拨，不再标明暂未生效', async () => {
     const wrapper = await mountPage(OverviewView)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('暂未生效')
-    expect(wrapper.get('[data-test="debug-switch"]').classes()).toContain('is-disabled')
+    expect(wrapper.text()).not.toContain('暂未生效')
+    expect(wrapper.get('[data-test="debug-switch"]').classes()).not.toContain('is-disabled')
+    expect(wrapper.text()).toContain('只对本机本地规则包记录脱敏后的请求与响应')
   })
 
   it('需要修复时不显示「已是最新」，列出原因和修复按钮', async () => {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Box, CircleCheckFilled, Connection, List, Refresh, Setting, Warning, WarningFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
@@ -35,6 +35,7 @@ const show = (value: number | string) => (loaded.value ? value : '—')
 const failures = computed(() => calls.value.filter((c) => !c.success).length)
 const repairs = computed(() => report.value?.conches.filter((s) => s.kind === 'REPAIR_REQUIRED') ?? [])
 const repairing = ref<string | null>(null)
+const debugBusy = ref(false)
 const changedConches = computed(
   () =>
     report.value?.conches.filter((s) => s.kind !== 'SKIPPED_SAME' && s.kind !== 'NOT_SUBSCRIBED' && s.kind !== 'REPAIR_REQUIRED') ?? [],
@@ -103,6 +104,36 @@ async function syncNow() {
     }
   } finally {
     syncing.value = false
+  }
+}
+
+async function toggleDebug(enabled: string | number | boolean) {
+  const on = Boolean(enabled)
+  try {
+    if (on) {
+      await ElMessageBox.confirm(
+        '打开后，本机本地规则包的调用和试跑会记录脱敏后的请求与响应。24 小时后自动关闭，并立刻删除这些追踪。正式包不受影响。',
+        '打开开发者模式',
+        { confirmButtonText: '打开', cancelButtonText: '取消', type: 'warning' },
+      )
+    } else {
+      await ElMessageBox.confirm(
+        '关闭后会立刻删除本机全部开发追踪，不能恢复。调用记录仍会保留。',
+        '关闭开发者模式',
+        { confirmButtonText: '关闭并删除追踪', cancelButtonText: '保持开启', type: 'warning', confirmButtonType: 'danger' },
+      )
+    }
+  } catch {
+    return
+  }
+  debugBusy.value = true
+  try {
+    debug.value = await api.setDebug(on)
+    ElMessage.success(on ? '已打开开发者模式' : '已关闭开发者模式，追踪已删除')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    debugBusy.value = false
   }
 }
 
@@ -285,14 +316,22 @@ onMounted(load)
       <div class="hm-card">
         <div class="hm-card-title">
           <span>调试开关</span>
-          <el-tag type="info" effect="plain" size="small">暂未生效</el-tag>
+          <el-tag v-if="debug.enabled" type="warning" effect="plain" size="small">开发者模式</el-tag>
         </div>
         <div class="debug">
-          <el-switch :model-value="debug.enabled" active-text="开启" disabled data-test="debug-switch" />
-          <p class="hm-muted">调试采集还没有接通，暂时不能开启。它不影响调用记录，也不会额外记录请求或返回内容。</p>
+          <el-switch
+            :model-value="debug.enabled"
+            :loading="debugBusy"
+            active-text="开启"
+            data-test="debug-switch"
+            @change="toggleDebug"
+          />
+          <p class="hm-muted">
+            打开后，只对本机本地规则包记录脱敏后的请求与响应，并允许试跑和刷新工具列表。正式包不受影响，调用记录照常。
+          </p>
           <p v-if="debug.enabled && debug.expiresAt">
             <el-icon><Warning /></el-icon>
-            将于 {{ formatTime(debug.expiresAt) }} 自动关闭
+            将于 {{ formatTime(debug.expiresAt) }} 自动关闭，并删除这些追踪
           </p>
         </div>
       </div>

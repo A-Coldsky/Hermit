@@ -99,11 +99,11 @@ URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 
 
 `latest-crab-version` 为空白时，`GET /agent/version` 不带升级提示。非空时按规则包同一套 semver 解析：`1.2.3` 与 `1.2.3-alpha.1` 可以通过，`abc`、`1.2`、`v1.0.0` 和 `1.2.3+build` 会拒绝启动。
 
-配置令牌归 id 最小的 `ADMIN`（含已禁用的账号，但该账号已禁用时这个令牌不再通过）。把它降成 `USER` 之后，归属改到下一个 id 最小的 `ADMIN`。明文只在 `POST /api/admin/tokens` 的响应里出现一次，丢失后吊销再签发。Reef 保存 SHA-256 十六进制，`token_prefix` 是明文的前 12 个字符。同一（令牌，实例）60 秒内只更新一次 `last_used_at` 和 `hermit_crab_instances.last_seen_at`，节流表在进程内存里，重启后重新计。实例上的 `crab_version` 最长 32 个字符，上报里更长的版本只在这一列截断。
+配置令牌归 id 最小的 `ADMIN`（含已禁用的账号）。该账号已禁用，或这个配置值的 SHA-256 已在 `hermit_voided_config_tokens` 里，令牌都不再通过。禁用这个管理员会写入当前值的摘要；重新启用不删这行，配置值不变则仍然 401。管理端 `POST /api/admin/tokens/config/revoke` 写入同一张表。把 `HERMIT_REEF_AGENT_TOKEN` 改成另一个非空字符串后，新值可用，旧值仍 401。只把这个管理员降成 `USER`、且没有作废当前值时，归属改到下一个 id 最小的 `ADMIN`，原值仍可用。禁用用户会吊销他名下未吊销的库内令牌，重新启用不恢复。库内令牌的明文只在 `POST /api/admin/tokens` 的响应里出现一次，丢失后吊销再签发。Reef 保存 SHA-256 十六进制，`token_prefix` 是明文的前 12 个字符。同一（令牌，实例）60 秒内只更新一次 `last_used_at` 和 `hermit_crab_instances.last_seen_at`，节流表在进程内存里，重启后重新计。这 60 秒内不会把实例行改到另一个用户；换一把令牌会。同一 `instance_id` 只留最后一次写出的用户。实例上的 `crab_version` 最长 32 个字符，上报里更长的版本只在这一列截断。
 
-启动警告只在配置令牌为空白，并且 `hermit_agent_tokens` 里没有 `revoked_at IS NULL` 的行时出现。已经吊销的行不算可用令牌。`docker-compose.yml` 里 Reef 的入口仍会在 `HERMIT_REEF_AGENT_TOKEN` 去掉空白后为空时直接退出；那是容器入口的检查，Java 进程本身允许只靠库内令牌启动。
+启动警告只在配置令牌为空白，并且 `hermit_agent_tokens` 里没有 `revoked_at IS NULL` 的行时出现。已经吊销的行不算可用令牌。已经作废的配置值仍然算「配置了令牌」，不会因此触发这条警告；Agent 请求会 401，直到改成新值或另有未吊销的库内令牌。`docker-compose.yml` 里 Reef 的入口仍会在 `HERMIT_REEF_AGENT_TOKEN` 去掉空白后为空时直接退出；那是容器入口的检查，Java 进程本身允许只靠库内令牌启动。
 
-Flyway `V6__users_and_agent_tokens.sql` 给 `hermit_admin_users` 增加 `role`（已有行默认为 `ADMIN`，检查约束 `ck_hermit_admin_users_role` 只允许 `ADMIN` / `USER`），并新建 `hermit_agent_tokens`、`hermit_crab_instances`。失败报告、小时计数和版本切换各增加可空的 `owner_user_id`。没有外键。已经跑过 V5 的库启动时补这些对象，不必为 V6 重建。V1–V4 的就地改写仍然要求重建更早的库，见下面。
+Flyway `V6__users_and_agent_tokens.sql` 给 `hermit_admin_users` 增加 `role`（已有行默认为 `ADMIN`，检查约束 `ck_hermit_admin_users_role` 只允许 `ADMIN` / `USER`），并新建 `hermit_agent_tokens`、`hermit_crab_instances`。失败报告、小时计数和版本切换各增加可空的 `owner_user_id`。没有外键。`V7__voided_config_tokens.sql` 新建 `hermit_voided_config_tokens`，只存配置令牌的 SHA-256 和作废时间。已经跑过 V5 的库启动时补这些对象，不必为 V6 或 V7 重建。V1–V4 的就地改写仍然要求重建更早的库，见下面。
 
 Tide 配置位于 `hermit.reef.tide`：
 

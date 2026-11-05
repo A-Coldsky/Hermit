@@ -18,6 +18,7 @@ import dev.hermit.common.report.FailureReport;
 import dev.hermit.common.report.ReportBatch;
 import dev.hermit.common.report.ReportJson;
 import dev.hermit.common.report.RollbackEvent;
+import dev.hermit.reef.config.ReefProperties;
 import dev.hermit.reef.security.AgentAccessFilter;
 import dev.hermit.reef.security.TokenDigests;
 import dev.hermit.reef.testsupport.AdjustableClock;
@@ -56,12 +57,14 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 class ReefUsersAndTokensTest {
 
     static final String CONFIG_TOKEN = "config-agent-token-value";
+    private static final String REPLACEMENT_CONFIG = "replacement-config-token-value";
 
     private static final String INSTANCE = "123e4567-e89b-12d3-a456-426614174000";
     private static final String USER_INSTANCE = "123e4567-e89b-12d3-a456-426614174001";
     private static final String ADMIN_INSTANCE = "123e4567-e89b-12d3-a456-426614174002";
     private static final String CONFIG_INSTANCE = "123e4567-e89b-12d3-a456-426614174003";
     private static final String REPORT_INSTANCE = "123e4567-e89b-12d3-a456-426614174004";
+    private static final String SHARED_INSTANCE = "123e4567-e89b-12d3-a456-426614174099";
     private static final String USER_NAME = "reef-user";
     private static final String OTHER_ADMIN = "other-admin";
     private static final String USER_PASSWORD = "UserPassword-2222";
@@ -91,6 +94,9 @@ class ReefUsersAndTokensTest {
     @Autowired
     AdjustableClock clock;
 
+    @Autowired
+    ReefProperties reefProperties;
+
     private final List<String> issuedSecrets = new ArrayList<>();
     private int logMark;
 
@@ -99,6 +105,8 @@ class ReefUsersAndTokensTest {
         logMark = MemoryLogAppender.LINES.size();
         issuedSecrets.clear();
         clock.setInstant(ReefTestConfig.START);
+        reefProperties.setAgentToken(CONFIG_TOKEN);
+        jdbc.update("DELETE FROM hermit_voided_config_tokens");
         jdbc.update("DELETE FROM hermit_crab_instances");
         jdbc.update("DELETE FROM hermit_agent_tokens");
         jdbc.update("DELETE FROM hermit_failure_reports");
@@ -124,7 +132,8 @@ class ReefUsersAndTokensTest {
                     .doesNotContain(OTHER_PASSWORD)
                     .doesNotContain(RESET_PASSWORD)
                     .doesNotContain(CHANGED_PASSWORD)
-                    .doesNotContain(CONFIG_TOKEN);
+                    .doesNotContain(CONFIG_TOKEN)
+                    .doesNotContain(REPLACEMENT_CONFIG);
             for (String secret : issuedSecrets) {
                 assertThat(line).doesNotContain(secret);
             }
@@ -152,6 +161,7 @@ class ReefUsersAndTokensTest {
         for (MockHttpServletRequestBuilder request : List.of(
                 post("/api/admin/conches"),
                 post("/api/admin/conches/missing/versions/1.0.0/publish"),
+                delete("/api/admin/conches/missing/versions/1.0.0"),
                 post("/api/admin/conches/missing/disable").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"stop\"}"),
                 post("/api/admin/conches/missing/enable").contentType(MediaType.APPLICATION_JSON)
@@ -460,6 +470,10 @@ class ReefUsersAndTokensTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
         agent(CONFIG_TOKEN, CONFIG_INSTANCE).andExpect(status().isOk());
+        assertThat(jdbc.queryForObject(
+                "SELECT revoked_at FROM hermit_agent_tokens WHERE id = ?", Timestamp.class, issued.id()))
+                .isNotNull();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_voided_config_tokens", Integer.class)).isZero();
     }
 
     @Test
@@ -482,12 +496,15 @@ class ReefUsersAndTokensTest {
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + other));
         assertThat(find(whileDisabled.get("data"), "source", "CONFIG").get("owner").asText())
                 .isEqualTo(TestSecrets.USERNAME);
+        assertThat(find(whileDisabled.get("data"), "source", "CONFIG").get("revokedAt").isNull()).isFalse();
 
         mockMvc.perform(patch("/api/admin/users/" + TestSecrets.USERNAME)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + other)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"disabled\":false}"))
                 .andExpect(status().isOk());
+        String stillBlocked = agentBody(CONFIG_TOKEN, "trace-config-stays");
+        assertThat(stillBlocked).isEqualTo(agentBody("wrong-token-value", "trace-config-stays"));
         mockMvc.perform(patch("/api/admin/users/" + TestSecrets.USERNAME)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + other)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -500,15 +517,17 @@ class ReefUsersAndTokensTest {
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + demoted));
         assertThat(sources(own.get("data"))).doesNotContain("CONFIG");
         JsonNode moved = read(get("/api/admin/tokens").header(HttpHeaders.AUTHORIZATION, "Bearer " + other));
-        assertThat(find(moved.get("data"), "source", "CONFIG").get("owner").asText()).isEqualTo(OTHER_ADMIN);
-        agent(CONFIG_TOKEN, CONFIG_INSTANCE).andExpect(status().isOk());
+        JsonNode movedConfig = find(moved.get("data"), "source", "CONFIG");
+        assertThat(movedConfig.get("owner").asText()).isEqualTo(OTHER_ADMIN);
+        assertThat(movedConfig.get("revokedAt").isNull()).isFalse();
+        assertThat(agentBody(CONFIG_TOKEN, "trace-config-moved")).isEqualTo(
+                agentBody("wrong-token-value", "trace-config-moved"));
         assertThat(jdbc.queryForObject(
-                "SELECT u.username FROM hermit_crab_instances c JOIN hermit_admin_users u ON u.id = c.user_id "
-                        + "WHERE c.instance_id = ?",
-                String.class,
-                CONFIG_INSTANCE)).isEqualTo(OTHER_ADMIN);
+                "SELECT COUNT(*) FROM hermit_crab_instances WHERE instance_id = ?",
+                Integer.class,
+                CONFIG_INSTANCE)).isZero();
         JsonNode users = read(get("/api/admin/users").header(HttpHeaders.AUTHORIZATION, "Bearer " + other));
-        assertThat(user(users, OTHER_ADMIN).get("tokenCount").asInt()).isEqualTo(2);
+        assertThat(user(users, OTHER_ADMIN).get("tokenCount").asInt()).isEqualTo(1);
         assertThat(user(users, TestSecrets.USERNAME).get("tokenCount").asInt()).isEqualTo(0);
     }
 
@@ -605,6 +624,297 @@ class ReefUsersAndTokensTest {
                 .isEqualTo(longVersion.substring(0, 32));
         assertThat(read(get("/api/admin/users").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)).toString())
                 .doesNotContain(userToken.secret());
+    }
+
+    @Test
+    void disablingRevokesDatabaseTokensAndReenableDoesNotRestoreThem() throws Exception {
+        String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        createUser(admin, USER_NAME, USER_PASSWORD, "USER");
+        String user = login(USER_NAME, USER_PASSWORD);
+        Issued first = issue(user, "phone");
+        Issued second = issue(user, "laptop");
+        agent(first.secret(), USER_INSTANCE).andExpect(status().isOk());
+        agent(second.secret(), ADMIN_INSTANCE).andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/admin/users/" + USER_NAME)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"disabled\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.disabled").value(true))
+                .andExpect(jsonPath("$.data.tokenCount").value(0));
+        Timestamp firstRevoked = jdbc.queryForObject(
+                "SELECT revoked_at FROM hermit_agent_tokens WHERE id = ?", Timestamp.class, first.id());
+        Timestamp secondRevoked = jdbc.queryForObject(
+                "SELECT revoked_at FROM hermit_agent_tokens WHERE id = ?", Timestamp.class, second.id());
+        assertThat(firstRevoked).isNotNull();
+        assertThat(secondRevoked).isNotNull();
+        String wrong = agentBody("wrong-token-value", "trace-revoked-user");
+        assertThat(agentBody(first.secret(), "trace-revoked-user")).isEqualTo(wrong);
+        assertThat(agentBody(second.secret(), "trace-revoked-user")).isEqualTo(wrong);
+        mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isUnauthorized());
+        agent(CONFIG_TOKEN, CONFIG_INSTANCE).andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_voided_config_tokens", Integer.class)).isZero();
+        List<String> details = revokeDetails();
+        assertThat(details).hasSize(2);
+        assertThat(details.get(0)).contains("\"name\":\"phone\"").contains("\"owner\":\"" + USER_NAME + "\"")
+                .doesNotContain(first.secret());
+        assertThat(details.get(1)).contains("\"name\":\"laptop\"").doesNotContain(second.secret());
+
+        mockMvc.perform(patch("/api/admin/users/" + USER_NAME)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"disabled\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.disabled").value(false))
+                .andExpect(jsonPath("$.data.tokenCount").value(0));
+        assertThat(jdbc.queryForObject(
+                "SELECT revoked_at FROM hermit_agent_tokens WHERE id = ?", Timestamp.class, first.id()))
+                .isEqualTo(firstRevoked);
+        assertThat(jdbc.queryForObject(
+                "SELECT revoked_at FROM hermit_agent_tokens WHERE id = ?", Timestamp.class, second.id()))
+                .isEqualTo(secondRevoked);
+        assertThat(agentBody(first.secret(), "trace-still-revoked")).isEqualTo(
+                agentBody("wrong-token-value", "trace-still-revoked"));
+        assertThat(agentBody(second.secret(), "trace-still-revoked")).isEqualTo(
+                agentBody("wrong-token-value", "trace-still-revoked"));
+        mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isOk());
+        login(USER_NAME, USER_PASSWORD);
+        Issued fresh = issue(user, "fresh");
+        agent(fresh.secret(), USER_INSTANCE).andExpect(status().isOk());
+        assertThat(agentBody(first.secret(), "trace-old-stays")).isEqualTo(
+                agentBody("wrong-token-value", "trace-old-stays"));
+        assertThat(revokeDetails()).hasSize(2);
+        agent(CONFIG_TOKEN, CONFIG_INSTANCE).andExpect(status().isOk());
+    }
+
+    @Test
+    void disablingTheInitialAdminVoidsTheConfigTokenUntilItChanges() throws Exception {
+        String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        Issued issued = issue(admin, "admin-phone");
+        createUser(admin, OTHER_ADMIN, OTHER_PASSWORD, "ADMIN");
+        String other = login(OTHER_ADMIN, OTHER_PASSWORD);
+        agent(CONFIG_TOKEN, CONFIG_INSTANCE).andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/admin/users/" + TestSecrets.USERNAME)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + other)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"disabled\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.tokenCount").value(0));
+        assertThat(agentBody(CONFIG_TOKEN, "trace-config-disabled")).isEqualTo(
+                agentBody("wrong-token-value", "trace-config-disabled"));
+        assertThat(agentBody(issued.secret(), "trace-config-disabled")).isEqualTo(
+                agentBody("wrong-token-value", "trace-config-disabled"));
+        assertThat(jdbc.queryForObject(
+                "SELECT revoked_at FROM hermit_agent_tokens WHERE id = ?", Timestamp.class, issued.id()))
+                .isNotNull();
+        String storedHash = jdbc.queryForObject(
+                "SELECT token_hash FROM hermit_voided_config_tokens", String.class).trim();
+        assertThat(storedHash).isEqualTo(TokenDigests.sha256Hex(CONFIG_TOKEN)).doesNotContain(CONFIG_TOKEN);
+        List<String> details = revokeDetails();
+        assertThat(details).hasSize(2);
+        assertThat(details.get(0)).contains("\"name\":\"admin-phone\"").doesNotContain(issued.secret());
+        assertThat(details.get(1)).isEqualTo(configRevokeDetail(TestSecrets.USERNAME));
+        JsonNode listed = read(get("/api/admin/tokens").param("all", "true")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + other));
+        assertThat(find(listed.get("data"), "source", "CONFIG").get("revokedAt").isNull()).isFalse();
+        mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin))
+                .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(patch("/api/admin/users/" + TestSecrets.USERNAME)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + other)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"disabled\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.disabled").value(false))
+                .andExpect(jsonPath("$.data.tokenCount").value(0));
+        assertThat(agentBody(CONFIG_TOKEN, "trace-config-enabled")).isEqualTo(
+                agentBody("wrong-token-value", "trace-config-enabled"));
+        assertThat(agentBody(issued.secret(), "trace-config-enabled")).isEqualTo(
+                agentBody("wrong-token-value", "trace-config-enabled"));
+        mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin))
+                .andExpect(status().isOk());
+        login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        Issued fresh = issue(admin, "admin-fresh");
+        agent(fresh.secret(), ADMIN_INSTANCE).andExpect(status().isOk());
+        assertThat(agentBody(issued.secret(), "trace-admin-old")).isEqualTo(
+                agentBody("wrong-token-value", "trace-admin-old"));
+
+        reefProperties.setAgentToken(REPLACEMENT_CONFIG);
+        agent(REPLACEMENT_CONFIG, CONFIG_INSTANCE).andExpect(status().isOk());
+        assertThat(agentBody(CONFIG_TOKEN, "trace-old-config")).isEqualTo(
+                agentBody("wrong-token-value", "trace-old-config"));
+        JsonNode restored = read(get("/api/admin/tokens").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin));
+        JsonNode config = find(restored.get("data"), "source", "CONFIG");
+        assertThat(config.get("revokedAt").isNull()).isTrue();
+        assertThat(config.get("owner").asText()).isEqualTo(TestSecrets.USERNAME);
+        assertThat(jdbc.queryForObject(
+                "SELECT u.username FROM hermit_crab_instances c JOIN hermit_admin_users u ON u.id = c.user_id "
+                        + "WHERE c.instance_id = ?",
+                String.class,
+                CONFIG_INSTANCE)).isEqualTo(TestSecrets.USERNAME);
+        assertThat(jdbc.queryForObject(
+                "SELECT TRIM(token_hash) FROM hermit_voided_config_tokens", String.class))
+                .isEqualTo(TokenDigests.sha256Hex(CONFIG_TOKEN));
+        assertThat(revokeDetails()).hasSize(2);
+    }
+
+    @Test
+    void configTokenCanBeVoidedAndARepeatDoesNotAuditAgain() throws Exception {
+        mockMvc.perform(post("/api/admin/tokens/config/revoke"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
+                .andExpect(jsonPath("$.error.message").value("未登录或登录已过期"));
+        String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        agent(CONFIG_TOKEN, CONFIG_INSTANCE).andExpect(status().isOk());
+
+        MvcResult voided = mockMvc.perform(post("/api/admin/tokens/config/revoke")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(nullValue()))
+                .andExpect(jsonPath("$.data.prefix").value(nullValue()))
+                .andExpect(jsonPath("$.data.createdAt").value(nullValue()))
+                .andExpect(jsonPath("$.data.lastUsedAt").value(nullValue()))
+                .andExpect(jsonPath("$.data.name").value(AgentTokenService.CONFIG_NAME))
+                .andExpect(jsonPath("$.data.source").value("CONFIG"))
+                .andExpect(jsonPath("$.data.owner").value(TestSecrets.USERNAME))
+                .andExpect(jsonPath("$.data.revokedAt").isNotEmpty())
+                .andReturn();
+        String raw = voided.getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(raw).doesNotContain(CONFIG_TOKEN).doesNotContain(TokenDigests.sha256Hex(CONFIG_TOKEN));
+        String revokedAt = objectMapper.readTree(raw).get("data").get("revokedAt").asText();
+        assertThat(agentBody(CONFIG_TOKEN, "trace-voided")).isEqualTo(agentBody("wrong-token-value", "trace-voided"));
+        JsonNode afterVoid = read(get("/api/admin/users").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin));
+        assertThat(user(afterVoid, TestSecrets.USERNAME).get("tokenCount").asInt()).isZero();
+
+        clock.setInstant(ReefTestConfig.START.plusSeconds(120));
+        mockMvc.perform(post("/api/admin/tokens/config/revoke")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.revokedAt").value(revokedAt));
+        assertThat(revokeDetails()).containsExactly(configRevokeDetail(TestSecrets.USERNAME));
+        JsonNode users = read(get("/api/admin/users").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin));
+        assertThat(user(users, TestSecrets.USERNAME).get("tokenCount").asInt()).isZero();
+
+        reefProperties.setAgentToken(REPLACEMENT_CONFIG);
+        agent(REPLACEMENT_CONFIG, ADMIN_INSTANCE).andExpect(status().isOk());
+        assertThat(agentBody(CONFIG_TOKEN, "trace-replaced")).isEqualTo(
+                agentBody("wrong-token-value", "trace-replaced"));
+        JsonNode relisted = read(get("/api/admin/tokens").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin));
+        assertThat(find(relisted.get("data"), "source", "CONFIG").get("revokedAt").isNull()).isTrue();
+        assertThat(relisted.toString()).doesNotContain(REPLACEMENT_CONFIG).doesNotContain(CONFIG_TOKEN);
+        users = read(get("/api/admin/users").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin));
+        assertThat(user(users, TestSecrets.USERNAME).get("tokenCount").asInt()).isEqualTo(1);
+
+        String secondRaw = mockMvc.perform(post("/api/admin/tokens/config/revoke")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.revokedAt").isNotEmpty())
+                .andReturn()
+                .getResponse()
+                .getContentAsString(StandardCharsets.UTF_8);
+        assertThat(secondRaw).doesNotContain(REPLACEMENT_CONFIG).doesNotContain(CONFIG_TOKEN);
+        assertThat(agentBody(REPLACEMENT_CONFIG, "trace-both")).isEqualTo(agentBody("wrong-token-value", "trace-both"));
+        assertThat(agentBody(CONFIG_TOKEN, "trace-both")).isEqualTo(agentBody("wrong-token-value", "trace-both"));
+        assertThat(revokeDetails()).containsExactly(
+                configRevokeDetail(TestSecrets.USERNAME),
+                configRevokeDetail(TestSecrets.USERNAME));
+        List<String> hashes = jdbc.queryForList(
+                "SELECT token_hash FROM hermit_voided_config_tokens ORDER BY voided_at", String.class);
+        assertThat(hashes.stream().map(String::trim).toList()).containsExactly(
+                TokenDigests.sha256Hex(CONFIG_TOKEN),
+                TokenDigests.sha256Hex(REPLACEMENT_CONFIG));
+
+        createUser(admin, USER_NAME, USER_PASSWORD, "USER");
+        String user = login(USER_NAME, USER_PASSWORD);
+        mockMvc.perform(post("/api/admin/tokens/config/revoke")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.error.message").value("没有权限执行这个操作"));
+        reefProperties.setAgentToken("");
+        mockMvc.perform(post("/api/admin/tokens/config/revoke")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.error.message").value(AgentTokenService.NO_CONFIG_TOKEN));
+    }
+
+    @Test
+    void theSameInstanceIdKeepsOnlyTheLaterUser() throws Exception {
+        String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        Issued earlier = issue(admin, "earlier");
+        createUser(admin, USER_NAME, USER_PASSWORD, "USER");
+        String user = login(USER_NAME, USER_PASSWORD);
+        Issued later = issue(user, "later");
+        agent(earlier.secret(), SHARED_INSTANCE).andExpect(status().isOk());
+        agent(later.secret(), SHARED_INSTANCE).andExpect(status().isOk());
+
+        JsonNode crabs = read(get("/api/admin/crabs").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin));
+        assertThat(crabs.get("data")).hasSize(1);
+        assertThat(crabs.get("data").get(0).get("owner").asText()).isEqualTo(USER_NAME);
+        assertThat(crabs.get("data").get(0).get("instanceId").asText()).isEqualTo(SHARED_INSTANCE);
+        assertThat(crabs.get("data").get(0).get("tokenName").asText()).isEqualTo("later");
+        JsonNode own = read(get("/api/admin/crabs").header(HttpHeaders.AUTHORIZATION, "Bearer " + user));
+        assertThat(own.get("data")).hasSize(1);
+        assertThat(own.get("data").get(0).get("owner").asText()).isEqualTo(USER_NAME);
+
+        Long adminId = jdbc.queryForObject(
+                "SELECT id FROM hermit_admin_users WHERE username = ?", Long.class, TestSecrets.USERNAME);
+        jdbc.update(
+                "INSERT INTO hermit_crab_instances (user_id, instance_id, token_id, first_seen_at, last_seen_at, "
+                        + "crab_version) VALUES (?, ?, ?, ?, ?, NULL)",
+                adminId,
+                SHARED_INSTANCE,
+                earlier.id(),
+                Timestamp.from(ReefTestConfig.START),
+                Timestamp.from(ReefTestConfig.START));
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM hermit_crab_instances WHERE instance_id = ?", Integer.class, SHARED_INSTANCE))
+                .isEqualTo(2);
+        clock.setInstant(ReefTestConfig.START.plusSeconds(60));
+        agent(later.secret(), SHARED_INSTANCE).andExpect(status().isOk());
+        JsonNode again = read(get("/api/admin/crabs").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin));
+        assertThat(again.get("data")).hasSize(1);
+        assertThat(again.get("data").get(0).get("owner").asText()).isEqualTo(USER_NAME);
+        assertThat(again.get("data").get(0).get("tokenName").asText()).isEqualTo("later");
+    }
+
+    @Test
+    void demotingTheInitialAdminMovesALiveConfigToken() throws Exception {
+        String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        createUser(admin, OTHER_ADMIN, OTHER_PASSWORD, "ADMIN");
+        String other = login(OTHER_ADMIN, OTHER_PASSWORD);
+        mockMvc.perform(patch("/api/admin/users/" + TestSecrets.USERNAME)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + other)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"role\":\"USER\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("USER"));
+        agent(CONFIG_TOKEN, CONFIG_INSTANCE).andExpect(status().isOk());
+        assertThat(jdbc.queryForObject(
+                "SELECT u.username FROM hermit_crab_instances c JOIN hermit_admin_users u ON u.id = c.user_id "
+                        + "WHERE c.instance_id = ?",
+                String.class,
+                CONFIG_INSTANCE)).isEqualTo(OTHER_ADMIN);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hermit_voided_config_tokens", Integer.class)).isZero();
+        JsonNode listed = read(get("/api/admin/tokens").header(HttpHeaders.AUTHORIZATION, "Bearer " + other));
+        JsonNode config = find(listed.get("data"), "source", "CONFIG");
+        assertThat(config.get("owner").asText()).isEqualTo(OTHER_ADMIN);
+        assertThat(config.get("revokedAt").isNull()).isTrue();
+    }
+
+    private List<String> revokeDetails() {
+        return jdbc.queryForList(
+                "SELECT detail FROM hermit_audit_log WHERE action = 'AGENT_TOKEN_REVOKED' ORDER BY id",
+                String.class);
+    }
+
+    private static String configRevokeDetail(String owner) {
+        return "{\"name\":\"" + AgentTokenService.CONFIG_NAME + "\",\"owner\":\"" + owner + "\",\"source\":\"CONFIG\"}";
     }
 
     private Issued issue(String bearer, String name) throws Exception {

@@ -34,6 +34,7 @@ public class AgentTokenService {
     public static final int RANDOM_BYTES = 32;
     public static final int PREFIX_LENGTH = 12;
     public static final String CONFIG_NAME = "HERMIT_REEF_AGENT_TOKEN";
+    public static final String NO_CONFIG_TOKEN = "没有配置令牌";
     static final int CRAB_VERSION_MAX = 32;
 
     private static final byte[] DUMMY_DIGEST = new byte[32];
@@ -44,22 +45,24 @@ public class AgentTokenService {
     private final AuditService auditService;
     private final Clock clock;
     private final ObjectMapper objectMapper;
+    private final ConfigTokenVoids configTokenVoids;
     private final SecureRandom random = new SecureRandom();
 
     public AgentTokenService(JdbcTemplate jdbc, AdminUsers users, ReefProperties properties, AuditService auditService,
-            Clock clock, ObjectMapper objectMapper) {
+            Clock clock, ObjectMapper objectMapper, ConfigTokenVoids configTokenVoids) {
         this.jdbc = jdbc;
         this.users = users;
         this.properties = properties;
         this.auditService = auditService;
         this.clock = clock;
         this.objectMapper = objectMapper;
+        this.configTokenVoids = configTokenVoids;
     }
 
     /**
      * 配置令牌和库内哈希都查。库内令牌未吊销且用户未禁用才算通过；两边都对得上时用库内身份。
-     * 配置令牌归 id 最小的 ADMIN。该用户已禁用则配置令牌 401。还没有任何 ADMIN 时配置令牌仍可通过，
-     * 但身份上没有 userId，调用不记实例、上报 owner 为空。
+     * 配置令牌归 id 最小的 ADMIN。该用户已禁用，或当前配置值的摘要已作废，则配置令牌不通过。
+     * 还没有任何 ADMIN 且当前值未作废时，配置令牌仍可通过，但身份上没有 userId，调用不记实例、上报 owner 为空。
      */
     public Optional<AgentPrincipal> authenticate(String header) {
         String presented = header == null ? "" : header;
@@ -78,6 +81,9 @@ public class AgentTokenService {
             return Optional.of(new AgentPrincipal(stored.userId(), stored.username(), stored.id()));
         }
         if (!configMatch) {
+            return Optional.empty();
+        }
+        if (configTokenVoids.currentIsVoided()) {
             return Optional.empty();
         }
         AdminAccount owner = users.initialAdmin();
@@ -105,7 +111,7 @@ public class AgentTokenService {
 
     @Transactional
     public IssuedAgentToken create(String actor, String name, String publicKey) {
-        AdminAccount user = require(actor);
+        AdminAccount user = users.lockEnabled(actor);
         byte[] bytes = new byte[RANDOM_BYTES];
         random.nextBytes(bytes);
         String secret = SECRET_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
@@ -162,6 +168,38 @@ public class AgentTokenService {
             row = findById(id);
         }
         return row.view();
+    }
+
+    /**
+     * 禁用已经落库之后调用。库内未吊销令牌各写一条 {@code AGENT_TOKEN_REVOKED}。
+     * {@code voidConfig} 为真时，再把当前配置值的摘要作废；已经作废过则不再审计。
+     */
+    @Transactional
+    public void revokeForDisabledUser(String actor, long userId, String ownerUsername, boolean voidConfig) {
+        List<Long> ids = jdbc.query(
+                "SELECT id FROM hermit_agent_tokens WHERE user_id = ? AND revoked_at IS NULL ORDER BY id",
+                (rs, rowNum) -> rs.getLong("id"),
+                userId);
+        for (Long id : ids) {
+            revoke(actor, true, id);
+        }
+        if (voidConfig && configTokenVoids.voidCurrent().filter(ConfigTokenVoids.Mark::created).isPresent()) {
+            auditConfigRevoked(actor, ownerUsername);
+        }
+    }
+
+    @Transactional
+    public AgentTokenView voidConfigToken(String actor) {
+        require(actor);
+        if (properties.configuredAgentToken() == null) {
+            throw new ApiException(404, ReefErrorCode.NOT_FOUND, NO_CONFIG_TOKEN);
+        }
+        AdminAccount owner = users.initialAdmin();
+        String ownerName = owner == null ? null : owner.username();
+        if (configTokenVoids.voidCurrent().filter(ConfigTokenVoids.Mark::created).isPresent()) {
+            auditConfigRevoked(actor, ownerName);
+        }
+        return configView(ownerName);
     }
 
     public List<CrabInstanceView> crabs(String actor, boolean admin) {
@@ -270,8 +308,17 @@ public class AgentTokenService {
         return account;
     }
 
-    private static AgentTokenView configView(String owner) {
-        return new AgentTokenView(null, owner, CONFIG_NAME, null, null, null, null, TokenSource.CONFIG);
+    private AgentTokenView configView(String owner) {
+        return new AgentTokenView(null, owner, CONFIG_NAME, null, null, null,
+                configTokenVoids.currentVoidedAt().orElse(null), TokenSource.CONFIG);
+    }
+
+    private void auditConfigRevoked(String actor, String owner) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("name", CONFIG_NAME);
+        values.put("owner", owner);
+        values.put("source", TokenSource.CONFIG.name());
+        auditService.record(actor, AuditAction.AGENT_TOKEN_REVOKED, null, null, detail(values));
     }
 
     private static Instant instant(Timestamp timestamp) {

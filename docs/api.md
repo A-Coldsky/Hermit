@@ -8,7 +8,7 @@
 | --- | --- |
 | Reef `/api/admin/login` | username/password；成功返回 data.token、data.expiresAt。JWT 带 `role`（`ADMIN` 或 `USER`）。每次请求按数据库里的当前角色授权，不看 JWT 里的 `role` |
 | Reef 其他 `/api/admin/**` | `Authorization: Bearer <JWT>`。`USER` 可以读规则包、Tide、告警，并管理自己的口令和 Agent 令牌；其余管理写操作、审计、清理和用户管理是 403 `FORBIDDEN`。账号已禁用时已发出的 JWT 也是 401 |
-| Reef `/agent/**` | `X-Hermit-Instance: <UUID>` 和 `X-Hermit-Token`。令牌可以是配置里的 `HERMIT_REEF_AGENT_TOKEN`，或某个用户签发且未吊销的 Agent 令牌。该用户已禁用时，他的令牌全部 401。配置令牌归 id 最小的 `ADMIN`；这个管理员被禁用则配置令牌也 401。库里还没有任何 `ADMIN` 时，配置令牌仍可通过，上报的 owner 为空，也不记 Crab 实例 |
+| Reef `/agent/**` | `X-Hermit-Instance: <UUID>` 和 `X-Hermit-Token`。令牌可以是配置里的 `HERMIT_REEF_AGENT_TOKEN`，或某个用户签发且未吊销、用户也未禁用的 Agent 令牌。禁用用户会把他名下未吊销的库内令牌写上 `revoked_at`，重新启用不清除，这些令牌与错误令牌一样 401。配置令牌归 id 最小的 `ADMIN`。这个管理员已禁用，或当前配置值的 SHA-256 在作废表里，配置令牌也 401；重新启用且配置值没改仍然 401。把配置改成另一个非空字符串后，新值可用（归属管理员须为启用），旧值仍 401。库里还没有任何 `ADMIN`、且当前值未作废时，配置令牌仍可通过，上报的 owner 为空，也不记 Crab 实例 |
 | Crab `/api/**`、别名、`/mcp` | `Authorization: Bearer <API Key>` 或 `X-Hermit-Key` |
 | Crab `/console/api/**` | 实际连接来源必须回环地址，且 `X-Hermit-Console: 1` |
 | Crab `/console/` | 页面请求来源必须回环地址；页面 JS 再加控制台头 |
@@ -30,7 +30,7 @@ Crab 在回环连接上，`GET /console/**` 除 `/console/api/**` 与 `/console/
 
 Reef 的查询参数、路径变量或请求头无法转换成声明类型，或缺少必填项时，`GlobalExceptionHandler` 返回 400 `INVALID_INPUT`。`message` 为 `字段 字段名 无效`（多个字段按字典序用逗号连接，例如 `字段 page, size 无效`），不回显原始参数值，也不把该异常记成 500。例如 `GET /api/admin/audit?size=abc` 的 message 是 `字段 size 无效`。数字越界、空原因等由各接口自己返回 400，message 为 `输入无效`。Bean 校验失败（如超长口令）message 为 `请求校验未通过`。请求体读不成目标类型（坏 JSON、无法识别的枚举值）message 为 `请求体无法解析`，不回显正文。路径不接受该方法时 405，错误码仍是 `INVALID_INPUT`，message 为 `不支持该请求方法`。上传缺少 `file`、空文件或坏 ZIP 仍是 422，message 为 `输入无效`。YAML 解析失败仍是 422，message 为解析器原文；语义校验失败仍是 422，message 为 `输入无效`，明细在 `data`。
 
-Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常。响应信封仍带 `traceId`。默认 message：401 `UNAUTHORIZED` 为 `未登录或登录已过期`，403 `FORBIDDEN` 为 `没有权限执行这个操作`，404 `NOT_FOUND` 为 `资源不存在`，500 `INTERNAL` 为 `服务器内部错误`。登录失败仍是 `authentication failed`，不走这句默认文案。控制台错误提示在 message 已经表达该错误码时只显示 message，因此这三句不会再变成「无权限：没有权限执行这个操作」「不存在：资源不存在」或「内部错误：服务器内部错误」。message 是另一句说明时仍加短标签。
+Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `request failed status=… traceId=…`。4xx 不写异常消息或请求体。5xx 另记未捕获异常。响应信封仍带 `traceId`。默认 message：401 `UNAUTHORIZED` 为 `未登录或登录已过期`，403 `FORBIDDEN` 为 `没有权限执行这个操作`，404 `NOT_FOUND` 为 `资源不存在`，409 `CONFLICT` 为 `状态冲突`，500 `INTERNAL` 为 `服务器内部错误`。业务接口传入自己的 message 时用那一句，不用这句默认文案。登录失败仍是 `authentication failed`，不走这句默认文案。控制台错误提示在 message 已经表达该错误码时只显示 message，因此这三句不会再变成「无权限：没有权限执行这个操作」「不存在：资源不存在」或「内部错误：服务器内部错误」。message 是另一句说明时仍加短标签。
 
 ## Reef 管理与分发
 
@@ -41,14 +41,15 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | POST | `/login` | `{username,password}`；失败锁定窗口 15 分钟，阈值 5 次 |
 | GET | `/me` | `{username, role}`。`role` 为 `ADMIN` 或 `USER` |
 | POST | `/me/password` | `{oldPassword, newPassword}`。旧口令不对是 400，message 为 `当前密码不正确`。`Cache-Control: no-store`。改口令不使已发出的 JWT 失效 |
-| GET | `/users` | 仅 `ADMIN`。`[{username, role, disabled, createdAt, tokenCount}]`。`tokenCount` 是未吊销的库内令牌数；该用户若是当前配置令牌的归属人（id 最小的 `ADMIN`）且配置了令牌，再加 1。不返回口令或令牌明文 |
+| GET | `/users` | 仅 `ADMIN`。`[{username, role, disabled, createdAt, tokenCount}]`。`tokenCount` 是未吊销的库内令牌数；该用户若是当前配置令牌的归属人（id 最小的 `ADMIN`），且配置了令牌，且当前值未作废，再加 1。不返回口令或令牌明文 |
 | POST | `/users` | 仅 `ADMIN`。`{username, password, role}`。用户名非空、最长 128，口令规则与登录相同。重复用户名 409，message 为 `用户名已存在`。不支持删除，只能禁用。`Cache-Control: no-store` |
-| PATCH | `/users/{username}` | 仅 `ADMIN`。`{role?, disabled?}`，至少给一个。不能取消最后一个启用中的 `ADMIN`，409，message 为 `至少要保留一个启用中的管理员`。不能改自己的角色，也不能禁用自己，409，message 为 `不能修改自己的角色或禁用自己`。自己就是最后一个启用中的管理员时，先返回前一条。空对象 400，message 为 `输入无效`。不存在 404，message 为 `资源不存在` |
+| PATCH | `/users/{username}` | 仅 `ADMIN`。`{role?, disabled?}`，至少给一个。不能取消最后一个启用中的 `ADMIN`，409，message 为 `至少要保留一个启用中的管理员`。不能改自己的角色，也不能禁用自己，409，message 为 `不能修改自己的角色或禁用自己`。自己就是最后一个启用中的管理员时，先返回前一条。空对象 400，message 为 `输入无效`。不存在 404，message 为 `资源不存在`。从启用改为禁用时，该用户 `revoked_at IS NULL` 的库内令牌全部写上 `revoked_at`，每个令牌一条 `AGENT_TOKEN_REVOKED`（detail 与 `DELETE /tokens/{id}` 相同：id、name、prefix、owner）。若请求开始时该用户是配置令牌的归属人且配置了令牌，同时作废当前配置值，再写一条 `AGENT_TOKEN_REVOKED`，detail 为 `{"name":"HERMIT_REEF_AGENT_TOKEN","owner":"<用户名>","source":"CONFIG"}`。已经禁用再传 `disabled: true` 不重复吊销、不重复审计。`disabled: false` 只清除禁用位，不清除 `revoked_at`，也不删作废摘要；该用户可以再登录，旧令牌仍是 401，需要再签发。只改角色、不禁用时，不吊销库内令牌，也不作废配置令牌。响应仍是用户摘要，不含令牌明文 |
 | POST | `/users/{username}/password` | 仅 `ADMIN`。`{password}`，重置别人的口令。重置自己是 400，message 为 `不能重置自己的密码，请用右上角「修改密码」`。`Cache-Control: no-store`。审计 `USER_PASSWORD_RESET`，detail 只有用户名 |
-| GET | `/tokens` | 自己的令牌。`ADMIN` 加 `?all=true` 看全部；`USER` 即使带 `all=true` 也只看自己。项为 `{id, owner, name, prefix, createdAt, lastUsedAt, revokedAt, source}`。`source` 为 `DATABASE` 或 `CONFIG`。配置令牌是只读项：`id`、`prefix` 和时间为 null，`name` 为 `HERMIT_REEF_AGENT_TOKEN`，不能删除。已吊销的库内令牌仍列出。响应和审计都不含明文 |
+| GET | `/tokens` | 自己的令牌。`ADMIN` 加 `?all=true` 看全部；`USER` 即使带 `all=true` 也只看自己。项为 `{id, owner, name, prefix, createdAt, lastUsedAt, revokedAt, source}`。`source` 为 `DATABASE` 或 `CONFIG`。配置令牌：`id`、`prefix`、`createdAt`、`lastUsedAt` 为 null，`name` 为 `HERMIT_REEF_AGENT_TOKEN`；当前配置值已作废时 `revokedAt` 为作废时间，否则为 null。不能用 `DELETE /tokens/{id}` 作废，走下面的作废接口。已吊销的库内令牌和已作废的配置令牌仍列出。响应和审计都不含明文或摘要 |
 | POST | `/tokens` | `{name}`，非空，最长 64。`USER` 和 `ADMIN` 都可以给自己签发。返回 `{token, secret, publicKey}`。`secret` 是 `hat_` 加 32 个随机字节的 base64url（无填充），只出现在这一次响应里。库里只存 SHA-256 的小写十六进制。`publicKey` 与 `GET /signing-key` 的 PEM 相同。`Cache-Control: no-store`。审计 `AGENT_TOKEN_CREATED`，detail 含 id、name、prefix、owner |
-| DELETE | `/tokens/{id}` | 归属人或 `ADMIN` 吊销。重复吊销仍是 200，只在第一次写 `AGENT_TOKEN_REVOKED`。别人的令牌 403，message 为 `没有权限执行这个操作`。不存在 404，message 为 `资源不存在`。配置令牌没有 id，不能从这里吊销 |
-| GET | `/crabs` | `[{owner, instanceId, tokenName, firstSeenAt, lastSeenAt, crabVersion}]`。`USER` 只看自己的。配置令牌记下的行 `tokenName` 为 null。同一（令牌，实例）在进程内 60 秒最多写一次 `last_used_at` 和 `last_seen_at`；重启后重新计。`crabVersion` 在实例行上最长 32 个字符，上报原文更长时截断；失败报告仍保留最多 64 个字符 |
+| POST | `/tokens/config/revoke` | 仅 `ADMIN`，无请求体。把当前 `HERMIT_REEF_AGENT_TOKEN` 的 SHA-256 写入 `hermit_voided_config_tokens`（Flyway V7）。成功 200，`data` 与列表中的配置令牌项相同，`revokedAt` 为作废时间。响应和审计不含明文，也不含摘要。第一次写入审计 `AGENT_TOKEN_REVOKED`，detail 为 `{"name":"HERMIT_REEF_AGENT_TOKEN","owner":"<当前归属用户名>","source":"CONFIG"}`。同一配置值再调用仍是 200，`revokedAt` 不变，不再写审计。没有配置令牌（空或空白）时 404 `NOT_FOUND`，message 为 `没有配置令牌`。`USER` 为 403 `FORBIDDEN`，message 为 `没有权限执行这个操作`。未登录 401 `UNAUTHORIZED`，message 为 `未登录或登录已过期`。换成新的非空配置值后旧摘要仍作废，新值可用；要停用新值需再调一次 |
+| DELETE | `/tokens/{id}` | 归属人或 `ADMIN` 吊销库内令牌。重复吊销仍是 200，只在第一次写 `AGENT_TOKEN_REVOKED`。别人的令牌 403，message 为 `没有权限执行这个操作`。不存在 404，message 为 `资源不存在`。配置令牌没有 id，不能从这里吊销 |
+| GET | `/crabs` | `[{owner, instanceId, tokenName, firstSeenAt, lastSeenAt, crabVersion}]`。`USER` 只看自己的。配置令牌记下的行 `tokenName` 为 null。同一 `instance_id` 只保留一行：后一次用有效令牌写出的用户留下，其他用户的同实例行删除。同一（令牌，实例）在进程内 60 秒最多写一次，这 60 秒内的重复访问不会改归属；换一把令牌会立刻改写。重启后重新计。`crabVersion` 在实例行上最长 32 个字符，上报原文更长时截断；失败报告仍保留最多 64 个字符 |
 | GET | `/signing-key` | `data.publicKey` PEM；不提供私钥 |
 | POST | `/conches` | multipart 字段 `file`，YAML 或仅含 conch.yaml 的 ZIP；上传及解包 YAML 限 1 MiB。同一规则包版本已存在时 409 `CONFLICT`，message 为 `该规则包版本已存在`。版本不高于该包已有的最高版本时 409 `CONFLICT`，message 为 `版本必须高于已有的最高版本` |
 | GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null。两项都带 `pullCount`（long，JSON 数字）：该规则包全部版本成功下载次数之和，含尚未发布的版本 |
@@ -56,6 +57,7 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | GET | `/conches/{conch}/versions/{version}/yaml` | YAML 原文 |
 | GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `版本对比需要同时提供 from 和 to`。少于两个版本时 400 `INVALID_INPUT`，message 为 `至少需要两个版本才能对比`。名字不合法仍是 404 |
 | POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。必须严格高于当前已发布版本；没有当前版本时可以发布。不高于时 409，`message` 为 `发布版本必须高于当前已发布版本`。已经发布过的版本仍是 409，`message` 为 `只能发布已上传、尚未发布的版本`。Conch 已停用时 409，`message` 为 `规则包已停用`（先于版本比较） |
+| DELETE | `/conches/{conch}/versions/{version}` | 仅 `ADMIN`，无请求体。只删除 `status = UPLOADED` 的版本。成功 200，`data` 为 `{conch, version}`。已发布 409 `CONFLICT`，message 为 `只能丢弃已上传、尚未发布的版本`，不删除该版本的 YAML 和签名 ZIP。不存在、重复删除、版本号不是 semver，或名字不是单个路径段时 404 `NOT_FOUND`，message 为 `资源不存在`。`USER` 与未登录分别是 403、401。审计见下文 |
 | POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `规则包已经停用` |
 | POST | `/conches/{conch}/enable` | `{reason}`，规则与停用相同。未停用时 409，`message` 为 `规则包尚未停用`。启用原因只写入审计 |
 | GET | `/tide/summary` | conch/from/to/bucket |
@@ -71,11 +73,13 @@ Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400
 
 失败分组、分组里的样本，以及版本切换事件带 `owner`（用户名）。旧数据没有归属，`owner` 为 null。同一组的 `owner` 相同；不同用户的失败会拆成两组。小时汇总 `series` 不加 `owner`。`hermit_failure_reports`、`hermit_hourly_counts`、`hermit_rollback_events` 各有可空的 `owner_user_id`，不进主键。小时计数更新时用 `COALESCE`，后来的空归属不会清掉已经记下的用户。
 
-用户和令牌审计还有 `USER_CREATED`、`USER_UPDATED`、`USER_PASSWORD_RESET`、`PASSWORD_CHANGED`、`AGENT_TOKEN_CREATED`、`AGENT_TOKEN_REVOKED`。detail 是 JSON，不含口令或令牌明文。`USER` 不能读 `GET /audit`。
+用户和令牌审计还有 `USER_CREATED`、`USER_UPDATED`、`USER_PASSWORD_RESET`、`PASSWORD_CHANGED`、`AGENT_TOKEN_CREATED`、`AGENT_TOKEN_REVOKED`。detail 是 JSON，不含口令、令牌明文或配置令牌摘要。禁用用户时，每个被吊销的库内令牌一条 `AGENT_TOKEN_REVOKED`；若同时作废配置令牌，再加一条，detail 含 `source` 为 `CONFIG`。`USER` 不能读 `GET /audit`。
 
 配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。协议须为 `http` 或 `https`，空字符串不推送；其他协议或没有协议时进程拒绝启动。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 
-停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布。坏掉的发布用一个更高版本替换，不再提供管理员回滚。`POST /api/admin/conches/{conch}/rollback` 没有对应接口。页面的 GET 兜底匹配所有路径，所以这个 POST 是 405 `INVALID_INPUT`，message 为 `不支持该请求方法`；对同一路径发 GET 则是 404 `NOT_FOUND`。拉取次数不进入清单，下载成功不会改变 ETag。
+停用和重新启用都记审计，`action` 为 `DISABLE` 或 `ENABLE`。`version` 是当时的当前已发布版本，没有当前版本时为 null。`detail` 是 `{"reason":"..."}`。停用不改签名包：清单 ETag 仍是清单 JSON 数组的 SHA-256，条目减少所以 ETag 变化，Crab 不会把停用误当成 304。重新启用后，原来的当前版本回到清单，包的 SHA-256 与停用前相同。停用期间可以上传新版本，但不能发布，仍可以丢弃 `UPLOADED`。坏掉的发布用一个更高版本替换，不再提供管理员回滚。`POST /api/admin/conches/{conch}/rollback` 没有对应接口。页面的 GET 兜底匹配所有路径，所以这个 POST 是 405 `INVALID_INPUT`，message 为 `不支持该请求方法`；对同一路径发 GET 则是 404 `NOT_FOUND`。拉取次数不进入清单，下载成功不会改变 ETag。
+
+`DELETE /api/admin/conches/{conch}/versions/{version}` 成功时写审计 `DISCARD`。`actor` 是操作者，`conch` 与 `version` 是被丢掉的那一版，`detail` 为 null。409、404 和 403 不写这条审计。删掉的是该版本目录里的 `conch.yaml`，以及这个版本还没发布时可能留下的 `package.zip`。已发布版本的 YAML、签名 ZIP 和行上的 `sha256` 保持不变，清单里的 SHA-256 也不变。这个包若已经没有任何版本，`GET /conches/{conch}/versions` 仍是 404，`GET /conches` 不再列出它；其它版本还在时，版本列表只是不再包含被丢掉的那一版。上传规则不变：新版本必须高于该包还在的最高版本。丢掉当前最高的未发布版本后，同一个版本号可以再上传；更高的版本还在时，较低的版本号不能再上传。停用期间丢弃已发布版本的 message 仍是 `只能丢弃已上传、尚未发布的版本`，不是 `规则包已停用`。
 
 Agent 路由：
 

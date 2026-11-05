@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 /**
  * 同一（令牌，实例）在内存里 60 秒内只写一次 {@code last_used_at} 和 {@code last_seen_at}。
  * 进程重启后重新计时。上报里的 crab 版本单独更新，不受这 60 秒限制。
+ * 写下当前用户的实例行之后，删掉其他用户上相同 {@code instance_id} 的行。后一次写出的用户留下。
  */
 @Component
 public class AgentPresence {
@@ -85,27 +86,33 @@ public class AgentPresence {
                 principal.tokenId(),
                 principal.userId(),
                 instanceId);
-        if (updated > 0) {
-            return;
+        if (updated == 0) {
+            try {
+                jdbc.update(
+                        "INSERT INTO hermit_crab_instances (user_id, instance_id, token_id, first_seen_at, "
+                                + "last_seen_at, crab_version) VALUES (?, ?, ?, ?, ?, NULL)",
+                        principal.userId(),
+                        instanceId,
+                        principal.tokenId(),
+                        stamp,
+                        stamp);
+            } catch (DuplicateKeyException ex) {
+                updated = jdbc.update(
+                        "UPDATE hermit_crab_instances SET last_seen_at = ?, token_id = ? "
+                                + "WHERE user_id = ? AND instance_id = ?",
+                        stamp,
+                        principal.tokenId(),
+                        principal.userId(),
+                        instanceId);
+                if (updated == 0) {
+                    return;
+                }
+            }
         }
-        try {
-            jdbc.update(
-                    "INSERT INTO hermit_crab_instances (user_id, instance_id, token_id, first_seen_at, last_seen_at, "
-                            + "crab_version) VALUES (?, ?, ?, ?, ?, NULL)",
-                    principal.userId(),
-                    instanceId,
-                    principal.tokenId(),
-                    stamp,
-                    stamp);
-        } catch (DuplicateKeyException ex) {
-            jdbc.update(
-                    "UPDATE hermit_crab_instances SET last_seen_at = ?, token_id = ? "
-                            + "WHERE user_id = ? AND instance_id = ?",
-                    stamp,
-                    principal.tokenId(),
-                    principal.userId(),
-                    instanceId);
-        }
+        jdbc.update(
+                "DELETE FROM hermit_crab_instances WHERE instance_id = ? AND user_id <> ?",
+                instanceId,
+                principal.userId());
     }
 
     private static String key(AgentPrincipal principal, String instanceId) {

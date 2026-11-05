@@ -1,7 +1,9 @@
 package dev.hermit.reef.admin;
 
 import dev.hermit.reef.conch.SigningKeyStore;
+import dev.hermit.reef.web.ApiException;
 import dev.hermit.reef.web.ApiResponse;
+import dev.hermit.reef.web.ReefErrorCode;
 import dev.hermit.reef.web.TraceIds;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -48,6 +50,15 @@ public class AgentTokenController {
         response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
         IssuedAgentToken issued = tokens.create(AdminCaller.current().getName(), body.name(), signingKeys.publicPem());
         return ApiResponse.ok(issued, TraceIds.current(request));
+    }
+
+    @PostMapping("/tokens/config/revoke")
+    public ApiResponse<AgentTokenView> voidConfig(HttpServletRequest request) {
+        Authentication authentication = AdminCaller.current();
+        if (!AdminCaller.admin(authentication)) {
+            throw new ApiException(403, ReefErrorCode.FORBIDDEN, ReefErrorCode.FORBIDDEN.message());
+        }
+        return ApiResponse.ok(tokens.voidConfigToken(authentication.getName()), TraceIds.current(request));
     }
 
     @DeleteMapping("/tokens/{id}")

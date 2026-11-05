@@ -9,7 +9,7 @@ public enum ReefErrorCode {
     FORBIDDEN("没有权限执行这个操作"),
     INVALID_INPUT("输入无效"),
     NOT_FOUND("资源不存在"),
-    CONFLICT("conflict"),
+    CONFLICT("状态冲突"),
     INTERNAL("服务器内部错误");
 
     /** Bean 校验未通过。响应不带字段值。 */

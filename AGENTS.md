@@ -20,7 +20,7 @@
 - 前端使用 Vitest + Vue Test Utils + jsdom，`npm test`，也接入 Maven test 阶段。
 - Crab 容器入口为 `deploy/crab-entrypoint.sh`；Compose `client` profile 用于同机部署，`docker-compose.crab.yml` 用于独立客户端。
 - Maven 制品版本 `0.1.0-SNAPSHOT` 与规则兼容版本 `CrabVersion.CURRENT = 1.0.0` 用途不同。
-- Conch 指 YAML 规则包。可执行的是 `driver: http`。`driver: mcp` 已能解析和校验，执行尚未接通。它不是操作系统命令脚本，也不支持 stdio。
+- Conch 指 YAML 规则包。可执行的是 `driver: http`。`driver: mcp` 已能解析和校验；Reef 管理 API 与 Agent 清单从包内读出上游和工具表，不连上游。执行尚未接通。它不是操作系统命令脚本，也不支持 stdio。
 
 ## 修改入口
 

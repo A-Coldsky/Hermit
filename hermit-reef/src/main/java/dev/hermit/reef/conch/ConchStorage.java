@@ -42,6 +42,15 @@ class ConchStorage {
         delete(conch, version, "conch.yaml");
     }
 
+    /**
+     * 删掉某个尚未发布版本目录里的 YAML，以及发布未提交时可能留下的 ZIP。
+     * 不进入其它版本目录。调用方必须已经确认该版本是 {@code UPLOADED} 并删掉了版本行。
+     */
+    void deleteUploadedFiles(String conch, String version) {
+        deleteYaml(conch, version);
+        deleteZip(conch, version);
+    }
+
     private void write(String conch, String version, String fileName, byte[] bytes) {
         Path dir = versionDir(conch, version, true);
         Path target = dir.resolve(fileName);

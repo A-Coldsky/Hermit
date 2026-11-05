@@ -72,6 +72,16 @@ class ConchRepository {
                 diffJson);
     }
 
+    /**
+     * 只删除尚未发布的行。已发布时返回 0，调用方不得再删文件。
+     */
+    int deleteUploaded(String conch, String version) {
+        return jdbc.update(
+                "DELETE FROM hermit_conch_versions WHERE conch = ? AND version = ? AND status = 'UPLOADED'",
+                conch,
+                version);
+    }
+
     int markPublished(String conch, String version, String actor, Instant publishedAt) {
         jdbc.update("UPDATE hermit_conch_versions SET is_current = FALSE WHERE conch = ?", conch);
         return jdbc.update(

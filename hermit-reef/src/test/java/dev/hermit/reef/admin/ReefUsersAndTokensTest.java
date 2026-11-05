@@ -152,6 +152,7 @@ class ReefUsersAndTokensTest {
         for (MockHttpServletRequestBuilder request : List.of(
                 post("/api/admin/conches"),
                 post("/api/admin/conches/missing/versions/1.0.0/publish"),
+                delete("/api/admin/conches/missing/versions/1.0.0"),
                 post("/api/admin/conches/missing/disable").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"stop\"}"),
                 post("/api/admin/conches/missing/enable").contentType(MediaType.APPLICATION_JSON)

@@ -2,6 +2,7 @@ package dev.hermit.reef.conch;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -24,6 +25,7 @@ import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationCodes;
 import dev.hermit.common.validate.ValidationResult;
 import dev.hermit.reef.security.AgentAccessFilter;
+import dev.hermit.reef.web.ReefErrorCode;
 import dev.hermit.reef.testsupport.MemoryLogAppender;
 import dev.hermit.reef.testsupport.ReefTestConfig;
 import dev.hermit.reef.testsupport.TestDataDirs;
@@ -40,6 +42,7 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -176,6 +179,147 @@ class ConchApiTest {
         JsonNode between = json(upload(withVersion(sample, "1.1.0")));
         assertThat(between.get("error").get("message").asText()).isEqualTo(ConchUploadService.VERSION_NOT_GREATER);
         assertThat(versionCount()).isEqualTo(2);
+    }
+
+    @Test
+    void discardsUploadedVersionsWithoutTouchingPublishedPackages() throws Exception {
+        assertThat(ReefErrorCode.CONFLICT.message()).isEqualTo("状态冲突");
+        assertThat(ConchDiscardService.NOT_UPLOADED).isEqualTo("只能丢弃已上传、尚未发布的版本");
+
+        byte[] spare = withConch(sample(), "spare_oa");
+        assertThat(json(upload(spare)).get("success").asBoolean()).isTrue();
+        mockMvc.perform(delete(discardPath("spare_oa", "1.0.0")).header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conch").value("spare_oa"))
+                .andExpect(jsonPath("$.data.version").value("1.0.0"))
+                .andExpect(jsonPath("$.error").value(nullValue()));
+        mockMvc.perform(get("/api/admin/conches/spare_oa/versions").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+        assertThat(Files.exists(versionFile("spare_oa", "1.0.0", "conch.yaml"))).isFalse();
+        assertThat(json(upload(spare)).get("success").asBoolean()).isTrue();
+        assertThat(discardCount("spare_oa", "1.0.0")).isEqualTo(1);
+
+        byte[] sample = sample();
+        upload(sample);
+        publish("1.0.0");
+        byte[] publishedYaml = Files.readAllBytes(versionFile("legacy_oa", "1.0.0", "conch.yaml"));
+        byte[] publishedZip = Files.readAllBytes(versionFile("legacy_oa", "1.0.0", "package.zip"));
+        String sha = storedSha("legacy_oa", "1.0.0");
+        PublicKey publicKey = Ed25519Keys.readPublicPem(Files.readString(DATA.resolve("keys/signing.pub")));
+        assertThat(ConchPackage.readVerified(publishedZip, publicKey).manifest().sha256()).isEqualTo(sha);
+
+        byte[] next = withVersion(sample, "1.1.0");
+        byte[] later = withVersion(sample, "1.2.0");
+        assertThat(json(upload(next)).get("success").asBoolean()).isTrue();
+        assertThat(json(upload(later)).get("success").asBoolean()).isTrue();
+        mockMvc.perform(delete(discardPath("legacy_oa", "1.1.0")).header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.1.0"));
+        assertVersions("legacy_oa", "1.2.0 UPLOADED", "1.0.0 PUBLISHED");
+        assertThat(Files.exists(versionFile("legacy_oa", "1.1.0", "conch.yaml"))).isFalse();
+        assertThat(Files.exists(versionFile("legacy_oa", "1.1.0", "package.zip"))).isFalse();
+        assertPublishedIntact(publishedYaml, publishedZip, sha, publicKey);
+
+        mockMvc.perform(delete(discardPath("legacy_oa", "1.1.0")).header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        mockMvc.perform(delete(discardPath("legacy_oa", "nope")).header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        assertThat(json(upload(next)).get("error").get("message").asText()).isEqualTo("版本必须高于已有的最高版本");
+        mockMvc.perform(delete(discardPath("legacy_oa", "1.2.0")).header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+        assertThat(json(upload(later)).get("data").get("version").asText()).isEqualTo("1.2.0");
+        assertThat(Files.readAllBytes(versionFile("legacy_oa", "1.2.0", "conch.yaml"))).isEqualTo(later);
+
+        mockMvc.perform(delete(discardPath("legacy_oa", "1.0.0")).header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("CONFLICT"))
+                .andExpect(jsonPath("$.error.message").value(ConchDiscardService.NOT_UPLOADED));
+        mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value("只能发布已上传、尚未发布的版本"));
+        JsonNode duplicate = json(upload(sample));
+        assertThat(duplicate.get("error").get("code").asText()).isEqualTo("CONFLICT");
+        assertThat(duplicate.get("error").get("message").asText()).isEqualTo("该规则包版本已存在");
+        assertThat(duplicate.get("error").get("message").asText()).isNotEqualTo("conflict");
+        assertThat(duplicate.get("error").get("message").asText()).isNotEqualTo(ReefErrorCode.CONFLICT.message());
+        assertPublishedIntact(publishedYaml, publishedZip, sha, publicKey);
+        assertThat(discardCount("legacy_oa", "1.0.0")).isZero();
+        assertThat(discardCount("legacy_oa", "1.1.0")).isEqualTo(1);
+        assertDiscardAudit("legacy_oa", "1.1.0");
+
+        mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].conch").value("legacy_oa"))
+                .andExpect(jsonPath("$.data[0].version").value("1.0.0"))
+                .andExpect(jsonPath("$.data[0].sha256").value(sha));
+        assertThat(download("1.0.0")).isEqualTo(publishedZip);
+        assertThat(storedPull("legacy_oa", "1.0.0")).isEqualTo(1);
+
+        mockMvc.perform(post("/api/admin/conches/legacy_oa/disable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"合同到期\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(delete(discardPath("legacy_oa", "1.2.0")).header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.2.0"));
+        mockMvc.perform(delete(discardPath("legacy_oa", "1.0.0")).header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(ConchDiscardService.NOT_UPLOADED));
+        assertPublishedIntact(publishedYaml, publishedZip, sha, publicKey);
+        assertThat(storedPull("legacy_oa", "1.0.0")).isEqualTo(1);
+        assertVersions("legacy_oa", "1.0.0 PUBLISHED");
+        mockMvc.perform(agent("/agent/conches/legacy_oa/1.0.0")).andExpect(status().isNotFound());
+        assertThat(Files.readAllBytes(versionFile("legacy_oa", "1.0.0", "package.zip"))).isEqualTo(publishedZip);
+    }
+
+    @Test
+    void userCannotDiscardAnUploadedVersion() throws Exception {
+        byte[] sample = sample();
+        upload(sample);
+        publish("1.0.0");
+        byte[] publishedZip = Files.readAllBytes(versionFile("legacy_oa", "1.0.0", "package.zip"));
+        assertThat(json(upload(withVersion(sample, "1.1.0"))).get("success").asBoolean()).isTrue();
+        mockMvc.perform(post("/api/admin/users")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "reef-user",
+                                "password", "UserPassword-9f3a7c",
+                                "role", "USER"))))
+                .andExpect(status().isOk());
+        MvcResult login = mockMvc.perform(post("/api/admin/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "reef-user",
+                                "password", "UserPassword-9f3a7c"))))
+                .andExpect(status().isOk())
+                .andReturn();
+        String user = objectMapper.readTree(login.getResponse().getContentAsString()).get("data").get("token").asText();
+
+        mockMvc.perform(delete(discardPath("legacy_oa", "1.1.0")).header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.error.message").value("没有权限执行这个操作"));
+        mockMvc.perform(delete(discardPath("legacy_oa", "1.1.0")))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
+                .andExpect(jsonPath("$.error.message").value("未登录或登录已过期"));
+        assertVersions("legacy_oa", "1.1.0 UPLOADED", "1.0.0 PUBLISHED");
+        assertThat(Files.readAllBytes(versionFile("legacy_oa", "1.1.0", "conch.yaml")))
+                .isEqualTo(withVersion(sample, "1.1.0"));
+        assertThat(Files.readAllBytes(versionFile("legacy_oa", "1.0.0", "package.zip"))).isEqualTo(publishedZip);
+        assertThat(discardCount("legacy_oa", "1.1.0")).isZero();
+        assertThat(discardCount("legacy_oa", "1.0.0")).isZero();
     }
 
     @Test
@@ -816,6 +960,71 @@ class ConchApiTest {
         return count == null ? 0 : count;
     }
 
+    private static String discardPath(String conch, String version) {
+        return "/api/admin/conches/" + conch + "/versions/" + version;
+    }
+
+    private static Path versionFile(String conch, String version, String name) {
+        return DATA.resolve("conches").resolve(conch).resolve(version).resolve(name);
+    }
+
+    private void assertVersions(String conch, String... expected) throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/admin/conches/" + conch + "/versions")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andReturn();
+        List<String> actual = new ArrayList<>();
+        json(result).get("data").forEach(node -> actual.add(
+                node.get("version").asText() + " " + node.get("status").asText()));
+        assertThat(actual).containsExactly(expected);
+    }
+
+    private void assertPublishedIntact(byte[] yaml, byte[] zip, String sha, PublicKey publicKey) throws Exception {
+        assertThat(Files.readAllBytes(versionFile("legacy_oa", "1.0.0", "conch.yaml"))).isEqualTo(yaml);
+        assertThat(Files.readAllBytes(versionFile("legacy_oa", "1.0.0", "package.zip"))).isEqualTo(zip);
+        assertThat(storedSha("legacy_oa", "1.0.0")).isEqualTo(sha);
+        VerifiedConch verified = ConchPackage.readVerified(
+                Files.readAllBytes(versionFile("legacy_oa", "1.0.0", "package.zip")), publicKey);
+        assertThat(verified.manifest().sha256()).isEqualTo(sha);
+        assertThat(verified.manifest().conch()).isEqualTo("legacy_oa");
+        assertThat(verified.manifest().version()).isEqualTo("1.0.0");
+        assertThat(jdbc.queryForObject(
+                "SELECT status FROM hermit_conch_versions WHERE conch = 'legacy_oa' AND version = '1.0.0'",
+                String.class)).isEqualTo("PUBLISHED");
+    }
+
+    private String storedSha(String conch, String version) {
+        return jdbc.queryForObject(
+                "SELECT sha256 FROM hermit_conch_versions WHERE conch = ? AND version = ?",
+                String.class,
+                conch,
+                version);
+    }
+
+    private int discardCount(String conch, String version) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM hermit_audit_log WHERE action = 'DISCARD' AND conch = ? AND version = ?",
+                Integer.class,
+                conch,
+                version);
+        return count == null ? 0 : count;
+    }
+
+    private void assertDiscardAudit(String conch, String version) {
+        String actor = jdbc.queryForObject(
+                "SELECT actor FROM hermit_audit_log WHERE action = 'DISCARD' AND conch = ? AND version = ?",
+                String.class,
+                conch,
+                version);
+        String detail = jdbc.queryForObject(
+                "SELECT detail FROM hermit_audit_log WHERE action = 'DISCARD' AND conch = ? AND version = ?",
+                String.class,
+                conch,
+                version);
+        assertThat(actor).isEqualTo(TestSecrets.USERNAME);
+        assertThat(detail).isNull();
+    }
+
     private void assertNoPrivateKey(String text) {
         if (text.contains("BEGIN PRIVATE KEY") || text.contains("END PRIVATE KEY")) {
             throw new AssertionError("private key pem appeared");
@@ -865,6 +1074,15 @@ class ConchApiTest {
             dir = dir.getParent();
         }
         throw new IllegalStateException("hermit-common conch fixtures not found");
+    }
+
+    private static byte[] withConch(byte[] yaml, String conch) {
+        String text = new String(yaml, StandardCharsets.UTF_8);
+        String updated = text.replace("\nconch: legacy_oa\n", "\nconch: " + conch + "\n");
+        if (updated.equals(text)) {
+            throw new IllegalStateException("conch line not found");
+        }
+        return updated.getBytes(StandardCharsets.UTF_8);
     }
 
     private static byte[] withVersion(byte[] yaml, String version) {

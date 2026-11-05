@@ -52,7 +52,7 @@ flowchart LR
 ## 发布与同步
 
 1. 管理员上传 YAML，经解析和校验后保存为 `UPLOADED`，同版本受唯一性约束。
-2. `ConchPublishService` 锁定 Conch 记录。已有当前版本时，目标 semver 必须严格更高；否则 409，不切换。然后生成签名包、验签自检，标记 `PUBLISHED` 并切换当前版本。这里自检包完整性，不访问老系统。没有管理员回滚。
+2. `ConchPublishService` 锁定 Conch 记录。已有当前版本时，目标 semver 必须严格更高；否则 409，不切换。然后生成签名包、验签自检，标记 `PUBLISHED` 并切换当前版本。这里自检包完整性，不访问老系统。没有管理员回滚。`DELETE /api/admin/conches/{conch}/versions/{version}` 只删除 `UPLOADED`：先锁住该包的版本行，已发布则 409，不删签名 ZIP 和 YAML。成功后写审计 `DISCARD`，提交之后再删这个版本目录里的 YAML 和尚未发布时留下的 ZIP。
 3. Crab 用实例 UUID 和 Agent token 拉取带 ETag 的 manifest。新装默认不订阅任何规则包。同步只下载并安装 `subscriptions` 里的名字；清单里其余条目记 `NOT_SUBSCRIBED`，不下载、不进注册表。已经从 `local-conches/` 加载的同名包记 `SKIPPED_LOCAL`，不下载、不覆盖。成功的 HTTP 200 把清单条目（含 title、description、capabilityCount；缺省时 title 为包名、description 为空、capabilityCount 为 0）写入目录缓存。304 且本地快照仍匹配时沿用该缓存；缓存还没写过时再拉一次完整清单。
 4. `ConchSync` 刷新目录。第一次订阅才下载并安装 Reef 当前版本。已经安装的正式包遇到更高清单版本记 `UPDATE_AVAILABLE`，不下载；更低版本记 `SKIPPED_OLDER`，不降级。已订阅、安装记录还在、但注册表没有这份包时，同步记 `REPAIR_REQUIRED` 且不下载。`REPAIR_REQUIRED` 可重试，不写入 ETag 快照，因此 304 不能盖住未加载；控制台读取仍会把这一行补到空的 304 上。显式更新先重新载入仍能验签的最新已安装 zip，`current` 停在该版本；验签失败才下载清单版本。注册表里仍有这份包时，手动更新才下载、验签，并在默认账号具备新增必填凭证后切换 `current` 和注册表。切换时才清理被删除的凭证声明。可重试失败不记清单 ETag。`UPDATE_AVAILABLE` 与 `SKIPPED_OLDER` 把已安装版本写入快照，因此后续同步可以 304。`NOT_SUBSCRIBED` 与 `SKIPPED_LOCAL` 都不阻止记下 ETag，也不写入 ETag 快照。`DISABLED` 也不阻止记下 ETag，并把本机保留的版本写入快照，因此 `current` 仍匹配时可以 304，且不会下载。订阅会清掉 ETag 再同步，避免 304 跳过安装。清单里已经没有、但本机已订阅且来源为 OFFICIAL 的已加载包写入 `disabled_conches`，注册表和 `current` 留在原地。未订阅的名字和 `Origin.LOCAL` 都留下，也不写墓碑。
 5. `RULE_MISMATCH` 进入失败报告，不切换版本。成功的正式调用由 `Invoker` 写入 `version_success`。schema 12 删除 `pinned_rollbacks`。`mismatch_streak` 不再写入。

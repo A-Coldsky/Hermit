@@ -36,6 +36,8 @@ export interface ConchSummary {
   loginPaused: boolean
   /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。 */
   source: 'LOCAL' | 'REEF'
+  /** 缺省或空白为 `http`。 */
+  driver: 'http' | 'mcp'
   /**
    * Reef 已停用。本机仍保留已安装版本，HTTP/MCP 照常调用；同步不再更新这份包。
    * 本地包为 false。
@@ -85,6 +87,8 @@ export interface ConchDetail {
   loginPaused: boolean
   /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。 */
   source: 'LOCAL' | 'REEF'
+  /** 缺省或空白为 `http`。 */
+  driver: 'http' | 'mcp'
   /** Reef 已停用。本机仍保留已安装版本并可调用。本地包为 false。 */
   reefDisabled: boolean
   /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
@@ -593,7 +597,7 @@ export const api = {
    * 成功时 data 是能力输出。MCP 成功时优先 structuredContent，否则 `{content}`。追踪在调用详情的 `devTrace`。
    */
   runLocal: (conch: string, action: string, body: { account?: string; input?: Record<string, unknown> }) =>
-    http.post<Record<string, unknown>>(`${base}/local-conches/${seg(conch)}/actions/${seg(action)}/run`, body),
+    http.postEnvelope<Record<string, unknown>>(`${base}/local-conches/${seg(conch)}/actions/${seg(action)}/run`, body),
   /**
    * 调试开关打开时，从上游 tools/list 重写本地 MCP 包。正式包为 409 `CONFLICT`。
    * OAuth 包使用已连接的令牌；没连上是 409 `NOT_CONFIGURED`，不打上游。

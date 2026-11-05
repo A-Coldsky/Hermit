@@ -21,6 +21,7 @@ const crab = vi.hoisted(() => ({
   reloadLocalConches: vi.fn(),
   deleteLocalConch: vi.fn(),
   exportLocalConch: vi.fn(),
+  debug: vi.fn(),
 }))
 
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
@@ -69,6 +70,7 @@ beforeEach(() => {
   crab.syncStatus.mockResolvedValue({ report: null, latestCrab: null })
   crab.accounts.mockResolvedValue({ accounts: [] })
   crab.config.mockResolvedValue({ fields: {} })
+  crab.debug.mockResolvedValue({ enabled: false, expiresAt: null })
 })
 
 describe('可订阅规则包', () => {

@@ -8,10 +8,11 @@ import ConchAvatar from '@shared/components/ConchAvatar.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { ApiError } from '@shared/http'
 import { notifyError } from '@shared/format'
-import { api, type Account, type ConfigValue, type ConchDetail } from '../api'
+import { api, type Account, type ConfigValue, type ConchDetail, type DebugState } from '../api'
 import AccountsPanel from '../components/AccountsPanel.vue'
 import CapabilityToggles from '../components/CapabilityToggles.vue'
 import ConfigPanel from '../components/ConfigPanel.vue'
+import DeveloperPanel from '../components/DeveloperPanel.vue'
 import { refreshPending } from '../status'
 import { unsubscribeMessage } from '../copy'
 import { updateConch } from '../update'
@@ -105,7 +106,16 @@ async function load() {
 }
 
 const local = computed(() => detail.value?.source === 'LOCAL')
+const debug = ref<DebugState>({ enabled: false, expiresAt: null })
 const working = ref(false)
+
+async function loadDebug() {
+  try {
+    debug.value = await api.debug()
+  } catch {
+    debug.value = { enabled: false, expiresAt: null }
+  }
+}
 
 async function exportYaml() {
   if (!detail.value) return
@@ -205,6 +215,7 @@ watch(
     accounts.value = []
     config.value = {}
     void load()
+    void loadDebug()
   },
   { immediate: true },
 )
@@ -304,6 +315,15 @@ watch(
 
       <AccountsPanel :conch="conch" :accounts="accounts" :credentials="detail.credentials" @changed="reloadParts" />
       <ConfigPanel :conch="conch" :fields="config" @changed="reloadParts" />
+      <DeveloperPanel
+        v-if="local"
+        :conch="conch"
+        :driver="detail.driver === 'mcp' ? 'mcp' : 'http'"
+        :debug-enabled="debug.enabled"
+        :capabilities="detail.capabilities"
+        :accounts="accounts"
+        @changed="load"
+      />
       <CapabilityToggles :conch="conch" :capabilities="detail.capabilities" />
     </template>
   </div>

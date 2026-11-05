@@ -7,6 +7,7 @@ const crab = vi.hoisted(() => ({
   accounts: vi.fn(),
   config: vi.fn(),
   credentialNames: vi.fn(),
+  debug: vi.fn(),
 }))
 
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
@@ -46,6 +47,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   crab.conch.mockResolvedValue(detail)
   crab.config.mockResolvedValue({ fields: {} })
+  crab.debug.mockResolvedValue({ enabled: false, expiresAt: null })
 })
 
 describe('Crab 规则包详情：账号状态', () => {

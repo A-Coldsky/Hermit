@@ -134,6 +134,7 @@ final class ConsoleApi {
             row.put("conch", doc.conch());
             row.put("version", doc.version().toString());
             row.put("title", text(doc.title()));
+            row.put("driver", driver(doc));
             row.put("capabilityCount", doc.actions().size());
             row.put("subscribed", runtime.subscribed(doc.conch()));
             row.put("accountCount", accounts.size());
@@ -154,6 +155,7 @@ final class ConsoleApi {
         body.put("version", doc.version().toString());
         body.put("title", text(doc.title()));
         body.put("description", text(doc.description()));
+        body.put("driver", driver(doc));
         body.put("credentials", credentialDecls(doc));
         body.put("config", configDecls(doc));
         ArrayList<Map<String, Object>> capabilities = new ArrayList<>();
@@ -1175,6 +1177,11 @@ final class ConsoleApi {
         body.put("source", row.source());
         body.put("channel", row.channel());
         return body;
+    }
+
+    private static String driver(ConchDoc doc) {
+        String value = doc.driver();
+        return value == null || value.isBlank() ? "http" : value;
     }
 
     private static Map<String, Object> debug(DebugStateStore.DebugSnapshot snapshot) {

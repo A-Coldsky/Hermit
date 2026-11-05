@@ -36,8 +36,8 @@ describe('Crab 调试开关', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('调试开关')
-    expect(wrapper.text()).toContain('暂未生效')
-    expect(wrapper.text()).toContain('不影响调用记录')
+    expect(wrapper.text()).not.toContain('暂未生效')
+    expect(wrapper.text()).toContain('正式包不受影响，调用记录照常')
     expect(wrapper.text()).not.toContain('调试模式')
     expect(wrapper.text()).not.toContain('调试日志')
   })

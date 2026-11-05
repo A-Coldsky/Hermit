@@ -26,20 +26,7 @@ export type Query = Record<string, string | number | boolean | null | undefined>
 
 export function createClient(options: ClientOptions = {}) {
   async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
-    const headers: Record<string, string> = { Accept: 'application/json', ...(options.headers?.() ?? {}) }
-    let payload: BodyInit | undefined
-    if (body instanceof FormData) {
-      payload = body
-    } else if (body !== undefined) {
-      headers['Content-Type'] = 'application/json'
-      payload = JSON.stringify(body)
-    }
-    const response = await fetch(withQuery(path, query), { method, headers, body: payload })
-    const parsed = parseEnvelope<T>(await response.text())
-    if (!response.ok || !parsed || !parsed.success) {
-      throw fail(response.status, parsed)
-    }
-    return parsed.data as T
+    return (await requestEnvelope<T>(method, path, body, query)).data as T
   }
 
   async function text(path: string): Promise<string> {
@@ -65,9 +52,27 @@ export function createClient(options: ClientOptions = {}) {
     return error
   }
 
+  async function requestEnvelope<T>(method: string, path: string, body?: unknown, query?: Query): Promise<Envelope<T>> {
+    const headers: Record<string, string> = { Accept: 'application/json', ...(options.headers?.() ?? {}) }
+    let payload: BodyInit | undefined
+    if (body instanceof FormData) {
+      payload = body
+    } else if (body !== undefined) {
+      headers['Content-Type'] = 'application/json'
+      payload = JSON.stringify(body)
+    }
+    const response = await fetch(withQuery(path, query), { method, headers, body: payload })
+    const parsed = parseEnvelope<T>(await response.text())
+    if (!response.ok || !parsed || !parsed.success) {
+      throw fail(response.status, parsed)
+    }
+    return parsed
+  }
+
   return {
     get: <T>(path: string, query?: Query) => request<T>('GET', path, undefined, query),
     post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
+    postEnvelope: <T>(path: string, body?: unknown) => requestEnvelope<T>('POST', path, body ?? {}),
     put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body ?? {}),
     patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body ?? {}),
     del: <T>(path: string) => request<T>('DELETE', path),

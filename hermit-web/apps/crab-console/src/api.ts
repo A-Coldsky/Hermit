@@ -1,7 +1,23 @@
-import { createClient, seg } from '@shared/http'
+import { type ApiError, createClient, seg } from '@shared/http'
 
-const http = createClient({ headers: () => ({ 'X-Hermit-Console': '1' }) })
+let unauthorized: (error: ApiError) => void = () => {}
+
+/** 由路由注册，避免 api 反向依赖路由。 */
+export function onUnauthorized(handler: (error: ApiError) => void): void {
+  unauthorized = handler
+}
+
+const http = createClient({
+  headers: () => ({ 'X-Hermit-Console': '1' }),
+  onUnauthorized: (error) => unauthorized(error),
+})
 const base = '/console/api'
+
+/** 未设置口令时 `required` 为 false，`authenticated` 恒为 true。 */
+export interface ConsoleSession {
+  required: boolean
+  authenticated: boolean
+}
 
 export interface ConchSummary {
   conch: string
@@ -382,6 +398,16 @@ const conchPath = (conch: string) => `${base}/conches/${seg(conch)}`
 const accountPath = (conch: string, account: string) => `${conchPath(conch)}/accounts/${seg(account)}`
 
 export const api = {
+  session: () => http.get<ConsoleSession>(`${base}/session`),
+  /**
+   * 成功后服务端写 HttpOnly Cookie `hermit_console`，12 小时有效。
+   * 口令错误或已锁定都是 401「口令错误」；未设置口令是 409 `NOT_CONFIGURED`。
+   */
+  login: (password: string) => http.post<{ ok: true }>(`${base}/session`, { password }),
+  /** 成功后服务端清掉所有会话，包括当前这个，需要重新登录。 */
+  changePassword: (current: string, next: string) =>
+    http.post<{ ok: true }>(`${base}/session/password`, { current, next }),
+
   conches: () => http.get<{ conches: ConchSummary[] }>(`${base}/conches`),
   conch: (conch: string) => http.get<ConchDetail>(conchPath(conch)),
 

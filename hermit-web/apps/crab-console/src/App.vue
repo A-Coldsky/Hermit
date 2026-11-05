@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { Box, Connection, DataAnalysis, Document, House, Key, List, Shop } from '@element-plus/icons-vue'
-import { computed, onMounted } from 'vue'
+import { Box, Connection, DataAnalysis, Document, House, Key, List, Lock, Shop } from '@element-plus/icons-vue'
+import { computed, onMounted, ref } from 'vue'
 import AppLayout, { type NavItem } from '@shared/components/AppLayout.vue'
+import PasswordDialog from './components/PasswordDialog.vue'
+import { consoleSession } from './session'
 import { pendingConches, refreshPending } from './status'
 
 const items = computed<NavItem[]>(() => [
@@ -14,6 +16,7 @@ const items = computed<NavItem[]>(() => [
   { to: '/reports', label: '上报', icon: DataAnalysis },
   { to: '/reef', label: '连接 Reef', icon: Connection },
 ])
+const passwordOpen = ref(false)
 
 onMounted(refreshPending)
 </script>
@@ -22,9 +25,20 @@ onMounted(refreshPending)
   <AppLayout product="Crab" subtitle="Hermit 本地控制台" :items="items">
     <template #topbar>
       <el-tag type="info" effect="plain" size="small">仅限本机访问</el-tag>
+      <el-button
+        v-if="consoleSession.required"
+        text
+        size="small"
+        :icon="Lock"
+        data-test="change-password"
+        @click="passwordOpen = true"
+      >
+        修改口令
+      </el-button>
     </template>
     <template #sidebar-foot>
       <span>凭证只保存在本机，加密存储</span>
     </template>
   </AppLayout>
+  <PasswordDialog v-model="passwordOpen" />
 </template>

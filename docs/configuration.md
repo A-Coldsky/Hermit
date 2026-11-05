@@ -51,7 +51,7 @@ mcp:
 
 `HERMIT_CONSOLE_PASSWORD` 是可选的控制台口令。只在 Crab 库里还没有口令哈希时，于进程启动时写入一次；已经有哈希则忽略，避免每次重启都改口令。空字符串视为未设置。长度是 8 到 256 个字符。哈希是 PBKDF2-HMAC-SHA256（16 字节盐、210000 次、32 字节结果），比较用常量时间。明文和哈希都不写入 `config.yml`。容器入口同样不把这个变量抄进 `config.yml`，只把它留在进程环境里；空白值视为未设置。同一操作系统用户看得到这个环境变量，和 `HERMIT_MASTER_KEY` 一样。
 
-忘了口令时先停掉 Crab，再执行 `crab console password`。新口令从终端、无终端时的 stdin，或 `--from-env` 读入，覆盖哈希，不需要旧口令。口令不能写在命令行参数里。已设置口令时，`crab debug status`、`crab debug on` 和 `crab debug off` 先用同样的方式核对；未设置时不询问。导入、凭证、API Key 等既有命令不查这口令。
+忘了口令时先停掉 Crab，再执行 `crab console password`。新口令从终端、无终端时的 stdin，或 `--from-env` 读入，覆盖哈希，不需要旧口令。口令不能写在命令行参数里。已设置口令时，`crab debug status`、`crab debug on`、`crab debug off`、`crab debug run` 和 `crab debug trace` 先用同样的方式核对；未设置时不询问。导入、凭证、API Key 等既有命令不查这口令。
 
 未设置口令时，控制台仍只认回环地址和 `X-Hermit-Console: 1`。已设置时，除 `GET /console/api/session` 和 `POST /console/api/session` 外，`/console/api/**` 还要 Cookie `hermit_console`（HttpOnly、`SameSite=Strict`、`Path=/console`，不加 `Secure`）。会话在内存中，自签发起 12 小时绝对到期，进程重启即失效。`POST /console/api/session/password` 体为 `{current, next}`，成功后清掉本进程的内存会话。15 分钟内累计 5 次失败后锁定；第 5 次失败会记下，锁定期间不再追加失败行，因此窗口不会被继续往后推。错误口令和锁定都是 401 `AUTH_FAILED`，message 为「口令错误」。没有 Cookie 或会话过期是 401 `AUTH_FAILED`，message 为「需要控制台登录。」。`/api`、`/mcp` 和 `mcp-stdio` 不认这张 Cookie，仍只认 API Key。`index.html` 和静态资源仍只认回环地址。
 
@@ -166,6 +166,8 @@ schema 13 增加 `report_settings`（`id`、`enabled`、`interval_seconds`、`up
 
 schema 14 增加 `console_password`（一行：`id`、`salt`、`hash`、`iterations`、`updated_at`）和 `console_login_failures`（只有 `failed_at`）。判断依据是版本 14 这一行是否已经记下，不看 `MAX(version)`，也不改 1–13 的语句。口令不在 `config.yml`。没有 `id = 1` 的行表示尚未设置口令。
 
+schema 15 增加 `dev_traces`（`trace_id`、`origin`、`conch`、`account`、`action`、`created_at`、`expires_at`、`body`）。判断依据是版本 15 这一行是否已经记下，不改 schema 14 的语句。`body` 是已经脱敏的 JSON，不进 `config.yml`，也不上报 Tide。单步正文截断到 256 KiB，整条截断到 2 MiB。`Cookie`、`Set-Cookie`、`Authorization`、`Mcp-Session-Id` 整头不入库。
+
 小时成功/失败计数和失败明细先留在内存。每 30 秒、每次发送前，以及进程正常关闭时，一起写入 H2。批次为空时不向 Reef 发 HTTP。发送的小时统计是合并后的全量，不是增量。异常退出可能丢掉尚未刷盘的最近 30 秒计数，以及还在内存里的失败明细。回滚事件仍在入队时立即写入 H2。导入的 Reef 令牌和 config.yml 里的令牌都会进入脱敏用的已知秘密列表（长度至少 4，并包含其 URL 编码）。签名校验和公钥信任根不变：已安装的正式包在下载和加载时仍用当前公钥验签。
 
 `local-conches/` 只放这一台机器的未签名规则。文件名是 `{conch}.yaml`，不递归，不跟随符号链接。进程启动时加载；`crab local reload` 或 `POST /console/api/local-conches/reload` 让目录里的增删改生效。单个文件上限 1 MiB。控制台上传还受现有请求体上限（1_000_000 字节）约束。与已订阅或已安装的正式包重名时拒绝导入。解析失败、读失败或文件名与包名不符时不另存上一份，该包不能调用；合法文件名仍留在 `GET /console/api/local-conches` 和 `crab local list`，删掉后才能不经确认再导入。同名覆盖要 `confirm=true` 或 `--replace`。文件从目录消失则卸载，不再留下坏包记录。
@@ -174,7 +176,7 @@ Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，F
 
 之后的升级要一致备份数据库、conches、keys。Compose 的 `reef-mysql` 与 `reef-data` 分别保存 MySQL 与 `/data`，升级必须保留两个卷。容器 Crab 的 `crab-data` 保存整个实例目录；要同时备份外部主密钥（如有），不能只备份数据库。实际卷名通常带 Compose 项目前缀，切换部署目录/项目名时要核对卷，避免意外创建新实例。恢复主密钥、公钥和实例 ID 时保持对应关系。H2 文件复制前停止所属进程，MySQL 使用数据库一致性备份；恢复应先在隔离实例验证。本次审计未实际做生产备份恢复演练。
 
-保留策略：Crab 调用/步骤日志 30 天、幂等响应 24 小时，启动及每小时清理；debug 状态 24 小时自动过期。Reef 每日 UTC 03:00（北京时间 11:00）清理过期失败报告、回滚事件及登录失败记录。两端小时统计以及部分审计/告警表没有全量定期保留策略，不应假定所有数据都会在 90 天删除。Crab 的 `config_audit` 可以由 `GET /console/api/audit` 和 CLI `audit list` 读取，内容限于操作者、动作、origin、Conch、账号、时间和字段名，不含凭证或配置值；这张表没有定期清理。
+保留策略：Crab 调用/步骤日志 30 天、幂等响应 24 小时，启动及每小时清理；debug 状态 24 小时自动过期。关掉调试开关，或这次到期，会立刻删除全部 `dev_traces`。保留任务再删 `expires_at` 已过的追踪。`call_logs` 仍按 30 天清理，不随开关删除。Reef 每日 UTC 03:00（北京时间 11:00）清理过期失败报告、回滚事件及登录失败记录。两端小时统计以及部分审计/告警表没有全量定期保留策略，不应假定所有数据都会在 90 天删除。Crab 的 `config_audit` 可以由 `GET /console/api/audit` 和 CLI `audit list` 读取，内容限于操作者、动作、origin、Conch、账号、时间和字段名，不含凭证或配置值；这张表没有定期清理。
 
 ## 部署边界
 

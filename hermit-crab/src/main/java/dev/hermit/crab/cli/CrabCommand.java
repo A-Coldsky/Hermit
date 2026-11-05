@@ -14,8 +14,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.Function;
 
@@ -27,8 +29,11 @@ import dev.hermit.crab.config.ConfigFileException;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.config.CrabConfigLoader;
 import dev.hermit.crab.engine.ConchRejectedException;
+import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.mcp.McpStdio;
+import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
+import dev.hermit.crab.runtime.TrialRejected;
 import dev.hermit.crab.runtime.ReefBootstrap;
 import dev.hermit.crab.runtime.ReefBootstrapException;
 import dev.hermit.crab.runtime.CrabServer;
@@ -53,6 +58,7 @@ import dev.hermit.crab.store.ConsolePassword;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.DatabaseInUseException;
 import dev.hermit.crab.store.DebugStateStore;
+import dev.hermit.crab.store.DevTraceStore;
 
 /**
  * Crab command line. Credential values are read from the console, one stdin line, or
@@ -87,6 +93,8 @@ public final class CrabCommand {
               crab local export <conch> [--out file]
               crab console password [--from-env VAR]
               crab debug status|on|off [--from-env VAR]
+              crab debug run <conch> <action> --account NAME [--from-env VAR]
+              crab debug trace <traceId> [--from-env VAR]
               crab mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
             """;
 
@@ -973,40 +981,33 @@ public final class CrabCommand {
         if (parsed == null) {
             return 1;
         }
+        if (parsed.positionals.size() < 2) {
+            err.print(USAGE);
+            return 1;
+        }
+        String verb = parsed.positionals.get(1);
+        if ("run".equals(verb)) {
+            return debugRun(parsed, env, in, out, err);
+        }
+        if ("trace".equals(verb)) {
+            return debugTrace(parsed, env, in, out, err);
+        }
         if (parsed.positionals.size() != 2 || parsed.readOnly || parsed.all
-                || parsed.conches != null || parsed.actions != null) {
-            if (parsed.positionals.size() > 2 && isDebugVerb(parsed.positionals.get(1))) {
+                || parsed.conches != null || parsed.actions != null || parsed.account != null) {
+            if (parsed.positionals.size() > 2 && isDebugVerb(verb)) {
                 err.println("口令不能写在命令行参数里。");
                 return 1;
             }
             err.print(USAGE);
             return 1;
         }
-        String verb = parsed.positionals.get(1);
         if (!isDebugVerb(verb)) {
             err.print(USAGE);
             return 1;
         }
         return withRuntime(env, runtime -> {
-            if (runtime.consolePassword().isSet()) {
-                String secret;
-                if (parsed.fromEnv != null) {
-                    secret = envPassword(env, parsed.fromEnv, err);
-                } else {
-                    try {
-                        secret = readPassword(in, err);
-                    } catch (IOException ex) {
-                        err.println("请提供口令。");
-                        return 1;
-                    }
-                }
-                if (secret == null) {
-                    return 1;
-                }
-                if (runtime.consolePassword().verify(secret) != ConsolePassword.Result.ACCEPTED) {
-                    err.println(ConsolePassword.FAILURE_MESSAGE);
-                    return 1;
-                }
+            if (!acceptPassword(runtime, parsed, env, in, err)) {
+                return 1;
             }
             DebugStateStore.DebugSnapshot snapshot = switch (verb) {
                 case "on" -> runtime.debug().setEnabled(true, Actors.CLI);
@@ -1016,6 +1017,121 @@ public final class CrabCommand {
             printDebug(out, snapshot);
             return 0;
         });
+    }
+
+    private int debugRun(
+            Parsed parsed,
+            Function<String, String> env,
+            InputStream in,
+            PrintStream out,
+            PrintStream err
+    ) {
+        if (parsed.positionals.size() != 4 || parsed.account == null || parsed.account.isBlank()
+                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.actions != null) {
+            err.print(USAGE);
+            return 1;
+        }
+        String conch = parsed.positionals.get(2);
+        String action = parsed.positionals.get(3);
+        return withRuntime(env, runtime -> {
+            if (!acceptPassword(runtime, parsed, env, in, err)) {
+                return 1;
+            }
+            Map<String, Object> input;
+            try {
+                input = readInput(in);
+            } catch (IOException ex) {
+                err.println("输入无效。");
+                return 1;
+            } catch (IllegalArgumentException ex) {
+                err.println("输入无效。");
+                return 1;
+            }
+            runtime.loadInstalledConches();
+            try {
+                ExecutionResult result = runtime.trialLocal(
+                        conch, action, Optional.of(parsed.account), input, UUID.randomUUID().toString());
+                out.println("traceId=" + result.traceId());
+                if (result.success()) {
+                    out.println(ApiJson.write(result.data()));
+                    return 0;
+                }
+                err.println(result.error() == null ? "内部错误" : result.error().message());
+                return 1;
+            } catch (TrialRejected ex) {
+                err.println(ex.getMessage());
+                return 1;
+            }
+        });
+    }
+
+    private int debugTrace(
+            Parsed parsed,
+            Function<String, String> env,
+            InputStream in,
+            PrintStream out,
+            PrintStream err
+    ) {
+        if (parsed.positionals.size() != 3 || parsed.account != null || parsed.readOnly || parsed.all
+                || parsed.conches != null || parsed.actions != null) {
+            err.print(USAGE);
+            return 1;
+        }
+        String traceId = parsed.positionals.get(2);
+        return withRuntime(env, runtime -> {
+            if (!acceptPassword(runtime, parsed, env, in, err)) {
+                return 1;
+            }
+            DevTraceStore.Trace trace = runtime.devTraces().find(traceId).orElse(null);
+            if (trace == null) {
+                err.println("没有这条开发追踪。");
+                return 1;
+            }
+            out.println(trace.body());
+            return 0;
+        });
+    }
+
+    /**
+     * When a console password is set, {@code --from-env} reads it from the environment and stdin
+     * stays the JSON input. Otherwise the first stdin line is the password and the rest is JSON.
+     * An unset password does not prompt.
+     */
+    private static boolean acceptPassword(
+            CrabRuntime runtime,
+            Parsed parsed,
+            Function<String, String> env,
+            InputStream in,
+            PrintStream err
+    ) {
+        if (!runtime.consolePassword().isSet()) {
+            return true;
+        }
+        String secret;
+        try {
+            secret = parsed.fromEnv != null
+                    ? envPassword(env, parsed.fromEnv, err)
+                    : readPassword(in, err);
+        } catch (IOException ex) {
+            err.println("请提供口令。");
+            return false;
+        }
+        if (secret == null) {
+            return false;
+        }
+        if (runtime.consolePassword().verify(secret) != ConsolePassword.Result.ACCEPTED) {
+            err.println(ConsolePassword.FAILURE_MESSAGE);
+            return false;
+        }
+        return true;
+    }
+
+    private static Map<String, Object> readInput(InputStream in) throws IOException {
+        byte[] raw = in.readAllBytes();
+        if (raw.length == 0) {
+            return Map.of();
+        }
+        return ApiJson.objectMap(raw);
     }
 
     private static boolean isDebugVerb(String verb) {
@@ -1102,6 +1218,7 @@ public final class CrabCommand {
     private static Parsed parse(String[] args, PrintStream err) {
         ArrayList<String> positionals = new ArrayList<>();
         String fromEnv = null;
+        String account = null;
         Set<String> conches = null;
         Set<String> actions = null;
         boolean readOnly = false;
@@ -1112,7 +1229,8 @@ public final class CrabCommand {
                 all = true;
                 continue;
             }
-            if ("--from-env".equals(arg) || "--conches".equals(arg) || "--actions".equals(arg)) {
+            if ("--from-env".equals(arg) || "--conches".equals(arg) || "--actions".equals(arg)
+                    || "--account".equals(arg)) {
                 if (i + 1 >= args.length || args[i + 1].startsWith("--")) {
                     err.println("缺少 " + arg + " 的值。");
                     return null;
@@ -1122,6 +1240,7 @@ public final class CrabCommand {
                     case "--from-env" -> fromEnv = value;
                     case "--conches" -> conches = split(value);
                     case "--actions" -> actions = split(value);
+                    case "--account" -> account = value;
                     default -> {
                     }
                 }
@@ -1137,7 +1256,11 @@ public final class CrabCommand {
             }
             positionals.add(arg);
         }
-        return new Parsed(positionals, fromEnv, conches, actions, readOnly, all);
+        if (account != null && (positionals.isEmpty() || !"debug".equals(positionals.get(0)))) {
+            err.println("不认识的选项 --account。");
+            return null;
+        }
+        return new Parsed(positionals, fromEnv, conches, actions, readOnly, all, account);
     }
 
     private static Set<String> split(String value) {
@@ -1196,7 +1319,8 @@ public final class CrabCommand {
             Set<String> conches,
             Set<String> actions,
             boolean readOnly,
-            boolean all
+            boolean all,
+            String account
     ) {
     }
 

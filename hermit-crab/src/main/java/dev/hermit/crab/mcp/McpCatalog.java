@@ -7,11 +7,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiPredicate;
+import java.util.function.BooleanSupplier;
 
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.Example;
 import dev.hermit.common.model.ParamSpec;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.crab.engine.DevTraceDraft;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
@@ -26,16 +28,23 @@ final class McpCatalog {
     static final String SEARCH = "search_capabilities";
     static final String DESCRIBE = "describe_capability";
     static final String CALL = "call_capability";
+    static final String DEBUG_TRACE = "debug_trace";
     private static final String GUIDE_PREFIX = "hermit://conches/";
     private static final String GUIDE_SUFFIX = "/guide";
     private static final String LOCAL_PREFIX = "[本地] ";
 
     private final ConchRegistry registry;
     private final BiPredicate<String, String> disabled;
+    private final BooleanSupplier devMode;
 
     McpCatalog(ConchRegistry registry, BiPredicate<String, String> disabled) {
+        this(registry, disabled, () -> false);
+    }
+
+    McpCatalog(ConchRegistry registry, BiPredicate<String, String> disabled, BooleanSupplier devMode) {
         this.registry = registry;
         this.disabled = disabled;
+        this.devMode = devMode == null ? () -> false : devMode;
     }
 
     boolean directory(ApiKeyPrincipal principal) {
@@ -44,12 +53,16 @@ final class McpCatalog {
 
     List<McpSchema.Tool> tools(ApiKeyPrincipal principal, String protocol) {
         boolean outputSchema = McpErrors.outputSchemaSupported(protocol);
-        if (directory(principal)) {
-            return directoryTools(outputSchema);
-        }
         ArrayList<McpSchema.Tool> tools = new ArrayList<>();
-        for (CapabilityRef ref : visible(principal)) {
-            tools.add(directTool(ref, outputSchema));
+        if (directory(principal)) {
+            tools.addAll(directoryTools(outputSchema));
+        } else {
+            for (CapabilityRef ref : visible(principal)) {
+                tools.add(directTool(ref, outputSchema));
+            }
+        }
+        if (devMode.getAsBoolean()) {
+            tools.add(debugTraceTool(outputSchema));
         }
         return List.copyOf(tools);
     }
@@ -233,6 +246,35 @@ final class McpCatalog {
             }
         }
         return objectSchema(properties);
+    }
+
+    private static McpSchema.Tool debugTraceTool(boolean outputSchema) {
+        LinkedHashMap<String, Object> traceId = new LinkedHashMap<>();
+        traceId.put("type", "string");
+        traceId.put("description", "调用记录的 traceId");
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("traceId", traceId);
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        schema.put("properties", properties);
+        schema.put("required", List.of("traceId"));
+        schema.put("additionalProperties", false);
+        LinkedHashMap<String, Object> output = new LinkedHashMap<>();
+        output.put("traceId", Map.of("type", "string"));
+        output.put("conch", Map.of("type", "string"));
+        output.put("account", Map.of("type", "string"));
+        output.put("action", Map.of("type", "string"));
+        output.put("note", Map.of("type", "string"));
+        output.put("untrusted", Map.of("type", "boolean"));
+        output.put("devTrace", Map.of("type", "object"));
+        output.put("createdAt", Map.of("type", "string"));
+        output.put("expiresAt", Map.of());
+        return tool(DEBUG_TRACE,
+                "读取一条本地规则包的开发追踪。" + DevTraceDraft.UNTRUSTED_NOTE,
+                schema,
+                outputSchema ? objectSchema(output) : null,
+                true,
+                true);
     }
 
     private static McpSchema.Tool tool(

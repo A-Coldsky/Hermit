@@ -26,6 +26,7 @@ import dev.hermit.common.template.TemplateEngine;
 import dev.hermit.common.template.TemplateException;
 import dev.hermit.crab.secure.KnownSecrets;
 import dev.hermit.crab.secure.Redactor;
+import dev.hermit.crab.store.Origin;
 
 public final class RuleEngine {
 
@@ -46,6 +47,8 @@ public final class RuleEngine {
     private final FilterRegistry filters;
     private final InputPreparer inputs = new InputPreparer();
     private final StepRunner steps;
+    /** HTTP body capture. Null leaves execution unchanged. JSON-RPC traces are not written here. */
+    private DevTraceSink traceSink;
 
     public RuleEngine(ConchRegistry registry, SessionManager sessions) {
         this(registry, sessions, EngineSettings.defaults());
@@ -70,6 +73,15 @@ public final class RuleEngine {
         this.steps = new StepRunner(templates, filters);
     }
 
+    /**
+     * Local HTTP calls capture a redacted body while this sink says the debug switch is on.
+     * {@link #testLogin} does not capture. MCP JSON-RPC traces stay on
+     * {@code DevTraceStore.recordJsonRpc} so a forwarder can record them without this method.
+     */
+    public void bindDevTraceSink(DevTraceSink sink) {
+        this.traceSink = sink;
+    }
+
     public ExecutionResult execute(ExecutionRequest request) {
         return execute(request, null);
     }
@@ -81,6 +93,15 @@ public final class RuleEngine {
      * A null snapshot looks the conch up in the registry, matching {@link #execute(ExecutionRequest)}.
      */
     public ExecutionResult execute(ExecutionRequest request, ConchDoc authorized) {
+        DevTraceScope.begin(openDraft(request, authorized));
+        try {
+            return executeCaptured(request, authorized);
+        } finally {
+            DevTraceScope.end();
+        }
+    }
+
+    private ExecutionResult executeCaptured(ExecutionRequest request, ConchDoc authorized) {
         long start = System.nanoTime();
         long deadline = Math.addExact(start, settings.capabilityTimeout().toNanos());
         Map<String, String> credentials = copyStrings(request.accountContext().credentials());
@@ -288,13 +309,22 @@ public final class RuleEngine {
         if (spec == null) {
             throw new StepFailure(ErrorCode.RULE_MISMATCH, "alive_check 无效", -1, "request", List.of());
         }
-        HttpResult result = HttpCalls.execute(
-                spec,
-                sessions.client(key),
-                () -> sessions.persist(key),
-                base,
-                alive.expectNotRedirect(),
-                deadline);
+        long started = System.nanoTime();
+        HttpResult result;
+        try {
+            result = HttpCalls.execute(
+                    spec,
+                    sessions.client(key),
+                    () -> sessions.persist(key),
+                    base,
+                    alive.expectNotRedirect(),
+                    deadline);
+        } catch (RuleProblem ex) {
+            recordAlive(spec, ex.method, ex.path, ex.status, null, null, started, false);
+            throw ex;
+        }
+        boolean aliveOk = !(result.sessionLost() || result.status() == 401 || result.status() == 403);
+        recordAlive(spec, result.method(), result.path(), result.status(), result.headers(), result.body(), started, aliveOk);
         if (result.sessionLost() || result.status() == 401 || result.status() == 403) {
             sessions.markLoggedOut(key);
             login(conch, input, credentials, config, key, base, deadline);
@@ -318,19 +348,37 @@ public final class RuleEngine {
             sessions.recordAuthSuccess(key);
             return;
         }
+        DevTraceDraft draft = DevTraceScope.current();
+        if (draft != null) {
+            draft.login(true, null);
+        }
         ArrayList<StepLog> logs = new ArrayList<>();
         Map<String, Object> vars = baseVars(input, credentials, config);
         try {
-            runSteps(auth.steps(), vars, true, null, logs, key, base, deadline);
+            runSteps(auth.steps(), vars, true, null, logs, key, base, deadline, "login");
             sessions.markLoggedIn(key);
             sessions.recordAuthSuccess(key);
+            if (draft != null) {
+                draft.login(true, true);
+            }
         } catch (StepFailure ex) {
+            if (draft != null) {
+                draft.login(true, false);
+            }
             if (ex.code == ErrorCode.AUTH_FAILED) {
                 sessions.recordAuthFailure(key);
             }
             throw ex;
         } catch (SessionLost ex) {
+            if (draft != null) {
+                draft.login(true, false);
+            }
             throw new StepFailure(ErrorCode.AUTH_FAILED, "登录失败", -1, "request", logs);
+        } catch (RuntimeException ex) {
+            if (draft != null) {
+                draft.login(true, false);
+            }
+            throw ex;
         }
     }
 
@@ -347,7 +395,7 @@ public final class RuleEngine {
         ArrayList<StepLog> logs = new ArrayList<>();
         Map<String, Object> vars = baseVars(input, credentials, config);
         try {
-            runSteps(action.steps(), vars, false, expectPrefix(conch), logs, key, base, deadline);
+            runSteps(action.steps(), vars, false, expectPrefix(conch), logs, key, base, deadline, "action");
             return Attempt.ok(vars, logs);
         } catch (SessionLost ex) {
             return Attempt.lost(logs);
@@ -364,16 +412,19 @@ public final class RuleEngine {
             List<StepLog> logs,
             SessionKey key,
             URI base,
-            long deadline
+            long deadline,
+            String phase
     ) {
         CloseableHttpClient client = sessions.client(key);
         Runnable persist = () -> sessions.persist(key);
+        boolean capture = DevTraceScope.current() != null;
         for (int i = 0; i < definitions.size(); i++) {
             Step step = definitions.get(i);
             if (System.nanoTime() >= deadline) {
                 throw new DeadlineExceeded(i, step.type(), logs);
             }
             long started = System.nanoTime();
+            DevTraceScope.takePending();
             try {
                 Outcome outcome = steps.run(
                         step,
@@ -383,7 +434,8 @@ public final class RuleEngine {
                         persist,
                         sessions.cookies(key),
                         base,
-                        deadline);
+                        deadline,
+                        capture);
                 logs.add(new StepLog(
                         i,
                         step.type(),
@@ -392,6 +444,12 @@ public final class RuleEngine {
                         outcome.path(),
                         outcome.status(),
                         outcome.extractCount()));
+                if (capture && outcome.capture() != null) {
+                    DevTraceDraft draft = DevTraceScope.current();
+                    if (draft != null) {
+                        draft.add(phase, i, elapsed(started), outcome.capture());
+                    }
+                }
                 // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
                 rejectCapabilityStatus(auth, outcome, i, step.type(), logs, definitions);
             } catch (RuleProblem ex) {
@@ -404,9 +462,11 @@ public final class RuleEngine {
                     }
                 }
                 logs.add(new StepLog(i, step.type(), elapsed(started), ex.method, ex.path, ex.status, null));
+                recordFailure(phase, i, step, elapsed(started), ex);
                 throw new StepFailure(code, summary, i, step.type(), logs);
             } catch (TemplateException ex) {
                 logs.add(new StepLog(i, step.type(), elapsed(started), null, null, null, null));
+                recordFailure(phase, i, step, elapsed(started), null);
                 ErrorCode code = auth ? ErrorCode.AUTH_FAILED : ErrorCode.RULE_MISMATCH;
                 throw new StepFailure(code, ex.getMessage(), i, step.type(), logs);
             } catch (DeadlineExceeded ex) {
@@ -491,6 +551,7 @@ public final class RuleEngine {
                     redactor.redact(summary));
         }
         Object masked = success ? OutputMask.apply(data, redactor) : null;
+        commitTrace(request, redactor);
         return new ExecutionResult(
                 success,
                 masked,
@@ -499,6 +560,113 @@ public final class RuleEngine {
                 scrubbedLogs,
                 version,
                 request.traceId());
+    }
+
+    private DevTraceDraft openDraft(ExecutionRequest request, ConchDoc authorized) {
+        if (traceSink == null || request.origin() != Origin.LOCAL) {
+            return null;
+        }
+        ConchDoc doc = authorized;
+        if (doc != null && !doc.conch().equals(request.conch())) {
+            return null;
+        }
+        if (doc == null) {
+            doc = registry.find(request.conch()).orElse(null);
+        }
+        // HTTP steps only. A forwarder records MCP JSON-RPC with DevTraceStore.recordJsonRpc.
+        if (doc == null || !"http".equals(doc.driver())) {
+            return null;
+        }
+        try {
+            return traceSink.open(request);
+        } catch (RuntimeException ex) {
+            LOG.warning("dev trace open failed: " + ex.getClass().getName());
+            return null;
+        }
+    }
+
+    private void recordAlive(
+            Map<String, Object> spec,
+            String method,
+            String path,
+            Integer status,
+            Map<String, String> responseHeaders,
+            String responseBody,
+            long started,
+            boolean ok
+    ) {
+        DevTraceDraft draft = DevTraceScope.current();
+        if (draft == null) {
+            return;
+        }
+        draft.aliveCheck(true, ok);
+        draft.add("alive_check", -1, elapsed(started),
+                DevTraceDraft.requestPiece(spec, method, path, status, responseHeaders, responseBody));
+    }
+
+    private static void recordFailure(String phase, int index, Step step, long durationMs, RuleProblem problem) {
+        DevTraceDraft draft = DevTraceScope.current();
+        if (draft == null) {
+            return;
+        }
+        Map<String, Object> pending = DevTraceScope.takePending();
+        if (pending != null) {
+            draft.add(phase, index, durationMs, pending);
+            return;
+        }
+        Map<String, Object> piece = switch (step.type()) {
+            case "assert" -> DevTraceDraft.assertPiece(step.def(), false);
+            case "extract" -> DevTraceDraft.extractPiece(step.def(), 0, Map.of());
+            case "set", "script" -> DevTraceDraft.variablePiece(step.type(), namesOnly(step.def()));
+            case "request" -> DevTraceDraft.requestPiece(
+                    null,
+                    problem == null ? null : problem.method,
+                    problem == null ? null : problem.path,
+                    problem == null ? null : problem.status,
+                    null,
+                    null);
+            default -> Map.of("type", step.type());
+        };
+        draft.add(phase, index, durationMs, piece);
+    }
+
+    private static Map<String, Object> namesOnly(Map<String, Object> def) {
+        LinkedHashMap<String, Object> names = new LinkedHashMap<>();
+        if (def == null) {
+            return names;
+        }
+        for (String key : def.keySet()) {
+            if ("code".equals(key) || "timeout_ms".equals(key) || ConchRegistry.RESERVED.contains(key)) {
+                continue;
+            }
+            names.put(key, null);
+        }
+        return names;
+    }
+
+    private void commitTrace(ExecutionRequest request, Redactor redactor) {
+        DevTraceDraft draft = DevTraceScope.current();
+        if (draft == null || traceSink == null) {
+            return;
+        }
+        SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
+        List<String> names;
+        boolean stored;
+        try {
+            names = sessions.cookieNames(key);
+        } catch (RuntimeException ex) {
+            names = List.of();
+        }
+        try {
+            stored = sessions.loggedIn(key);
+        } catch (RuntimeException ex) {
+            stored = false;
+        }
+        try {
+            traceSink.save(request, draft.expiresAt(), draft.render(redactor, names, stored));
+        } catch (RuntimeException ex) {
+            LOG.warning("dev trace save failed: " + ex.getClass().getName());
+        }
     }
 
     private Redactor redactor(Map<String, String> credentials, List<String> cookies) {

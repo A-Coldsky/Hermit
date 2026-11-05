@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -34,6 +35,7 @@ import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.EngineSettings;
+import dev.hermit.crab.engine.ExecutionRequest;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionManager;
@@ -46,8 +48,11 @@ import dev.hermit.crab.report.ReportSettingsStore;
 import dev.hermit.crab.secure.CredentialCipher;
 import dev.hermit.crab.secure.KnownSecrets;
 import dev.hermit.crab.secure.CredentialDecryptException;
+import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.secure.MasterKeyException;
 import dev.hermit.crab.secure.MasterKeyProvider;
+import dev.hermit.crab.store.Account;
+import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.AccountStore;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyService;
@@ -58,7 +63,9 @@ import dev.hermit.crab.store.CapabilitySwitchStore;
 import dev.hermit.crab.store.CrabDatabase;
 import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.CredentialVault;
+import dev.hermit.crab.store.CallChannel;
 import dev.hermit.crab.store.DebugStateStore;
+import dev.hermit.crab.store.DevTraceStore;
 import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
@@ -105,6 +112,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final IdempotencyStore idempotency;
     private final CapabilitySwitchStore switches;
     private final DebugStateStore debug;
+    private final DevTraceStore devTraces;
     private final ConsolePassword consolePassword;
     private final ConsoleSessions consoleSessions;
     private final Set<String> configDisabled;
@@ -174,6 +182,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());
         this.debug = new DebugStateStore(database.dataSource(), clock);
+        this.devTraces = new DevTraceStore(database.dataSource(), clock, debug);
+        this.engine.bindDevTraceSink(new DevTraceBinding(debug, devTraces));
         this.consolePassword = new ConsolePassword(database.dataSource(), clock);
         this.consoleSessions = new ConsoleSessions(clock);
         this.configDisabled = Set.copyOf(config.disabledCapabilities());
@@ -268,6 +278,89 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public DebugStateStore debug() {
         return debug;
+    }
+
+    public DevTraceStore devTraces() {
+        return devTraces;
+    }
+
+    /**
+     * Runs one local HTTP action without an API key and without reporting to Tide.
+     * The loaded document is the one passed to the engine. Official packages, a debug switch
+     * that is off, and a disabled capability are rejected before execution.
+     */
+    public ExecutionResult trialLocal(
+            String conch,
+            String action,
+            Optional<String> account,
+            Map<String, Object> input,
+            String traceId
+    ) {
+        String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
+        ConchDoc doc = registry.find(conch).orElse(null);
+        if (doc == null) {
+            throw new TrialRejected(404, ErrorCode.NOT_FOUND, "not found");
+        }
+        Origin origin = registry.origin(conch);
+        if (origin != Origin.LOCAL) {
+            throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地包上开发，再导出上传。");
+        }
+        if (!debug.get().enabled()) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "先打开调试开关。");
+        }
+        if ("mcp".equals(doc.driver())) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "MCP 规则包的试跑还没有接通。");
+        }
+        if (!"http".equals(doc.driver())) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "只支持 HTTP 规则包的试跑。");
+        }
+        Action capability = doc.actions().get(action);
+        if (capability == null) {
+            throw new TrialRejected(404, ErrorCode.NOT_FOUND, "not found");
+        }
+        if (disabled(conch, action)) {
+            throw new TrialRejected(404, ErrorCode.CAPABILITY_DISABLED, Invoker.CAPABILITY_DISABLED_MESSAGE);
+        }
+        Account resolved;
+        try {
+            resolved = accounts.resolve(Origin.LOCAL, conch, account == null ? Optional.empty() : account);
+        } catch (AccountNotFoundException ex) {
+            if (ex.account() == null && accounts.list(Origin.LOCAL, conch).isEmpty()) {
+                throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "no account configured");
+            }
+            throw new TrialRejected(404, ErrorCode.ACCOUNT_NOT_FOUND, Invoker.ACCOUNT_NOT_FOUND_MESSAGE);
+        } catch (IllegalArgumentException ex) {
+            throw new TrialRejected(400, ErrorCode.INVALID_INPUT, Invoker.INVALID_ACCOUNT_NAME);
+        }
+        Map<String, String> stored = conchConfig.all(Origin.LOCAL, conch);
+        List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
+        if (!missingConfig.isEmpty()) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED,
+                    "missing config: " + String.join(", ", missingConfig));
+        }
+        List<String> missingCredentials = DeclaredSettings.missingCredentials(
+                doc, vault.fieldNames(Origin.LOCAL, conch, resolved.account()));
+        if (!missingCredentials.isEmpty()) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED,
+                    "missing credentials: " + String.join(", ", missingCredentials));
+        }
+        Map<String, String> secrets;
+        try {
+            secrets = vault.decryptForExecution(Origin.LOCAL, conch, resolved.account());
+        } catch (CredentialDecryptException ex) {
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE);
+        }
+        ExecutionRequest request = new ExecutionRequest(
+                id,
+                Origin.LOCAL,
+                doc.conch(),
+                action,
+                input == null ? Map.of() : input,
+                resolved.account(),
+                new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
+        ExecutionResult result = engine.execute(request, doc);
+        logTrial(result, secrets, doc.conch(), action, resolved.account());
+        return result;
     }
 
     public ConsolePassword consolePassword() {
@@ -672,6 +765,51 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         callLogs.purgeBefore(clock.instant().minus(CALL_LOG_RETENTION));
         idempotency.purgeBefore(clock.instant().minus(IdempotencyStore.TTL));
         debug.expire();
+        if (debug.get().enabled()) {
+            devTraces.deleteExpired(clock.instant());
+        } else {
+            devTraces.deleteAll();
+        }
+    }
+
+    private void logTrial(
+            ExecutionResult result,
+            Map<String, String> secrets,
+            String conch,
+            String action,
+            String account
+    ) {
+        String message = null;
+        String code = null;
+        if (!result.success() && result.error() != null) {
+            code = result.error().code().name();
+            LinkedHashSet<String> values = new LinkedHashSet<>(knownSecrets.copy());
+            if (secrets != null) {
+                for (String value : secrets.values()) {
+                    if (value != null) {
+                        values.add(value);
+                    }
+                }
+            }
+            message = Redactor.of(values).redact(result.error().message());
+        }
+        try {
+            callLogs.append(new CallLogStore.NewCall(
+                    result.traceId() == null ? "" : result.traceId(),
+                    Origin.LOCAL,
+                    conch,
+                    action,
+                    account,
+                    result.conchVersion(),
+                    result.success(),
+                    code,
+                    message,
+                    result.durationMillis(),
+                    null,
+                    CallChannel.CONSOLE), result.stepLogs());
+        } catch (RuntimeException ex) {
+            LOG.warning("call log failed: " + ex.getClass().getName());
+        }
     }
 
     @Override

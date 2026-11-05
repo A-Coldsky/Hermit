@@ -57,6 +57,9 @@ import dev.hermit.common.validate.ConchValidator;
  * and {@code console_login_failures} (failed_at only). It runs when its own row is missing
  * and does not rewrite versions 1–13. The console password is not stored in config.yml.
  * Later versions must not edit {@link #applyV14}.
+ * Version 15 adds {@code dev_traces} (redacted JSON for local-package debugging). It runs
+ * when its own row is missing and does not rewrite {@link #applyV14} or versions 1–13.
+ * Later versions must not edit {@link #applyV15}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Before the first official release these statements may be edited in
@@ -174,6 +177,12 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 14)) {
                 applyV14(connection);
                 insertVersion(connection, 14);
+            }
+            // A database that already recorded version 16 still needs this table.
+            // Do not gate version 15 on MAX(version), and do not rewrite applyV14.
+            if (!applied(connection, 15)) {
+                applyV15(connection);
+                insertVersion(connection, 15);
             }
             return null;
         });
@@ -612,6 +621,22 @@ public final class CrabDatabase implements AutoCloseable {
                     failed_at TIMESTAMP WITH TIME ZONE NOT NULL
                 )
                 """);
+    }
+
+    private static void applyV15(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS dev_traces (
+                    trace_id VARCHAR(64) NOT NULL PRIMARY KEY,
+                    origin VARCHAR(16) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
+                    account VARCHAR(64) NOT NULL,
+                    action VARCHAR(256) NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    expires_at TIMESTAMP WITH TIME ZONE,
+                    body CLOB NOT NULL
+                )
+                """);
+        execute(connection, "CREATE INDEX IF NOT EXISTS dev_traces_expires_idx ON dev_traces (expires_at)");
     }
 
     private static boolean applied(Connection connection, int version) throws SQLException {

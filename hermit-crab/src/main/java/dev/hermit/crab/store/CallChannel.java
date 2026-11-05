@@ -9,8 +9,7 @@ public enum CallChannel {
     HTTP,
     MCP,
     /**
-     * Reserved for a console path that executes a capability. Test login is not one, and nothing
-     * writes this value today.
+     * Console and CLI trial runs. Test login does not write a call log.
      */
     CONSOLE;
 

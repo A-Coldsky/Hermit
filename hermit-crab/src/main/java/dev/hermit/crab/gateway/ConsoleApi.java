@@ -100,6 +100,7 @@ final class ConsoleApi {
         put(app, "/console/api/reports/settings", ctx -> updateReportSettings(runtime, ctx));
         get(app, "/console/api/reports/preview", ctx -> reportPreview(runtime, ctx));
         post(app, "/console/api/reports/send", ctx -> reportSend(runtime, ctx));
+        get(app, "/console/api/local-conches", ctx -> listLocal(runtime, ctx));
         post(app, "/console/api/local-conches", ctx -> importLocal(runtime, ctx));
         post(app, "/console/api/local-conches/reload", ctx -> reloadLocal(runtime, ctx));
         delete(app, "/console/api/local-conches/{conch}", ctx -> deleteLocal(runtime, ctx));
@@ -656,6 +657,19 @@ final class ConsoleApi {
             } catch (AccountNotFoundException ex) {
                 GatewayResponses.writeError(ctx, 404, ErrorCode.ACCOUNT_NOT_FOUND, "account not found");
             } catch (LocalConchException ex) {
+                if (ex.replaceConch() != null) {
+                    LinkedHashMap<String, Object> data = new LinkedHashMap<>();
+                    data.put("conch", ex.replaceConch());
+                    data.put("confirm", true);
+                    String traceId = GatewayResponses.trace(ctx);
+                    GatewayResponses.write(
+                            ctx,
+                            ex.status(),
+                            ApiJson.bytes(ApiEnvelope.json(data, ex.code(), ex.getMessage(), traceId)),
+                            traceId,
+                            false);
+                    return;
+                }
                 if (ex.hasIssues()) {
                     LinkedHashMap<String, Object> data = new LinkedHashMap<>();
                     data.put("errors", issues(ex.errors()));
@@ -690,13 +704,41 @@ final class ConsoleApi {
     }
 
     private static void importLocal(CrabRuntime runtime, Context ctx) throws Exception {
-        LocalConches.ImportResult result = runtime.localConches().importBytes(localBody(ctx), Actors.CONSOLE);
+        LocalConches.ImportResult result = runtime.localConches().importBytes(
+                localBody(ctx), Actors.CONSOLE, confirm(ctx));
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", result.conch());
         body.put("version", result.version());
         body.put("replaced", result.replaced());
         body.put("warnings", issues(result.warnings()));
         GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void listLocal(CrabRuntime runtime, Context ctx) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (LocalConches.LocalPackage pkg : runtime.localConches().packages()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("conch", pkg.conch());
+            row.put("file", pkg.file());
+            row.put("version", pkg.version());
+            row.put("loaded", pkg.loaded());
+            row.put("broken", pkg.broken());
+            row.put("reason", pkg.reason());
+            rows.add(row);
+        }
+        GatewayResponses.writeData(ctx, Map.of("conches", rows));
+    }
+
+    /** Absent or blank is not confirmed. Only {@code true} and {@code false} are accepted. */
+    private static boolean confirm(Context ctx) {
+        String raw = ctx.queryParam("confirm");
+        if (raw == null || raw.isBlank() || "false".equalsIgnoreCase(raw)) {
+            return false;
+        }
+        if ("true".equalsIgnoreCase(raw)) {
+            return true;
+        }
+        throw new IllegalArgumentException("confirm 只能是 true 或 false。");
     }
 
     private static void reloadLocal(CrabRuntime runtime, Context ctx) {

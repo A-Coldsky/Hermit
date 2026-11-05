@@ -78,7 +78,8 @@ public final class CrabCommand {
               crab apikey create <name> [--all] [--conches a,b] [--actions conch.action] [--read-only]
               crab apikey list
               crab apikey revoke <id>
-              crab local import <file>
+              crab local import <file> [--replace]
+              crab local list
               crab local reload
               crab local delete <conch>
               crab local export <conch> [--out file]
@@ -545,6 +546,7 @@ public final class CrabCommand {
         }
         return switch (args[1]) {
             case "import" -> importLocal(args, env, out, err);
+            case "list" -> listLocal(args, env, out, err);
             case "reload" -> reloadLocal(args, env, out, err);
             case "delete" -> deleteLocal(args, env, out, err);
             case "export" -> exportLocal(args, env, out, err);
@@ -556,11 +558,33 @@ public final class CrabCommand {
     }
 
     private int importLocal(String[] args, Function<String, String> env, PrintStream out, PrintStream err) throws IOException {
-        if (args.length != 3) {
+        boolean replace = false;
+        String fileArg = null;
+        for (int i = 2; i < args.length; i++) {
+            String arg = args[i];
+            if ("--replace".equals(arg)) {
+                if (replace) {
+                    err.println("--replace 重复了。");
+                    return 1;
+                }
+                replace = true;
+                continue;
+            }
+            if (arg.startsWith("--")) {
+                err.println("不认识的选项 " + arg + "。");
+                return 1;
+            }
+            if (fileArg != null) {
+                err.print(USAGE);
+                return 1;
+            }
+            fileArg = arg;
+        }
+        if (fileArg == null) {
             err.print(USAGE);
             return 1;
         }
-        Path file = Path.of(args[2]);
+        Path file = Path.of(fileArg);
         if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
             err.println("请提供 YAML 文件。");
             return 1;
@@ -570,12 +594,31 @@ public final class CrabCommand {
             return 1;
         }
         byte[] raw = Files.readAllBytes(file);
+        boolean confirmed = replace;
         return withRuntime(env, runtime -> {
             runtime.loadInstalledConches();
-            LocalConches.ImportResult result = runtime.localConches().importBytes(raw, Actors.CLI);
-            out.println(result.conch() + " " + result.version() + " " + (result.replaced() ? "replaced" : "imported"));
+            LocalConches.ImportResult result = runtime.localConches().importBytes(raw, Actors.CLI, confirmed);
+            out.println(result.conch() + " " + result.version() + " " + (result.replaced() ? "已覆盖" : "已导入"));
             for (ValidationIssue issue : result.warnings()) {
                 err.println(issue.code() + " " + issue.path());
+            }
+            return 0;
+        });
+    }
+
+    private int listLocal(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 2) {
+            err.print(USAGE);
+            return 1;
+        }
+        return withRuntime(env, runtime -> {
+            runtime.loadInstalledConches();
+            for (LocalConches.LocalPackage pkg : runtime.localConches().packages()) {
+                if (pkg.broken()) {
+                    out.println(pkg.conch() + " - " + pkg.file() + " 未载入 " + pkg.reason());
+                } else {
+                    out.println(pkg.conch() + " " + pkg.version() + " " + pkg.file());
+                }
             }
             return 0;
         });
@@ -592,9 +635,10 @@ public final class CrabCommand {
                 if (result.ok()) {
                     out.println(result.file() + " " + result.conch() + " " + result.version() + " ok");
                 } else {
-                    out.println(result.file() + " - - failed");
+                    String name = result.conch() == null ? "-" : result.conch();
+                    out.println(result.file() + " " + name + " - 未载入");
                     for (ValidationIssue issue : result.issues()) {
-                        err.println(issue.code() + " " + issue.path());
+                        err.println(issue.message());
                     }
                 }
             }

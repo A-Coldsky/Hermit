@@ -86,7 +86,7 @@ Agent 路由：
 | 方法 | 路径 | 返回 |
 | --- | --- | --- |
 | GET | `/agent/version` | Crab 最新版本与下载地址提示。`latest-crab-version` 为空则版本字段为空，表示不提示升级；非空值在启动时必须是 semver |
-| GET | `/agent/conches/manifest` | 当前可分发规则清单与 ETag，支持 If-None-Match/304。已停用的 Conch 不在清单里。每项含 `conch`、`version`、`sha256`、`minCrabVersion`、`title`，以及当前发布版本的 `description`（string 或 null）、`capabilityCount`（int，能力个数，与管理端 `capabilityCount` 一样按 actions 计数）和 `requiredCredentials`（字符串数组，当前发布版本里 `required: true` 的凭证名，按字典序）。每项另含 `driver` 和 `upstreamHost`。`upstreamHost` 是当前发布版本 `upstream.url` 的主机，小写、不含端口；HTTP 包，或地址解析不了时，为 null。ETag 覆盖上述字段（含 `driver` 和 `upstreamHost`），字段变化后旧 ETag 不再 304。清单请求和 304 不增加拉取次数。Reef 不为此连接上游。旧 Crab 忽略不认识的字段 |
+| GET | `/agent/conches/manifest` | 当前可分发规则清单与 ETag，支持 If-None-Match/304。已停用的 Conch 不在清单里。每项含 `conch`、`version`、`sha256`、`minCrabVersion`、`title`，以及当前发布版本的 `description`（string 或 null）、`capabilityCount`（int，能力个数，与管理端 `capabilityCount` 一样按 actions 计数）和 `requiredCredentials`（字符串数组，当前发布版本里 `required: true` 的凭证名，按字典序）。每项另含 `driver` 和 `upstreamHost`。`upstreamHost` 是当前发布版本 `upstream.url` 的主机，小写、不含端口；HTTP 包，或地址解析不了时，为 null。ETag 覆盖上述字段（含 `driver` 和 `upstreamHost`），字段变化后旧 ETag 不再 304。清单请求和 304 不增加拉取次数。Reef 不为此连接上游。旧 Crab 按字段名读取，忽略不认识的字段（含 `driver`、`upstreamHost` 和嵌套对象），不会因此拒绝清单。本机目录缓存同样忽略这些字段，写回时不保存它们 |
 | GET | `/agent/conches/{conch}/{version}` | 已发布 ZIP。Conch 已停用、版本未发布或不存在时 404，包文件仍留在 Reef。验签失败为 500。只有成功返回 ZIP 时，该版本 `pull_count` 加 1（单条 `UPDATE`，`pull_count = pull_count + 1`）。失败、404 和停用不计。次数是下载成功次数，不按 Crab 实例统计 |
 | POST | `/agent/reports` | ReportBatch；instanceId 须与请求头一致 |
 

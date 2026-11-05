@@ -286,9 +286,10 @@ export interface SubscriptionOutcome {
   reason: string | null
 }
 
+/** `subscribed` 为 false 时这次没有订上，`outcome` 为 null。 */
 export interface SubscriptionResult {
   conch: string
-  subscribed: true
+  subscribed: boolean
   outcome: SubscriptionOutcome | null
 }
 

@@ -21,8 +21,9 @@ import dev.hermit.crab.secure.Redactor;
 /**
  * Redacted developer traces. Rows live only while the debug switch is on.
  * Turning the switch off, or letting it expire, deletes every row in the same
- * transaction as the flag change. {@link #recordJsonRpc} is the hook for MCP
- * forwarding; the HTTP engine does not call it.
+ * transaction as the flag change. {@link #recordJsonRpc} is called by MCP
+ * forwarding. Several round trips with the same trace id accumulate in one body.
+ * The HTTP engine does not call it.
  */
 public final class DevTraceStore {
     /** Refresh is not a capability call. A forwarder may store a trace under this action and no call log. */
@@ -53,6 +54,7 @@ public final class DevTraceStore {
 
     /**
      * Stores one JSON-RPC exchange when the debug switch is on and the conch is local.
+     * Later exchanges with the same trace id, conch, account, and action are appended.
      * Official packages and a switch that is off are ignored. This does not write {@code call_logs}.
      * {@code secrets} are used only to redact and are not stored. {@code Mcp-Session-Id} is dropped.
      */
@@ -87,8 +89,15 @@ public final class DevTraceStore {
             fields.put("params", trace.params());
             fields.put("result", trace.result());
             fields.put("error", trace.error());
-            String body = DevTraceDraft.renderJsonRpc(fields, Redactor.of(secrets));
-            save(new NewTrace(trace.traceId(), Origin.LOCAL, conch, account, action, snapshot.expiresAt(), body));
+            String rendered = DevTraceDraft.renderJsonRpc(fields, Redactor.of(secrets));
+            Db.transaction(dataSource, connection -> {
+                String prior = compatibleBody(connection, trace.traceId(), conch, account, action);
+                String body = prior == null ? rendered : DevTraceDraft.mergeJsonRpc(prior, rendered);
+                write(connection, new NewTrace(
+                        trace.traceId(), Origin.LOCAL, conch, account, action, snapshot.expiresAt(), body),
+                        clock.instant());
+                return null;
+            });
         } catch (RuntimeException ex) {
             LOG.warning("jsonrpc trace failed: " + ex.getClass().getName());
         }
@@ -201,6 +210,38 @@ public final class DevTraceStore {
                 Db.instant(resultSet, "created_at"),
                 Db.instant(resultSet, "expires_at"),
                 resultSet.getString("body"));
+    }
+
+    /** {@code null} when the row is absent. A mismatched row is not merged; the caller overwrites it. */
+    private static String compatibleBody(
+            Connection connection,
+            String traceId,
+            String conch,
+            String account,
+            String action
+    ) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT origin, conch, account, action, body FROM dev_traces WHERE trace_id = ?
+                """)) {
+            statement.setString(1, traceId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return null;
+                }
+                String storedAccount = resultSet.getString("account");
+                if (storedAccount == null) {
+                    storedAccount = "";
+                }
+                boolean same = Origin.LOCAL.name().equals(resultSet.getString("origin"))
+                        && conch.equals(resultSet.getString("conch"))
+                        && account.equals(storedAccount)
+                        && action.equals(resultSet.getString("action"));
+                if (!same) {
+                    return null;
+                }
+                return resultSet.getString("body");
+            }
+        }
     }
 
     private static boolean fits(String traceId, String conch, String account, String action) {

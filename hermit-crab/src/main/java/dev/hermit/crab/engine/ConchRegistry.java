@@ -50,13 +50,20 @@ public final class ConchRegistry {
      * {@link Origin#LOCAL} instead of the official fallback.
      */
     public void put(ConchDoc doc, Origin origin) {
+        put(doc, origin, false);
+    }
+
+    /**
+     * {@code allowEmptyMcpActions} 只对 {@link Origin#LOCAL} 生效。正式包始终拒绝空 actions。
+     */
+    public void put(ConchDoc doc, Origin origin, boolean allowEmptyMcpActions) {
         if (doc == null) {
             throw new IllegalArgumentException("doc");
         }
         if (origin == null) {
             throw new IllegalArgumentException("origin");
         }
-        List<ValidationIssue> issues = inspect(doc);
+        List<ValidationIssue> issues = inspect(doc, origin == Origin.LOCAL && allowEmptyMcpActions);
         if (!issues.isEmpty()) {
             throw new ConchRejectedException(issues);
         }
@@ -79,12 +86,22 @@ public final class ConchRegistry {
 
     /** Errors that {@link #put(ConchDoc, Origin)} would reject, including reserved-variable writes. */
     public List<ValidationIssue> inspect(ConchDoc doc) {
+        return inspect(doc, false);
+    }
+
+    /**
+     * {@code allowEmptyMcpActions} 把空的 mcp {@code actions} 从错误降为警告。
+     * 调用方只在本地包且调试开关打开时传入 true。
+     */
+    public List<ValidationIssue> inspect(ConchDoc doc, boolean allowEmptyMcpActions) {
         if (doc == null) {
             throw new IllegalArgumentException("doc");
         }
         ArrayList<ValidationIssue> issues = new ArrayList<>();
-        ValidationResult result = ConchValidator.validate(
-                doc, ConchValidator.Context.of(CrabVersion.CURRENT, STEP_TYPES));
+        ConchValidator.Context context = allowEmptyMcpActions
+                ? ConchValidator.Context.allowingEmptyMcpActions(CrabVersion.CURRENT, STEP_TYPES)
+                : ConchValidator.Context.of(CrabVersion.CURRENT, STEP_TYPES);
+        ValidationResult result = ConchValidator.validate(doc, context);
         issues.addAll(result.errors());
         reserved(doc, issues);
         return List.copyOf(issues);

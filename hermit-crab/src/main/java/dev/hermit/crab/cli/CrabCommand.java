@@ -51,6 +51,7 @@ import dev.hermit.crab.sync.SyncReport;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.Actors;
+import dev.hermit.crab.upstream.McpRefresh;
 import dev.hermit.crab.store.AuditLog;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.ApiKeySummary;
@@ -96,6 +97,7 @@ public final class CrabCommand {
               crab debug status|on|off [--from-env VAR]
               crab debug run <conch> <action> --account NAME [--from-env VAR]
               crab debug trace <traceId> [--from-env VAR]
+              crab mcp refresh <conch> [--account NAME] [--from-env VAR]
               crab mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
             """;
 
@@ -163,6 +165,7 @@ public final class CrabCommand {
             case "local" -> local(args, env, out, err);
             case "console" -> consolePassword(args, env, in, out, err);
             case "debug" -> debug(args, env, in, out, err);
+            case "mcp" -> mcp(args, env, in, out, err);
             case "mcp-stdio" -> new McpStdio().run(args, env, in, out, err);
             default -> {
                 err.print(USAGE);
@@ -1260,11 +1263,56 @@ public final class CrabCommand {
             }
             positionals.add(arg);
         }
-        if (account != null && (positionals.isEmpty() || !"debug".equals(positionals.get(0)))) {
+        if (account != null && (positionals.isEmpty() || !allowsAccount(positionals.get(0)))) {
             err.println("不认识的选项 --account。");
             return null;
         }
         return new Parsed(positionals, fromEnv, conches, actions, readOnly, all, account);
+    }
+
+    private int mcp(
+            String[] args,
+            Function<String, String> env,
+            InputStream in,
+            PrintStream out,
+            PrintStream err
+    ) {
+        Parsed parsed = parse(args, err);
+        if (parsed == null) {
+            return 1;
+        }
+        if (parsed.positionals.size() != 3 || !"refresh".equals(parsed.positionals.get(1))
+                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.actions != null) {
+            err.print(USAGE);
+            return 1;
+        }
+        String conch = parsed.positionals.get(2);
+        Optional<String> account = parsed.account == null || parsed.account.isBlank()
+                ? Optional.empty()
+                : Optional.of(parsed.account);
+        return withRuntime(env, runtime -> {
+            if (!acceptPassword(runtime, parsed, env, in, err)) {
+                return 1;
+            }
+            runtime.loadInstalledConches();
+            try {
+                McpRefresh.Outcome outcome = runtime.refreshLocalMcp(
+                        conch, account, Actors.CLI, UUID.randomUUID().toString());
+                out.println("version=" + outcome.version());
+                out.println("added=" + String.join(",", outcome.added()));
+                out.println("removed=" + String.join(",", outcome.removed()));
+                out.println("changed=" + String.join(",", outcome.changed()));
+                out.println("traceId=" + outcome.traceId());
+                return 0;
+            } catch (TrialRejected ex) {
+                err.println(ex.getMessage());
+                return 1;
+            }
+        });
+    }
+
+    private static boolean allowsAccount(String command) {
+        return "debug".equals(command) || "mcp".equals(command);
     }
 
     private static Set<String> split(String value) {

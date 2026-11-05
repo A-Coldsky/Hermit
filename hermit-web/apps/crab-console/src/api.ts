@@ -263,6 +263,26 @@ export interface DevTrace {
   params?: unknown
   result?: unknown
   error?: unknown
+  /** 同一次调用或刷新里的多次 JSON-RPC。顶层的 method/params 是最后一轮。 */
+  exchanges?: DevTraceExchange[]
+}
+
+export interface DevTraceExchange {
+  method?: string | null
+  id?: unknown
+  httpStatus?: number | null
+  durationMs?: number | null
+  params?: unknown
+  result?: unknown
+  error?: unknown
+}
+
+export interface McpRefreshResult {
+  version: string
+  added: string[]
+  removed: string[]
+  changed: string[]
+  traceId: string
 }
 
 export interface CallStep {
@@ -569,9 +589,18 @@ export const api = {
   /** 响应体是原始 YAML 文本，与磁盘文件一致。 */
   exportLocalConch: (conch: string) => http.text(`${base}/local-conches/${seg(conch)}/export`),
   /**
-   * 本地 HTTP 包试跑。正式包为 409 `CONFLICT`。开关关掉为 409 `NOT_CONFIGURED`。
-   * 成功时 data 是能力输出。追踪在调用详情的 `devTrace`。
+   * 本地 HTTP 或 MCP 包试跑。正式包为 409 `CONFLICT`。开关关掉为 409 `NOT_CONFIGURED`。
+   * 成功时 data 是能力输出。MCP 成功时优先 structuredContent，否则 `{content}`。追踪在调用详情的 `devTrace`。
    */
   runLocal: (conch: string, action: string, body: { account?: string; input?: Record<string, unknown> }) =>
     http.post<Record<string, unknown>>(`${base}/local-conches/${seg(conch)}/actions/${seg(action)}/run`, body),
+  /**
+   * 调试开关打开时，从上游 tools/list 重写本地 MCP 包。正式包为 409 `CONFLICT`。
+   * OAuth 包使用已连接的令牌；没连上是 409 `NOT_CONFIGURED`，不打上游。
+   * version 不变。traceId 指向 action 为 mcp_refresh 的 JSON-RPC 追踪，没有对应调用记录。
+   */
+  refreshLocalMcp: (conch: string, account?: string) => {
+    const query = account ? `?account=${encodeURIComponent(account)}` : ''
+    return http.post<McpRefreshResult>(`${base}/local-conches/${seg(conch)}/mcp/refresh${query}`)
+  },
 }

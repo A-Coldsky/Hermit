@@ -37,6 +37,7 @@ import dev.hermit.crab.report.FlushResult;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.Actors;
+import dev.hermit.crab.upstream.McpRefresh;
 import dev.hermit.crab.store.AuditLog;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.ApiKeySummary;
@@ -120,6 +121,7 @@ final class ConsoleApi {
         delete(app, "/console/api/local-conches/{conch}", ctx -> deleteLocal(runtime, ctx));
         get(app, "/console/api/local-conches/{conch}/export", ctx -> exportLocal(runtime, ctx));
         post(app, "/console/api/local-conches/{conch}/actions/{action}/run", ctx -> runLocal(runtime, ctx));
+        post(app, "/console/api/local-conches/{conch}/mcp/refresh", ctx -> refreshLocalMcp(runtime, ctx));
     }
 
     private static void conches(CrabRuntime runtime, Context ctx) {
@@ -462,6 +464,20 @@ final class ConsoleApi {
         }
         body.put("steps", steps);
         body.put("devTrace", devTrace(runtime, detail.call().traceId()));
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void refreshLocalMcp(CrabRuntime runtime, Context ctx) {
+        String account = ctx.queryParam("account");
+        Optional<String> selected = account == null || account.isBlank() ? Optional.empty() : Optional.of(account);
+        McpRefresh.Outcome outcome = runtime.refreshLocalMcp(
+                ctx.pathParam("conch"), selected, Actors.CONSOLE, GatewayResponses.trace(ctx));
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("version", outcome.version());
+        body.put("added", outcome.added());
+        body.put("removed", outcome.removed());
+        body.put("changed", outcome.changed());
+        body.put("traceId", outcome.traceId());
         GatewayResponses.writeData(ctx, body);
     }
 

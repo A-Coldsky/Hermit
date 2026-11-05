@@ -55,7 +55,7 @@ mcp:
 
 `HERMIT_CONSOLE_PASSWORD` 是可选的控制台口令。只在 Crab 库里还没有口令哈希时，于进程启动时写入一次；已经有哈希则忽略，避免每次重启都改口令。空字符串视为未设置。长度是 8 到 256 个字符。哈希是 PBKDF2-HMAC-SHA256（16 字节盐、210000 次、32 字节结果），比较用常量时间。明文和哈希都不写入 `config.yml`。容器入口同样不把这个变量抄进 `config.yml`，只把它留在进程环境里；空白值视为未设置。同一操作系统用户看得到这个环境变量，和 `HERMIT_MASTER_KEY` 一样。
 
-忘了口令时先停掉 Crab，再执行 `crab console password`。新口令从终端、无终端时的 stdin，或 `--from-env` 读入，覆盖哈希，不需要旧口令。口令不能写在命令行参数里。已设置口令时，`crab debug status`、`crab debug on`、`crab debug off`、`crab debug run` 和 `crab debug trace` 先用同样的方式核对；未设置时不询问。导入、凭证、API Key 等既有命令不查这口令。
+忘了口令时先停掉 Crab，再执行 `crab console password`。新口令从终端、无终端时的 stdin，或 `--from-env` 读入，覆盖哈希，不需要旧口令。口令不能写在命令行参数里。已设置口令时，`crab debug status`、`crab debug on`、`crab debug off`、`crab debug run`、`crab debug trace` 和 `crab mcp refresh` 先用同样的方式核对；未设置时不询问。导入、凭证、API Key 等既有命令不查这口令。
 
 未设置口令时，控制台仍只认回环地址和 `X-Hermit-Console: 1`。已设置时，除 `GET /console/api/session` 和 `POST /console/api/session` 外，`/console/api/**` 还要 Cookie `hermit_console`（HttpOnly、`SameSite=Strict`、`Path=/console`，不加 `Secure`）。会话在内存中，自签发起 12 小时绝对到期，进程重启即失效。`POST /console/api/session/password` 体为 `{current, next}`，成功后清掉本进程的内存会话。15 分钟内累计 5 次失败后锁定；第 5 次失败会记下，锁定期间不再追加失败行，因此窗口不会被继续往后推。错误口令和锁定都是 401 `AUTH_FAILED`，message 为「口令错误」。没有 Cookie 或会话过期是 401 `AUTH_FAILED`，message 为「需要控制台登录。」。`/api`、`/mcp` 和 `mcp-stdio` 不认这张 Cookie，仍只认 API Key。`index.html` 和静态资源仍只认回环地址。
 

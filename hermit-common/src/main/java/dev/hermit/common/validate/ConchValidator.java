@@ -116,7 +116,7 @@ public final class ConchValidator {
                         "min_crab_version",
                         "driver 为 mcp 时 min_crab_version 必须不低于 1.1.0"));
             }
-            validateMcp(doc, errors, warnings);
+            validateMcp(doc, ctx, errors, warnings);
             return new ValidationResult(errors, warnings);
         }
         rejectMcpOnly(doc, errors);
@@ -514,6 +514,7 @@ public final class ConchValidator {
 
     private static void validateMcp(
             ConchDoc doc,
+            Context ctx,
             List<ValidationIssue> errors,
             List<ValidationIssue> warnings
     ) {
@@ -539,7 +540,14 @@ public final class ConchValidator {
             checkSnapshot(doc.snapshot(), errors);
         }
         if (doc.actions().isEmpty()) {
-            errors.add(issue(ValidationCodes.MCP_NO_ACTIONS, "actions", "mcp 包必须至少有一个 action"));
+            if (ctx.allowEmptyMcpActions()) {
+                warnings.add(issue(
+                        ValidationCodes.MCP_NO_ACTIONS,
+                        "actions",
+                        "mcp 包还没有 action，刷新工具列表后才能调用"));
+            } else {
+                errors.add(issue(ValidationCodes.MCP_NO_ACTIONS, "actions", "mcp 包必须至少有一个 action"));
+            }
         }
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
             checkMcpAction(entry.getKey(), entry.getValue(), doc, errors, warnings);
@@ -957,7 +965,11 @@ public final class ConchValidator {
         return false;
     }
 
-    public record Context(SemVer currentCrabVersion, Set<String> supportedStepTypes) {
+    public record Context(
+            SemVer currentCrabVersion,
+            Set<String> supportedStepTypes,
+            boolean allowEmptyMcpActions
+    ) {
 
         public Context {
             supportedStepTypes = supportedStepTypes == null
@@ -965,12 +977,21 @@ public final class ConchValidator {
                     : Set.copyOf(supportedStepTypes);
         }
 
+        public Context(SemVer currentCrabVersion, Set<String> supportedStepTypes) {
+            this(currentCrabVersion, supportedStepTypes, false);
+        }
+
         public static Context of(SemVer currentCrabVersion) {
-            return new Context(currentCrabVersion, DEFAULT_STEP_TYPES);
+            return new Context(currentCrabVersion, DEFAULT_STEP_TYPES, false);
         }
 
         public static Context of(SemVer currentCrabVersion, Set<String> supportedStepTypes) {
-            return new Context(currentCrabVersion, supportedStepTypes);
+            return new Context(currentCrabVersion, supportedStepTypes, false);
+        }
+
+        /** 调试开关打开时，本地导入可以把空 actions 当成警告。Reef 上传不使用这个上下文。 */
+        public static Context allowingEmptyMcpActions(SemVer currentCrabVersion, Set<String> supportedStepTypes) {
+            return new Context(currentCrabVersion, supportedStepTypes, true);
         }
     }
 }

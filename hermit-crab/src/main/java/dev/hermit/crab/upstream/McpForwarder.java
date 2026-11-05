@@ -36,6 +36,8 @@ import dev.hermit.crab.engine.StepLog;
 import dev.hermit.crab.secure.KnownSecrets;
 import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.store.CredentialVault;
+import dev.hermit.crab.store.DevTraceStore;
+import dev.hermit.crab.store.Origin;
 
 /**
  * {@code driver: mcp} 的执行器。权限、停用、审计和幂等仍在 {@code Invoker}。
@@ -70,6 +72,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     private final Duration capabilityTimeout;
     private final TemplateEngine templates = new TemplateEngine();
     private final InputPreparer inputs = new InputPreparer();
+    private volatile DevTraceStore traces;
 
     public McpForwarder(SessionManager accounts, KnownSecrets knownSecrets, Duration capabilityTimeout, int concurrency) {
         this(accounts, knownSecrets, capabilityTimeout, concurrency, null, null);
@@ -96,6 +99,11 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         return oauth;
     }
 
+    /** 调试追踪。不放进构造器，避免和上游 OAuth 的构造改动缠在一起。 */
+    public void bindDevTraces(DevTraceStore traces) {
+        this.traces = traces;
+    }
+
     @Override
     public ExecutionResult execute(ExecutionRequest request, ConchDoc authorized) {
         long started = System.nanoTime();
@@ -108,9 +116,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         if (action == null || action.tool() == null) {
             return finish(request, doc, started, false, null, ErrorCode.RULE_MISMATCH, "能力没有上游工具。", null, List.of());
         }
-        boolean oauthPackage = doc.upstream().auth() != null && doc.upstream().auth().oauth();
-        Map<String, String> credentials = credentials(request.accountContext());
-        if (oauthPackage && oauth.peek(request.origin(), request.conch(), request.account(), credentials) == null) {
+        if (oauthPackage(doc) && !oauthConnected(request)) {
             return finish(request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, OAUTH_NOT_CONNECTED, null, List.of());
         }
         Map<String, Object> arguments;
@@ -119,19 +125,9 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         } catch (InvalidInput ex) {
             return finish(request, doc, started, false, null, ErrorCode.INVALID_INPUT, ex.getMessage(), null, List.of());
         }
-        McpAddresses.ParseResult parsed = McpAddresses.parse(doc.upstream().url());
-        if (!parsed.ok() || !McpAddresses.hostAllowed(parsed.url().host(), doc.upstream().allowedHosts())) {
-            return finish(request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, HOST_DENIED, null, List.of());
-        }
-        boolean allowLoopback = McpAddressGuard.packageAllowsLoopback(parsed.url().host());
-        if (literal(parsed.url().host()) && rejectedLiteral(parsed.url().host(), allowLoopback)) {
-            return finish(request, doc, started, false, null, ErrorCode.UPSTREAM_ERROR, ADDRESS_DENIED, null, List.of());
-        }
-        Map<String, String> headers;
-        try {
-            headers = renderHeaders(doc, request.accountContext());
-        } catch (TemplateException ex) {
-            return finish(request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, "上游请求头无法渲染。", null, List.of());
+        Prepared prepared = prepareUpstream(request, doc, started);
+        if (prepared.denied() != null) {
+            return prepared.denied();
         }
         SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
         McpUpstreamSessions.Permit permit;
@@ -145,14 +141,11 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             return finish(request, doc, started, false, null, ErrorCode.TIMEOUT, DEADLINE, null, List.of());
         }
         try {
-            if (oauthPackage) {
-                McpOAuth.Attempt fresh = oauth.ensureFresh(
-                        request.origin(), request.conch(), request.account(), doc, credentials, deadline);
-                if (!fresh.ok()) {
-                    return finish(request, doc, started, false, null, fresh.code(), fresh.message(), null, List.of());
-                }
-                headers = authorize(headers, fresh.token());
+            TokenGate gate = freshToken(request, doc, prepared.headers(), deadline, started);
+            if (gate.denied() != null) {
+                return gate.denied();
             }
+            Map<String, String> headers = gate.headers();
             Long timeoutMs = doc.upstream().timeoutMs() == null ? null : doc.upstream().timeoutMs().longValue();
             McpUpstreamSessions.CallResult result = sessions.call(
                     key,
@@ -163,20 +156,14 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
                     arguments,
                     deadline,
                     timeoutMs,
-                    allowLoopback);
-            if (oauthPackage && unauthorized(result)) {
-                McpOAuth.Attempt again = oauth.refreshAfterUnauthorized(
-                        request.origin(),
-                        request.conch(),
-                        request.account(),
-                        doc,
-                        credentials,
-                        bearerAccess(headers),
-                        deadline);
-                if (!again.ok()) {
-                    return finish(request, doc, started, false, null, again.code(), again.message(), null, List.of());
+                    prepared.allowLoopback(),
+                    sink(request));
+            if (oauthPackage(doc) && unauthorized(result)) {
+                TokenGate again = refreshedToken(request, doc, headers, deadline, started);
+                if (again.denied() != null) {
+                    return again.denied();
                 }
-                headers = authorize(headers, again.token());
+                headers = again.headers();
                 result = sessions.call(
                         key,
                         doc,
@@ -186,7 +173,8 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
                         arguments,
                         deadline,
                         timeoutMs,
-                        allowLoopback);
+                        prepared.allowLoopback(),
+                        sink(request));
                 if (unauthorized(result)) {
                     oauth.clear(request.origin(), request.conch(), request.account());
                     return finish(request, doc, started, false, null, ErrorCode.AUTH_FAILED, McpOAuth.REJECTED, null, List.of());
@@ -198,10 +186,231 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         }
     }
 
+    /**
+     * 分页拉取 {@code tools/list}。失败时 {@link ListOutcome#failure()} 已是脱敏后的执行结果。
+     * 成功不写调用日志。调试开关和本地包的判断在追踪存储里。
+     */
+    ListOutcome listTools(ExecutionRequest request, ConchDoc doc) {
+        long started = System.nanoTime();
+        long deadline = started + capabilityTimeout.toNanos();
+        if (doc == null || doc.upstream() == null || !"mcp".equals(doc.driver())) {
+            return ListOutcome.failed(finish(request, doc, started, false, null, ErrorCode.INTERNAL, "内部错误", null, List.of()));
+        }
+        if (oauthPackage(doc) && !oauthConnected(request)) {
+            return ListOutcome.failed(finish(
+                    request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, OAUTH_NOT_CONNECTED, null, List.of()));
+        }
+        Prepared prepared = prepareUpstream(request, doc, started);
+        if (prepared.denied() != null) {
+            return ListOutcome.failed(prepared.denied());
+        }
+        SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
+        McpUpstreamSessions.Permit permit;
+        try {
+            permit = sessions.acquire(key, deadline);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return ListOutcome.failed(finish(request, doc, started, false, null, ErrorCode.TIMEOUT, DEADLINE, null, List.of()));
+        }
+        if (permit == null) {
+            return ListOutcome.failed(finish(request, doc, started, false, null, ErrorCode.TIMEOUT, DEADLINE, null, List.of()));
+        }
+        try {
+            TokenGate gate = freshToken(request, doc, prepared.headers(), deadline, started);
+            if (gate.denied() != null) {
+                return ListOutcome.failed(gate.denied());
+            }
+            Map<String, String> headers = gate.headers();
+            Long timeoutMs = doc.upstream().timeoutMs() == null ? null : doc.upstream().timeoutMs().longValue();
+            McpUpstreamSessions.ListResult listed = listOnce(
+                    key, doc, headers, deadline, timeoutMs, prepared.allowLoopback(), sink(request));
+            if (oauthPackage(doc) && listed.failure() != null && unauthorized(listed.failure())) {
+                TokenGate again = refreshedToken(request, doc, headers, deadline, started);
+                if (again.denied() != null) {
+                    return ListOutcome.failed(again.denied());
+                }
+                headers = again.headers();
+                listed = listOnce(key, doc, headers, deadline, timeoutMs, prepared.allowLoopback(), sink(request));
+                if (listed.failure() != null && unauthorized(listed.failure())) {
+                    oauth.clear(request.origin(), request.conch(), request.account());
+                    return ListOutcome.failed(finish(
+                            request, doc, started, false, null, ErrorCode.AUTH_FAILED, McpOAuth.REJECTED, null, List.of()));
+                }
+            }
+            if (listed.limitMessage() != null) {
+                return ListOutcome.failed(finish(
+                        request, doc, started, false, null, ErrorCode.UPSTREAM_ERROR, listed.limitMessage(), null, List.of()));
+            }
+            if (listed.failure() != null) {
+                return ListOutcome.failed(map(request, doc, "tools/list", started, listed.failure()));
+            }
+            if (listed.handle() == null || listed.handle().protocol == null || listed.handle().protocol.isBlank()) {
+                return ListOutcome.failed(finish(
+                        request, doc, started, false, null, ErrorCode.UPSTREAM_ERROR, BAD_PROTOCOL, null, List.of()));
+            }
+            return ListOutcome.ready(
+                    listed.tools(),
+                    listed.handle().protocol,
+                    listed.handle().serverName,
+                    listed.handle().serverVersion);
+        } finally {
+            permit.close();
+        }
+    }
+
     @Override
     public void close() {
         sessions.close();
         oauth.close();
+    }
+
+    private McpUpstreamSessions.ListResult listOnce(
+            SessionKey key,
+            ConchDoc doc,
+            Map<String, String> headers,
+            long deadline,
+            Long timeoutMs,
+            boolean allowLoopback,
+            McpUpstreamSessions.ExchangeSink sink
+    ) {
+        return sessions.list(key, doc, material(headers), headers, deadline, timeoutMs, allowLoopback, sink);
+    }
+
+    private static boolean oauthPackage(ConchDoc doc) {
+        return doc.upstream().auth() != null && doc.upstream().auth().oauth();
+    }
+
+    private boolean oauthConnected(ExecutionRequest request) {
+        return oauth.peek(
+                request.origin(), request.conch(), request.account(), credentials(request.accountContext())) != null;
+    }
+
+    private TokenGate freshToken(
+            ExecutionRequest request,
+            ConchDoc doc,
+            Map<String, String> headers,
+            long deadline,
+            long started
+    ) {
+        if (!oauthPackage(doc)) {
+            return TokenGate.ready(headers);
+        }
+        McpOAuth.Attempt fresh = oauth.ensureFresh(
+                request.origin(),
+                request.conch(),
+                request.account(),
+                doc,
+                credentials(request.accountContext()),
+                deadline);
+        if (!fresh.ok()) {
+            return TokenGate.deny(finish(request, doc, started, false, null, fresh.code(), fresh.message(), null, List.of()));
+        }
+        return TokenGate.ready(authorize(headers, fresh.token()));
+    }
+
+    private TokenGate refreshedToken(
+            ExecutionRequest request,
+            ConchDoc doc,
+            Map<String, String> headers,
+            long deadline,
+            long started
+    ) {
+        McpOAuth.Attempt again = oauth.refreshAfterUnauthorized(
+                request.origin(),
+                request.conch(),
+                request.account(),
+                doc,
+                credentials(request.accountContext()),
+                bearerAccess(headers),
+                deadline);
+        if (!again.ok()) {
+            return TokenGate.deny(finish(request, doc, started, false, null, again.code(), again.message(), null, List.of()));
+        }
+        return TokenGate.ready(authorize(headers, again.token()));
+    }
+
+    private Prepared prepareUpstream(ExecutionRequest request, ConchDoc doc, long started) {
+        McpAddresses.ParseResult parsed = McpAddresses.parse(doc.upstream().url());
+        if (!parsed.ok() || !McpAddresses.hostAllowed(parsed.url().host(), doc.upstream().allowedHosts())) {
+            return Prepared.deny(finish(request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, HOST_DENIED, null, List.of()));
+        }
+        boolean allowLoopback = McpAddressGuard.packageAllowsLoopback(parsed.url().host());
+        if (literal(parsed.url().host()) && rejectedLiteral(parsed.url().host(), allowLoopback)) {
+            return Prepared.deny(finish(request, doc, started, false, null, ErrorCode.UPSTREAM_ERROR, ADDRESS_DENIED, null, List.of()));
+        }
+        try {
+            return Prepared.ready(renderHeaders(doc, request.accountContext()), allowLoopback);
+        } catch (TemplateException ex) {
+            return Prepared.deny(finish(request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, "上游请求头无法渲染。", null, List.of()));
+        }
+    }
+
+    private McpUpstreamSessions.ExchangeSink sink(ExecutionRequest request) {
+        return (method, id, httpStatus, durationMs, params, result, error, sessionId) ->
+                record(request, method, id, httpStatus, durationMs, params, result, error, sessionId);
+    }
+
+    private void record(
+            ExecutionRequest request,
+            String method,
+            Object id,
+            int httpStatus,
+            long durationMs,
+            Object params,
+            Object result,
+            Object error,
+            String sessionId
+    ) {
+        DevTraceStore store = traces;
+        if (store == null || request.origin() != Origin.LOCAL) {
+            return;
+        }
+        if (sessionId != null && !sessionId.isBlank()) {
+            knownSecrets.add(sessionId);
+        }
+        LinkedHashSet<String> secrets = new LinkedHashSet<>();
+        if (request.accountContext() != null && request.accountContext().credentials() != null) {
+            for (String value : request.accountContext().credentials().values()) {
+                if (value != null) {
+                    secrets.add(value);
+                }
+            }
+        }
+        secrets.addAll(knownSecrets.copy());
+        if (sessionId != null && !sessionId.isBlank()) {
+            secrets.add(sessionId);
+        }
+        try {
+            store.recordJsonRpc(new DevTraceStore.JsonRpcTrace(
+                    request.traceId(),
+                    Origin.LOCAL,
+                    request.conch(),
+                    request.account(),
+                    request.action(),
+                    method,
+                    id,
+                    httpStatus,
+                    durationMs,
+                    params,
+                    "initialize".equals(method) ? dropInstructions(result) : result,
+                    error,
+                    List.copyOf(secrets)));
+        } catch (RuntimeException ex) {
+            // 存储自己会记下失败。这里不再打断转发。
+        }
+    }
+
+    private static Object dropInstructions(Object result) {
+        if (!(result instanceof Map<?, ?> map) || !map.containsKey("instructions")) {
+            return result;
+        }
+        LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (!"instructions".equals(String.valueOf(entry.getKey()))) {
+                copy.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+        return copy;
     }
 
     private ExecutionResult map(
@@ -502,5 +711,41 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             return (List<Object>) list;
         }
         return List.of();
+    }
+
+    private record TokenGate(ExecutionResult denied, Map<String, String> headers) {
+        static TokenGate deny(ExecutionResult result) {
+            return new TokenGate(result, Map.of());
+        }
+
+        static TokenGate ready(Map<String, String> headers) {
+            return new TokenGate(null, headers);
+        }
+    }
+
+    private record Prepared(ExecutionResult denied, Map<String, String> headers, boolean allowLoopback) {
+        static Prepared deny(ExecutionResult result) {
+            return new Prepared(result, Map.of(), false);
+        }
+
+        static Prepared ready(Map<String, String> headers, boolean allowLoopback) {
+            return new Prepared(null, headers, allowLoopback);
+        }
+    }
+
+    record ListOutcome(
+            List<JsonNode> tools,
+            String protocol,
+            String serverName,
+            String serverVersion,
+            ExecutionResult failure
+    ) {
+        static ListOutcome failed(ExecutionResult failure) {
+            return new ListOutcome(List.of(), null, null, null, failure);
+        }
+
+        static ListOutcome ready(List<JsonNode> tools, String protocol, String serverName, String serverVersion) {
+            return new ListOutcome(List.copyOf(tools), protocol, serverName, serverVersion, null);
+        }
     }
 }

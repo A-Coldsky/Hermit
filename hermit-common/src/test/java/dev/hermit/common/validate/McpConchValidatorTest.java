@@ -61,6 +61,31 @@ class McpConchValidatorTest {
     }
 
     @Test
+    void emptyMcpActionsAreAWarningOnlyForTheLocalDebugContext() {
+        ConchDoc doc = ConchParser.parse("""
+                conch: vendor_crm
+                version: 1.0.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                upstream:
+                  url: https://crm.intra.example.com/mcp
+                  transport: streamable_http
+                  auth: {type: headers}
+                """);
+        ValidationResult strict = ConchValidator.validate(doc, ConchValidator.Context.of(null));
+        assertThat(codes(strict)).contains(ValidationCodes.MCP_NO_ACTIONS);
+        ValidationResult local = ConchValidator.validate(
+                doc, ConchValidator.Context.allowingEmptyMcpActions(null, null));
+        assertThat(codes(local)).doesNotContain(ValidationCodes.MCP_NO_ACTIONS);
+        assertThat(local.warnings()).extracting(ValidationIssue::code).contains(ValidationCodes.MCP_NO_ACTIONS);
+        assertThat(local.warnings()).extracting(ValidationIssue::message)
+                .anyMatch(message -> message.contains("刷新工具列表"));
+    }
+
+    @Test
     void rejectsHttpFieldsStdioLowVersionAndHostTricks() {
         ValidationResult result = validate(ConchParser.parse("""
                 conch: vendor_crm

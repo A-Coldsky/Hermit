@@ -101,13 +101,52 @@ public final class DevTraceDraft {
     /**
      * One JSON-RPC exchange. {@code fields} may contain method, id, httpStatus, durationMs,
      * params, result, and error. Session ids are stripped with the same header rule as HTTP.
+     * The rendered document also keeps that exchange in {@code exchanges}.
      */
     public static String renderJsonRpc(Map<String, Object> fields, Redactor redactor) {
         LinkedHashMap<String, Object> document = base("jsonrpc");
         if (fields != null) {
             document.putAll(fields);
         }
+        ArrayList<Object> exchanges = new ArrayList<>();
+        exchanges.add(exchangeOf(document));
+        document.put("exchanges", exchanges);
         return renderMasked(document, redactor, JSONRPC_FAILURE);
+    }
+
+    /**
+     * Appends one already-redacted exchange onto an existing JSON-RPC trace.
+     * A redaction failure replaces the stored body so a later exchange cannot keep an earlier secret.
+     */
+    public static String mergeJsonRpc(String existingBody, String incomingBody) {
+        if (incomingBody == null || incomingBody.isBlank() || JSONRPC_FAILURE.equals(incomingBody)) {
+            return JSONRPC_FAILURE;
+        }
+        if (existingBody == null || existingBody.isBlank() || JSONRPC_FAILURE.equals(existingBody)) {
+            return incomingBody;
+        }
+        try {
+            Map<String, Object> existing = readObject(existingBody);
+            Map<String, Object> incoming = readObject(incomingBody);
+            if (Boolean.TRUE.equals(incoming.get("redactionFailed"))) {
+                return JSONRPC_FAILURE;
+            }
+            if (Boolean.TRUE.equals(existing.get("redactionFailed"))) {
+                return incomingBody;
+            }
+            ArrayList<Object> exchanges = new ArrayList<>();
+            appendExchanges(exchanges, existing);
+            appendExchanges(exchanges, incoming);
+            LinkedHashMap<String, Object> document = base("jsonrpc");
+            document.put("exchanges", exchanges);
+            projectLastExchange(document);
+            limitFields(document);
+            limitTrace(document);
+            return ApiJson.write(document);
+        } catch (RuntimeException ex) {
+            LOG.warning("jsonrpc merge failed: " + ex.getClass().getName());
+            return JSONRPC_FAILURE;
+        }
     }
 
     public static Map<String, Object> requestPiece(
@@ -227,21 +266,43 @@ public final class DevTraceDraft {
         if (!"jsonrpc".equals(document.get("kind"))) {
             return;
         }
-        for (String field : List.of("params", "result", "error")) {
-            Object value = document.get(field);
-            if (value == null) {
-                continue;
-            }
-            LinkedHashMap<String, Object> holder = new LinkedHashMap<>();
-            holder.put("value", mutableValue(value));
-            if (utf8(holder) <= STEP_LIMIT) {
-                continue;
-            }
-            fit(holder, STEP_LIMIT, STEP_NOTE);
-            document.put(field, holder.get("value"));
+        if (capJsonRpcFields(document)) {
             document.put("truncated", true);
             document.put("truncation", STEP_NOTE);
         }
+        Object raw = document.get("exchanges");
+        if (!(raw instanceof List<?> exchanges)) {
+            return;
+        }
+        for (Object item : exchanges) {
+            if (item instanceof Map<?, ?> map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> exchange = (Map<String, Object>) map;
+                if (capJsonRpcFields(exchange)) {
+                    document.put("truncated", true);
+                    document.put("truncation", STEP_NOTE);
+                }
+            }
+        }
+    }
+
+    private static boolean capJsonRpcFields(Map<String, Object> holder) {
+        boolean truncated = false;
+        for (String field : List.of("params", "result", "error")) {
+            Object value = holder.get(field);
+            if (value == null) {
+                continue;
+            }
+            LinkedHashMap<String, Object> wrapped = new LinkedHashMap<>();
+            wrapped.put("value", mutableValue(value));
+            if (utf8(wrapped) <= STEP_LIMIT) {
+                continue;
+            }
+            fit(wrapped, STEP_LIMIT, STEP_NOTE);
+            holder.put(field, wrapped.get("value"));
+            truncated = true;
+        }
+        return truncated;
     }
 
     private static void limitTrace(Map<String, Object> document) {
@@ -256,9 +317,88 @@ public final class DevTraceDraft {
                 steps.remove(steps.size() - 1);
             }
         }
+        Object exchanges = document.get("exchanges");
+        if (exchanges instanceof List<?> list) {
+            while (list.size() > 1 && utf8(document) > TRACE_LIMIT) {
+                list.remove(0);
+                projectLastExchange(document);
+            }
+        }
         if (utf8(document) > TRACE_LIMIT) {
             fit(document, TRACE_LIMIT, TRACE_NOTE);
         }
+    }
+
+    private static Map<String, Object> exchangeOf(Map<String, Object> source) {
+        LinkedHashMap<String, Object> exchange = new LinkedHashMap<>();
+        for (String field : List.of("method", "id", "httpStatus", "durationMs", "params", "result", "error")) {
+            if (source.containsKey(field)) {
+                exchange.put(field, source.get(field));
+            }
+        }
+        return exchange;
+    }
+
+    private static void appendExchanges(List<Object> exchanges, Map<String, Object> document) {
+        Object raw = document.get("exchanges");
+        if (raw instanceof List<?> list && !list.isEmpty()) {
+            exchanges.addAll(list);
+            return;
+        }
+        if (document.get("method") != null) {
+            exchanges.add(exchangeOf(document));
+        }
+    }
+
+    private static void projectLastExchange(Map<String, Object> document) {
+        Object raw = document.get("exchanges");
+        if (!(raw instanceof List<?> list) || list.isEmpty() || !(list.get(list.size() - 1) instanceof Map<?, ?> last)) {
+            return;
+        }
+        for (String field : List.of("method", "id", "httpStatus", "durationMs", "params", "result", "error")) {
+            if (last.containsKey(field)) {
+                document.put(field, last.get(field));
+            } else {
+                document.remove(field);
+            }
+        }
+    }
+
+    private static Map<String, Object> readObject(String json) {
+        com.fasterxml.jackson.databind.JsonNode node = ApiJson.tree(json);
+        Object value = mutableValue(fromNode(node));
+        if (!(value instanceof Map<?, ?> map)) {
+            throw new IllegalArgumentException("trace body");
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> typed = (Map<String, Object>) map;
+        return typed;
+    }
+
+    private static Object fromNode(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        if (node.isObject()) {
+            LinkedHashMap<String, Object> map = new LinkedHashMap<>();
+            node.fields().forEachRemaining(entry -> map.put(entry.getKey(), fromNode(entry.getValue())));
+            return map;
+        }
+        if (node.isArray()) {
+            ArrayList<Object> list = new ArrayList<>();
+            node.forEach(item -> list.add(fromNode(item)));
+            return list;
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue();
+        }
+        if (node.isIntegralNumber()) {
+            return node.longValue();
+        }
+        if (node.isFloatingPointNumber()) {
+            return node.doubleValue();
+        }
+        return node.asText();
     }
 
     private static void fit(Map<String, Object> node, int limit, String note) {

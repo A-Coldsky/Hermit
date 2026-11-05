@@ -38,7 +38,7 @@ actions:
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
 | `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.1.0。`driver: mcp` 还要求不低于 1.1.0 |
-| `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。工具列表刷新还没有 |
+| `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。调试开关打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
 | `config` | 可选字段映射；字段支持默认值；不用于保存秘密 |
@@ -62,7 +62,7 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 
 ## MCP 上游包
 
-`driver: mcp` 描述上游 MCP 服务。`transport` 只接受 `streamable_http`。`stdio` 与 `local_ref` 都拒绝，包里不能带要在 Crab 上执行的命令。Crab 对 `auth.type: headers` 按 Streamable HTTP 转发：渲染 `upstream.headers`，按账号复用会话，把 action 转成上游 `tools/call`。`oauth` 用授权码和 PKCE 在控制台登录，令牌放凭证库，调用前刷新。工具列表刷新还没有。Reef 从包内读出上游和工具表，不连接上游。
+`driver: mcp` 描述上游 MCP 服务。`transport` 只接受 `streamable_http`。`stdio` 与 `local_ref` 都拒绝，包里不能带要在 Crab 上执行的命令。Crab 对 `auth.type: headers` 按 Streamable HTTP 转发：渲染 `upstream.headers`，按账号复用会话，把 action 转成上游 `tools/call`。`oauth` 用授权码和 PKCE 在控制台登录，令牌放凭证库，调用前刷新。调试开关打开时，本地包的 `tools/list` 刷新走同一条取令牌和 401 刷新路径。Reef 从包内读出上游和工具表，不连接上游。
 
 ```yaml
 conch: vendor_crm
@@ -89,11 +89,13 @@ actions:
     related: [search_customer]
 ```
 
-不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。`actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`。还没有 action 的本地骨架不在本批放行。`tools.include` / `exclude` 会保存，只准备给以后的刷新过滤；现在能调用的名字仍只有 `actions`。
+不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。Reef 上传和正式包要求 `actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`，message 为「mcp 包必须至少有一个 action」。调试开关打开时，本地包的空 `actions` 只是同一错误码的警告，message 为「mcp 包还没有 action，刷新工具列表后才能调用。」。开关关掉时，空文件仍不能导入。`tools.include` / `exclude` 在刷新时过滤：`include` 省略或为空表示全部，`exclude` 优先，`*` 与 `?` 按整段、区分大小写匹配。能调用的名字仍只有刷新之后留下的 `actions`。
+
+本地刷新按上游工具名合并，不改 `version`。已有 action 保留本地名字、标题、描述、`read_only`、`destructive`、`confirm`、`idempotent` 和 `notes`，更新 schema、上游注解和 `schema_sha256`。新工具的本地名把非 `[a-z0-9]` 换成 `_`，长度 2–64，冲突时加 `_2`、`_3`。新描述去掉 C0 控制字符（保留换行、回车、制表）、零宽与双向字符，以及 ANSI CSI/OSC，截到 2 KiB UTF-8；空了就写成「（上游未提供描述）」。不删 URL，也不删「忽略之前的指令」。新工具的 `read_only` 只在 `readOnlyHint` 为 true 时为 true；`destructiveHint` 是布尔就用它（显式 false 保持 false），没有这个布尔时非只读为 true；`confirm` 写成与 `destructive` 相同。不把 `idempotentHint` 抄到 `idempotent`。注解去掉 `_meta`。没有 `inputSchema` 时写成 `{type: object}`；上游没有 `outputSchema` 就不写 `output_schema`。`snapshot.tools_sha256` 哈希的是过滤前的完整列表。`initialize` 的 `capabilities` 仍是 `{}`，依赖 elicitation 或 sampling 才出现的工具不会进包。写回会丢掉 YAML 注释和原来的排版。上游工具超过 500 个、超过 20 页，或分页游标不前进时整次失败，不改文件。
 
 `upstream.auth.type` 是 `headers` 或 `oauth`。`headers` 的请求头模板只能引用 `{{credential.*}}` 和 `{{config.*}}`，不能引用 `input`。HTTP 包允许模板里出现未声明的 `config.base_url`，mcp 请求头没有这项豁免。`oauth` 必须写 `client_id`。`scopes` 里不能有空字符串。`authorization_endpoint` 和 `token_endpoint` 可以省略。省略时 Crab 先看 MCP 地址返回 401 时 `WWW-Authenticate` 里的 `resource_metadata`，再按 RFC 9728 请求路径感知和根上的 `/.well-known/oauth-protected-resource`，然后按 RFC 8414 读取授权服务器元数据；没有再试 `/.well-known/openid-configuration`。每个 URL 都要过 `allowed_hosts` 和地址检查，不跟随重定向，也不做动态客户端注册。写了的端点必须是不带模板、用户信息和片段的 http 或 https URL。https 的主机要落在 `allowed_hosts`。http 还要和 `upstream.url` 同一源（协议、主机、端口；省略端口时 https 为 443、http 为 80）。`oauth` 不能再设置 `Authorization`。
 
-登录只在 Crab 控制台做。PKCE 用 S256，回调是本机 `GET /console/oauth/callback`。访问令牌、刷新令牌和到期时间写在凭证库字段 `oauth_token`，按 `(origin, conch, account)` 分开，不进规则包，导出的 YAML 里也没有。控制台凭证名单和 `credential list` 都不显示这个字段，手写会被拒绝。源站若还要客户端机密，声明 `credentials.client_secret`，值在凭证库，不在 YAML。调用前若访问令牌在 60 秒内到期就刷新；上游轮换刷新令牌时只留新的，没发新的就沿用原来的。令牌端点拒绝，或调用得到 HTTP 401、刷新后重放仍是 401，就清掉这组令牌并返回 `AUTH_FAILED`，不再用旧访问令牌打工具。主机不在允许列表、发现失败，或刷新时网络失败，不清令牌。`needsConfiguration` 不把未连接算进去；账号行的 `oauth` 表示连上没有。同步删掉规则包里已经移除的凭证声明时，不会删 `oauth_token`。
+登录只在 Crab 控制台做。PKCE 用 S256，回调是本机 `GET /console/oauth/callback`。访问令牌、刷新令牌和到期时间写在凭证库字段 `oauth_token`，按 `(origin, conch, account)` 分开，不进规则包，导出的 YAML 里也没有。控制台凭证名单和 `credential list` 都不显示这个字段，手写会被拒绝。源站若还要客户端机密，声明 `credentials.client_secret`，值在凭证库，不在 YAML。调用前若访问令牌在 60 秒内到期就刷新；上游轮换刷新令牌时只留新的，没发新的就沿用原来的。令牌端点拒绝，或 `tools/call`、本地刷新的 `tools/list` 得到 HTTP 401、刷新后重放仍是 401，就清掉这组令牌并返回 `AUTH_FAILED`，不再用旧访问令牌打工具。没连上时刷新是 `NOT_CONFIGURED`「尚未连接上游。请到控制台连接上游。」，不打 `initialize`。主机不在允许列表、发现失败，或刷新时网络失败，不清令牌。`needsConfiguration` 不把未连接算进去；账号行的 `oauth` 表示连上没有。同步删掉规则包里已经移除的凭证声明时，不会删 `oauth_token`。
 
 禁止的请求头不区分大小写：`Host`、`Content-Length`、`Cookie`、`Mcp-Session-Id`、`MCP-Protocol-Version`、`Accept`、`Content-Type`。头的值若是字面凭证，仍走原来的明文凭证检查。`timeout_ms` 若写了必须是正整数。
 
@@ -105,11 +107,11 @@ actions:
 
 `schema_sha256` 可省略。写了就必须是 64 位小写十六进制，并且等于 `ToolSnapshots.schemaSha256(input_schema, output_schema)`。没写 `output_schema` 时摘要不含 `outputSchema`；写成 `{}` 会写入，两者不同。对象键按字典序，每一层去掉 `_meta`，数组保持原顺序。摘要是紧凑 JSON 的 UTF-8 SHA-256，小写十六进制。
 
-`snapshot` 可省略。写了就必须有能按 `Instant` 解析的 `fetched_at`、`protocol_version`，以及 64 位小写十六进制的 `tools_sha256`。`server` 可省略；写了则 `name` 和 `version` 都要有。校验不按 actions 重算 `tools_sha256`。`ToolSnapshots.toolsSha256` 只取 `tools` 数组，按 `name` 排序，键排序并去掉 `_meta`，忽略 `nextCursor`。刷新还没做，版本对比和以后的刷新共用这个算法。
+`snapshot` 可省略。写了就必须有能按 `Instant` 解析的 `fetched_at`、`protocol_version`，以及 64 位小写十六进制的 `tools_sha256`。`server` 可省略；写了则 `name` 和 `version` 都要有。校验不按 actions 重算 `tools_sha256`。`ToolSnapshots.toolsSha256` 只取 `tools` 数组，按 `name` 排序，键排序并去掉 `_meta`，忽略 `nextCursor`。版本对比和本地刷新共用这个算法；刷新写入的是过滤前的完整列表。
 
 没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。带上游工具的 action，`effectiveMethod()` 固定 POST，Crab 对外注解的 `destructiveHint` 用这个有效破坏性，`readOnlyHint` 用 `mcp.read_only`，`idempotentHint` 用 `idempotent`。HTTP 能力的注解里，`destructiveHint` 同样是声明的 destructive（缺省 false），不再从「非只读且非幂等」推导。目录元工具 `call_capability` 仍用那条旧公式。`inputJsonSchema()` 返回原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文。管理 API 的列表和详情另外给出 `upstream`、`snapshot` 和 `tools`，字段见 [api.md](api.md)。Reef 管理端目录和详情已列出这些工具。
 
-缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。`notes` 和 `related` 的原有警告仍在。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新时去掉这些字符不在本批。
+缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。`notes` 和 `related` 的原有警告仍在。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
 `min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。`CrabVersion.CURRENT` 现为 1.1.0，Crab 可以载入 1.1.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求 1.2.0 时会报高于当前 Crab。Maven 制品版本仍是 `0.1.0-SNAPSHOT`。没有新的 `ErrorCode`，也没有数据库迁移。
 

@@ -77,7 +77,7 @@ describe('Reef 规则包目录视图', () => {
     expect(wrapper.find('.cards .conch').exists()).toBe(true)
     expect(wrapper.find('.el-table').exists()).toBe(false)
 
-    await wrapper.findAll('.el-radio-button input')[1].setValue(true)
+    await wrapper.get('[aria-label="列表视图"] input').setValue(true)
     await flushPromises()
     expect(wrapper.find('.el-table').exists()).toBe(true)
     expect(localStorage.getItem('hermit.reef.conchesView')).toBe('table')

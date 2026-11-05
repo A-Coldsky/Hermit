@@ -105,8 +105,11 @@ class McpHttpTest {
             assertThat(todo.path("annotations").path("idempotentHint").asBoolean()).isTrue();
             JsonNode save = tool(tools, "legacy_oa__save_note");
             assertThat(save.path("annotations").path("readOnlyHint").asBoolean()).isFalse();
-            assertThat(save.path("annotations").path("destructiveHint").asBoolean()).isTrue();
+            assertThat(save.path("annotations").path("destructiveHint").asBoolean()).isFalse();
             assertThat(save.path("annotations").path("idempotentHint").asBoolean()).isFalse();
+            JsonNode purge = tool(tools, "legacy_oa__purge_note");
+            assertThat(purge.path("annotations").path("destructiveHint").asBoolean()).isTrue();
+            assertThat(purge.path("annotations").path("idempotentHint").asBoolean()).isTrue();
             JsonNode lookup = tool(tools, "account_conch__lookup");
             assertThat(lookup.path("inputSchema").path("properties").has("account")).isTrue();
             assertThat(lookup.path("inputSchema").path("properties").has("_account")).isTrue();
@@ -928,7 +931,7 @@ class McpHttpTest {
                       - input: { text: hi }
                         output: { saved: true }
                     notes: 需要确认后才执行
-                    mcp: { read_only: false }
+                    mcp: { read_only: false, destructive: true }
                 """);
         for (int i = 0; i < 40; i++) {
             yaml.append("""
@@ -1053,6 +1056,23 @@ class McpHttpTest {
                       output: { saved: true }
                   notes: 测试写能力。
                   mcp: { read_only: false }
+                purge_note:
+                  title: 清空备注
+                  description: 清空全部备注。
+                  method: POST
+                  idempotent: true
+                  input:
+                    text: { type: string, description: 备注正文 }
+                  steps:
+                    - set:
+                        saved: true
+                  output:
+                    saved: { type: boolean, description: 是否已清空 }
+                  examples:
+                    - input: { text: hello }
+                      output: { saved: true }
+                  notes: 幂等但破坏。
+                  mcp: { read_only: false, destructive: true }
                 """.stripIndent().indent(2);
         return sample.replace("health_check:", action + "health_check:");
     }

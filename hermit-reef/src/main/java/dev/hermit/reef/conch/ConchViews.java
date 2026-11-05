@@ -51,7 +51,11 @@ record ConchSummary(
         Instant disabledAt,
         String disabledBy,
         String disabledReason,
-        long pullCount) {
+        long pullCount,
+        String driver,
+        UpstreamView upstream,
+        SnapshotView snapshot,
+        List<ToolView> tools) {
 }
 
 record ConchVersionItem(
@@ -152,7 +156,10 @@ record ConchDetail(
         Instant disabledAt,
         String disabledBy,
         String disabledReason,
-        long pullCount) {
+        long pullCount,
+        UpstreamView upstream,
+        SnapshotView snapshot,
+        List<ToolView> tools) {
 
     static ConchDetail from(ConchDoc doc, AvailabilityRow availability, long pullCount) {
         Map<String, CredentialDeclaration> credentials = new java.util.LinkedHashMap<>();
@@ -163,10 +170,11 @@ record ConchDetail(
         doc.config().forEach((name, field) -> config.put(name, ConfigDeclaration.from(field)));
         Map<String, CapabilityView> actions = new java.util.LinkedHashMap<>();
         doc.actions().forEach((name, action) -> actions.put(name, CapabilityView.from(action)));
+        McpPackageView.Projection mcp = McpPackageView.of(doc);
         return new ConchDetail(
                 doc.conch(),
                 doc.version().toString(),
-                doc.driver(),
+                mcp.driver(),
                 doc.minCrabVersion().toString(),
                 doc.baseUrl(),
                 doc.title(),
@@ -181,8 +189,53 @@ record ConchDetail(
                 availability != null && availability.disabled() ? availability.disabledAt() : null,
                 availability != null && availability.disabled() ? availability.disabledBy() : null,
                 availability != null && availability.disabled() ? availability.disabledReason() : null,
-                pullCount);
+                pullCount,
+                mcp.upstream(),
+                mcp.snapshot(),
+                mcp.tools());
     }
+}
+
+/** {@code upstream.auth} 只公开类型。请求头模板不出现在管理 API 里。 */
+record UpstreamAuthView(String type) {
+}
+
+/**
+ * 包内上游。{@code allowedHosts} 是解析后的列表：省略时已由解析器填成 URL 主机。
+ */
+record UpstreamView(
+        String url,
+        String transport,
+        UpstreamAuthView auth,
+        List<String> allowedHosts) {
+}
+
+/** 快照里的上游服务器名和版本。没有 {@code server} 键时为 null。 */
+record SnapshotServerView(String name, String version) {
+}
+
+/**
+ * 写进包里的快照。{@code fetchedAt} 是 YAML 原文，不是 Reef 读到这份包的时间。
+ */
+record SnapshotView(
+        String fetchedAt,
+        String protocolVersion,
+        SnapshotServerView server,
+        String toolsSha256) {
+}
+
+/**
+ * 工具表的一行。破坏性和确认是有效值，与 {@code ConchDiff} 的工具差异相同。
+ * {@code schemaSha256} 按 {@code ToolSnapshots.schemaSha256} 计算，不看 YAML 里声明的原文。
+ */
+record ToolView(
+        String name,
+        String upstreamName,
+        boolean readOnly,
+        boolean destructive,
+        boolean confirm,
+        Map<String, Object> upstreamAnnotations,
+        String schemaSha256) {
 }
 
 record ManifestEntry(
@@ -193,8 +246,13 @@ record ManifestEntry(
         String title,
         String description,
         int capabilityCount,
-        List<String> requiredCredentials) {
+        List<String> requiredCredentials,
+        String driver,
+        String upstreamHost) {
     ManifestEntry {
         requiredCredentials = requiredCredentials == null ? List.of() : List.copyOf(requiredCredentials);
+        if (driver == null || driver.isBlank()) {
+            driver = "http";
+        }
     }
 }

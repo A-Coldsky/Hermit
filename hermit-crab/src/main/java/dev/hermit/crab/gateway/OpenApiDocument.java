@@ -82,9 +82,15 @@ public final class OpenApiDocument {
         if (method == HttpMethod.POST) {
             operation.put("requestBody", requestBody(action.inputJsonSchema()));
         }
+        Map<String, Object> dataSchema = action.tool() == null
+                ? action.outputJsonSchema()
+                : Map.of("type", "object");
         operation.put("responses", Map.of("200", Map.of(
                 "description", "envelope",
-                "content", Map.of("application/json", Map.of("schema", envelope(action.outputJsonSchema()))))));
+                "content", Map.of("application/json", Map.of("schema", envelope(dataSchema))))));
+        if (action.tool() != null) {
+            operation.put("x-hermit-driver", "mcp");
+        }
         if (alias) {
             operation.put("x-hermit-alias", true);
         }
@@ -113,6 +119,12 @@ public final class OpenApiDocument {
         }
         if (method == HttpMethod.POST) {
             parameters.add(parameter("Idempotency-Key", "header", false, Map.of("type", "string", "maxLength", 128)));
+        }
+        if (action.effectiveConfirm()) {
+            parameters.add(parameter("X-Hermit-Confirm", "header", true, Map.of(
+                    "type", "string",
+                    "enum", List.of("true"),
+                    "description", "破坏性操作必须带 true，否则拒绝且不会调用上游。")));
         }
         if (method == HttpMethod.GET) {
             Set<String> required = stringSet(action.inputJsonSchema().get("required"));

@@ -55,10 +55,3 @@ final class DeadlineExceeded extends RuntimeException {
         this.logs = logs == null ? List.of() : List.copyOf(logs);
     }
 }
-
-final class InvalidInput extends RuntimeException {
-
-    InvalidInput(String message) {
-        super(message);
-    }
-}

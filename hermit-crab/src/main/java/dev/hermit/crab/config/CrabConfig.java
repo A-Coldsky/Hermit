@@ -22,7 +22,8 @@ public record CrabConfig(
         int capabilityTimeoutSeconds,
         int sessionIdleMinutes,
         int maxLoginFailures,
-        List<String> mcpAllowedOrigins
+        List<String> mcpAllowedOrigins,
+        int mcpMaxConcurrencyPerAccount
 ) {
     public CrabConfig {
         if (serverHost == null || serverHost.isBlank()) {
@@ -46,6 +47,9 @@ public record CrabConfig(
         if (maxLoginFailures < 1) {
             throw new IllegalArgumentException("engine.max_login_failures must be positive");
         }
+        if (mcpMaxConcurrencyPerAccount < 1 || mcpMaxConcurrencyPerAccount > 32) {
+            throw new IllegalArgumentException("engine.mcp_max_concurrency_per_account must be from 1 to 32");
+        }
         disabledCapabilities = List.copyOf(disabledCapabilities == null ? List.of() : disabledCapabilities);
         aliases = aliases == null ? Map.of() : Map.copyOf(aliases);
         for (String disabled : disabledCapabilities) {
@@ -58,7 +62,7 @@ public record CrabConfig(
     }
 
     public static CrabConfig defaults() {
-        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 1800, List.of(), Map.of(), 60, 10, 3, List.of());
+        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 1800, List.of(), Map.of(), 60, 10, 3, List.of(), 4);
     }
 
     public EngineSettings engineSettings() {
@@ -72,35 +76,42 @@ public record CrabConfig(
         return new CrabConfig(
                 url, token, publicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount);
     }
 
     public CrabConfig withListen(String host, int port) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, host, port, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount);
     }
 
     public CrabConfig withAliases(Map<String, String> aliasMap) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliasMap, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount);
     }
 
     public CrabConfig withDisabled(List<String> disabled) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabled, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount);
+    }
+
+    public CrabConfig withLimits(int capabilityTimeoutSeconds, int concurrencyPerAccount) {
+        return new CrabConfig(
+                reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
+                reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
+                maxLoginFailures, mcpAllowedOrigins, concurrencyPerAccount);
     }
 
     public CrabConfig withMcpAllowedOrigins(List<String> origins) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, origins);
+                maxLoginFailures, origins, mcpMaxConcurrencyPerAccount);
     }
 
     public static void requireAlias(String path, String target) {

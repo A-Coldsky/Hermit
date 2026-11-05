@@ -7,20 +7,31 @@ import java.util.Set;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SchemaValidatorsConfig;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
 
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ParamSpec;
 
-final class InputPreparer {
+public final class InputPreparer {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private final JsonSchemaFactory schemas = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V7);
+    private final JsonSchemaFactory draft2020 = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
 
-    Map<String, Object> prepare(Action action, Map<String, Object> rawInput) {
+    public Map<String, Object> prepare(Action action, Map<String, Object> rawInput) {
+        if (action.tool() != null) {
+            return prepareMcp(action, rawInput);
+        }
+        return prepareHttp(action, rawInput);
+    }
+
+    /** HTTP 入参。按 ParamSpec 转换字符串，schema 里已经带 {@code additionalProperties: false}。 */
+    private Map<String, Object> prepareHttp(Action action, Map<String, Object> rawInput) {
         LinkedHashMap<String, Object> values = new LinkedHashMap<>();
         if (rawInput != null) {
             values.putAll(rawInput);
@@ -47,6 +58,55 @@ final class InputPreparer {
             throw new InvalidInput("输入无效: " + paths(messages));
         }
         return values;
+    }
+
+    /**
+     * 按包内原文校验。不补 {@code additionalProperties}，也不去加载 {@code $schema} 或远程 {@code $ref}。
+     */
+    private Map<String, Object> prepareMcp(Action action, Map<String, Object> rawInput) {
+        LinkedHashMap<String, Object> values = new LinkedHashMap<>();
+        if (rawInput != null) {
+            values.putAll(rawInput);
+        }
+        Map<String, Object> schema = action.inputJsonSchema();
+        if (schema.isEmpty()) {
+            return values;
+        }
+        JsonNode schemaNode = JSON.valueToTree(schema);
+        rejectRemoteRefs(schemaNode);
+        boolean draft202012 = false;
+        if (schemaNode instanceof ObjectNode object) {
+            JsonNode dialect = object.remove("$schema");
+            draft202012 = dialect != null && dialect.asText("").contains("2020-12");
+        }
+        SchemaValidatorsConfig config = new SchemaValidatorsConfig();
+        config.setPreloadJsonSchema(false);
+        JsonSchema compiled = (draft202012 ? draft2020 : schemas).getSchema(schemaNode, config);
+        Set<ValidationMessage> messages = compiled.validate(JSON.valueToTree(values));
+        if (!messages.isEmpty()) {
+            throw new InvalidInput("输入无效: " + paths(messages));
+        }
+        return values;
+    }
+
+    private static void rejectRemoteRefs(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (node.isObject()) {
+            JsonNode ref = node.get("$ref");
+            if (ref != null && ref.isTextual()) {
+                String text = ref.asText("");
+                if (!"#".equals(text) && !text.startsWith("#/")) {
+                    throw new InvalidInput("远程 schema 引用被拒绝");
+                }
+            }
+            node.properties().forEach(entry -> rejectRemoteRefs(entry.getValue()));
+            return;
+        }
+        if (node.isArray()) {
+            node.forEach(InputPreparer::rejectRemoteRefs);
+        }
     }
 
     private static Object coerce(String field, String type, String text) {

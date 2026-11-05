@@ -13,7 +13,9 @@ import FieldTable from '../components/FieldTable.vue'
 import CapabilityList from '../components/CapabilityList.vue'
 import VersionPanel from '../components/VersionPanel.vue'
 import ConchStats from '../components/ConchStats.vue'
-import { pullCountHint } from '../labels'
+import DriverBadge from '../components/DriverBadge.vue'
+import McpToolTable from '../components/McpToolTable.vue'
+import { isMcp, mcpAuthLabels, pullCountHint, transportLabels } from '../labels'
 
 const props = defineProps<{ conch: string }>()
 const route = useRoute()
@@ -28,6 +30,12 @@ const tab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'overvie
 const credentialCount = computed(() => Object.keys(detail.value?.credentials ?? {}).length)
 const configCount = computed(() => Object.keys(detail.value?.config ?? {}).length)
 const capabilityCount = computed(() => Object.keys(detail.value?.actions ?? {}).length)
+const mcp = computed(() => (detail.value ? isMcp(detail.value) : false))
+const toolCount = computed(() => detail.value?.tools?.length ?? 0)
+const authLabel = computed(() => {
+  const type = detail.value?.upstream?.auth?.type
+  return type ? (mcpAuthLabels[type] ?? type) : '未声明'
+})
 const unpublished = computed(() => {
   const current = versions.value.find((v) => v.current)
   return versions.value.filter((v) => !v.current && v.status !== 'PUBLISHED' && (!current || v.uploadedAt > current.uploadedAt))
@@ -112,6 +120,7 @@ watch(() => props.conch, load, { immediate: true })
       <template #badge>
         <el-tag v-if="detail" :type="detail.disabled ? 'info' : 'success'" effect="light" round class="mono">v{{ detail.version }}</el-tag>
         <el-tag v-if="detail?.disabled" type="danger" effect="light" round class="off">已停用</el-tag>
+        <DriverBadge v-if="detail" :driver="detail.driver" size="default" class="off" />
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <template v-if="detail && isAdmin">
@@ -160,6 +169,12 @@ watch(() => props.conch, load, { immediate: true })
         </template>
       </el-alert>
 
+      <el-alert v-if="mcp" type="info" :closable="false" show-icon class="notice" data-test="mcp-notice" title="这是源站提供的原生 MCP">
+        <template #default>
+          工具、参数和说明都来自源站的 MCP 服务，Hermit 只做权限管理和转发。下面的工具表是写进这个版本的快照，Reef 不会去连上游；源站新增或改了工具，要更新规则包里的工具列表，再上传新版本。
+        </template>
+      </el-alert>
+
       <el-tabs v-model="tab" class="tabs">
         <el-tab-pane label="概况" name="overview" :disabled="!detail">
           <div v-if="detail" class="hm-grid cols-2">
@@ -170,12 +185,14 @@ watch(() => props.conch, load, { immediate: true })
                 <dd class="mono">{{ detail.conch }}</dd>
                 <dt>版本</dt>
                 <dd class="mono">v{{ detail.version }}</dd>
-                <dt>驱动</dt>
-                <dd>{{ detail.driver }}</dd>
+                <dt>类型</dt>
+                <dd><DriverBadge :driver="detail.driver" /></dd>
                 <dt>最低 Crab 版本</dt>
                 <dd class="mono">{{ detail.minCrabVersion }}</dd>
-                <dt>老系统地址</dt>
-                <dd class="mono">{{ detail.baseUrl ?? '由 Crab 端配置' }}</dd>
+                <template v-if="!mcp">
+                  <dt>老系统地址</dt>
+                  <dd class="mono">{{ detail.baseUrl ?? '由 Crab 端配置' }}</dd>
+                </template>
                 <dt>负责人</dt>
                 <dd>{{ detail.owner ?? '—' }}</dd>
                 <dt>标签</dt>
@@ -185,12 +202,43 @@ watch(() => props.conch, load, { immediate: true })
                 </dd>
               </dl>
             </div>
+            <div v-if="mcp" class="hm-card" data-test="mcp-upstream">
+              <div class="hm-card-title"><span>上游 MCP</span></div>
+              <dl class="hm-kv">
+                <dt>上游地址</dt>
+                <dd class="mono">{{ detail.upstream?.url ?? '—' }}</dd>
+                <dt>连接方式</dt>
+                <dd>{{ transportLabels[detail.upstream?.transport ?? ''] ?? detail.upstream?.transport ?? '—' }}</dd>
+                <dt>认证方式</dt>
+                <dd>{{ authLabel }}</dd>
+                <dt>允许的主机</dt>
+                <dd class="mono">{{ detail.upstream?.allowedHosts.length ? detail.upstream.allowedHosts.join('、') : '—' }}</dd>
+                <dt>上游服务</dt>
+                <dd>
+                  <template v-if="detail.snapshot?.server?.name">
+                    {{ detail.snapshot.server.name }}<span v-if="detail.snapshot.server.version" class="mono hm-muted"> v{{ detail.snapshot.server.version }}</span>
+                  </template>
+                  <template v-else>—</template>
+                </dd>
+                <dt>协议版本</dt>
+                <dd class="mono">{{ detail.snapshot?.protocolVersion ?? '—' }}</dd>
+                <dt>工具快照</dt>
+                <dd>
+                  <template v-if="detail.snapshot?.fetchedAt">
+                    {{ formatTime(detail.snapshot.fetchedAt) }}<span class="hm-muted">（写进规则包的时间）</span>
+                  </template>
+                  <template v-else>包里没有记录</template>
+                </dd>
+                <dt>工具数</dt>
+                <dd>{{ toolCount }}<span v-if="detail.snapshot?.toolsSha256" class="mono hm-muted" :title="detail.snapshot.toolsSha256"> · {{ detail.snapshot.toolsSha256.slice(0, 12) }}</span></dd>
+              </dl>
+            </div>
             <div class="hm-card">
               <div class="hm-card-title"><span>更新说明</span></div>
               <p v-if="detail.changelog" class="changelog">{{ detail.changelog }}</p>
               <p v-else class="hm-muted">这个版本没有写 changelog。</p>
               <div class="counts">
-                <div><strong>{{ capabilityCount }}</strong><span class="hm-muted">能力</span></div>
+                <div><strong>{{ capabilityCount }}</strong><span class="hm-muted">{{ mcp ? '工具' : '能力' }}</span></div>
                 <div><strong>{{ credentialCount }}</strong><span class="hm-muted">凭证字段</span></div>
                 <div><strong>{{ configCount }}</strong><span class="hm-muted">配置项</span></div>
                 <div :title="`${pullCountHint}，各版本合计`">
@@ -215,8 +263,11 @@ watch(() => props.conch, load, { immediate: true })
           </div>
         </el-tab-pane>
 
-        <el-tab-pane :label="`能力（${capabilityCount}）`" name="capabilities" :disabled="!detail">
-          <CapabilityList v-if="detail" :actions="detail.actions" />
+        <el-tab-pane :label="mcp ? `工具（${toolCount}）` : `能力（${capabilityCount}）`" name="capabilities" :disabled="!detail">
+          <div v-if="detail && mcp" class="hm-card">
+            <McpToolTable :tools="detail.tools ?? []" />
+          </div>
+          <CapabilityList v-else-if="detail" :actions="detail.actions" />
         </el-tab-pane>
 
         <el-tab-pane :label="`版本（${versions.length}）`" name="versions">

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ActionChange, ConchDiff } from '../api'
+import type { ActionChange, ConchDiff, ToolChange } from '../api'
 
 const props = defineProps<{ diff: Partial<ConchDiff> | null }>()
 
@@ -25,8 +25,37 @@ const empty = computed(() => {
     v.addedConfig,
     v.removedConfig,
     v.configDefaultChanges,
+    v.toolChanges,
   ].some((list) => list && list.length)
 })
+
+const toolsAdded = computed(() => d.value.toolChanges?.filter((c) => c.kind === 'added') ?? [])
+const toolsRemoved = computed(() => d.value.toolChanges?.filter((c) => c.kind === 'removed') ?? [])
+const toolsChanged = computed(() => d.value.toolChanges?.filter((c) => c.kind === 'changed') ?? [])
+
+/** 变了的方面；只列有变化的项。 */
+function toolParts(change: ToolChange): string[] {
+  const parts: string[] = []
+  if (change.previousUpstreamName !== change.upstreamName) {
+    parts.push(`上游名称 ${change.previousUpstreamName ?? '—'} → ${change.upstreamName ?? '—'}`)
+  }
+  if (change.previousSchemaSha256 !== change.schemaSha256) {
+    parts.push('参数')
+  }
+  if (change.previousDescription !== change.description) {
+    parts.push('说明')
+  }
+  if (change.previousReadOnly !== change.readOnly) {
+    parts.push(change.readOnly ? '改为只读' : '改为写入')
+  }
+  if (change.previousDestructive !== change.destructive) {
+    parts.push(change.destructive ? '变为破坏性' : '不再是破坏性')
+  }
+  if (change.previousConfirm !== change.confirm) {
+    parts.push(change.confirm ? '改为需确认' : '不再需确认')
+  }
+  return parts
+}
 
 function show(value: unknown): string {
   return value === undefined || value === null ? '（无）' : JSON.stringify(value)
@@ -59,6 +88,23 @@ function show(value: unknown): string {
             </el-tag>
           </li>
         </ul>
+      </section>
+      <section v-if="d.toolChanges?.length" data-test="tool-changes">
+        <h4>MCP 工具</h4>
+        <div class="chips">
+          <el-tag v-for="change in toolsAdded" :key="`a-${change.name}`" type="success" class="mono">+ {{ change.name }}</el-tag>
+          <el-tag v-for="change in toolsRemoved" :key="`r-${change.name}`" type="danger" class="mono">− {{ change.name }}</el-tag>
+        </div>
+        <ul v-if="toolsChanged.length" class="changes">
+          <li v-for="change in toolsChanged" :key="change.name">
+            <span class="mono">~ {{ change.name }}</span>
+            <span class="hm-muted">变更了</span>
+            <el-tag v-for="part in toolParts(change)" :key="part" size="small" type="warning" effect="plain">{{ part }}</el-tag>
+          </li>
+        </ul>
+        <p v-if="toolsAdded.some((c) => c.destructive) || toolsChanged.some((c) => c.destructive && !c.previousDestructive)" class="warn">
+          有新的破坏性工具。发布前请核对工具说明，以及调用前是否需要确认。
+        </p>
       </section>
       <section v-if="d.addedCredentials?.length || d.removedCredentials?.length || d.credentialRequiredChanges?.length">
         <h4>凭证</h4>
@@ -114,6 +160,12 @@ h4 {
   list-style: none;
   margin: 8px 0 0;
   padding: 0;
+}
+
+.warn {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--el-color-warning);
 }
 
 .changes li {

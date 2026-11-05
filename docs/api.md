@@ -10,7 +10,7 @@
 | Reef 其他 `/api/admin/**` | `Authorization: Bearer <JWT>`。`USER` 可以读规则包、Tide、告警，并管理自己的口令和 Agent 令牌；其余管理写操作、审计、清理和用户管理是 403 `FORBIDDEN`。账号已禁用时已发出的 JWT 也是 401 |
 | Reef `/agent/**` | `X-Hermit-Instance: <UUID>` 和 `X-Hermit-Token`。令牌可以是配置里的 `HERMIT_REEF_AGENT_TOKEN`，或某个用户签发且未吊销、用户也未禁用的 Agent 令牌。禁用用户会把他名下未吊销的库内令牌写上 `revoked_at`，重新启用不清除，这些令牌与错误令牌一样 401。配置令牌归 id 最小的 `ADMIN`。这个管理员已禁用，或当前配置值的 SHA-256 在作废表里，配置令牌也 401；重新启用且配置值没改仍然 401。把配置改成另一个非空字符串后，新值可用（归属管理员须为启用），旧值仍 401。库里还没有任何 `ADMIN`、且当前值未作废时，配置令牌仍可通过，上报的 owner 为空，也不记 Crab 实例 |
 | Crab `/api/**`、别名、`/mcp` | `Authorization: Bearer <API Key>` 或 `X-Hermit-Key` |
-| Crab `/console/api/**` | 实际连接来源必须回环地址，且 `X-Hermit-Console: 1` |
+| Crab `/console/api/**` | 实际连接来源必须回环地址，且 `X-Hermit-Console: 1`。设置了控制台口令时，除 `GET/POST /console/api/session` 外还要带登录后发的 Cookie `hermit_console`，没带或已过期是 401 `AUTH_FAILED`「需要控制台登录。」 |
 | Crab `/console/` | 页面请求来源必须回环地址；页面 JS 再加控制台头 |
 | Crab `/openapi.json` | 当前无需 API Key，可能展示能力元数据 |
 
@@ -52,10 +52,10 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | GET | `/crabs` | `[{owner, instanceId, tokenName, firstSeenAt, lastSeenAt, crabVersion}]`。`USER` 只看自己的。配置令牌记下的行 `tokenName` 为 null。同一 `instance_id` 只保留一行：后一次用有效令牌写出的用户留下，其他用户的同实例行删除。同一（令牌，实例）在进程内 60 秒最多写一次，这 60 秒内的重复访问不会改归属；换一把令牌会立刻改写。重启后重新计。`crabVersion` 在实例行上最长 32 个字符，上报原文更长时截断；失败报告仍保留最多 64 个字符 |
 | GET | `/signing-key` | `data.publicKey` PEM；不提供私钥 |
 | POST | `/conches` | multipart 字段 `file`，YAML 或仅含 conch.yaml 的 ZIP；上传及解包 YAML 限 1 MiB。同一规则包版本已存在时 409 `CONFLICT`，message 为 `该规则包版本已存在`。版本不高于该包已有的最高版本时 409 `CONFLICT`，message 为 `版本必须高于已有的最高版本` |
-| GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null。两项都带 `pullCount`（long，JSON 数字）：该规则包全部版本成功下载次数之和，含尚未发布的版本 |
+| GET | `/conches`、`/conches/{conch}` | 列表/详情。两项都带 `disabled`、`disabledAt`、`disabledBy`、`disabledReason`；未停用时后三个为 null。两项都带 `pullCount`（long，JSON 数字）：该规则包全部版本成功下载次数之和，含尚未发布的版本。两项都带 `driver`：缺省或空白为 `http`。`upstream`、`snapshot`、`tools` 在 HTTP 包上为 null。`driver: mcp` 时 `upstream` 为 `{url, transport, auth: {type}, allowedHosts}`，不含请求头模板、超时，也不含 OAuth 的 `client_id` 和端点；`allowedHosts` 省略时是解析器填上的 URL 主机，显式列表按原文。`snapshot` 没有该键时为 null，有则为 `{fetchedAt, protocolVersion, server, toolsSha256}`，`fetchedAt` 是包里的原文，`server` 可 null。`tools` 为数组，每项 `{name, upstreamName, readOnly, destructive, confirm, upstreamAnnotations, schemaSha256}`。`destructive` 与 `confirm` 是有效值，与 `toolChanges` 相同。`schemaSha256` 按 `ToolSnapshots.schemaSha256` 计算，不看 YAML 里声明的 `schema_sha256`。这些字段都从已保存的 YAML 读出，Reef 不连接上游。列表在已有当前发布版本时用那一版，否则用最高版本 |
 | GET | `/conches/{conch}/versions` | 版本列表，每项含 `warningCount`、`warnings` 校验警告明细，以及 `pullCount`（该版本成功下载次数，long） |
 | GET | `/conches/{conch}/versions/{version}/yaml` | YAML 原文 |
-| GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `版本对比需要同时提供 from 和 to`。少于两个版本时 400 `INVALID_INPUT`，message 为 `至少需要两个版本才能对比`。名字不合法仍是 404。响应增加 `toolChanges`。HTTP 包是空数组。MCP 包列出两个已上传版本之间的工具差异，不连上游：`kind` 为 `added`、`removed` 或 `changed`，并带上游名、`schemaSha256`、描述、只读、破坏性、确认的前后值。摘要按 `ToolSnapshots.schemaSha256` 计算，不看 YAML 里声明的 `schema_sha256` 原文。只改标题，或只调 schema 键顺序，不算 `changed`。管理端还不展示 `driver`、`upstream` 或工具表 |
+| GET | `/conches/{conch}/diff?from=...&to=...` | 版本差异。`from` 和 `to` 都不传时，按 semver 取该包最高的两个版本，高的为 `to`。只传其中一个仍是 400 `INVALID_INPUT`，message 为 `版本对比需要同时提供 from 和 to`。少于两个版本时 400 `INVALID_INPUT`，message 为 `至少需要两个版本才能对比`。名字不合法仍是 404。响应增加 `toolChanges`。HTTP 包是空数组。MCP 包列出两个已上传版本之间的工具差异，不连上游：`kind` 为 `added`、`removed` 或 `changed`，并带上游名、`schemaSha256`、描述、只读、破坏性、确认的前后值。摘要按 `ToolSnapshots.schemaSha256` 计算，不看 YAML 里声明的 `schema_sha256` 原文。只改标题，或只调 schema 键顺序，不算 `changed`。管理端列表和详情另外返回 `driver`、`upstream`、`snapshot` 和工具表，见上一行。页面还没有把 `toolChanges` 或工具表画出来 |
 | POST | `/conches/{conch}/versions/{version}/publish` | 发布已上传版本。必须严格高于当前已发布版本；没有当前版本时可以发布。不高于时 409，`message` 为 `发布版本必须高于当前已发布版本`。已经发布过的版本仍是 409，`message` 为 `只能发布已上传、尚未发布的版本`。Conch 已停用时 409，`message` 为 `规则包已停用`（先于版本比较） |
 | DELETE | `/conches/{conch}/versions/{version}` | 仅 `ADMIN`，无请求体。只删除 `status = UPLOADED` 的版本。成功 200，`data` 为 `{conch, version}`。已发布 409 `CONFLICT`，message 为 `只能丢弃已上传、尚未发布的版本`，不删除该版本的 YAML 和签名 ZIP。不存在、重复删除、版本号不是 semver，或名字不是单个路径段时 404 `NOT_FOUND`，message 为 `资源不存在`。`USER` 与未登录分别是 403、401。审计见下文 |
 | POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `规则包已经停用` |
@@ -86,7 +86,7 @@ Agent 路由：
 | 方法 | 路径 | 返回 |
 | --- | --- | --- |
 | GET | `/agent/version` | Crab 最新版本与下载地址提示。`latest-crab-version` 为空则版本字段为空，表示不提示升级；非空值在启动时必须是 semver |
-| GET | `/agent/conches/manifest` | 当前可分发规则清单与 ETag，支持 If-None-Match/304。已停用的 Conch 不在清单里。每项含 `conch`、`version`、`sha256`、`minCrabVersion`、`title`，以及当前发布版本的 `description`（string 或 null）、`capabilityCount`（int，能力个数，与管理端 `capabilityCount` 一样按 actions 计数）和 `requiredCredentials`（字符串数组，当前发布版本里 `required: true` 的凭证名，按字典序）。ETag 覆盖这些字段，字段变化后旧 ETag 不再 304。清单请求和 304 不增加拉取次数。旧 Crab 忽略不认识的字段 |
+| GET | `/agent/conches/manifest` | 当前可分发规则清单与 ETag，支持 If-None-Match/304。已停用的 Conch 不在清单里。每项含 `conch`、`version`、`sha256`、`minCrabVersion`、`title`，以及当前发布版本的 `description`（string 或 null）、`capabilityCount`（int，能力个数，与管理端 `capabilityCount` 一样按 actions 计数）和 `requiredCredentials`（字符串数组，当前发布版本里 `required: true` 的凭证名，按字典序）。每项另含 `driver` 和 `upstreamHost`。`upstreamHost` 是当前发布版本 `upstream.url` 的主机，小写、不含端口；HTTP 包，或地址解析不了时，为 null。ETag 覆盖上述字段（含 `driver` 和 `upstreamHost`），字段变化后旧 ETag 不再 304。清单请求和 304 不增加拉取次数。Reef 不为此连接上游。旧 Crab 按字段名读取，忽略不认识的字段（含 `driver`、`upstreamHost` 和嵌套对象），不会因此拒绝清单。本机目录缓存同样忽略这些字段，写回时不保存它们 |
 | GET | `/agent/conches/{conch}/{version}` | 已发布 ZIP。Conch 已停用、版本未发布或不存在时 404，包文件仍留在 Reef。验签失败为 500。只有成功返回 ZIP 时，该版本 `pull_count` 加 1（单条 `UPDATE`，`pull_count = pull_count + 1`）。失败、404 和停用不计。次数是下载成功次数，不按 Crab 实例统计 |
 | POST | `/agent/reports` | ReportBatch；instanceId 须与请求头一致 |
 
@@ -103,19 +103,23 @@ POST /api/{conch}/{action}           JSON object body
 
 POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，有效期 24 小时，另存请求体的 SHA-256（小写十六进制，schema 10 的 `idempotency.body_sha256`）。摘要是网关读到的原始字节，不是规范化 JSON：空格或字段顺序不同算另一个请求体。相同键且摘要相同，回放第一次的响应（含旧 traceId），响应头 `Idempotent-Replayed: true`，不再执行。摘要不同返回 409 `IDEMPOTENCY_CONFLICT`，message 为 `Idempotency-Key was already used with a different request body`，不执行、不覆盖已存响应。升级前写入、摘要为 null 的行也无法证明请求体相同，重放同样是这个冲突，直到 24 小时过期。键仍不包含 API Key 身份或规则版本。
 
+`effectiveConfirm()` 为 true 的 HTTP 调用必须带请求头 `X-Hermit-Confirm: true`（去空白后恰好是 `true`）。缺头或值不对时，在权限、能力停用、账号和凭证检查之后、幂等缓存之前返回 409 `CONFLICT`，message 为「该操作需要确认。请带上请求头 X-Hermit-Confirm: true 后重试。」。这次不读、不写幂等缓存，也不访问上游。MCP 入口不看这个头，确认走 elicitation。
+
+`driver: mcp` 在上述检查之后交给 `McpForwarder`，执行的是这次授权的快照。`auth.type: headers` 把渲染后的 `upstream.headers` 发给上游；`oauth` 返回 409 `NOT_CONFIGURED`，message 为「尚未连接上游。请到控制台连接上游。」，不连网。主机不在 `allowed_hosts` 同样是这个错误码，message 为「上游主机不在允许列表中。」。成功时 HTTP 的 `data` 优先是 `structuredContent`，否则是 `{content: [...]}`。上游 `isError: true` 且文本不是 `Input validation error:` 开头时，HTTP 502，`data` 是脱敏后的 content，Tide 失败的 `stepType` 为 `mcp_tool_error`。OpenAPI 里这些操作为 POST，带 `x-hermit-driver: mcp`，响应 `data` 的 schema 是 `{type: object}`，需要确认的操作把 `X-Hermit-Confirm` 标成必填。
+
 | 错误码 | HTTP 状态 |
 | --- | --- |
 | INVALID_INPUT | 400（方法错误 405） |
 | AUTH_FAILED | 网关 Key 无效 401；清单令牌失效导致的同步 401；上游登录失败 422 |
 | FORBIDDEN | 403 |
 | NOT_FOUND / ACCOUNT_NOT_FOUND / CAPABILITY_DISABLED | 404 |
-| NOT_CONFIGURED / CONCH_DISABLED / IDEMPOTENCY_CONFLICT | 409 |
+| NOT_CONFIGURED / CONCH_DISABLED / IDEMPOTENCY_CONFLICT / CONFLICT | 409 |
 | SESSION_EXPIRED / RULE_MISMATCH | 422 |
 | UPSTREAM_ERROR | 502 |
 | TIMEOUT | 504 |
 | INTERNAL | 500 |
 
-缺必填、类型无法转换，数值超出参数声明的 `minimum` / `maximum`，或请求里多了未声明字段，都返回 `INVALID_INPUT`。入参 JSON Schema 带 `additionalProperties: false`，运行时不会把负页码、过大的 `pageSize` 或多余字段改成合法值再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。MCP 在这次校验前去掉账号选择：直接工具去掉 `account`，能力入参已经占用 `account` 时去掉 `_account`；目录模式的 `call_capability` 把 `account` 放在能力参数外面。HTTP 同样在校验前拿掉账号选择：GET 去掉查询参数 `account`（入参已占用该名字时去掉 `_account`），POST 只把查询参数 `account` 当作账号，不写入 JSON 正文。MCP 的 `account` / `_account` 参数不变。账号选择因此不会被当成未声明字段。
+缺必填、类型无法转换，数值超出参数声明的 `minimum` / `maximum`，或请求里多了未声明字段，都返回 `INVALID_INPUT`。HTTP 能力的入参 JSON Schema 带 `additionalProperties: false`，运行时不会把负页码、过大的 `pageSize` 或多余字段改成合法值再返回 200。`driver: mcp` 按包内原文校验，不补 `additionalProperties`，也不去取 `$schema` 或远程 `$ref`。HTTP 与 MCP 共用 `Invoker`；HTTP 包进入 `RuleEngine`，mcp 包进入 `McpForwarder`，两边都用 `InputPreparer`。MCP 在这次校验前去掉账号选择：直接工具去掉 `account`，能力入参已经占用 `account` 时去掉 `_account`；目录模式的 `call_capability` 把 `account` 放在能力参数外面。HTTP 同样在校验前拿掉账号选择：GET 去掉查询参数 `account`（入参已占用该名字时去掉 `_account`），POST 只把查询参数 `account` 当作账号，不写入 JSON 正文。MCP 的 `account` / `_account` 参数不变。账号选择因此不会被当成未声明字段。
 
 本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为 `not found`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`，message 为「没有这个工具，或当前 API Key 看不到它。」。直接模式的 hint 只建议 `tools/list`，不提到 `search_capabilities`；目录模式的 hint 可以建议 `tools/list` 和 `search_capabilities`。若调用已经进入 `Invoker` 后才发现能力被关掉，MCP 的 `code` 与 HTTP 同为 `CAPABILITY_DISABLED`，hint 说明到控制台重新启用，或从 `capabilities.disabled` 里去掉。
 
@@ -133,6 +137,9 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 
 | 方法 | 路径 | 输入/用途 |
 | --- | --- | --- |
+| GET | `/session` | `{required, authenticated}`。未设置口令时 `required` 为 false、`authenticated` 为 true。不需要 Cookie |
+| POST | `/session` | `{password}`。正确时 200 `{ok: true}`，写 Cookie `hermit_console`（HttpOnly、SameSite=Strict、Path=/console，12 小时有效，只存在进程内存，重启后要重新登录）。口令错误和锁定都是 401 `AUTH_FAILED`「口令错误」；15 分钟内第 5 次失败之后锁定，锁定期间正确的口令也是 401。未设置口令是 409 `NOT_CONFIGURED`「尚未设置控制台口令。」。审计 `CONSOLE_LOGIN` |
+| POST | `/session/password` | `{current, next}`，需要 Cookie。`next` 为 8 到 256 个字符，否则 400。`current` 不对是 401「口令错误」，并计入失败次数。成功后清掉所有会话，当前浏览器也要重新登录。未设置口令是 409 `NOT_CONFIGURED`；第一次设置只能用 `HERMIT_CONSOLE_PASSWORD` 或停掉 Crab 后运行 `crab console password` |
 | GET | `/conches`、`/conches/{conch}` | 已加载规则/字段声明/能力状态。列表项含 `subscribed`、`needsConfiguration`、`loginPaused`、`source`、`reefDisabled`、`reefDisabledAt`、`updateAvailable`、`latestVersion`、`newRequiredCredentials`；详情同样含这三项。`updateAvailable` 为 true 表示最近一次同步的清单版本高于已安装版本，且 `min_crab_version` 允许安装。`latestVersion` 是清单版本；本地包，以及清单里已经没有的停用包，为 null。`newRequiredCredentials` 是清单要求、但当前已安装文档未要求的凭证名，已排序。目录里没有该行时这三项为 false、null、空数组。`source` 为 `LOCAL` 或 `REEF`。`reefDisabled` 为 true 时本机仍保留已安装版本并可调用，`reefDisabledAt` 是本机第一次记下停用墓碑的 ISO-8601 时间；未停用时 `reefDisabled` 为 false，`reefDisabledAt` 为 null。本地包这两项为 false 和 null |
 | GET | `/catalog` | 最近一次成功清单。`{conches, syncedAt, configured}`。未配置 Reef 时 `configured` 为 false，`conches` 为空。每项含 `conch`、`version`、`title`、`description`、`capabilityCount`、`subscribed`、`installed`、`installedVersion`、`disabled`、`localConflict`、`updateAvailable`、`latestVersion`、`newRequiredCredentials`。`disabled` 与停用墓碑一致。名字已经离开清单缓存、墓碑还在时仍补一行：`disabled` 为 true，`version` 为 null（Reef 没有在发布的版本），`installedVersion` 是本机保留的版本。`localConflict` 表示该名字已是本机本地包 |
 | POST | `/conches/{conch}/subscription` | 订阅并立即同步。记账前忽略目录缓存，再拉一次清单。新鲜清单里没有这个名字、且本机还没有订阅行：HTTP 404 `NOT_FOUND`，`message` 为「Reef 上当前不能订阅这个规则包。」，不插入行。成功时返回 `{conch, subscribed, outcome}`。`subscribed` 为 true 只在订阅行还在、并且这次同步给出了该包的结果时（`outcome` 不是 JSON `null`，且 `kind` 不是 `NOT_SUBSCRIBED`）；否则 HTTP 200，`subscribed` 为 false，没有结果时 `outcome` 为 JSON `null`。`outcome` 与同步结果里的一行相同。与本地包重名是 409，错误码仍是 `INVALID_INPUT`。第一次订阅安装 Reef 当前版本。已有订阅再点一次不写第二条 `CONCH_SUBSCRIBED`，仍清掉 ETag 再同步 |
@@ -309,10 +316,10 @@ MCP 工具 `debug_trace` 只在调试开关打开时出现在 `tools/list`。入
 
 - 可见能力不超过 40 个时，直接工具名 `conch__action`。本地包的直接工具说明、资源说明、`list_systems` 里该包的说明，以及 `describe_capability` 的说明，都以 `[本地] ` 开头。使用指南里也会标明这是本地包。`all: true` 以及旧的空 `conches` Key 仍能看见这些工具；调用时 `Invoker` 返回 403 `FORBIDDEN`。显式写出包名的 Key 可以调用。
 - 超过 40 个时，提供 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个目录工具。
-- 目录模式调用非只读能力需要支持 elicitation 且保持 SSE，明确确认后执行；直接模式没有同样的服务端确认步骤，客户端应依据工具注解交互。
+- `effectiveConfirm()` 为 true 时，目录模式和直接模式都要客户端在 `initialize` 里声明 elicitation，并保持 GET SSE。不支持时工具失败 `FORBIDDEN`，message 为「客户端不支持确认，拒绝执行写操作」。用户拒绝是「用户拒绝执行」。HTTP 用请求头 `X-Hermit-Confirm: true`，不走 elicitation。
 - guide resource 为 `hermit://conches/{conch}/guide`，由说明、参数、示例生成。
 - 规则更新/能力开关变化推送列表变更通知。
-- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。这个字段在校验前拿掉。直接工具的 `inputSchema` 与能力入参一样设置 `additionalProperties: false`，并声明账号选择，所以账号不是多余字段。HTTP 的查询参数不改变这些工具参数。未知账号的 message 与 HTTP 同为「没有这个账号。」。
+- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。这个字段在校验前拿掉。HTTP 能力的直接工具 `inputSchema` 设置 `additionalProperties: false`。`driver: mcp` 的直接工具保留包内 schema，不补这个字段，并去掉 `$schema`。两种都声明账号选择。HTTP 的查询参数不改变这些工具参数。未知账号的 message 与 HTTP 同为「没有这个账号。」。官方 mcp 包的 `describe_capability` 说明和指南写「来源：源站 MCP」；指南同时说明结果来自上游、不可信。`tools/list` 的工具说明不加这句来源前缀。本地包仍以 `[本地] ` 开头。
 - `tools/call` 不传 `Idempotency-Key`。同键回放只在 HTTP POST。
 
 协议级失败是 JSON-RPC error，不使用能力 API 的 success/error envelope。`error.code` 是 JSON-RPC 整数；`error.data.code` 是稳定字符串，`error.data.hint` 是下一步。HTTP 401 的 body 同样是这个 JSON-RPC 错误。
@@ -328,7 +335,7 @@ MCP 工具 `debug_trace` 只在调试开关打开时出现在 `tools/list`。入
 | `Origin` 不在允许范围 | 403 | -32003 | `ORIGIN_REJECTED`。不创建会话。没有 `Origin` 仍允许 |
 | 非 `initialize` 的 `MCP-Protocol-Version` 不受支持 | 400 | -32600 | `UNSUPPORTED_PROTOCOL`。去掉该头，或改成上面四个版本之一 |
 
-工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,traceId,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`CAPABILITY_DISABLED`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。`traceId` 与这次响应的 `X-Hermit-Trace` 相同；若这次调用写了调用记录，记录里也是这个编号。协议错误的 `error.data` 同样带 `traceId`，并与该头相同。成功的 JSON-RPC 响应也写 `X-Hermit-Trace`，不把 `traceId` 放进业务结果。
+工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,traceId,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`CAPABILITY_DISABLED`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。`traceId` 与这次响应的 `X-Hermit-Trace` 相同；若这次调用写了调用记录，记录里也是这个编号。协议错误的 `error.data` 同样带 `traceId`，并与该头相同。成功的 JSON-RPC 响应也写 `X-Hermit-Trace`，不把 `traceId` 放进业务结果。上游 `tools/call` 的 `isError: true` 另有一种形状：`content` 原样转发，`structuredContent.error.upstreamToolError` 为 true。文本以 `Input validation error:` 开头时错误码是 `INVALID_INPUT`，不记 `mcp_tool_error`。其它工具失败是 `UPSTREAM_ERROR`，Tide 的 `stepType` 为 `mcp_tool_error`。没有 `isError` 字段时，即使文本以 `Error:` 开头也按成功转发。
 
 成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。直接工具的 `outputSchema` 只列 Conch `output` 的字段名和说明，不带类型约束，因为模板渲染不会把提取值转换成声明类型；目录工具的 `outputSchema` 带类型。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
 

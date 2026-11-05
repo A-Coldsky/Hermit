@@ -485,7 +485,7 @@ class SubscriptionTest {
     void catalogAndSubscribeRequireReefButUnsubscribeWorksOffline() throws Exception {
         CrabPaths paths = new CrabPaths(temp.resolve("offline"));
         CrabConfig config = new CrabConfig(
-                null, null, null, "127.0.0.1", 0, 30, false, 60, List.of(), Map.of(), 60, 10, 3, List.of());
+                null, null, null, "127.0.0.1", 0, 30, false, 60, List.of(), Map.of(), 60, 10, 3, List.of(), 4);
         try (CrabRuntime runtime = CrabRuntime.open(paths, config, name -> null)) {
             ConchCatalog catalog = runtime.catalog();
             assertThat(catalog.configured()).isFalse();
@@ -720,7 +720,8 @@ class SubscriptionTest {
                 60,
                 10,
                 3,
-                List.of());
+                List.of(),
+                4);
     }
 
     private static dev.hermit.crab.runtime.InvokeOutcome invoke(CrabRuntime runtime, CreatedApiKey key, String trace) {

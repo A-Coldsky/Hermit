@@ -18,9 +18,12 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.crab.engine.ExecutionError;
 import dev.hermit.crab.engine.ExecutionRequest;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
+import dev.hermit.crab.upstream.McpCallPayload;
+import dev.hermit.crab.upstream.McpForwarder;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.secure.CredentialDecryptException;
@@ -52,6 +55,8 @@ public final class Invoker {
      * tell a header/query conflict from an earlier permission or capability rejection.
      */
     public static final String INVALID_ACCOUNT_NAME = "invalid account name";
+    /** HTTP 破坏性调用缺这个头时返回 409，并且不查、不写幂等缓存。 */
+    public static final String CONFIRM_REQUIRED = "该操作需要确认。请带上请求头 X-Hermit-Confirm: true 后重试。";
     /** Power of two. Distinct keys share a stripe; stripes are not removed after a request. */
     static final int IDEMPOTENCY_STRIPES = 64;
 
@@ -70,6 +75,7 @@ public final class Invoker {
     private volatile KnownSecrets knownSecrets = KnownSecrets.empty();
     private volatile DataSource versionSuccess;
     private volatile Clock versionClock = Clock.systemUTC();
+    private volatile McpForwarder mcpForwarder;
 
     public Invoker(
             ConchRegistry registry,
@@ -118,6 +124,11 @@ public final class Invoker {
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
     }
 
+    /** {@code driver: mcp} 走转发器。没绑定时这类包失败关闭，不会落到 HTTP 步骤引擎。 */
+    public void bindMcpForwarder(McpForwarder forwarder) {
+        this.mcpForwarder = forwarder;
+    }
+
     /** Successful official calls record the executed version so retention can keep it. */
     public void bindVersionSuccess(DataSource dataSource, Clock clock) {
         this.versionSuccess = dataSource;
@@ -151,6 +162,24 @@ public final class Invoker {
             String bodySha256,
             CallChannel channel,
             String traceId
+    ) {
+        return invoke(principal, conch, action, input, account, idempotencyKey, bodySha256, channel, traceId, false);
+    }
+
+    /**
+     * {@code httpConfirmed} 只对 HTTP 入口有意义。MCP 的确认走 elicitation，不看这个头。
+     */
+    public InvokeOutcome invoke(
+            ApiKeyPrincipal principal,
+            String conch,
+            String action,
+            Map<String, Object> input,
+            Optional<String> account,
+            Optional<String> idempotencyKey,
+            String bodySha256,
+            CallChannel channel,
+            String traceId,
+            boolean httpConfirmed
     ) {
         if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
@@ -211,6 +240,9 @@ public final class Invoker {
         }
         Map<String, Object> rawInput = input == null ? Map.of() : input;
         CallChannel recorded = channel == null ? CallChannel.HTTP : channel;
+        if (recorded == CallChannel.HTTP && capability.effectiveConfirm() && !httpConfirmed) {
+            return done(traceId, ErrorCode.CONFLICT, CONFIRM_REQUIRED, null, null);
+        }
         if (CapabilityHttp.method(capability) == HttpMethod.POST && idempotencyKey != null && idempotencyKey.isPresent()) {
             return replayOrExecute(
                     principal, doc, origin, action, rawInput, resolved, secrets, merged,
@@ -298,7 +330,7 @@ public final class Invoker {
                 input,
                 account.account(),
                 new MappedAccount(secrets, merged));
-        ExecutionResult result = engine.execute(request, doc);
+        ExecutionResult result = executeAuthorized(request, doc, traceId);
         Invocation invocation = new Invocation(
                 traceId,
                 origin,
@@ -310,10 +342,31 @@ public final class Invoker {
                 idempotencyKey);
         publish(invocation, result);
         log(principal, result, secrets, origin, doc.conch(), action, account.account(), channel);
+        McpCallPayload payload = result.data() instanceof McpCallPayload call ? call : null;
+        Object httpData = payload == null ? result.data() : payload.httpData();
         if (result.success()) {
-            return done(traceId, null, null, result.data());
+            return done(traceId, null, null, httpData, payload);
         }
-        return done(traceId, result.error().code(), result.error().message(), null);
+        Object errorData = payload != null && payload.upstreamToolError() ? payload.httpData() : null;
+        return done(traceId, result.error().code(), result.error().message(), errorData, payload);
+    }
+
+    private ExecutionResult executeAuthorized(ExecutionRequest request, ConchDoc doc, String traceId) {
+        if ("mcp".equals(doc.driver())) {
+            McpForwarder forwarder = mcpForwarder;
+            if (forwarder == null) {
+                return new ExecutionResult(
+                        false,
+                        null,
+                        new ExecutionError(ErrorCode.INTERNAL, "内部错误", null, null, "内部错误"),
+                        0,
+                        List.of(),
+                        doc.version().toString(),
+                        traceId);
+            }
+            return forwarder.execute(request, doc);
+        }
+        return engine.execute(request, doc);
     }
 
     private void publish(Invocation invocation, ExecutionResult result) {
@@ -396,9 +449,13 @@ public final class Invoker {
     }
 
     private static InvokeOutcome done(String traceId, ErrorCode code, String message, Object data) {
+        return done(traceId, code, message, data, null);
+    }
+
+    private static InvokeOutcome done(String traceId, ErrorCode code, String message, Object data, McpCallPayload payload) {
         int status = code == null ? 200 : StatusCodes.of(code);
         String json = ApiEnvelope.json(data, code, message, traceId);
-        return new InvokeOutcome(status, ApiJson.bytes(json), traceId, false);
+        return new InvokeOutcome(status, ApiJson.bytes(json), traceId, false, payload);
     }
 
     int idempotencyStripes() {

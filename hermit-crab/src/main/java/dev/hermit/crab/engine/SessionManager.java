@@ -82,7 +82,7 @@ public final class SessionManager implements AutoCloseable {
         }
     }
 
-    boolean tryLock(SessionKey key, long deadlineNanos) throws InterruptedException {
+    public boolean tryLock(SessionKey key, long deadlineNanos) throws InterruptedException {
         AccountState state = states.computeIfAbsent(key, this::newState);
         long wait = deadlineNanos - System.nanoTime();
         if (wait <= 0) {
@@ -91,7 +91,7 @@ public final class SessionManager implements AutoCloseable {
         return state.lock.tryLock(wait, TimeUnit.NANOSECONDS);
     }
 
-    void unlock(SessionKey key) {
+    public void unlock(SessionKey key) {
         AccountState state = states.get(key);
         if (state != null && state.lock.isHeldByCurrentThread()) {
             state.lock.unlock();

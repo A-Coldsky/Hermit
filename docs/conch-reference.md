@@ -38,7 +38,7 @@ actions:
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
 | `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.1.0。`driver: mcp` 还要求不低于 1.1.0 |
-| `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」；Crab 按 `headers` 认证转发，OAuth 与工具刷新还没有 |
+| `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。工具列表刷新还没有 |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
 | `config` | 可选字段映射；字段支持默认值；不用于保存秘密 |
@@ -62,7 +62,7 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 
 ## MCP 上游包
 
-`driver: mcp` 描述上游 MCP 服务。`transport` 只接受 `streamable_http`。`stdio` 与 `local_ref` 都拒绝，包里不能带要在 Crab 上执行的命令。Crab 对 `auth.type: headers` 按 Streamable HTTP 转发：渲染 `upstream.headers`，按账号复用会话，把 action 转成上游 `tools/call`。`oauth` 调用返回尚未连接。登录、令牌刷新和工具列表刷新还没有。Reef 从包内读出上游和工具表，不连接上游。
+`driver: mcp` 描述上游 MCP 服务。`transport` 只接受 `streamable_http`。`stdio` 与 `local_ref` 都拒绝，包里不能带要在 Crab 上执行的命令。Crab 对 `auth.type: headers` 按 Streamable HTTP 转发：渲染 `upstream.headers`，按账号复用会话，把 action 转成上游 `tools/call`。`oauth` 用授权码和 PKCE 在控制台登录，令牌放凭证库，调用前刷新。工具列表刷新还没有。Reef 从包内读出上游和工具表，不连接上游。
 
 ```yaml
 conch: vendor_crm
@@ -91,7 +91,9 @@ actions:
 
 不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。`actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`。还没有 action 的本地骨架不在本批放行。`tools.include` / `exclude` 会保存，只准备给以后的刷新过滤；现在能调用的名字仍只有 `actions`。
 
-`upstream.auth.type` 是 `headers` 或 `oauth`。`headers` 的请求头模板只能引用 `{{credential.*}}` 和 `{{config.*}}`，不能引用 `input`。HTTP 包允许模板里出现未声明的 `config.base_url`，mcp 请求头没有这项豁免。`oauth` 必须写 `client_id`。`scopes` 里不能有空字符串。`authorization_endpoint` 和 `token_endpoint` 可以省略；写了就必须是不带模板、用户信息和片段的 http 或 https URL。https 的主机要落在 `allowed_hosts`。http 还要和 `upstream.url` 同一源（协议、主机、端口；省略端口时 https 为 443、http 为 80）。`oauth` 不能再设置 `Authorization`。本批不发现端点，也不保存令牌。
+`upstream.auth.type` 是 `headers` 或 `oauth`。`headers` 的请求头模板只能引用 `{{credential.*}}` 和 `{{config.*}}`，不能引用 `input`。HTTP 包允许模板里出现未声明的 `config.base_url`，mcp 请求头没有这项豁免。`oauth` 必须写 `client_id`。`scopes` 里不能有空字符串。`authorization_endpoint` 和 `token_endpoint` 可以省略。省略时 Crab 先看 MCP 地址返回 401 时 `WWW-Authenticate` 里的 `resource_metadata`，再按 RFC 9728 请求路径感知和根上的 `/.well-known/oauth-protected-resource`，然后按 RFC 8414 读取授权服务器元数据；没有再试 `/.well-known/openid-configuration`。每个 URL 都要过 `allowed_hosts` 和地址检查，不跟随重定向，也不做动态客户端注册。写了的端点必须是不带模板、用户信息和片段的 http 或 https URL。https 的主机要落在 `allowed_hosts`。http 还要和 `upstream.url` 同一源（协议、主机、端口；省略端口时 https 为 443、http 为 80）。`oauth` 不能再设置 `Authorization`。
+
+登录只在 Crab 控制台做。PKCE 用 S256，回调是本机 `GET /console/oauth/callback`。访问令牌、刷新令牌和到期时间写在凭证库字段 `oauth_token`，按 `(origin, conch, account)` 分开，不进规则包，导出的 YAML 里也没有。控制台凭证名单和 `credential list` 都不显示这个字段，手写会被拒绝。源站若还要客户端机密，声明 `credentials.client_secret`，值在凭证库，不在 YAML。调用前若访问令牌在 60 秒内到期就刷新；上游轮换刷新令牌时只留新的，没发新的就沿用原来的。令牌端点拒绝，或调用得到 HTTP 401、刷新后重放仍是 401，就清掉这组令牌并返回 `AUTH_FAILED`，不再用旧访问令牌打工具。主机不在允许列表、发现失败，或刷新时网络失败，不清令牌。`needsConfiguration` 不把未连接算进去；账号行的 `oauth` 表示连上没有。同步删掉规则包里已经移除的凭证声明时，不会删 `oauth_token`。
 
 禁止的请求头不区分大小写：`Host`、`Content-Length`、`Cookie`、`Mcp-Session-Id`、`MCP-Protocol-Version`、`Accept`、`Content-Type`。头的值若是字面凭证，仍走原来的明文凭证检查。`timeout_ms` 若写了必须是正整数。
 

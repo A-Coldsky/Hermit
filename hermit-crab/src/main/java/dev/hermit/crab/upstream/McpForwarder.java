@@ -2,6 +2,7 @@ package dev.hermit.crab.upstream;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -34,6 +35,7 @@ import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.engine.StepLog;
 import dev.hermit.crab.secure.KnownSecrets;
 import dev.hermit.crab.secure.Redactor;
+import dev.hermit.crab.store.CredentialVault;
 
 /**
  * {@code driver: mcp} 的执行器。权限、停用、审计和幂等仍在 {@code Invoker}。
@@ -63,18 +65,35 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final McpUpstreamSessions sessions;
+    private final McpOAuth oauth;
     private final KnownSecrets knownSecrets;
     private final Duration capabilityTimeout;
     private final TemplateEngine templates = new TemplateEngine();
     private final InputPreparer inputs = new InputPreparer();
 
     public McpForwarder(SessionManager accounts, KnownSecrets knownSecrets, Duration capabilityTimeout, int concurrency) {
+        this(accounts, knownSecrets, capabilityTimeout, concurrency, null, null);
+    }
+
+    public McpForwarder(
+            SessionManager accounts,
+            KnownSecrets knownSecrets,
+            Duration capabilityTimeout,
+            int concurrency,
+            CredentialVault vault,
+            Clock clock
+    ) {
         if (concurrency < 1 || concurrency > 32) {
             throw new IllegalArgumentException("mcp concurrency must be 1..32");
         }
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
         this.capabilityTimeout = capabilityTimeout;
         this.sessions = new McpUpstreamSessions(new McpUpstreamClient(), accounts, concurrency);
+        this.oauth = new McpOAuth(vault, accounts, sessions::discard, this.knownSecrets, clock);
+    }
+
+    public McpOAuth oauth() {
+        return oauth;
     }
 
     @Override
@@ -89,7 +108,9 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         if (action == null || action.tool() == null) {
             return finish(request, doc, started, false, null, ErrorCode.RULE_MISMATCH, "能力没有上游工具。", null, List.of());
         }
-        if (doc.upstream().auth() != null && doc.upstream().auth().oauth()) {
+        boolean oauthPackage = doc.upstream().auth() != null && doc.upstream().auth().oauth();
+        Map<String, String> credentials = credentials(request.accountContext());
+        if (oauthPackage && oauth.peek(request.origin(), request.conch(), request.account(), credentials) == null) {
             return finish(request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, OAUTH_NOT_CONNECTED, null, List.of());
         }
         Map<String, Object> arguments;
@@ -124,6 +145,15 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             return finish(request, doc, started, false, null, ErrorCode.TIMEOUT, DEADLINE, null, List.of());
         }
         try {
+            if (oauthPackage) {
+                McpOAuth.Attempt fresh = oauth.ensureFresh(
+                        request.origin(), request.conch(), request.account(), doc, credentials, deadline);
+                if (!fresh.ok()) {
+                    return finish(request, doc, started, false, null, fresh.code(), fresh.message(), null, List.of());
+                }
+                headers = authorize(headers, fresh.token());
+            }
+            Long timeoutMs = doc.upstream().timeoutMs() == null ? null : doc.upstream().timeoutMs().longValue();
             McpUpstreamSessions.CallResult result = sessions.call(
                     key,
                     doc,
@@ -132,8 +162,36 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
                     action.tool().name(),
                     arguments,
                     deadline,
-                    doc.upstream().timeoutMs() == null ? null : doc.upstream().timeoutMs().longValue(),
+                    timeoutMs,
                     allowLoopback);
+            if (oauthPackage && unauthorized(result)) {
+                McpOAuth.Attempt again = oauth.refreshAfterUnauthorized(
+                        request.origin(),
+                        request.conch(),
+                        request.account(),
+                        doc,
+                        credentials,
+                        bearerAccess(headers),
+                        deadline);
+                if (!again.ok()) {
+                    return finish(request, doc, started, false, null, again.code(), again.message(), null, List.of());
+                }
+                headers = authorize(headers, again.token());
+                result = sessions.call(
+                        key,
+                        doc,
+                        material(headers),
+                        headers,
+                        action.tool().name(),
+                        arguments,
+                        deadline,
+                        timeoutMs,
+                        allowLoopback);
+                if (unauthorized(result)) {
+                    oauth.clear(request.origin(), request.conch(), request.account());
+                    return finish(request, doc, started, false, null, ErrorCode.AUTH_FAILED, McpOAuth.REJECTED, null, List.of());
+                }
+            }
             return map(request, doc, action.tool().name(), started, result);
         } finally {
             permit.close();
@@ -143,6 +201,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     @Override
     public void close() {
         sessions.close();
+        oauth.close();
     }
 
     private ExecutionResult map(
@@ -343,6 +402,47 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             secrets.addAll(account.credentials().values());
         }
         return Redactor.of(secrets);
+    }
+
+    private Map<String, String> authorize(Map<String, String> headers, McpOAuthToken token) {
+        LinkedHashMap<String, String> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            if (!"authorization".equalsIgnoreCase(entry.getKey())) {
+                copy.put(entry.getKey(), entry.getValue());
+            }
+        }
+        String header = token.authorizationHeader();
+        copy.put("Authorization", header);
+        knownSecrets.add(token.accessToken());
+        knownSecrets.add(token.refreshToken());
+        knownSecrets.add(header);
+        return Map.copyOf(copy);
+    }
+
+    private static boolean unauthorized(McpUpstreamSessions.CallResult result) {
+        return result != null
+                && result.error() == McpUpstreamSessions.SessionError.HTTP
+                && result.status() == 401;
+    }
+
+    private static String bearerAccess(Map<String, String> headers) {
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            if (!"authorization".equalsIgnoreCase(entry.getKey()) || entry.getValue() == null) {
+                continue;
+            }
+            String value = entry.getValue().strip();
+            if (value.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())) {
+                return value.substring("Bearer ".length()).strip();
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, String> credentials(AccountContext account) {
+        if (account == null || account.credentials() == null) {
+            return Map.of();
+        }
+        return account.credentials();
     }
 
     private static String material(Map<String, String> headers) {

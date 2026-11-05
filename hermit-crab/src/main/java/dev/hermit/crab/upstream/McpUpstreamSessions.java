@@ -303,6 +303,13 @@ final class McpUpstreamSessions implements AutoCloseable {
         return value == 0L ? 1L : Math.abs(value);
     }
 
+    /** 断开登录时丢掉本机会话。不向上游发 DELETE，下一次调用会重新 initialize。 */
+    void discard(SessionKey key) {
+        if (key != null) {
+            handles.remove(key);
+        }
+    }
+
     @Override
     public void close() {
         handles.clear();

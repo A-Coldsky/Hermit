@@ -43,7 +43,7 @@ flowchart LR
 | [crab/cli](../hermit-crab/src/main/java/dev/hermit/crab/cli) | `CrabMain` 经 `CrabCommand` 分派命令 |
 | [crab/runtime](../hermit-crab/src/main/java/dev/hermit/crab/runtime) | `CrabRuntime` 装配；`CrabServer` 生命周期；`Invoker` 调用层；`ConchAdmin` 管理操作 |
 | [crab/engine](../hermit-crab/src/main/java/dev/hermit/crab/engine) | 输入校验、规则注册、账号锁/会话、步骤、Rhino 沙箱、输出脱敏。`ConchExecutor` 由 `RuleEngine` 实现 |
-| [crab/upstream](../hermit-crab/src/main/java/dev/hermit/crab/upstream) | `driver: mcp` 的 Streamable HTTP 转发。`headers` 认证；OAuth 返回未连接。账号锁只包住会话创建 |
+| [crab/upstream](../hermit-crab/src/main/java/dev/hermit/crab/upstream) | `driver: mcp` 的 Streamable HTTP 转发。`headers` 用请求头模板；`oauth` 走 PKCE，令牌在凭证库，调用前刷新。OAuth 使用单独的 HTTP 客户端，不跟随重定向。账号锁只包住会话创建 |
 | [crab/store](../hermit-crab/src/main/java/dev/hermit/crab/store) / [secure](../hermit-crab/src/main/java/dev/hermit/crab/secure) | H2、账户、配置、凭证/会话/幂等响应加密、API Key、日志 |
 | [crab/gateway](../hermit-crab/src/main/java/dev/hermit/crab/gateway) / [mcp](../hermit-crab/src/main/java/dev/hermit/crab/mcp) | HTTP API、本机控制台、OpenAPI、MCP HTTP/SSE、stdio 桥接 |
 | [crab/sync](../hermit-crab/src/main/java/dev/hermit/crab/sync) / [report](../hermit-crab/src/main/java/dev/hermit/crab/report) | ETag/安装/手动更新/版本保留；失败队列、小时计数与发送重试 |

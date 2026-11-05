@@ -112,6 +112,22 @@ export interface Account {
   loginPauseReason: string | null
   /** 暂停时为恢复方法（修正凭证后测试登录成功才恢复），否则 null。 */
   loginPauseRecovery: string | null
+  /**
+   * 非 OAuth 包为 null。OAuth 包给出是否已连接，以及访问令牌的到期时间。
+   * 未连接，或上游没有给到期时间时 expiresAt 为 null。
+   * needsConfiguration 不把「还没连接上游」算进去。
+   */
+  oauth: OAuthStatus | null
+}
+
+export interface OAuthStatus {
+  connected: boolean
+  /** ISO-8601。未连接，或上游没有给到期时间时为 null。 */
+  expiresAt: string | null
+}
+
+export interface OAuthStart {
+  authorizationUrl: string
 }
 
 export interface ConfigValue {
@@ -478,6 +494,16 @@ export const api = {
   writeCredentials: (conch: string, account: string, values: Record<string, string>) =>
     http.put<{ updated: boolean }>(`${accountPath(conch, account)}/credentials`, values),
   testLogin: (conch: string, account: string) => http.post<unknown>(`${accountPath(conch, account)}/test-login`),
+  /**
+   * 开始上游 OAuth。浏览器打开 authorizationUrl；授权端点再跳回 {@link oauthCallbackPath}。
+   * 回调不在 /console/api 下，响应是 HTML，不是 JSON。
+   */
+  startOAuth: (conch: string, account: string) =>
+    http.post<OAuthStart>(`${accountPath(conch, account)}/oauth/start`),
+  disconnectOAuth: (conch: string, account: string) =>
+    http.del<{ oauth: OAuthStatus }>(`${accountPath(conch, account)}/oauth`),
+  /** 浏览器导航地址，不走 http 客户端。 */
+  oauthCallbackPath: '/console/oauth/callback',
 
   config: (conch: string) => http.get<{ fields: Record<string, ConfigValue> }>(`${conchPath(conch)}/config`),
   writeConfig: (conch: string, values: Record<string, string>) =>

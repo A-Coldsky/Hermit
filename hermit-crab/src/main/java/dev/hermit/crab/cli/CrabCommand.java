@@ -31,6 +31,7 @@ import dev.hermit.crab.config.CrabConfigLoader;
 import dev.hermit.crab.engine.ConchRejectedException;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.mcp.McpStdio;
+import dev.hermit.crab.upstream.McpOAuthToken;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.TrialRejected;
@@ -436,6 +437,9 @@ public final class CrabCommand {
                 runtime.loadInstalledConches();
                 runtime.admin().requireAccount(conch, account);
                 for (String name : new TreeSet<>(runtime.admin().credentialNames(conch, account))) {
+                    if (McpOAuthToken.FIELD.equals(name)) {
+                        continue;
+                    }
                     out.println(name);
                 }
                 return 0;

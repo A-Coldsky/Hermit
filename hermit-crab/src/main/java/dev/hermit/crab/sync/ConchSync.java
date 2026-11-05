@@ -28,6 +28,7 @@ import javax.sql.DataSource;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.CredentialField;
+import dev.hermit.crab.upstream.McpOAuthToken;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.pkg.PackageVerificationException;
@@ -1332,6 +1333,7 @@ public final class ConchSync {
         if (installed != null && installed.credentials() != null) {
             fields.removeAll(installed.credentials().keySet());
         }
+        fields.remove(McpOAuthToken.FIELD);
         if (fields.isEmpty()) {
             store.replacePendingCredentialFields(conch, Set.of());
             return;

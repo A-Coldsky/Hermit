@@ -105,7 +105,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 
 `effectiveConfirm()` 为 true 的 HTTP 调用必须带请求头 `X-Hermit-Confirm: true`（去空白后恰好是 `true`）。缺头或值不对时，在权限、能力停用、账号和凭证检查之后、幂等缓存之前返回 409 `CONFLICT`，message 为「该操作需要确认。请带上请求头 X-Hermit-Confirm: true 后重试。」。这次不读、不写幂等缓存，也不访问上游。MCP 入口不看这个头，确认走 elicitation。
 
-`driver: mcp` 在上述检查之后交给 `McpForwarder`，执行的是这次授权的快照。`auth.type: headers` 把渲染后的 `upstream.headers` 发给上游；`oauth` 返回 409 `NOT_CONFIGURED`，message 为「尚未连接上游。请到控制台连接上游。」，不连网。主机不在 `allowed_hosts` 同样是这个错误码，message 为「上游主机不在允许列表中。」。成功时 HTTP 的 `data` 优先是 `structuredContent`，否则是 `{content: [...]}`。上游 `isError: true` 且文本不是 `Input validation error:` 开头时，HTTP 502，`data` 是脱敏后的 content，Tide 失败的 `stepType` 为 `mcp_tool_error`。OpenAPI 里这些操作为 POST，带 `x-hermit-driver: mcp`，响应 `data` 的 schema 是 `{type: object}`，需要确认的操作把 `X-Hermit-Confirm` 标成必填。
+`driver: mcp` 在上述检查之后交给 `McpForwarder`，执行的是这次授权的快照。`auth.type: headers` 把渲染后的 `upstream.headers` 发给上游。`oauth` 还没有 `oauth_token` 时返回 409 `NOT_CONFIGURED`，message 为「尚未连接上游。请到控制台连接上游。」，不连网，也不校验入参。已经连接时，访问令牌在到期前 60 秒内先刷新，再带 `Authorization: Bearer` 调用。刷新被令牌端点拒绝，或调用得到 HTTP 401、刷新后重放这次请求仍是 401，就清掉该账号的这组令牌，返回 422 `AUTH_FAILED`，message 为「上游拒绝了登录。请到控制台重新连接。」，不再用旧访问令牌打工具。主机不在 `allowed_hosts` 是 409 `NOT_CONFIGURED`，message 为「上游主机不在允许列表中。」，不清令牌。发现不到端点是同一错误码，「无法发现上游的授权端点。」。刷新时连不上或超时也不清令牌，分别是 502 `UPSTREAM_ERROR`「上游连接失败。」和 504 `TIMEOUT`「执行超时」。成功时 HTTP 的 `data` 优先是 `structuredContent`，否则是 `{content: [...]}`。上游 `isError: true` 且文本不是 `Input validation error:` 开头时，HTTP 502，`data` 是脱敏后的 content，Tide 失败的 `stepType` 为 `mcp_tool_error`。访问令牌和刷新令牌按已知秘密脱敏，含 URL 编码形式。OpenAPI 里这些操作为 POST，带 `x-hermit-driver: mcp`，响应 `data` 的 schema 是 `{type: object}`，需要确认的操作把 `X-Hermit-Confirm` 标成必填。
 
 | 错误码 | HTTP 状态 |
 | --- | --- |
@@ -148,8 +148,10 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | GET / POST | `/conches/{conch}/accounts` | 列表 / `{name}` 创建。账号行见下方字段 |
 | DELETE | `/conches/{conch}/accounts/{account}` | 删除账号/凭证并使会话失效 |
 | POST | `/conches/{conch}/accounts/{account}/default` | 设默认账号 |
-| GET / PUT | `/conches/{conch}/accounts/{account}/credentials` | 仅字段名 / `{字段:字符串}` 写入；空字符串表示删除。空 body、`{}`，或写入后仍缺必填字段，返回 `INVALID_INPUT`。已保存字段可以只改其中几项。凭证无法解密时，必须把已存字段都重新写成非空值 |
+| GET / PUT | `/conches/{conch}/accounts/{account}/credentials` | 仅字段名 / `{字段:字符串}` 写入；空字符串表示删除。空 body、`{}`，或写入后仍缺必填字段，返回 `INVALID_INPUT`。已保存字段可以只改其中几项。凭证无法解密时，必须把已存字段都重新写成非空值。`oauth_token` 不出现在字段名里，也无法解密时也不要求重填；PUT 写它是 400，message 为「oauth_token 由控制台连接上游写入，不能手工填写。」 |
 | POST | `/conches/{conch}/accounts/{account}/test-login` | 测试登录。成功才解除自动登录暂停；失败、缺凭证或无法解密都不解除。不写调用记录 |
+| POST | `/conches/{conch}/accounts/{account}/oauth/start` | 开始上游 OAuth。OAuth 包返回 `{authorizationUrl}`。不是 OAuth 是 409 `NOT_CONFIGURED`，message 为「这个规则包不是 OAuth 登录。」。授权端点或令牌端点的主机不在 `allowed_hosts` 是同一错误码，「上游主机不在允许列表中。」。发现不到端点是「无法发现上游的授权端点。」。state 和 PKCE verifier 只放内存，10 分钟，用过即丢。已设置控制台口令时这条要 Cookie |
+| DELETE | `/conches/{conch}/accounts/{account}/oauth` | 删掉该账号的 `oauth_token`，并使本机登录会话失效。返回 `{oauth:{connected:false, expiresAt:null}}`。不是 OAuth 是 409，message 与 start 相同。账号不存在是 404 |
 | GET / PUT | `/conches/{conch}/config` | 配置声明/值 / `{字段:字符串}`；空字符串清除覆盖 |
 | POST | `/capabilities/{conch}/{action}/enable`、`/disable` | 数据库开关；不能覆盖 config.yml 的禁用 |
 | GET / POST | `/apikeys` | 列表 / 创建。创建体 `{name, readOnly, all, conches, actions}`。`name` 必填。`readOnly` 与 `all` 缺省为 false，必须是布尔。`conches`、`actions` 缺省或 `[]` 都是空集合。只接受这五个字段。嵌套 `scope` 或其他未知字段是 400 `INVALID_INPUT`，message 为 `unknown field: …`。`all` 不是 true 且两个集合都空：400，message 为 `必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions`。`all: true` 再带非空 `conches` 或 `actions`：400，message 为 `all 为 true 时不能同时填写 conches 或 actions`。`all: true` 保存空集合，表示全部正式包的全部能力，不含本地包；`readOnly: true` 仍只放行只读能力。只写 `conches` 或只写 `actions` 时 `scope.all` 为 false。`actions` 必须是已加载的 `conch.action`；`conches` 必须是已加载（含本地包）或停用墓碑中的规则包名。裸名、不存在的能力、未知规则包拒绝创建。新 Key 仅返回一次 plaintext。响应与列表的 `scope` 都是 `{all, conches, actions, readOnly}`。`all` 为 true 表示两个集合都空（全部正式包）。早于该字段、两个集合都空的旧行仍可调用，读出来的 `all` 也是 true，不迁移 |
@@ -214,6 +216,9 @@ Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填�
 | `loginPaused` | 连续登录失败达到 `engine.max_login_failures` 后为 true |
 | `loginPauseReason` | 暂停时为原因，否则 `null` |
 | `loginPauseRecovery` | 暂停时说明恢复方法：修正凭证后对该账号执行测试登录，成功才恢复。否则 `null` |
+| `oauth` | 非 OAuth 包为 JSON `null`。OAuth 包为 `{connected, expiresAt}`。未连接，或上游没有给到期时间时，`expiresAt` 为 JSON `null`。`needsConfiguration` 不把「还没连接上游」算进去 |
+
+`GET /console/oauth/callback` 不在 `/console/api` 下。它只认回环套接字，不要求 `X-Hermit-Console`，也不认控制台 Cookie：授权服务器在另一个站点时带不回 `SameSite=Strict`。成功是 200 的 HTML，「已连接上游。可以关闭这个页面，回到控制台。」，知道到期时间时再写一行。失败是 400 的 HTML，只用固定中文，不回显 `code`、`state`、`error` 或令牌。响应带 `Cache-Control: no-store` 和 `Referrer-Policy: no-referrer`。
 
 测试登录仍会尝试登录，不看暂停旗标。只有登录成功（`recordAuthSuccess`）才清掉暂停和失败计数。失败、缺配置、缺凭证或无法解密都保持暂停，下一次能力调用仍直接返回「该账号已暂停自动登录」。页面应读这些字段显示「已暂停」和恢复方法，不要只看 `needsConfiguration`。
 
@@ -285,7 +290,7 @@ debug trace <traceId> [--from-env VAR]
 mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 ```
 
-普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。不带参数，或参数只有 `--help` / `-h`，把用法打到 stdout，退出 0。未知命令，以及子命令参数不够，仍把同一段用法打到 stderr，退出 1。这段用法以「用法：」开头，后面仍是英文命令和选项名。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
+普通管理 CLI 直接打开 H2；serve 已运行时使用控制台 API，不能依靠另一个 CLI 共享库。凭证通过隐藏输入、stdin 或命名环境变量输入，不接受明文命令行值。`credential list` 不打印 `oauth_token`。`credential set` 写这个字段会拒绝，stderr 为「oauth_token 由控制台连接上游写入，不能手工填写。」。不带参数，或参数只有 `--help` / `-h`，把用法打到 stdout，退出 0。未知命令，以及子命令参数不够，仍把同一段用法打到 stderr，退出 1。这段用法以「用法：」开头，后面仍是英文命令和选项名。普通错误退出 1，数据库被占用退出 2；stdio 的连接失败也有独立退出约定。
 
 `catalog` 打印目录缓存，一行一个包：`包名 版本`，后面按情况接 `subscribed`、`installed 版本`、`disabled`、`local-conflict`、`update-available 清单版本`，最后是标题。缓存还没有时没有输出，退出 0。`subscribe` 成功时打印 `包名 版本 KIND`；这一轮结果里没有该包时打印 `包名 subscribed`。`unsubscribe` 成功时打印包名。`update` 成功时打印 `包名 版本`。它用的是最近一次同步的清单，不会在这条命令里再拉 Reef。未配置 `reef.url` 时 `catalog`、`subscribe` 和 `update` 与 `sync` 一样在 stderr 打印 `reef.url is not configured` 并退出 1。清单返回 401 或 403 时，`sync` 与 `subscribe` 在 stderr 打印「令牌已失效，请重新导入引导文件。」并退出 1。`unsubscribe` 在未配置 Reef 时仍可用。超过 200 字或含换行的错误被收成「输入无效。」。
 

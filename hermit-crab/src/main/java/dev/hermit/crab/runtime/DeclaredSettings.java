@@ -11,6 +11,8 @@ import java.util.Set;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.crab.upstream.McpOAuth;
+import dev.hermit.crab.upstream.McpOAuthToken;
 
 public final class DeclaredSettings {
     private DeclaredSettings() {
@@ -33,6 +35,9 @@ public final class DeclaredSettings {
         }
         ArrayList<String> missing = new ArrayList<>();
         for (Map.Entry<String, CredentialField> entry : doc.credentials().entrySet()) {
+            if (McpOAuthToken.FIELD.equals(entry.getKey())) {
+                continue;
+            }
             if (entry.getValue().required() && (present == null || !present.contains(entry.getKey()))) {
                 missing.add(entry.getKey());
             }
@@ -68,6 +73,9 @@ public final class DeclaredSettings {
             throw new IllegalArgumentException("conch declares no credentials");
         }
         for (Map.Entry<String, String> entry : fields.entrySet()) {
+            if (McpOAuthToken.FIELD.equals(entry.getKey())) {
+                throw new IllegalArgumentException(McpOAuth.RESERVED);
+            }
             CredentialField declared = declaration(installed, staged, entry.getKey());
             if (declared == null) {
                 throw new IllegalArgumentException("unknown credential field");

@@ -67,6 +67,23 @@ async function publish(row: ConchVersion) {
   }
 }
 
+async function discard(row: ConchVersion) {
+  const message = `丢弃后删除 v${row.version} 的 YAML，版本列表里不再有它，同一个版本号可以重新上传。已发布的版本不受影响。`
+  if (!(await confirm(message, `丢弃 v${row.version}`, '丢弃'))) {
+    return
+  }
+  busy.value = row.version
+  try {
+    await api.discardVersion(props.conch, row.version)
+    ElMessage.success(`v${row.version} 已丢弃`)
+    emit('changed')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    busy.value = null
+  }
+}
+
 function showWarnings(row: ConchVersion) {
   warningDialog.row = row
   warningDialog.open = true
@@ -144,7 +161,7 @@ async function runDiff() {
       <el-table-column prop="pullCount" label="拉取次数" width="96" align="right">
         <template #header><span :title="pullCountHint">拉取次数</span></template>
       </el-table-column>
-      <el-table-column label="操作" :width="isAdmin ? 280 : 160">
+      <el-table-column label="操作" :width="isAdmin ? 320 : 160">
         <template #default="{ row }">
           <el-button link type="primary" @click="showYaml(row)">YAML</el-button>
           <el-button link type="primary" :disabled="versions.length < 2" @click="openDiff(row)">对比</el-button>
@@ -153,6 +170,16 @@ async function runDiff() {
           </el-tooltip>
           <el-button v-else-if="row.status === 'UPLOADED' && isAdmin" link type="primary" :loading="busy === row.version" @click="publish(row)">
             发布
+          </el-button>
+          <el-button
+            v-if="row.status === 'UPLOADED' && isAdmin"
+            link
+            type="danger"
+            :disabled="busy === row.version"
+            data-test="discard"
+            @click="discard(row)"
+          >
+            丢弃
           </el-button>
         </template>
       </el-table-column>

@@ -442,8 +442,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     /**
-     * Subscribes and syncs. One {@code SYNC_REQUESTED} audit is written after both the optional
-     * catalog prefetch and the install sync succeed.
+     * Subscribes and syncs. One {@code SYNC_REQUESTED} audit is written after the fresh
+     * manifest check and the install sync both succeed.
      */
     public ConchOutcome subscribe(String conch, String actor) {
         prepare();

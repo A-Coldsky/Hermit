@@ -313,7 +313,7 @@ class SubscriptionTest {
                         .satisfies(error -> {
                             SubscriptionException ex = (SubscriptionException) error;
                             assertThat(ex.status()).isEqualTo(404);
-                            assertThat(ex.getMessage()).isEqualTo(SubscriptionException.NOT_IN_CATALOG);
+                            assertThat(ex.getMessage()).isEqualTo(SubscriptionException.CANNOT_SUBSCRIBE);
                         });
                 assertThat(runtime.subscribed("legacy_oa")).isFalse();
 
@@ -328,7 +328,7 @@ class SubscriptionTest {
     }
 
     @Test
-    void syncFailureAfterSubscribeLeavesTheRow() throws Exception {
+    void catalogRefreshFailureDoesNotInsertASubscription() throws Exception {
         try (FakeReef reef = new FakeReef()) {
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
             try (CrabRuntime runtime = open(reef, "fail")) {
@@ -338,8 +338,145 @@ class SubscriptionTest {
                 reef.disconnect();
                 assertThatThrownBy(() -> runtime.subscribe("legacy_oa", Actors.CONSOLE))
                         .isInstanceOf(SyncException.class);
-                assertThat(runtime.subscribed("legacy_oa")).isTrue();
+                assertThat(runtime.subscribed("legacy_oa")).isFalse();
+                assertThat(runtime.registry().find("legacy_oa")).isEmpty();
                 assertThat(reef.downloads()).isZero();
+                assertThat(auditCount(runtime, "CONCH_SUBSCRIBED")).isZero();
+            }
+        }
+    }
+
+    @Test
+    void rejectedDownloadAfterSubscribeLeavesTheRow() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            try (CrabRuntime runtime = open(reef, "reject-download")) {
+                runtime.loadInstalledConches();
+                runtime.syncOnce(Actors.CONSOLE);
+                reef.downloadStatus("legacy_oa", 500);
+                ConchOutcome outcome = runtime.subscribe("legacy_oa", Actors.CONSOLE);
+                assertThat(outcome.kind()).isEqualTo(OutcomeKind.REJECTED);
+                assertThat(runtime.subscribed("legacy_oa")).isTrue();
+                assertThat(runtime.registry().find("legacy_oa")).isEmpty();
+                assertThat(Files.exists(runtime.paths().conches().resolve("legacy_oa/current"))).isFalse();
+                assertThat(auditCount(runtime, "CONCH_SUBSCRIBED")).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void staleCatalogCannotSubscribeARemovedConch() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            reef.publish(ConchTexts.standard("other_sys", "1.0.0"));
+            CrabConfig config = config(reef).withListen("127.0.0.1", 0);
+            try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("stale-sub")), config, name -> null);
+                 CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newHttpClient();
+                HttpResponse<String> synced = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(synced.statusCode()).as(synced.body()).isEqualTo(200);
+                assertThat(reef.downloads()).isZero();
+
+                HttpResponse<String> cached = send(http, server.port(), "GET", "/console/api/catalog", null);
+                assertThat(cached.body()).contains("legacy_oa").contains("other_sys");
+                reef.remove("legacy_oa");
+                int downloads = reef.downloads();
+
+                HttpResponse<String> rejected = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/subscription", "{}");
+                assertThat(rejected.statusCode()).as(rejected.body()).isEqualTo(404);
+                JsonNode rejectedBody = JSON.readTree(rejected.body());
+                assertThat(rejectedBody.path("success").asBoolean()).isFalse();
+                assertThat(rejectedBody.path("data").isNull()).isTrue();
+                assertThat(rejectedBody.path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+                assertThat(rejectedBody.path("error").path("message").asText())
+                        .isEqualTo(SubscriptionException.CANNOT_SUBSCRIBE);
+                assertThat(runtime.subscribed("legacy_oa")).isFalse();
+                assertThat(runtime.registry().find("legacy_oa")).isEmpty();
+                assertThat(Files.exists(runtime.paths().conches().resolve("legacy_oa/current"))).isFalse();
+                assertThat(reef.downloads()).isEqualTo(downloads);
+                assertThat(auditCount(runtime, "CONCH_SUBSCRIBED")).isZero();
+
+                HttpResponse<String> catalog = send(http, server.port(), "GET", "/console/api/catalog", null);
+                assertThat(catalog.body()).doesNotContain("legacy_oa").contains("other_sys");
+
+                HttpResponse<String> installed = send(
+                        http, server.port(), "POST", "/console/api/conches/other_sys/subscription", "{}");
+                assertThat(installed.statusCode()).as(installed.body()).isEqualTo(200);
+                JsonNode data = JSON.readTree(installed.body()).path("data");
+                assertThat(data.path("conch").asText()).isEqualTo("other_sys");
+                assertThat(data.path("subscribed").asBoolean()).isTrue();
+                assertThat(data.path("outcome").path("kind").asText()).isEqualTo("INSTALLED");
+                assertThat(runtime.subscribed("other_sys")).isTrue();
+                assertThat(runtime.registry().find("other_sys")).isPresent();
+                assertThat(runtime.subscribed("legacy_oa")).isFalse();
+
+                HttpResponse<String> unknown = send(
+                        http, server.port(), "POST", "/console/api/conches/never_pub/subscription", "{}");
+                assertThat(unknown.statusCode()).as(unknown.body()).isEqualTo(404);
+                assertThat(JSON.readTree(unknown.body()).path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+                assertThat(JSON.readTree(unknown.body()).path("error").path("message").asText())
+                        .isEqualTo(SubscriptionException.CANNOT_SUBSCRIBE);
+                assertThat(runtime.subscribed("never_pub")).isFalse();
+                assertThat(runtime.registry().find("other_sys")).isPresent();
+            }
+        }
+    }
+
+    @Test
+    void repeatSubscribeOfARemovedConchKeepsTheRowAndSyncs() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            CrabConfig config = config(reef).withListen("127.0.0.1", 0);
+            try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("repeat-removed")), config, name -> null);
+                 CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newHttpClient();
+                HttpResponse<String> first = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/subscription", "{}");
+                assertThat(first.statusCode()).as(first.body()).isEqualTo(200);
+                assertThat(JSON.readTree(first.body()).path("data").path("subscribed").asBoolean()).isTrue();
+                assertThat(JSON.readTree(first.body()).path("data").path("outcome").path("kind").asText())
+                        .isEqualTo("INSTALLED");
+
+                reef.remove("legacy_oa");
+                HttpResponse<String> again = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/subscription", "{}");
+                assertThat(again.statusCode()).as(again.body()).isEqualTo(200);
+                JsonNode data = JSON.readTree(again.body()).path("data");
+                assertThat(data.path("subscribed").asBoolean()).isTrue();
+                assertThat(data.path("outcome").path("kind").asText()).isEqualTo("DISABLED");
+                assertThat(data.path("outcome").path("version").asText()).isEqualTo("1.0.0");
+                assertThat(runtime.subscribed("legacy_oa")).isTrue();
+                assertThat(runtime.registry().find("legacy_oa")).isPresent();
+                assertThat(auditCount(runtime, "CONCH_SUBSCRIBED")).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void subscribeWithoutAnOutcomeDoesNotClaimSubscribed() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            CrabConfig config = config(reef).withListen("127.0.0.1", 0);
+            try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("no-outcome")), config, name -> null);
+                 CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newHttpClient();
+                HttpResponse<String> synced = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(synced.statusCode()).as(synced.body()).isEqualTo(200);
+                new Subscriptions(runtime.dataSource()).record("legacy_oa", "test", Instant.EPOCH);
+                reef.remove("legacy_oa");
+
+                HttpResponse<String> response = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/subscription", "{}");
+                assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+                JsonNode data = JSON.readTree(response.body()).path("data");
+                assertThat(data.path("conch").asText()).isEqualTo("legacy_oa");
+                assertThat(data.path("subscribed").asBoolean()).isFalse();
+                assertThat(data.path("outcome").isNull()).isTrue();
+                assertThat(runtime.subscribed("legacy_oa")).isTrue();
+                assertThat(runtime.registry().find("legacy_oa")).isEmpty();
+                assertThat(reef.downloads()).isZero();
+                assertThat(auditCount(runtime, "CONCH_SUBSCRIBED")).isZero();
             }
         }
     }

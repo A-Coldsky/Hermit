@@ -120,6 +120,21 @@ describe('可订阅规则包', () => {
     expect(warning).toHaveBeenCalledWith('已订阅 legacy_oa，但这次没有安装')
   })
 
+  it('接口返回没有订上时不说已订阅', async () => {
+    crab.catalog.mockResolvedValue({ conches: [entry()], syncedAt: '2026-10-30T00:00:00Z', configured: true })
+    crab.subscribe.mockResolvedValue({ conch: 'legacy_oa', subscribed: false, outcome: null })
+    const success = vi.spyOn(ElMessage, 'success')
+    const warning = vi.spyOn(ElMessage, 'warning')
+    const wrapper = await mountPage(CatalogView)
+    await flushPromises()
+
+    await buttons(wrapper, '订阅')[0].trigger('click')
+    await flushPromises()
+
+    expect(success).not.toHaveBeenCalled()
+    expect(warning).toHaveBeenCalledWith('没有订阅 legacy_oa：Reef 上当前不能订阅这个规则包')
+  })
+
   it('与本地包同名时不能订阅', async () => {
     crab.catalog.mockResolvedValue({
       conches: [entry({ localConflict: true, installed: true, installedVersion: '0.1.0' })],

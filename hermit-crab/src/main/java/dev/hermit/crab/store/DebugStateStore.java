@@ -12,7 +12,9 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Single debug flag. Enabling it arms a 24-hour deadline; this slice only stores the flag.
+ * Single debug flag for this Crab. Enabling it arms a 24-hour deadline.
+ * A read after the deadline turns the flag off and appends {@code DEBUG_CHANGED}
+ * with actor {@code retention}. Request and response bodies are not stored here.
  */
 public final class DebugStateStore {
     public static final Duration WINDOW = Duration.ofHours(24);
@@ -57,6 +59,12 @@ public final class DebugStateStore {
         Instant now = clock.instant();
         if (row.expiresAt() != null && !row.expiresAt().isAfter(now)) {
             upsert(connection, false, null);
+            ConfigAudit.append(
+                    connection,
+                    Actors.RETENTION,
+                    AuditKind.DEBUG_CHANGED,
+                    "debug",
+                    Json.write(Map.of("enabled", false)));
             return new DebugSnapshot(false, null);
         }
         return new DebugSnapshot(true, row.expiresAt());
@@ -64,7 +72,7 @@ public final class DebugStateStore {
 
     private static Row select(Connection connection) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
-                "SELECT enabled, expires_at FROM debug_state WHERE id = ?")) {
+                "SELECT enabled, expires_at FROM debug_state WHERE id = ? FOR UPDATE")) {
             statement.setInt(1, ROW_ID);
             try (ResultSet resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {

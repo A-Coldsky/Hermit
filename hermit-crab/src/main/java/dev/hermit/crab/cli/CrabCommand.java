@@ -49,8 +49,10 @@ import dev.hermit.crab.store.AuditLog;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.ApiKeySummary;
 import dev.hermit.crab.store.CrabPaths;
+import dev.hermit.crab.store.ConsolePassword;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.DatabaseInUseException;
+import dev.hermit.crab.store.DebugStateStore;
 
 /**
  * Crab command line. Credential values are read from the console, one stdin line, or
@@ -83,6 +85,8 @@ public final class CrabCommand {
               crab local reload
               crab local delete <conch>
               crab local export <conch> [--out file]
+              crab console password [--from-env VAR]
+              crab debug status|on|off [--from-env VAR]
               crab mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
             """;
 
@@ -148,6 +152,8 @@ public final class CrabCommand {
             case "audit" -> audit(args, env, out, err);
             case "apikey" -> apiKey(args, env, out, err);
             case "local" -> local(args, env, out, err);
+            case "console" -> consolePassword(args, env, in, out, err);
+            case "debug" -> debug(args, env, in, out, err);
             case "mcp-stdio" -> new McpStdio().run(args, env, in, out, err);
             default -> {
                 err.print(USAGE);
@@ -924,6 +930,103 @@ public final class CrabCommand {
         };
     }
 
+    private int consolePassword(String[] args, Function<String, String> env, InputStream in, PrintStream out,
+            PrintStream err) throws IOException {
+        Parsed parsed = parse(args, err);
+        if (parsed == null) {
+            return 1;
+        }
+        if (parsed.positionals.size() > 2 && "password".equals(parsed.positionals.get(1))) {
+            err.println("口令不能写在命令行参数里。");
+            return 1;
+        }
+        if (parsed.positionals.size() != 2 || !"password".equals(parsed.positionals.get(1))
+                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.actions != null) {
+            err.print(USAGE);
+            return 1;
+        }
+        String secret = parsed.fromEnv == null ? readPassword(in, err) : envPassword(env, parsed.fromEnv, err);
+        if (secret == null) {
+            return 1;
+        }
+        if (secret.length() < ConsolePassword.MIN_LENGTH || secret.length() > ConsolePassword.MAX_LENGTH) {
+            err.println(ConsolePassword.LENGTH_MESSAGE);
+            return 1;
+        }
+        return withRuntime(env, runtime -> {
+            try {
+                runtime.replaceConsolePassword(secret);
+            } catch (RuntimeException ex) {
+                if (ex.getMessage() != null && ex.getMessage().contains(secret)) {
+                    err.println("口令无效。");
+                    return 1;
+                }
+                throw ex;
+            }
+            out.println("updated");
+            return 0;
+        });
+    }
+
+    private int debug(String[] args, Function<String, String> env, InputStream in, PrintStream out, PrintStream err) {
+        Parsed parsed = parse(args, err);
+        if (parsed == null) {
+            return 1;
+        }
+        if (parsed.positionals.size() != 2 || parsed.readOnly || parsed.all
+                || parsed.conches != null || parsed.actions != null) {
+            if (parsed.positionals.size() > 2 && isDebugVerb(parsed.positionals.get(1))) {
+                err.println("口令不能写在命令行参数里。");
+                return 1;
+            }
+            err.print(USAGE);
+            return 1;
+        }
+        String verb = parsed.positionals.get(1);
+        if (!isDebugVerb(verb)) {
+            err.print(USAGE);
+            return 1;
+        }
+        return withRuntime(env, runtime -> {
+            if (runtime.consolePassword().isSet()) {
+                String secret;
+                if (parsed.fromEnv != null) {
+                    secret = envPassword(env, parsed.fromEnv, err);
+                } else {
+                    try {
+                        secret = readPassword(in, err);
+                    } catch (IOException ex) {
+                        err.println("请提供口令。");
+                        return 1;
+                    }
+                }
+                if (secret == null) {
+                    return 1;
+                }
+                if (runtime.consolePassword().verify(secret) != ConsolePassword.Result.ACCEPTED) {
+                    err.println(ConsolePassword.FAILURE_MESSAGE);
+                    return 1;
+                }
+            }
+            DebugStateStore.DebugSnapshot snapshot = switch (verb) {
+                case "on" -> runtime.debug().setEnabled(true, Actors.CLI);
+                case "off" -> runtime.debug().setEnabled(false, Actors.CLI);
+                default -> runtime.debug().get();
+            };
+            printDebug(out, snapshot);
+            return 0;
+        });
+    }
+
+    private static boolean isDebugVerb(String verb) {
+        return "status".equals(verb) || "on".equals(verb) || "off".equals(verb);
+    }
+
+    private static void printDebug(PrintStream out, DebugStateStore.DebugSnapshot snapshot) {
+        out.println("enabled=" + snapshot.enabled());
+        out.println("expiresAt=" + (snapshot.expiresAt() == null ? "-" : snapshot.expiresAt()));
+    }
+
     private static String readSecret(InputStream in, PrintStream err) throws IOException {
         err.println("凭证：");
         Console console = System.console();
@@ -945,6 +1048,42 @@ public final class CrabCommand {
             return null;
         }
         return line;
+    }
+
+    private static String readPassword(InputStream in, PrintStream err) throws IOException {
+        err.println("口令：");
+        Console console = System.console();
+        if (console != null && in == System.in) {
+            char[] chars = console.readPassword();
+            if (chars == null || chars.length == 0) {
+                err.println("请提供口令。");
+                return null;
+            }
+            try {
+                return new String(chars);
+            } finally {
+                Arrays.fill(chars, '\0');
+            }
+        }
+        String line = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8)).readLine();
+        if (line == null || line.isEmpty()) {
+            err.println("请提供口令。");
+            return null;
+        }
+        return line;
+    }
+
+    private static String envPassword(Function<String, String> env, String name, PrintStream err) {
+        String value = env.apply(name);
+        if (value == null) {
+            err.println("环境变量没有设置。");
+            return null;
+        }
+        if (value.isEmpty()) {
+            err.println("请提供口令。");
+            return null;
+        }
+        return value;
     }
 
     private static String envSecret(Function<String, String> env, String name, PrintStream err) {

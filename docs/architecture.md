@@ -97,13 +97,13 @@ Reef 与 Crab 的浏览器页面都是同一份静态 `index.html`，不用请�
 | --- | --- |
 | Reef 管理员、版本元数据、审计、报告、告警、Agent 令牌 | H2 或 MySQL。业务表、索引、唯一约束、检查约束和 Flyway 历史表 `hermit_flyway_schema_history` 都以 `hermit_` 开头。[Flyway SQL](../hermit-reef/src/main/resources/db/migration) 的 V1–V4 在发布前就地改写，没有数据迁移。已有 `reef-data` 里的 H2 和 Compose MySQL 库必须重建。V5 增加 `pull_count`，V6 增加角色、令牌哈希和 Crab 实例，V7 增加 `hermit_voided_config_tokens`。这三次是新增迁移，已经跑过 V5 的库不必为它们重建 |
 | Reef YAML/包/签名密钥/JWT 密钥 | `data-dir/conches/`、`data-dir/keys/` |
-| Crab 账号、配置、API Key、日志、队列、配置审计 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 conch/account 分页读取，响应不含凭证和配置值 |
+| Crab 账号、配置、API Key、日志、队列、配置审计、控制台口令哈希 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 conch/account 分页读取，响应不含凭证和配置值。控制台口令只存 schema 14 的 PBKDF2 哈希，不进 `config.yml` |
 | Crab 凭证、Cookie 会话、幂等响应 | H2 中 AES-256-GCM 密文；主密钥在环境变量或本机文件 |
 | Crab 规则及当前版本 | `HERMIT_HOME/conches/<conch>/...` |
 | API Key | 创建时返回一次明文；后续前缀和哈希查验 |
 | 上报 | 错误类型/脱敏摘要、小时计数/延迟、回滚事件，不是完整请求响应 |
 
-Reef 管理 JWT、Agent 令牌（每用户哈希，外加可选的配置令牌）和签名公钥是不同用途的信任边界。Crab 在 Reef 上的身份是用户加上实例 UUID。Crab 控制台依靠真实连接地址为回环地址且 API 带 `X-Hermit-Console: 1`，没有管理员登录，不能当成可公开反向代理的远程控制台。
+Reef 管理 JWT、Agent 令牌（每用户哈希，外加可选的配置令牌）和签名公钥是不同用途的信任边界。Crab 在 Reef 上的身份是用户加上实例 UUID。Crab 控制台依靠真实连接地址为回环地址且 API 带 `X-Hermit-Console: 1`。口令未设置时没有登录。设置之后 `/console/api/**` 还要会话 Cookie `hermit_console`，只有口令、没有用户名。页面和静态资源仍不认这张 Cookie。不能当成可公开反向代理的远程控制台。
 
 ## 生命周期与扩展
 

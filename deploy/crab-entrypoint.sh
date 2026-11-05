@@ -194,6 +194,15 @@ else
     fi
 fi
 
+# 控制台口令只留给 Java。不写入 config.yml，也不打印口令。
+# 空白视为没设，避免 Compose 把空字符串传进来。已有哈希时 Java 会忽略这个变量。
+if [ "${HERMIT_CONSOLE_PASSWORD+x}" = x ]; then
+    password_compact=$(printf '%s' "$HERMIT_CONSOLE_PASSWORD" | tr -d '[:space:]')
+    if [ -z "$password_compact" ]; then
+        unset HERMIT_CONSOLE_PASSWORD
+    fi
+fi
+
 write_config() {
     reef_block=$1
     tmp_config=$(mktemp)

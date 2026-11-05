@@ -198,7 +198,8 @@ final class ConfigAudit {
         if (AuditKind.API_KEY_CREATED.name().equals(kind)
                 || AuditKind.API_KEY_REVOKED.name().equals(kind)
                 || AuditKind.DEBUG_CHANGED.name().equals(kind)
-                || AuditKind.SYNC_REQUESTED.name().equals(kind)) {
+                || AuditKind.SYNC_REQUESTED.name().equals(kind)
+                || AuditKind.CONSOLE_LOGIN.name().equals(kind)) {
             return EMPTY;
         }
         int first = target.indexOf('/');

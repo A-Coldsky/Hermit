@@ -10,7 +10,7 @@ const reef = vi.hoisted(() => ({
   ackAlert: vi.fn(),
   tideRollbacks: vi.fn(),
 }))
-const crab = vi.hoisted(() => ({ conches: vi.fn() }))
+const crab = vi.hoisted(() => ({ conches: vi.fn(), localConches: vi.fn(async () => ({ conches: [] })) }))
 
 vi.mock('../apps/reef-admin/src/api', () => ({ api: reef }))
 vi.mock('../apps/reef-admin/src/alerts', () => ({ refreshOpenAlerts: vi.fn() }))

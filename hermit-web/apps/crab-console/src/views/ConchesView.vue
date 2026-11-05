@@ -1,18 +1,37 @@
 <script setup lang="ts">
-import { ArrowRight, CircleCheckFilled, FolderOpened, Refresh, Upload, User, WarningFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import {
+  ArrowRight,
+  CircleCheckFilled,
+  CircleCloseFilled,
+  Delete,
+  FolderOpened,
+  Refresh,
+  Upload,
+  User,
+  WarningFilled,
+} from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
 import { ApiError } from '@shared/http'
 import { notifyError } from '@shared/format'
-import { api, type ConchSummary, type LocalFileResult, type ValidationIssue } from '../api'
+import {
+  api,
+  type ConchSummary,
+  type LocalConchEntry,
+  type LocalFileResult,
+  type LocalImportConflict,
+  type ValidationIssue,
+} from '../api'
 import { refreshPending } from '../status'
 
 const router = useRouter()
 const loading = ref(true)
 const conches = ref<ConchSummary[]>([])
+const broken = ref<LocalConchEntry[]>([])
+const deleting = ref<string | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const importing = ref(false)
 const reloading = ref(false)
@@ -48,7 +67,34 @@ async function importFile(event: Event) {
   if (!file) return
   importing.value = true
   try {
-    const result = await api.importLocalConch(file)
+    await upload(file, false)
+  } finally {
+    importing.value = false
+  }
+}
+
+function overwriteConflict(error: unknown): LocalImportConflict | null {
+  if (!(error instanceof ApiError) || error.status !== 409 || error.code !== 'CONFLICT') return null
+  const data = error.data as Partial<LocalImportConflict> | null
+  return data && data.confirm === true && typeof data.conch === 'string' ? (data as LocalImportConflict) : null
+}
+
+async function confirmOverwrite(conch: string): Promise<boolean> {
+  try {
+    await ElMessageBox.confirm(
+      `本机已有本地规则包 ${conch}。覆盖后以这次导入的文件为准，账号、凭证和配置保留。要覆盖吗？`,
+      '已有同名本地规则包',
+      { confirmButtonText: '覆盖', cancelButtonText: '取消', type: 'warning' },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function upload(file: File, confirm: boolean) {
+  try {
+    const result = await api.importLocalConch(file, confirm)
     const verb = result.replaced ? '已覆盖' : '已导入'
     if (result.warnings.length) {
       showReport({
@@ -61,14 +107,39 @@ async function importFile(event: Event) {
     }
     await load()
   } catch (error) {
+    const conflict = confirm ? null : overwriteConflict(error)
+    if (conflict) {
+      if (await confirmOverwrite(conflict.conch)) await upload(file, true)
+      return
+    }
     const issues = error instanceof ApiError ? issuesOf(error.data) : null
     if (issues) {
       showReport({ title: '导入失败', summary: error instanceof Error ? error.message : '', ...issues })
     } else {
       notifyError(error)
     }
+  }
+}
+
+async function removeBroken(row: LocalConchEntry) {
+  try {
+    await ElMessageBox.confirm(
+      `删除后 ${row.file} 会从本机移除。账号、凭证和配置会保留，重新导入同名规则包后可以直接使用。`,
+      `删除本地规则包 ${row.conch}`,
+      { confirmButtonText: '删除', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
+    )
+  } catch {
+    return
+  }
+  deleting.value = row.conch
+  try {
+    await api.deleteLocalConch(row.conch)
+    ElMessage.success(`已删除本地规则包 ${row.conch}，可以重新导入`)
+    await load()
+  } catch (error) {
+    notifyError(error)
   } finally {
-    importing.value = false
+    deleting.value = null
   }
 }
 
@@ -93,7 +164,15 @@ async function reloadLocal() {
 async function load() {
   loading.value = true
   try {
-    conches.value = (await api.conches()).conches
+    const [installed, local] = await Promise.all([
+      api.conches(),
+      api.localConches().catch((error: unknown) => {
+        notifyError(error)
+        return null
+      }),
+    ])
+    conches.value = installed.conches
+    broken.value = local ? local.conches.filter((row) => row.broken) : []
     void refreshPending()
   } catch (error) {
     notifyError(error)
@@ -118,10 +197,10 @@ onMounted(load)
       <input ref="fileInput" type="file" accept=".yaml,.yml" class="file" data-test="local-file" @change="importFile" />
     </PageHeader>
 
-    <div v-if="loading && !conches.length" class="cards">
+    <div v-if="loading && !conches.length && !broken.length" class="cards">
       <div v-for="n in 2" :key="n" class="hm-card"><el-skeleton :rows="3" animated /></div>
     </div>
-    <div v-else-if="conches.length" class="cards">
+    <div v-else-if="conches.length || broken.length" class="cards">
       <div
         v-for="row in conches"
         :key="row.conch"
@@ -160,6 +239,35 @@ onMounted(load)
           <span><b class="num">{{ row.accountCount }}</b> 个账号</span>
           <span class="spacer" />
           <span class="manage">管理<el-icon><ArrowRight /></el-icon></span>
+        </div>
+      </div>
+      <div v-for="row in broken" :key="`broken-${row.conch}`" class="hm-card conch broken" data-test="broken-conch">
+        <div class="top">
+          <ConchAvatar :name="row.conch" />
+          <div class="name">
+            <strong>
+              {{ row.conch }}
+              <el-tag type="info" effect="plain" size="small" class="local">本地</el-tag>
+              <el-tag type="danger" effect="plain" size="small" class="local" data-test="broken-tag">文件损坏，无法加载</el-tag>
+            </strong>
+            <span class="mono hm-muted">{{ row.file }}</span>
+          </div>
+        </div>
+        <div class="status bad">
+          <el-icon><CircleCloseFilled /></el-icon>
+          <span>未载入，不能调用。修好文件后重新导入覆盖，或先删除再导入</span>
+        </div>
+        <p v-if="row.reason" class="broken-reason" data-test="broken-reason">{{ row.reason }}</p>
+        <div class="foot hm-muted">
+          <span class="spacer" />
+          <el-button
+            type="danger"
+            plain
+            size="small"
+            :icon="Delete"
+            :loading="deleting === row.conch"
+            @click="removeBroken(row)"
+          >删除</el-button>
         </div>
       </div>
     </div>
@@ -248,6 +356,23 @@ onMounted(load)
 .status.warn {
   background: var(--el-color-warning-light-9);
   color: var(--el-color-warning-dark-2);
+}
+
+.status.bad {
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger-dark-2);
+}
+
+.broken {
+  border-color: var(--el-color-danger-light-7);
+}
+
+.broken-reason {
+  margin: -4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--hm-danger);
+  word-break: break-all;
 }
 
 .status.idle {

@@ -245,6 +245,27 @@ export interface LocalImportResult {
   warnings: ValidationIssue[]
 }
 
+/**
+ * `GET /local-conches` 的一行。已载入的本地包和载入失败的坏包都在这里。
+ * 坏包不在 `GET /conches` 里，详情、导出和调用都是 404，只能删除后重新导入。
+ */
+export interface LocalConchEntry {
+  conch: string
+  file: string
+  /** 已载入的版本。坏包为 null，不表示已安装。 */
+  version: string | null
+  loaded: boolean
+  broken: boolean
+  /** 坏包为中文原因，含文件名、包名和原因；已载入为 null。 */
+  reason: string | null
+}
+
+/** 同名本地包已存在、未带 `confirm=true` 时 409 `CONFLICT` 的 data。 */
+export interface LocalImportConflict {
+  conch: string
+  confirm: true
+}
+
 export interface LocalFileResult {
   file: string
   conch: string | null
@@ -421,11 +442,17 @@ export const api = {
   reportPreview: () => http.get<{ batch: ReportBatch; dropped: number }>(`${base}/reports/preview`),
   sendReport: () => http.post<{ attempted: boolean; accepted: boolean; status: number }>(`${base}/reports/send`),
 
-  /** `file` 是 multipart 字段名。校验失败时 data 为 `{ errors, warnings }`。 */
-  importLocalConch: (file: File) => {
+  /** 按 `conch` 排序，含 `broken` 为 true 的坏包。 */
+  localConches: () => http.get<{ conches: LocalConchEntry[] }>(`${base}/local-conches`),
+  /**
+   * `file` 是 multipart 字段名。校验失败时 400，data 为 `{ errors, warnings }`。
+   * 同名本地包（含坏包）已存在且未确认时 409 `CONFLICT`，data 为 {@link LocalImportConflict}，
+   * 用户同意后带 `confirm` 再传一次。与正式包或已订阅名字重名是 409 `INVALID_INPUT`，确认也不能覆盖。
+   */
+  importLocalConch: (file: File, confirm = false) => {
     const form = new FormData()
     form.append('file', file)
-    return http.upload<LocalImportResult>(`${base}/local-conches`, form)
+    return http.upload<LocalImportResult>(`${base}/local-conches${confirm ? '?confirm=true' : ''}`, form)
   },
   reloadLocalConches: () => http.post<{ results: LocalFileResult[] }>(`${base}/local-conches/reload`),
   deleteLocalConch: (conch: string) =>

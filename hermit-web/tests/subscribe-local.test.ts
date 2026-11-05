@@ -17,6 +17,7 @@ const crab = vi.hoisted(() => ({
   config: vi.fn(),
   apiKeys: vi.fn(),
   importLocalConch: vi.fn(),
+  localConches: vi.fn(),
   reloadLocalConches: vi.fn(),
   deleteLocalConch: vi.fn(),
   exportLocalConch: vi.fn(),
@@ -64,6 +65,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   document.body.innerHTML = ''
   crab.conches.mockResolvedValue({ conches: [] })
+  crab.localConches.mockResolvedValue({ conches: [] })
   crab.syncStatus.mockResolvedValue({ report: null, latestCrab: null })
   crab.accounts.mockResolvedValue({ accounts: [] })
   crab.config.mockResolvedValue({ fields: {} })
@@ -181,10 +183,106 @@ describe('本地规则包', () => {
     await input.trigger('change')
     await flushPromises()
 
-    expect(crab.importLocalConch).toHaveBeenCalledWith(file)
+    expect(crab.importLocalConch).toHaveBeenCalledWith(file, false)
     expect(document.body.textContent).toContain('导入失败')
     expect(document.body.textContent).toContain('缺少 actions')
     wrapper.unmount()
+  })
+
+  async function chooseFile(wrapper: Awaited<ReturnType<typeof mountPage>>) {
+    const input = wrapper.find('[data-test="local-file"]')
+    const file = new File(['conch: local_ping'], 'local_ping.yaml', { type: 'application/yaml' })
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+    return file
+  }
+
+  const overwriteConflict = () =>
+    new ApiError(409, 'CONFLICT', '将覆盖已有的本地规则包 local_ping。确认后再导入。', { conch: 'local_ping', confirm: true })
+
+  it('同名本地包要确认覆盖，确认后带 confirm 重新导入', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const success = vi.spyOn(ElMessage, 'success')
+    crab.importLocalConch
+      .mockRejectedValueOnce(overwriteConflict())
+      .mockResolvedValueOnce({ conch: 'local_ping', version: '0.2.0', replaced: true, warnings: [] })
+    const wrapper = await mountPage(ConchesView)
+    await flushPromises()
+    const file = await chooseFile(wrapper)
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(confirm.mock.calls[0][0]).toContain('local_ping')
+    expect(confirm.mock.calls[0][1]).toBe('已有同名本地规则包')
+    expect(crab.importLocalConch.mock.calls).toEqual([
+      [file, false],
+      [file, true],
+    ])
+    expect(success).toHaveBeenCalledWith('已覆盖本地规则包 local_ping v0.2.0')
+    expect(crab.conches).toHaveBeenCalledTimes(2)
+    confirm.mockRestore()
+  })
+
+  it('取消覆盖时不重新导入，也不报错', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const error = vi.spyOn(ElMessage, 'error')
+    crab.importLocalConch.mockRejectedValue(overwriteConflict())
+    const wrapper = await mountPage(ConchesView)
+    await flushPromises()
+    await chooseFile(wrapper)
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(crab.importLocalConch).toHaveBeenCalledTimes(1)
+    expect(error).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+
+  it('与正式包重名的 409 只显示错误，不询问覆盖', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    const error = vi.spyOn(ElMessage, 'error')
+    crab.importLocalConch.mockRejectedValue(new ApiError(409, 'INVALID_INPUT', '与已安装的正式规则包重名'))
+    const wrapper = await mountPage(ConchesView)
+    await flushPromises()
+    await chooseFile(wrapper)
+
+    expect(confirm).not.toHaveBeenCalled()
+    expect(crab.importLocalConch).toHaveBeenCalledTimes(1)
+    expect((error.mock.calls[0][0] as { message: string }).message).toContain('与已安装的正式规则包重名')
+    confirm.mockRestore()
+  })
+
+  it('坏的本地包标出损坏和原因，不能进入详情，删除后刷新列表', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const reason = '文件 local_ping.yaml 的规则包 local_ping 无法解析：YAML 无法解析（第 1 行）。'
+    crab.localConches
+      .mockResolvedValueOnce({
+        conches: [
+          { conch: 'local_ok', file: 'local_ok.yaml', version: '0.1.0', loaded: true, broken: false, reason: null },
+          { conch: 'local_ping', file: 'local_ping.yaml', version: null, loaded: false, broken: true, reason },
+        ],
+      })
+      .mockResolvedValue({ conches: [] })
+    crab.deleteLocalConch.mockResolvedValue({ conch: 'local_ping', deleted: true })
+    const wrapper = await mountPage(ConchesView)
+    await flushPromises()
+
+    const cards = wrapper.findAll('[data-test="broken-conch"]')
+    expect(cards).toHaveLength(1)
+    const card = cards[0]
+    expect(card.find('[data-test="broken-tag"]').text()).toBe('文件损坏，无法加载')
+    expect(card.find('[data-test="broken-reason"]').text()).toBe(reason)
+    expect(card.text()).toContain('不能调用')
+    expect(card.text()).not.toContain('可用：')
+    expect(card.attributes('role')).toBeUndefined()
+    expect(wrapper.text()).not.toContain('还没有规则包')
+
+    await card.find('button').trigger('click')
+    await flushPromises()
+    expect(confirm.mock.calls[0][1]).toBe('删除本地规则包 local_ping')
+    expect(crab.deleteLocalConch).toHaveBeenCalledWith('local_ping')
+    expect(wrapper.findAll('[data-test="broken-conch"]')).toHaveLength(0)
+    expect(wrapper.text()).toContain('还没有规则包')
+    confirm.mockRestore()
   })
 
   it('本地包详情可以导出和删除，没有取消订阅', async () => {

@@ -9,6 +9,7 @@ export const auditActionLabels: Record<string, string> = {
   LOGIN_FAILURE: '登录失败',
   UPLOAD: '上传',
   PUBLISH: '发布',
+  DISCARD: '丢弃',
   ROLLBACK: '回滚',
   DISABLE: '停用',
   ENABLE: '启用',

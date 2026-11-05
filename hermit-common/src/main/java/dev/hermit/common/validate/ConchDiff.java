@@ -1,14 +1,17 @@
 package dev.hermit.common.validate;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import dev.hermit.common.mcp.ToolSnapshots;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.McpTool;
 
 public record ConchDiff(
         List<String> addedActions,
@@ -20,7 +23,8 @@ public record ConchDiff(
         List<String> addedConfig,
         List<String> removedConfig,
         List<ConfigDefaultChange> configDefaultChanges,
-        List<String> newRequiredCredentials
+        List<String> newRequiredCredentials,
+        List<ToolChange> toolChanges
 ) {
     public ConchDiff {
         addedActions = List.copyOf(addedActions);
@@ -33,6 +37,7 @@ public record ConchDiff(
         removedConfig = List.copyOf(removedConfig);
         configDefaultChanges = List.copyOf(configDefaultChanges);
         newRequiredCredentials = List.copyOf(newRequiredCredentials);
+        toolChanges = List.copyOf(toolChanges);
     }
 
     public static ConchDiff between(ConchDoc oldDoc, ConchDoc newDoc) {
@@ -111,6 +116,79 @@ public record ConchDiff(
         return new ConchDiff(
                 addedActions, removedActions, changedActions,
                 addedCredentials, removedCredentials, requiredChanges,
-                addedConfig, removedConfig, defaultChanges, newRequired);
+                addedConfig, removedConfig, defaultChanges, newRequired,
+                toolChanges(oldDoc, newDoc));
+    }
+
+    private static List<ToolChange> toolChanges(ConchDoc oldDoc, ConchDoc newDoc) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        names.addAll(oldDoc.actions().keySet());
+        names.addAll(newDoc.actions().keySet());
+        ArrayList<ToolChange> changes = new ArrayList<>();
+        for (String name : names) {
+            ToolChange change = toolChange(name, oldDoc.actions().get(name), newDoc.actions().get(name));
+            if (change != null) {
+                changes.add(change);
+            }
+        }
+        return changes;
+    }
+
+    private static ToolChange toolChange(String name, Action previous, Action current) {
+        boolean wasTool = previous != null && previous.tool() != null;
+        boolean isTool = current != null && current.tool() != null;
+        if (!wasTool && !isTool) {
+            return null;
+        }
+        if (!wasTool) {
+            return toolView(name, ToolChange.ADDED, null, current);
+        }
+        if (!isTool) {
+            return toolView(name, ToolChange.REMOVED, previous, null);
+        }
+        if (sameTool(previous, current)) {
+            return null;
+        }
+        return toolView(name, ToolChange.CHANGED, previous, current);
+    }
+
+    private static boolean sameTool(Action previous, Action current) {
+        return Objects.equals(upstreamName(previous), upstreamName(current))
+                && Objects.equals(schemaSha(previous), schemaSha(current))
+                && Objects.equals(previous.description(), current.description())
+                && previous.mcp().readOnly() == current.mcp().readOnly()
+                && previous.effectiveDestructive() == current.effectiveDestructive()
+                && previous.effectiveConfirm() == current.effectiveConfirm();
+    }
+
+    private static ToolChange toolView(String name, String kind, Action previous, Action current) {
+        return new ToolChange(
+                name,
+                kind,
+                previous == null ? null : upstreamName(previous),
+                current == null ? null : upstreamName(current),
+                previous == null ? null : schemaSha(previous),
+                current == null ? null : schemaSha(current),
+                previous == null ? null : previous.description(),
+                current == null ? null : current.description(),
+                previous == null ? null : previous.mcp().readOnly(),
+                current == null ? null : current.mcp().readOnly(),
+                previous == null ? null : previous.effectiveDestructive(),
+                current == null ? null : current.effectiveDestructive(),
+                previous == null ? null : previous.effectiveConfirm(),
+                current == null ? null : current.effectiveConfirm());
+    }
+
+    private static String upstreamName(Action action) {
+        McpTool tool = action.tool();
+        return tool == null ? null : tool.name();
+    }
+
+    private static String schemaSha(Action action) {
+        McpTool tool = action.tool();
+        if (tool == null) {
+            return null;
+        }
+        return ToolSnapshots.schemaSha256(tool.inputSchema(), tool.outputSchema());
     }
 }

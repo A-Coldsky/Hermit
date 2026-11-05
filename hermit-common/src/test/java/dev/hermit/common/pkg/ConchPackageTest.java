@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import dev.hermit.common.Fixtures;
+import dev.hermit.common.McpFixtures;
 import dev.hermit.common.parse.ConchParser;
 
 class ConchPackageTest {
@@ -52,6 +53,29 @@ class ConchPackageTest {
         assertThat(unzip(again).get("signature.sig")).containsExactly(entries.get("signature.sig"));
         assertThat(ConchPackage.readVerified(again, Ed25519Keys.readPublicPem(publicPem)).manifest().sha256())
                 .isEqualTo(sha);
+    }
+
+    @Test
+    void mcpYamlRoundTripsAndStillRejectsEntriesOverOneMib() {
+        byte[] yaml = McpFixtures.headersYaml().getBytes(StandardCharsets.UTF_8);
+        assertThat(yaml.length).isLessThan(ConchPackage.MAX_ENTRY_BYTES);
+        byte[] zip = ConchPackage.write(yaml, keys.getPrivate());
+        VerifiedConch verified = ConchPackage.readVerified(zip, keys.getPublic());
+        assertThat(verified.conchYaml()).containsExactly(yaml);
+        assertThat(verified.conchDoc()).isEqualTo(McpFixtures.headersDoc());
+        assertThat(verified.conchDoc().driver()).isEqualTo("mcp");
+        assertThat(verified.manifest().minCrabVersion()).isEqualTo("1.1.0");
+
+        String huge = McpFixtures.headersYaml().replace(
+                "按名称或手机号搜索客户。",
+                "注".repeat(400_000));
+        byte[] tooBig = huge.getBytes(StandardCharsets.UTF_8);
+        assertThat(tooBig.length).isGreaterThan(ConchPackage.MAX_ENTRY_BYTES);
+        byte[] oversized = ConchPackage.write(tooBig, keys.getPrivate());
+        assertThatThrownBy(() -> ConchPackage.readVerified(oversized, keys.getPublic()))
+                .isInstanceOf(PackageVerificationException.class)
+                .extracting(ex -> ((PackageVerificationException) ex).reason())
+                .isEqualTo(PackageReason.ENTRY_TOO_LARGE);
     }
 
     @Test

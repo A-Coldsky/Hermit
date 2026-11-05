@@ -37,8 +37,8 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer；当前引擎兼容版本为 1.0.0 |
-| `driver` | 只能 `http` |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.0.0。`driver: mcp` 还要求不低于 1.1.0 |
+| `driver` | `http` 或 `mcp`。mcp 只解析和校验，见「MCP 上游包」 |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
 | `config` | 可选字段映射；字段支持默认值；不用于保存秘密 |
@@ -50,15 +50,68 @@ actions:
 
 兼容别名：`connector` → `conch`、`min_agent_version` → `min_crab_version`。新旧键同时出现且值不一致会拒绝。解析器对各已定义层的未知键较严格，步骤内部的完整语义则部分留到运行时校验，不能假定“可上传”就等于能正确执行。
 
-`credentials`/`config` 字段接受 `type`、`label`、`required`、`description`、`options`；config 额外支持 `default`。类型有 text/secret/select/url。校验会拒绝 `config` 的 `type: secret`，秘密必须放在 `credentials`。配置值优先级为用户值 → 声明 default → 顶层 base_url（仅 base_url 字段）；引擎也可直接回退顶层 base_url。
+`credentials`/`config` 字段接受 `type`、`label`、`required`、`description`、`options`；config 额外支持 `default`。类型有 text/secret/select/url。校验会拒绝 `config` 的 `type: secret`，秘密必须放在 `credentials`。mcp 包还拒绝 `config` 的 `type: url`。配置值优先级为用户值 → 声明 default → 顶层 base_url（仅 base_url 字段）；引擎也可直接回退顶层 base_url。
 
 `description` 会原样显示在 Crab 控制台的账号凭证对话框里，是写给填表的人看的。只写要填什么，例如示例 `legacy_oa` 的密码写「填原始密码」；md5、加密、明文提交这类处理细节由步骤模板的过滤器负责，不写进说明。
 
 凭证、配置、账号和能力开关会在 Crab 的 `config_audit` 追加一条记录。记录里是字段名和动作，不是凭证明文、密文或配置值。本机 `GET /console/api/audit` 和 CLI `audit list` 按时间倒序读取，结果同样只有操作者、动作、origin、Conch、账号、时间和字段名。detail 里其它键不会被读出来。
 
-Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。缺 examples 是校验错误；notes/related 等说明质量问题可能产生警告。不写 related 时警告是「缺少 related」；related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。示例 `legacy_oa` 只有 `list_todo`，所以不写 related。
+Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 时警告是「缺少 related」；related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。示例 `legacy_oa` 只有 `list_todo`，所以不写 related。
 
 输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由 `InputPreparer` 转换并按生成的 JSON Schema 校验。生成的 schema 含 `additionalProperties: false`。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换、小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`），以及未声明字段，都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内、也不会丢掉多余字段再当成功。HTTP 网关和 MCP 都经过 `Invoker` 与 `RuleEngine`，所以这条校验两边相同。MCP 在校验前去掉账号选择（直接工具的 `account`，或能力入参已占用该名字时的 `_account`）。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`、`traceId`，能定位到单个字段时还有 `field`。`traceId` 与响应头 `X-Hermit-Trace` 相同。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；示例 `legacy_oa` 的 `page` 声明了 `minimum: 1`。
+
+## MCP 上游包
+
+`driver: mcp` 描述上游 MCP 服务。这一版只解析、校验、比较版本和签名。Crab 不会连接 `upstream.url`，也不会把 action 转成上游 `tools/call`。`transport` 只接受 `streamable_http`。`stdio` 与 `local_ref` 都拒绝，包里不能带要在 Crab 上执行的命令。
+
+```yaml
+conch: vendor_crm
+version: 1.0.0
+driver: mcp
+min_crab_version: 1.1.0
+title: 客户系统
+description: 源站提供的 MCP 服务。
+credentials: {}
+upstream:
+  url: https://crm.intra.example.com/mcp
+  transport: streamable_http
+  auth: {type: headers}
+actions:
+  search_customer:
+    tool: searchCustomer
+    title: 搜索客户
+    description: 按名称搜索客户。
+    input_schema: {type: object}
+    examples:
+      - input: {}
+        output: {}
+    notes: 只校验，不调用。
+    related: [search_customer]
+```
+
+不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。`actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`。还没有 action 的本地骨架不在本批放行。`tools.include` / `exclude` 会保存，只准备给以后的刷新过滤；能调用的名字仍只有 `actions`，而且现在也不会调用。
+
+`upstream.auth.type` 是 `headers` 或 `oauth`。`headers` 的请求头模板只能引用 `{{credential.*}}` 和 `{{config.*}}`，不能引用 `input`。HTTP 包允许模板里出现未声明的 `config.base_url`，mcp 请求头没有这项豁免。`oauth` 必须写 `client_id`。`scopes` 里不能有空字符串。`authorization_endpoint` 和 `token_endpoint` 可以省略；写了就必须是不带模板、用户信息和片段的 http 或 https URL。https 的主机要落在 `allowed_hosts`。http 还要和 `upstream.url` 同一源（协议、主机、端口；省略端口时 https 为 443、http 为 80）。`oauth` 不能再设置 `Authorization`。本批不发现端点，也不保存令牌。
+
+禁止的请求头不区分大小写：`Host`、`Content-Length`、`Cookie`、`Mcp-Session-Id`、`MCP-Protocol-Version`、`Accept`、`Content-Type`。头的值若是字面凭证，仍走原来的明文凭证检查。`timeout_ms` 若写了必须是正整数。
+
+`allowed_hosts` 省略时，解析器填入 `upstream.url` 主机的小写形式。显式列表按原文保存，比对时忽略大小写；写成空列表不会再从 URL 补。每一项是主机名、IPv6 字面量，或 `*.后缀`。`*.后缀` 只匹配多出来的下级，不匹配后缀自己。`::1` 与 `[::1]` 是同一主机。带点分十进制的地址（如 `::ffff:127.0.0.1`）含有 `.`，不当作 IPv6 字面量。校验不做 DNS。
+
+`credentials` 必须出现，可以是 `{}`。`config` 的 `type: secret` 仍是 `CONFIG_SECRET`。mcp 的 `config` 若 `type: url`，错误码是 `MCP_UPSTREAM`，不是新的错误码。
+
+每个 action 要有 `tool` 和 `input_schema`。`tool` 为 1–256 个字符，不能含空白或控制字符。`output_schema` 可省略。`$ref` 只能是 `#` 或 `#/…`，远程引用是 `MCP_SCHEMA_REF`。单个 schema 的规范 JSON 不超过 64 KiB，深度不超过 32（根对象深度为 1）。`upstream_annotations` 里的 `readOnlyHint`、`destructiveHint`、`idempotentHint` 若出现，必须是布尔。
+
+`schema_sha256` 可省略。写了就必须是 64 位小写十六进制，并且等于 `ToolSnapshots.schemaSha256(input_schema, output_schema)`。没写 `output_schema` 时摘要不含 `outputSchema`；写成 `{}` 会写入，两者不同。对象键按字典序，每一层去掉 `_meta`，数组保持原顺序。摘要是紧凑 JSON 的 UTF-8 SHA-256，小写十六进制。
+
+`snapshot` 可省略。写了就必须有能按 `Instant` 解析的 `fetched_at`、`protocol_version`，以及 64 位小写十六进制的 `tools_sha256`。`server` 可省略；写了则 `name` 和 `version` 都要有。校验不按 actions 重算 `tools_sha256`。`ToolSnapshots.toolsSha256` 只取 `tools` 数组，按 `name` 排序，键排序并去掉 `_meta`，忽略 `nextCursor`。刷新还没做，版本对比和以后的刷新共用这个算法。
+
+没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。Crab 现有 HTTP 工具注解仍从 readOnly 与 idempotent 推导，不读这个有效值。带上游工具的 action，`effectiveMethod()` 固定 POST。`inputJsonSchema()` 返回原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文；管理端还不单独列出 upstream 和工具表。
+
+缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。`notes` 和 `related` 的原有警告仍在。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新时去掉这些字符不在本批。
+
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。Crab 载入仍用 `CrabVersion.CURRENT = 1.0.0`，1.1.0 会报高于当前 Crab。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求 1.2.0 时两条都会报。Maven 制品版本仍是 `0.1.0-SNAPSHOT`。没有新的 `ErrorCode`，也没有数据库迁移。
+
+`GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
 ## HTTP 方法、只读和幂等是不同概念
 
@@ -67,7 +120,7 @@ Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examp
 - 权限中的只读仅由 `mcp.read_only` 决定，不能因为 GET 或 idempotent 就推断只读。
 - `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。会话失效包括重定向到 `alive_check.expect_not_redirect` 前缀，以及能力请求返回 HTTP 401/403。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
 - POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。同键换请求体返回 `IDEMPOTENCY_CONFLICT`，见 [api.md](api.md)。
-- `mcp.expose` 默认 true，read_only/destructive 默认 false。当前 MCP destructiveHint 从“非只读且非幂等”计算，声明的 destructive 字段没有独立传入注解，见功能状态。
+- `mcp.expose` 默认 true，read_only/destructive 默认 false。Crab 对外的 HTTP 工具注解仍从“非只读且非幂等”计算 destructiveHint，声明的 destructive 没有独立传入注解。mcp 包自己的有效破坏性和确认见上一节，目前也不进这套注解。
 
 ## 步骤
 

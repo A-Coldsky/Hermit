@@ -72,7 +72,7 @@ npm run dev:reef
 
 | 层 | 主要测试 | 重点 |
 | --- | --- | --- |
-| common | `ConchParserTest`、`ConchValidatorTest`、`ConchDiffTest`、`ConchPackageTest`、`TemplateEngineTest` | 严格字段、引用、版本差异、签名、模板 |
+| common | `ConchParserTest`、`McpConchParserTest`、`ConchValidatorTest`、`McpConchValidatorTest`、`ConchDiffTest`、`McpConchDiffTest`、`ConchPackageTest`、`ToolSnapshotsTest`、`McpAddressesTest`、`TemplateEngineTest` | 严格字段、MCP 包校验与摘要、版本差异、签名、模板 |
 | Reef | `AdminApiTest`、`AgentToken*Test`、`ConchApiTest`、`ConchConcurrencyTest`、`SigningKeyStoreTest` | 鉴权、令牌缺失拒绝、发布必须更高、并发、密钥 |
 | Tide | `ReportIngestTest`、`TideQueryTest`、`AlertEvaluationTest`、`TidePropertiesTest` | 上报校验、失败去重、聚合与告警、阈值负值拒绝 |
 | 执行 | `EngineUnitTest`、`LegacyOaEngineTest`、`ScriptStepTest`、`CapabilityDeadlineTest`、`StepTimeoutTest` | 模拟 OA、登录隔离、编码/提取、脚本、显式 `status` 断言与非 GET 3xx 放行、没有覆盖期望的 GET 非 2xx 不抽成空列表、步骤超时与能力 deadline |

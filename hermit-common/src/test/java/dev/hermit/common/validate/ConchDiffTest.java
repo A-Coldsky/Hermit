@@ -89,6 +89,28 @@ class ConchDiffTest {
         assertThat(diff.removedConfig()).containsExactly("timeout");
         assertThat(diff.configDefaultChanges())
                 .containsExactly(new ConfigDefaultChange("base_url", "http://old", "http://new"));
+        assertThat(diff.toolChanges()).isEmpty();
+    }
+
+    @Test
+    void explicitFalseDestructiveDoesNotDifferFromOmitted() {
+        String action = """
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    mcp: { read_only: true%s }
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                """;
+        ConchDoc omitted = conch(action.formatted(""));
+        ConchDoc explicit = conch(action.formatted(", destructive: false"));
+        assertThat(omitted.actions().get("list_todo").mcp())
+                .isEqualTo(explicit.actions().get("list_todo").mcp());
+        assertThat(ConchDiff.between(omitted, explicit).changedActions()).isEmpty();
+        assertThat(ConchDiff.between(omitted, explicit).toolChanges()).isEmpty();
     }
 
     @Test

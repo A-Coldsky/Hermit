@@ -14,13 +14,47 @@ import dev.hermit.common.version.SemVer;
 class ConchValidatorTest {
 
     @Test
-    void legacyOaHasNoErrorsAndWarnsOnUnknownRelated() {
+    void legacyOaHasNoErrorsAndWarnsWhenRelatedIsOmitted() {
         ValidationResult result = Fixtures.validate("legacy_oa_valid.yaml");
+        assertThat(result.errors()).isEmpty();
+        assertThat(result.warnings()).singleElement().satisfies(issue -> {
+            assertThat(issue.code()).isEqualTo(ValidationCodes.MISSING_RELATED);
+            assertThat(issue.path()).isEqualTo("actions.list_todo.related");
+            assertThat(issue.message()).isEqualTo("缺少 related");
+        });
+    }
+
+    @Test
+    void danglingRelatedStaysAWarning() {
+        ValidationResult result = ConchValidator.validate(ConchParser.parse("""
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [approve, list_done]
+                """), ConchValidator.Context.of(null));
         assertThat(result.errors()).isEmpty();
         assertThat(result.warnings()).extracting(ValidationIssue::code)
                 .containsExactly(ValidationCodes.UNKNOWN_RELATED, ValidationCodes.UNKNOWN_RELATED);
         assertThat(result.warnings()).extracting(ValidationIssue::path)
                 .containsExactly("actions.list_todo.related[0]", "actions.list_todo.related[1]");
+        assertThat(result.warnings()).extracting(ValidationIssue::message)
+                .containsExactly("related 指向不存在的能力 approve", "related 指向不存在的能力 list_done");
     }
 
     @Test

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import JsonBlock from '@shared/components/JsonBlock.vue'
 import { ApiError } from '@shared/http'
-import { errorCodeLabels, errorText, notifyError } from '@shared/format'
+import { errorCodeLabels, errorText, formatTime, notifyError } from '@shared/format'
 import { useNarrow } from '@shared/narrow'
 import { api, type Account, type CredentialField } from '../api'
 import CredentialDialog from './CredentialDialog.vue'
@@ -114,6 +114,72 @@ function editCredentials(account: Account) {
   editing.account = account.name
   editing.open = true
 }
+
+const usesOAuth = computed(() => props.accounts.some((a) => a.oauth !== null))
+const connecting = reactive({ open: false, account: '' })
+
+function expired(account: Account): boolean {
+  const at = account.oauth?.expiresAt
+  return !!at && Date.parse(at) <= Date.now()
+}
+
+function refreshOnReturn() {
+  if (connecting.open) {
+    emit('changed')
+  }
+}
+window.addEventListener('focus', refreshOnReturn)
+onBeforeUnmount(() => window.removeEventListener('focus', refreshOnReturn))
+
+async function connect(account: Account) {
+  // 先同步开窗，等接口返回再跳转，避免被浏览器当成弹窗拦掉。
+  const popup = window.open('', '_blank')
+  busy.value = account.name
+  try {
+    const { authorizationUrl } = await api.startOAuth(props.conch, account.name)
+    if (popup) {
+      popup.opener = null
+      popup.location.href = authorizationUrl
+    } else {
+      window.location.assign(authorizationUrl)
+      return
+    }
+    connecting.account = account.name
+    connecting.open = true
+  } catch (error) {
+    popup?.close()
+    notifyError(error)
+  } finally {
+    busy.value = null
+  }
+}
+
+function finishConnect() {
+  connecting.open = false
+  emit('changed')
+}
+
+async function disconnect(account: Account) {
+  try {
+    await ElMessageBox.confirm(
+      `断开后会删除 ${account.name} 在本机保存的上游令牌，之后的调用会提示「尚未连接上游」，需要重新连接。上游那边的授权不会被撤销。`,
+      '断开上游',
+      { confirmButtonText: '断开', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
+    )
+  } catch {
+    return
+  }
+  busy.value = account.name
+  try {
+    await api.disconnectOAuth(props.conch, account.name)
+    ElMessage.success(`${account.name} 已断开上游`)
+    emit('changed')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    busy.value = null
+  }
+}
 </script>
 
 <template>
@@ -146,6 +212,26 @@ function editCredentials(account: Account) {
           </template>
         </template>
       </el-table-column>
+      <el-table-column v-if="usesOAuth" label="上游连接" min-width="200">
+        <template #default="{ row }">
+          <div v-if="row.oauth" data-test="oauth-status">
+            <template v-if="row.oauth.connected">
+              <el-tag :type="expired(row) ? 'warning' : 'success'" effect="plain" size="small">
+                {{ expired(row) ? '令牌已过期' : '已连接' }}
+              </el-tag>
+              <div class="hm-muted note">
+                {{ row.oauth.expiresAt ? `访问令牌到期：${formatTime(row.oauth.expiresAt)}` : '上游没有给出到期时间' }}
+              </div>
+              <div v-if="expired(row)" class="hm-muted note">下次调用会自动刷新；刷新失败需要重新连接。</div>
+            </template>
+            <template v-else>
+              <el-tag type="warning" effect="plain" size="small">未连接</el-tag>
+              <div class="hm-muted note">调用会提示「尚未连接上游」，点「连接上游」登录。</div>
+            </template>
+          </div>
+          <span v-else class="hm-muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="自动登录" min-width="200">
         <template #default="{ row }">
           <template v-if="row.loginPaused">
@@ -158,9 +244,23 @@ function editCredentials(account: Account) {
           <span v-else class="hm-muted">正常</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" :width="narrow ? 96 : 300" align="right" fixed="right">
+      <el-table-column label="操作" :width="narrow ? 96 : usesOAuth ? 420 : 300" align="right" fixed="right">
         <template #default="{ row }">
           <div class="ops" :class="{ stacked: narrow }">
+            <template v-if="row.oauth">
+              <el-button
+                link
+                type="primary"
+                data-test="oauth-connect"
+                :loading="busy === row.name"
+                @click="connect(row)"
+              >
+                {{ row.oauth.connected ? '重新连接' : '连接上游' }}
+              </el-button>
+              <el-button v-if="row.oauth.connected" link type="danger" data-test="oauth-disconnect" @click="disconnect(row)">
+                断开
+              </el-button>
+            </template>
             <el-button link type="primary" :disabled="!credentials.length" @click="editCredentials(row)">填写凭证</el-button>
             <el-button link type="primary" :loading="busy === row.name" @click="testLogin(row)">测试登录</el-button>
             <el-button v-if="!row.default" link @click="makeDefault(row)">设为默认</el-button>
@@ -192,6 +292,15 @@ function editCredentials(account: Account) {
     :unreadable="accounts.find((a) => a.name === editing.account)?.credentialsUnreadable ?? false"
     @saved="emit('changed')"
   />
+
+  <el-dialog v-model="connecting.open" :title="`连接上游 · ${connecting.account}`" width="460px" data-test="oauth-dialog">
+    <p>已在新窗口打开上游的登录页。在那里登录并同意授权，看到「已连接上游」后回到这里。</p>
+    <p class="hm-muted">登录链接 10 分钟内有效，只能用一次。令牌保存在本机凭证库，页面不会显示令牌。</p>
+    <template #footer>
+      <el-button @click="connecting.open = false">稍后再说</el-button>
+      <el-button type="primary" @click="finishConnect">我已完成授权</el-button>
+    </template>
+  </el-dialog>
 
   <el-dialog v-model="testResult.open" :title="`测试登录 · ${testResult.account}`" width="560px">
     <el-result v-if="testResult.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存">

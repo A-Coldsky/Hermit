@@ -14,6 +14,7 @@ const showAll = ref(false)
 const tokens = ref<AgentToken[]>([])
 const crabs = ref<CrabInstance[]>([])
 const revoking = ref<number | null>(null)
+const voidingConfig = ref(false)
 
 const create = reactive({ open: false, name: '', saving: false })
 const issued = reactive({
@@ -125,6 +126,28 @@ async function revoke(token: AgentToken) {
   }
 }
 
+async function voidConfig(token: AgentToken) {
+  try {
+    await ElMessageBox.confirm(
+      `作废后，使用 ${token.name} 的 Crab 会立即无法同步和上报。要恢复，只能在 Reef 配置里把 HERMIT_REEF_AGENT_TOKEN 换成一串新值并重启 Reef，再把新值导入 Crab。`,
+      '作废配置令牌',
+      { confirmButtonText: '作废', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
+    )
+  } catch {
+    return
+  }
+  voidingConfig.value = true
+  try {
+    await api.voidConfigToken()
+    ElMessage.success('配置令牌已作废')
+    await load()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    voidingConfig.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -160,17 +183,24 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
-            <el-tag v-if="row.revokedAt" type="info" size="small" effect="plain">已吊销</el-tag>
+            <el-tag v-if="row.revokedAt" type="info" size="small" effect="plain">{{ row.source === 'CONFIG' ? '已作废' : '已吊销' }}</el-tag>
             <el-tag v-else type="success" size="small" effect="plain">有效</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="100" align="right" fixed="right">
           <template #default="{ row }">
-            <el-tooltip v-if="row.source === 'CONFIG'" content="来自 Reef 配置 HERMIT_REEF_AGENT_TOKEN，要停用请修改 Reef 配置" placement="top">
-              <span class="hm-muted">—</span>
-            </el-tooltip>
             <el-button
-              v-else-if="!row.revokedAt"
+              v-if="row.source === 'CONFIG' && !row.revokedAt && isAdmin"
+              link
+              type="danger"
+              :loading="voidingConfig"
+              data-test="void-config"
+              @click="voidConfig(row)"
+            >
+              作废
+            </el-button>
+            <el-button
+              v-else-if="row.source !== 'CONFIG' && !row.revokedAt"
               link
               type="danger"
               :loading="revoking === row.id"

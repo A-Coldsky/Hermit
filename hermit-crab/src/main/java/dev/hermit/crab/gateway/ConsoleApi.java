@@ -2,6 +2,7 @@ package dev.hermit.crab.gateway;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -44,6 +45,8 @@ import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.ConsolePassword;
 import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.store.Origin;
+import dev.hermit.crab.upstream.McpOAuth;
+import dev.hermit.crab.upstream.McpOAuthToken;
 import dev.hermit.crab.sync.ConchCatalog;
 import dev.hermit.crab.sync.CrabRelease;
 import dev.hermit.crab.sync.LocalConchException;
@@ -84,6 +87,9 @@ final class ConsoleApi {
         get(app, "/console/api/conches/{conch}/accounts/{account}/credentials", ctx -> credentialNames(runtime, ctx));
         put(app, "/console/api/conches/{conch}/accounts/{account}/credentials", ctx -> writeCredentials(runtime, ctx));
         post(app, "/console/api/conches/{conch}/accounts/{account}/test-login", ctx -> testLogin(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/accounts/{account}/oauth/start", ctx -> oauthStart(runtime, ctx));
+        delete(app, "/console/api/conches/{conch}/accounts/{account}/oauth", ctx -> oauthDisconnect(runtime, ctx));
+        app.get("/console/oauth/callback", ctx -> oauthCallback(runtime, ctx));
         get(app, "/console/api/conches/{conch}/config", ctx -> config(runtime, ctx));
         put(app, "/console/api/conches/{conch}/config", ctx -> writeConfig(runtime, ctx));
         post(app, "/console/api/capabilities/{conch}/{action}/enable", ctx -> toggle(runtime, ctx, false));
@@ -184,6 +190,7 @@ final class ConsoleApi {
             row.put("loginPaused", paused);
             row.put("loginPauseReason", paused ? LoginPause.REASON : null);
             row.put("loginPauseRecovery", paused ? LoginPause.RECOVERY : null);
+            row.put("oauth", oauthStatus(runtime, doc, account.account()));
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("accounts", rows));
@@ -214,6 +221,7 @@ final class ConsoleApi {
         String account = ctx.pathParam("account");
         runtime.admin().requireAccount(doc.conch(), account);
         ArrayList<String> names = new ArrayList<>(runtime.admin().credentialNames(doc.conch(), account));
+        names.remove(McpOAuthToken.FIELD);
         names.sort(String::compareTo);
         GatewayResponses.writeData(ctx, Map.of("fields", names));
     }
@@ -229,6 +237,9 @@ final class ConsoleApi {
         if (runtime.admin().credentialsUnreadable(doc.conch(), account)) {
             ArrayList<String> pending = new ArrayList<>();
             for (String name : new TreeSet<>(runtime.admin().credentialNames(doc.conch(), account))) {
+                if (McpOAuthToken.FIELD.equals(name)) {
+                    continue;
+                }
                 String value = fields.get(name);
                 if (value == null || value.isEmpty()) {
                     pending.add(name);
@@ -264,6 +275,85 @@ final class ConsoleApi {
         ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
         String message = result.error() == null ? "internal error" : result.error().message();
         GatewayResponses.writeError(ctx, StatusCodes.of(code), code, message == null ? "" : message);
+    }
+
+    private static void oauthStart(CrabRuntime runtime, Context ctx) {
+        ConchDoc doc = requireConch(runtime, ctx);
+        McpOAuth.Start start = runtime.oauth().start(
+                origin(runtime, doc.conch()),
+                doc,
+                ctx.pathParam("account"),
+                redirectUri(ctx),
+                System.nanoTime() + McpOAuth.START_BUDGET_NANOS);
+        if (!start.ok()) {
+            GatewayResponses.writeError(ctx, StatusCodes.of(start.code()), start.code(), start.message());
+            return;
+        }
+        GatewayResponses.writeData(ctx, Map.of("authorizationUrl", start.authorizationUrl()));
+    }
+
+    private static void oauthDisconnect(CrabRuntime runtime, Context ctx) {
+        ConchDoc doc = requireConch(runtime, ctx);
+        McpOAuth.Outcome outcome = runtime.oauth().disconnect(
+                origin(runtime, doc.conch()), doc, ctx.pathParam("account"));
+        if (!outcome.ok()) {
+            GatewayResponses.writeError(ctx, StatusCodes.of(outcome.code()), outcome.code(), outcome.message());
+            return;
+        }
+        LinkedHashMap<String, Object> oauth = new LinkedHashMap<>();
+        oauth.put("connected", false);
+        oauth.put("expiresAt", null);
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("oauth", oauth);
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void oauthCallback(CrabRuntime runtime, Context ctx) {
+        McpOAuth.Callback callback;
+        try {
+            callback = runtime.oauth().callback(ctx.queryParam("code"), ctx.queryParam("state"), ctx.queryParam("error"));
+        } catch (RuntimeException ex) {
+            callback = McpOAuth.Callback.fail(McpOAuth.CALLBACK_FAILED);
+        }
+        ctx.header("Referrer-Policy", "no-referrer");
+        ctx.header("X-Content-Type-Options", "nosniff");
+        GatewayResponses.writeBytes(
+                ctx,
+                callback.connected() ? 200 : 400,
+                "text/html; charset=utf-8",
+                "no-store",
+                McpOAuth.page(callback));
+    }
+
+    private static Object oauthStatus(CrabRuntime runtime, ConchDoc doc, String account) {
+        McpOAuth.Status status = runtime.oauth().status(origin(runtime, doc.conch()), doc, account);
+        if (!status.applicable()) {
+            return null;
+        }
+        LinkedHashMap<String, Object> oauth = new LinkedHashMap<>();
+        oauth.put("connected", status.connected());
+        oauth.put("expiresAt", status.expiresAt() == null
+                ? null
+                : DateTimeFormatter.ISO_INSTANT.format(status.expiresAt()));
+        return oauth;
+    }
+
+    private static String redirectUri(Context ctx) {
+        String host = ctx.req().getLocalAddr();
+        int port = ctx.req().getLocalPort();
+        if (host == null || !Loopback.address(host)) {
+            host = "127.0.0.1";
+        } else if ("::1".equals(host) || "0:0:0:0:0:0:0:1".equals(host)) {
+            host = "[::1]";
+        } else if ("::ffff:127.0.0.1".equalsIgnoreCase(host)) {
+            host = "127.0.0.1";
+        }
+        return "http://" + host + ":" + port + "/console/oauth/callback";
+    }
+
+    private static Origin origin(CrabRuntime runtime, String conch) {
+        Origin stored = runtime.registry().origin(conch);
+        return stored == null ? Origin.OFFICIAL : stored;
     }
 
     private static void config(CrabRuntime runtime, Context ctx) {

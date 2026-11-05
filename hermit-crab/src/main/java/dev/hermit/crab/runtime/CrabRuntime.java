@@ -40,6 +40,7 @@ import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.upstream.McpForwarder;
+import dev.hermit.crab.upstream.McpOAuth;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.report.LiveReportSettings;
 import dev.hermit.crab.report.ReportQueue;
@@ -181,7 +182,12 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.sessions = new SessionManager(new EncryptedSessionPersistence(database.dataSource(), cipher), settings, clock);
         this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
         this.mcpForwarder = new McpForwarder(
-                sessions, knownSecrets, settings.capabilityTimeout(), config.mcpMaxConcurrencyPerAccount());
+                sessions,
+                knownSecrets,
+                settings.capabilityTimeout(),
+                config.mcpMaxConcurrencyPerAccount(),
+                vault,
+                clock);
         this.callLogs = new CallLogStore(database.dataSource(), clock);
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());
@@ -267,6 +273,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public ConchAdmin admin() {
         return admin;
+    }
+
+    public McpOAuth oauth() {
+        return mcpForwarder.oauth();
     }
 
     public ApiKeyService apiKeys() {

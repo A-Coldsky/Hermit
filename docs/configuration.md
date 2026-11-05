@@ -22,6 +22,8 @@
 | `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；只有测试登录成功才解除，失败不会清掉暂停 |
 | `engine.mcp_max_concurrency_per_account` | `4` | 整数 1–32。每个 `(origin, conch, account)` 同时进行的上游 `tools/call` 上限。启动时读取，不热更新。排队也算进能力 deadline |
 
+上游 OAuth 的访问令牌和刷新令牌不写在这份文件里。它们在凭证库的 `oauth_token` 字段，按 `(origin, conch, account)` 分开保存，由控制台登录写入。源站若还要客户端机密，在规则包里声明 `credentials.client_secret`，值仍进凭证库，不进 YAML。
+
 完整配置示例：
 
 ```yaml

@@ -7,22 +7,27 @@ import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
 import { formatTime, notifyError, relativeTime } from '@shared/format'
 import { api, type ConchSummary } from '../api'
-import { pullCountHint } from '../labels'
+import DriverBadge from '../components/DriverBadge.vue'
+import { isMcp, pullCountHint, upstreamHost } from '../labels'
 
 const router = useRouter()
 const loading = ref(true)
 const conches = ref<ConchSummary[]>([])
 const keyword = ref('')
+const kind = ref<'all' | 'mcp' | 'http'>('all')
 const mode = ref<'cards' | 'table'>(localStorage.getItem('hermit.reef.conchesView') === 'table' ? 'table' : 'cards')
 watch(mode, (value) => localStorage.setItem('hermit.reef.conchesView', value))
 
 const filtered = computed(() => {
   const q = keyword.value.trim().toLowerCase()
+  const byKind = kind.value === 'all' ? conches.value : conches.value.filter((s) => isMcp(s) === (kind.value === 'mcp'))
   if (!q) {
-    return conches.value
+    return byKind
   }
-  return conches.value.filter((s) =>
-    [s.conch, s.title, s.description, s.owner ?? '', ...s.tags].some((v) => v.toLowerCase().includes(q)),
+  return byKind.filter((s) =>
+    [s.conch, s.title, s.description, s.owner ?? '', upstreamHost(s.upstream?.url) ?? '', ...s.tags].some((v) =>
+      v.toLowerCase().includes(q),
+    ),
   )
 })
 
@@ -53,6 +58,11 @@ onMounted(load)
 
     <div class="hm-toolbar bar">
       <el-input v-model="keyword" :prefix-icon="Search" placeholder="按名称、标题、负责人或标签筛选" clearable class="search" />
+      <el-radio-group v-model="kind" size="small" data-test="kind-filter">
+        <el-radio-button value="all">全部</el-radio-button>
+        <el-radio-button value="mcp">原生 MCP</el-radio-button>
+        <el-radio-button value="http">HTTP 规则</el-radio-button>
+      </el-radio-group>
       <span class="spacer" />
       <span v-if="!loading" class="hm-muted" data-test="conch-count">共 {{ filtered.length }} 个</span>
       <el-radio-group v-model="mode" size="small">
@@ -77,12 +87,16 @@ onMounted(load)
             <el-tag v-if="row.version" :type="row.disabled ? 'info' : 'success'" effect="light" round class="mono">v{{ row.version }}</el-tag>
             <el-tag v-else type="info" effect="light" round>未发布</el-tag>
           </div>
+          <div class="kind">
+            <DriverBadge :driver="row.driver" />
+            <span v-if="isMcp(row)" class="mono hm-muted host" data-test="upstream-host">{{ upstreamHost(row.upstream?.url) ?? '上游地址未填' }}</span>
+          </div>
           <p class="desc">{{ row.description || '没有描述' }}</p>
           <div class="tags">
             <el-tag v-for="tag in row.tags" :key="tag" size="small" effect="plain" round>{{ tag }}</el-tag>
           </div>
           <div class="foot hm-muted">
-            <span><b class="num">{{ row.capabilityCount }}</b> 个能力</span>
+            <span><b class="num">{{ row.capabilityCount }}</b> 个{{ isMcp(row) ? '工具' : '能力' }}</span>
             <span :title="`${pullCountHint}，各版本合计`">拉取次数 <b class="num">{{ row.pullCount }}</b></span>
             <span>{{ row.owner ?? '未填负责人' }}</span>
             <span class="spacer" />
@@ -92,7 +106,8 @@ onMounted(load)
         </RouterLink>
       </div>
       <div v-else-if="!loading" class="hm-card empty">
-        <template v-if="conches.length">没有匹配「{{ keyword }}」的规则包</template>
+        <template v-if="conches.length && kind === 'all'">没有匹配「{{ keyword }}」的规则包</template>
+        <template v-else-if="conches.length">没有符合筛选条件的{{ kind === 'mcp' ? '原生 MCP 规则包' : 'HTTP 规则包' }}</template>
         <template v-else>
           <span>{{ isAdmin ? '还没有规则包，先上传一个 YAML' : '还没有规则包，等管理员上传' }}</span>
           <el-button v-if="isAdmin" type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
@@ -114,6 +129,12 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
+        <el-table-column label="类型" width="230">
+          <template #default="{ row }">
+            <DriverBadge :driver="row.driver" />
+            <div v-if="isMcp(row)" class="mono hm-muted host">{{ upstreamHost(row.upstream?.url) ?? '上游地址未填' }}</div>
+          </template>
+        </el-table-column>
         <el-table-column label="当前版本" width="190">
           <template #default="{ row }">
             <el-tag v-if="row.version" :type="row.disabled ? 'info' : 'success'" effect="plain" class="mono">v{{ row.version }}</el-tag>
@@ -121,7 +142,7 @@ onMounted(load)
             <el-tag v-if="row.disabled" type="danger" effect="plain" class="off">已停用</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="capabilityCount" label="能力数" width="90" align="right" />
+        <el-table-column prop="capabilityCount" label="能力/工具数" width="110" align="right" />
         <el-table-column prop="pullCount" label="拉取次数" width="100" align="right">
           <template #header><span :title="`${pullCountHint}，各版本合计`">拉取次数</span></template>
         </el-table-column>
@@ -188,6 +209,20 @@ onMounted(load)
   -webkit-box-orient: vertical;
   overflow: hidden;
   min-height: 42px;
+}
+
+.kind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.host {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tags {

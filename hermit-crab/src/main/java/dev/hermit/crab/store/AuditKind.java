@@ -12,6 +12,8 @@ public enum AuditKind {
     CAPABILITY_ENABLED,
     CAPABILITY_DISABLED,
     DEBUG_CHANGED,
+    /** Console password accepted or rejected. Detail is {@code {"ok":true|false}} and has no password. */
+    CONSOLE_LOGIN,
     TEST_LOGIN,
     SYNC_REQUESTED,
     CREDENTIAL_DECLARATION,

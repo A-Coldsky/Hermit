@@ -63,6 +63,7 @@ import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.store.ConchConfigStore;
+import dev.hermit.crab.store.ConsolePassword;
 import dev.hermit.crab.sync.ConchCatalog;
 import dev.hermit.crab.sync.ConchOutcome;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
@@ -104,6 +105,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final IdempotencyStore idempotency;
     private final CapabilitySwitchStore switches;
     private final DebugStateStore debug;
+    private final ConsolePassword consolePassword;
+    private final ConsoleSessions consoleSessions;
     private final Set<String> configDisabled;
     private final Set<String> switchDisabled;
     private final List<Runnable> catalogListeners = new CopyOnWriteArrayList<>();
@@ -171,6 +174,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());
         this.debug = new DebugStateStore(database.dataSource(), clock);
+        this.consolePassword = new ConsolePassword(database.dataSource(), clock);
+        this.consoleSessions = new ConsoleSessions(clock);
         this.configDisabled = Set.copyOf(config.disabledCapabilities());
         this.switchDisabled = ConcurrentHashMap.newKeySet();
         this.switchDisabled.addAll(switches.disabledKeys(Origin.OFFICIAL));
@@ -185,6 +190,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(paths, registry, database.dataSource());
         this.instanceId = InstanceIds.loadOrCreate(paths);
+        try {
+            String initialPassword = environment == null ? null : environment.apply(ConsolePassword.ENV);
+            this.consolePassword.applyInitial(initialPassword);
+        } catch (RuntimeException ex) {
+            this.database.close();
+            throw ex;
+        }
     }
 
     public static CrabRuntime open(CrabPaths paths, CrabConfig config) {
@@ -256,6 +268,29 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public DebugStateStore debug() {
         return debug;
+    }
+
+    public ConsolePassword consolePassword() {
+        return consolePassword;
+    }
+
+    public ConsoleSessions consoleSessions() {
+        return consoleSessions;
+    }
+
+    /** Replaces the hash and drops every in-memory console session in this process. */
+    public void replaceConsolePassword(String next) {
+        consolePassword.set(next);
+        consoleSessions.clear();
+    }
+
+    public void recordConsoleLogin(boolean accepted) {
+        AuditLog.record(
+                database.dataSource(),
+                Actors.CONSOLE,
+                AuditKind.CONSOLE_LOGIN,
+                "console",
+                accepted ? "{\"ok\":true}" : "{\"ok\":false}");
     }
 
     public EngineSettings settings() {

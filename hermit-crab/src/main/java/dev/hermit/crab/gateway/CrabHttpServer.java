@@ -18,6 +18,7 @@ import dev.hermit.crab.mcp.McpEndpoint;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.BodyDigests;
 import dev.hermit.crab.runtime.CapabilityHttp;
+import dev.hermit.crab.runtime.ConsoleSessions;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.IdempotencyKeys;
 import dev.hermit.crab.runtime.InvokeOutcome;
@@ -94,6 +95,9 @@ public final class CrabHttpServer implements AutoCloseable {
             if (consoleApi(path)) {
                 if (!Loopback.address(ctx.req().getRemoteAddr()) || !"1".equals(ctx.header("X-Hermit-Console"))) {
                     GatewayResponses.writeError(ctx, 403, ErrorCode.FORBIDDEN, "console access denied");
+                    ctx.skipRemainingHandlers();
+                } else if (consoleSessionRequired(ctx)) {
+                    GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, ConsoleSessions.LOGIN_REQUIRED);
                     ctx.skipRemainingHandlers();
                 }
             } else if (consolePage(path) && !Loopback.address(ctx.req().getRemoteAddr())) {
@@ -311,6 +315,22 @@ public final class CrabHttpServer implements AutoCloseable {
         for (HandlerType method : METHODS) {
             http.addHttpHandler(method, path, handler);
         }
+    }
+
+    private boolean consoleSessionRequired(Context ctx) {
+        if (!runtime.consolePassword().isSet() || sessionProbe(ctx)) {
+            return false;
+        }
+        return !runtime.consoleSessions().valid(ctx.cookie(ConsoleSessions.COOKIE));
+    }
+
+    /** Login and the session probe stay open so a browser can learn whether a password is set. */
+    private static boolean sessionProbe(Context ctx) {
+        if (!"/console/api/session".equals(ctx.path())) {
+            return false;
+        }
+        String method = ctx.method().name();
+        return "GET".equals(method) || "POST".equals(method);
     }
 
     private static boolean consoleApi(String path) {

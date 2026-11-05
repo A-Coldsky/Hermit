@@ -103,19 +103,23 @@ POST /api/{conch}/{action}           JSON object body
 
 POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，有效期 24 小时，另存请求体的 SHA-256（小写十六进制，schema 10 的 `idempotency.body_sha256`）。摘要是网关读到的原始字节，不是规范化 JSON：空格或字段顺序不同算另一个请求体。相同键且摘要相同，回放第一次的响应（含旧 traceId），响应头 `Idempotent-Replayed: true`，不再执行。摘要不同返回 409 `IDEMPOTENCY_CONFLICT`，message 为 `Idempotency-Key was already used with a different request body`，不执行、不覆盖已存响应。升级前写入、摘要为 null 的行也无法证明请求体相同，重放同样是这个冲突，直到 24 小时过期。键仍不包含 API Key 身份或规则版本。
 
+`effectiveConfirm()` 为 true 的 HTTP 调用必须带请求头 `X-Hermit-Confirm: true`（去空白后恰好是 `true`）。缺头或值不对时，在权限、能力停用、账号和凭证检查之后、幂等缓存之前返回 409 `CONFLICT`，message 为「该操作需要确认。请带上请求头 X-Hermit-Confirm: true 后重试。」。这次不读、不写幂等缓存，也不访问上游。MCP 入口不看这个头，确认走 elicitation。
+
+`driver: mcp` 在上述检查之后交给 `McpForwarder`，执行的是这次授权的快照。`auth.type: headers` 把渲染后的 `upstream.headers` 发给上游；`oauth` 返回 409 `NOT_CONFIGURED`，message 为「尚未连接上游。请到控制台连接上游。」，不连网。主机不在 `allowed_hosts` 同样是这个错误码，message 为「上游主机不在允许列表中。」。成功时 HTTP 的 `data` 优先是 `structuredContent`，否则是 `{content: [...]}`。上游 `isError: true` 且文本不是 `Input validation error:` 开头时，HTTP 502，`data` 是脱敏后的 content，Tide 失败的 `stepType` 为 `mcp_tool_error`。OpenAPI 里这些操作为 POST，带 `x-hermit-driver: mcp`，响应 `data` 的 schema 是 `{type: object}`，需要确认的操作把 `X-Hermit-Confirm` 标成必填。
+
 | 错误码 | HTTP 状态 |
 | --- | --- |
 | INVALID_INPUT | 400（方法错误 405） |
 | AUTH_FAILED | 网关 Key 无效 401；清单令牌失效导致的同步 401；上游登录失败 422 |
 | FORBIDDEN | 403 |
 | NOT_FOUND / ACCOUNT_NOT_FOUND / CAPABILITY_DISABLED | 404 |
-| NOT_CONFIGURED / CONCH_DISABLED / IDEMPOTENCY_CONFLICT | 409 |
+| NOT_CONFIGURED / CONCH_DISABLED / IDEMPOTENCY_CONFLICT / CONFLICT | 409 |
 | SESSION_EXPIRED / RULE_MISMATCH | 422 |
 | UPSTREAM_ERROR | 502 |
 | TIMEOUT | 504 |
 | INTERNAL | 500 |
 
-缺必填、类型无法转换，数值超出参数声明的 `minimum` / `maximum`，或请求里多了未声明字段，都返回 `INVALID_INPUT`。入参 JSON Schema 带 `additionalProperties: false`，运行时不会把负页码、过大的 `pageSize` 或多余字段改成合法值再返回 200。HTTP 与 MCP 共用 `Invoker` → `RuleEngine` → `InputPreparer`。MCP 在这次校验前去掉账号选择：直接工具去掉 `account`，能力入参已经占用 `account` 时去掉 `_account`；目录模式的 `call_capability` 把 `account` 放在能力参数外面。HTTP 同样在校验前拿掉账号选择：GET 去掉查询参数 `account`（入参已占用该名字时去掉 `_account`），POST 只把查询参数 `account` 当作账号，不写入 JSON 正文。MCP 的 `account` / `_account` 参数不变。账号选择因此不会被当成未声明字段。
+缺必填、类型无法转换，数值超出参数声明的 `minimum` / `maximum`，或请求里多了未声明字段，都返回 `INVALID_INPUT`。HTTP 能力的入参 JSON Schema 带 `additionalProperties: false`，运行时不会把负页码、过大的 `pageSize` 或多余字段改成合法值再返回 200。`driver: mcp` 按包内原文校验，不补 `additionalProperties`，也不去取 `$schema` 或远程 `$ref`。HTTP 与 MCP 共用 `Invoker`；HTTP 包进入 `RuleEngine`，mcp 包进入 `McpForwarder`，两边都用 `InputPreparer`。MCP 在这次校验前去掉账号选择：直接工具去掉 `account`，能力入参已经占用 `account` 时去掉 `_account`；目录模式的 `call_capability` 把 `account` 放在能力参数外面。HTTP 同样在校验前拿掉账号选择：GET 去掉查询参数 `account`（入参已占用该名字时去掉 `_account`），POST 只把查询参数 `account` 当作账号，不写入 JSON 正文。MCP 的 `account` / `_account` 参数不变。账号选择因此不会被当成未声明字段。
 
 本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为 `not found`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`，message 为「没有这个工具，或当前 API Key 看不到它。」。直接模式的 hint 只建议 `tools/list`，不提到 `search_capabilities`；目录模式的 hint 可以建议 `tools/list` 和 `search_capabilities`。若调用已经进入 `Invoker` 后才发现能力被关掉，MCP 的 `code` 与 HTTP 同为 `CAPABILITY_DISABLED`，hint 说明到控制台重新启用，或从 `capabilities.disabled` 里去掉。
 
@@ -297,10 +301,10 @@ mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 
 - 可见能力不超过 40 个时，直接工具名 `conch__action`。本地包的直接工具说明、资源说明、`list_systems` 里该包的说明，以及 `describe_capability` 的说明，都以 `[本地] ` 开头。使用指南里也会标明这是本地包。`all: true` 以及旧的空 `conches` Key 仍能看见这些工具；调用时 `Invoker` 返回 403 `FORBIDDEN`。显式写出包名的 Key 可以调用。
 - 超过 40 个时，提供 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个目录工具。
-- 目录模式调用非只读能力需要支持 elicitation 且保持 SSE，明确确认后执行；直接模式没有同样的服务端确认步骤，客户端应依据工具注解交互。
+- `effectiveConfirm()` 为 true 时，目录模式和直接模式都要客户端在 `initialize` 里声明 elicitation，并保持 GET SSE。不支持时工具失败 `FORBIDDEN`，message 为「客户端不支持确认，拒绝执行写操作」。用户拒绝是「用户拒绝执行」。HTTP 用请求头 `X-Hermit-Confirm: true`，不走 elicitation。
 - guide resource 为 `hermit://conches/{conch}/guide`，由说明、参数、示例生成。
 - 规则更新/能力开关变化推送列表变更通知。
-- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。这个字段在校验前拿掉。直接工具的 `inputSchema` 与能力入参一样设置 `additionalProperties: false`，并声明账号选择，所以账号不是多余字段。HTTP 的查询参数不改变这些工具参数。未知账号的 message 与 HTTP 同为「没有这个账号。」。
+- 直接调用的账号参数为 `account`；若 action 自带 account 输入，则使用 `_account`，也支持 X-Hermit-Account。这个字段在校验前拿掉。HTTP 能力的直接工具 `inputSchema` 设置 `additionalProperties: false`。`driver: mcp` 的直接工具保留包内 schema，不补这个字段，并去掉 `$schema`。两种都声明账号选择。HTTP 的查询参数不改变这些工具参数。未知账号的 message 与 HTTP 同为「没有这个账号。」。官方 mcp 包的 `describe_capability` 说明和指南写「来源：源站 MCP」；指南同时说明结果来自上游、不可信。`tools/list` 的工具说明不加这句来源前缀。本地包仍以 `[本地] ` 开头。
 - `tools/call` 不传 `Idempotency-Key`。同键回放只在 HTTP POST。
 
 协议级失败是 JSON-RPC error，不使用能力 API 的 success/error envelope。`error.code` 是 JSON-RPC 整数；`error.data.code` 是稳定字符串，`error.data.hint` 是下一步。HTTP 401 的 body 同样是这个 JSON-RPC 错误。
@@ -316,7 +320,7 @@ mcp-stdio [--help] [--url http://127.0.0.1:7777/mcp] [--account NAME]
 | `Origin` 不在允许范围 | 403 | -32003 | `ORIGIN_REJECTED`。不创建会话。没有 `Origin` 仍允许 |
 | 非 `initialize` 的 `MCP-Protocol-Version` 不受支持 | 400 | -32600 | `UNSUPPORTED_PROTOCOL`。去掉该头，或改成上面四个版本之一 |
 
-工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,traceId,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`CAPABILITY_DISABLED`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。`traceId` 与这次响应的 `X-Hermit-Trace` 相同；若这次调用写了调用记录，记录里也是这个编号。协议错误的 `error.data` 同样带 `traceId`，并与该头相同。成功的 JSON-RPC 响应也写 `X-Hermit-Trace`，不把 `traceId` 放进业务结果。
+工具执行失败仍是 JSON-RPC 成功响应里的 tool result：`isError: true`，`structuredContent` 为 `{error:{code,message,hint,traceId,field?}}`，`content[0].text` 是同一 error 对象的 JSON。`code` 与能力 API 的错误码一致，例如 `INVALID_INPUT`、`NOT_FOUND`、`CAPABILITY_DISABLED`、`FORBIDDEN`，和上面的 `AUTH_MISSING` / `AUTH_INVALID` 不同。`field` 只在能定位到一个参数时出现。`traceId` 与这次响应的 `X-Hermit-Trace` 相同；若这次调用写了调用记录，记录里也是这个编号。协议错误的 `error.data` 同样带 `traceId`，并与该头相同。成功的 JSON-RPC 响应也写 `X-Hermit-Trace`，不把 `traceId` 放进业务结果。上游 `tools/call` 的 `isError: true` 另有一种形状：`content` 原样转发，`structuredContent.error.upstreamToolError` 为 true。文本以 `Input validation error:` 开头时错误码是 `INVALID_INPUT`，不记 `mcp_tool_error`。其它工具失败是 `UPSTREAM_ERROR`，Tide 的 `stepType` 为 `mcp_tool_error`。没有 `isError` 字段时，即使文本以 `Error:` 开头也按成功转发。
 
 成功调用在 `content[0].text` 之外带 `structuredContent` 对象。协商到 `2025-06-18` 或 `2025-11-25` 时，`tools/list` 为直接工具以及 `list_systems`、`search_capabilities`、`describe_capability` 声明 `outputSchema`。`2024-11-05` 与 `2025-03-26` 不声明该字段。`call_capability` 的返回随被调能力变化，不声明单一 `outputSchema`。直接工具的 `outputSchema` 只列 Conch `output` 的字段名和说明，不带类型约束，因为模板渲染不会把提取值转换成声明类型；目录工具的 `outputSchema` 带类型。`outputSchema` 描述成功结果；失败结果看 `isError` 和 `structuredContent.error`。
 

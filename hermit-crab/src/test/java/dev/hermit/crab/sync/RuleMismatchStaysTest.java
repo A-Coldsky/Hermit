@@ -50,7 +50,8 @@ class RuleMismatchStaysTest {
                     60,
                     10,
                     3,
-                    List.of());
+                    List.of(),
+                    4);
             try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp), config, name -> null)) {
                 TestSubscriptions.grantKnown(runtime.dataSource());
                 runtime.loadInstalledConches();

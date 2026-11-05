@@ -27,7 +27,7 @@ import dev.hermit.common.template.TemplateException;
 import dev.hermit.crab.secure.KnownSecrets;
 import dev.hermit.crab.secure.Redactor;
 
-public final class RuleEngine {
+public final class RuleEngine implements ConchExecutor {
 
     private static final Logger LOG = Logger.getLogger(RuleEngine.class.getName());
 

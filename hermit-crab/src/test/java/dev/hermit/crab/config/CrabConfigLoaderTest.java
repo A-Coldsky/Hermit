@@ -28,6 +28,7 @@ class CrabConfigLoaderTest {
         assertThat(config.capabilityTimeoutSeconds()).isEqualTo(60);
         assertThat(config.sessionIdleMinutes()).isEqualTo(10);
         assertThat(config.maxLoginFailures()).isEqualTo(3);
+        assertThat(config.mcpMaxConcurrencyPerAccount()).isEqualTo(4);
         assertThat(config.reefUrl()).isNull();
         assertThat(config.mcpAllowedOrigins()).isEmpty();
     }
@@ -105,5 +106,25 @@ class CrabConfigLoaderTest {
         assertThat(omitted.reportEnabled()).isTrue();
         assertThat(omitted.reportIntervalSeconds()).isEqualTo(1800);
         assertThat(omitted.syncIntervalSeconds()).isEqualTo(300);
+    }
+
+    @Test
+    void mcpConcurrencyDefaultsToFourAndRejectsOutOfRange() throws Exception {
+        Path file = new CrabPaths(temp).configFile();
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, """
+                engine:
+                  mcp_max_concurrency_per_account: 8
+                """);
+        assertThat(CrabConfigLoader.load(file).mcpMaxConcurrencyPerAccount()).isEqualTo(8);
+        for (int value : new int[] {0, 33}) {
+            Files.writeString(file, """
+                    engine:
+                      mcp_max_concurrency_per_account: %d
+                    """.formatted(value));
+            assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                    .isInstanceOf(ConfigFileException.class)
+                    .hasMessageContaining("engine.mcp_max_concurrency_per_account");
+        }
     }
 }

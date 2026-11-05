@@ -4,8 +4,8 @@ import dev.hermit.common.version.SemVer;
 
 public final class CrabVersion {
 
-    /** 加载 Conch 时交给校验器的当前版本。 */
-    public static final SemVer CURRENT = SemVer.parse("1.0.0");
+    /** 加载 Conch 时交给校验器的当前版本。1.1.0 起可以载入 {@code driver: mcp}。 */
+    public static final SemVer CURRENT = SemVer.parse("1.1.0");
 
     private CrabVersion() {
     }

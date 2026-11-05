@@ -37,8 +37,8 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.0.0。`driver: mcp` 还要求不低于 1.1.0 |
-| `driver` | `http` 或 `mcp`。mcp 只解析和校验，见「MCP 上游包」 |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.1.0。`driver: mcp` 还要求不低于 1.1.0 |
+| `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」；Crab 按 `headers` 认证转发，OAuth 与工具刷新还没有 |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
 | `config` | 可选字段映射；字段支持默认值；不用于保存秘密 |
@@ -105,11 +105,11 @@ actions:
 
 `snapshot` 可省略。写了就必须有能按 `Instant` 解析的 `fetched_at`、`protocol_version`，以及 64 位小写十六进制的 `tools_sha256`。`server` 可省略；写了则 `name` 和 `version` 都要有。校验不按 actions 重算 `tools_sha256`。`ToolSnapshots.toolsSha256` 只取 `tools` 数组，按 `name` 排序，键排序并去掉 `_meta`，忽略 `nextCursor`。刷新还没做，版本对比和以后的刷新共用这个算法。
 
-没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。Crab 现有 HTTP 工具注解仍从 readOnly 与 idempotent 推导，不读这个有效值。带上游工具的 action，`effectiveMethod()` 固定 POST。`inputJsonSchema()` 返回原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文；管理端还不单独列出 upstream 和工具表。
+没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。带上游工具的 action，`effectiveMethod()` 固定 POST，Crab 对外注解的 `destructiveHint` 用这个有效破坏性，`readOnlyHint` 用 `mcp.read_only`，`idempotentHint` 用 `idempotent`。HTTP 能力的注解里，`destructiveHint` 同样是声明的 destructive（缺省 false），不再从「非只读且非幂等」推导。目录元工具 `call_capability` 仍用那条旧公式。`inputJsonSchema()` 返回原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文；管理端还不单独列出 upstream 和工具表。
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。`notes` 和 `related` 的原有警告仍在。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新时去掉这些字符不在本批。
 
-`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。Crab 载入仍用 `CrabVersion.CURRENT = 1.0.0`，1.1.0 会报高于当前 Crab。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求 1.2.0 时两条都会报。Maven 制品版本仍是 `0.1.0-SNAPSHOT`。没有新的 `ErrorCode`，也没有数据库迁移。
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。`CrabVersion.CURRENT` 现为 1.1.0，Crab 可以载入 1.1.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求 1.2.0 时会报高于当前 Crab。Maven 制品版本仍是 `0.1.0-SNAPSHOT`。没有新的 `ErrorCode`，也没有数据库迁移。
 
 `GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
@@ -120,7 +120,7 @@ actions:
 - 权限中的只读仅由 `mcp.read_only` 决定，不能因为 GET 或 idempotent 就推断只读。
 - `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。会话失效包括重定向到 `alive_check.expect_not_redirect` 前缀，以及能力请求返回 HTTP 401/403。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
 - POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。同键换请求体返回 `IDEMPOTENCY_CONFLICT`，见 [api.md](api.md)。
-- `mcp.expose` 默认 true，read_only/destructive 默认 false。Crab 对外的 HTTP 工具注解仍从“非只读且非幂等”计算 destructiveHint，声明的 destructive 没有独立传入注解。mcp 包自己的有效破坏性和确认见上一节，目前也不进这套注解。
+- `mcp.expose` 默认 true，read_only/destructive 默认 false。能力工具的 `destructiveHint` 用上一节的有效破坏性。目录元工具 `call_capability` 仍从「非只读且非幂等」计算 `destructiveHint`。`effectiveConfirm()` 为 true 时，HTTP 要带 `X-Hermit-Confirm: true`，Hermit 自己的 MCP 两种模式都走 elicitation。
 
 ## 步骤
 

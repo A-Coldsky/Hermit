@@ -20,6 +20,7 @@
 | `engine.capability_timeout_seconds` | `60` | 正整数。能力执行的总 deadline，到点返回 `TIMEOUT`。未写步骤 `timeout_ms` 时，上游空闲读也停在这个 deadline，不再先用 15 秒。规则写了更短的 `timeout_ms` 时，空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。持续慢速输出会在 deadline 被取消。TCP 连接一直挂起没有单独回归 |
 | `engine.session_idle_minutes` | `10` | 空闲超过此阈值且配置 alive_check 时检测会话 |
 | `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；只有测试登录成功才解除，失败不会清掉暂停 |
+| `engine.mcp_max_concurrency_per_account` | `4` | 整数 1–32。每个 `(origin, conch, account)` 同时进行的上游 `tools/call` 上限。启动时读取，不热更新。排队也算进能力 deadline |
 
 完整配置示例：
 
@@ -39,6 +40,7 @@ engine:
   capability_timeout_seconds: 60
   session_idle_minutes: 10
   max_login_failures: 3
+  mcp_max_concurrency_per_account: 4
 mcp:
   allowed_origins: []
 ```

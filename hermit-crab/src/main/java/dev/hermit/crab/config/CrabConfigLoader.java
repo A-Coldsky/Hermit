@@ -31,7 +31,8 @@ public final class CrabConfigLoader {
     private static final Set<String> REPORT = Set.of("enabled", "interval_seconds");
     private static final Set<String> CAPABILITIES = Set.of("disabled");
     private static final Set<String> ENGINE = Set.of(
-            "capability_timeout_seconds", "session_idle_minutes", "max_login_failures");
+            "capability_timeout_seconds", "session_idle_minutes", "max_login_failures",
+            "mcp_max_concurrency_per_account");
     private static final Set<String> MCP = Set.of("allowed_origins");
 
     private static final YAMLMapper YAML = yaml();
@@ -105,7 +106,9 @@ public final class CrabConfigLoader {
                             defaults.sessionIdleMinutes(), 1, Integer.MAX_VALUE),
                     integer(file, engine, "max_login_failures", "engine.max_login_failures",
                             defaults.maxLoginFailures(), 1, Integer.MAX_VALUE),
-                    origins(file, mcp));
+                    origins(file, mcp),
+                    integer(file, engine, "mcp_max_concurrency_per_account", "engine.mcp_max_concurrency_per_account",
+                            defaults.mcpMaxConcurrencyPerAccount(), 1, 32));
         } catch (IllegalArgumentException ex) {
             throw new ConfigFileException(file + ": " + ex.getMessage());
         }

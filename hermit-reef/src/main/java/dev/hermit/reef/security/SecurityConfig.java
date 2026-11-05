@@ -80,6 +80,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/admin/conches/*/diff").hasAnyRole("ADMIN", "USER")
                         .requestMatchers(HttpMethod.GET, "/api/admin/tide/**").hasAnyRole("ADMIN", "USER")
                         .requestMatchers(HttpMethod.GET, "/api/admin/alerts").hasAnyRole("ADMIN", "USER")
+                        // 作废配置令牌只给 ADMIN。不要并进下面的 /tokens/*，那条 DELETE 允许 USER 吊销自己的库内令牌。
+                        .requestMatchers(HttpMethod.POST, "/api/admin/tokens/config/revoke").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/admin/tokens").hasAnyRole("ADMIN", "USER")
                         .requestMatchers(HttpMethod.POST, "/api/admin/tokens").hasAnyRole("ADMIN", "USER")
                         .requestMatchers(HttpMethod.DELETE, "/api/admin/tokens/*").hasAnyRole("ADMIN", "USER")

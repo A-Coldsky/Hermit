@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CircleCheckFilled, FolderOpened, Refresh, Upload, WarningFilled } from '@element-plus/icons-vue'
+import { CircleCheckFilled, CircleCloseFilled, FolderOpened, Refresh, Upload, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
@@ -13,6 +13,8 @@ import { refreshPending } from '../status'
 const loading = ref(true)
 const importing = ref(false)
 const connection = ref<ReefConnection | null>(null)
+/** 最近一次同步被 Reef 拒绝令牌时的 message。引导文件还在，但这条连接已经不能用。 */
+const tokenRejected = ref<string | null>(null)
 const text = ref('')
 const fileInput = ref<HTMLInputElement>()
 
@@ -38,7 +40,10 @@ const preview = computed(() => {
 async function load() {
   loading.value = true
   try {
-    connection.value = await api.reef()
+    const [reef, status] = await Promise.all([api.reef(), api.syncStatus().catch(() => null)])
+    connection.value = reef
+    const error = status?.report?.error
+    tokenRejected.value = reef.configured && error?.code === 'AUTH_FAILED' ? error.message : null
   } catch (error) {
     notifyError(error)
   } finally {
@@ -80,6 +85,7 @@ async function submit() {
   importing.value = true
   try {
     connection.value = await api.importReefBootstrap(parsed.value.value)
+    tokenRejected.value = null
     text.value = ''
     ElMessage.success('已连接 Reef，正在同步规则包目录')
     void refreshPending()
@@ -104,7 +110,16 @@ onMounted(load)
     <div class="hm-card">
       <div class="hm-card-title"><span>当前连接</span></div>
       <template v-if="connection?.configured">
-        <div class="state ok">
+        <div v-if="tokenRejected" class="state bad" data-test="token-rejected">
+          <el-icon :size="22"><CircleCloseFilled /></el-icon>
+          <div>
+            <strong>{{ tokenRejected }}</strong>
+            <div class="hm-muted">
+              最近一次同步被 Reef 拒绝，令牌可能已被吊销、作废或所属用户已被禁用。请在 Reef「我的令牌」重新生成令牌，在下面重新导入初始化 JSON。
+            </div>
+          </div>
+        </div>
+        <div v-else class="state ok">
           <el-icon :size="22"><CircleCheckFilled /></el-icon>
           <strong>已连接 Reef</strong>
           <el-tag size="small" effect="plain" type="info">{{ connection.source === 'BOOTSTRAP' ? '初始化 JSON 导入' : 'config.yml 配置' }}</el-tag>
@@ -191,6 +206,10 @@ onMounted(load)
 
 .state.warn .el-icon {
   color: var(--el-color-warning);
+}
+
+.state.bad .el-icon {
+  color: var(--el-color-danger);
 }
 
 .fp {

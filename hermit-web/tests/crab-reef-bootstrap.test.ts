@@ -6,6 +6,7 @@ import { mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
   reef: vi.fn(),
+  syncStatus: vi.fn(),
   importReefBootstrap: vi.fn(),
   reportPreview: vi.fn(),
   reportSettings: vi.fn(),
@@ -48,6 +49,7 @@ async function paste(wrapper: Awaited<ReturnType<typeof mountPage>>, value: stri
 beforeEach(() => {
   vi.clearAllMocks()
   crab.reef.mockResolvedValue(notConnected)
+  crab.syncStatus.mockResolvedValue({ report: null, latestCrab: null })
 })
 
 afterEach(() => {
@@ -93,6 +95,38 @@ describe('连接 Reef', () => {
     expect(connection).toContain('https://reef.example.com')
     expect(connection).toContain('办公室 PC')
     expect(wrapper.text()).toContain('初始化 JSON 导入')
+  })
+
+  it('最近一次同步令牌失效时不显示「已连接」，提示重新导入', async () => {
+    crab.reef.mockResolvedValue({ ...notConnected, configured: true, source: 'BOOTSTRAP', url: 'https://reef.example.com' })
+    crab.syncStatus.mockResolvedValue({
+      report: {
+        notModified: false,
+        conches: [],
+        removed: [],
+        credentialChanges: [],
+        latestCrab: null,
+        error: { code: 'AUTH_FAILED', message: '令牌已失效，请重新导入引导文件。' },
+      },
+      latestCrab: null,
+    })
+    const wrapper = await mountPage(ReefView)
+    await flushPromises()
+    expect(wrapper.get('[data-test="token-rejected"]').text()).toContain('令牌已失效，请重新导入引导文件。')
+    expect(wrapper.text()).not.toContain('已连接 Reef')
+    expect(wrapper.get('[data-test="connection"]').text()).toContain('https://reef.example.com')
+  })
+
+  it('其他同步错误仍显示已连接', async () => {
+    crab.reef.mockResolvedValue({ ...notConnected, configured: true, source: 'BOOTSTRAP', url: 'https://reef.example.com' })
+    crab.syncStatus.mockResolvedValue({
+      report: { notModified: false, conches: [], removed: [], credentialChanges: [], latestCrab: null, error: { code: 'UPSTREAM_ERROR', message: '连不上 Reef' } },
+      latestCrab: null,
+    })
+    const wrapper = await mountPage(ReefView)
+    await flushPromises()
+    expect(wrapper.find('[data-test="token-rejected"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已连接 Reef')
   })
 
   it('已连接时先确认替换，令牌被拒时给出中文原因', async () => {

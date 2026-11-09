@@ -34,11 +34,20 @@ function unauthorized(): Response {
   )
 }
 
-async function lead(path = '/login'): Promise<string> {
+interface LoginPage {
+  lead: string
+  warning: string | null
+}
+
+async function openLogin(path = '/login'): Promise<LoginPage> {
   const wrapper = await mountPage(LoginView, { path })
-  const text = wrapper.get('.lead').text()
+  const alert = wrapper.find('.expired')
+  const page: LoginPage = {
+    lead: wrapper.get('.lead').text(),
+    warning: alert.exists() ? alert.get('.el-alert__title').text() : null,
+  }
   wrapper.unmount()
-  return text
+  return page
 }
 
 beforeEach(() => {
@@ -54,19 +63,39 @@ afterEach(() => {
 
 describe('Reef 登录页文案', () => {
   it('直接打开登录页仍是请先登录', async () => {
-    expect(await lead()).toBe(SIGNED_OUT)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: null })
   })
 
   it('地址栏带 expired 也不会固定成过期文案', async () => {
-    expect(await lead('/login?expired=1')).toBe(SIGNED_OUT)
+    expect(await openLogin('/login?expired=1')).toEqual({ lead: SIGNED_OUT, warning: null })
+  })
+
+  it('过期提示在表单上方，用 warning 样式和图标', async () => {
+    markExpiredRedirect()
+    const wrapper = await mountPage(LoginView)
+    const alert = wrapper.get('.panel-stack .el-alert')
+    const form = wrapper.get('form')
+
+    expect(alert.classes()).toContain('el-alert--warning')
+    expect(alert.classes()).toContain('is-light')
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.find('.el-alert__icon svg').exists()).toBe(true)
+    expect(alert.find('.el-alert__close-btn').exists()).toBe(false)
+    expect(alert.get('.el-alert__title').text()).toBe(EXPIRED)
+    expect(wrapper.get('.lead').text()).toBe(SIGNED_OUT)
+    expect(form.text()).not.toContain(EXPIRED)
+    expect(form.element.contains(alert.element)).toBe(false)
+    expect(alert.element.compareDocumentPosition(form.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(wrapper.get('.expired').get('.el-alert').element).toBe(alert.element)
+    wrapper.unmount()
   })
 
   it('过期跳转只影响这一次挂载，再进登录页回到请先登录', async () => {
     markExpiredRedirect()
-    expect(await lead()).toBe(EXPIRED)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: EXPIRED })
 
-    expect(await lead()).toBe(SIGNED_OUT)
-    expect(await lead('/login?expired=1')).toBe(SIGNED_OUT)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: null })
+    expect(await openLogin('/login?expired=1')).toEqual({ lead: SIGNED_OUT, warning: null })
   })
 
   it('过期原因不写入 sessionStorage', () => {
@@ -80,7 +109,7 @@ describe('Reef 登录页文案', () => {
   it('主动退出后仍是请先登录', async () => {
     signIn('token', FUTURE, 'admin')
     signOut()
-    expect(await lead()).toBe(SIGNED_OUT)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: null })
   })
 })
 
@@ -91,7 +120,7 @@ describe('Reef 路由守卫：本地 expiresAt', () => {
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query).toEqual({ redirect: '/tide' })
     expect(consumeExpiredRedirect()).toBe(false)
-    expect(await lead()).toBe(SIGNED_OUT)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: null })
   })
 
   it('过点后清会话并让这一次登录页显示会话已过期', async () => {
@@ -102,8 +131,8 @@ describe('Reef 路由守卫：本地 expiresAt', () => {
     expect(sessionStorage.getItem('hermit.reef.token')).toBeNull()
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query).toEqual({ redirect: '/conches' })
-    expect(await lead()).toBe(EXPIRED)
-    expect(await lead()).toBe(SIGNED_OUT)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: EXPIRED })
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: null })
   })
 
   it('从首页过期跳转也不把原因写进 query', async () => {
@@ -112,7 +141,7 @@ describe('Reef 路由守卫：本地 expiresAt', () => {
 
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query).toEqual({})
-    expect(await lead()).toBe(EXPIRED)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: EXPIRED })
   })
 
   it('未过期的会话留在原页面', async () => {
@@ -134,7 +163,20 @@ describe('Reef 路由守卫：本地 expiresAt', () => {
 
     expect(router.currentRoute.value.name).toBe('login')
     expect(session.token).toBeNull()
-    expect(await lead()).toBe(SIGNED_OUT)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: null })
+  })
+
+  it('删掉令牌后再打开页面仍是请先登录', async () => {
+    signIn('token', FUTURE, 'admin')
+    session.token = null
+    sessionStorage.removeItem('hermit.reef.token')
+
+    await router.push('/tide')
+
+    expect(session.token).toBeNull()
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query).toEqual({ redirect: '/tide' })
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: null })
   })
 })
 
@@ -150,8 +192,8 @@ describe('Reef 401：仍持有令牌', () => {
     expect(session.token).toBeNull()
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query).toEqual({ redirect: '/alerts' })
-    expect(await lead()).toBe(EXPIRED)
-    expect(await lead()).toBe(SIGNED_OUT)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: EXPIRED })
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: null })
   })
 
   it('没有令牌时的 401 留在登录页，文案不变', async () => {
@@ -163,6 +205,6 @@ describe('Reef 401：仍持有令牌', () => {
 
     expect(router.currentRoute.value.name).toBe('login')
     expect(consumeExpiredRedirect()).toBe(false)
-    expect(await lead()).toBe(SIGNED_OUT)
+    expect(await openLogin()).toEqual({ lead: SIGNED_OUT, warning: null })
   })
 })

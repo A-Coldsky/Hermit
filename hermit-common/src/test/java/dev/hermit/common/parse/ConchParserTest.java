@@ -6,7 +6,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.List;
 import java.util.Map;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+
 import org.junit.jupiter.api.Test;
+import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.error.Mark;
+import org.yaml.snakeyaml.error.MarkedYAMLException;
 
 import dev.hermit.common.Fixtures;
 import dev.hermit.common.model.HttpMethod;
@@ -170,5 +177,93 @@ class ConchParserTest {
         assertThat(spec.maximum()).isEqualTo(2);
         assertThat(spec.items()).isEqualTo(Map.of("type", "string"));
         assertThat(doc.actions().get("list_todo").inputJsonSchema().get("required")).isEqualTo(List.of("status"));
+    }
+
+    @Test
+    void tabAndDeeperIndentReportTheSnakeYamlLine() {
+        String tab = yaml(
+                "conch: demo",
+                "version: 1.0.0",
+                "min_crab_version: 1.0.0",
+                "driver: http",
+                "base_url: http://example.test",
+                "\ttitle: broken");
+        String deeper = yaml(
+                "conch: demo",
+                "version: 1.0.0",
+                "min_crab_version: 1.0.0",
+                "actions:",
+                "  list: {}",
+                "    extra: 1");
+        assertReportedLine(tab, 6, true);
+        assertReportedLine(deeper, 6, true);
+    }
+
+    @Test
+    void mappingValueOnTheSameLineStaysThere() {
+        String colon = yaml(
+                "conch: demo",
+                "version: 1.0.0",
+                "min_crab_version: 1.0.0",
+                "driver: http",
+                "base_url: http://example.test",
+                "title: a: b");
+        assertReportedLine(colon, 6, false);
+    }
+
+    @Test
+    void unclosedFlowSequenceKeepsTheFollowingLine() {
+        String open = yaml(
+                "conch: demo",
+                "version: 1.0.0",
+                "min_crab_version: 1.0.0",
+                "driver: http",
+                "base_url: http://example.test",
+                "tags: [");
+        assertReportedLine(open, 7, true);
+    }
+
+    private static void assertReportedLine(String yaml, int snakeLine, boolean jacksonIsEarlier) {
+        JsonProcessingException failure = yamlFailure(yaml);
+        int jackson = failure.getLocation().getLineNr();
+        int snake = snakeProblemLine(failure);
+        assertThat(snake).isEqualTo(snakeLine);
+        if (jacksonIsEarlier) {
+            assertThat(jackson).isEqualTo(snakeLine - 1);
+        } else {
+            assertThat(jackson).isEqualTo(snakeLine);
+        }
+        assertThatThrownBy(() -> ConchParser.parse(yaml))
+                .isInstanceOf(ConchParseException.class)
+                .hasMessage("YAML 无法解析（第 " + snakeLine + " 行）");
+    }
+
+    private static String yaml(String... lines) {
+        return String.join("\n", lines) + "\n";
+    }
+
+    private static JsonProcessingException yamlFailure(String yaml) {
+        LoaderOptions options = new LoaderOptions();
+        options.setCodePointLimit(4 * 1024 * 1024);
+        YAMLMapper mapper = new YAMLMapper(YAMLFactory.builder().loaderOptions(options).build());
+        try {
+            mapper.readTree(yaml);
+        } catch (JsonProcessingException ex) {
+            return ex;
+        }
+        throw new AssertionError("expected a YAML syntax error");
+    }
+
+    private static int snakeProblemLine(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof MarkedYAMLException marked && marked.getProblemMark() != null) {
+                Mark mark = marked.getProblemMark();
+                return mark.getLine() + 1;
+            }
+            Throwable next = current.getCause();
+            current = next == current ? null : next;
+        }
+        throw new AssertionError("SnakeYAML problem mark is missing");
     }
 }

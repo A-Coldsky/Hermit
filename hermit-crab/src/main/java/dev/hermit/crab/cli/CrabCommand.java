@@ -110,7 +110,7 @@ public final class CrabCommand {
         } catch (ConchRejectedException ex) {
             err.println("规则包未通过校验。");
             for (ValidationIssue issue : ex.issues()) {
-                err.println(issue.code() + " " + issue.path());
+                printIssue(err, issue);
             }
             return 1;
         } catch (ConchParseException ex) {
@@ -131,7 +131,7 @@ public final class CrabCommand {
         } catch (LocalConchException ex) {
             err.println(ex.getMessage());
             for (ValidationIssue issue : ex.errors()) {
-                err.println(issue.code() + " " + issue.path());
+                printIssue(err, issue);
             }
             return 1;
         } catch (IllegalArgumentException | IllegalStateException ex) {
@@ -141,6 +141,10 @@ public final class CrabCommand {
             err.println(ex.getClass().getName());
             return 1;
         }
+    }
+
+    private static void printIssue(PrintStream err, ValidationIssue issue) {
+        err.println(issue.code() + " " + issue.path() + " " + issue.message());
     }
 
     private int dispatch(String[] args, Function<String, String> env, InputStream in, PrintStream out, PrintStream err)

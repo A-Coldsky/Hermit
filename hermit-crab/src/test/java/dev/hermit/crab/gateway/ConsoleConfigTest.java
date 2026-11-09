@@ -231,8 +231,16 @@ class ConsoleConfigTest {
             assertThat(pending.path("loginPaused").asBoolean()).isTrue();
             assertThat(pending.path("needsConfiguration").asBoolean()).isTrue();
             TestServer.Reply detail = server.console("GET", "/console/api/conches/legacy_oa", null, true);
-            assertThat(detail.json().path("data").path("loginPaused").asBoolean()).isTrue();
-            assertThat(detail.json().path("data").path("driver").asText()).isEqualTo("http");
+            JsonNode detailData = detail.json().path("data");
+            assertThat(detailData.path("loginPaused").asBoolean()).isTrue();
+            assertThat(detailData.path("driver").asText()).isEqualTo("http");
+            assertThat(detailData.path("subscribed").isBoolean()).isTrue();
+            assertThat(detailData.path("needsConfiguration").isBoolean()).isTrue();
+            assertThat(detailData.path("subscribed").asBoolean()).isEqualTo(pending.path("subscribed").asBoolean());
+            assertThat(detailData.path("needsConfiguration").asBoolean()).isTrue();
+            assertThat(detailData.path("needsConfiguration").asBoolean())
+                    .isEqualTo(pending.path("needsConfiguration").asBoolean());
+            assertThat(account(server, "alice").path("needsConfiguration").asBoolean()).isFalse();
 
             TestServer.Reply failedLogin = server.console(
                     "POST", "/console/api/conches/legacy_oa/accounts/alice/test-login", "{}", true);

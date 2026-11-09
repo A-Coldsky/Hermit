@@ -204,7 +204,9 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 
 `crab local list` 一行一个包。已载入是 `包名 版本 文件名`。未能载入是 `包名 - 文件名 未载入 ` 接上面的 `reason`。`crab local reload` 成功行仍是 `文件 包名 版本 ok`；失败行是 `文件 包名 - 未载入`（没有合法包名时包名位置为 `-`），中文原因在 stderr。重新加载即使有失败文件也退出 0。`crab local delete` 对坏包同样打印 `包名 deleted` 并退出 0。
 
-Conch 列表的 `needsConfiguration` 在缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。概览待配置按它计数。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。
+`crab local import` 校验失败时退出 1，不写入坏文件。stderr 第一行仍是「规则包校验失败」，随后每条错误打印 code、path 和已有中文 message。无法解析时 message 为「YAML 无法解析（第 N 行）」；`driver` 不是 `http` 或 `mcp` 时为「driver 只允许 http 或 mcp」。不把 YAML 正文或解析器英文原文拼进错误。装载已安装包未通过校验时，前缀仍是「规则包未通过校验。」，同样带上 message。
+
+Conch 列表和详情的包级 `needsConfiguration` 用同一套计算：缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。概览待配置按列表上的这个字段计数。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。详情的 `subscribed` 与列表相同：已订阅为 true，本地包为 false。
 
 账号列表每一行：
 

@@ -1,7 +1,7 @@
 import { ElMessage } from 'element-plus'
 import { createRouter, createWebHistory } from 'vue-router'
 import { api } from './api'
-import { session, setRole, signedIn } from './auth'
+import { markExpiredRedirect, session, sessionPastExpiry, setRole, signedIn } from './auth'
 
 export const router = createRouter({
   history: createWebHistory('/'),
@@ -35,7 +35,10 @@ export const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
+  // signedIn() 会清掉过期会话，要先记下是过期还是从未登录。
+  const expired = sessionPastExpiry()
   if (!to.meta.public && !signedIn()) {
+    if (expired) markExpiredRedirect()
     return { name: 'login', query: to.fullPath === '/' ? {} : { redirect: to.fullPath } }
   }
   if (to.name === 'login' && signedIn()) {

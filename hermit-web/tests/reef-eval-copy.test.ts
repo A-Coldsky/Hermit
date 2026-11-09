@@ -10,7 +10,7 @@ const reef = vi.hoisted(() => ({
 }))
 
 vi.mock('../apps/reef-admin/src/api', () => ({ api: reef }))
-vi.mock('../apps/reef-admin/src/auth', () => ({ signIn: vi.fn(), setRole: vi.fn() }))
+vi.mock('../apps/reef-admin/src/auth', () => ({ signIn: vi.fn(), setRole: vi.fn(), consumeExpiredRedirect: () => false }))
 
 import LoginView from '../apps/reef-admin/src/views/LoginView.vue'
 import ConchStats from '../apps/reef-admin/src/components/ConchStats.vue'

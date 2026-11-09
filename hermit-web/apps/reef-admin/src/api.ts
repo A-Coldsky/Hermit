@@ -1,11 +1,13 @@
 import { createClient, seg } from '@shared/http'
 import { router } from './router'
-import { session, signOut } from './auth'
+import { markExpiredRedirect, session, signOut } from './auth'
 
 const http = createClient({
   headers: (): Record<string, string> => (session.token ? { Authorization: `Bearer ${session.token}` } : {}),
   onUnauthorized: () => {
+    // 还握着令牌时的 401 才是会话失效。登录失败时没有令牌，不改登录页文案。
     if (session.token) {
+      markExpiredRedirect()
       signOut()
       void router.replace({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
     }

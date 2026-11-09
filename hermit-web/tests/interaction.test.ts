@@ -93,4 +93,34 @@ describe('Reef 规则包目录视图', () => {
     expect(wrapper.text()).toContain('没有匹配「不存在」的规则包')
     expect(wrapper.text()).not.toContain('还没有规则包')
   })
+
+  it('列表视图筛选零匹配时不提示去上传', async () => {
+    localStorage.setItem('hermit.reef.conchesView', 'table')
+    reef.conches.mockResolvedValue([conch])
+    const wrapper = await mountPage(ReefConchesView)
+    await flushPromises()
+    expect(wrapper.find('.el-table').exists()).toBe(true)
+
+    await wrapper.get('input[placeholder^="按名称"]').setValue('不存在')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('没有匹配「不存在」的规则包')
+    expect(wrapper.text()).not.toContain('还没有规则包')
+    expect(wrapper.find('.el-table').exists()).toBe(true)
+  })
+
+  it('列表视图按类型筛到零个时说明没有符合筛选的规则包', async () => {
+    localStorage.setItem('hermit.reef.conchesView', 'table')
+    reef.conches.mockResolvedValue([conch])
+    const wrapper = await mountPage(ReefConchesView)
+    await flushPromises()
+
+    const mcpOption = wrapper.findAll('[data-test="kind-filter"] label').find((l) => l.text() === '原生 MCP')!
+    await mcpOption.find('input').setValue(true)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('没有符合筛选条件的原生 MCP 规则包')
+    expect(wrapper.text()).not.toContain('还没有规则包')
+    expect(wrapper.text()).not.toContain('协同办公 OA')
+  })
 })

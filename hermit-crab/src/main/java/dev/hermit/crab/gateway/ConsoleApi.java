@@ -1091,11 +1091,13 @@ final class ConsoleApi {
     }
 
     /**
-     * Overview “待配置” counts a conch when required config or credentials are missing, stored
-     * credentials cannot be decrypted, or any account has automatic login paused.
+     * List and detail share this package flag. It is true when the conch has no account, required
+     * config or credentials are missing, stored credentials cannot be decrypted, or any account has
+     * automatic login paused. An existing account may leave {@code required: false} credentials unset.
+     * Account rows do not use this method.
      */
     private static boolean needsConfiguration(CrabRuntime runtime, ConchDoc doc, List<Account> accounts, boolean loginPaused) {
-        if (loginPaused) {
+        if (accounts.isEmpty() || loginPaused) {
             return true;
         }
         if (!DeclaredSettings.missingConfig(doc, runtime.admin().storedConfig(doc.conch())).isEmpty()) {

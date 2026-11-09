@@ -33,7 +33,7 @@ const incompleteAccounts = computed(() =>
 )
 const unreadableAccounts = computed(() => accounts.value.filter((a) => a.credentialsUnreadable).map((a) => a.name))
 const pausedAccounts = computed(() => accounts.value.filter((a) => a.loginPaused))
-const needsAccount = computed(() => !!detail.value?.credentials.length && !accounts.value.length)
+const needsAccount = computed(() => accounts.value.length === 0)
 const ready = computed(
   () =>
     !missingConfig.value.length &&
@@ -301,7 +301,7 @@ watch(
         :title="bannerTitle"
       >
         <template #default>
-          <div v-if="needsAccount">先新建一个账号并填写凭证。</div>
+          <div v-if="needsAccount">先新建一个账号。</div>
           <div v-if="missingConfig.length">缺少必填配置：<span class="mono">{{ missingConfig.join(', ') }}</span></div>
           <div v-if="unreadableAccounts.length">
             凭证无法解密，需全部重新填写：<span class="mono">{{ unreadableAccounts.join(', ') }}</span>

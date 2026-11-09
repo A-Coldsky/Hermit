@@ -170,6 +170,44 @@ describe('本地规则包', () => {
     expect(cards[1].find('.local').exists()).toBe(false)
   })
 
+  it('没有账号时提示先新建，并标成待配置', async () => {
+    crab.conches.mockResolvedValue({
+      conches: [
+        {
+          conch: 'optional_note',
+          version: '1.0.0',
+          title: '备注',
+          capabilityCount: 1,
+          subscribed: false,
+          accountCount: 0,
+          needsConfiguration: true,
+          loginPaused: false,
+          source: 'LOCAL',
+        },
+        {
+          conch: 'ready_ping',
+          version: '1.0.0',
+          title: '就绪',
+          capabilityCount: 1,
+          subscribed: false,
+          accountCount: 1,
+          needsConfiguration: false,
+          loginPaused: false,
+          source: 'LOCAL',
+        },
+      ],
+    })
+    const wrapper = await mountPage(ConchesView)
+    await flushPromises()
+    const cards = wrapper.findAll('.conch')
+    expect(cards[0].classes()).toContain('warn')
+    expect(cards[0].text()).toContain('未建账号：先新建一个账号')
+    expect(cards[0].text()).not.toContain('还缺凭证或配置项')
+    expect(cards[0].text()).not.toContain('可用')
+    expect(cards[1].classes()).not.toContain('warn')
+    expect(cards[1].text()).toContain('可用：可以通过 OpenAPI 和 MCP 调用')
+  })
+
   it('导入校验失败时列出错误', async () => {
     crab.importLocalConch.mockRejectedValue(
       new ApiError(400, 'INVALID_INPUT', 'conch is invalid', {

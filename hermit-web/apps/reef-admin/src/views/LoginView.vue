@@ -56,18 +56,28 @@ async function submit() {
       </ul>
     </section>
     <section class="panel">
-      <el-form class="form" label-position="top" size="large" @submit.prevent="submit">
-        <h2>登录管理端</h2>
-        <p class="lead">{{ expired ? '会话已过期' : '请先登录。使用部署时配置的管理员账号' }}</p>
-        <el-form-item label="用户名">
-          <el-input v-model="form.username" :prefix-icon="User" autocomplete="username" autofocus />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input v-model="form.password" :prefix-icon="Lock" type="password" show-password autocomplete="current-password" />
-        </el-form-item>
-        <el-alert v-if="failure" :title="failure" type="error" :closable="false" show-icon class="failure" />
-        <el-button type="primary" native-type="submit" :loading="loading" class="submit">登录</el-button>
-      </el-form>
+      <div class="panel-stack">
+        <el-alert
+          v-if="expired"
+          class="expired"
+          type="warning"
+          title="会话已过期"
+          :closable="false"
+          show-icon
+        />
+        <el-form class="form" label-position="top" size="large" @submit.prevent="submit">
+          <h2>登录管理端</h2>
+          <p class="lead">请先登录。使用部署时配置的管理员账号</p>
+          <el-form-item label="用户名">
+            <el-input v-model="form.username" :prefix-icon="User" autocomplete="username" autofocus />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input v-model="form.password" :prefix-icon="Lock" type="password" show-password autocomplete="current-password" />
+          </el-form-item>
+          <el-alert v-if="failure" :title="failure" type="error" :closable="false" show-icon class="failure" />
+          <el-button type="primary" native-type="submit" :loading="loading" class="submit">登录</el-button>
+        </el-form>
+      </div>
     </section>
   </div>
 </template>
@@ -171,9 +181,16 @@ async function submit() {
   padding: 48px;
 }
 
-.form {
+.panel-stack {
   width: 100%;
   max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form {
+  width: 100%;
   background: var(--hm-surface);
   border: 1px solid var(--hm-border);
   border-radius: 18px;

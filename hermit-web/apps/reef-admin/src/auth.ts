@@ -42,11 +42,36 @@ export function signOut(): void {
   sessionStorage.removeItem(USER_KEY)
 }
 
+/**
+ * 过期回登录页的一次性标记。只活在这次页面里：刷新会重新加载脚本，标记消失，
+ * 登录页回到「请先登录」。不写入 sessionStorage，也不能靠地址栏书签固定。
+ */
+let expiredRedirect = false
+
+export function markExpiredRedirect(): void {
+  expiredRedirect = true
+}
+
+export function consumeExpiredRedirect(): boolean {
+  const expired = expiredRedirect
+  expiredRedirect = false
+  return expired
+}
+
+function pastExpiry(expiresAt: string | null): boolean {
+  return Boolean(expiresAt) && new Date(expiresAt as string).getTime() <= Date.now()
+}
+
+/** 本地仍握着令牌，且 expiresAt 已到。不清除会话。 */
+export function sessionPastExpiry(): boolean {
+  return Boolean(session.token) && pastExpiry(session.expiresAt)
+}
+
 export function signedIn(): boolean {
   if (!session.token) {
     return false
   }
-  if (session.expiresAt && new Date(session.expiresAt).getTime() <= Date.now()) {
+  if (pastExpiry(session.expiresAt)) {
     signOut()
     return false
   }

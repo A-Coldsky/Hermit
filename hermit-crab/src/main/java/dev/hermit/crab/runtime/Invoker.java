@@ -202,8 +202,9 @@ public final class Invoker {
         if (origin == null) {
             origin = Origin.OFFICIAL;
         }
-        // 空的 conches 表示全部正式包。本地包必须被点名，否则这里就是 403，目录里仍能看见该工具。
-        if (origin == Origin.LOCAL && !principal.scope().conches().contains(conch)) {
+        // grantsAllOfficial（all: true，或旧的空 conches 且空 actions）包含本地包。
+        // 写了 conches 或 actions 的 Key 仍要求本地包出现在 conches 里。只读由后面的 permits 限制。
+        if (origin == Origin.LOCAL && !principal.scope().allowsLocal(conch)) {
             return done(traceId, ErrorCode.FORBIDDEN, "forbidden", null);
         }
         if (!principal.permits(conch, action, CapabilityHttp.readOnly(capability))) {

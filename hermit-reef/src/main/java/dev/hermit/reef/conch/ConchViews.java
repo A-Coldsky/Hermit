@@ -41,6 +41,7 @@ record ValidationFailure(List<ValidationIssue> errors, List<ValidationIssue> war
 record ConchSummary(
         String conch,
         String version,
+        boolean published,
         String title,
         String description,
         String owner,
@@ -142,6 +143,7 @@ record CapabilityView(
 record ConchDetail(
         String conch,
         String version,
+        boolean published,
         String driver,
         String minCrabVersion,
         String baseUrl,
@@ -162,7 +164,7 @@ record ConchDetail(
         SnapshotView snapshot,
         List<ToolView> tools) {
 
-    static ConchDetail from(ConchDoc doc, AvailabilityRow availability, long pullCount) {
+    static ConchDetail from(ConchDoc doc, AvailabilityRow availability, long pullCount, boolean published) {
         Map<String, CredentialDeclaration> credentials = new java.util.LinkedHashMap<>();
         if (doc.credentials() != null) {
             doc.credentials().forEach((name, field) -> credentials.put(name, CredentialDeclaration.from(field)));
@@ -175,6 +177,7 @@ record ConchDetail(
         return new ConchDetail(
                 doc.conch(),
                 doc.version().toString(),
+                published,
                 mcp.driver(),
                 doc.minCrabVersion().toString(),
                 doc.baseUrl(),

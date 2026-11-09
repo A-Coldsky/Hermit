@@ -1,3 +1,4 @@
+import { ApiError } from '@shared/http'
 import { flushPromises } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -67,6 +68,7 @@ const detail = {
   disabledBy: null,
   disabledReason: null,
   pullCount: 0,
+  published: true,
 }
 
 async function chooseFile(wrapper: Awaited<ReturnType<typeof mountPage>>) {
@@ -180,6 +182,48 @@ describe('USER 看到的规则包', () => {
     const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
     await flushPromises()
     expect(wrapper.find('[data-test="go-publish"]').exists()).toBe(true)
+  })
+
+  it('管理员打开从未发布的包时标明未发布，并展示最高已上传版本', async () => {
+    reef.versions.mockResolvedValue([
+      { ...uploaded, version: '1.0.0', uploadedAt: '2026-11-04T02:00:00Z' },
+      uploaded,
+    ])
+    reef.conch.mockResolvedValue({
+      ...detail,
+      version: '1.1.0',
+      published: false,
+      description: '只覆盖待办查询。',
+      changelog: '先看这一版再决定发不发布。',
+    })
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="unpublished-badge"]').text()).toBe('未发布')
+    const notice = wrapper.get('[data-test="unpublished-notice"]').text()
+    expect(notice).toContain('还未发布')
+    expect(notice).toContain('v1.1.0')
+    expect(wrapper.get('[data-test="go-publish"]').text()).toContain('去发布')
+    expect(wrapper.text()).toContain('尚未发布')
+    expect(wrapper.text()).toContain('最高已上传版本')
+    expect(wrapper.text()).toContain('只覆盖待办查询。')
+    expect(wrapper.text()).toContain('先看这一版再决定发不发布。')
+    expect(wrapper.text()).not.toContain('当前发布版本')
+
+    await wrapper.get('[data-test="go-publish"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('v1.1.0')
+  })
+
+  it('普通用户直接打开从未发布的包时显示不存在', async () => {
+    setRole('USER')
+    reef.versions.mockRejectedValue(new ApiError(404, 'NOT_FOUND', '资源不存在'))
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('规则包不存在')
+    expect(wrapper.find('[data-test="unpublished-badge"]').exists()).toBe(false)
+    expect(reef.conch).not.toHaveBeenCalled()
   })
 
   it('目录加载中不显示「共 0 个」', async () => {

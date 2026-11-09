@@ -100,7 +100,10 @@ export interface ConchAvailability {
 
 export interface ConchSummary {
   conch: string
+  /** 当前已发布版本。从未发布时为 null。 */
   version: string | null
+  /** 有当前已发布版本时为 true。从未发布时为 false，不靠 version 为 null 判断。 */
+  published: boolean
   title: string
   description: string
   owner: string | null
@@ -146,7 +149,10 @@ export interface Capability {
 
 export interface ConchDetail {
   conch: string
+  /** 有当前版本时是该版本；从未发布时是最高的已上传版本。 */
   version: string
+  /** 没有 current 时为 false。未发布不靠 version 为 null 判断。 */
+  published: boolean
   /** 缺省或空白按 `http`。 */
   driver: string
   minCrabVersion: string

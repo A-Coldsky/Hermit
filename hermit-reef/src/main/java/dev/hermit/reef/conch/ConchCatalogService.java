@@ -41,12 +41,15 @@ public class ConchCatalogService {
         this.objectMapper = objectMapper;
     }
 
-    public List<ConchSummary> list() {
+    public List<ConchSummary> list(boolean includeUnpublished) {
         Map<String, List<VersionRow>> grouped = group(repository.listAll());
         Map<String, AvailabilityRow> flags = availability.all();
         List<ConchSummary> summaries = new ArrayList<>();
         for (List<VersionRow> rows : grouped.values()) {
             VersionRow current = singleCurrent(rows);
+            if (current == null && !includeUnpublished) {
+                continue;
+            }
             VersionRow source = current != null ? current : highest(rows);
             ConchDoc doc = readDoc(source);
             AvailabilityRow flag = flags.get(doc.conch());
@@ -55,6 +58,7 @@ public class ConchCatalogService {
             summaries.add(new ConchSummary(
                     doc.conch(),
                     current == null ? null : current.version(),
+                    current != null,
                     doc.title(),
                     doc.description(),
                     doc.owner(),
@@ -75,17 +79,16 @@ public class ConchCatalogService {
         return summaries;
     }
 
-    public ConchDetail detail(String conch) {
-        List<VersionRow> rows = rowsOf(conch);
+    public ConchDetail detail(String conch, boolean includeUnpublished) {
+        List<VersionRow> rows = visibleRows(conch, includeUnpublished);
         VersionRow current = singleCurrent(rows);
-        if (current == null) {
-            throw notFound();
-        }
-        return ConchDetail.from(readDoc(current), availability.find(current.conch()), pullTotal(rows));
+        VersionRow source = current != null ? current : highest(rows);
+        return ConchDetail.from(
+                readDoc(source), availability.find(source.conch()), pullTotal(rows), current != null);
     }
 
-    public List<ConchVersionItem> versions(String conch) {
-        List<VersionRow> rows = new ArrayList<>(rowsOf(conch));
+    public List<ConchVersionItem> versions(String conch, boolean includeUnpublished) {
+        List<VersionRow> rows = new ArrayList<>(visibleRows(conch, includeUnpublished));
         if (rows.isEmpty()) {
             throw notFound();
         }
@@ -108,12 +111,14 @@ public class ConchCatalogService {
         return items;
     }
 
-    public byte[] yaml(String conch, String version) {
+    public byte[] yaml(String conch, String version, boolean includeUnpublished) {
+        visibleRows(conch, includeUnpublished);
         VersionRow row = requireVersion(conch, version);
         return storage.readYaml(row.conch(), row.version());
     }
 
-    public ConchDiff diff(String conch, String from, String to) {
+    public ConchDiff diff(String conch, String from, String to, boolean includeUnpublished) {
+        visibleRows(conch, includeUnpublished);
         boolean fromBlank = from == null || from.isBlank();
         boolean toBlank = to == null || to.isBlank();
         if (fromBlank != toBlank) {
@@ -149,6 +154,19 @@ public class ConchCatalogService {
                 .filter(row -> row.version().equals(parsed.toString()))
                 .findFirst()
                 .orElseThrow(ConchCatalogService::notFound);
+    }
+
+    /**
+     * 已经有版本、但没有 current，并且调用方不能看从未发布的包时，与不存在同一句 404。
+     * 还没有任何版本行时交给调用方：版本列表是 404，对比仍是「至少需要两个版本才能对比」。
+     * 已经有 current 的包仍返回全部版本行，包括更高的 {@code UPLOADED}。
+     */
+    private List<VersionRow> visibleRows(String conch, boolean includeUnpublished) {
+        List<VersionRow> rows = rowsOf(conch);
+        if (!rows.isEmpty() && !includeUnpublished && singleCurrent(rows) == null) {
+            throw notFound();
+        }
+        return rows;
     }
 
     private List<VersionRow> rowsOf(String conch) {

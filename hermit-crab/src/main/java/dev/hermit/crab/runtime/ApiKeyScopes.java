@@ -14,10 +14,11 @@ import dev.hermit.crab.sync.DisabledConches;
  * An empty actions set still means every action. Bare names and unknown capabilities are rejected
  * at creation so a key is not stored only to fail every call with {@code FORBIDDEN}.
  * Names in {@code conches} must be loaded, or tombstoned in {@code disabled_conches}.
- * A loaded local conch counts as known. An empty {@code conches} set, including {@code all: true},
- * does not authorize calls to local conches; {@code Invoker} requires the name to be listed.
+ * A loaded local conch counts as known. {@link ApiKeyScope#grantsAllOfficial()} includes local
+ * conches. A key that names any conch or action still needs the local package name in
+ * {@code conches}; {@code Invoker} and the MCP catalog both use {@link ApiKeyScope#allowsLocal}.
  * Console and CLI creation use {@link ApiKeyScope#explicit} so a new key cannot store both
- * sets empty unless that full-official flag was requested. This check does not.
+ * sets empty unless that full-access flag was requested. This check does not.
  */
 public final class ApiKeyScopes {
     private ApiKeyScopes() {

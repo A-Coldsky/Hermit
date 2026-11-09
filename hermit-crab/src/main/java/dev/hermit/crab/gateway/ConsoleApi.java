@@ -170,7 +170,11 @@ final class ConsoleApi {
             capabilities.add(row);
         }
         body.put("capabilities", capabilities);
-        body.put("loginPaused", loginPaused(runtime, doc, runtime.admin().listAccounts(doc.conch())));
+        List<Account> accounts = runtime.admin().listAccounts(doc.conch());
+        boolean paused = loginPaused(runtime, doc, accounts);
+        body.put("subscribed", runtime.subscribed(doc.conch()));
+        body.put("needsConfiguration", needsConfiguration(runtime, doc, accounts, paused));
+        body.put("loginPaused", paused);
         body.put("source", source(runtime, doc.conch()));
         putReefDisabled(runtime, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);

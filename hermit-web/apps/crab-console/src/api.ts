@@ -83,6 +83,13 @@ export interface ConchDetail {
   credentials: CredentialField[]
   config: ConfigDeclaration[]
   capabilities: CapabilityState[]
+  /** 本机是否已订阅。本地包为 false。 */
+  subscribed: boolean
+  /**
+   * 与列表相同：缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停。
+   * 账号行的同名字段不含自动登录暂停。
+   */
+  needsConfiguration: boolean
   /** 任一账号自动登录已暂停。账号行带原因和恢复方法。 */
   loginPaused: boolean
   /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。 */

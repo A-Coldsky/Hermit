@@ -481,6 +481,50 @@ class CliTest {
     }
 
     @Test
+    void localImportPrintsChineseReasonsAndRejectsBadFiles() throws Exception {
+        Path home = temp.resolve("local-bad");
+        Files.createDirectories(home);
+        Function<String, String> env = env(home);
+
+        Path driver = home.resolve("bad-driver.yaml");
+        Files.writeString(driver, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("bad_driver", "1.0.0")
+                .replace("driver: http", "driver: shell"));
+        ByteArrayOutputStream driverErr = new ByteArrayOutputStream();
+        ByteArrayOutputStream driverOut = new ByteArrayOutputStream();
+        int driverCode = new CrabCommand().run(
+                new String[] {"local", "import", driver.toString()},
+                env,
+                InputStream.nullInputStream(),
+                stdout(driverOut),
+                stderr(driverErr));
+        String driverText = driverErr.toString(StandardCharsets.UTF_8);
+        assertThat(driverCode).isEqualTo(1);
+        assertThat(driverOut.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(driverText).contains("规则包校验失败").contains("DRIVER").contains("driver 只允许 http 或 mcp");
+        assertThat(driverText).doesNotContain("shell").doesNotContain("com.fasterxml");
+        assertThat(home.resolve("local-conches").resolve("bad_driver.yaml")).doesNotExist();
+
+        Path broken = home.resolve("broken.yaml");
+        Files.writeString(broken, "conch: \"unterminated\nversion: 1.0.0\n");
+        ByteArrayOutputStream parseErr = new ByteArrayOutputStream();
+        ByteArrayOutputStream parseOut = new ByteArrayOutputStream();
+        int parseCode = new CrabCommand().run(
+                new String[] {"local", "import", broken.toString()},
+                env,
+                InputStream.nullInputStream(),
+                stdout(parseOut),
+                stderr(parseErr));
+        String parseText = parseErr.toString(StandardCharsets.UTF_8);
+        assertThat(parseCode).isEqualTo(1);
+        assertThat(parseOut.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(parseText).contains("规则包校验失败").contains("PARSE").contains("YAML 无法解析").contains("行");
+        assertThat(parseText).doesNotContain("unterminated").doesNotContain("com.fasterxml");
+        try (var files = Files.list(home.resolve("local-conches"))) {
+            assertThat(files.filter(path -> path.getFileName().toString().endsWith(".yaml")).toList()).isEmpty();
+        }
+    }
+
+    @Test
     void apiKeyCreateRejectsUnknownOptions() {
         Path root = temp.resolve("unknown-opt");
         Function<String, String> env = env(root);

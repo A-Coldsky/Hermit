@@ -8,7 +8,11 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.util.Set;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -182,6 +186,68 @@ class LocalConchConsoleTest {
             TestServer.Reply missing = server.console("DELETE", "/console/api/local-conches/missing_ping", null, true);
             assertThat(missing.status()).isEqualTo(404);
         }
+    }
+
+    @Test
+    void detailFlagsMatchTheListForSubscribedPendingAndLocalReady() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("detail-flags"), PASSWORD, config)) {
+            server.runtime.admin().createAccount("legacy_oa", "alice", Actors.CLI);
+            try (Connection connection = server.runtime.dataSource().getConnection();
+                 PreparedStatement statement = connection.prepareStatement(
+                         "INSERT INTO subscriptions (conch, subscribed_at, actor) VALUES (?, CURRENT_TIMESTAMP, ?)")) {
+                statement.setString(1, "legacy_oa");
+                statement.setString(2, "test");
+                statement.executeUpdate();
+            }
+            HttpResponse<String> imported = post(
+                    server,
+                    "/console/api/local-conches",
+                    "text/yaml; charset=utf-8",
+                    LocalConchBehaviorTest.ping("local_ping", "1.0.0").getBytes(StandardCharsets.UTF_8));
+            assertThat(imported.statusCode()).as(imported.body()).isEqualTo(200);
+
+            TestServer.Reply listed = server.console("GET", "/console/api/conches", null, true);
+            assertThat(listed.status()).isEqualTo(200);
+            JsonNode rows = listed.json().path("data").path("conches");
+            assertFlagsMatch(server, rows, "legacy_oa", true, true);
+            assertFlagsMatch(server, rows, "local_ping", false, false);
+
+            TestServer.Reply accounts = server.console("GET", "/console/api/conches/legacy_oa/accounts", null, true);
+            JsonNode alice = null;
+            for (JsonNode row : accounts.json().path("data").path("accounts")) {
+                if ("alice".equals(row.path("name").asText())) {
+                    alice = row;
+                }
+            }
+            assertThat(alice).isNotNull();
+            assertThat(alice.path("needsConfiguration").asBoolean()).isTrue();
+            assertThat(alice.path("missingFields").size()).isPositive();
+            assertThat(alice.path("loginPaused").asBoolean()).isFalse();
+        }
+    }
+
+    private static void assertFlagsMatch(
+            TestServer server, JsonNode rows, String name, boolean subscribed, boolean needsConfiguration) throws Exception {
+        JsonNode summary = null;
+        for (JsonNode row : rows) {
+            if (name.equals(row.path("conch").asText())) {
+                summary = row;
+            }
+        }
+        assertThat(summary).as(name).isNotNull();
+        assertThat(summary.path("subscribed").isBoolean()).isTrue();
+        assertThat(summary.path("needsConfiguration").isBoolean()).isTrue();
+        assertThat(summary.path("subscribed").asBoolean()).isEqualTo(subscribed);
+        assertThat(summary.path("needsConfiguration").asBoolean()).isEqualTo(needsConfiguration);
+
+        TestServer.Reply detail = server.console("GET", "/console/api/conches/" + name, null, true);
+        assertThat(detail.status()).as(detail.body()).isEqualTo(200);
+        JsonNode body = detail.json().path("data");
+        assertThat(body.path("subscribed").isBoolean()).isTrue();
+        assertThat(body.path("needsConfiguration").isBoolean()).isTrue();
+        assertThat(body.path("subscribed").asBoolean()).isEqualTo(summary.path("subscribed").asBoolean());
+        assertThat(body.path("needsConfiguration").asBoolean()).isEqualTo(summary.path("needsConfiguration").asBoolean());
     }
 
     private static HttpResponse<String> post(TestServer server, String path, String type, byte[] body) throws Exception {

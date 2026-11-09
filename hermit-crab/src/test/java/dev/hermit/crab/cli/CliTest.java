@@ -117,6 +117,18 @@ class CliTest {
         return name -> "HERMIT_HOME".equals(name) ? root.toString() : null;
     }
 
+    private static Path explicitEmptyRelatedYaml() {
+        Path dir = Path.of("").toAbsolutePath();
+        for (int i = 0; i < 6 && dir != null; i++) {
+            Path candidate = dir.resolve("hermit-common/src/test/resources/related/explicit-empty.yaml");
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+            dir = dir.getParent();
+        }
+        throw new IllegalStateException("explicit-empty.yaml not found");
+    }
+
     @Test
     void invalidMasterKeyPrintsTheReason() {
         ByteArrayOutputStream err = new ByteArrayOutputStream();
@@ -381,6 +393,27 @@ class CliTest {
         assertThat(run(env(home), InputStream.nullInputStream(), deleted, "local", "delete", "local_two")).isZero();
         assertThat(deleted.toString(StandardCharsets.UTF_8)).contains("local_two deleted");
         assertThat(dir.resolve("local_two.yaml")).doesNotExist();
+    }
+
+    @Test
+    void localImportAcceptsExplicitEmptyRelatedWithoutMissingRelated() throws Exception {
+        Path home = temp.resolve("empty-related");
+        Files.createDirectories(home);
+        Path file = home.resolve("in.yaml");
+        byte[] yaml = Files.readAllBytes(explicitEmptyRelatedYaml());
+        Files.write(file, yaml);
+        ByteArrayOutputStream imported = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {"local", "import", file.toString()},
+                env(home),
+                InputStream.nullInputStream(),
+                stdout(imported),
+                stderr(err));
+        assertThat(code).isZero();
+        assertThat(imported.toString(StandardCharsets.UTF_8)).contains("empty_related 1.0.0 已导入");
+        assertThat(err.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(Files.readAllBytes(home.resolve("local-conches").resolve("empty_related.yaml"))).isEqualTo(yaml);
     }
 
     @Test

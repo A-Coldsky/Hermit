@@ -45,7 +45,7 @@ class LegacyOaFixtureTest {
         Action action = doc.actions().get("list_todo");
         assertThat(action.effectiveMethod()).isEqualTo(HttpMethod.GET);
         assertThat(action.outputTemplate()).isEqualTo(Map.of("items", "{{items}}"));
-        assertThat(action.related()).isEmpty();
+        assertThat(action.related()).isNull();
         assertThat(new String(fixture, StandardCharsets.UTF_8))
                 .doesNotContain("approve")
                 .doesNotContain("list_done");

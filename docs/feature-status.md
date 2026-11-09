@@ -49,7 +49,7 @@
 | 前端交互测试 | 类型检查、构建、后端静态资源测试和 Vitest/jsdom 组件测试 | 仍缺真实浏览器 E2E |
 | 交付工程化 | Maven 构建/Java/Vitest 测试和 Crab Docker 运行镜像已提供 | 无 CI workflow/覆盖率门槛/自动依赖扫描；原生 Crab 仍为普通 jar |
 
-`legacy_oa.yaml` 只实现 `list_todo`。顶层说明写明目前只提供待办查询；`related` 留空，因此有一条「缺少 related」警告，没有错误。指向包内不存在能力的 `related` 仍是警告，不是错误。
+`legacy_oa.yaml` 只实现 `list_todo`。顶层说明写明目前只提供待办查询；不写 `related` 键，因此有一条「缺少 related」警告，没有错误。显式 `related: []` 表示没有关联能力，不产生这条警告。`related: null` 与省略相同，仍警告。指向包内不存在能力的 `related` 仍是警告，不是错误。
 
 ## 验证记录
 
@@ -202,3 +202,5 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 2026-11-05 MCP 包上游 OAuth 登录。合入 origin/main（#94 headers 转发、#96 本地 HTTP 开发追踪，`d8473e2`）后，以 JDK 17.0.20.1 执行 `./mvnw -B -pl hermit-crab -am test -Dhermit.web.skip=true` 通过。Surefire：hermit-common 66（失败/错误/跳过 0），hermit-crab 347（失败 0、错误 0、跳过 1，仍是 `ConsoleUiTest`，跳过前端资源后 classpath 没有控制台 `index.html`）。其中 `McpOAuthTest` 5，`McpForwardTest` 11 仍在。随后同一 JDK 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 66、hermit-reef 184、hermit-crab 347、hermit-it 2，失败与错误均为 0；这次构建带上前端资源，hermit-crab 与 hermit-reef 的跳过为 0。hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过：Vitest 157（22 个文件）。Java 小计 599，连同 Vitest 合计 756。没有改 Vue 页面。未在浏览器点选，未启动 MySQL 或 Compose，没有用真实 OAuth 授权服务器。hermit-it 仍只验收 headers。刷新时网络失败不清令牌已写在 `McpOAuth`，这条没有单独停掉上游再断言第二次仍是 `UPSTREAM_ERROR`；令牌端点 HTTP 400 与 302 会清令牌且不打工具，已有用例。
 
 2026-11-05 本地 MCP 包在调试开关打开时可以刷新 `tools/list`，本地 MCP 试跑接通，JSON-RPC 写入 `dev_traces`。合入 origin/main（#97 上游 OAuth，`cdbeab9`）后，以 JDK 17.0.20.1 执行 `./mvnw -B verify` 通过。Surefire：hermit-common 67、hermit-reef 184、hermit-crab 356、hermit-it 2，失败与错误均为 0，跳过 0。其中 `McpRefreshTest` 6、`McpToolMergeTest` 2、`McpConchValidatorTest` 8、`DevTraceDraftTest` 6、`DevTraceStoreTest` 4，`McpOAuthTest` 5 与 `McpForwardTest` 11 仍在。hermit-web 的 `npm ci`、vue-tsc、两个 Vite 构建和 Vitest 通过：Vitest 157（22 个文件）。Java 小计 609，连同 Vitest 合计 766。没有改 Vue 页面，只补了 `api.ts` 类型。未在浏览器点选，未启动 MySQL 或 Compose，没有用真实 MCP 或 OAuth 服务器。hermit-it 仍只验收 headers。刷新复用 #97 的取令牌和 401 刷新，不另做 PKCE。`initialize` 的 `capabilities` 仍是 `{}`。写回 YAML 不保留注释。schema 仍是 15，没有新增 Flyway。
+
+2026-11-09 显式 `related: []` 不再警告「缺少 related」。省略 `related` 键和 `related: null` 仍是 `MISSING_RELATED`。指向包内没有的能力仍是 `UNKNOWN_RELATED`。HTTP 与 MCP 共用 hermit-common 的解析和校验。以 JDK 17.0.20.1 执行 `./mvnw -B -pl hermit-reef,hermit-crab -am test -Dhermit.web.skip=true` 通过。Surefire：hermit-common 69（失败/错误/跳过 0），hermit-reef 185（失败 0、错误 0、跳过 1，`AdminUiPackagedTest`，跳过前端资源后没有管理端 `index.html`），hermit-crab 357（失败 0、错误 0、跳过 1，`ConsoleUiTest`，跳过前端资源后没有控制台 `index.html`）。其中 `ConchValidatorTest` 16（HTTP 与 MCP 的空列表、省略和 null），`ConchApiTest` 上传同一份 `related/explicit-empty.yaml` 为 200 且警告为空，发布后详情的 `related` 是空数组；`CliTest` 的 `local import` 退出码 0，stderr 为空。未跑完整 `verify`、hermit-it 和 Vitest，未在浏览器点选，未启动 MySQL 或 Compose。

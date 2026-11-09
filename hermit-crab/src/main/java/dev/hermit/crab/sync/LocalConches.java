@@ -457,19 +457,21 @@ public final class LocalConches {
         } catch (ConchParseException ex) {
             throw LocalConchException.invalid(
                     "规则包校验失败",
-                    List.of(issue("PARSE", ex.path(), clip(ex.getMessage()))),
+                    ImportIssueLines.locate(yaml, List.of(issue("PARSE", ex.path(), clip(ex.getMessage())))),
                     List.of());
         }
         if (!ConchValidator.isConchName(doc.conch()) || !ConchFiles.safeSegment(doc.conch())) {
             throw LocalConchException.invalid(
                     "规则包校验失败",
-                    List.of(issue("CONCH_NAME", "conch", "conch 不符合 ^[a-z][a-z0-9_]{1,63}$")),
+                    ImportIssueLines.locate(yaml, List.of(issue(
+                            "CONCH_NAME", "conch", "conch 不符合 ^[a-z][a-z0-9_]{1,63}$"))),
                     List.of());
         }
         if (!ConchFiles.safeSegment(doc.version().toString())) {
             throw LocalConchException.invalid(
                     "规则包校验失败",
-                    List.of(issue("VERSION_INVALID", "version", "version is not a safe path segment")),
+                    ImportIssueLines.locate(yaml, List.of(issue(
+                            "VERSION_INVALID", "version", "version is not a safe path segment"))),
                     List.of(),
                     doc.conch());
         }
@@ -477,9 +479,13 @@ public final class LocalConches {
         ValidationResult result = ConchValidator.validate(doc, validationContext(allowEmpty));
         List<ValidationIssue> structural = registry.inspect(doc, allowEmpty);
         if (!structural.isEmpty()) {
-            throw LocalConchException.invalid("规则包校验失败", structural, result.warnings(), doc.conch());
+            throw LocalConchException.invalid(
+                    "规则包校验失败",
+                    ImportIssueLines.locate(yaml, structural),
+                    ImportIssueLines.locate(yaml, result.warnings()),
+                    doc.conch());
         }
-        return new Parsed(doc, result.warnings());
+        return new Parsed(doc, ImportIssueLines.locate(yaml, result.warnings()));
     }
 
     private boolean allowEmptyMcpActions() {

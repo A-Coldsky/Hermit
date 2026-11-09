@@ -1110,6 +1110,9 @@ final class ConsoleApi {
             row.put("code", issue.code());
             row.put("path", issue.path());
             row.put("message", issue.message());
+            if (issue.line() != null) {
+                row.put("line", issue.line());
+            }
             rows.add(row);
         }
         return rows;

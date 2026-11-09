@@ -13,6 +13,7 @@ import java.sql.PreparedStatement;
 import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -230,6 +231,58 @@ class LocalConchConsoleTest {
             assertThat(alice.path("missingFields").size()).isPositive();
             assertThat(alice.path("loginPaused").asBoolean()).isFalse();
         }
+    }
+
+    @Test
+    void importFailureIncludesALineWhenTheFieldExistsAndDoesNotStore() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("lines"), PASSWORD, config)) {
+            ObjectMapper mapper = new ObjectMapper();
+            String marker = "zz_body_marker_should_not_leak";
+            String missing = LocalConchBehaviorTest.ping("local_ping", "1.0.0")
+                    .replace("min_crab_version: 1.0.0\n", "")
+                    .replace("title: 本地探测", "title: " + marker);
+            HttpResponse<String> rejected = post(
+                    server, "/console/api/local-conches", "text/yaml", missing.getBytes(StandardCharsets.UTF_8));
+            assertThat(rejected.statusCode()).isEqualTo(400);
+            JsonNode issue = mapper.readTree(rejected.body()).path("data").path("errors").get(0);
+            assertThat(issue.path("code").asText()).isEqualTo("PARSE");
+            assertThat(issue.path("path").asText()).isEqualTo("min_crab_version");
+            assertThat(issue.path("message").asText()).isEqualTo("min_crab_version: 缺少 min_crab_version");
+            assertThat(issue.has("line")).isFalse();
+            assertThat(rejected.body()).doesNotContain(marker).doesNotContain("com.fasterxml");
+            assertThat(server.paths.localConches().resolve("local_ping.yaml")).doesNotExist();
+            assertThat(server.runtime.registry().find("local_ping")).isEmpty();
+
+            String driver = LocalConchBehaviorTest.ping("bad_driver", "1.0.0")
+                    .replace("driver: http", "driver: shell")
+                    .replace("title: 本地探测", "title: " + marker);
+            HttpResponse<String> badDriver = post(
+                    server, "/console/api/local-conches", "text/yaml", driver.getBytes(StandardCharsets.UTF_8));
+            assertThat(badDriver.statusCode()).isEqualTo(400);
+            JsonNode driverIssue = null;
+            for (JsonNode row : mapper.readTree(badDriver.body()).path("data").path("errors")) {
+                if ("DRIVER".equals(row.path("code").asText())) {
+                    driverIssue = row;
+                }
+            }
+            assertThat(driverIssue).isNotNull();
+            assertThat(driverIssue.path("path").asText()).isEqualTo("driver");
+            assertThat(driverIssue.path("message").asText()).isEqualTo("driver 只允许 http 或 mcp");
+            assertThat(driverIssue.path("line").asInt()).isEqualTo(sourceLine(driver, "driver:"));
+            assertThat(badDriver.body()).doesNotContain(marker).doesNotContain("shell").doesNotContain("com.fasterxml");
+            assertThat(server.paths.localConches().resolve("bad_driver.yaml")).doesNotExist();
+        }
+    }
+
+    private static int sourceLine(String text, String token) {
+        String[] lines = text.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].contains(token)) {
+                return i + 1;
+            }
+        }
+        throw new AssertionError(token);
     }
 
     @Test

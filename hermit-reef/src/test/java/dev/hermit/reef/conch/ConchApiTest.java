@@ -348,6 +348,100 @@ class ConchApiTest {
     }
 
     @Test
+    void unpublishedConchMatchesListAndDetailForTheSameRole() throws Exception {
+        byte[] sample = sample();
+        upload(sample);
+        String preview = "只覆盖待办查询。";
+        assertThat(json(upload(withDescription(withVersion(sample, "1.1.0"), preview))).get("success").asBoolean())
+                .isTrue();
+        String user = loginUser();
+
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+        mockMvc.perform(get("/api/admin/conches/legacy_oa").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/versions").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/versions/1.1.0/yaml")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/diff").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.message").value("资源不存在"));
+
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].conch").value("legacy_oa"))
+                .andExpect(jsonPath("$.data[0].version").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].published").value(false))
+                .andExpect(jsonPath("$.data[0].description").value(preview));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.1.0"))
+                .andExpect(jsonPath("$.data.published").value(false))
+                .andExpect(jsonPath("$.data.title").value("协同办公 OA"))
+                .andExpect(jsonPath("$.data.description").value(preview))
+                .andExpect(jsonPath("$.data.actions.list_todo.effectiveMethod").value("GET"));
+        assertVersions("legacy_oa", "1.1.0 UPLOADED", "1.0.0 UPLOADED");
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/diff").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.toolChanges").isEmpty());
+
+        publish("1.0.0");
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].conch").value("legacy_oa"))
+                .andExpect(jsonPath("$.data[0].version").value("1.0.0"))
+                .andExpect(jsonPath("$.data[0].published").value(true))
+                .andExpect(jsonPath("$.data[0].description").value(SAMPLE_DESCRIPTION));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.0.0"))
+                .andExpect(jsonPath("$.data.published").value(true))
+                .andExpect(jsonPath("$.data.description").value(SAMPLE_DESCRIPTION));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/versions").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].version").value("1.1.0"))
+                .andExpect(jsonPath("$.data[0].status").value("UPLOADED"))
+                .andExpect(jsonPath("$.data[1].version").value("1.0.0"))
+                .andExpect(jsonPath("$.data[1].status").value("PUBLISHED"))
+                .andExpect(jsonPath("$.data[1].current").value(true));
+        mockMvc.perform(get("/api/admin/conches/legacy_oa/versions/1.1.0/yaml")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isOk());
+
+        assertThat(json(upload(withConch(sample(), "spare_oa"))).get("success").asBoolean()).isTrue();
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].conch").value("legacy_oa"));
+        mockMvc.perform(get("/api/admin/conches/spare_oa").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        mockMvc.perform(get("/api/admin/conches/spare_oa/versions").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0].conch").value("legacy_oa"))
+                .andExpect(jsonPath("$.data[0].published").value(true))
+                .andExpect(jsonPath("$.data[1].conch").value("spare_oa"))
+                .andExpect(jsonPath("$.data[1].version").value(nullValue()))
+                .andExpect(jsonPath("$.data[1].published").value(false));
+        mockMvc.perform(get("/api/admin/conches/spare_oa").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.0.0"))
+                .andExpect(jsonPath("$.data.published").value(false))
+                .andExpect(jsonPath("$.data.title").value("协同办公 OA"));
+    }
+
+    @Test
     void listsUploadedConchesAndPublishesRollbackAndDistribution() throws Exception {
         byte[] sample = sample();
         upload(sample);
@@ -356,6 +450,7 @@ class ConchApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].conch").value("legacy_oa"))
                 .andExpect(jsonPath("$.data[0].version").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].published").value(false))
                 .andExpect(jsonPath("$.data[0].title").value("协同办公 OA"))
                 .andExpect(jsonPath("$.data[0].owner").value("平台组"))
                 .andExpect(jsonPath("$.data[0].capabilityCount").value(1))
@@ -370,8 +465,14 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data[0].snapshot").value(nullValue()))
                 .andExpect(jsonPath("$.data[0].tools").value(nullValue()));
         mockMvc.perform(get("/api/admin/conches/legacy_oa").header(HttpHeaders.AUTHORIZATION, bearer()))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conch").value("legacy_oa"))
+                .andExpect(jsonPath("$.data.version").value("1.0.0"))
+                .andExpect(jsonPath("$.data.published").value(false))
+                .andExpect(jsonPath("$.data.title").value("协同办公 OA"))
+                .andExpect(jsonPath("$.data.description").value(SAMPLE_DESCRIPTION))
+                .andExpect(jsonPath("$.data.driver").value("http"))
+                .andExpect(jsonPath("$.data.actions.list_todo.name").value("list_todo"));
         mockMvc.perform(get("/api/admin/conches/legacy_oa/versions").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].version").value("1.0.0"))
@@ -444,6 +545,7 @@ class ConchApiTest {
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.version").value("1.1.0"))
+                .andExpect(jsonPath("$.data.published").value(true))
                 .andExpect(jsonPath("$.data.disabled").value(false))
                 .andExpect(jsonPath("$.data.actions.list_todo.effectiveMethod").value("GET"))
                 .andExpect(jsonPath("$.data.credentials.password.type").value("secret"))
@@ -916,6 +1018,7 @@ class ConchApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].conch").value("vendor_crm"))
                 .andExpect(jsonPath("$.data[0].version").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].published").value(false))
                 .andExpect(jsonPath("$.data[0].driver").value("mcp"))
                 .andExpect(jsonPath("$.data[0].upstream.url").value("https://crm.intra.example.com/mcp"))
                 .andExpect(jsonPath("$.data[0].upstream.transport").value("streamable_http"))
@@ -974,10 +1077,17 @@ class ConchApiTest {
 
         mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(jsonPath("$.data[0].version").value(nullValue()))
+                .andExpect(jsonPath("$.data[0].published").value(false))
                 .andExpect(jsonPath("$.data[0].upstream.url").value("https://Tickets.intra.example.com:8443/mcp"))
                 .andExpect(jsonPath("$.data[0].upstream.allowedHosts[0]").value("Tickets.intra.example.com"))
                 .andExpect(jsonPath("$.data[0].tools[0].upstreamName").value("findCustomer"))
                 .andExpect(jsonPath("$.data[0].tools[1].name").value("close_ticket"));
+        mockMvc.perform(get("/api/admin/conches/vendor_crm").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1.1.0"))
+                .andExpect(jsonPath("$.data.published").value(false))
+                .andExpect(jsonPath("$.data.upstream.url").value("https://Tickets.intra.example.com:8443/mcp"))
+                .andExpect(jsonPath("$.data.tools[1].name").value("close_ticket"));
 
         mockMvc.perform(post("/api/admin/conches/vendor_crm/versions/1.0.0/publish")
                         .header(HttpHeaders.AUTHORIZATION, bearer()))
@@ -985,6 +1095,7 @@ class ConchApiTest {
         mockMvc.perform(get("/api/admin/conches/vendor_crm").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.version").value("1.0.0"))
+                .andExpect(jsonPath("$.data.published").value(true))
                 .andExpect(jsonPath("$.data.driver").value("mcp"))
                 .andExpect(jsonPath("$.data.upstream.url").value("https://crm.intra.example.com/mcp"))
                 .andExpect(jsonPath("$.data.snapshot.fetchedAt").value("2026-11-05T03:00:00Z"))
@@ -1014,6 +1125,7 @@ class ConchApiTest {
                 .andExpect(status().isOk());
         String detail = mockMvc.perform(get("/api/admin/conches/vendor_crm").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(jsonPath("$.data.version").value("1.1.0"))
+                .andExpect(jsonPath("$.data.published").value(true))
                 .andExpect(jsonPath("$.data.upstream.url").value("https://Tickets.intra.example.com:8443/mcp"))
                 .andExpect(jsonPath("$.data.upstream.allowedHosts[0]").value("Tickets.intra.example.com"))
                 .andExpect(jsonPath("$.data.snapshot.fetchedAt").value("2026-11-05T04:00:00Z"))
@@ -1220,6 +1332,25 @@ class ConchApiTest {
 
     private JsonNode json(MvcResult result) throws Exception {
         return objectMapper.readTree(result.getResponse().getContentAsString());
+    }
+
+    private String loginUser() throws Exception {
+        mockMvc.perform(post("/api/admin/users")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "reef-user",
+                                "password", "UserPassword-9f3a7c",
+                                "role", "USER"))))
+                .andExpect(status().isOk());
+        MvcResult login = mockMvc.perform(post("/api/admin/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "reef-user",
+                                "password", "UserPassword-9f3a7c"))))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(login.getResponse().getContentAsString()).get("data").get("token").asText();
     }
 
     private String login() throws Exception {

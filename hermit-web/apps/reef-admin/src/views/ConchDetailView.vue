@@ -36,7 +36,11 @@ const authLabel = computed(() => {
   const type = detail.value?.upstream?.auth?.type
   return type ? (mcpAuthLabels[type] ?? type) : '未声明'
 })
+const neverPublished = computed(() => detail.value?.published === false)
 const unpublished = computed(() => {
+  if (neverPublished.value) {
+    return []
+  }
   const current = versions.value.find((v) => v.current)
   return versions.value.filter((v) => !v.current && v.status !== 'PUBLISHED' && (!current || v.uploadedAt > current.uploadedAt))
 })
@@ -118,7 +122,8 @@ watch(() => props.conch, load, { immediate: true })
         <ConchAvatar :name="conch" :title="detail?.title" :size="48" />
       </template>
       <template #badge>
-        <el-tag v-if="detail" :type="detail.disabled ? 'info' : 'success'" effect="light" round class="mono">v{{ detail.version }}</el-tag>
+        <el-tag v-if="neverPublished" type="info" effect="light" round data-test="unpublished-badge">未发布</el-tag>
+        <el-tag v-else-if="detail" :type="detail.disabled ? 'info' : 'success'" effect="light" round class="mono">v{{ detail.version }}</el-tag>
         <el-tag v-if="detail?.disabled" type="danger" effect="light" round class="off">已停用</el-tag>
         <DriverBadge v-if="detail" :driver="detail.driver" size="default" class="off" />
       </template>
@@ -143,6 +148,22 @@ watch(() => props.conch, load, { immediate: true })
             <template v-if="detail.disabledReason">原因：{{ detail.disabledReason }} · </template>
             {{ detail.disabledBy ?? '—' }} 于 {{ formatTime(detail.disabledAt) }} 停用
           </div>
+        </template>
+      </el-alert>
+
+      <el-alert
+        v-if="!loading && neverPublished"
+        type="info"
+        :closable="false"
+        show-icon
+        class="notice"
+        data-test="unpublished-notice"
+      >
+        <template #title>
+          这个规则包还未发布。下面是最高的已上传版本
+          <span class="mono">v{{ detail?.version }}</span>，Crab 暂时拿不到它。
+          <el-button v-if="isAdmin" link type="primary" class="jump" data-test="go-publish" @click="tab = 'versions'">去发布</el-button>
+          <template v-else>等管理员发布。</template>
         </template>
       </el-alert>
 
@@ -179,12 +200,12 @@ watch(() => props.conch, load, { immediate: true })
         <el-tab-pane label="概况" name="overview" :disabled="!detail">
           <div v-if="detail" class="hm-grid cols-2">
             <div class="hm-card">
-              <div class="hm-card-title"><span>当前发布版本</span></div>
+              <div class="hm-card-title"><span>{{ neverPublished ? '尚未发布' : '当前发布版本' }}</span></div>
               <dl class="hm-kv">
                 <dt>名称</dt>
                 <dd class="mono">{{ detail.conch }}</dd>
                 <dt>版本</dt>
-                <dd class="mono">v{{ detail.version }}</dd>
+                <dd class="mono">v{{ detail.version }}<span v-if="neverPublished" class="hm-muted"> · 最高已上传版本</span></dd>
                 <dt>类型</dt>
                 <dd><DriverBadge :driver="detail.driver" /></dd>
                 <dt>最低 Crab 版本</dt>

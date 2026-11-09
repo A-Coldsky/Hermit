@@ -11,6 +11,7 @@ import java.util.List;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -65,24 +66,24 @@ public class ConchAdminController {
 
     @GetMapping("/conches")
     public ApiResponse<List<ConchSummary>> list(HttpServletRequest request) {
-        return ApiResponse.ok(catalog.list(), TraceIds.current(request));
+        return ApiResponse.ok(catalog.list(includeUnpublished()), TraceIds.current(request));
     }
 
     @GetMapping("/conches/{conch}")
     public ApiResponse<ConchDetail> detail(@PathVariable("conch") String conch, HttpServletRequest request) {
-        return ApiResponse.ok(catalog.detail(conch), TraceIds.current(request));
+        return ApiResponse.ok(catalog.detail(conch, includeUnpublished()), TraceIds.current(request));
     }
 
     @GetMapping("/conches/{conch}/versions")
     public ApiResponse<List<ConchVersionItem>> versions(@PathVariable("conch") String conch, HttpServletRequest request) {
-        return ApiResponse.ok(catalog.versions(conch), TraceIds.current(request));
+        return ApiResponse.ok(catalog.versions(conch, includeUnpublished()), TraceIds.current(request));
     }
 
     @GetMapping("/conches/{conch}/versions/{version:.+}/yaml")
     public ResponseEntity<byte[]> yaml(@PathVariable("conch") String conch, @PathVariable("version") String version) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, "text/plain; charset=utf-8")
-                .body(catalog.yaml(conch, version));
+                .body(catalog.yaml(conch, version, includeUnpublished()));
     }
 
     @GetMapping("/conches/{conch}/diff")
@@ -90,7 +91,7 @@ public class ConchAdminController {
             @RequestParam(name = "from", required = false) String from,
             @RequestParam(name = "to", required = false) String to,
             HttpServletRequest request) {
-        return ApiResponse.ok(catalog.diff(conch, from, to), TraceIds.current(request));
+        return ApiResponse.ok(catalog.diff(conch, from, to, includeUnpublished()), TraceIds.current(request));
     }
 
     @PostMapping("/conches/{conch}/versions/{version:.+}/publish")
@@ -125,6 +126,20 @@ public class ConchAdminController {
             throw new ApiException(401, ReefErrorCode.UNAUTHORIZED, ReefErrorCode.UNAUTHORIZED.message());
         }
         return authentication.getName();
+    }
+
+    /** 只有 ADMIN 能看到从未发布（没有 current）的包。已有 current 的包两种角色都能读。 */
+    private static boolean includeUnpublished() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
+            return false;
+        }
+        for (GrantedAuthority authority : authentication.getAuthorities()) {
+            if ("ROLE_ADMIN".equals(authority.getAuthority())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public record ReasonBody(String reason) {

@@ -90,6 +90,33 @@ describe('Crab 规则包详情：账号状态', () => {
     expect(wrapper.text()).toContain('配置完整，可以调用')
   })
 
+  it('没有凭证声明也没有账号时不显示可以调用', async () => {
+    crab.conch.mockResolvedValue({ ...detail, credentials: [], loginPaused: false })
+    crab.accounts.mockResolvedValue({ accounts: [] })
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('还没有账号，调用会返回「待配置」')
+    expect(wrapper.text()).toContain('先新建一个账号。')
+    expect(wrapper.text()).not.toContain('配置完整，可以调用')
+    expect(wrapper.text()).not.toContain('并填写凭证')
+  })
+
+  it('已有账号且只缺可选凭证时可以调用', async () => {
+    crab.conch.mockResolvedValue({
+      ...detail,
+      loginPaused: false,
+      credentials: [{ name: 'note', description: '备注', required: false }],
+    })
+    crab.accounts.mockResolvedValue({ accounts: [account({ needsConfiguration: false, missingFields: [] })] })
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('配置完整，可以调用')
+    expect(wrapper.text()).not.toContain('还没有账号')
+    expect(wrapper.text()).not.toContain('缺少凭证')
+  })
+
   it('只有非默认账号暂停时，不说整个规则包不能调用，并点名账号', async () => {
     crab.accounts.mockResolvedValue({
       accounts: [account({}), account({ name: 'lisi', default: false, loginPaused: true, loginPauseReason: '密码错误' })],

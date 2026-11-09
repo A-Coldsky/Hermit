@@ -200,6 +200,10 @@ final class McpCatalog {
                 if (!action.mcp().expose() || disabled.test(conch.conch(), action.name())) {
                     continue;
                 }
+                // 全范围 Key 列出本地工具。写了 conches 或 actions 的 Key 仍要在 conches 里点名。
+                if (local(conch.conch()) && !principal.scope().allowsLocal(conch.conch())) {
+                    continue;
+                }
                 if (!principal.permits(conch.conch(), action.name(), CapabilityHttp.readOnly(action))) {
                     continue;
                 }

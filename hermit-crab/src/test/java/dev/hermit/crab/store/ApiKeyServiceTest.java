@@ -156,6 +156,7 @@ class ApiKeyServiceTest {
     @Test
     void explicitAllMatchesEmptySetsAndRejectsABlankCreate() {
         assertThat(ApiKeyScope.MISSING_SCOPE.length()).isLessThanOrEqualTo(200);
+        assertThat(ApiKeyScope.MISSING_SCOPE).contains("包括本地包").doesNotContain("不含本地包");
         assertThat(ApiKeyScope.ALL_EXCLUDES_NAMES.length()).isLessThanOrEqualTo(200);
         ApiKeyScope wide = ApiKeyScope.explicit(true, Set.of(), Set.of(), true);
         assertThat(wide.all()).isTrue();

@@ -85,8 +85,12 @@ class LocalConchConsoleTest {
             server.runtime.admin().createAccount("local_ping", "alice", Actors.CLI);
             CreatedApiKey named = server.runtime.admin().createApiKey(
                     "named", new ApiKeyScope(Set.of("local_ping"), Set.of(), false), Actors.CLI);
-            TestServer.Reply denied = server.call("GET", "/api/local_ping/ping", server.apiKey.plaintext(), null, null, null);
+            CreatedApiKey narrow = server.runtime.admin().createApiKey(
+                    "narrow", new ApiKeyScope(Set.of(server.conch.conch()), Set.of(), false), Actors.CLI);
+            TestServer.Reply wide = server.call("GET", "/api/local_ping/ping", server.apiKey.plaintext(), null, null, null);
+            TestServer.Reply denied = server.call("GET", "/api/local_ping/ping", narrow.plaintext(), null, null, null);
             TestServer.Reply allowed = server.call("GET", "/api/local_ping/ping", named.plaintext(), null, null, null);
+            assertThat(wide.status()).isEqualTo(200);
             assertThat(denied.status()).isEqualTo(403);
             assertThat(denied.json().path("error").path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(allowed.status()).isEqualTo(200);

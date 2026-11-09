@@ -153,7 +153,7 @@ export interface ConfigValue {
 }
 
 export interface ApiKeyScope {
-  /** 全部正式规则包的全部能力，不含本地包。两个集合都为空的旧 Key 也是 true。 */
+  /** 全部规则包的全部能力，包括本地包。两个集合都为空的旧 Key 也是 true。只读仍只放行只读能力。 */
   all: boolean
   conches: string[] | null
   actions: string[] | null

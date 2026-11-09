@@ -1,0 +1,23 @@
+# 显式空列表，表示没有关联能力。Reef 上传和 Crab 本地导入共用这份文件。
+conch: empty_related
+version: 1.0.0
+driver: http
+min_crab_version: 1.0.0
+base_url: http://oa.intranet.local
+title: 空关联
+description: 能力写明没有关联能力。
+credentials: {}
+actions:
+  list_todo:
+    title: 查询
+    description: 没有前后衔接的能力。
+    steps:
+      - set:
+          marker: ok
+    output:
+      marker: { type: string, description: 标记, value: ok }
+    examples:
+      - input: {}
+        output: { marker: ok }
+    notes: 没有关联能力。
+    related: []

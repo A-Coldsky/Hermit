@@ -268,7 +268,7 @@ public final class ConchParser {
                 bool(obj.get("idempotent"), child(path, "idempotent"), false),
                 examples(obj.get("examples"), child(path, "examples")),
                 text(obj.get("notes"), child(path, "notes")),
-                stringList(obj.get("related"), child(path, "related")),
+                relatedNames(obj, path),
                 mcp(obj.get("mcp"), child(path, "mcp")),
                 mcpTool(obj, path));
     }
@@ -555,6 +555,21 @@ public final class ConchParser {
             items.add(castMap(toTree(node.get(i), childPath)));
         }
         return items;
+    }
+
+    /**
+     * 没有 related 键，或值是 null，返回 null。
+     * 显式空列表返回空列表，不与省略混成同一种。
+     */
+    private static List<String> relatedNames(ObjectNode obj, String path) {
+        if (!obj.has("related")) {
+            return null;
+        }
+        JsonNode node = obj.get("related");
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        return stringList(node, child(path, "related"));
     }
 
     private static List<String> stringList(JsonNode node, String path) {

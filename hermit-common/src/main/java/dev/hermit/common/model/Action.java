@@ -6,6 +6,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * {@code related == null} 表示能力没有 related 键，或该键写成了 null。
+ * 空列表表示显式 {@code related: []}，即没有关联能力。
+ */
 public record Action(
         String name,
         String title,
@@ -29,7 +33,7 @@ public record Action(
         output = output == null ? Map.of() : Frozen.map(output);
         steps = steps == null ? List.of() : List.copyOf(steps);
         examples = examples == null ? List.of() : List.copyOf(examples);
-        related = related == null ? List.of() : List.copyOf(related);
+        related = related == null ? null : List.copyOf(related);
         mcp = mcp == null ? McpHints.defaults() : mcp;
     }
 

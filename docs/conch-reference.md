@@ -56,7 +56,7 @@ actions:
 
 凭证、配置、账号和能力开关会在 Crab 的 `config_audit` 追加一条记录。记录里是字段名和动作，不是凭证明文、密文或配置值。本机 `GET /console/api/audit` 和 CLI `audit list` 按时间倒序读取，结果同样只有操作者、动作、origin、Conch、账号、时间和字段名。detail 里其它键不会被读出来。
 
-Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 时警告是「缺少 related」；related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。示例 `legacy_oa` 只有 `list_todo`，所以不写 related。
+Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 键时警告是「缺少 related」；写成 `related: []` 表示没有关联能力，不产生这条警告。`related: null` 与省略相同，仍是「缺少 related」。related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。示例 `legacy_oa` 只有 `list_todo`，所以不写 related。
 
 输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由 `InputPreparer` 转换并按生成的 JSON Schema 校验。生成的 schema 含 `additionalProperties: false`。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换、小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`），以及未声明字段，都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内、也不会丢掉多余字段再当成功。HTTP 网关和 MCP 都经过 `Invoker` 与 `RuleEngine`，所以这条校验两边相同。MCP 在校验前去掉账号选择（直接工具的 `account`，或能力入参已占用该名字时的 `_account`）。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`、`traceId`，能定位到单个字段时还有 `field`。`traceId` 与响应头 `X-Hermit-Trace` 相同。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；示例 `legacy_oa` 的 `page` 声明了 `minimum: 1`。
 
@@ -111,7 +111,7 @@ actions:
 
 没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。带上游工具的 action，`effectiveMethod()` 固定 POST，Crab 对外注解的 `destructiveHint` 用这个有效破坏性，`readOnlyHint` 用 `mcp.read_only`，`idempotentHint` 用 `idempotent`。HTTP 能力的注解里，`destructiveHint` 同样是声明的 destructive（缺省 false），不再从「非只读且非幂等」推导。目录元工具 `call_capability` 仍用那条旧公式。`inputJsonSchema()` 返回原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文。管理 API 的列表和详情另外给出 `upstream`、`snapshot` 和 `tools`，字段见 [api.md](api.md)。Reef 管理端目录和详情已列出这些工具。
 
-缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。`notes` 和 `related` 的原有警告仍在。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
+缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
 `min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。`CrabVersion.CURRENT` 现为 1.1.0，Crab 可以载入 1.1.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求 1.2.0 时会报高于当前 Crab。Maven 制品版本仍是 `0.1.0-SNAPSHOT`。没有新的 `ErrorCode`，也没有数据库迁移。
 

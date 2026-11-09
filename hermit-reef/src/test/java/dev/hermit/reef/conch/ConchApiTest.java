@@ -185,6 +185,28 @@ class ConchApiTest {
     }
 
     @Test
+    void uploadsExplicitEmptyRelatedWithoutMissingRelatedWarning() throws Exception {
+        byte[] yaml = Files.readAllBytes(explicitEmptyRelatedYaml());
+        MvcResult result = upload(yaml);
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        JsonNode uploaded = json(result);
+        assertThat(uploaded.get("success").asBoolean()).isTrue();
+        assertThat(uploaded.get("data").get("conch").asText()).isEqualTo("empty_related");
+        assertThat(uploaded.get("data").get("version").asText()).isEqualTo("1.0.0");
+        assertThat(uploaded.get("data").get("warnings")).isEmpty();
+        assertThat(result.getResponse().getContentAsString()).doesNotContain(ValidationCodes.MISSING_RELATED);
+        assertThat(Files.readAllBytes(DATA.resolve("conches/empty_related/1.0.0/conch.yaml"))).isEqualTo(yaml);
+
+        mockMvc.perform(post("/api/admin/conches/empty_related/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/admin/conches/empty_related").header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.actions.list_todo.related").isArray())
+                .andExpect(jsonPath("$.data.actions.list_todo.related").isEmpty());
+    }
+
+    @Test
     void discardsUploadedVersionsWithoutTouchingPublishedPackages() throws Exception {
         assertThat(ReefErrorCode.CONFLICT.message()).isEqualTo("状态冲突");
         assertThat(ConchDiscardService.NOT_UPLOADED).isEqualTo("只能丢弃已上传、尚未发布的版本");
@@ -429,6 +451,8 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data.config.base_url.default").value("http://oa.intranet.local"))
                 .andExpect(jsonPath("$.data.actions.list_todo.mcp.readOnly").value(true))
                 .andExpect(jsonPath("$.data.actions.list_todo.inputJsonSchema.type").value("object"))
+                .andExpect(jsonPath("$.data.actions.list_todo.related").isArray())
+                .andExpect(jsonPath("$.data.actions.list_todo.related").isEmpty())
                 .andExpect(jsonPath("$.data.driver").value("http"))
                 .andExpect(jsonPath("$.data.upstream").value(nullValue()))
                 .andExpect(jsonPath("$.data.snapshot").value(nullValue()))
@@ -1319,6 +1343,18 @@ class ConchApiTest {
                     .sorted()
                     .toList();
         }
+    }
+
+    private static Path explicitEmptyRelatedYaml() {
+        Path dir = Path.of("").toAbsolutePath();
+        for (int i = 0; i < 6 && dir != null; i++) {
+            Path candidate = dir.resolve("hermit-common/src/test/resources/related/explicit-empty.yaml");
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+            dir = dir.getParent();
+        }
+        throw new IllegalStateException("explicit-empty.yaml not found");
     }
 
     private static Path fixtureDir() {

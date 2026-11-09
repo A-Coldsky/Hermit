@@ -182,17 +182,22 @@ public final class ConchValidator {
         if (blank(action.notes())) {
             warnings.add(issue(ValidationCodes.MISSING_NOTES, path + ".notes", "缺少 notes"));
         }
-        if (action.related().isEmpty()) {
+        checkRelated(action, doc, path, warnings);
+    }
+
+    private static void checkRelated(
+            Action action, ConchDoc doc, String path, List<ValidationIssue> warnings) {
+        if (action.related() == null) {
             warnings.add(issue(ValidationCodes.MISSING_RELATED, path + ".related", "缺少 related"));
-        } else {
-            for (int i = 0; i < action.related().size(); i++) {
-                String related = action.related().get(i);
-                if (!doc.actions().containsKey(related)) {
-                    warnings.add(issue(
-                            ValidationCodes.UNKNOWN_RELATED,
-                            path + ".related[" + i + "]",
-                            "related 指向不存在的能力 " + related));
-                }
+            return;
+        }
+        for (int i = 0; i < action.related().size(); i++) {
+            String related = action.related().get(i);
+            if (!doc.actions().containsKey(related)) {
+                warnings.add(issue(
+                        ValidationCodes.UNKNOWN_RELATED,
+                        path + ".related[" + i + "]",
+                        "related 指向不存在的能力 " + related));
             }
         }
     }
@@ -811,19 +816,7 @@ public final class ConchValidator {
         if (blank(action.notes())) {
             warnings.add(issue(ValidationCodes.MISSING_NOTES, path + ".notes", "缺少 notes"));
         }
-        if (action.related().isEmpty()) {
-            warnings.add(issue(ValidationCodes.MISSING_RELATED, path + ".related", "缺少 related"));
-        } else {
-            for (int i = 0; i < action.related().size(); i++) {
-                String related = action.related().get(i);
-                if (!doc.actions().containsKey(related)) {
-                    warnings.add(issue(
-                            ValidationCodes.UNKNOWN_RELATED,
-                            path + ".related[" + i + "]",
-                            "related 指向不存在的能力 " + related));
-                }
-            }
-        }
+        checkRelated(action, doc, path, warnings);
     }
 
     private static boolean validToolName(String name) {

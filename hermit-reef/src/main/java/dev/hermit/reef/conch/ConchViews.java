@@ -133,7 +133,8 @@ record CapabilityView(
                 action.outputJsonSchema(),
                 action.examples().stream().map(ExampleView::from).toList(),
                 action.notes(),
-                action.related(),
+                // 省略和 null 在详情里仍是空数组，页面按 string[] 读取。
+                action.related() == null ? List.of() : action.related(),
                 McpView.from(action.mcp()));
     }
 }

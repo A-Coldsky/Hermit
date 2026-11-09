@@ -2,6 +2,10 @@ package dev.hermit.common.validate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
 import org.junit.jupiter.api.Test;
@@ -21,6 +25,69 @@ class ConchValidatorTest {
             assertThat(issue.code()).isEqualTo(ValidationCodes.MISSING_RELATED);
             assertThat(issue.path()).isEqualTo("actions.list_todo.related");
             assertThat(issue.message()).isEqualTo("缺少 related");
+        });
+    }
+
+    @Test
+    void explicitEmptyRelatedIsNotMissingForHttp() {
+        String yaml = explicitEmptyRelatedYaml();
+        assertThat(yaml).contains("    related: []\n");
+        ValidationResult empty = validate(yaml);
+        assertThat(empty.errors()).isEmpty();
+        assertThat(empty.warnings()).extracting(ValidationIssue::code)
+                .doesNotContain(ValidationCodes.MISSING_RELATED);
+        assertThat(ConchParser.parse(yaml).actions().get("list_todo").related()).isEmpty();
+
+        String omitted = yaml.replace("    related: []\n", "");
+        assertThat(omitted).doesNotContain("related:");
+        ValidationResult missing = validate(omitted);
+        assertThat(missing.errors()).isEmpty();
+        assertThat(missing.warnings()).singleElement().satisfies(issue -> {
+            assertThat(issue.code()).isEqualTo(ValidationCodes.MISSING_RELATED);
+            assertThat(issue.path()).isEqualTo("actions.list_todo.related");
+            assertThat(issue.message()).isEqualTo("缺少 related");
+        });
+        assertThat(ConchParser.parse(omitted).actions().get("list_todo").related()).isNull();
+
+        ValidationResult nulled = validate(yaml.replace("    related: []\n", "    related: null\n"));
+        assertThat(nulled.errors()).isEmpty();
+        assertThat(nulled.warnings()).extracting(ValidationIssue::code)
+                .containsExactly(ValidationCodes.MISSING_RELATED);
+        assertThat(nulled.warnings().get(0).message()).isEqualTo("缺少 related");
+        assertThat(ConchParser.parse(yaml.replace("    related: []\n", "    related: null\n"))
+                .actions().get("list_todo").related()).isNull();
+    }
+
+    @Test
+    void explicitEmptyRelatedIsNotMissingForMcp() {
+        ValidationResult empty = validate(mcpRelated("    related: []\n"));
+        assertThat(empty.errors()).isEmpty();
+        assertThat(empty.warnings()).extracting(ValidationIssue::code)
+                .doesNotContain(ValidationCodes.MISSING_RELATED);
+        assertThat(ConchParser.parse(mcpRelated("    related: []\n"))
+                .actions().get("search_customer").related()).isEmpty();
+
+        ValidationResult missing = validate(mcpRelated(""));
+        assertThat(missing.errors()).isEmpty();
+        assertThat(missing.warnings()).singleElement().satisfies(issue -> {
+            assertThat(issue.code()).isEqualTo(ValidationCodes.MISSING_RELATED);
+            assertThat(issue.path()).isEqualTo("actions.search_customer.related");
+            assertThat(issue.message()).isEqualTo("缺少 related");
+        });
+        assertThat(ConchParser.parse(mcpRelated(""))
+                .actions().get("search_customer").related()).isNull();
+
+        ValidationResult nulled = validate(mcpRelated("    related: null\n"));
+        assertThat(nulled.errors()).isEmpty();
+        assertThat(nulled.warnings()).extracting(ValidationIssue::code)
+                .containsExactly(ValidationCodes.MISSING_RELATED);
+
+        ValidationResult unknown = validate(mcpRelated("    related: [approve]\n"));
+        assertThat(unknown.errors()).isEmpty();
+        assertThat(unknown.warnings()).singleElement().satisfies(issue -> {
+            assertThat(issue.code()).isEqualTo(ValidationCodes.UNKNOWN_RELATED);
+            assertThat(issue.path()).isEqualTo("actions.search_customer.related[0]");
+            assertThat(issue.message()).isEqualTo("related 指向不存在的能力 approve");
         });
     }
 
@@ -548,5 +615,48 @@ class ConchValidatorTest {
 
     private static java.util.List<String> codes(ValidationResult result) {
         return result.errors().stream().map(ValidationIssue::code).toList();
+    }
+
+    private static ValidationResult validate(String yaml) {
+        return ConchValidator.validate(ConchParser.parse(yaml), ConchValidator.Context.of(null));
+    }
+
+    private static String explicitEmptyRelatedYaml() {
+        try (InputStream in = ConchValidatorTest.class.getClassLoader()
+                .getResourceAsStream("related/explicit-empty.yaml")) {
+            if (in == null) {
+                throw new IllegalStateException("missing related/explicit-empty.yaml");
+            }
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
+
+    private static String mcpRelated(String relatedField) {
+        return """
+                conch: vendor_crm
+                version: 1.0.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 客户系统
+                description: 源站提供的 MCP 服务。
+                credentials: {}
+                upstream:
+                  url: https://crm.intra.example.com/mcp
+                  transport: streamable_http
+                  auth: {type: headers}
+                actions:
+                  search_customer:
+                    tool: searchCustomer
+                    title: 搜索客户
+                    description: 按名称搜索客户。
+                    input_schema: {type: object}
+                    examples:
+                      - input: {}
+                        output: {}
+                    notes: 只读查询。
+                %s
+                """.formatted(relatedField);
     }
 }

@@ -25,6 +25,7 @@ import {
   type LocalImportConflict,
   type ValidationIssue,
 } from '../api'
+import { formatImportIssue } from '../import-issue'
 import { refreshPending } from '../status'
 
 const router = useRouter()
@@ -44,6 +45,10 @@ const report = reactive({
   warnings: [] as ValidationIssue[],
   files: [] as LocalFileResult[],
 })
+
+function shown(issues: ValidationIssue[]) {
+  return issues.map(formatImportIssue)
+}
 
 function showReport(next: Partial<Omit<typeof report, 'open'>>) {
   Object.assign(report, { title: '', summary: '', errors: [], warnings: [], files: [] }, next, { open: true })
@@ -278,13 +283,19 @@ onMounted(load)
     <el-dialog v-model="report.open" :title="report.title" width="600px">
       <p v-if="report.summary" class="summary">{{ report.summary }}</p>
       <ul v-if="report.errors.length" class="issues bad">
-        <li v-for="(issue, i) in report.errors" :key="`e${i}`">
-          <span class="mono">{{ issue.path || '/' }}</span> {{ issue.message }}
+        <li v-for="(view, i) in shown(report.errors)" :key="`e${i}`" data-test="import-error">
+          <el-icon class="mark"><CircleCloseFilled /></el-icon>
+          <span class="code">{{ view.code }}</span>
+          <span class="where">{{ view.location }}</span>
+          <span class="reason">{{ view.reason }}</span>
         </li>
       </ul>
       <ul v-if="report.warnings.length" class="issues warn">
-        <li v-for="(issue, i) in report.warnings" :key="`w${i}`">
-          <span class="mono">{{ issue.path || '/' }}</span> {{ issue.message }}
+        <li v-for="(view, i) in shown(report.warnings)" :key="`w${i}`" data-test="import-warning">
+          <el-icon class="mark"><WarningFilled /></el-icon>
+          <span class="code">{{ view.code }}</span>
+          <span class="where">{{ view.location }}</span>
+          <span class="reason">{{ view.reason }}</span>
         </li>
       </ul>
       <el-table v-if="report.files.length" :data="report.files" size="small">
@@ -430,18 +441,58 @@ onMounted(load)
 }
 
 .issues {
+  list-style: none;
   margin: 0 0 12px;
-  padding-left: 18px;
-  line-height: 1.7;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.issues.bad,
+.issues li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  line-height: 1.55;
+  border-left: 3px solid transparent;
+}
+
+.issues .mark {
+  font-size: 16px;
+}
+
+.issues .code,
+.issues .where {
+  font-family: var(--hm-mono);
+  font-size: 12px;
+}
+
+.issues .code {
+  font-weight: 600;
+}
+
+.issues .reason {
+  flex: 1 0 100%;
+  font-size: 13px;
+}
+
+.issues.bad li {
+  color: var(--hm-danger);
+  background: var(--el-color-danger-light-9);
+  border-left-color: var(--hm-danger);
+}
+
+.issues.warn li {
+  color: var(--hm-warning);
+  background: var(--el-color-warning-light-9);
+  border-left-color: var(--hm-warning);
+}
+
 .err {
   color: var(--hm-danger);
-}
-
-.issues.warn {
-  color: var(--el-color-warning-dark-2);
 }
 
 .ok {

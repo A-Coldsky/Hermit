@@ -174,7 +174,7 @@ onMounted(load)
 
     <el-alert v-if="unconfigured.length" type="warning" show-icon :closable="false" class="notice">
       <template #title>
-        {{ unconfigured.length }} 个规则包还缺凭证或配置：
+        {{ unconfigured.length }} 个规则包还没有账号，或还缺凭证、配置：
         <router-link v-for="s in unconfigured" :key="s.conch" :to="`/conches/${encodeURIComponent(s.conch)}`" class="mono pending">
           {{ s.conch }}
         </router-link>
@@ -201,7 +201,7 @@ onMounted(load)
         label="待配置"
         :value="show(pending.length)"
         :tone="!loaded ? 'default' : pending.length ? 'warn' : 'ok'"
-        hint="缺凭证、配置，或有账号暂停自动登录"
+        hint="没有账号，或缺凭证、配置，或有账号暂停自动登录"
         :icon="Setting"
         to="/conches"
       />

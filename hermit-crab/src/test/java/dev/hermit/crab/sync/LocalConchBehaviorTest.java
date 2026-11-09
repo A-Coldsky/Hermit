@@ -195,8 +195,10 @@ public class LocalConchBehaviorTest {
     void callsRecordLocalSourceAndSkipTide() throws Exception {
         try (CrabRuntime runtime = open(temp.resolve("calls"))) {
             runtime.localConches().importBytes(ping("local_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            runtime.localConches().importBytes(save("local_save", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
             runtime.registry().put(ConchParser.parse(ping("official_ping", "1.0.0")));
             runtime.admin().createAccount("local_ping", "alice", Actors.CLI);
+            runtime.admin().createAccount("local_save", "alice", Actors.CLI);
             runtime.admin().createAccount("official_ping", "alice", Actors.CLI);
             runtime.setCapabilityDisabled("local_ping", "ping", true, Actors.CLI);
             assertThat(originOfSwitch(runtime, "local_ping")).isEqualTo("LOCAL");
@@ -205,26 +207,47 @@ public class LocalConchBehaviorTest {
             CreatedApiKey openKey = runtime.admin().createApiKey("all", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
             CreatedApiKey explicitKey = runtime.admin().createApiKey(
                     "explicit", ApiKeyScope.explicit(true, Set.of(), Set.of(), false), Actors.CLI);
+            CreatedApiKey readOnlyKey = runtime.admin().createApiKey(
+                    "reader", ApiKeyScope.explicit(true, Set.of(), Set.of(), true), Actors.CLI);
             CreatedApiKey namedKey = runtime.admin().createApiKey(
                     "named", new ApiKeyScope(Set.of("local_ping", "official_ping"), Set.of(), false), Actors.CLI);
+            CreatedApiKey narrowKey = runtime.admin().createApiKey(
+                    "narrow", new ApiKeyScope(Set.of("official_ping"), Set.of(), false), Actors.CLI);
+            CreatedApiKey actionKey = runtime.admin().createApiKey(
+                    "action", new ApiKeyScope(Set.of(), Set.of("local_ping.ping"), false), Actors.CLI);
             ApiKeyPrincipal openPrincipal = runtime.apiKeys().authenticate(openKey.plaintext()).orElseThrow();
             ApiKeyPrincipal explicitPrincipal = runtime.apiKeys().authenticate(explicitKey.plaintext()).orElseThrow();
+            ApiKeyPrincipal readOnlyPrincipal = runtime.apiKeys().authenticate(readOnlyKey.plaintext()).orElseThrow();
             ApiKeyPrincipal namedPrincipal = runtime.apiKeys().authenticate(namedKey.plaintext()).orElseThrow();
+            ApiKeyPrincipal narrowPrincipal = runtime.apiKeys().authenticate(narrowKey.plaintext()).orElseThrow();
+            ApiKeyPrincipal actionPrincipal = runtime.apiKeys().authenticate(actionKey.plaintext()).orElseThrow();
             ReportQueue reports = new ReportQueue(
                     new ReportSettings(true, URI.create("http://127.0.0.1:9/"), Optional.empty(), UUID.randomUUID(), "1.0.0"),
                     runtime.dataSource(),
                     Clock.systemUTC());
             runtime.invoker().bindHooks(reports);
 
-            InvokeOutcome denied = runtime.invoker().invoke(
-                    openPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-deny");
-            assertThat(denied.status()).isEqualTo(403);
+            InvokeOutcome openLocal = runtime.invoker().invoke(
+                    openPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-open");
+            assertThat(openLocal.status()).isEqualTo(200);
             InvokeOutcome explicitLocal = runtime.invoker().invoke(
                     explicitPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-explicit-local");
-            assertThat(explicitLocal.status()).isEqualTo(403);
+            assertThat(explicitLocal.status()).isEqualTo(200);
             InvokeOutcome explicitOfficial = runtime.invoker().invoke(
                     explicitPrincipal, "official_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-explicit-official");
             assertThat(explicitOfficial.status()).isEqualTo(200);
+            InvokeOutcome readOnlyLocal = runtime.invoker().invoke(
+                    readOnlyPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-readonly");
+            assertThat(readOnlyLocal.status()).isEqualTo(200);
+            InvokeOutcome readOnlyWrite = runtime.invoker().invoke(
+                    readOnlyPrincipal, "local_save", "save", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-readonly-write");
+            assertThat(readOnlyWrite.status()).isEqualTo(403);
+            InvokeOutcome narrowLocal = runtime.invoker().invoke(
+                    narrowPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-narrow");
+            assertThat(narrowLocal.status()).isEqualTo(403);
+            InvokeOutcome actionLocal = runtime.invoker().invoke(
+                    actionPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-action");
+            assertThat(actionLocal.status()).isEqualTo(403);
             InvokeOutcome local = runtime.invoker().invoke(
                     namedPrincipal, "local_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-local");
             assertThat(local.status()).isEqualTo(200);
@@ -232,11 +255,14 @@ public class LocalConchBehaviorTest {
                     namedPrincipal, "official_ping", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-official");
             assertThat(official.status()).isEqualTo(200);
 
+            assertThat(callSource(runtime, "trace-open")).containsExactly("LOCAL", "LOCAL");
+            assertThat(callSource(runtime, "trace-explicit-local")).containsExactly("LOCAL", "LOCAL");
+            assertThat(callSource(runtime, "trace-readonly")).containsExactly("LOCAL", "LOCAL");
             assertThat(callSource(runtime, "trace-local")).containsExactly("LOCAL", "LOCAL");
             assertThat(callSource(runtime, "trace-official")).containsExactly("OFFICIAL", "REEF");
             reports.flushMemory();
-            assertThat(hourlyConches(runtime)).contains("official_ping").doesNotContain("local_ping");
-            assertThat(reportConches(runtime)).doesNotContain("local_ping");
+            assertThat(hourlyConches(runtime)).contains("official_ping").doesNotContain("local_ping", "local_save");
+            assertThat(reportConches(runtime)).doesNotContain("local_ping", "local_save");
         }
     }
 
@@ -499,6 +525,34 @@ public class LocalConchBehaviorTest {
                         output: { marker: ok }
                     notes: 本地
                 """.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** 非只读的本地写入能力。全范围只读 Key 不能调用它。 */
+    public static String save(String name, String version) {
+        return """
+                conch: %s
+                version: %s
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:9/
+                title: 本地写入
+                description: 只在本机。
+                credentials: {}
+                actions:
+                  save:
+                    title: 写入
+                    description: 写入标记。
+                    method: POST
+                    steps:
+                      - set:
+                          marker: ok
+                    output:
+                      marker: { type: string, description: 标记, value: ok }
+                    examples:
+                      - input: {}
+                        output: { marker: ok }
+                    notes: 本地写入
+                """.formatted(name, version);
     }
 
     public static String ping(String name, String version) {

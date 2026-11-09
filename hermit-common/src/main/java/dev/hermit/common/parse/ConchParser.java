@@ -13,6 +13,8 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 
 import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.error.Mark;
+import org.yaml.snakeyaml.error.MarkedYAMLException;
 
 import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.model.Action;
@@ -708,11 +710,32 @@ public final class ConchParser {
         return path + "." + key;
     }
 
+    // Jackson 的 location 停在上一个成功事件的结尾，行首 TAB 和更深的缩进会早一行。
+    // problemMark 从 0 计。未闭合的 [ 在 SnakeYAML 2.5 里标在下一行，沿用这个标记。
     private static int lineOf(JsonProcessingException ex) {
+        Mark mark = problemMark(ex);
+        if (mark != null) {
+            return mark.getLine() + 1;
+        }
         if (ex.getLocation() == null) {
             return 0;
         }
         return ex.getLocation().getLineNr();
+    }
+
+    private static Mark problemMark(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof MarkedYAMLException marked) {
+                Mark mark = marked.getProblemMark();
+                if (mark != null && mark.getLine() >= 0) {
+                    return mark;
+                }
+            }
+            Throwable next = current.getCause();
+            current = next == current ? null : next;
+        }
+        return null;
     }
 
     private static YAMLMapper buildMapper() {

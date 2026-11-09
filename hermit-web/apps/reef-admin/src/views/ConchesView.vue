@@ -31,6 +31,17 @@ const filtered = computed(() => {
   )
 })
 
+/** 目录本身为空才提示上传；筛选零匹配用另一句，两种视图共用。 */
+const emptyText = computed(() => {
+  if (!conches.value.length) {
+    return isAdmin.value ? '还没有规则包，先上传一个 YAML' : '还没有规则包，等管理员上传'
+  }
+  if (kind.value === 'all') {
+    return `没有匹配「${keyword.value}」的规则包`
+  }
+  return `没有符合筛选条件的${kind.value === 'mcp' ? '原生 MCP 规则包' : 'HTTP 规则包'}`
+})
+
 async function load() {
   loading.value = true
   try {
@@ -106,18 +117,18 @@ onMounted(load)
         </RouterLink>
       </div>
       <div v-else-if="!loading" class="hm-card empty">
-        <template v-if="conches.length && kind === 'all'">没有匹配「{{ keyword }}」的规则包</template>
-        <template v-else-if="conches.length">没有符合筛选条件的{{ kind === 'mcp' ? '原生 MCP 规则包' : 'HTTP 规则包' }}</template>
-        <template v-else>
-          <span>{{ isAdmin ? '还没有规则包，先上传一个 YAML' : '还没有规则包，等管理员上传' }}</span>
-          <el-button v-if="isAdmin" type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
-        </template>
+        <span>{{ emptyText }}</span>
+        <el-button v-if="isAdmin && !conches.length" type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
       </div>
     </template>
 
+    <div v-else-if="loading && !conches.length" class="hm-card" data-test="catalog-loading">
+      <p class="loading-label">加载中</p>
+      <el-skeleton :rows="4" animated />
+    </div>
     <div v-else class="hm-card">
       <el-table v-loading="loading" :data="filtered" row-class-name="clickable" @row-click="open">
-        <template #empty>{{ loading ? '' : '还没有规则包，先上传一个 YAML' }}</template>
+        <template #empty>{{ emptyText }}</template>
         <el-table-column label="规则包" min-width="220">
           <template #default="{ row }">
             <div class="row-name">
@@ -269,6 +280,11 @@ onMounted(load)
   align-items: center;
   gap: 14px;
   padding: 48px 20px;
+  color: var(--hm-muted);
+}
+
+.loading-label {
+  margin: 0 0 12px;
   color: var(--hm-muted);
 }
 

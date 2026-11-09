@@ -5,13 +5,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { errorText } from '@shared/format'
 import { ApiError } from '@shared/http'
 import { api } from '../api'
-import { setRole, signIn } from '../auth'
+import { consumeExpiredRedirect, setRole, signIn } from '../auth'
 
 const route = useRoute()
 const router = useRouter()
 const form = reactive({ username: '', password: '' })
 const loading = ref(false)
 const failure = ref('')
+const expired = consumeExpiredRedirect()
 
 async function submit() {
   if (!form.username || !form.password) {
@@ -57,7 +58,7 @@ async function submit() {
     <section class="panel">
       <el-form class="form" label-position="top" size="large" @submit.prevent="submit">
         <h2>登录管理端</h2>
-        <p class="lead">请先登录。使用部署时配置的管理员账号</p>
+        <p class="lead">{{ expired ? '会话已过期' : '请先登录。使用部署时配置的管理员账号' }}</p>
         <el-form-item label="用户名">
           <el-input v-model="form.username" :prefix-icon="User" autocomplete="username" autofocus />
         </el-form-item>

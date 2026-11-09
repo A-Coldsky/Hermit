@@ -13,7 +13,7 @@ const crab = vi.hoisted(() => ({
 }))
 
 vi.mock('../apps/reef-admin/src/api', () => ({ api: reef }))
-vi.mock('../apps/reef-admin/src/auth', () => ({ signIn: vi.fn() }))
+vi.mock('../apps/reef-admin/src/auth', () => ({ signIn: vi.fn(), consumeExpiredRedirect: () => false }))
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
 vi.mock('../apps/crab-console/src/status', () => ({ refreshPending: vi.fn() }))
 

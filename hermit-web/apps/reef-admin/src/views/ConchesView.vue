@@ -82,11 +82,21 @@ onMounted(load)
       </el-radio-group>
     </div>
 
-    <template v-if="mode === 'cards'">
-      <div v-if="loading && !conches.length" class="cards">
-        <div v-for="n in 3" :key="n" class="hm-card"><el-skeleton :rows="3" animated /></div>
+    <template v-if="loading && !conches.length">
+      <div v-if="mode === 'cards'" data-test="catalog-loading">
+        <p class="loading-label">加载中</p>
+        <div class="cards">
+          <div v-for="n in 3" :key="n" class="hm-card"><el-skeleton :rows="3" animated /></div>
+        </div>
       </div>
-      <div v-else-if="filtered.length" class="cards">
+      <div v-else class="hm-card" data-test="catalog-loading">
+        <p class="loading-label">加载中</p>
+        <el-skeleton :rows="4" animated />
+      </div>
+    </template>
+
+    <template v-else-if="mode === 'cards'">
+      <div v-if="filtered.length" class="cards">
         <RouterLink v-for="row in filtered" :key="row.conch" :to="`/conches/${encodeURIComponent(row.conch)}`" class="hm-card conch" :class="{ off: row.disabled }">
           <div class="top">
             <ConchAvatar :name="row.conch" :title="row.title" />
@@ -122,10 +132,6 @@ onMounted(load)
       </div>
     </template>
 
-    <div v-else-if="loading && !conches.length" class="hm-card" data-test="catalog-loading">
-      <p class="loading-label">加载中</p>
-      <el-skeleton :rows="4" animated />
-    </div>
     <div v-else class="hm-card">
       <el-table v-loading="loading" :data="filtered" row-class-name="clickable" @row-click="open">
         <template #empty>{{ emptyText }}</template>

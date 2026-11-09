@@ -94,7 +94,7 @@ onMounted(load)
               <strong>{{ row.title || row.conch }}</strong>
               <span class="mono hm-muted">{{ row.conch }}</span>
             </div>
-            <el-tag v-if="row.disabled" type="danger" effect="light" round>已停用</el-tag>
+            <el-tag v-if="row.disabled" type="warning" effect="light" round>已停用</el-tag>
             <el-tag v-if="row.version" :type="row.disabled ? 'info' : 'success'" effect="light" round class="mono">v{{ row.version }}</el-tag>
             <el-tag v-else type="info" effect="light" round>未发布</el-tag>
           </div>
@@ -150,7 +150,7 @@ onMounted(load)
           <template #default="{ row }">
             <el-tag v-if="row.version" :type="row.disabled ? 'info' : 'success'" effect="plain" class="mono">v{{ row.version }}</el-tag>
             <el-tag v-else type="info" effect="plain">未发布</el-tag>
-            <el-tag v-if="row.disabled" type="danger" effect="plain" class="off">已停用</el-tag>
+            <el-tag v-if="row.disabled" type="warning" effect="plain" class="off">已停用</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="capabilityCount" label="能力/工具数" width="110" align="right" />

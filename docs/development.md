@@ -40,7 +40,7 @@ Maven 前端插件固定 Node 22.14.0，本地前端开发可使用相同版本�
   -DincludeScope=runtime -Dmdep.outputFile=target/classpath.txt
 ```
 
-`hermit-it` 用 Surefire 执行，但依赖上游 package 阶段生成的 Reef 可执行 jar 和 Crab test-jar；干净仓库全量入口是 `verify`，不能以根目录 `test` 替代。
+`hermit-it` 用 Surefire 执行，但依赖上游 package 阶段生成的 Reef 可执行 jar 和 Crab test-jar；干净仓库全量测试入口是 `verify`，不能以根目录 `test` 替代。该模块没有主代码，`package` 仍生成不含 class 的 jar，供根目录 `install`（含 `-DskipTests`）写入本地仓库。
 
 `-DskipTests` 跳过 Java 测试执行，并通过 Maven profile 跳过前端测试，仍可能编译 Java 测试。`-Dhermit.web.skip=true` 跳过 npm/前端测试/页面资源复制，并清掉旧的 classpath 页面资源；缺页面时有占位页。仅跳过 Vitest 可用 `-Dhermit.web.skipTests=true`。完整发布验证不要带这些跳过参数。跳过前端不等于离线模式。
 

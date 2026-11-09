@@ -36,6 +36,7 @@ const reefConch = {
 beforeEach(() => {
   setRole('ADMIN')
   vi.clearAllMocks()
+  localStorage.removeItem('hermit.reef.conchesView')
 })
 
 describe('Reef 规则包目录', () => {
@@ -59,6 +60,44 @@ describe('Reef 规则包目录', () => {
 
     expect(wrapper.text()).toContain('协同办公 OA')
     expect(wrapper.text()).not.toContain('还没有规则包')
+  })
+
+  it('列表视图在请求返回前显示加载中，返回后再显示表格', async () => {
+    localStorage.setItem('hermit.reef.conchesView', 'table')
+    const pending = deferred<unknown[]>()
+    reef.conches.mockReturnValue(pending.promise)
+    const wrapper = await mountPage(ReefConchesView)
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="catalog-loading"]').text()).toContain('加载中')
+    expect(wrapper.find('.el-skeleton').exists()).toBe(true)
+    expect(wrapper.find('.el-table').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('还没有规则包')
+
+    pending.resolve([reefConch])
+    await flushPromises()
+    expect(wrapper.find('[data-test="catalog-loading"]').exists()).toBe(false)
+    expect(wrapper.find('.el-table').exists()).toBe(true)
+    expect(wrapper.text()).toContain('协同办公 OA')
+    expect(wrapper.text()).not.toContain('加载中')
+    expect(wrapper.text()).not.toContain('还没有规则包')
+  })
+
+  it('列表视图在目录为空时，加载结束后才显示上传提示', async () => {
+    localStorage.setItem('hermit.reef.conchesView', 'table')
+    const pending = deferred<unknown[]>()
+    reef.conches.mockReturnValue(pending.promise)
+    const wrapper = await mountPage(ReefConchesView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('加载中')
+    expect(wrapper.text()).not.toContain('还没有规则包')
+
+    pending.resolve([])
+    await flushPromises()
+    expect(wrapper.find('.el-table').exists()).toBe(true)
+    expect(wrapper.text()).toContain('还没有规则包，先上传一个 YAML')
+    expect(wrapper.text()).not.toContain('加载中')
   })
 })
 

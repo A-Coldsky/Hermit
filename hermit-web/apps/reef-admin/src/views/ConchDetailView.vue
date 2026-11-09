@@ -119,7 +119,7 @@ watch(() => props.conch, load, { immediate: true })
       </template>
       <template #badge>
         <el-tag v-if="detail" :type="detail.disabled ? 'info' : 'success'" effect="light" round class="mono">v{{ detail.version }}</el-tag>
-        <el-tag v-if="detail?.disabled" type="danger" effect="light" round class="off">已停用</el-tag>
+        <el-tag v-if="detail?.disabled" type="warning" effect="light" round class="off">已停用</el-tag>
         <DriverBadge v-if="detail" :driver="detail.driver" size="default" class="off" />
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
@@ -136,7 +136,7 @@ watch(() => props.conch, load, { immediate: true })
     </el-result>
 
     <template v-else>
-      <el-alert v-if="detail?.disabled" type="error" :closable="false" show-icon class="notice" title="这个规则包已停用">
+      <el-alert v-if="detail?.disabled" type="warning" :closable="false" show-icon class="notice" title="这个规则包已停用">
         <template #default>
           <div>各 Crab 同步后把它标记为「Reef 已停用」：已安装的版本仍可调用，但不会再下载或更新。启用后，Crab 下次同步时取消停用标记，有更高版本时由使用者手动更新。停用期间可以上传新版本，但不能发布。</div>
           <div class="reason">

@@ -574,5 +574,80 @@ describe('需要修复的规则包', () => {
     expect(crab.update).toHaveBeenCalledWith('legacy_oa')
     expect(success).toHaveBeenCalledWith('legacy_oa 已从本机重新载入 v1.0.0')
   })
+
+  it('签名损坏时目录显示不可信，不显示已安装，修复走更新接口', async () => {
+    crab.catalog.mockResolvedValue({
+      configured: true,
+      syncedAt: '2026-11-09T00:00:00Z',
+      conches: [
+        entry({
+          subscribed: true,
+          installed: false,
+          installedVersion: '1.0.0',
+          updateAvailable: false,
+          repairRequired: true,
+          repairReason: 'BAD_SIGNATURE',
+          message: '签名已损坏，当前不可信。',
+        }),
+      ],
+    })
+    crab.syncStatus.mockResolvedValue({ report: null, latestCrab: null })
+    crab.update.mockResolvedValue({ outcome: { conch: 'legacy_oa', version: '1.0.0', kind: 'INSTALLED', reason: null } })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = await mountPage(CatalogView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="repair-message"]').text()).toBe('签名已损坏，当前不可信。')
+    expect(wrapper.text()).not.toContain('已安装')
+    expect(buttons(wrapper, '管理')).toHaveLength(0)
+    expect(buttons(wrapper, '更新')).toHaveLength(0)
+    expect(buttons(wrapper, '修复')).toHaveLength(1)
+
+    await buttons(wrapper, '修复')[0].trigger('click')
+    await flushPromises()
+    expect(crab.update).toHaveBeenCalledWith('legacy_oa')
+  })
+
+  it('签名损坏的详情显示同一句中文和手动修复，不拉取账号', async () => {
+    crab.conch.mockResolvedValue({
+      conch: 'legacy_oa',
+      version: null,
+      title: '标题',
+      description: '说明',
+      driver: null,
+      credentials: [],
+      config: [],
+      capabilities: [],
+      subscribed: true,
+      needsConfiguration: false,
+      loginPaused: false,
+      source: 'REEF',
+      reefDisabled: false,
+      reefDisabledAt: null,
+      installed: false,
+      repairRequired: true,
+      repairReason: 'BAD_SIGNATURE',
+      message: '签名已损坏，当前不可信。可以手动修复。',
+      updateAvailable: false,
+      latestVersion: '1.0.0',
+      newRequiredCredentials: [],
+    })
+    crab.update.mockResolvedValue({ outcome: { conch: 'legacy_oa', version: '1.0.0', kind: 'INSTALLED', reason: null } })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="repair-message"]').text()).toContain('签名已损坏，当前不可信。')
+    expect(wrapper.find('[data-test="repair-message"]').text()).toContain('可以手动修复。')
+    expect(wrapper.text()).not.toContain('已安装')
+    expect(wrapper.text()).not.toContain('配置完整')
+    expect(crab.accounts).not.toHaveBeenCalled()
+    expect(crab.config).not.toHaveBeenCalled()
+    expect(buttons(wrapper, '修复')).toHaveLength(1)
+
+    await wrapper.find('[data-test="repair"]').trigger('click')
+    await flushPromises()
+    expect(crab.update).toHaveBeenCalledWith('legacy_oa')
+  })
 })
 

@@ -16,6 +16,7 @@ import java.util.TreeSet;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.pkg.PackageReason;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
@@ -34,6 +35,8 @@ import dev.hermit.crab.runtime.StatusCodes;
 import dev.hermit.crab.runtime.TrialRejected;
 import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.report.FlushResult;
+import dev.hermit.crab.sync.ConchSync;
+import dev.hermit.crab.sync.SignatureDamage;
 import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.Actors;
@@ -149,7 +152,17 @@ final class ConsoleApi {
     }
 
     private static void conch(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
+        String name = ctx.pathParam("conch");
+        ConchDoc doc = runtime.registry().find(name).orElse(null);
+        if (doc == null) {
+            ConchSync sync = runtime.conchSync();
+            ConchSync.UntrustedSignature damaged = sync == null ? null : sync.untrustedSignature(name).orElse(null);
+            if (damaged == null) {
+                throw new IllegalArgumentException("conch not found");
+            }
+            GatewayResponses.writeData(ctx, untrustedConch(damaged));
+            return;
+        }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", doc.conch());
         body.put("version", doc.version().toString());
@@ -179,6 +192,36 @@ final class ConsoleApi {
         putReefDisabled(runtime, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
         GatewayResponses.writeData(ctx, body);
+    }
+
+    /**
+     * Subscribed, but the on-disk zip fails signature verification and is not loaded.
+     * Capabilities stay empty: the untrusted package is not a callable install.
+     */
+    private static Map<String, Object> untrustedConch(ConchSync.UntrustedSignature damaged) {
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conch", damaged.conch());
+        body.put("version", null);
+        body.put("title", damaged.title());
+        body.put("description", damaged.description());
+        body.put("driver", null);
+        body.put("credentials", List.of());
+        body.put("config", List.of());
+        body.put("capabilities", List.of());
+        body.put("subscribed", true);
+        body.put("needsConfiguration", false);
+        body.put("loginPaused", false);
+        body.put("source", "REEF");
+        body.put("reefDisabled", false);
+        body.put("reefDisabledAt", null);
+        body.put("installed", false);
+        body.put("repairRequired", true);
+        body.put("repairReason", PackageReason.BAD_SIGNATURE.name());
+        body.put("message", SignatureDamage.DETAIL_MESSAGE);
+        body.put("updateAvailable", false);
+        body.put("latestVersion", damaged.latestVersion());
+        body.put("newRequiredCredentials", List.of());
+        return body;
     }
 
     private static void accounts(CrabRuntime runtime, Context ctx) {
@@ -671,6 +714,9 @@ final class ConsoleApi {
             row.put("updateAvailable", entry.updateAvailable());
             row.put("latestVersion", entry.latestVersion());
             row.put("newRequiredCredentials", entry.newRequiredCredentials());
+            row.put("repairRequired", entry.repairRequired());
+            row.put("repairReason", entry.repairReason());
+            row.put("message", entry.message());
             rows.add(row);
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();

@@ -15,7 +15,7 @@ import ConfigPanel from '../components/ConfigPanel.vue'
 import DeveloperPanel from '../components/DeveloperPanel.vue'
 import { refreshPending } from '../status'
 import { unsubscribeMessage } from '../copy'
-import { updateConch } from '../update'
+import { repairConch, updateConch } from '../update'
 
 const props = defineProps<{ conch: string }>()
 const router = useRouter()
@@ -90,6 +90,14 @@ async function load() {
     } else {
       notifyError(error)
     }
+    loading.value = false
+    return
+  }
+  if (next.repairRequired) {
+    accounts.value = []
+    config.value = {}
+    partsFailed.value = false
+    detail.value = next
     loading.value = false
     return
   }
@@ -169,6 +177,19 @@ async function removeLocal() {
   }
 }
 
+async function repair() {
+  if (!detail.value?.repairRequired) return
+  working.value = true
+  try {
+    if (await repairConch(props.conch, detail.value.repairReason ?? null)) {
+      void refreshPending()
+      await load()
+    }
+  } finally {
+    working.value = false
+  }
+}
+
 async function update() {
   if (!detail.value) return
   working.value = true
@@ -223,7 +244,7 @@ watch(
 
 <template>
   <div v-loading="loading" class="detail">
-    <PageHeader :title="detail?.title || conch" :description="detail?.description">
+    <PageHeader :title="detail?.title || conch" :description="detail?.description ?? undefined">
       <template #crumbs>
         <router-link to="/conches">规则包与账号</router-link>
         <span class="hm-muted"> / {{ conch }}</span>
@@ -232,7 +253,7 @@ watch(
         <ConchAvatar :name="conch" :title="detail?.title" :size="48" />
       </template>
       <template #badge>
-        <el-tag v-if="detail" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
+        <el-tag v-if="detail?.version && !detail.repairRequired" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
         <el-tag v-if="local" type="info" effect="plain" round>本地</el-tag>
         <el-tag v-if="detail?.reefDisabled" type="warning" effect="plain" round>Reef 已停用</el-tag>
         <el-tag v-if="detail?.updateAvailable" type="warning" effect="plain" round class="mono">有新版本 v{{ detail.latestVersion }}</el-tag>
@@ -250,6 +271,20 @@ watch(
         <el-button type="primary" @click="router.push('/conches')">返回列表</el-button>
       </template>
     </el-result>
+
+    <template v-else-if="detail?.repairRequired">
+      <el-alert
+        type="error"
+        show-icon
+        :closable="false"
+        :title="detail.message || ''"
+        data-test="repair-message"
+      >
+        <template #default>
+          <el-button type="primary" class="update-btn" :loading="working" data-test="repair" @click="repair">修复</el-button>
+        </template>
+      </el-alert>
+    </template>
 
     <template v-else-if="detail">
       <el-alert

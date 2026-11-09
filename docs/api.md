@@ -206,13 +206,13 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 
 `crab local import` 校验失败时退出 1，不写入坏文件。stderr 第一行仍是「规则包校验失败」，随后每条错误打印 code、path 和已有中文 message。无法解析时 message 为「YAML 无法解析（第 N 行）」；`driver` 不是 `http` 或 `mcp` 时为「driver 只允许 http 或 mcp」。不把 YAML 正文或解析器英文原文拼进错误。装载已安装包未通过校验时，前缀仍是「规则包未通过校验。」，同样带上 message。
 
-Conch 列表和详情的包级 `needsConfiguration` 用同一套计算：缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。概览待配置按列表上的这个字段计数。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。详情的 `subscribed` 与列表相同：已订阅为 true，本地包为 false。
+Conch 列表和详情的包级 `needsConfiguration` 用同一套计算：账号数为 0、缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。已经有账号时，`required: false` 的凭证可以不填，不因此变成 true。概览待配置按列表上的这个字段计数。没有账号时调用是 409 `NOT_CONFIGURED`，message 为 `no account configured`。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。详情的 `subscribed` 与列表相同：已订阅为 true，本地包为 false。
 
 账号列表每一行：
 
 | 字段 | 含义 |
 | --- | --- |
-| `needsConfiguration` | 缺必填凭证，或已存密文无法用当前主密钥解密。自动登录暂停不计入 |
+| `needsConfiguration` | 该账号缺必填凭证，或已存密文无法用当前主密钥解密。自动登录暂停不计入。没有账号时列表为空，不另造一行，也不把「没有账号」算进这一列 |
 | `missingFields` | 尚未写入的必填凭证名 |
 | `credentialsUnreadable` | 已存密文无法解密 |
 | `credentialMessage` | 无法解密时为「凭证无法解密，需重新配置」，否则 JSON `null` |

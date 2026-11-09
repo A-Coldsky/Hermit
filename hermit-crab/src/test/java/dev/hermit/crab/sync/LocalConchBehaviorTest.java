@@ -394,6 +394,74 @@ public class LocalConchBehaviorTest {
         }
     }
 
+    @Test
+    void rejectedImportKeepsChineseReasonsAndDoesNotStoreTheFile() {
+        try (CrabRuntime runtime = open(temp.resolve("reject-lines"))) {
+            String marker = "zz_body_marker_should_not_leak";
+            String missing = ping("local_ping", "1.0.0")
+                    .replace("min_crab_version: 1.0.0\n", "")
+                    .replace("title: 本地探测", "title: " + marker);
+            assertThatThrownBy(() -> runtime.localConches().importBytes(
+                    missing.getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                    .isInstanceOf(LocalConchException.class)
+                    .hasMessage("规则包校验失败")
+                    .satisfies(error -> {
+                        LocalConchException failure = (LocalConchException) error;
+                        assertThat(failure.errors()).singleElement().satisfies(issue -> {
+                            assertThat(issue.code()).isEqualTo("PARSE");
+                            assertThat(issue.path()).isEqualTo("min_crab_version");
+                            assertThat(issue.message()).isEqualTo("min_crab_version: 缺少 min_crab_version");
+                            assertThat(issue.line()).isNull();
+                            assertThat(issue.message()).doesNotContain(marker);
+                        });
+                    });
+            assertThat(runtime.paths().localConches().resolve("local_ping.yaml")).doesNotExist();
+            assertThat(runtime.registry().find("local_ping")).isEmpty();
+
+            String driver = ping("bad_driver", "1.0.0")
+                    .replace("driver: http", "driver: shell")
+                    .replace("title: 本地探测", "title: " + marker);
+            assertThatThrownBy(() -> runtime.localConches().importBytes(
+                    driver.getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                    .isInstanceOf(LocalConchException.class)
+                    .satisfies(error -> {
+                        LocalConchException failure = (LocalConchException) error;
+                        assertThat(failure.errors()).anySatisfy(issue -> {
+                            assertThat(issue.code()).isEqualTo("DRIVER");
+                            assertThat(issue.path()).isEqualTo("driver");
+                            assertThat(issue.message()).isEqualTo("driver 只允许 http 或 mcp");
+                            assertThat(issue.line()).isEqualTo(sourceLine(driver, "driver:"));
+                            assertThat(issue.message()).doesNotContain(marker).doesNotContain("shell");
+                        });
+                    });
+            assertThat(runtime.paths().localConches().resolve("bad_driver.yaml")).doesNotExist();
+
+            String broken = "conch: \"unterminated\nversion: 1.0.0\n";
+            assertThatThrownBy(() -> runtime.localConches().importBytes(
+                    broken.getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                    .isInstanceOf(LocalConchException.class)
+                    .satisfies(error -> {
+                        LocalConchException failure = (LocalConchException) error;
+                        assertThat(failure.errors()).singleElement().satisfies(issue -> {
+                            assertThat(issue.code()).isEqualTo("PARSE");
+                            assertThat(issue.message()).contains("YAML 无法解析").doesNotContain("unterminated");
+                            assertThat(issue.line()).isNotNull();
+                            assertThat(issue.message()).contains("第 " + issue.line() + " 行");
+                        });
+                    });
+        }
+    }
+
+    private static int sourceLine(String text, String token) {
+        String[] lines = text.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].contains(token)) {
+                return i + 1;
+            }
+        }
+        throw new AssertionError(token);
+    }
+
     private static CrabRuntime open(Path root) {
         return CrabRuntime.open(new CrabPaths(root), CrabConfig.defaults(), name -> null);
     }

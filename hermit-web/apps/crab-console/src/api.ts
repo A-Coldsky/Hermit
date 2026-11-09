@@ -356,6 +356,8 @@ export interface ValidationIssue {
   code: string
   path: string
   message: string
+  /** 从 1 计的 YAML 行。定位不到时没有这个字段。 */
+  line?: number | null
 }
 
 export interface LocalImportResult {

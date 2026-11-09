@@ -166,7 +166,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | GET | `/reports/preview` | 待发送批次和丢弃数。上报关闭或尚未连接 Reef 时 409 `NOT_CONFIGURED`，`message` 为「上报未开启，或尚未连接 Reef。」 |
 | POST | `/reports/send` | 手动发送，返回 attempted/accepted/status。上报关闭或尚未连接 Reef 时 409 `NOT_CONFIGURED`，`message` 与预览相同。批次为空时不发 HTTP |
 | GET | `/local-conches` | 本机本地包，含未能载入的。见下方字段。已载入的包仍在 `GET /conches`；未能载入的不在那里，也不能调用 |
-| POST | `/local-conches` | 导入。`multipart/form-data` 字段 `file`，或 `text/yaml`、`application/yaml`、`application/x-yaml` 正文。查询参数 `confirm`：缺省、空白或 `false` 表示不确认，`true` 表示确认覆盖（大小写不敏感）。其它值 400 `INVALID_INPUT`，message 为 `confirm 只能是 true 或 false。`。成功 `{conch, version, replaced, warnings}`。目标已是本地包、坏包，或同名 yaml 已存在时，未确认是 409 `CONFLICT`，不写文件；`confirm=true` 才覆盖。校验失败 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，message 为 `规则包校验失败`。与正式包或订阅重名是 409，错误码仍是 `INVALID_INPUT`，确认参数不能绕过 |
+| POST | `/local-conches` | 导入。`multipart/form-data` 字段 `file`，或 `text/yaml`、`application/yaml`、`application/x-yaml` 正文。查询参数 `confirm`：缺省、空白或 `false` 表示不确认，`true` 表示确认覆盖（大小写不敏感）。其它值 400 `INVALID_INPUT`，message 为 `confirm 只能是 true 或 false。`。成功 `{conch, version, replaced, warnings}`。目标已是本地包、坏包，或同名 yaml 已存在时，未确认是 409 `CONFLICT`，不写文件；`confirm=true` 才覆盖。校验失败 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，message 为 `规则包校验失败`。每项含 `code`、`path`、`message`；能定位到 YAML 行时再加 `line`（从 1 计），定位不到则没有 `line`。失败不写文件。与正式包或订阅重名是 409，错误码仍是 `INVALID_INPUT`，确认参数不能绕过 |
 | POST | `/local-conches/reload` | 按 `local-conches/` 目录增删改。`{results:[{file, conch, version, ok, issues}]}`。失败时 `ok` 为 false，`issues[0].message` 用中文写明文件、包和原因。文件名不是合法包名时 `conch` 为 null。解析成功但未载入时 `version` 仍是文件里的版本，不表示已经安装 |
 | DELETE | `/local-conches/{conch}` | 删除本地包文件。已载入的同时移出注册表；只是坏包的删掉 yaml 和列表中的记录。返回 `{conch, deleted: true}`。账号与凭证保留。删完后同名可以不带 `confirm` 再导入。不是本地包、也不是坏包时 404。正式包 404，不删文件 |
 | GET | `/local-conches/{conch}/export` | 仅已载入的本地包。`application/yaml`，`Content-Disposition: attachment; filename="{conch}-{version}.yaml"`，正文与磁盘文件相同。坏包 404 |
@@ -204,7 +204,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 
 `crab local list` 一行一个包。已载入是 `包名 版本 文件名`。未能载入是 `包名 - 文件名 未载入 ` 接上面的 `reason`。`crab local reload` 成功行仍是 `文件 包名 版本 ok`；失败行是 `文件 包名 - 未载入`（没有合法包名时包名位置为 `-`），中文原因在 stderr。重新加载即使有失败文件也退出 0。`crab local delete` 对坏包同样打印 `包名 deleted` 并退出 0。
 
-`crab local import` 校验失败时退出 1，不写入坏文件。stderr 第一行仍是「规则包校验失败」，随后每条错误打印 code、path 和已有中文 message。无法解析时 message 为「YAML 无法解析（第 N 行）」；`driver` 不是 `http` 或 `mcp` 时为「driver 只允许 http 或 mcp」。不把 YAML 正文或解析器英文原文拼进错误。装载已安装包未通过校验时，前缀仍是「规则包未通过校验。」，同样带上 message。
+`crab local import` 校验失败时退出 1，不写入坏文件。stderr 第一行仍是「规则包校验失败」，随后每条错误打印 code、path 和已有中文 message。无法解析时 message 为「YAML 无法解析（第 N 行）」；`driver` 不是 `http` 或 `mcp` 时为「driver 只允许 http 或 mcp」。不把 YAML 正文或解析器英文原文拼进错误。成功但有警告时退出 0，stdout 仍是「包名 版本 已导入」或「包名 版本 已覆盖」；stderr 每条警告同样打印 code、path 和已有中文 message，例如省略 `related` 时为 `MISSING_RELATED actions.ping.related 缺少 related`。装载已安装包未通过校验时，前缀仍是「规则包未通过校验。」，同样带上 message。
 
 Conch 列表和详情的包级 `needsConfiguration` 用同一套计算：缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停时为 true。概览待配置按列表上的这个字段计数。`loginPaused` 只表示暂停，详情接口同样返回这个布尔值。详情的 `subscribed` 与列表相同：已订阅为 true，本地包为 false。
 

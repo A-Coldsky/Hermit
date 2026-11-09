@@ -625,7 +625,7 @@ public final class CrabCommand {
             LocalConches.ImportResult result = runtime.localConches().importBytes(raw, Actors.CLI, confirmed);
             out.println(result.conch() + " " + result.version() + " " + (result.replaced() ? "已覆盖" : "已导入"));
             for (ValidationIssue issue : result.warnings()) {
-                err.println(issue.code() + " " + issue.path());
+                printIssue(err, issue);
             }
             return 0;
         });

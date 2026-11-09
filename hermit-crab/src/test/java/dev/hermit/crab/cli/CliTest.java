@@ -525,6 +525,46 @@ class CliTest {
     }
 
     @Test
+    void localImportPrintsChineseWarningsAndKeepsFailureChinese() throws Exception {
+        Path home = temp.resolve("warn-import");
+        Files.createDirectories(home);
+        Path file = home.resolve("in.yaml");
+        String yaml = dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_ping", "1.0.0");
+        Files.writeString(file, yaml);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {"local", "import", file.toString()},
+                env(home),
+                InputStream.nullInputStream(),
+                stdout(out),
+                stderr(err));
+        String warnings = err.toString(StandardCharsets.UTF_8);
+        assertThat(code).isZero();
+        assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("local_ping 1.0.0 已导入\n");
+        assertThat(warnings).isEqualTo("MISSING_RELATED actions.ping.related 缺少 related\n");
+        assertThat(warnings).doesNotContain("本地探测").doesNotContain("base_url").doesNotContain("com.fasterxml");
+        assertThat(Files.readString(home.resolve("local-conches").resolve("local_ping.yaml"))).isEqualTo(yaml);
+
+        Path missing = home.resolve("missing.yaml");
+        Files.writeString(missing, yaml.replace("min_crab_version: 1.0.0\n", "").replace("conch: local_ping", "conch: local_miss"));
+        ByteArrayOutputStream failOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream failErr = new ByteArrayOutputStream();
+        int failed = new CrabCommand().run(
+                new String[] {"local", "import", missing.toString()},
+                env(home),
+                InputStream.nullInputStream(),
+                stdout(failOut),
+                stderr(failErr));
+        String failure = failErr.toString(StandardCharsets.UTF_8);
+        assertThat(failed).isEqualTo(1);
+        assertThat(failOut.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(failure).isEqualTo("规则包校验失败\nPARSE min_crab_version min_crab_version: 缺少 min_crab_version\n");
+        assertThat(failure).doesNotContain("本地探测").doesNotContain("com.fasterxml").doesNotContain("unterminated");
+        assertThat(home.resolve("local-conches").resolve("local_miss.yaml")).doesNotExist();
+    }
+
+    @Test
     void apiKeyCreateRejectsUnknownOptions() {
         Path root = temp.resolve("unknown-opt");
         Function<String, String> env = env(root);

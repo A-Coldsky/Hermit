@@ -191,6 +191,84 @@ describe('本地规则包', () => {
     wrapper.unmount()
   })
 
+  it('导入失败把代码、位置和中文原因分开，字段名不连成三次', async () => {
+    crab.importLocalConch.mockRejectedValue(
+      new ApiError(400, 'INVALID_INPUT', '规则包校验失败', {
+        errors: [{ code: 'PARSE', path: 'min_crab_version', message: 'min_crab_version: 缺少 min_crab_version' }],
+        warnings: [],
+      }),
+    )
+    const wrapper = await mountPage(ConchesView, { attach: true })
+    await flushPromises()
+    const input = wrapper.find('[data-test="local-file"]')
+    const file = new File(['conch: mine'], 'mine.yaml', { type: 'application/yaml' })
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+
+    const item = document.body.querySelector('[data-test="import-error"]')
+    const text = item?.textContent ?? ''
+    expect(text).toContain('PARSE')
+    expect(text).toContain('缺少 min_crab_version')
+    expect(text).not.toContain('min_crab_version:')
+    expect(text.match(/min_crab_version/g)).toHaveLength(2)
+    expect(document.body.textContent).toContain('规则包校验失败')
+    wrapper.unmount()
+  })
+
+  it('能定位到行时在失败位置里写出行号', async () => {
+    crab.importLocalConch.mockRejectedValue(
+      new ApiError(400, 'INVALID_INPUT', '规则包校验失败', {
+        errors: [
+          { code: 'PARSE', path: '', message: 'YAML 无法解析（第 4 行）' },
+          { code: 'DRIVER', path: 'driver', message: 'driver 只允许 http 或 mcp', line: 3 },
+        ],
+        warnings: [],
+      }),
+    )
+    const wrapper = await mountPage(ConchesView, { attach: true })
+    await flushPromises()
+    const input = wrapper.find('[data-test="local-file"]')
+    const file = new File([':'], 'bad.yaml', { type: 'application/yaml' })
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+
+    const items = [...document.body.querySelectorAll('[data-test="import-error"]')].map((node) => node.textContent ?? '')
+    expect(items[0]).toContain('第 4 行')
+    expect(items[0]).toContain('YAML 无法解析')
+    expect(items[0]).not.toContain('（第 4 行）')
+    expect(items[1]).toContain('第 3 行')
+    expect(items[1]).toContain('driver 只允许 http 或 mcp')
+    wrapper.unmount()
+  })
+
+  it('导入成功的警告条目能看出是警告，并写出中文原因', async () => {
+    crab.importLocalConch.mockResolvedValue({
+      conch: 'local_ping',
+      version: '1.0.0',
+      replaced: false,
+      warnings: [{ code: 'MISSING_RELATED', path: 'actions.ping.related', message: '缺少 related' }],
+    })
+    const wrapper = await mountPage(ConchesView, { attach: true })
+    await flushPromises()
+    const input = wrapper.find('[data-test="local-file"]')
+    const file = new File(['conch: local_ping'], 'local_ping.yaml', { type: 'application/yaml' })
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+
+    const item = document.body.querySelector('[data-test="import-warning"]')
+    const text = item?.textContent ?? ''
+    expect(text).toContain('MISSING_RELATED')
+    expect(text).toContain('actions.ping.related')
+    expect(text).toContain('缺少 related')
+    expect(item?.closest('.issues')?.classList.contains('warn')).toBe(true)
+    expect(item?.querySelector('.el-icon')).toBeTruthy()
+    expect(document.body.textContent).toContain('已导入本地规则包 local_ping')
+    wrapper.unmount()
+  })
+
   async function chooseFile(wrapper: Awaited<ReturnType<typeof mountPage>>) {
     const input = wrapper.find('[data-test="local-file"]')
     const file = new File(['conch: local_ping'], 'local_ping.yaml', { type: 'application/yaml' })

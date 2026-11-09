@@ -25,7 +25,10 @@ public record ConchCatalog(boolean configured, Instant syncedAt, List<Entry> con
             boolean localConflict,
             boolean updateAvailable,
             String latestVersion,
-            List<String> newRequiredCredentials
+            List<String> newRequiredCredentials,
+            boolean repairRequired,
+            String repairReason,
+            String message
     ) {
         public Entry {
             newRequiredCredentials = newRequiredCredentials == null ? List.of() : List.copyOf(newRequiredCredentials);

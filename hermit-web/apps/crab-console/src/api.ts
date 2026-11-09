@@ -78,9 +78,10 @@ export interface CapabilityState {
 
 export interface ConchDetail {
   conch: string
-  version: string
+  /** 已加载版本。签名损坏且未载入时为 null，不表示已安装。 */
+  version: string | null
   title: string
-  description: string
+  description: string | null
   credentials: CredentialField[]
   config: ConfigDeclaration[]
   capabilities: CapabilityState[]
@@ -90,14 +91,15 @@ export interface ConchDetail {
    * 与列表相同：账号数为 0、缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停。
    * 已经有账号时，`required: false` 的凭证可以不填。
    * 账号行的同名字段不含「没有账号」，也不含自动登录暂停。
+   * 签名损坏且未载入时为 false，不改已加载包的计算。
    */
   needsConfiguration: boolean
   /** 任一账号自动登录已暂停。账号行带原因和恢复方法。 */
   loginPaused: boolean
-  /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。 */
+  /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。签名损坏且未载入时仍是 `REEF`。 */
   source: 'LOCAL' | 'REEF'
-  /** 缺省或空白为 `http`。 */
-  driver: 'http' | 'mcp'
+  /** 缺省或空白为 `http`。签名损坏且未载入时为 null，不从损坏的包里读。 */
+  driver: 'http' | 'mcp' | null
   /** Reef 已停用。本机仍保留已安装版本并可调用。本地包为 false。 */
   reefDisabled: boolean
   /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
@@ -108,6 +110,19 @@ export interface ConchDetail {
   latestVersion: string | null
   /** 清单要求、但当前已安装版本未要求的凭证名，已排序。 */
   newRequiredCredentials: string[]
+  /**
+   * 已订阅但签名损坏、没有载入时为 false。已加载的详情没有这个字段。
+   */
+  installed?: boolean
+  /** 已订阅但签名损坏、没有载入时为 true。已加载的详情没有这个字段。 */
+  repairRequired?: boolean
+  /** `BAD_SIGNATURE`，否则没有这个字段。 */
+  repairReason?: string | null
+  /**
+   * 签名损坏时为「签名已损坏，当前不可信。可以手动修复。」。
+   * 已加载的详情没有这个字段。
+   */
+  message?: string | null
 }
 
 export interface Account {
@@ -414,6 +429,12 @@ export interface CatalogConch {
   updateAvailable: boolean
   latestVersion: string | null
   newRequiredCredentials: string[]
+  /** 已订阅且因签名损坏没有载入时为 true。其它情况为 false。 */
+  repairRequired: boolean
+  /** `BAD_SIGNATURE`，没有需要修复的签名损坏时为 null。 */
+  repairReason: string | null
+  /** `BAD_SIGNATURE` 时为「签名已损坏，当前不可信。」，否则 null。 */
+  message: string | null
 }
 
 export interface Catalog {

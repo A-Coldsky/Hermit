@@ -31,6 +31,7 @@ import dev.hermit.common.model.CredentialField;
 import dev.hermit.crab.upstream.McpOAuthToken;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.pkg.PackageReason;
 import dev.hermit.common.pkg.PackageVerificationException;
 import dev.hermit.common.pkg.ConchManifest;
 import dev.hermit.common.pkg.ConchPackage;
@@ -679,7 +680,10 @@ public final class ConchSync {
                 false,
                 false,
                 null,
-                List.of());
+                List.of(),
+                false,
+                null,
+                null);
     }
 
     private ConchCatalog.Entry catalogRow(ReefClient.CatalogEntry entry) {
@@ -694,7 +698,8 @@ public final class ConchSync {
         boolean local = name != null && registry.origin(name) == Origin.LOCAL;
         boolean disabled = name != null && disabledConches.contains(name);
         boolean subscribed = name != null && subscriptions.contains(name);
-        boolean installed = doc != null || pointer != null;
+        boolean untrusted = doc == null && badSignatureUnloaded(name);
+        boolean installed = (doc != null || pointer != null) && !untrusted;
         List<String> newly = local || doc == null ? List.of() : newlyRequired(doc, entry.requiredCredentials());
         boolean updateAvailable = !local && !disabled && subscribed && installed
                 && higherInstallable(entry, installedVersion);
@@ -712,7 +717,49 @@ public final class ConchSync {
                 local,
                 updateAvailable,
                 latestVersion,
-                local ? List.of() : newly);
+                local ? List.of() : newly,
+                untrusted,
+                untrusted ? PackageReason.BAD_SIGNATURE.name() : null,
+                untrusted ? SignatureDamage.MESSAGE : null);
+    }
+
+    /**
+     * Subscribed, previously installed, and not loaded because {@code signature.sig} does not verify.
+     * A Reef disable tombstone is excluded: manual update refuses to download it.
+     * Caller holds this lock, or calls {@link #untrustedSignature(String)}.
+     */
+    private boolean badSignatureUnloaded(String conch) {
+        if (conch == null || !ConchValidator.isConchName(conch)) {
+            return false;
+        }
+        if (isLocal(conch) || disabledConches.contains(conch) || officiallyLoaded(conch)) {
+            return false;
+        }
+        if (!subscriptions.contains(conch) || !previouslyInstalled(conch)) {
+            return false;
+        }
+        return PackageReason.BAD_SIGNATURE.name().equals(unloadedReason(conch));
+    }
+
+    /**
+     * Display fields for {@link #badSignatureUnloaded(String)}. Empty when the package is loaded,
+     * not subscribed, or failed for any other reason.
+     */
+    public Optional<UntrustedSignature> untrustedSignature(String conch) {
+        synchronized (this) {
+            if (!badSignatureUnloaded(conch)) {
+                return Optional.empty();
+            }
+            ReefClient.CatalogEntry cached = cached(conch).orElse(null);
+            String title = cached == null || cached.title() == null || cached.title().isBlank() ? conch : cached.title();
+            String description = cached == null ? null : cached.description();
+            String latest = cached == null ? null : cached.version();
+            return Optional.of(new UntrustedSignature(conch, title, description, latest));
+        }
+    }
+
+    /** A subscribed package whose on-disk signature is not trusted and which is not loaded. */
+    public record UntrustedSignature(String conch, String title, String description, String latestVersion) {
     }
 
     private Optional<ReefClient.CatalogEntry> cached(String conch) {

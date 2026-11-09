@@ -70,6 +70,19 @@ describe('Crab 概览', () => {
 
     expect(wrapper.text()).toContain('1 个规则包有账号暂停了自动登录')
     expect(wrapper.text()).not.toContain('还缺凭证或配置')
+    expect(wrapper.text()).not.toContain('还没有账号，或还缺凭证、配置')
+  })
+
+  it('没有账号的规则包计入待配置，不说成账号暂停', async () => {
+    crab.conches.mockResolvedValue({
+      conches: [summary({ accountCount: 0, needsConfiguration: true, loginPaused: false })],
+    })
+    const wrapper = await mountPage(OverviewView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('1 个规则包还没有账号，或还缺凭证、配置')
+    expect(wrapper.text()).toContain('legacy_oa')
+    expect(wrapper.text()).not.toContain('有账号暂停了自动登录')
   })
 
   it('有停用的规则包时同步卡不显示「已是最新」，也不重复列为已移除', async () => {

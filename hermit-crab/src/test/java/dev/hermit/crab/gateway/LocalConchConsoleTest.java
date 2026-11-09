@@ -206,6 +206,7 @@ class LocalConchConsoleTest {
                     "text/yaml; charset=utf-8",
                     LocalConchBehaviorTest.ping("local_ping", "1.0.0").getBytes(StandardCharsets.UTF_8));
             assertThat(imported.statusCode()).as(imported.body()).isEqualTo(200);
+            server.runtime.admin().createAccount("local_ping", "ada", Actors.CLI);
 
             TestServer.Reply listed = server.console("GET", "/console/api/conches", null, true);
             assertThat(listed.status()).isEqualTo(200);
@@ -225,6 +226,115 @@ class LocalConchConsoleTest {
             assertThat(alice.path("missingFields").size()).isPositive();
             assertThat(alice.path("loginPaused").asBoolean()).isFalse();
         }
+    }
+
+    @Test
+    void zeroAccountsNeedConfigurationUntilAnAccountExists() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("no-account"), PASSWORD, config)) {
+            TestServer.Reply listed = server.console("GET", "/console/api/conches", null, true);
+            assertThat(listed.status()).isEqualTo(200);
+            JsonNode rows = listed.json().path("data").path("conches");
+            assertFlagsMatch(server, rows, "legacy_oa", false, true);
+            assertThat(summary(rows, "legacy_oa").path("accountCount").asInt()).isZero();
+            assertThat(accounts(server, "legacy_oa")).isEmpty();
+            TestServer.Reply blocked = server.call(
+                    "GET", "/api/legacy_oa/list_todo?page=1", server.apiKey.plaintext(), null, null, null);
+            assertThat(blocked.status()).isEqualTo(409);
+            assertThat(blocked.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(blocked.json().path("error").path("message").asText()).isEqualTo("no account configured");
+
+            HttpResponse<String> optional = post(
+                    server, "/console/api/local-conches", "text/yaml; charset=utf-8", optionalNote());
+            assertThat(optional.statusCode()).as(optional.body()).isEqualTo(200);
+            HttpResponse<String> bare = post(
+                    server,
+                    "/console/api/local-conches",
+                    "text/yaml; charset=utf-8",
+                    LocalConchBehaviorTest.ping("bare_ping", "1.0.0").getBytes(StandardCharsets.UTF_8));
+            assertThat(bare.statusCode()).as(bare.body()).isEqualTo(200);
+
+            CreatedApiKey key = server.runtime.admin().createApiKey(
+                    "local", new ApiKeyScope(Set.of("optional_note", "bare_ping"), Set.of(), false), Actors.CLI);
+            listed = server.console("GET", "/console/api/conches", null, true);
+            rows = listed.json().path("data").path("conches");
+            assertFlagsMatch(server, rows, "optional_note", false, true);
+            assertFlagsMatch(server, rows, "bare_ping", false, true);
+            assertThat(summary(rows, "optional_note").path("accountCount").asInt()).isZero();
+            assertThat(summary(rows, "bare_ping").path("accountCount").asInt()).isZero();
+            assertThat(accounts(server, "optional_note")).isEmpty();
+            assertThat(accounts(server, "bare_ping")).isEmpty();
+
+            TestServer.Reply optionalCall = server.call(
+                    "GET", "/api/optional_note/ping", key.plaintext(), null, null, null);
+            assertThat(optionalCall.status()).isEqualTo(409);
+            assertThat(optionalCall.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(optionalCall.json().path("error").path("message").asText()).isEqualTo("no account configured");
+            TestServer.Reply bareCall = server.call(
+                    "GET", "/api/bare_ping/ping", key.plaintext(), null, null, null);
+            assertThat(bareCall.status()).isEqualTo(409);
+            assertThat(bareCall.json().path("error").path("message").asText()).isEqualTo("no account configured");
+
+            server.runtime.admin().createAccount("optional_note", "ada", Actors.CLI);
+            server.runtime.admin().createAccount("bare_ping", "ada", Actors.CLI);
+            listed = server.console("GET", "/console/api/conches", null, true);
+            rows = listed.json().path("data").path("conches");
+            assertFlagsMatch(server, rows, "optional_note", false, false);
+            assertFlagsMatch(server, rows, "bare_ping", false, false);
+            assertThat(summary(rows, "optional_note").path("accountCount").asInt()).isEqualTo(1);
+            JsonNode ada = account(accounts(server, "optional_note"), "ada");
+            assertThat(ada.path("needsConfiguration").asBoolean()).isFalse();
+            assertThat(ada.path("missingFields")).isEmpty();
+            assertThat(ada.path("credentialsUnreadable").asBoolean()).isFalse();
+            JsonNode bareAccount = account(accounts(server, "bare_ping"), "ada");
+            assertThat(bareAccount.path("needsConfiguration").asBoolean()).isFalse();
+            assertThat(bareAccount.path("missingFields")).isEmpty();
+
+            TestServer.Reply ready = server.call(
+                    "GET", "/api/optional_note/ping", key.plaintext(), null, null, null);
+            assertThat(ready.status()).as(ready.body()).isEqualTo(200);
+            TestServer.Reply bareReady = server.call(
+                    "GET", "/api/bare_ping/ping", key.plaintext(), null, null, null);
+            assertThat(bareReady.status()).as(bareReady.body()).isEqualTo(200);
+        }
+    }
+
+    private static byte[] optionalNote() {
+        return LocalConchBehaviorTest.ping("optional_note", "1.0.0")
+                .replace(
+                        "credentials: {}",
+                        """
+                        credentials:
+                          note:
+                            type: text
+                            label: 备注
+                            required: false
+                        """)
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static JsonNode summary(JsonNode rows, String name) {
+        for (JsonNode row : rows) {
+            if (name.equals(row.path("conch").asText())) {
+                return row;
+            }
+        }
+        throw new AssertionError("missing " + name);
+    }
+
+    private static JsonNode accounts(TestServer server, String conch) throws Exception {
+        TestServer.Reply listed = server.console("GET", "/console/api/conches/" + conch + "/accounts", null, true);
+        assertThat(listed.status()).as(listed.body()).isEqualTo(200);
+        return listed.json().path("data").path("accounts");
+    }
+
+    private static JsonNode account(JsonNode rows, String name) {
+        for (JsonNode row : rows) {
+            if (name.equals(row.path("name").asText())) {
+                return row;
+            }
+        }
+        throw new AssertionError("missing account " + name);
     }
 
     private static void assertFlagsMatch(

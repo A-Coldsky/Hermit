@@ -28,7 +28,8 @@ export interface ConchSummary {
   subscribed: boolean
   accountCount: number
   /**
-   * 缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停。
+   * 账号数为 0、缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停。
+   * 已经有账号时，`required: false` 的凭证可以不填。
    * 概览「待配置」按这个字段计数。
    */
   needsConfiguration: boolean
@@ -86,8 +87,9 @@ export interface ConchDetail {
   /** 本机是否已订阅。本地包为 false。 */
   subscribed: boolean
   /**
-   * 与列表相同：缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停。
-   * 账号行的同名字段不含自动登录暂停。
+   * 与列表相同：账号数为 0、缺必填配置、任一账号缺必填凭证、凭证无法解密，或任一账号自动登录已暂停。
+   * 已经有账号时，`required: false` 的凭证可以不填。
+   * 账号行的同名字段不含「没有账号」，也不含自动登录暂停。
    */
   needsConfiguration: boolean
   /** 任一账号自动登录已暂停。账号行带原因和恢复方法。 */
@@ -111,7 +113,7 @@ export interface ConchDetail {
 export interface Account {
   name: string
   default: boolean
-  /** 缺必填凭证，或已存凭证无法用当前主密钥解密。自动登录暂停不计入这里。 */
+  /** 该账号缺必填凭证，或已存凭证无法用当前主密钥解密。没有账号、自动登录暂停都不计入这里。 */
   needsConfiguration: boolean
   missingFields: string[]
   /** 已保存的密文无法解密。为 true 时 needsConfiguration 也为 true。 */

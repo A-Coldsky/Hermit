@@ -189,4 +189,4 @@ ZIP 只包含 `conch.yaml`、`manifest.json`、`signature.sig`；manifest format
 
 名字只和本机注册表里的正式包、以及 `subscriptions` 里的名字冲突。冲突是 HTTP 409，错误码仍是 `INVALID_INPUT`。已安装正式包时拒绝更换另一把 Reef 公钥也是 `CONFLICT`。订阅一个已经导入的本地包同样是 409，`message` 为「与本机本地规则包同名」。与已有本地包同名（含未能载入的坏包，或目录里已经有同名 yaml）必须确认后才覆盖：控制台不带 `confirm=true` 是 409 `CONFLICT`，CLI 不带 `--replace` 退出 1，都不写文件。确认后版本以 YAML 为准。账号和凭证留在 `(LOCAL, conch, account)` 上，删除本地包也不清它们。
 
-导出的是磁盘上的原始字节，`Content-Type` 为 `application/yaml`。本地包可以经 HTTP 和 MCP 调用，但 API Key 的 `conches` 必须写上这个名字。`all: true`（以及更早存下来、`conches` 与 `actions` 都为空的 Key）只覆盖正式包，不含本地包。MCP 工具和资源说明以 `[本地] ` 开头。调用记录的 `source` 为 `LOCAL`，不会进入 Tide 上报。同步不会下载、覆盖或卸下本地包。
+导出的是磁盘上的原始字节，`Content-Type` 为 `application/yaml`。本地包可以经 HTTP 和 MCP 调用。`all: true` 以及更早存下来、`conches` 与 `actions` 都为空的 Key 可以调用；写了 `conches` 或 `actions` 的 Key 仍要在 `conches` 里点名。只读限制仍然有效。MCP 工具和资源说明以 `[本地] ` 开头。调用记录的 `source` 为 `LOCAL`，不会进入 Tide 上报。同步不会下载、覆盖或卸下本地包。

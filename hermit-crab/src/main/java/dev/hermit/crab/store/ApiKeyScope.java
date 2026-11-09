@@ -5,20 +5,21 @@ import java.util.Set;
 /**
  * What an API key is allowed to call.
  * An empty {@code conches} set means every conch for {@link ApiKeyPrincipal#permits}.
- * Local conches are a further check in {@code Invoker}: the name must be listed even when
- * this set is empty, including a key created with {@link #all} true.
+ * Local conches are included when {@link #grantsAllOfficial()} is true. A key that names
+ * any conch or action still needs the local name in {@code conches}; {@link #allowsLocal}
+ * is that check for {@code Invoker} and {@code tools/list}.
  * An empty {@code actions} set means every action of the selected conches. Action elements
  * are {@code conch.action}. {@code readOnlyOnly} rejects actions whose read-only flag is false.
  *
- * <p>{@code all} is stored only for a key created as full official access: both sets empty.
+ * <p>{@code all} is stored only for a key created with both sets empty.
  * Rows written before the flag omit it, so Jackson reads {@code all} as false; those empty
- * sets still grant every official conch. {@link #grantsAllOfficial()} is that runtime meaning.
- * Console and CLI creation reject both sets empty unless {@code all} is requested.
- * {@link ApiKeyPrincipal} does not read {@code all}.
+ * sets still grant every loaded conch, including local ones. {@link #grantsAllOfficial()}
+ * is that runtime meaning. Console and CLI creation reject both sets empty unless {@code all}
+ * is requested. {@link ApiKeyPrincipal} does not read {@code all}.
  */
 public record ApiKeyScope(Set<String> conches, Set<String> actions, boolean readOnlyOnly, boolean all) {
     public static final String MISSING_SCOPE =
-            "必须指定范围：设置 all 为 true 表示全部正式规则包（不含本地包），或填写 conches、actions";
+            "必须指定范围：设置 all 为 true 表示全部规则包（包括本地包），或填写 conches、actions";
     public static final String ALL_EXCLUDES_NAMES =
             "all 为 true 时不能同时填写 conches 或 actions";
 
@@ -36,8 +37,8 @@ public record ApiKeyScope(Set<String> conches, Set<String> actions, boolean read
     }
 
     /**
-     * Scope from a console or CLI create. {@code all} requests every official conch and
-     * every action (still subject to {@code readOnlyOnly}), and does not include local conches.
+     * Scope from a console or CLI create. {@code all} requests every loaded conch and
+     * every action, including local conches, still subject to {@code readOnlyOnly}.
      * Both sets empty without {@code all} is rejected. {@code all} together with any name is rejected.
      */
     public static ApiKeyScope explicit(boolean all, Set<String> conches, Set<String> actions, boolean readOnlyOnly) {
@@ -57,11 +58,23 @@ public record ApiKeyScope(Set<String> conches, Set<String> actions, boolean read
     }
 
     /**
-     * Every official conch and every action of those conches, before the read-only filter.
-     * Local conches are not included. True for an explicit {@code all} key and for a stored
-     * row whose sets are both empty.
+     * Every loaded conch and every action, before the read-only filter, including local conches.
+     * True for an explicit {@code all} key and for a stored row whose sets are both empty.
+     * A key that names any conch or action is false here and must list a local conch to use it.
      */
     public boolean grantsAllOfficial() {
         return conches.isEmpty() && actions.isEmpty();
+    }
+
+    /**
+     * Whether this key may call and list {@code conch} when that package is local.
+     * Full access ({@link #grantsAllOfficial()}) may. Any other key may only when
+     * {@link #conches()} names it. Read-only is enforced separately.
+     */
+    public boolean allowsLocal(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return false;
+        }
+        return grantsAllOfficial() || conches.contains(conch);
     }
 }

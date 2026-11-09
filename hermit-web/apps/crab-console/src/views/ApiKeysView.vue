@@ -137,7 +137,7 @@ onMounted(load)
               <el-tag v-if="row.scope.readOnly" size="small" type="success" effect="plain">仅只读能力</el-tag>
               <template v-if="row.scope.all">
                 <el-tag size="small" type="danger" effect="plain" data-test="scope-all">全部权限</el-tag>
-                <span class="hm-muted">全部 Reef 规则包的全部能力，不含本地包</span>
+                <span class="hm-muted">全部规则包的全部能力，包括本地包</span>
               </template>
               <template v-else>
                 <span><span class="hm-muted">规则包：</span><span class="mono">{{ scopeText(row.scope.conches, '不限') }}</span></span>
@@ -176,7 +176,7 @@ onMounted(load)
           </el-radio-group>
         </el-form-item>
         <el-alert v-if="form.all" type="error" :closable="false" show-icon title="全部权限风险较高" class="risk" data-test="scope-all-risk">
-          <div>这把 Key 可以调用本机全部 Reef 规则包的全部能力，以后新订阅的规则包也自动包含；本地规则包仍要单独授权。</div>
+          <div>这把 Key 可以调用本机全部规则包的全部能力，包括本地包；以后新订阅的规则包和新导入的本地包也自动包含。</div>
           <div v-if="!form.readOnly"><strong>没有勾选「只允许调用只读能力」，会修改数据的能力也能调用。</strong></div>
           <div>Key 泄露时影响面最大。只给信任的调用方，能指定范围时尽量指定。</div>
         </el-alert>

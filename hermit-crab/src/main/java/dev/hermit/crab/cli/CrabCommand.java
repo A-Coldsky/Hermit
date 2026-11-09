@@ -835,7 +835,7 @@ public final class CrabCommand {
     }
 
     /**
-     * One list line. Full official access prints {@code all=true} and omits the empty
+     * One list line. Full access prints {@code all=true} and omits the empty
      * conch and action sets. A narrower key prints {@code all=false} with those sets;
      * an empty dimension is {@code -}. {@code all} follows {@link ApiKeyScope#grantsAllOfficial()},
      * so a stored row that omits the flag still shows full access. The plaintext key is

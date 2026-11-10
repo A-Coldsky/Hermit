@@ -144,7 +144,15 @@ public final class CrabCommand {
     }
 
     private static void printIssue(PrintStream err, ValidationIssue issue) {
-        err.println(issue.code() + " " + issue.path() + " " + issue.message());
+        StringBuilder line = new StringBuilder();
+        line.append(issue.code()).append(' ').append(issue.path()).append(' ').append(issue.message());
+        if (issue.line() != null && issue.line() > 0) {
+            String marker = "第 " + issue.line() + " 行";
+            if (issue.message() == null || !issue.message().contains(marker)) {
+                line.append(' ').append(marker);
+            }
+        }
+        err.println(line);
     }
 
     private int dispatch(String[] args, Function<String, String> env, InputStream in, PrintStream out, PrintStream err)

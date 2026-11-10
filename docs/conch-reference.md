@@ -118,7 +118,7 @@ actions:
     related: []
 ```
 
-规则包（Conch）以 [ConchParser](../hermit-common/src/main/java/dev/hermit/common/parse/ConchParser.java)、[ConchValidator](../hermit-common/src/main/java/dev/hermit/common/validate/ConchValidator.java) 和 Crab 引擎为准。这里覆盖当前实现，不是未来功能设计。完整可发布例子：[legacy_oa.yaml](../hermit-common/src/main/resources/samples/legacy_oa.yaml)。
+下面的字段说明和文首两个示例是同一份规则。完整可发布的例子就是上面的 `demo_status` 和 `sample_oa`。
 
 ## 最小规则
 
@@ -156,7 +156,7 @@ actions:
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
 | `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.1.0。`driver: mcp` 还要求不低于 1.1.0 |
-| `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。调试开关打开时，本地 MCP 包可以刷新 `tools/list` |
+| `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
 | `config` | 可选字段映射；字段支持默认值；不用于保存秘密 |
@@ -170,17 +170,17 @@ actions:
 
 `credentials`/`config` 字段接受 `type`、`label`、`required`、`description`、`options`；config 额外支持 `default`。类型有 text/secret/select/url。校验会拒绝 `config` 的 `type: secret`，秘密必须放在 `credentials`。mcp 包还拒绝 `config` 的 `type: url`。配置值优先级为用户值 → 声明 default → 顶层 base_url（仅 base_url 字段）；引擎也可直接回退顶层 base_url。
 
-`description` 会原样显示在 Crab 控制台的账号凭证对话框里，是写给填表的人看的。只写要填什么，例如示例 `legacy_oa` 的密码写「填原始密码」；md5、加密、明文提交这类处理细节由步骤模板的过滤器负责，不写进说明。
+`description` 会原样显示在 Crab 控制台的账号凭证对话框里，是写给填表的人看的。只写要填什么，例如上面 `sample_oa` 的密码写「填原始密码」；md5、加密、明文提交这类处理细节由步骤模板的过滤器负责，不写进说明。
 
 凭证、配置、账号和能力开关会在 Crab 的 `config_audit` 追加一条记录。记录里是字段名和动作，不是凭证明文、密文或配置值。本机 `GET /console/api/audit` 和 CLI `audit list` 按时间倒序读取，结果同样只有操作者、动作、origin、Conch、账号、时间和字段名。detail 里其它键不会被读出来。
 
-Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 键时警告是「缺少 related」；写成 `related: []` 表示没有关联能力，不产生这条警告。`related: null` 与省略相同，仍是「缺少 related」。related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。示例 `legacy_oa` 只有 `list_todo`，所以不写 related。
+Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 键时警告是「缺少 related」；写成 `related: []` 表示没有关联能力，不产生这条警告。`related: null` 与省略相同，仍是「缺少 related」。related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。上面的 `sample_oa` 只有 `list_todo`，所以 `related` 写成 `[]`。
 
-输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由 `InputPreparer` 转换并按生成的 JSON Schema 校验。生成的 schema 含 `additionalProperties: false`。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换、小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`），以及未声明字段，都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内、也不会丢掉多余字段再当成功。HTTP 网关和 MCP 都经过 `Invoker` 与 `RuleEngine`，所以这条校验两边相同。MCP 在校验前去掉账号选择（直接工具的 `account`，或能力入参已占用该名字时的 `_account`）。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`、`traceId`，能定位到单个字段时还有 `field`。`traceId` 与响应头 `X-Hermit-Trace` 相同。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；示例 `legacy_oa` 的 `page` 声明了 `minimum: 1`。
+输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由输入层转换并按生成的 JSON Schema 校验。生成的 schema 含 `additionalProperties: false`。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换、小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`），以及未声明字段，都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内、也不会丢掉多余字段再当成功。HTTP 网关和 MCP 走同一条校验，所以两边相同。MCP 在校验前去掉账号选择（直接工具的 `account`，或能力入参已占用该名字时的 `_account`）。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`、`traceId`，能定位到单个字段时还有 `field`。`traceId` 与响应头 `X-Hermit-Trace` 相同。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；上面 `sample_oa` 的 `page` 声明了 `minimum: 1`。
 
 ## MCP 上游包
 
-`driver: mcp` 描述上游 MCP 服务。`transport` 只接受 `streamable_http`。`stdio` 与 `local_ref` 都拒绝，包里不能带要在 Crab 上执行的命令。Crab 对 `auth.type: headers` 按 Streamable HTTP 转发：渲染 `upstream.headers`，按账号复用会话，把 action 转成上游 `tools/call`。`oauth` 用授权码和 PKCE 在控制台登录，令牌放凭证库，调用前刷新。调试开关打开时，本地包的 `tools/list` 刷新走同一条取令牌和 401 刷新路径。Reef 从包内读出上游和工具表，不连接上游。
+`driver: mcp` 描述上游 MCP 服务。`transport` 只接受 `streamable_http`。`stdio` 与 `local_ref` 都拒绝，包里不能带要在 Crab 上执行的命令。Crab 对 `auth.type: headers` 按 Streamable HTTP 转发：渲染 `upstream.headers`，按账号复用会话，把 action 转成上游 `tools/call`。`oauth` 用授权码和 PKCE 在控制台登录，令牌放凭证库，调用前刷新。开发者模式打开时，本地包的 `tools/list` 刷新走同一条取令牌和 401 刷新路径。Reef 从包内读出上游和工具表，不连接上游。
 
 ```yaml
 conch: vendor_crm
@@ -207,7 +207,7 @@ actions:
     related: [search_customer]
 ```
 
-不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。Reef 上传和正式包要求 `actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`，message 为「mcp 包必须至少有一个 action」。调试开关打开时，本地包的空 `actions` 只是同一错误码的警告，message 为「mcp 包还没有 action，刷新工具列表后才能调用。」。开关关掉时，空文件仍不能导入。`tools.include` / `exclude` 在刷新时过滤：`include` 省略或为空表示全部，`exclude` 优先，`*` 与 `?` 按整段、区分大小写匹配。能调用的名字仍只有刷新之后留下的 `actions`。
+不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。Reef 上传和正式包要求 `actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`，message 为「mcp 包必须至少有一个 action」。开发者模式打开时，本地包的空 `actions` 只是同一错误码的警告，message 为「mcp 包还没有 action，刷新工具列表后才能调用。」。开发者模式关掉时，空文件仍不能导入。`tools.include` / `exclude` 在刷新时过滤：`include` 省略或为空表示全部，`exclude` 优先，`*` 与 `?` 按整段、区分大小写匹配。能调用的名字仍只有刷新之后留下的 `actions`。
 
 本地刷新按上游工具名合并，不改 `version`。已有 action 保留本地名字、标题、描述、`read_only`、`destructive`、`confirm`、`idempotent` 和 `notes`，更新 schema、上游注解和 `schema_sha256`。新工具的本地名把非 `[a-z0-9]` 换成 `_`，长度 2–64，冲突时加 `_2`、`_3`。新描述去掉 C0 控制字符（保留换行、回车、制表）、零宽与双向字符，以及 ANSI CSI/OSC，截到 2 KiB UTF-8；空了就写成「（上游未提供描述）」。不删 URL，也不删「忽略之前的指令」。新工具的 `read_only` 只在 `readOnlyHint` 为 true 时为 true；`destructiveHint` 是布尔就用它（显式 false 保持 false），没有这个布尔时非只读为 true；`confirm` 写成与 `destructive` 相同。不把 `idempotentHint` 抄到 `idempotent`。注解去掉 `_meta`。没有 `inputSchema` 时写成 `{type: object}`；上游没有 `outputSchema` 就不写 `output_schema`。`snapshot.tools_sha256` 哈希的是过滤前的完整列表。`initialize` 的 `capabilities` 仍是 `{}`，依赖 elicitation 或 sampling 才出现的工具不会进包。写回会丢掉 YAML 注释和原来的排版。上游工具超过 500 个、超过 20 页，或分页游标不前进时整次失败，不改文件。
 
@@ -223,15 +223,15 @@ actions:
 
 每个 action 要有 `tool` 和 `input_schema`。`tool` 为 1–256 个字符，不能含空白或控制字符。`output_schema` 可省略。`$ref` 只能是 `#` 或 `#/…`，远程引用是 `MCP_SCHEMA_REF`。单个 schema 的规范 JSON 不超过 64 KiB，深度不超过 32（根对象深度为 1）。`upstream_annotations` 里的 `readOnlyHint`、`destructiveHint`、`idempotentHint` 若出现，必须是布尔。
 
-`schema_sha256` 可省略。写了就必须是 64 位小写十六进制，并且等于 `ToolSnapshots.schemaSha256(input_schema, output_schema)`。没写 `output_schema` 时摘要不含 `outputSchema`；写成 `{}` 会写入，两者不同。对象键按字典序，每一层去掉 `_meta`，数组保持原顺序。摘要是紧凑 JSON 的 UTF-8 SHA-256，小写十六进制。
+`schema_sha256` 可省略。写了就必须是 64 位小写十六进制，并且等于对 `input_schema` 和 `output_schema` 做的摘要。没写 `output_schema` 时摘要不含 `outputSchema`；写成 `{}` 会写入，两者不同。对象键按字典序，每一层去掉 `_meta`，数组保持原顺序。摘要是紧凑 JSON 的 UTF-8 SHA-256，小写十六进制。
 
-`snapshot` 可省略。写了就必须有能按 `Instant` 解析的 `fetched_at`、`protocol_version`，以及 64 位小写十六进制的 `tools_sha256`。`server` 可省略；写了则 `name` 和 `version` 都要有。校验不按 actions 重算 `tools_sha256`。`ToolSnapshots.toolsSha256` 只取 `tools` 数组，按 `name` 排序，键排序并去掉 `_meta`，忽略 `nextCursor`。版本对比和本地刷新共用这个算法；刷新写入的是过滤前的完整列表。
+`snapshot` 可省略。写了就必须有能解析成时间的 `fetched_at`、`protocol_version`，以及 64 位小写十六进制的 `tools_sha256`。`server` 可省略；写了则 `name` 和 `version` 都要有。校验不按 actions 重算 `tools_sha256`。`tools_sha256` 只取 `tools` 数组，按 `name` 排序，键排序并去掉 `_meta`，忽略 `nextCursor`。版本对比和本地刷新共用这个算法；刷新写入的是过滤前的完整列表。
 
-没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。带上游工具的 action，`effectiveMethod()` 固定 POST，Crab 对外注解的 `destructiveHint` 用这个有效破坏性，`readOnlyHint` 用 `mcp.read_only`，`idempotentHint` 用 `idempotent`。HTTP 能力的注解里，`destructiveHint` 同样是声明的 destructive（缺省 false），不再从「非只读且非幂等」推导。目录元工具 `call_capability` 仍用那条旧公式。`inputJsonSchema()` 返回原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文。管理 API 的列表和详情另外给出 `upstream`、`snapshot` 和 `tools`，字段见 [api.md](api.md)。Reef 管理端目录和详情已列出这些工具。
+没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。带上游工具的 action，对外方法固定 POST，Crab 对外注解的 `destructiveHint` 用这个有效破坏性，`readOnlyHint` 用 `mcp.read_only`，`idempotentHint` 用 `idempotent`。HTTP 能力的注解里，`destructiveHint` 同样是声明的 destructive（缺省 false），不再从「非只读且非幂等」推导。目录元工具 `call_capability` 仍用那条旧公式。MCP 能力对外的入参 schema 就是原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文。管理 API 的列表和详情另外给出 `upstream`、`snapshot` 和 `tools`。Reef 管理端目录和详情已列出这些工具。
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
-`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。`CrabVersion.CURRENT` 现为 1.1.0，Crab 可以载入 1.1.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求 1.2.0 时会报高于当前 Crab。Maven 制品版本仍是 `0.1.0-SNAPSHOT`。没有新的 `ErrorCode`，也没有数据库迁移。
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.1.0，可以载入 1.1.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求 1.2.0 时会报高于当前 Crab。
 
 `GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
@@ -241,8 +241,8 @@ actions:
 
 - 权限中的只读仅由 `mcp.read_only` 决定，不能因为 GET 或 idempotent 就推断只读。
 - `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。会话失效包括重定向到 `alive_check.expect_not_redirect` 前缀，以及能力请求返回 HTTP 401/403。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
-- POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。同键换请求体返回 `IDEMPOTENCY_CONFLICT`，见 [api.md](api.md)。
-- `mcp.expose` 默认 true，read_only/destructive 默认 false。能力工具的 `destructiveHint` 用上一节的有效破坏性。目录元工具 `call_capability` 仍从「非只读且非幂等」计算 `destructiveHint`。`effectiveConfirm()` 为 true 时，HTTP 要带 `X-Hermit-Confirm: true`，Hermit 自己的 MCP 两种模式都走 elicitation。
+- POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。同键换请求体返回 `IDEMPOTENCY_CONFLICT`。
+- `mcp.expose` 默认 true，read_only/destructive 默认 false。能力工具的 `destructiveHint` 用上一节的有效破坏性。目录元工具 `call_capability` 仍从「非只读且非幂等」计算 `destructiveHint`。需要确认时，HTTP 要带 `X-Hermit-Confirm: true`，Hermit 自己的 MCP 两种模式都走 elicitation。
 
 ## 步骤
 
@@ -254,7 +254,7 @@ actions:
 | extract | CSS、XPath、JSONPath、regex；可 each 遍历及 filter 转换 |
 | assert | status、contains、not_contains、cookie_exists、header_exists、not_redirected_to |
 | set | 设置后续步骤/输出使用的变量 |
-| script | Rhino JavaScript，对 vars 运算并 return 结果；可指定 into |
+| script | JavaScript，对 vars 运算并 return 结果；可指定 into |
 
 request 的 path 与 url 必须二选一，form 与 json 互斥。默认 GET、UTF-8、不跟随重定向；响应最多 5 MiB。未写 `timeout_ms` 时，空闲读超时等于剩余的能力 deadline（`engine.capability_timeout_seconds`，默认 60 秒），不再固定 15 秒，到点是 `TIMEOUT`。写了 `timeout_ms` 时使用该毫秒数，且不超过剩余 deadline；更短的空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。解码优先 Content-Type charset，其次 HTML meta，再使用步骤 encoding。开启重定向最多 5 跳，只允许同源；Cookie 由账号客户端管理，规则不能自行覆盖 Cookie 头。最终响应仍是 3xx 时：非 GET 且不是登录重定向（表单常见 `follow_redirects: false` 的 302/303）不拒绝；GET 只在后面没有覆盖该状态码的 `assert.status` 时才是 `UPSTREAM_ERROR`。
 
@@ -271,17 +271,17 @@ steps:
   - assert: {status: 200}
 ```
 
-CSS/各提取器的详细参数看 [Extractors](../hermit-crab/src/main/java/dev/hermit/crab/engine/Extractors.java) 与 `LegacyOaEngineTest`；request 失败会形成步骤索引、类型和错误摘要。持续慢速输出会在能力 deadline 被取消并返回 `TIMEOUT`。TCP 连接一直挂起没有单独回归。
+提取规格必须且只能有一种选择器：`css`、`xpath`、`jsonpath`、`regex`。上面 `sample_oa` 的 `list_todo` 用 `css` 加 `each` 取出表格行。`attr` 取属性，`html` 取内部 HTML，两者不能同时写；都省略时取文本。`regex` 的 `group` 默认 1。`each` 是子规格映射，可配 `min` 要求至少匹配这么多条。`optional: true` 时匹配 0 条得到空值，而不是失败。`from` 指定从哪个变量读，省略则用上一次 `request` 的响应。`filter` 用和模板一样的过滤器。request 失败会形成步骤索引、类型和错误摘要。持续慢速输出会在能力 deadline 被取消并返回 `TIMEOUT`。TCP 连接一直挂起没有单独回归。
 
 ## 模板、输出与脚本
 
-模板如 `{{input.page}}`、`{{credential.password | md5}}`、`{{config.base_url}}`、`{{items}}`。支持的内置过滤器为 md5、sha256、base64、urlencode、trim、default、date、rsa；具体参数见 [BuiltinFilters](../hermit-common/src/main/java/dev/hermit/common/template/BuiltinFilters.java)。完整表达式保留原值类型，拼接字符串则转成文本。
+模板如 `{{input.page}}`、`{{credential.password | md5}}`、`{{config.base_url}}`、`{{items}}`。支持的过滤器：`md5` 和 `sha256` 对 UTF-8 文本做摘要并输出小写十六进制，不接受参数；`base64`、`urlencode`、`trim` 也不接受参数。`default` 需要一个后备值，原值为空或 null 时用它。`date` 需要一个输出格式；值可以是 `now`，或 `yyyy-MM-dd`、`yyyy/MM/dd`、`yyyy-MM-dd HH:mm:ss`、`yyyy/MM/dd HH:mm:ss`、`yyyy年M月d日`、`yyyyMMdd`。`rsa` 需要一个公钥参数，用 RSA/ECB/PKCS1Padding 加密后再做 Base64；公钥是 X.509，可以是 PEM，也可以是去掉空白的 Base64。完整表达式保留原值类型，拼接字符串则转成文本。
 
 `input`、`credential`、`config`、`response`、`now` 是保留变量，不能通过 set/extract/script.into 覆盖。request 更新 response，extract/set 产生后续步骤可用的变量。
 
 输出可采用映射模板，也可用说明式字段。说明式字段省略 value 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。校验器禁止在输出中直接引用 credential。
 
-实际输出由 `OutputMask` 遍历字符串值，替换长度至少 4 个字符的已知凭证/Cookie 值及其 URL 编码形式。它不按 `password`、`token` 等字段名屏蔽内容，也不替换 Map 的键；短值、尚未登记的上游秘密及哈希等派生值没有普遍保护。`Redactor.redactFields` 虽提供字段名屏蔽能力，但当前输出链没有调用它。规则应只返回业务需要的数据，不能依靠字段名自动脱敏。
+实际输出会遍历字符串值，替换长度至少 4 个字符的已知凭证/Cookie 值及其 URL 编码形式。它不按 `password`、`token` 等字段名屏蔽内容，也不替换映射的键；短值、尚未登记的上游秘密及哈希等派生值没有普遍保护。当前输出不会按字段名自动打码。规则应只返回业务需要的数据，不能依靠字段名自动脱敏。
 
 ```yaml
 - script:
@@ -303,7 +303,7 @@ ZIP 只包含 `conch.yaml`、`manifest.json`、`signature.sig`；manifest format
 
 本机可以导入未签名的 YAML，用来在这一台 Crab 上试规则。来源是控制台上传，或 `HERMIT_HOME/local-conches/{conch}.yaml` 加上重新加载。没有在线编辑器。文件名必须等于包名，只认直接放在该目录下的 `*.yaml`。
 
-导入走与 Reef 上传相同的解析和 `ConchValidator`。`config` 仍然不能写 `type: secret`。单文件上限 1 MiB。控制台这次请求还受 Crab 现有请求体上限（1_000_000 字节）约束。校验失败返回 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，每项含 `code`、`path`、`message`。能定位到 YAML 行时再加 `line`（从 1 计）；缺字段这类定位不到的情况没有 `line`。失败不写文件。
+导入走与 Reef 上传相同的解析和校验。`config` 仍然不能写 `type: secret`。单文件上限 1 MiB。控制台这次请求还受 Crab 现有请求体上限（1_000_000 字节）约束。校验失败返回 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，每项含 `code`、`path`、`message`。能定位到 YAML 行时再加 `line`（从 1 计）；缺字段这类定位不到的情况没有 `line`。失败不写文件。
 
 名字只和本机注册表里的正式包、以及 `subscriptions` 里的名字冲突。冲突是 HTTP 409，错误码仍是 `INVALID_INPUT`。已安装正式包时拒绝更换另一把 Reef 公钥也是 `CONFLICT`。订阅一个已经导入的本地包同样是 409，`message` 为「与本机本地规则包同名」。与已有本地包同名（含未能载入的坏包，或目录里已经有同名 yaml）必须确认后才覆盖：控制台不带 `confirm=true` 是 409 `CONFLICT`，CLI 不带 `--replace` 退出 1，都不写文件。确认后版本以 YAML 为准。账号和凭证留在 `(LOCAL, conch, account)` 上，删除本地包也不清它们。
 

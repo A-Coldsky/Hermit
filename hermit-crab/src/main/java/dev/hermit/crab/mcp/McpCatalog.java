@@ -319,7 +319,7 @@ final class McpCatalog {
                         true,
                         false),
                 tool(SAVE_LOCAL,
-                        "把通过校验的 YAML 存成本地规则包。同名覆盖必须由你在客户端确认。"
+                        "把通过校验的 YAML 存成本地规则包。同名覆盖必须在客户端确认。"
                                 + "不要传 confirm。客户端不能确认时，换一个新包名，或到控制台导入。正式包会拒绝。",
                         yaml,
                         issues,

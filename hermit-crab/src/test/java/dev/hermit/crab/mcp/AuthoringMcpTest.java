@@ -5,8 +5,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
 import java.net.URI;
+import java.util.Enumeration;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -320,12 +324,21 @@ class AuthoringMcpTest {
             JsonNode trace = ApiJson.tree(seen.path("result").path("content").get(0).path("text").asText());
             assertThat(trace.path("note").asText()).contains("正文已脱敏").isNotEqualTo(AuthoringCalls.UNTRUSTED);
 
+            JsonNode own = server.rpc(session, 9, "tools/call", Map.of(
+                    "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+            assertThat(own.path("result").path("isError").asBoolean(true)).as(own.toString()).isFalse();
+            JsonNode ownBody = ApiJson.tree(own.path("result").path("content").get(0).path("text").asText());
+            assertThat(ownBody.path("traceId").asText()).isEqualTo(traceId);
+            assertThat(ownBody.path("devTrace").isObject()).isTrue();
+            assertThat(ownBody.path("conch").asText()).isEqualTo("trial_ping");
+
             CreatedApiKey all = server.runtime.apiKeys().create(
                     "all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
             String allSession = server.initialize(all.plaintext(), false);
             JsonNode hidden = server.rpc(all.plaintext(), allSession, 2, "tools/call", Map.of(
                     "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
-            assertThat(toolMessage(hidden)).isEqualTo(McpErrors.UNKNOWN_TOOL);
+            assertThat(toolMessage(hidden)).isEqualTo(McpCalls.TRACE_DENIED);
+            assertThat(toolMessage(hidden)).doesNotContain("没有这个工具");
         } finally {
             upstream.stop(0);
         }
@@ -386,6 +399,169 @@ class AuthoringMcpTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void readOnlyKeyCannotSaveAndOnlyTrialsReadOnlyActions() throws Exception {
+        AtomicInteger writes = new AtomicInteger();
+        HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        upstream.createContext("/note", exchange -> {
+            writes.incrementAndGet();
+            byte[] body = "{\"message\":\"saved\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        upstream.start();
+        try (Harness server = Harness.open(temp.resolve("readonly"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String base = "http://127.0.0.1:" + upstream.getAddress().getPort();
+            String yaml = readWritePackage("ro_ping", "1.0.0", base);
+            String session = server.initialize(false);
+            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            server.runtime.admin().createAccount("ro_ping", "main", Actors.CONSOLE);
+            Path stored = server.runtime.paths().localConches().resolve("ro_ping.yaml");
+            Path other = server.runtime.paths().localConches().resolve("ro_other.yaml");
+
+            CreatedApiKey readOnly = server.runtime.apiKeys().create(
+                    "read-only", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+            CreatedApiKey namedReadOnly = server.runtime.apiKeys().create(
+                    "named-read-only", new ApiKeyScope(Set.of("ro_ping"), Set.of(), true), Actors.CONSOLE);
+            String readOnlySession = server.initialize(readOnly.plaintext(), false);
+            String namedSession = server.initialize(namedReadOnly.plaintext(), false);
+
+            JsonNode validated = server.rpc(readOnly.plaintext(), readOnlySession, 3, "tools/call", Map.of(
+                    "name", "conch_validate", "arguments", Map.of("yaml", yaml)));
+            assertThat(validated.path("result").path("isError").asBoolean(true)).isFalse();
+            assertThat(structured(validated).path("ok").asBoolean()).isTrue();
+
+            String replacement = yaml.replace("version: 1.0.0", "version: 1.0.1");
+            JsonNode saveDenied = server.rpc(readOnly.plaintext(), readOnlySession, 4, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", replacement)));
+            assertThat(toolMessage(saveDenied)).isEqualTo(AuthoringCalls.READ_ONLY_SAVE);
+            assertThat(toolError(saveDenied).path("code").asText()).isEqualTo("FORBIDDEN");
+            String fresh = readWritePackage("ro_other", "1.0.0", base);
+            JsonNode freshDenied = server.rpc(namedReadOnly.plaintext(), namedSession, 4, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", fresh)));
+            assertThat(toolMessage(freshDenied)).isEqualTo(AuthoringCalls.READ_ONLY_SAVE);
+            assertThat(Files.readString(stored)).contains("version: 1.0.0").doesNotContain("version: 1.0.1");
+            assertThat(other).doesNotExist();
+
+            JsonNode shown = server.rpc(readOnly.plaintext(), readOnlySession, 5, "tools/call", Map.of(
+                    "name", "conch_trial_run",
+                    "arguments", Map.of("conch", "ro_ping", "action", "show", "account", "main")));
+            assertThat(shown.path("result").path("isError").asBoolean(true)).as(shown.toString()).isFalse();
+            assertThat(structured(shown).path("data").path("message").asText()).isEqualTo("seen");
+            JsonNode ownTrace = server.rpc(readOnly.plaintext(), readOnlySession, 6, "tools/call", Map.of(
+                    "name", "debug_trace", "arguments", Map.of("traceId", structured(shown).path("traceId").asText())));
+            assertThat(ownTrace.path("result").path("isError").asBoolean(true)).as(ownTrace.toString()).isFalse();
+
+            JsonNode writeDenied = server.rpc(readOnly.plaintext(), readOnlySession, 7, "tools/call", Map.of(
+                    "name", "conch_trial_run",
+                    "arguments", Map.of("conch", "ro_ping", "action", "save_note", "account", "main")));
+            assertThat(toolMessage(writeDenied)).isEqualTo(AuthoringCalls.READ_ONLY_TRIAL_PREFIX + "save_note 不是只读，已拒绝。");
+            assertThat(writes).hasValue(0);
+            assertThat(Files.readString(stored)).doesNotContain("version: 1.0.1");
+        } finally {
+            upstream.stop(0);
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void externalSocketCannotAuthorOrReadTheGuideEvenWithoutOrigin() throws Exception {
+        String external = nonLoopback();
+        try (Harness server = Harness.open(temp.resolve("remote"), "0.0.0.0")) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String localSession = server.initialize(false);
+            JsonNode localGuide = server.rpc(localSession, 4, "resources/read", Map.of("uri", AuthoringGuide.URI));
+            assertThat(localGuide.path("result").path("contents").get(0).path("text").asText()).contains("从 HAR 写规则");
+            String yaml = LocalConchBehaviorTest.ping("remote_ping", "1.0.0");
+            String remote = "http://" + external + ":" + server.httpServer.port();
+
+            HttpResponse<String> opened = server.postRaw(remote + "/mcp", server.key.plaintext(), null, """
+                    {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}
+                    """, Map.of());
+            assertThat(opened.statusCode()).as(opened.body()).isEqualTo(200);
+            String remoteSession = opened.headers().firstValue("Mcp-Session-Id").orElseThrow();
+            for (String tool : java.util.List.of("conch_validate", "conch_save_local", "conch_trial_run")) {
+                HttpResponse<String> called = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, callJson(tool, yaml), Map.of());
+                assertThat(called.statusCode()).as(called.body()).isEqualTo(200);
+                JsonNode body = ApiJson.tree(called.body());
+                assertThat(toolMessage(body)).as(tool).isEqualTo(AuthoringCalls.LOCAL_ONLY);
+                assertThat(toolError(body).path("code").asText()).isEqualTo("FORBIDDEN");
+            }
+            assertThat(server.runtime.paths().localConches().resolve("remote_ping.yaml")).doesNotExist();
+
+            HttpResponse<String> guide = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
+                    {"jsonrpc":"2.0","id":8,"method":"resources/read","params":{"uri":"%s"}}
+                    """.formatted(AuthoringGuide.URI), Map.of());
+            assertThat(guide.statusCode()).isEqualTo(200);
+            JsonNode guideError = ApiJson.tree(guide.body()).path("error");
+            assertThat(guideError.path("message").asText()).isEqualTo(AuthoringCalls.LOCAL_ONLY);
+            assertThat(guideError.path("data").path("code").asText()).isEqualTo("FORBIDDEN");
+
+            HttpResponse<String> console = server.http.send(HttpRequest.newBuilder(URI.create(remote + "/console/api/session"))
+                    .header("X-Hermit-Console", "1")
+                    .GET()
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(console.statusCode()).isEqualTo(403);
+            assertThat(console.body()).contains("console access denied");
+
+            JsonNode saved = server.call(localSession, "conch_save_local", Map.of("yaml", yaml));
+            assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();
+            assertThat(server.runtime.paths().localConches().resolve("remote_ping.yaml")).exists();
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void trialNamesTheMissingCredentialAndDoesNotEchoAnIllegalAccount() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("account"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String yaml = """
+                    conch: needs_password
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    base_url: http://127.0.0.1:9
+                    title: 需要凭证
+                    description: 缺凭证时要说清字段。
+                    credentials:
+                      password:
+                        type: secret
+                        label: 密码
+                        required: true
+                    actions:
+                      show:
+                        title: 看
+                        description: 返回常量。
+                        idempotent: true
+                        mcp: {expose: true, read_only: true}
+                        steps:
+                          - set: {message: seen}
+                        output:
+                          message: {type: string, description: 文本}
+                        examples:
+                          - input: {}
+                            output: {message: seen}
+                        notes: 无
+                        related: []
+                    """;
+            String session = server.initialize(false);
+            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            server.runtime.admin().createAccount("needs_password", "main", Actors.CONSOLE);
+            JsonNode missing = server.call(session, "conch_trial_run", Map.of(
+                    "conch", "needs_password", "action", "show", "account", "main"));
+            assertThat(toolMessage(missing)).isEqualTo(CrabRuntime.trialMissingCredentials(java.util.List.of("password")));
+            assertThat(toolMessage(missing)).contains("password").contains("控制台").doesNotContain("missing credentials");
+            assertThat(missing.toString()).doesNotContain("s3cret-value");
+
+            JsonNode illegal = server.call(session, "conch_trial_run", Map.of(
+                    "conch", "needs_password", "action", "show", "account", "s3cret-value!!"));
+            assertThat(toolMessage(illegal)).isEqualTo(CrabRuntime.TRIAL_ACCOUNT_INVALID);
+            assertThat(toolError(illegal).path("field").asText()).isEqualTo("account");
+            assertThat(illegal.toString()).doesNotContain("s3cret-value").doesNotContain("invalid account name");
+        }
+    }
+
     private static void assertSameIssues(Harness server, String session, String yaml) throws Exception {
         JsonNode validated = server.call(session, "conch_validate", Map.of("yaml", yaml));
         assertThat(validated.path("result").path("isError").asBoolean(true)).isFalse();
@@ -420,7 +596,8 @@ class AuthoringMcpTest {
             }
             int codeEnd = line.indexOf(' ');
             int pathEnd = line.indexOf(' ', codeEnd + 1);
-            found.add(new Issue(line.substring(0, codeEnd), line.substring(codeEnd + 1, pathEnd), line.substring(pathEnd + 1), null));
+            String message = line.substring(pathEnd + 1).replaceFirst(" 第 \\d+ 行$", "");
+            found.add(new Issue(line.substring(0, codeEnd), line.substring(codeEnd + 1, pathEnd), message, null));
         }
         return found;
     }
@@ -486,6 +663,87 @@ class AuthoringMcpTest {
     private record Issue(String code, String path, String message, Integer line) {
     }
 
+    private static String readWritePackage(String name, String version, String base) {
+        return """
+                conch: %s
+                version: %s
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: %s
+                title: 只读和写入
+                description: 用来区分只读能力。
+                credentials: {}
+                actions:
+                  show:
+                    title: 看
+                    description: 只读。
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - set: {message: seen}
+                    output:
+                      message: {type: string, description: 文本}
+                    examples:
+                      - input: {}
+                        output: {message: seen}
+                    notes: 无
+                    related: []
+                  save_note:
+                    title: 写
+                    description: 会打上游。
+                    idempotent: false
+                    mcp: {expose: true, read_only: false}
+                    steps:
+                      - request: {method: POST, path: /note}
+                      - extract:
+                          message: {jsonpath: $.message}
+                    output:
+                      message: {type: string, description: 文本}
+                    examples:
+                      - input: {}
+                        output: {message: saved}
+                    notes: 无
+                    related: []
+                """.formatted(name, version, base);
+    }
+
+    private static String callJson(String tool, String yaml) {
+        java.util.LinkedHashMap<String, Object> arguments = new java.util.LinkedHashMap<>();
+        if ("conch_trial_run".equals(tool)) {
+            arguments.put("conch", "remote_ping");
+            arguments.put("action", "ping");
+        } else {
+            arguments.put("yaml", yaml);
+        }
+        java.util.LinkedHashMap<String, Object> params = new java.util.LinkedHashMap<>();
+        params.put("name", tool);
+        params.put("arguments", arguments);
+        java.util.LinkedHashMap<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("jsonrpc", "2.0");
+        body.put("id", 3);
+        body.put("method", "tools/call");
+        body.put("params", params);
+        return ApiJson.write(body);
+    }
+
+    private static String nonLoopback() throws Exception {
+        Enumeration<NetworkInterface> nics = NetworkInterface.getNetworkInterfaces();
+        while (nics.hasMoreElements()) {
+            NetworkInterface nic = nics.nextElement();
+            if (!nic.isUp() || nic.isLoopback()) {
+                continue;
+            }
+            Enumeration<InetAddress> addresses = nic.getInetAddresses();
+            while (addresses.hasMoreElements()) {
+                InetAddress address = addresses.nextElement();
+                if (address instanceof Inet4Address && !address.isLoopbackAddress() && !address.isAnyLocalAddress()) {
+                    return address.getHostAddress();
+                }
+            }
+        }
+        throw new AssertionError("no non-loopback address");
+    }
+
     private static final class Harness implements AutoCloseable {
         final CrabRuntime runtime;
         final CrabHttpServer httpServer;
@@ -501,7 +759,11 @@ class AuthoringMcpTest {
         }
 
         static Harness open(Path home) throws Exception {
-            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), CrabConfig.defaults().withListen("127.0.0.1", 0));
+            return open(home, "127.0.0.1");
+        }
+
+        static Harness open(Path home, String host) throws Exception {
+            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), CrabConfig.defaults().withListen(host, 0));
             CrabHttpServer server = new CrabHttpServer(runtime);
             server.start();
             CreatedApiKey key = runtime.apiKeys().create("authoring", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
@@ -551,7 +813,11 @@ class AuthoringMcpTest {
         }
 
         HttpResponse<String> postRaw(String apiKey, String session, String body, Map<String, String> extra) throws Exception {
-            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(base + "/mcp"))
+            return postRaw(base + "/mcp", apiKey, session, body, extra);
+        }
+
+        HttpResponse<String> postRaw(String endpoint, String apiKey, String session, String body, Map<String, String> extra) throws Exception {
+            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(endpoint))
                     .timeout(Duration.ofSeconds(20))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json, text/event-stream")

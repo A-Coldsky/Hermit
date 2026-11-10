@@ -304,10 +304,22 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         return devTraces;
     }
 
+    /** Shown when a trial account name is not a single token. The value is not repeated. */
+    public static final String TRIAL_ACCOUNT_INVALID = "账号名不合法。";
+
     /**
-     * Runs one local HTTP or MCP action without an API key and without reporting to Tide.
-     * Official packages, a debug switch that is off, and a disabled capability are rejected
+     * Names the missing credential fields and where to fill them. Field names only; values are never included.
+     */
+    public static String trialMissingCredentials(java.util.List<String> names) {
+        String listed = names == null || names.isEmpty() ? "" : String.join("、", names);
+        return "还没填写凭证：" + listed + "。请到控制台打开这个本地包，在对应账号的凭证里补上。不要把口令、Cookie 或令牌发给 AI。";
+    }
+
+    /**
+     * Runs one local HTTP or MCP action without reporting to Tide.
+     * Official packages, developer mode that is off, and a disabled capability are rejected
      * before execution. MCP does not go through {@code Invoker}, so there is no confirm header.
+     * {@code apiKeyId} is recorded only for {@code conch_trial_run}; console and CLI trials pass null.
      */
     public ExecutionResult trialLocal(
             String conch,
@@ -315,6 +327,17 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             Optional<String> account,
             Map<String, Object> input,
             String traceId
+    ) {
+        return trialLocal(conch, action, account, input, traceId, null);
+    }
+
+    public ExecutionResult trialLocal(
+            String conch,
+            String action,
+            Optional<String> account,
+            Map<String, Object> input,
+            String traceId,
+            String apiKeyId
     ) {
         String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
         ConchDoc doc = requireLocalDebug(conch);
@@ -340,7 +363,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         ExecutionResult result = "mcp".equals(doc.driver())
                 ? mcpForwarder.execute(request, doc)
                 : engine.execute(request, doc);
-        logTrial(result, ready.secrets(), doc.conch(), action, ready.account());
+        logTrial(result, ready.secrets(), doc.conch(), action, ready.account(), apiKeyId);
         return httpView(result);
     }
 
@@ -381,7 +404,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地包上开发，再导出上传。");
         }
         if (!debug.get().enabled()) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "先打开调试开关。");
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "先打开开发者模式。");
         }
         return doc;
     }
@@ -396,7 +419,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             }
             throw new TrialRejected(404, ErrorCode.ACCOUNT_NOT_FOUND, Invoker.ACCOUNT_NOT_FOUND_MESSAGE);
         } catch (IllegalArgumentException ex) {
-            throw new TrialRejected(400, ErrorCode.INVALID_INPUT, Invoker.INVALID_ACCOUNT_NAME);
+            throw new TrialRejected(400, ErrorCode.INVALID_INPUT, TRIAL_ACCOUNT_INVALID);
         }
         Map<String, String> stored = conchConfig.all(Origin.LOCAL, doc.conch());
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
@@ -407,8 +430,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         List<String> missingCredentials = DeclaredSettings.missingCredentials(
                 doc, vault.fieldNames(Origin.LOCAL, doc.conch(), resolved.account()));
         if (!missingCredentials.isEmpty()) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED,
-                    "missing credentials: " + String.join(", ", missingCredentials));
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, trialMissingCredentials(missingCredentials));
         }
         Map<String, String> secrets;
         try {
@@ -850,7 +872,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             Map<String, String> secrets,
             String conch,
             String action,
-            String account
+            String account,
+            String apiKeyId
     ) {
         String message = null;
         String code = null;
@@ -878,7 +901,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     code,
                     message,
                     result.durationMillis(),
-                    null,
+                    apiKeyId,
                     CallChannel.CONSOLE), result.stepLogs());
         } catch (RuntimeException ex) {
             LOG.warning("call log failed: " + ex.getClass().getName());

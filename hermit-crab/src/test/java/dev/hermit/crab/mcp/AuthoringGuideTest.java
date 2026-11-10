@@ -34,6 +34,23 @@ class AuthoringGuideTest {
         assertThat(guide).isEqualTo(AuthoringGuide.stripDocLinks(source));
         assertThat(guide).contains("从 HAR 写规则").contains("conch: demo_status").contains("conch: sample_oa");
         assertThat(guide).doesNotContain("](").doesNotContain("github.com");
+        assertThat(guide).doesNotContain(
+                "legacy_oa",
+                "api.md",
+                "Extractors",
+                "LegacyOaEngineTest",
+                "BuiltinFilters",
+                "ConchParser",
+                "ConchValidator",
+                "InputPreparer",
+                "Invoker",
+                "RuleEngine",
+                "ToolSnapshots",
+                "OutputMask",
+                "Redactor",
+                "CrabVersion",
+                "调试开关",
+                "打开调试");
 
         String prose = guide.replaceAll("(?s)```.*?```", "");
         assertThat(prose).doesNotContain("http://").doesNotContain("https://").doesNotContain("](").doesNotContain("github.com");

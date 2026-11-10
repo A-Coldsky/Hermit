@@ -631,7 +631,7 @@ export const api = {
   runLocal: (conch: string, action: string, body: { account?: string; input?: Record<string, unknown> }) =>
     http.postEnvelope<Record<string, unknown>>(`${base}/local-conches/${seg(conch)}/actions/${seg(action)}/run`, body),
   /**
-   * 调试开关打开时，从上游 tools/list 重写本地 MCP 包。正式包为 409 `CONFLICT`。
+   * 开发者模式打开时，从上游 tools/list 重写本地 MCP 包。正式包为 409 `CONFLICT`。
    * OAuth 包使用已连接的令牌；没连上是 409 `NOT_CONFIGURED`，不打上游。
    * version 不变。traceId 指向 action 为 mcp_refresh 的 JSON-RPC 追踪，没有对应调用记录。
    */

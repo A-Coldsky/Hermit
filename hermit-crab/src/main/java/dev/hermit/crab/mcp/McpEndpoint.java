@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import dev.hermit.crab.engine.CrabVersion;
+import dev.hermit.crab.gateway.Loopback;
 import dev.hermit.crab.gateway.RequestBodies;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.store.ApiKeyPrincipal;
@@ -240,6 +241,10 @@ public final class McpEndpoint {
             request = McpJson.convert(params, McpSchema.ReadResourceRequest.class);
         } catch (IllegalArgumentException ex) {
             writeRpcError(ctx, id, McpErrors.invalidParams(), session);
+            return;
+        }
+        if (AuthoringGuide.URI.equals(request.uri()) && !Loopback.address(ctx.req().getRemoteAddr())) {
+            writeRpcError(ctx, id, McpErrors.authoringRemote(), session);
             return;
         }
         if (AuthoringGuide.URI.equals(request.uri()) && !runtime.debug().get().enabled()) {
@@ -469,7 +474,13 @@ public final class McpEndpoint {
     private void callTool(Context ctx, ApiKeyPrincipal principal, JsonNode id, JsonNode params, McpSession session) {
         String traceId = trace(ctx);
         try {
-            writeResult(ctx, id, calls.call(principal, session, headerAccount(ctx), params, traceId), session);
+            writeResult(ctx, id, calls.call(
+                    principal,
+                    session,
+                    headerAccount(ctx),
+                    params,
+                    traceId,
+                    Loopback.address(ctx.req().getRemoteAddr())), session);
         } catch (McpProtocolException ex) {
             writeRpcError(ctx, id, McpErrors.invalidParams(), session);
         }

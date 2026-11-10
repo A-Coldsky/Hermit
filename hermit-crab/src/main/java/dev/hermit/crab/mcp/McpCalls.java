@@ -29,6 +29,8 @@ import io.modelcontextprotocol.spec.McpSchema;
 final class McpCalls {
     static final String NO_CONFIRM = "客户端不支持确认，拒绝执行写操作";
     static final String REJECTED = "用户拒绝执行";
+    static final String TRACE_DENIED =
+            "这把 API Key 不能读取这条追踪。点名了该本地包的 Key 可以读。全范围 Key 只能读自己用 conch_trial_run 试跑出来的本地包追踪。正式包的追踪不能读。";
 
     private final CrabRuntime runtime;
     private final McpCatalog catalog;
@@ -60,6 +62,17 @@ final class McpCalls {
             JsonNode params,
             String traceId
     ) {
+        return call(principal, session, headerAccount, params, traceId, true);
+    }
+
+    McpSchema.CallToolResult call(
+            ApiKeyPrincipal principal,
+            McpSession session,
+            Optional<String> headerAccount,
+            JsonNode params,
+            String traceId,
+            boolean localCaller
+    ) {
         Attempt attempt = new Attempt(catalog.directory(principal), traceId == null || traceId.isBlank()
                 ? UUID.randomUUID().toString()
                 : traceId);
@@ -80,14 +93,19 @@ final class McpCalls {
             }
             return readTrace(principal, arguments, attempt);
         }
+        if (McpCatalog.VALIDATE.equals(name) || McpCatalog.SAVE_LOCAL.equals(name) || McpCatalog.TRIAL_RUN.equals(name)) {
+            if (!localCaller) {
+                return fail(attempt, "FORBIDDEN", AuthoringCalls.LOCAL_ONLY);
+            }
+        }
         if (McpCatalog.VALIDATE.equals(name)) {
             return authoring.validate(arguments, attempt);
         }
         if (McpCatalog.SAVE_LOCAL.equals(name)) {
-            return authoring.save(session, arguments, attempt);
+            return authoring.save(principal, session, arguments, attempt);
         }
         if (McpCatalog.TRIAL_RUN.equals(name)) {
-            return authoring.trial(arguments, attempt);
+            return authoring.trial(principal, arguments, attempt);
         }
         if (attempt.directory()) {
             return directory(principal, session, headerAccount, name, arguments, attempt);
@@ -275,8 +293,11 @@ final class McpCalls {
             return fail(attempt, "INVALID_INPUT", "traceId is required");
         }
         DevTraceStore.Trace trace = runtime.devTraces().find(traceId).orElse(null);
-        if (trace == null || !visible(principal, trace)) {
+        if (trace == null) {
             return fail(attempt, "NOT_FOUND", "not found");
+        }
+        if (!visible(principal, trace)) {
+            return fail(attempt, "FORBIDDEN", TRACE_DENIED);
         }
         Object devTrace;
         try {
@@ -298,24 +319,28 @@ final class McpCalls {
     }
 
     /**
-     * Local traces only. A call recorded under another API key is hidden.
-     * Console trials have no key, so any key that names this local conch may read them.
-     * {@code all: true} does not name local conches and cannot read them.
+     * Local traces only. A named key still has to list the conch. A call recorded under another
+     * API key stays hidden, except a console-channel trial, which named keys could already read.
+     * A full-scope key can read the local trial it started with {@code conch_trial_run}.
+     * Official traces are not local and stay hidden.
      */
     private boolean visible(ApiKeyPrincipal principal, DevTraceStore.Trace trace) {
         if (trace.origin() != Origin.LOCAL || principal == null || principal.scope() == null) {
             return false;
         }
-        if (!principal.scope().conches().contains(trace.conch())) {
+        CallLogStore.CallDetail detail = runtime.callLogs().findByTraceId(trace.traceId()).orElse(null);
+        boolean namesConch = principal.scope().conches().contains(trace.conch());
+        boolean ownTrial = ownLocalTrial(principal, detail);
+        if (!namesConch && !ownTrial) {
             return false;
         }
-        CallLogStore.CallDetail detail = runtime.callLogs().findByTraceId(trace.traceId()).orElse(null);
         if (detail != null && detail.call().apiKeyId() != null
-                && !detail.call().apiKeyId().equals(principal.id())) {
+                && !detail.call().apiKeyId().equals(principal.id())
+                && !(namesConch && "CONSOLE".equals(detail.call().channel()))) {
             return false;
         }
         if (DevTraceStore.MCP_REFRESH_ACTION.equals(trace.action())) {
-            return true;
+            return namesConch;
         }
         ConchDoc doc = runtime.registry().find(trace.conch()).orElse(null);
         Action action = doc == null ? null : doc.actions().get(trace.action());
@@ -323,6 +348,14 @@ final class McpCalls {
             return !principal.scope().readOnlyOnly();
         }
         return principal.permits(trace.conch(), trace.action(), CapabilityHttp.readOnly(action));
+    }
+
+    /** Full-scope key, and the call log is the trial that key started. */
+    private static boolean ownLocalTrial(ApiKeyPrincipal principal, CallLogStore.CallDetail detail) {
+        if (detail == null || principal.scope() == null || !principal.scope().grantsAllOfficial()) {
+            return false;
+        }
+        return "CONSOLE".equals(detail.call().channel()) && principal.id().equals(detail.call().apiKeyId());
     }
 
     private static String longestConchPrefix(String toolName, Set<String> conches) {

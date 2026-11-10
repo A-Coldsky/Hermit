@@ -30,7 +30,11 @@ final class McpCalls {
     static final String NO_CONFIRM = "客户端不支持确认，拒绝执行写操作";
     static final String REJECTED = "用户拒绝执行";
     static final String TRACE_DENIED =
-            "这把 API Key 不能读取这条追踪。点名了该本地包的 Key 可以读。全范围 Key 只能读自己用 conch_trial_run 试跑出来的本地包追踪。正式包的追踪不能读。";
+            "这把 API Key 不能读取这条追踪。点名了该本地规则包的 Key 可以读。全部权限 Key 只能读自己用 conch_trial_run 试跑出来的本地规则包追踪。正式包的追踪不能读。";
+    static final String TRACE_ABSENT = "没有这条追踪。编号不存在。";
+    static final String TRACE_REJECTED = "试跑被拒，没有留下追踪。";
+    static final String TRACE_DELETED = "追踪已删。关掉开发者模式时会删除全部追踪。";
+    static final String CONFIRM_TIMEOUT = "等待确认超时。请重新发起，并在客户端确认。";
 
     private final CrabRuntime runtime;
     private final McpCatalog catalog;
@@ -88,9 +92,6 @@ final class McpCalls {
         }
         Map<String, Object> arguments = request.arguments() == null ? Map.of() : request.arguments();
         if (McpCatalog.DEBUG_TRACE.equals(name)) {
-            if (!runtime.debug().get().enabled()) {
-                return missingTool(attempt, name);
-            }
             return readTrace(principal, arguments, attempt);
         }
         if (McpCatalog.VALIDATE.equals(name) || McpCatalog.SAVE_LOCAL.equals(name) || McpCatalog.TRIAL_RUN.equals(name)) {
@@ -246,7 +247,7 @@ final class McpCalls {
         try {
             answer = session.elicit(McpSchema.ElicitFormRequest.builder(message.toString(), schema).build());
         } catch (TimeoutException ex) {
-            return fail(attempt, "INTERNAL", "确认超时");
+            return fail(attempt, "TIMEOUT", CONFIRM_TIMEOUT);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             return fail(attempt, "INTERNAL", "internal error");
@@ -283,6 +284,13 @@ final class McpCalls {
             Map<String, Object> arguments,
             Attempt attempt
     ) {
+        if (!runtime.debug().get().enabled()) {
+            String id = arguments.get("traceId") instanceof String text ? text.trim() : "";
+            if (runtime.deletedTrace(id)) {
+                return fail(attempt, "NOT_FOUND", TRACE_DELETED);
+            }
+            return fail(attempt, "NOT_FOUND", AuthoringCalls.DEV_MODE_CLOSED);
+        }
         if (arguments.size() != 1 || !arguments.containsKey("traceId")) {
             return fail(attempt, "INVALID_INPUT", arguments.containsKey("traceId")
                     ? "unknown field"
@@ -294,7 +302,10 @@ final class McpCalls {
         }
         DevTraceStore.Trace trace = runtime.devTraces().find(traceId).orElse(null);
         if (trace == null) {
-            return fail(attempt, "NOT_FOUND", "not found");
+            if (runtime.rejectedTrial(traceId)) {
+                return fail(attempt, "NOT_FOUND", TRACE_REJECTED);
+            }
+            return fail(attempt, "NOT_FOUND", TRACE_ABSENT);
         }
         if (!visible(principal, trace)) {
             return fail(attempt, "FORBIDDEN", TRACE_DENIED);
@@ -500,6 +511,11 @@ final class McpCalls {
         return toolError(code, message, null, attempt.directory(), attempt.traceId());
     }
 
+    /** A trial rejected before execution has no trace. The response must not hand back an id. */
+    static McpSchema.CallToolResult failWithoutTrace(Attempt attempt, String code, String message) {
+        return toolError(code, message, null, attempt.directory(), null, false);
+    }
+
     static McpSchema.CallToolResult fail(Attempt attempt, String code, String message, String field) {
         return toolError(code, message, field, attempt.directory(), attempt.traceId());
     }
@@ -511,17 +527,30 @@ final class McpCalls {
             boolean directory,
             String traceId
     ) {
+        return toolError(code, message, field, directory, traceId, true);
+    }
+
+    static McpSchema.CallToolResult toolError(
+            String code,
+            String message,
+            String field,
+            boolean directory,
+            String traceId,
+            boolean includeTrace
+    ) {
         String resolved = code == null || code.isBlank() ? "INTERNAL" : code;
         String text = message == null ? "" : message;
         if ("NOT_FOUND".equals(resolved) && (text.isBlank() || "not found".equals(text))) {
             text = McpErrors.UNKNOWN_TOOL;
         }
-        String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
         LinkedHashMap<String, String> error = new LinkedHashMap<>();
         error.put("code", resolved);
         error.put("message", text);
         error.put("hint", McpErrors.toolHint(resolved, text, directory));
-        error.put("traceId", id);
+        if (includeTrace) {
+            String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
+            error.put("traceId", id);
+        }
         String named = field == null || field.isBlank() ? McpErrors.fieldOf(text) : field;
         if (named != null && !named.isBlank()) {
             error.put("field", named);

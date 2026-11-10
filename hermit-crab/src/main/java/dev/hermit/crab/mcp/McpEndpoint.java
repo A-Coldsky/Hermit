@@ -203,9 +203,14 @@ public final class McpEndpoint {
         switch (method) {
             case "ping" -> writeResult(ctx, id, Map.of(), session);
             case "tools/list" -> writeResult(ctx, id,
-                    McpSchema.ListToolsResult.builder(catalog.tools(principal, session.protocolVersion)).build(), session);
+                    McpSchema.ListToolsResult.builder(catalog.tools(
+                            principal, session.protocolVersion, Loopback.address(ctx.req().getRemoteAddr()))).build(),
+                    session);
             case "tools/call" -> callTool(ctx, principal, id, message.get("params"), session);
-            case "resources/list" -> writeResult(ctx, id, McpSchema.ListResourcesResult.builder(catalog.resources(principal)).build(), session);
+            case "resources/list" -> writeResult(ctx, id,
+                    McpSchema.ListResourcesResult.builder(catalog.resources(
+                            principal, Loopback.address(ctx.req().getRemoteAddr()))).build(),
+                    session);
             case "resources/read" -> readResource(ctx, principal, id, message.get("params"), session);
             default -> writeRpcError(ctx, id, McpErrors.methodNotFound(), session);
         }

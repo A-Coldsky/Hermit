@@ -318,7 +318,7 @@ watch(
       </el-alert>
       <el-alert v-if="local" type="info" show-icon :closable="false" title="本地规则包：未经 Reef 签名，只在本机可用">
         <template #default>
-          全范围 Key 可以调用这个本地包。在范围里点名了它的 Key 也可以调用。调用不会上报 Reef。
+          全部权限可以调用这个本地规则包。在范围里点名了它的 Key 也可以调用。调用不会上报 Reef。
           导出的 YAML 可以直接在 Reef「上传规则包」页面上传，校验签名后发布给其他 Crab。
         </template>
       </el-alert>

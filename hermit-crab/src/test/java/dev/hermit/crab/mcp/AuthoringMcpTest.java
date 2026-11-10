@@ -85,7 +85,7 @@ class AuthoringMcpTest {
             assertThat(toolError(called).path("code").asText()).isEqualTo("NOT_CONFIGURED");
             JsonNode trace = server.rpc(closed, 5, "tools/call", Map.of(
                     "name", "debug_trace", "arguments", Map.of("traceId", "missing")));
-            assertThat(toolMessage(trace)).isEqualTo(McpErrors.UNKNOWN_TOOL);
+            assertThat(toolMessage(trace)).isEqualTo(AuthoringCalls.DEV_MODE_CLOSED).doesNotContain("没有这个工具");
 
             HttpResponse<String> denied = server.post(Map.of(
                     "jsonrpc", "2.0", "id", 6, "method", "resources/read",
@@ -156,8 +156,13 @@ class AuthoringMcpTest {
             assertThat(console.statusCode()).isEqualTo(400);
             assertThat(issues(body.path("warnings"), true)).isEqualTo(issues(ApiJson.tree(console.body()).path("data").path("warnings"), true));
             assertThat(issues(body.path("errors"), true)).isEqualTo(issues(ApiJson.tree(console.body()).path("data").path("errors"), true));
-            assertThat(codes(body.path("warnings"))).contains("LITERAL_CREDENTIAL");
-            assertThat(codes(body.path("errors"))).contains("PLAINTEXT_CREDENTIAL");
+            assertThat(codes(body.path("errors"))).containsOnly("PLAINTEXT_CREDENTIAL");
+            assertThat(body.path("errors")).allSatisfy(issue -> assertThat(issue.path("line").isNumber()).isTrue());
+            assertThat(codes(body.path("warnings"))).doesNotContain("LITERAL_CREDENTIAL");
+            assertThat(issues(body.path("errors"), false)).extracting(Issue::path).containsExactlyInAnyOrder(
+                    "actions.ping.steps[0].request.headers.Cookie",
+                    "actions.ping.steps[0].request.headers.Authorization",
+                    "actions.ping.steps[0].request.headers.X-Password");
             assertThat(server.runtime.paths().localConches().resolve("leak_ping.yaml")).doesNotExist();
 
             String warningOnly = """
@@ -189,10 +194,16 @@ class AuthoringMcpTest {
                     """.formatted(token);
             JsonNode warned = server.call(session, "conch_validate", Map.of("yaml", warningOnly));
             JsonNode warnedBody = structured(warned);
-            assertThat(warnedBody.path("ok").asBoolean()).isTrue();
-            assertThat(codes(warnedBody.path("errors"))).isEmpty();
-            assertThat(codes(warnedBody.path("warnings"))).containsExactly("LITERAL_CREDENTIAL");
+            assertThat(warnedBody.path("ok").asBoolean()).isFalse();
+            assertThat(codes(warnedBody.path("errors"))).containsExactly("PLAINTEXT_CREDENTIAL");
+            assertThat(codes(warnedBody.path("warnings"))).doesNotContain("LITERAL_CREDENTIAL");
+            assertThat(warnedBody.path("errors").get(0).path("line").isNumber()).isTrue();
+            assertThat(warnedBody.path("errors").get(0).path("path").asText())
+                    .isEqualTo("actions.ping.steps[0].request.headers.X-Note");
             assertThat(warnedBody.toString()).doesNotContain(token);
+            JsonNode blocked = server.call(session, "conch_save_local", Map.of("yaml", warningOnly));
+            assertThat(structured(blocked).path("ok").asBoolean()).isFalse();
+            assertThat(server.runtime.paths().localConches().resolve("note_ping.yaml")).doesNotExist();
         }
     }
 
@@ -205,7 +216,9 @@ class AuthoringMcpTest {
             JsonNode saved = server.call(session, "conch_save_local", Map.of("yaml", yaml));
             assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();
             assertThat(structured(saved).path("replaced").asBoolean()).isFalse();
-            assertThat(structured(saved).path("next").asText()).contains("不要把口令、Cookie 或令牌发给 AI");
+            assertThat(structured(saved).path("next").asText())
+                    .contains("不要把口令、Cookie 或令牌发给 AI")
+                    .contains("新建账号");
             Path file = server.runtime.paths().localConches().resolve("saved_ping.yaml");
             assertThat(Files.readString(file)).isEqualTo(yaml);
 
@@ -242,6 +255,19 @@ class AuthoringMcpTest {
                 assertThat(structured(accepted.get()).path("ok").asBoolean()).as(String.valueOf(accepted.get())).isTrue();
                 assertThat(structured(accepted.get()).path("replaced").asBoolean()).isTrue();
                 assertThat(Files.readString(file)).contains("version: 1.0.1");
+
+                server.runtime.admin().createAccount("saved_ping", "main", Actors.CONSOLE);
+                String later = next.replace("version: 1.0.1", "version: 1.0.2");
+                AtomicReference<JsonNode> checked = new AtomicReference<>();
+                Thread check = new Thread(() -> checked.set(
+                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", later))));
+                check.start();
+                JsonNode third = sse.awaitMethod("elicitation/create");
+                server.answer(confirming, third, "accept", true);
+                check.join(15_000);
+                assertThat(structured(checked.get()).path("next").asText())
+                        .doesNotContain("新建账号")
+                        .contains("核对");
             }
 
             server.runtime.registry().put(ConchParser.parse(LocalConchBehaviorTest.ping("official_ping", "1.0.0")));
@@ -301,7 +327,7 @@ class AuthoringMcpTest {
             assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
             JsonNode missing = server.call(session, "conch_trial_run", Map.of("conch", "trial_ping", "action", "ping"));
             assertThat(toolMessage(missing)).isEqualTo(
-                    "还没有账号。请到控制台为本地包 trial_ping 新建账号并填写凭证。不要把口令、Cookie 或令牌发给 AI。");
+                    "还没有账号。请到控制台为本地规则包 trial_ping 新建账号并填写凭证。不要把口令、Cookie 或令牌发给 AI。");
             assertThat(hits).hasValue(0);
 
             server.runtime.admin().createAccount("trial_ping", "main", Actors.CONSOLE);
@@ -428,6 +454,9 @@ class AuthoringMcpTest {
                     "named-read-only", new ApiKeyScope(Set.of("ro_ping"), Set.of(), true), Actors.CONSOLE);
             String readOnlySession = server.initialize(readOnly.plaintext(), false);
             String namedSession = server.initialize(namedReadOnly.plaintext(), false);
+            JsonNode readOnlyTools = server.rpc(readOnly.plaintext(), readOnlySession, 2, "tools/list", null);
+            assertThat(toolNames(readOnlyTools)).doesNotContain("conch_save_local")
+                    .contains("conch_validate", "conch_trial_run", "debug_trace");
 
             JsonNode validated = server.rpc(readOnly.plaintext(), readOnlySession, 3, "tools/call", Map.of(
                     "name", "conch_validate", "arguments", Map.of("yaml", yaml)));
@@ -472,6 +501,10 @@ class AuthoringMcpTest {
         try (Harness server = Harness.open(temp.resolve("remote"), "0.0.0.0")) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String localSession = server.initialize(false);
+            JsonNode localTools = server.rpc(localSession, 2, "tools/list", null);
+            assertThat(toolNames(localTools)).contains("conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
+            JsonNode localResources = server.rpc(localSession, 3, "resources/list", null);
+            assertThat(resourceUris(localResources)).contains(AuthoringGuide.URI);
             JsonNode localGuide = server.rpc(localSession, 4, "resources/read", Map.of("uri", AuthoringGuide.URI));
             assertThat(localGuide.path("result").path("contents").get(0).path("text").asText()).contains("从 HAR 写规则");
             String yaml = LocalConchBehaviorTest.ping("remote_ping", "1.0.0");
@@ -482,6 +515,17 @@ class AuthoringMcpTest {
                     """, Map.of());
             assertThat(opened.statusCode()).as(opened.body()).isEqualTo(200);
             String remoteSession = opened.headers().firstValue("Mcp-Session-Id").orElseThrow();
+            HttpResponse<String> remoteTools = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
+                    {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+                    """, Map.of());
+            assertThat(remoteTools.body()).contains("debug_trace")
+                    .doesNotContain("conch_validate")
+                    .doesNotContain("conch_save_local")
+                    .doesNotContain("conch_trial_run");
+            HttpResponse<String> remoteResources = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
+                    {"jsonrpc":"2.0","id":3,"method":"resources/list"}
+                    """, Map.of());
+            assertThat(remoteResources.body()).doesNotContain(AuthoringGuide.URI);
             for (String tool : java.util.List.of("conch_validate", "conch_save_local", "conch_trial_run")) {
                 HttpResponse<String> called = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, callJson(tool, yaml), Map.of());
                 assertThat(called.statusCode()).as(called.body()).isEqualTo(200);
@@ -548,17 +592,231 @@ class AuthoringMcpTest {
             String session = server.initialize(false);
             assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
             server.runtime.admin().createAccount("needs_password", "main", Actors.CONSOLE);
-            JsonNode missing = server.call(session, "conch_trial_run", Map.of(
-                    "conch", "needs_password", "action", "show", "account", "main"));
-            assertThat(toolMessage(missing)).isEqualTo(CrabRuntime.trialMissingCredentials(java.util.List.of("password")));
-            assertThat(toolMessage(missing)).contains("password").contains("控制台").doesNotContain("missing credentials");
+            HttpResponse<String> rejected = server.postRaw(server.key.plaintext(), session, """
+                    {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_trial_run","arguments":{"conch":"needs_password","action":"show","account":"main"}}}
+                    """, Map.of());
+            String rejectedId = rejected.headers().firstValue("X-Hermit-Trace").orElseThrow();
+            JsonNode missing = ApiJson.tree(rejected.body());
+            assertThat(missing.toString()).doesNotContain("\"traceId\"").doesNotContain(rejectedId);
+            assertThat(toolMessage(missing)).contains("main").contains("password").contains("密码")
+                    .contains("控制台").doesNotContain("missing credentials");
             assertThat(missing.toString()).doesNotContain("s3cret-value");
+            JsonNode rejectedTrace = server.rpc(session, 8, "tools/call", Map.of(
+                    "name", "debug_trace", "arguments", Map.of("traceId", rejectedId)));
+            assertThat(toolMessage(rejectedTrace)).contains("试跑被拒").doesNotContain("没有这个工具");
 
             JsonNode illegal = server.call(session, "conch_trial_run", Map.of(
                     "conch", "needs_password", "action", "show", "account", "s3cret-value!!"));
             assertThat(toolMessage(illegal)).isEqualTo(CrabRuntime.TRIAL_ACCOUNT_INVALID);
             assertThat(toolError(illegal).path("field").asText()).isEqualTo("account");
             assertThat(illegal.toString()).doesNotContain("s3cret-value").doesNotContain("invalid account name");
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void developerModeNotifiesToolAndResourceListsWhenOpenedAndClosed() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("notify-debug"))) {
+            String session = server.initialize(false);
+            try (Sse sse = Sse.open(server, session)) {
+                sse.awaitPrefix(": open");
+                server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+                sse.awaitMethod("notifications/tools/list_changed");
+                sse.awaitMethod("notifications/resources/list_changed");
+                server.runtime.debug().setEnabled(false, Actors.CONSOLE);
+                sse.awaitMethod("notifications/tools/list_changed");
+                sse.awaitMethod("notifications/resources/list_changed");
+            }
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void confirmationTimeoutIsNotAnInternalError() throws Exception {
+        long previous = McpSession.elicitWaitMillis;
+        McpSession.elicitWaitMillis = 400;
+        try (Harness server = Harness.open(temp.resolve("timeout"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String yaml = LocalConchBehaviorTest.ping("timeout_ping", "1.0.0");
+            assertThat(structured(server.call(server.initialize(false), "conch_save_local", Map.of("yaml", yaml)))
+                    .path("ok").asBoolean()).isTrue();
+            String next = yaml.replace("version: 1.0.0", "version: 1.0.1");
+            String confirming = server.initialize(true);
+            try (Sse sse = Sse.open(server, confirming)) {
+                sse.awaitPrefix(": open");
+                JsonNode timed = server.call(confirming, "conch_save_local", Map.of("yaml", next));
+                assertThat(toolMessage(timed)).contains("等待确认超时").doesNotContain("内部错误");
+                assertThat(toolError(timed).path("code").asText()).isNotEqualTo("INTERNAL");
+                assertThat(toolError(timed).path("hint").asText()).doesNotContain("内部错误");
+            }
+        } finally {
+            McpSession.elicitWaitMillis = previous;
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void undefinedVariablesFailAtValidateWithLineNumbers() throws Exception {
+        String yaml = """
+                conch: undef_ping
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:9
+                title: 未定义
+                description: 变量还没声明。
+                credentials: {}
+                actions:
+                  ping:
+                    title: 探测
+                    description: 引用了三个未定义变量。
+                    steps:
+                      - request:
+                          method: GET
+                          path: "/{{vars.token}}"
+                          headers:
+                            X-A: "{{token}}"
+                          query:
+                            q: "{{auth.token}}"
+                    output:
+                      message: {type: string, description: 文本, value: no}
+                    examples:
+                      - input: {}
+                        output: {message: no}
+                    notes: 无
+                    related: []
+                """;
+        String declared = """
+                conch: declared_ping
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:9
+                title: 已声明
+                description: 这些变量都先出现过。
+                credentials:
+                  password: {type: secret, required: true, label: 密码}
+                auth:
+                  steps:
+                    - extract:
+                        viewstate: {jsonpath: $.view}
+                    - request:
+                        method: POST
+                        path: /login
+                        form:
+                          state: "{{viewstate}}"
+                          password: "{{credential.password}}"
+                actions:
+                  ping:
+                    title: 探测
+                    description: 使用已声明变量。
+                    input:
+                      page: {type: integer, description: 页码}
+                    steps:
+                      - request:
+                          method: GET
+                          path: /items
+                          query: {p: "{{input.page}}"}
+                      - extract:
+                          items: {jsonpath: $.items}
+                      - request:
+                          method: GET
+                          path: "/item/{{items}}"
+                    output:
+                      items: {type: string, description: 列表}
+                    examples:
+                      - input: {page: 1}
+                        output: {items: ok}
+                    notes: 无
+                    related: []
+                """;
+        try (Harness server = Harness.open(temp.resolve("undef"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String session = server.initialize(false);
+            JsonNode validated = server.call(session, "conch_validate", Map.of("yaml", yaml));
+            JsonNode errors = structured(validated).path("errors");
+            assertThat(structured(validated).path("ok").asBoolean()).isFalse();
+            assertThat(errors).hasSize(3);
+            String[] lines = yaml.split("\n", -1);
+            for (JsonNode error : errors) {
+                assertThat(error.path("code").asText()).isEqualTo("UNDECLARED_VARIABLE");
+                assertThat(error.path("line").isNumber()).isTrue();
+                String message = error.path("message").asText();
+                assertThat(message).contains("未定义的变量");
+                String ref = message.substring("引用了未定义的变量 ".length(), message.length() - 1);
+                assertThat(lines[error.path("line").asInt() - 1]).contains("{{" + ref + "}}");
+            }
+            JsonNode ok = server.call(session, "conch_validate", Map.of("yaml", declared));
+            assertThat(structured(ok).path("ok").asBoolean()).as(ok.toString()).isTrue();
+            assertThat(McpErrors.toolHint("RULE_MISMATCH", "引用了未定义的变量 token。"))
+                    .doesNotContain("上游").doesNotContain("版本不一致");
+            assertThat(McpErrors.toolHint("AUTH_FAILED", "引用了未定义的变量 token。"))
+                    .doesNotContain("上游").doesNotContain("版本不一致").doesNotContain("test-login");
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void missingCredentialsNameTheAccountFieldAndConsoleLabelOnEveryCallPath() throws Exception {
+        String yaml = """
+                conch: partial_ping
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:9
+                title: 部分凭证
+                description: 只填了一个字段。
+                credentials:
+                  password:
+                    type: secret
+                    label: 密码
+                    required: true
+                  token:
+                    type: secret
+                    label: 访问令牌
+                    required: true
+                actions:
+                  show:
+                    title: 看
+                    description: 返回常量。
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - set: {message: seen}
+                    output:
+                      message: {type: string, description: 文本, value: seen}
+                    examples:
+                      - input: {}
+                        output: {message: seen}
+                    notes: 无
+                    related: []
+                """;
+        try (Harness server = Harness.open(temp.resolve("partial"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String session = server.initialize(false);
+            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            dev.hermit.common.model.ConchDoc doc = server.runtime.registry().find("partial_ping").orElseThrow();
+            server.runtime.admin().createAccount("partial_ping", "ada", Actors.CONSOLE);
+            server.runtime.admin().writeCredentials(doc, "ada", Map.of("password", "filled-secret"), Actors.CONSOLE);
+
+            JsonNode trial = server.call(session, "conch_trial_run", Map.of(
+                    "conch", "partial_ping", "action", "show", "account", "ada"));
+            JsonNode mcp = server.call(session, "partial_ping__show", Map.of("account", "ada"));
+            HttpResponse<String> api = server.http.send(java.net.http.HttpRequest.newBuilder(
+                    java.net.URI.create(server.base + "/api/partial_ping/show"))
+                    .header("Authorization", "Bearer " + server.key.plaintext())
+                    .header("X-Hermit-Account", "ada")
+                    .GET().build(), java.net.http.HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
+            HttpResponse<String> login = server.http.send(java.net.http.HttpRequest.newBuilder(
+                    java.net.URI.create(server.base + "/console/api/conches/partial_ping/accounts/ada/test-login"))
+                    .header("X-Hermit-Console", "1")
+                    .header("Content-Type", "application/json")
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString("{}"))
+                    .build(), java.net.http.HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
+            for (String text : java.util.List.of(
+                    toolMessage(trial),
+                    toolMessage(mcp),
+                    api.body(),
+                    login.body())) {
+                assertThat(text).contains("ada").contains("token").contains("访问令牌").contains("控制台");
+                assertThat(text).doesNotContain("missing credentials").doesNotContain("password（密码）").doesNotContain("filled-secret");
+            }
         }
     }
 

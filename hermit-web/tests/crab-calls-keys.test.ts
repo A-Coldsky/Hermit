@@ -88,7 +88,7 @@ describe('Crab API Keys', () => {
     const wrapper = await mountPage(ApiKeysView)
     await flushPromises()
     expect(wrapper.findAll('[data-test="scope-all"]')).toHaveLength(1)
-    expect(wrapper.text()).toContain('全部规则包的全部能力，包括本地包')
+    expect(wrapper.text()).toContain('全部规则包的全部能力，包括本地规则包')
     expect(wrapper.text()).toContain('legacy_oa')
   })
 
@@ -118,7 +118,7 @@ describe('Crab API Keys', () => {
     await flushPromises()
     const risk = document.body.querySelector('[data-test="scope-all-risk"]')
     expect(risk?.textContent).toContain('全部权限风险较高')
-    expect(risk?.textContent).toContain('包括本地包')
+    expect(risk?.textContent).toContain('包括本地规则包')
     expect(risk?.textContent).not.toContain('会修改数据的能力也能调用')
 
     ;(dialog().querySelector('.el-checkbox') as HTMLElement).click()

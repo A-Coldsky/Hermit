@@ -230,7 +230,7 @@ public final class Invoker {
                 doc, vault.fieldNames(origin, conch, resolved.account()));
         if (!missingCredentials.isEmpty()) {
             return done(traceId, ErrorCode.NOT_CONFIGURED,
-                    "missing credentials: " + String.join(", ", missingCredentials), null);
+                    CredentialMessages.missing(resolved.account(), missingCredentials, doc.credentials()), null);
         }
         Map<String, String> merged = DeclaredSettings.mergedConfig(doc, stored);
         Map<String, String> secrets;

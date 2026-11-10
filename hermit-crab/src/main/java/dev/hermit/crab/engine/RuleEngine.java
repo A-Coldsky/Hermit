@@ -24,6 +24,7 @@ import dev.hermit.common.model.Step;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
 import dev.hermit.common.template.TemplateException;
+import dev.hermit.common.template.UndefinedVariable;
 import dev.hermit.crab.secure.KnownSecrets;
 import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.store.Origin;
@@ -258,7 +259,8 @@ public final class RuleEngine implements ConchExecutor {
             try {
                 data = templates.render(action.outputTemplate(), attempt.vars);
             } catch (TemplateException ex) {
-                return finish(false, null, ErrorCode.RULE_MISMATCH, ex.getMessage(), null, null, ex.getMessage(),
+                String text = undefinedOr(ex);
+                return finish(false, null, ErrorCode.RULE_MISMATCH, text, null, null, text,
                         attempt.logs, version, request, credentials, sessions.seenCookieValues(key), start);
             }
             sessions.touch(key);
@@ -303,7 +305,7 @@ public final class RuleEngine implements ConchExecutor {
         try {
             rendered = templates.render(alive.request(), vars);
         } catch (TemplateException ex) {
-            throw new StepFailure(ErrorCode.AUTH_FAILED, ex.getMessage(), -1, "request", List.of());
+            throw new StepFailure(ErrorCode.AUTH_FAILED, undefinedOr(ex), -1, "request", List.of());
         }
         Map<String, Object> spec = Values.map(rendered);
         if (spec == null) {
@@ -417,7 +419,13 @@ public final class RuleEngine implements ConchExecutor {
     ) {
         CloseableHttpClient client = sessions.client(key);
         Runnable persist = () -> sessions.persist(key);
-        boolean capture = DevTraceScope.current() != null;
+        DevTraceDraft draft = DevTraceScope.current();
+        boolean capture = draft != null;
+        boolean collectDerived = draft != null && "login".equals(phase);
+        if (collectDerived) {
+            draft.collectDerived(true);
+        }
+        try {
         for (int i = 0; i < definitions.size(); i++) {
             Step step = definitions.get(i);
             if (System.nanoTime() >= deadline) {
@@ -444,11 +452,8 @@ public final class RuleEngine implements ConchExecutor {
                         outcome.path(),
                         outcome.status(),
                         outcome.extractCount()));
-                if (capture && outcome.capture() != null) {
-                    DevTraceDraft draft = DevTraceScope.current();
-                    if (draft != null) {
-                        draft.add(phase, i, elapsed(started), outcome.capture());
-                    }
+                if (capture && outcome.capture() != null && draft != null) {
+                    draft.add(phase, i, elapsed(started), outcome.capture());
                 }
                 // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
                 rejectCapabilityStatus(auth, outcome, i, step.type(), logs, definitions);
@@ -468,11 +473,21 @@ public final class RuleEngine implements ConchExecutor {
                 logs.add(new StepLog(i, step.type(), elapsed(started), null, null, null, null));
                 recordFailure(phase, i, step, elapsed(started), null);
                 ErrorCode code = auth ? ErrorCode.AUTH_FAILED : ErrorCode.RULE_MISMATCH;
-                throw new StepFailure(code, ex.getMessage(), i, step.type(), logs);
+                throw new StepFailure(code, undefinedOr(ex), i, step.type(), logs);
             } catch (DeadlineExceeded ex) {
                 throw new DeadlineExceeded(i, step.type(), logs);
             }
         }
+        } finally {
+            if (collectDerived) {
+                draft.collectDerived(false);
+            }
+        }
+    }
+
+    private static String undefinedOr(TemplateException ex) {
+        String undefined = UndefinedVariable.fromTemplateFailure(ex.getMessage());
+        return undefined == null ? ex.getMessage() : undefined;
     }
 
     private ExecutionResult expired(
@@ -684,6 +699,10 @@ public final class RuleEngine implements ConchExecutor {
                     secrets.add(value);
                 }
             }
+        }
+        DevTraceDraft draft = DevTraceScope.current();
+        if (draft != null) {
+            secrets.addAll(draft.derivedSecrets());
         }
         return Redactor.of(secrets);
     }

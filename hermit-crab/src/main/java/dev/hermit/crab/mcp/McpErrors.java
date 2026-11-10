@@ -216,7 +216,22 @@ final class McpErrors {
             return "换一把没有勾选「只允许调用只读能力」的 Key。只读 Key 仍可以校验，也可以试跑 read_only 为 true 的能力。";
         }
         if (McpCalls.TRACE_DENIED.equals(message)) {
-            return "点名该本地包，或用试跑的那把全范围 Key 读取自己的试跑追踪。正式包的追踪不能读。";
+            return "点名该本地规则包，或用试跑的那把全部权限 Key 读取自己的试跑追踪。正式包的追踪不能读。";
+        }
+        if (message != null && message.contains("编号不存在")) {
+            return "核对追踪编号。这条编号没有对应的追踪。";
+        }
+        if (message != null && message.contains("试跑被拒")) {
+            return "这次试跑没有执行，没有留下追踪。";
+        }
+        if (message != null && message.contains("追踪已删")) {
+            return "关掉开发者模式时会删除全部追踪。重新打开后再试跑才会有新的追踪。";
+        }
+        if (McpCalls.CONFIRM_TIMEOUT.equals(message)) {
+            return "请重新发起，并在客户端确认。";
+        }
+        if (message != null && message.contains("未定义的变量")) {
+            return "请在规则中先声明或提取这个变量。";
         }
         if (CrabRuntime.TRIAL_ACCOUNT_INVALID.equals(message)) {
             return "账号名只能是字母、数字、下划线或连字符，最长 64 个字符。不要把口令放在 account 里。";
@@ -225,13 +240,13 @@ final class McpErrors {
             return "换一个新的包名再保存，或到控制台导入并确认覆盖。";
         }
         if (AuthoringCalls.OVERWRITE_DECLINED.equals(message)) {
-            return "本地包没有改动。要覆盖时，在客户端确认。";
+            return "本地规则包没有改动。要覆盖时，在客户端确认。";
         }
         if (AuthoringCalls.OFFICIAL.equals(message)) {
-            return "正式包不能在这里保存或试跑。先在本地包上开发，再导出上传。";
+            return "正式包不能在这里保存或试跑。先在本地规则包上开发，再导出上传。";
         }
         if (AuthoringCalls.CONFIRM_PARAM.equals(message)) {
-            return "去掉 confirm。覆盖已有本地包时，在客户端确认。";
+            return "去掉 confirm。覆盖已有本地规则包时，在客户端确认。";
         }
         if ("FORBIDDEN".equals(code)) {
             if (McpCalls.NO_CONFIRM.equals(message)) {
@@ -253,7 +268,7 @@ final class McpErrors {
             case "CONCH_DISABLED" -> "该规则包已在 Reef 停用，且本机没有可调用的已安装版本。管理员重新启用后同步即可装回；已安装的版本仍可调用。";
             case "ACCOUNT_NOT_FOUND" -> "在 Crab 控制台或 CLI 为该规则包创建账号，或改用已有账号名。";
             case "NOT_CONFIGURED" -> "在 Crab 控制台补齐该规则包的配置和凭证。";
-            case "AUTH_FAILED" -> "这是上游登录失败，不是 API Key 错误。请检查该账号的凭证，或在控制台执行 test-login。";
+            case "AUTH_FAILED" -> "这是上游登录失败，不是 API Key 错误。请检查该账号的凭证，或在控制台执行测试登录。";
             case "SESSION_EXPIRED" -> "上游会话已失效。请检查凭证后重试。";
             case "TIMEOUT" -> "调用超时。请稍后重试。";
             case "UPSTREAM_ERROR" -> "上游返回错误。请稍后重试。";

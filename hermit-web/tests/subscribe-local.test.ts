@@ -416,7 +416,7 @@ describe('本地规则包', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('本地规则包：未经 Reef 签名')
     const local = wrapper.findAll('.el-alert').find((node) => node.text().includes('未经 Reef 签名'))
-    expect(local?.text()).toContain('全范围 Key 可以调用这个本地包')
+    expect(local?.text()).toContain('全部权限可以调用这个本地规则包')
     expect(local?.text()).not.toContain('会被拒绝')
     expect(buttons(wrapper, '导出 YAML')).toHaveLength(1)
     expect(buttons(wrapper, '删除')).toHaveLength(1)

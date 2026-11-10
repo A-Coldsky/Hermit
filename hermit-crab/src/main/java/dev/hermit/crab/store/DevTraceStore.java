@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -152,6 +153,17 @@ public final class DevTraceStore {
         try (Statement statement = connection.createStatement()) {
             return statement.executeUpdate("DELETE FROM dev_traces");
         }
+    }
+
+    static List<String> ids(Connection connection) throws SQLException {
+        ArrayList<String> ids = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+                ResultSet resultSet = statement.executeQuery("SELECT trace_id FROM dev_traces")) {
+            while (resultSet.next()) {
+                ids.add(resultSet.getString(1));
+            }
+        }
+        return ids;
     }
 
     private static void write(Connection connection, NewTrace trace, Instant createdAt) throws SQLException {

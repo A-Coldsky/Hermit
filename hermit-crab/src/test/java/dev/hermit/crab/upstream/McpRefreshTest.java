@@ -188,7 +188,7 @@ class McpRefreshTest {
                 Reply official = lab.post("/console/api/local-conches/signed_crm/mcp/refresh", "{}");
                 assertThat(official.status).isEqualTo(409);
                 assertThat(official.json.path("error").path("code").asText()).isEqualTo("CONFLICT");
-                assertThat(official.json.path("error").path("message").asText()).isEqualTo("先在本地包上开发，再导出上传。");
+                assertThat(official.json.path("error").path("message").asText()).isEqualTo("先在本地规则包上开发，再导出上传。");
                 assertThat(upstream.initializes.get()).isZero();
                 assertThat(lab.runtime.devTraces().count()).isZero();
 

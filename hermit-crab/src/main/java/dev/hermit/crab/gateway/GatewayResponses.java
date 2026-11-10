@@ -33,8 +33,12 @@ final class GatewayResponses {
     }
 
     static void writeError(Context ctx, int status, ErrorCode code, String message) {
+        writeError(ctx, status, code, message, true);
+    }
+
+    static void writeError(Context ctx, int status, ErrorCode code, String message, boolean includeTrace) {
         String traceId = trace(ctx);
-        write(ctx, status, ApiJson.bytes(ApiEnvelope.json(null, code, message, traceId)), traceId, false);
+        write(ctx, status, ApiJson.bytes(ApiEnvelope.json(null, code, message, traceId, includeTrace)), traceId, false);
     }
 
     static void writeData(Context ctx, Object data) {

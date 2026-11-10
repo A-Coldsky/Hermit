@@ -111,13 +111,13 @@ async function refreshTools() {
   <div v-if="!debugEnabled" class="hm-card" data-test="developer-hint">
     <div class="hm-card-title"><span>开发者模式</span></div>
     <p class="hm-muted hint">
-      先到<router-link to="/">概览</router-link>打开调试开关，才能试跑本地包<template v-if="isMcp">或刷新工具列表</template>。正式包没有这些操作。
+      先到<router-link to="/">概览</router-link>打开开发者模式，才能试跑本地包<template v-if="isMcp">或刷新工具列表</template>。正式包没有这些操作。
     </p>
   </div>
   <div v-else class="hm-card" data-test="developer-panel">
     <div class="hm-card-title"><span>开发者模式</span></div>
     <p class="hm-muted hint">
-      试跑不需要 API Key，也不上报 Tide。追踪写在调用详情里，关掉调试开关会立刻删除。
+      试跑不需要 API Key，也不上报 Tide。追踪写在调用详情里，关掉开发者模式会立刻删除。
     </p>
 
     <div class="block" data-test="trial">

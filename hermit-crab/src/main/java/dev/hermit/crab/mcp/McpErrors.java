@@ -1,5 +1,6 @@
 package dev.hermit.crab.mcp;
 
+import dev.hermit.crab.runtime.CrabRuntime;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.ProtocolVersions;
 
@@ -132,7 +133,16 @@ final class McpErrors {
                 McpSchema.ErrorCodes.INVALID_REQUEST,
                 "NOT_CONFIGURED",
                 AuthoringCalls.DEV_MODE_CLOSED,
-                "到 Crab 控制台概览打开调试开关后再读取这份指南。");
+                "到 Crab 控制台概览打开开发者模式后再读取这份指南。");
+    }
+
+    static Failure authoringRemote() {
+        return new Failure(
+                200,
+                McpSchema.ErrorCodes.INVALID_REQUEST,
+                "FORBIDDEN",
+                AuthoringCalls.LOCAL_ONLY,
+                "从本机连接 Crab 后再读取这份指南。不带 Origin 也不能从外部地址读取。");
     }
 
     static Failure resourceNotFound() {
@@ -196,7 +206,20 @@ final class McpErrors {
      */
     static String toolHint(String code, String message, boolean directory) {
         if (AuthoringCalls.DEV_MODE_CLOSED.equals(message)) {
-            return "到 Crab 控制台概览打开调试开关后再试。";
+            return "到 Crab 控制台概览打开开发者模式后再试。";
+        }
+        if (AuthoringCalls.LOCAL_ONLY.equals(message)) {
+            return "从本机连接 Crab 后再调用。不带 Origin 也不能从外部地址调用这些工具。";
+        }
+        if (AuthoringCalls.READ_ONLY_SAVE.equals(message)
+                || (message != null && message.startsWith(AuthoringCalls.READ_ONLY_TRIAL_PREFIX))) {
+            return "换一把没有勾选「只允许调用只读能力」的 Key。只读 Key 仍可以校验，也可以试跑 read_only 为 true 的能力。";
+        }
+        if (McpCalls.TRACE_DENIED.equals(message)) {
+            return "点名该本地包，或用试跑的那把全范围 Key 读取自己的试跑追踪。正式包的追踪不能读。";
+        }
+        if (CrabRuntime.TRIAL_ACCOUNT_INVALID.equals(message)) {
+            return "账号名只能是字母、数字、下划线或连字符，最长 64 个字符。不要把口令放在 account 里。";
         }
         if (AuthoringCalls.NO_OVERWRITE.equals(message)) {
             return "换一个新的包名再保存，或到控制台导入并确认覆盖。";
@@ -208,7 +231,7 @@ final class McpErrors {
             return "正式包不能在这里保存或试跑。先在本地包上开发，再导出上传。";
         }
         if (AuthoringCalls.CONFIRM_PARAM.equals(message)) {
-            return "去掉 confirm。覆盖已有本地包时，由你在客户端确认。";
+            return "去掉 confirm。覆盖已有本地包时，在客户端确认。";
         }
         if ("FORBIDDEN".equals(code)) {
             if (McpCalls.NO_CONFIRM.equals(message)) {

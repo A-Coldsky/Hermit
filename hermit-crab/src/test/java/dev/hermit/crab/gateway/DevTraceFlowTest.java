@@ -97,7 +97,7 @@ class DevTraceFlowTest {
                     "{\"account\":\"alice\",\"input\":{}}");
             assertThat(debugOff.status).isEqualTo(409);
             assertThat(debugOff.json.path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
-            assertThat(debugOff.json.path("error").path("message").asText()).isEqualTo("先打开调试开关。");
+            assertThat(debugOff.json.path("error").path("message").asText()).isEqualTo("先打开开发者模式。");
             assertThat(runtime.devTraces().count()).isZero();
 
             runtime.debug().setEnabled(true, Actors.CONSOLE);
@@ -203,10 +203,16 @@ class DevTraceFlowTest {
 
             JsonNode hidden = mcp(http, crab, otherKey.plaintext(), initialize(http, crab, otherKey.plaintext()),
                     4, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", "key-trace")));
-            assertThat(toolMessage(hidden)).isEqualTo("没有这个工具，或当前 API Key 看不到它。");
+            assertThat(toolMessage(hidden)).isEqualTo(
+                    "这把 API Key 不能读取这条追踪。点名了该本地包的 Key 可以读。全范围 Key 只能读自己用 conch_trial_run 试跑出来的本地包追踪。正式包的追踪不能读。");
+            assertThat(toolMessage(hidden)).doesNotContain("没有这个工具");
             JsonNode allHidden = mcp(http, crab, allKey.plaintext(), initialize(http, crab, allKey.plaintext()),
                     5, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
-            assertThat(toolMessage(allHidden)).isEqualTo("没有这个工具，或当前 API Key 看不到它。");
+            assertThat(toolMessage(allHidden)).isEqualTo(toolMessage(hidden));
+            JsonNode officialHidden = mcp(http, crab, allKey.plaintext(), initialize(http, crab, allKey.plaintext()),
+                    9, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", "official-trace")));
+            assertThat(toolMessage(officialHidden)).isEqualTo("没有这个工具，或当前 API Key 看不到它。");
+            assertThat(officialHidden.toString()).doesNotContain("devTrace");
 
             JsonNode called = mcp(http, crab, localKey.plaintext(), sessionId, 6, "tools/call",
                     Map.of("name", "local_echo__echo", "arguments", Map.of("account", "alice")));

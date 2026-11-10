@@ -179,7 +179,7 @@ class McpRefreshTest {
                 Reply off = lab.post("/console/api/local-conches/vendor_crm/mcp/refresh?account=alice", "{}");
                 assertThat(off.status).isEqualTo(409);
                 assertThat(off.json.path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
-                assertThat(off.json.path("error").path("message").asText()).isEqualTo("先打开调试开关。");
+                assertThat(off.json.path("error").path("message").asText()).isEqualTo("先打开开发者模式。");
                 assertThat(upstream.initializes.get()).isZero();
                 assertThat(lab.runtime.devTraces().count()).isZero();
 

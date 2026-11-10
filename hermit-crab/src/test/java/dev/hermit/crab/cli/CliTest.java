@@ -500,9 +500,24 @@ class CliTest {
         String driverText = driverErr.toString(StandardCharsets.UTF_8);
         assertThat(driverCode).isEqualTo(1);
         assertThat(driverOut.toString(StandardCharsets.UTF_8)).isEmpty();
-        assertThat(driverText).contains("规则包校验失败").contains("DRIVER").contains("driver 只允许 http 或 mcp");
+        assertThat(driverText).contains("规则包校验失败").contains("DRIVER").contains("driver 只允许 http 或 mcp").contains("第 3 行");
         assertThat(driverText).doesNotContain("shell").doesNotContain("com.fasterxml");
         assertThat(home.resolve("local-conches").resolve("bad_driver.yaml")).doesNotExist();
+
+        Path high = home.resolve("high-version.yaml");
+        Files.writeString(high, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("high_crab", "1.0.0")
+                .replace("min_crab_version: 1.0.0", "min_crab_version: 9.0.0"));
+        ByteArrayOutputStream highErr = new ByteArrayOutputStream();
+        int highCode = new CrabCommand().run(
+                new String[] {"local", "import", high.toString()},
+                env,
+                InputStream.nullInputStream(),
+                stdout(new ByteArrayOutputStream()),
+                stderr(highErr));
+        String highText = highErr.toString(StandardCharsets.UTF_8);
+        assertThat(highCode).isEqualTo(1);
+        assertThat(highText).contains("MIN_CRAB_VERSION").contains("高于当前 Crab").contains("第 4 行");
+        assertThat(home.resolve("local-conches").resolve("high_crab.yaml")).doesNotExist();
 
         Path broken = home.resolve("broken.yaml");
         Files.writeString(broken, "conch: \"unterminated\nversion: 1.0.0\n");

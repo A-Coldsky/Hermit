@@ -569,11 +569,11 @@ final class ConsoleApi {
             return Optional.empty();
         }
         if (!node.isTextual()) {
-            throw new IllegalArgumentException("invalid account name");
+            throw new IllegalArgumentException(CrabRuntime.TRIAL_ACCOUNT_INVALID);
         }
         String name = node.textValue();
         if (name.isBlank()) {
-            throw new IllegalArgumentException("invalid account name");
+            throw new IllegalArgumentException(CrabRuntime.TRIAL_ACCOUNT_INVALID);
         }
         return Optional.of(name);
     }

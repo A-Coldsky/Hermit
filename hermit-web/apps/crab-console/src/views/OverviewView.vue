@@ -53,7 +53,7 @@ const authoringPrompt = computed(() => {
     '6. 成功后我在控制台导出，再上传 Reef。不要从 MCP 上传或发布。',
     '',
     '正式包不能保存或试跑。先在本地包上开发，再导出上传。',
-    '读 debug_trace 的 API Key，conches 必须点名这个本地包。all: true 读不到这些追踪。',
+    '用全范围 Key 就能保存、试跑和看追踪。',
   ].join('\n')
 })
 const changedConches = computed(
@@ -335,7 +335,7 @@ onMounted(load)
 
       <div class="hm-card">
         <div class="hm-card-title">
-          <span>调试开关</span>
+          <span>开发者模式</span>
           <el-tag v-if="debug.enabled" type="warning" effect="plain" size="small">开发者模式</el-tag>
         </div>
         <div class="debug">
@@ -349,11 +349,13 @@ onMounted(load)
           <p class="hm-muted">
             打开后，只对本机本地规则包记录脱敏后的请求与响应，并允许试跑、刷新工具列表，以及用 MCP 写本地规则包。正式包不受影响，调用记录照常。
           </p>
-          <p v-if="!debug.enabled" class="hm-muted" data-test="authoring-hint">打开调试开关后，这里会出现可以发给 AI 的写规则包说明。</p>
+          <p v-if="!debug.enabled" class="hm-muted" data-test="authoring-hint">打开开发者模式后，这里会出现可以发给 AI 的写规则包说明。</p>
           <div v-else class="authoring" data-test="authoring-prompt">
-            <p>把下面这段发给 AI。不要写入 API Key 明文。</p>
+            <div class="authoring-bar">
+              <el-button data-test="copy-authoring" @click="copyText(authoringPrompt, '已复制写规则包说明')">复制</el-button>
+              <p>把下面这段发给 AI。不要写入 API Key 明文。</p>
+            </div>
             <pre>{{ authoringPrompt }}</pre>
-            <el-button data-test="copy-authoring" @click="copyText(authoringPrompt, '已复制写规则包说明')">复制</el-button>
           </div>
           <p v-if="debug.enabled && debug.expiresAt">
             <el-icon><Warning /></el-icon>
@@ -506,6 +508,16 @@ onMounted(load)
 
 .authoring {
   margin-top: 12px;
+}
+
+.authoring-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.authoring-bar p {
+  margin: 0;
 }
 
 .authoring pre {

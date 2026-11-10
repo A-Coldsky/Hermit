@@ -286,7 +286,8 @@ onMounted(load)
         <li v-for="(view, i) in shown(report.errors)" :key="`e${i}`" data-test="import-error">
           <el-icon class="mark"><CircleCloseFilled /></el-icon>
           <span class="code">{{ view.code }}</span>
-          <span class="where">{{ view.location }}</span>
+          <span v-if="view.label" class="gloss">{{ view.label }}</span>
+          <span v-if="view.location" class="where">{{ view.location }}</span>
           <span class="reason">{{ view.reason }}</span>
         </li>
       </ul>
@@ -294,7 +295,8 @@ onMounted(load)
         <li v-for="(view, i) in shown(report.warnings)" :key="`w${i}`" data-test="import-warning">
           <el-icon class="mark"><WarningFilled /></el-icon>
           <span class="code">{{ view.code }}</span>
-          <span class="where">{{ view.location }}</span>
+          <span v-if="view.label" class="gloss">{{ view.label }}</span>
+          <span v-if="view.location" class="where">{{ view.location }}</span>
           <span class="reason">{{ view.reason }}</span>
         </li>
       </ul>
@@ -471,6 +473,11 @@ onMounted(load)
 }
 
 .issues .code {
+  font-weight: 600;
+}
+
+.issues .gloss {
+  font-size: 13px;
   font-weight: 600;
 }
 

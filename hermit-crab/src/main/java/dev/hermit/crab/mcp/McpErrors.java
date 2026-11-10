@@ -126,6 +126,15 @@ final class McpErrors {
                 "缩小请求体，使其不超过网关上限。");
     }
 
+    static Failure devModeClosed() {
+        return new Failure(
+                200,
+                McpSchema.ErrorCodes.INVALID_REQUEST,
+                "NOT_CONFIGURED",
+                AuthoringCalls.DEV_MODE_CLOSED,
+                "到 Crab 控制台概览打开调试开关后再读取这份指南。");
+    }
+
     static Failure resourceNotFound() {
         return new Failure(
                 200,
@@ -186,6 +195,21 @@ final class McpErrors {
      * 直接模式没有 {@code search_capabilities}。目录模式才建议用它和 {@code tools/list} 查找能力。
      */
     static String toolHint(String code, String message, boolean directory) {
+        if (AuthoringCalls.DEV_MODE_CLOSED.equals(message)) {
+            return "到 Crab 控制台概览打开调试开关后再试。";
+        }
+        if (AuthoringCalls.NO_OVERWRITE.equals(message)) {
+            return "换一个新的包名再保存，或到控制台导入并确认覆盖。";
+        }
+        if (AuthoringCalls.OVERWRITE_DECLINED.equals(message)) {
+            return "本地包没有改动。要覆盖时，在客户端确认。";
+        }
+        if (AuthoringCalls.OFFICIAL.equals(message)) {
+            return "正式包不能在这里保存或试跑。先在本地包上开发，再导出上传。";
+        }
+        if (AuthoringCalls.CONFIRM_PARAM.equals(message)) {
+            return "去掉 confirm。覆盖已有本地包时，由你在客户端确认。";
+        }
         if ("FORBIDDEN".equals(code)) {
             if (McpCalls.NO_CONFIRM.equals(message)) {
                 return "客户端需在 initialize 中声明 elicitation，并保持 GET /mcp 的 SSE 连接后再执行写操作。";

@@ -242,6 +242,10 @@ public final class McpEndpoint {
             writeRpcError(ctx, id, McpErrors.invalidParams(), session);
             return;
         }
+        if (AuthoringGuide.URI.equals(request.uri()) && !runtime.debug().get().enabled()) {
+            writeRpcError(ctx, id, McpErrors.devModeClosed(), session);
+            return;
+        }
         Optional<String> guide = catalog.guide(principal, request.uri());
         if (guide.isEmpty()) {
             writeRpcError(ctx, id, McpErrors.resourceNotFound(), session);

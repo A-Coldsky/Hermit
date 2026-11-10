@@ -89,6 +89,7 @@ describe('formatImportIssue', () => {
 
   it('其它代码也查表给人话，未知代码不加', () => {
     expect(importIssueLabels.PARSE).toBe('解析失败')
+    expect(importIssueLabels.LITERAL_CREDENTIAL).toBe('明文凭证')
     expect(formatImportIssue({ code: 'DRIVER', path: 'x', message: 'y' }).label).toBe(importIssueLabels.DRIVER)
     expect(formatImportIssue({ code: 'MISSING_RELATED', path: 'x', message: 'y' }).label).toBe(importIssueLabels.MISSING_RELATED)
     expect(importIssueLabels.DRIVER).not.toBe(importIssueLabels.PARSE)

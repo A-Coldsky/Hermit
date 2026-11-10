@@ -32,14 +32,16 @@ final class McpCalls {
 
     private final CrabRuntime runtime;
     private final McpCatalog catalog;
+    private final AuthoringCalls authoring;
 
     McpCalls(CrabRuntime runtime, McpCatalog catalog) {
         this.runtime = runtime;
         this.catalog = catalog;
+        this.authoring = new AuthoringCalls(runtime);
     }
 
     /** 调用记录、响应头和失败体共用的这一次编号。目录模式决定未知工具的 hint。 */
-    private record Attempt(boolean directory, String traceId) {
+    record Attempt(boolean directory, String traceId) {
     }
 
     McpSchema.CallToolResult call(
@@ -77,6 +79,15 @@ final class McpCalls {
                 return missingTool(attempt, name);
             }
             return readTrace(principal, arguments, attempt);
+        }
+        if (McpCatalog.VALIDATE.equals(name)) {
+            return authoring.validate(arguments, attempt);
+        }
+        if (McpCatalog.SAVE_LOCAL.equals(name)) {
+            return authoring.save(session, arguments, attempt);
+        }
+        if (McpCatalog.TRIAL_RUN.equals(name)) {
+            return authoring.trial(arguments, attempt);
         }
         if (attempt.directory()) {
             return directory(principal, session, headerAccount, name, arguments, attempt);
@@ -452,11 +463,11 @@ final class McpCalls {
                 .build();
     }
 
-    private static McpSchema.CallToolResult fail(Attempt attempt, String code, String message) {
+    static McpSchema.CallToolResult fail(Attempt attempt, String code, String message) {
         return toolError(code, message, null, attempt.directory(), attempt.traceId());
     }
 
-    private static McpSchema.CallToolResult fail(Attempt attempt, String code, String message, String field) {
+    static McpSchema.CallToolResult fail(Attempt attempt, String code, String message, String field) {
         return toolError(code, message, field, attempt.directory(), attempt.traceId());
     }
 

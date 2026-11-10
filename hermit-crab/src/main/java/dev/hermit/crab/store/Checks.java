@@ -31,8 +31,9 @@ final class Checks {
     }
 
     static String actor(String actor) {
-        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor) && !Actors.SYNC.equals(actor)) {
-            throw new IllegalArgumentException("actor must be cli, console, or sync");
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor) && !Actors.SYNC.equals(actor)
+                && !Actors.MCP.equals(actor)) {
+            throw new IllegalArgumentException("actor must be cli, console, sync, or mcp");
         }
         return actor;
     }

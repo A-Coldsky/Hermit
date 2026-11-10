@@ -167,7 +167,7 @@ async function discard() {
           <div class="el-upload__tip">支持 .yaml / .yml，单个文件不超过 1 MB</div>
           <div class="el-upload__tip" data-test="local-import-tip">
             Crab 控制台「导出 YAML」得到的本地规则包可以直接上传。上传后由 Reef 校验并签名，发布后订阅了它的 Crab 才会安装。
-            若 Crab 本机仍有同名本地包，需要先在那台 Crab 上删除本地包再订阅。
+            若 Crab 本机仍有同名本地规则包，需要先在那台 Crab 上删除本地规则包再订阅。
           </div>
         </template>
       </el-upload>

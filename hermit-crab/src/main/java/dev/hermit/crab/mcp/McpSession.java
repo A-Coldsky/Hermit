@@ -17,6 +17,8 @@ import io.modelcontextprotocol.spec.McpSchema;
 
 final class McpSession {
     static final String WAKE = " ";
+    /** Package-visible so a test can observe a confirmation timeout without waiting a minute. */
+    static volatile long elicitWaitMillis = 60_000L;
 
     final String id;
     final String apiKeyId;
@@ -101,7 +103,7 @@ final class McpSession {
         pending.put(requestId, future);
         publish(McpJson.write(message));
         try {
-            return future.get(60, TimeUnit.SECONDS);
+            return future.get(elicitWaitMillis, TimeUnit.MILLISECONDS);
         } catch (TimeoutException ex) {
             pending.remove(requestId, future);
             throw ex;

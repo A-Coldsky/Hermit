@@ -123,6 +123,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final Set<String> configDisabled;
     private final Set<String> switchDisabled;
     private final List<Runnable> catalogListeners = new CopyOnWriteArrayList<>();
+    private final TraceMemory traceMemory = new TraceMemory();
     private final DisabledConches disabledConches;
     private final Subscriptions subscriptions;
     private final Invoker invoker;
@@ -193,7 +194,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.callLogs = new CallLogStore(database.dataSource(), clock);
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());
-        this.debug = new DebugStateStore(database.dataSource(), clock);
+        this.debug = new DebugStateStore(database.dataSource(), clock, this::onDebugChanged);
         this.devTraces = new DevTraceStore(database.dataSource(), clock, debug);
         this.mcpForwarder.bindDevTraces(devTraces);
         this.engine.bindDevTraceSink(new DevTraceBinding(debug, devTraces));
@@ -307,12 +308,17 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     /** Shown when a trial account name is not a single token. The value is not repeated. */
     public static final String TRIAL_ACCOUNT_INVALID = "账号名不合法。";
 
-    /**
-     * Names the missing credential fields and where to fill them. Field names only; values are never included.
-     */
-    public static String trialMissingCredentials(java.util.List<String> names) {
-        String listed = names == null || names.isEmpty() ? "" : String.join("、", names);
-        return "还没填写凭证：" + listed + "。请到控制台打开这个本地包，在对应账号的凭证里补上。不要把口令、Cookie 或令牌发给 AI。";
+    /** Records a trial that was refused before execution, so a later debug_trace can explain it. */
+    public void noteRejectedTrial(String traceId) {
+        traceMemory.reject(traceId);
+    }
+
+    public boolean rejectedTrial(String traceId) {
+        return traceMemory.rejected(traceId);
+    }
+
+    public boolean deletedTrace(String traceId) {
+        return traceMemory.deleted(traceId);
     }
 
     /**
@@ -401,7 +407,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             throw new TrialRejected(404, ErrorCode.NOT_FOUND, "not found");
         }
         if (registry.origin(conch) != Origin.LOCAL) {
-            throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地包上开发，再导出上传。");
+            throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地规则包上开发，再导出上传。");
         }
         if (!debug.get().enabled()) {
             throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "先打开开发者模式。");
@@ -430,7 +436,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         List<String> missingCredentials = DeclaredSettings.missingCredentials(
                 doc, vault.fieldNames(Origin.LOCAL, doc.conch(), resolved.account()));
         if (!missingCredentials.isEmpty()) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, trialMissingCredentials(missingCredentials));
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialMessages.missing(
+                    resolved.account(), missingCredentials, doc.credentials()));
         }
         Map<String, String> secrets;
         try {
@@ -794,6 +801,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (listener != null) {
             catalogListeners.add(listener);
         }
+    }
+
+    private void onDebugChanged(boolean enabled, java.util.List<String> deleted) {
+        traceMemory.rememberDeleted(deleted);
+        notifyCatalogListeners();
     }
 
     private void notifyCatalogListeners() {

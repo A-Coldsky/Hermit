@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -23,22 +24,36 @@ public final class DebugStateStore {
 
     private final DataSource dataSource;
     private final Clock clock;
+    private final DebugModeListener listener;
 
     public DebugStateStore(DataSource dataSource, Clock clock) {
+        this(dataSource, clock, null);
+    }
+
+    public DebugStateStore(DataSource dataSource, Clock clock, DebugModeListener listener) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.listener = listener;
     }
 
     public DebugSnapshot get() {
-        return Db.transaction(dataSource, this::readAndExpire);
+        Transition transition = Db.transaction(dataSource, this::readAndExpire);
+        fire(transition);
+        return transition.snapshot();
     }
 
     public DebugSnapshot setEnabled(boolean enabled, String actor) {
         String checkedActor = Checks.actor(actor);
         Instant expiresAt = enabled ? clock.instant().plus(WINDOW) : null;
-        return Db.transaction(dataSource, connection -> {
+        Transition transition = Db.transaction(dataSource, connection -> {
+            Row row = select(connection);
+            boolean previous = row != null && row.enabled();
             upsert(connection, enabled, expiresAt);
+            List<String> deleted = List.of();
             if (!enabled) {
+                if (previous) {
+                    deleted = DevTraceStore.ids(connection);
+                }
                 DevTraceStore.deleteAll(connection);
             }
             ConfigAudit.append(
@@ -47,22 +62,25 @@ public final class DebugStateStore {
                     AuditKind.DEBUG_CHANGED,
                     "debug",
                     Json.write(Map.of("enabled", enabled)));
-            return new DebugSnapshot(enabled, expiresAt);
+            return new Transition(new DebugSnapshot(enabled, expiresAt), previous != enabled, deleted);
         });
+        fire(transition);
+        return transition.snapshot();
     }
 
     public void expire() {
-        Db.transaction(dataSource, this::readAndExpire);
+        get();
     }
 
-    private DebugSnapshot readAndExpire(Connection connection) throws SQLException {
+    private Transition readAndExpire(Connection connection) throws SQLException {
         Row row = select(connection);
         if (row == null || !row.enabled()) {
-            return new DebugSnapshot(false, row == null ? null : row.expiresAt());
+            return new Transition(new DebugSnapshot(false, row == null ? null : row.expiresAt()), false, List.of());
         }
         Instant now = clock.instant();
         if (row.expiresAt() != null && !row.expiresAt().isAfter(now)) {
             upsert(connection, false, null);
+            List<String> deleted = DevTraceStore.ids(connection);
             DevTraceStore.deleteAll(connection);
             ConfigAudit.append(
                     connection,
@@ -70,9 +88,16 @@ public final class DebugStateStore {
                     AuditKind.DEBUG_CHANGED,
                     "debug",
                     Json.write(Map.of("enabled", false)));
-            return new DebugSnapshot(false, null);
+            return new Transition(new DebugSnapshot(false, null), true, deleted);
         }
-        return new DebugSnapshot(true, row.expiresAt());
+        return new Transition(new DebugSnapshot(true, row.expiresAt()), false, List.of());
+    }
+
+    private void fire(Transition transition) {
+        if (!transition.fire() || listener == null) {
+            return;
+        }
+        listener.changed(transition.snapshot().enabled(), transition.deleted());
     }
 
     private static Row select(Connection connection) throws SQLException {
@@ -121,5 +146,8 @@ public final class DebugStateStore {
     }
 
     private record Row(boolean enabled, Instant expiresAt) {
+    }
+
+    private record Transition(DebugSnapshot snapshot, boolean fire, List<String> deleted) {
     }
 }

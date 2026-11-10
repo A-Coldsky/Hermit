@@ -128,7 +128,7 @@ describe('Crab 概览', () => {
     expect(wrapper.get('[data-test="updatable"]').text()).toContain('legacy_oa v1.2.0')
   })
 
-  it('调试开关可以拨，不再标明暂未生效', async () => {
+  it('开发者模式可以拨，不再标明暂未生效', async () => {
     const wrapper = await mountPage(OverviewView)
     await flushPromises()
 

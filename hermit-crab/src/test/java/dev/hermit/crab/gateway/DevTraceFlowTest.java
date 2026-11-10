@@ -105,7 +105,7 @@ class DevTraceFlowTest {
                     "{\"account\":\"alice\",\"input\":{}}");
             assertThat(officialTrial.status).isEqualTo(409);
             assertThat(officialTrial.json.path("error").path("code").asText()).isEqualTo("CONFLICT");
-            assertThat(officialTrial.json.path("error").path("message").asText()).isEqualTo("先在本地包上开发，再导出上传。");
+            assertThat(officialTrial.json.path("error").path("message").asText()).isEqualTo("先在本地规则包上开发，再导出上传。");
             assertThat(runtime.devTraces().count()).isZero();
 
             runtime.setCapabilityDisabled("local_echo", "echo", true, Actors.CONSOLE);
@@ -202,16 +202,16 @@ class DevTraceFlowTest {
             assertThat(content.toString()).doesNotContain(PASSWORD).doesNotContain(COOKIE);
 
             JsonNode hidden = mcp(http, crab, otherKey.plaintext(), initialize(http, crab, otherKey.plaintext()),
-                    4, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", "key-trace")));
+                    4, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolMessage(hidden)).isEqualTo(
-                    "这把 API Key 不能读取这条追踪。点名了该本地包的 Key 可以读。全范围 Key 只能读自己用 conch_trial_run 试跑出来的本地包追踪。正式包的追踪不能读。");
+                    "这把 API Key 不能读取这条追踪。点名了该本地规则包的 Key 可以读。全部权限 Key 只能读自己用 conch_trial_run 试跑出来的本地规则包追踪。正式包的追踪不能读。");
             assertThat(toolMessage(hidden)).doesNotContain("没有这个工具");
             JsonNode allHidden = mcp(http, crab, allKey.plaintext(), initialize(http, crab, allKey.plaintext()),
                     5, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolMessage(allHidden)).isEqualTo(toolMessage(hidden));
             JsonNode officialHidden = mcp(http, crab, allKey.plaintext(), initialize(http, crab, allKey.plaintext()),
                     9, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", "official-trace")));
-            assertThat(toolMessage(officialHidden)).isEqualTo("没有这个工具，或当前 API Key 看不到它。");
+            assertThat(toolMessage(officialHidden)).contains("编号不存在").doesNotContain("没有这个工具");
             assertThat(officialHidden.toString()).doesNotContain("devTrace");
 
             JsonNode called = mcp(http, crab, localKey.plaintext(), sessionId, 6, "tools/call",
@@ -229,7 +229,10 @@ class DevTraceFlowTest {
             assertThat(toolNames(offTools)).doesNotContain("debug_trace");
             JsonNode offCall = mcp(http, crab, localKey.plaintext(), offSession, 8, "tools/call",
                     Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
-            assertThat(toolMessage(offCall)).isEqualTo("没有这个工具，或当前 API Key 看不到它。");
+            assertThat(toolMessage(offCall)).contains("追踪已删").doesNotContain("没有这个工具");
+            JsonNode closedUnknown = mcp(http, crab, localKey.plaintext(), offSession, 11, "tools/call",
+                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", "never-opened")));
+            assertThat(toolMessage(closedUnknown)).contains("开发者模式没有打开").doesNotContain("没有这个工具");
         } finally {
             server.close();
             runtime.close();
@@ -343,6 +346,92 @@ class DevTraceFlowTest {
             }
             return extra.get(name);
         };
+    }
+
+    @Test
+    void missingCredentialTrialOmitsTheTraceIdFromBodyAndHeader() throws Exception {
+        CrabRuntime runtime = CrabRuntime.open(
+                new CrabPaths(temp.resolve("gap")),
+                CrabConfig.defaults().withListen("127.0.0.1", 0));
+        CrabHttpServer server = new CrabHttpServer(runtime);
+        try {
+            server.start();
+            runtime.debug().setEnabled(true, Actors.CONSOLE);
+            runtime.localConches().importBytes(gapYaml().getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            runtime.admin().createAccount("gap_ping", "ada", Actors.CONSOLE);
+            CreatedApiKey key = runtime.apiKeys().create(
+                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+            String crab = "http://127.0.0.1:" + server.port();
+
+            HttpResponse<String> trial = http.send(HttpRequest.newBuilder(URI.create(
+                    crab + "/console/api/local-conches/gap_ping/actions/show/run"))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("X-Hermit-Console", "1")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"account\":\"ada\",\"input\":{}}"))
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertTraceOmitted(trial);
+            assertThat(trial.body()).contains("ada").contains("password").contains("密码");
+
+            HttpResponse<String> api = http.send(HttpRequest.newBuilder(URI.create(crab + "/api/gap_ping/show"))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Authorization", "Bearer " + key.plaintext())
+                    .header("X-Hermit-Account", "ada")
+                    .GET()
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertTraceOmitted(api);
+            assertThat(api.body()).contains("ada").contains("password").contains("密码");
+
+            HttpResponse<String> other = http.send(HttpRequest.newBuilder(URI.create(crab + "/api/missing_conch/show"))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Authorization", "Bearer " + key.plaintext())
+                    .GET()
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(other.headers().firstValue("X-Hermit-Trace")).isPresent();
+            assertThat(ApiJson.tree(other.body()).path("traceId").asText())
+                    .isEqualTo(other.headers().firstValue("X-Hermit-Trace").orElseThrow());
+        } finally {
+            server.close();
+            runtime.close();
+        }
+    }
+
+    private static void assertTraceOmitted(HttpResponse<String> response) {
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(409);
+        assertThat(response.headers().firstValue("X-Hermit-Trace")).isEmpty();
+        JsonNode body = ApiJson.tree(response.body());
+        assertThat(body.has("traceId")).isFalse();
+        assertThat(response.body()).doesNotContain("traceId");
+    }
+
+    private static String gapYaml() {
+        return """
+                conch: gap_ping
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:9
+                title: 缺凭证
+                description: 执行前就被拒绝。
+                credentials:
+                  password: { type: secret, label: 密码, required: true }
+                actions:
+                  show:
+                    title: 看
+                    description: 返回常量。
+                    idempotent: true
+                    mcp: { expose: true, read_only: true }
+                    steps:
+                      - set: { message: seen }
+                    output:
+                      message: { type: string, description: 文本, value: seen }
+                    examples:
+                      - input: {}
+                        output: { message: seen }
+                    notes: 无
+                    related: []
+                """;
     }
 
     private static void respond(

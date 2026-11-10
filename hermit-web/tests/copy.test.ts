@@ -26,7 +26,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('Crab 调试开关', () => {
+describe('Crab 开发者模式', () => {
   it('写明不影响调用记录，不再自称调试模式', async () => {
     crab.conches.mockResolvedValue({ conches: [] })
     crab.calls.mockResolvedValue({ calls: [] })

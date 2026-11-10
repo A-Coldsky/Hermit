@@ -164,7 +164,8 @@ public final class ConchAdmin {
         }
         List<String> missingCredentials = missingCredentials(doc, resolved.account());
         if (!missingCredentials.isEmpty()) {
-            return failed(doc, traceId, "missing credentials: " + String.join(", ", missingCredentials));
+            return failed(doc, traceId, CredentialMessages.missing(
+                    resolved.account(), missingCredentials, doc.credentials()));
         }
         Map<String, String> secrets;
         try {

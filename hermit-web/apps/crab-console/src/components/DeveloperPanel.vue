@@ -111,7 +111,7 @@ async function refreshTools() {
   <div v-if="!debugEnabled" class="hm-card" data-test="developer-hint">
     <div class="hm-card-title"><span>开发者模式</span></div>
     <p class="hm-muted hint">
-      先到<router-link to="/">概览</router-link>打开开发者模式，才能试跑本地包<template v-if="isMcp">或刷新工具列表</template>。正式包没有这些操作。
+      先到<router-link to="/">概览</router-link>打开开发者模式，才能试跑本地规则包<template v-if="isMcp">或刷新工具列表</template>。正式包没有这些操作。
     </p>
   </div>
   <div v-else class="hm-card" data-test="developer-panel">
@@ -144,7 +144,7 @@ async function refreshTools() {
 
     <div v-if="isMcp" class="block" data-test="refresh">
       <h4>刷新工具列表</h4>
-      <p class="hm-muted hint">从上游 tools/list 重写这个本地包的工具快照，版本号不变。写回 YAML 会丢掉注释。</p>
+      <p class="hm-muted hint">从上游 tools/list 重写这个本地规则包的工具快照，版本号不变。写回 YAML 会丢掉注释。</p>
       <div class="row">
         <el-select
           v-if="accounts.length"

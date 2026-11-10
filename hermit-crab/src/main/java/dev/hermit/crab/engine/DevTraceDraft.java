@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -42,6 +43,8 @@ public final class DevTraceDraft {
     private Boolean loginOk;
     private boolean aliveCheckRan;
     private Boolean aliveCheckOk;
+    private boolean collectDerived;
+    private final LinkedHashSet<String> derived = new LinkedHashSet<>();
 
     public DevTraceDraft(Instant expiresAt) {
         this.expiresAt = expiresAt;
@@ -49,6 +52,46 @@ public final class DevTraceDraft {
 
     public Instant expiresAt() {
         return expiresAt;
+    }
+
+    /** Login steps remember extracted, set, and script string values so the later redactor can mask them. */
+    public void collectDerived(boolean enabled) {
+        this.collectDerived = enabled;
+    }
+
+    public boolean collectingDerived() {
+        return collectDerived;
+    }
+
+    public void rememberDerived(Object value) {
+        rememberDerived(value, 0);
+    }
+
+    public Set<String> derivedSecrets() {
+        return Set.copyOf(derived);
+    }
+
+    private void rememberDerived(Object value, int depth) {
+        if (value == null || depth > 8) {
+            return;
+        }
+        if (value instanceof String text) {
+            if (text.length() >= 4 && !"***".equals(text)) {
+                derived.add(text);
+            }
+            return;
+        }
+        if (value instanceof Map<?, ?> map) {
+            for (Object item : map.values()) {
+                rememberDerived(item, depth + 1);
+            }
+            return;
+        }
+        if (value instanceof List<?> list) {
+            for (Object item : list) {
+                rememberDerived(item, depth + 1);
+            }
+        }
     }
 
     public void login(boolean ran, Boolean ok) {

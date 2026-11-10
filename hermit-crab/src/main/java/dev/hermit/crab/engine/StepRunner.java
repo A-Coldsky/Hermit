@@ -140,8 +140,10 @@ final class StepRunner {
         if (!capture) {
             return new Outcome(null, null, null, count, false);
         }
+        Map<String, Object> extracted = changed(before, vars);
+        rememberDerived(extracted);
         return new Outcome(null, null, null, count, false,
-                DevTraceDraft.extractPiece(spec, count, changed(before, vars)));
+                DevTraceDraft.extractPiece(spec, count, extracted));
     }
 
     private Outcome set(Map<String, Object> spec, Map<String, Object> vars, boolean capture) {
@@ -151,6 +153,7 @@ final class StepRunner {
             }
             vars.put(entry.getKey(), entry.getValue());
         }
+        rememberDerived(spec);
         if (!capture) {
             return new Outcome(null, null, null, null, false);
         }
@@ -160,11 +163,20 @@ final class StepRunner {
     private Outcome script(Map<String, Object> spec, Map<String, Object> vars, long deadlineNanos, boolean capture) {
         Map<String, Object> before = capture ? new LinkedHashMap<>(vars) : null;
         Outcome outcome = scripts.run(spec, vars, deadlineNanos);
+        Map<String, Object> produced = changed(before, vars);
+        rememberDerived(produced);
         if (!capture) {
             return outcome;
         }
         return new Outcome(outcome.method(), outcome.path(), outcome.status(), outcome.extractCount(),
-                outcome.sessionLost(), DevTraceDraft.variablePiece("script", changed(before, vars)));
+                outcome.sessionLost(), DevTraceDraft.variablePiece("script", produced));
+    }
+
+    private static void rememberDerived(Object value) {
+        DevTraceDraft draft = DevTraceScope.current();
+        if (draft != null && draft.collectingDerived()) {
+            draft.rememberDerived(value);
+        }
     }
 
     private static Map<String, Object> changed(Map<String, Object> before, Map<String, Object> after) {

@@ -19,9 +19,9 @@ import java.util.Set;
  */
 public record ApiKeyScope(Set<String> conches, Set<String> actions, boolean readOnlyOnly, boolean all) {
     public static final String MISSING_SCOPE =
-            "必须指定范围：设置 all 为 true 表示全部规则包（包括本地包），或填写 conches、actions";
+            "必须指定范围：选择全部权限（包括本地规则包），或填写 conches、actions";
     public static final String ALL_EXCLUDES_NAMES =
-            "all 为 true 时不能同时填写 conches 或 actions";
+            "选择了全部权限时不能同时填写 conches 或 actions";
 
     public ApiKeyScope {
         conches = conches == null ? Set.of() : Set.copyOf(conches);

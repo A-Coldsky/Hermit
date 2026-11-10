@@ -505,6 +505,15 @@ public final class LocalConches {
         ValidationResult result = ConchValidator.validate(doc, validationContext(allowEmpty));
         ArrayList<ValidationIssue> warnings = new ArrayList<>(result.warnings());
         warnings.addAll(LiteralCredentialWarnings.scan(doc));
+        java.util.Set<String> errorPaths = new java.util.HashSet<>();
+        for (ValidationIssue error : result.errors()) {
+            if (error.path() != null) {
+                errorPaths.add(error.path());
+            }
+        }
+        warnings.removeIf(issue -> LiteralCredentialWarnings.CODE.equals(issue.code())
+                && issue.path() != null
+                && errorPaths.contains(issue.path()));
         List<ValidationIssue> locatedWarnings = ImportIssueLines.locate(yaml, warnings);
         List<ValidationIssue> structural = registry.inspect(doc, allowEmpty);
         if (!structural.isEmpty()) {

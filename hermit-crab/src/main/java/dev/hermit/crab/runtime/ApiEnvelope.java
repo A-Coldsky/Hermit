@@ -28,7 +28,15 @@ public final class ApiEnvelope {
     }
 
     public static String json(Object data, ErrorCode code, String message, String traceId) {
-        return ApiJson.write(of(data, code, message, traceId));
+        return json(data, code, message, traceId, true);
+    }
+
+    public static String json(Object data, ErrorCode code, String message, String traceId, boolean includeTrace) {
+        Map<String, Object> body = of(data, code, message, traceId);
+        if (!includeTrace) {
+            body.remove("traceId");
+        }
+        return ApiJson.write(body);
     }
 
     public static int status(JsonNode envelope) {

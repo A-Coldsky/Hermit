@@ -213,7 +213,7 @@ onMounted(load)
             <el-button v-if="needsRepair(row)" link type="warning" :loading="busy === row.conch" data-test="repair" @click="repair(row)">修复</el-button>
             <el-button v-else-if="row.updateAvailable" link type="primary" :loading="busy === row.conch" @click="update(row)">更新</el-button>
             <el-button v-if="row.subscribed" link type="danger" :loading="busy === row.conch" @click="unsubscribe(row)">取消订阅</el-button>
-            <el-tooltip v-else-if="row.localConflict" content="本机已有同名本地规则包。删除本地包后才能订阅" placement="top">
+            <el-tooltip v-else-if="row.localConflict" content="本机已有同名本地规则包。删除本地规则包后才能订阅" placement="top">
               <span><el-button link type="primary" disabled>订阅</el-button></span>
             </el-tooltip>
             <el-button v-else link type="primary" :loading="busy === row.conch" @click="subscribe(row)">订阅</el-button>

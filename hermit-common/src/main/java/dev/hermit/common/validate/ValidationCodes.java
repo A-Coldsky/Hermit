@@ -13,6 +13,7 @@ public final class ValidationCodes {
     public static final String UNSUPPORTED_STEP = "UNSUPPORTED_STEP";
     public static final String UNDECLARED_CREDENTIAL = "UNDECLARED_CREDENTIAL";
     public static final String UNDECLARED_CONFIG = "UNDECLARED_CONFIG";
+    public static final String UNDECLARED_VARIABLE = "UNDECLARED_VARIABLE";
     public static final String CONFIG_SECRET = "CONFIG_SECRET";
     public static final String PLAINTEXT_CREDENTIAL = "PLAINTEXT_CREDENTIAL";
     public static final String CREDENTIAL_IN_OUTPUT = "CREDENTIAL_IN_OUTPUT";

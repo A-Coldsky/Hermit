@@ -229,8 +229,8 @@ public final class Invoker {
         List<String> missingCredentials = DeclaredSettings.missingCredentials(
                 doc, vault.fieldNames(origin, conch, resolved.account()));
         if (!missingCredentials.isEmpty()) {
-            return done(traceId, ErrorCode.NOT_CONFIGURED,
-                    "missing credentials: " + String.join(", ", missingCredentials), null);
+            return rejectedBeforeExecution(ErrorCode.NOT_CONFIGURED,
+                    CredentialMessages.missing(resolved.account(), missingCredentials, doc.credentials()));
         }
         Map<String, String> merged = DeclaredSettings.mergedConfig(doc, stored);
         Map<String, String> secrets;
@@ -447,6 +447,13 @@ public final class Invoker {
             }
         }
         return values;
+    }
+
+    /** 执行前就拒绝时不留下追踪，响应体和 {@code X-Hermit-Trace} 都不返回编号。 */
+    private static InvokeOutcome rejectedBeforeExecution(ErrorCode code, String message) {
+        int status = StatusCodes.of(code);
+        String json = ApiEnvelope.json(null, code, message, "", false);
+        return new InvokeOutcome(status, ApiJson.bytes(json), null, false, null);
     }
 
     private static InvokeOutcome done(String traceId, ErrorCode code, String message, Object data) {

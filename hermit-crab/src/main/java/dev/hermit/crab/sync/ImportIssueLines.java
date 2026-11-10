@@ -170,7 +170,7 @@ final class ImportIssueLines {
     }
 
     private static boolean isNameChar(char current) {
-        return current == '_' || Character.isLetterOrDigit(current);
+        return current == '_' || current == '-' || Character.isLetterOrDigit(current);
     }
 
     private static boolean hasPath(String path) {

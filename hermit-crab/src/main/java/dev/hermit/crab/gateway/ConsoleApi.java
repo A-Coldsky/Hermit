@@ -550,7 +550,8 @@ final class ConsoleApi {
             String message = result.error() == null ? "内部错误" : result.error().message();
             GatewayResponses.writeError(ctx, StatusCodes.of(code), code, message);
         } catch (TrialRejected ex) {
-            GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
+            runtime.noteRejectedTrial(GatewayResponses.trace(ctx));
+            GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage(), false);
         }
     }
 

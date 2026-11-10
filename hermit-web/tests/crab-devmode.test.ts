@@ -71,6 +71,8 @@ describe('Crab 开发者模式', () => {
     expect(wrapper.text()).not.toContain('暂未生效')
     expect(wrapper.get('[data-test="debug-switch"]').classes()).not.toContain('is-disabled')
     expect(wrapper.text()).toContain('只对本机本地规则包记录脱敏后的请求与响应')
+    expect(wrapper.get('[data-test="authoring-hint"]').text()).toContain('打开调试开关')
+    expect(wrapper.find('[data-test="authoring-prompt"]').exists()).toBe(false)
 
     await wrapper.get('[data-test="debug-switch"] input').setValue(true)
     await flushPromises()
@@ -78,6 +80,14 @@ describe('Crab 开发者模式', () => {
     expect(String(vi.mocked(ElMessageBox.confirm).mock.calls[0][0])).toContain('正式包不受影响')
     expect(crab.setDebug).toHaveBeenCalledWith(true)
     expect(wrapper.text()).toContain('自动关闭，并删除这些追踪')
+    const prompt = wrapper.get('[data-test="authoring-prompt"]').text()
+    expect(prompt).toContain('hermit://authoring/guide')
+    expect(prompt).toContain('conch_validate')
+    expect(prompt).toContain('conch_save_local')
+    expect(prompt).toContain('conch_trial_run')
+    expect(prompt).toContain('/mcp')
+    expect(prompt).not.toContain('hk_')
+    expect(prompt).toContain('不要把 Key 明文写进对话')
     wrapper.unmount()
   })
 

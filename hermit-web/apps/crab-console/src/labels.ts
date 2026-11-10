@@ -99,6 +99,7 @@ export const channelLabels: Record<string, string> = {
 export const actorLabels: Record<string, string> = {
   cli: '命令行',
   console: '控制台',
+  mcp: 'MCP',
   sync: '同步',
   migration: '升级迁移',
 }

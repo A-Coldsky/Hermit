@@ -32,6 +32,7 @@ export const importIssueLabels: Record<string, string> = {
   UNDECLARED_CONFIG: '配置未声明',
   CONFIG_SECRET: '配置不能是密文',
   PLAINTEXT_CREDENTIAL: '疑似明文秘密',
+  LITERAL_CREDENTIAL: '明文凭证',
   CREDENTIAL_IN_OUTPUT: '输出含凭证',
   MIN_CRAB_VERSION: '版本要求过高',
   TEMPLATE_SYNTAX: '模板有误',

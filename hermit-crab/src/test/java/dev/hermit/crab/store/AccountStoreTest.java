@@ -145,7 +145,7 @@ class AccountStoreTest {
         String supplied = "HermitRequestActor-not-allowed";
         Throwable thrown = catchThrowable(() -> fixture.accounts.create(Origin.OFFICIAL, "erp", "bob", supplied));
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class);
-        assertThat(thrown.getMessage()).isEqualTo("actor must be cli, console, or sync");
+        assertThat(thrown.getMessage()).isEqualTo("actor must be cli, console, sync, or mcp");
         SecretChecks.absent(thrown, supplied);
         assertThat(auditText()).doesNotContain(supplied);
     }

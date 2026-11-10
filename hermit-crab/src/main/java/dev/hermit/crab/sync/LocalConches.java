@@ -226,6 +226,32 @@ public final class LocalConches {
         }
     }
 
+    /**
+     * Parse and validate the same way as import. Does not check name clashes and does not write.
+     * A failure that is not a validation issue (empty body, bad UTF-8, over 1 MiB) is thrown.
+     */
+    public CheckResult check(byte[] raw) {
+        if (raw == null) {
+            throw LocalConchException.invalid("yaml is required");
+        }
+        if (raw.length > MAX_BYTES) {
+            throw LocalConchException.invalid("yaml exceeds 1 MiB");
+        }
+        try {
+            Parsed parsed = parse(raw);
+            return new CheckResult(
+                    parsed.doc().conch(),
+                    parsed.doc().version().toString(),
+                    List.of(),
+                    parsed.warnings());
+        } catch (LocalConchException ex) {
+            if (!ex.hasIssues()) {
+                throw ex;
+            }
+            return new CheckResult(ex.parsedConch(), null, ex.errors(), ex.warnings());
+        }
+    }
+
     public static byte[] readLimited(InputStream in) throws IOException {
         byte[] bytes = in.readNBytes(MAX_BYTES + 1);
         if (bytes.length > MAX_BYTES) {
@@ -477,15 +503,18 @@ public final class LocalConches {
         }
         boolean allowEmpty = allowEmptyMcpActions();
         ValidationResult result = ConchValidator.validate(doc, validationContext(allowEmpty));
+        ArrayList<ValidationIssue> warnings = new ArrayList<>(result.warnings());
+        warnings.addAll(LiteralCredentialWarnings.scan(doc));
+        List<ValidationIssue> locatedWarnings = ImportIssueLines.locate(yaml, warnings);
         List<ValidationIssue> structural = registry.inspect(doc, allowEmpty);
         if (!structural.isEmpty()) {
             throw LocalConchException.invalid(
                     "规则包校验失败",
                     ImportIssueLines.locate(yaml, structural),
-                    ImportIssueLines.locate(yaml, result.warnings()),
+                    locatedWarnings,
                     doc.conch());
         }
-        return new Parsed(doc, ImportIssueLines.locate(yaml, result.warnings()));
+        return new Parsed(doc, locatedWarnings);
     }
 
     private boolean allowEmptyMcpActions() {
@@ -520,7 +549,7 @@ public final class LocalConches {
     }
 
     private void audit(String actor, AuditKind kind, String conch, String version) {
-        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor) && !Actors.MCP.equals(actor)) {
             return;
         }
         AuditLog.record(
@@ -532,8 +561,8 @@ public final class LocalConches {
     }
 
     private static String actor(String actor) {
-        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
-            throw new IllegalArgumentException("actor must be cli or console");
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor) && !Actors.MCP.equals(actor)) {
+            throw new IllegalArgumentException("actor must be cli, console, or mcp");
         }
         return actor;
     }
@@ -694,6 +723,26 @@ public final class LocalConches {
     }
 
     private record Parsed(ConchDoc doc, List<ValidationIssue> warnings) {
+    }
+
+    /**
+     * Validation outcome shared by import and {@code conch_validate}. {@code version} is null when
+     * the YAML did not validate. Empty {@code errors} means the YAML itself is acceptable.
+     */
+    public record CheckResult(
+            String conch,
+            String version,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
+    ) {
+        public CheckResult {
+            errors = errors == null ? List.of() : List.copyOf(errors);
+            warnings = warnings == null ? List.of() : List.copyOf(warnings);
+        }
+
+        public boolean ok() {
+            return errors.isEmpty();
+        }
     }
 
     public record ImportResult(String conch, String version, boolean replaced, List<ValidationIssue> warnings) {

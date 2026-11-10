@@ -229,7 +229,7 @@ describe('本地规则包', () => {
     wrapper.unmount()
   })
 
-  it('导入失败把代码、位置和中文原因分开，字段名不连成三次', async () => {
+  it('导入失败时字段名只出现一次，PARSE 旁边有人话', async () => {
     crab.importLocalConch.mockRejectedValue(
       new ApiError(400, 'INVALID_INPUT', '规则包校验失败', {
         errors: [{ code: 'PARSE', path: 'min_crab_version', message: 'min_crab_version: 缺少 min_crab_version' }],
@@ -245,11 +245,11 @@ describe('本地规则包', () => {
     await flushPromises()
 
     const item = document.body.querySelector('[data-test="import-error"]')
-    const text = item?.textContent ?? ''
-    expect(text).toContain('PARSE')
-    expect(text).toContain('缺少 min_crab_version')
-    expect(text).not.toContain('min_crab_version:')
-    expect(text.match(/min_crab_version/g)).toHaveLength(2)
+    expect(item).toBeTruthy()
+    expect(issueLines(item!)).toEqual(['PARSE 解析失败', '缺少 min_crab_version'])
+    expect(item?.textContent).not.toContain('min_crab_version:')
+    expect(item?.textContent).not.toMatch(/第\s*\d+\s*行/)
+    expect(document.body.textContent).toContain('导入失败')
     expect(document.body.textContent).toContain('规则包校验失败')
     wrapper.unmount()
   })
@@ -272,12 +272,10 @@ describe('本地规则包', () => {
     await input.trigger('change')
     await flushPromises()
 
-    const items = [...document.body.querySelectorAll('[data-test="import-error"]')].map((node) => node.textContent ?? '')
-    expect(items[0]).toContain('第 4 行')
-    expect(items[0]).toContain('YAML 无法解析')
-    expect(items[0]).not.toContain('（第 4 行）')
-    expect(items[1]).toContain('第 3 行')
-    expect(items[1]).toContain('driver 只允许 http 或 mcp')
+    const items = [...document.body.querySelectorAll('[data-test="import-error"]')]
+    expect(issueLines(items[0])).toEqual(['PARSE 解析失败 第 4 行', 'YAML 无法解析'])
+    expect(items[0].textContent).not.toContain('（第 4 行）')
+    expect(issueLines(items[1])).toEqual(['DRIVER 驱动无效 第 3 行', 'driver 只允许 http 或 mcp'])
     wrapper.unmount()
   })
 
@@ -298,6 +296,7 @@ describe('本地规则包', () => {
 
     const item = document.body.querySelector('[data-test="import-warning"]')
     const text = item?.textContent ?? ''
+    expect(issueLines(item!)).toEqual(['MISSING_RELATED 缺少相关能力 actions.ping.related', '缺少 related'])
     expect(text).toContain('MISSING_RELATED')
     expect(text).toContain('actions.ping.related')
     expect(text).toContain('缺少 related')
@@ -306,6 +305,14 @@ describe('本地规则包', () => {
     expect(document.body.textContent).toContain('已导入本地规则包 local_ping')
     wrapper.unmount()
   })
+
+  function issueLines(item: Element): [string, string] {
+    const head = ['.code', '.gloss', '.where']
+      .map((selector) => item.querySelector(selector)?.textContent?.trim() ?? '')
+      .filter(Boolean)
+      .join(' ')
+    return [head, item.querySelector('.reason')?.textContent?.trim() ?? '']
+  }
 
   async function chooseFile(wrapper: Awaited<ReturnType<typeof mountPage>>) {
     const input = wrapper.find('[data-test="local-file"]')

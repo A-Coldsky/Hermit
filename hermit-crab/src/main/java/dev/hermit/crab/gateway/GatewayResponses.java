@@ -38,7 +38,8 @@ final class GatewayResponses {
 
     static void writeError(Context ctx, int status, ErrorCode code, String message, boolean includeTrace) {
         String traceId = trace(ctx);
-        write(ctx, status, ApiJson.bytes(ApiEnvelope.json(null, code, message, traceId, includeTrace)), traceId, false);
+        write(ctx, status, ApiJson.bytes(ApiEnvelope.json(null, code, message, traceId, includeTrace)),
+                includeTrace ? traceId : null, false);
     }
 
     static void writeData(Context ctx, Object data) {
@@ -73,7 +74,9 @@ final class GatewayResponses {
         ctx.attribute(WRITTEN, Boolean.TRUE);
         ctx.status(status);
         ctx.contentType("application/json; charset=utf-8");
-        ctx.header("X-Hermit-Trace", traceId);
+        if (traceId != null) {
+            ctx.header("X-Hermit-Trace", traceId);
+        }
         if (replayed) {
             ctx.header("Idempotent-Replayed", "true");
         }

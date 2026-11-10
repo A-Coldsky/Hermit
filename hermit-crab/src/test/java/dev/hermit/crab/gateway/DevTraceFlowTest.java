@@ -348,6 +348,92 @@ class DevTraceFlowTest {
         };
     }
 
+    @Test
+    void missingCredentialTrialOmitsTheTraceIdFromBodyAndHeader() throws Exception {
+        CrabRuntime runtime = CrabRuntime.open(
+                new CrabPaths(temp.resolve("gap")),
+                CrabConfig.defaults().withListen("127.0.0.1", 0));
+        CrabHttpServer server = new CrabHttpServer(runtime);
+        try {
+            server.start();
+            runtime.debug().setEnabled(true, Actors.CONSOLE);
+            runtime.localConches().importBytes(gapYaml().getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            runtime.admin().createAccount("gap_ping", "ada", Actors.CONSOLE);
+            CreatedApiKey key = runtime.apiKeys().create(
+                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+            String crab = "http://127.0.0.1:" + server.port();
+
+            HttpResponse<String> trial = http.send(HttpRequest.newBuilder(URI.create(
+                    crab + "/console/api/local-conches/gap_ping/actions/show/run"))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("X-Hermit-Console", "1")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"account\":\"ada\",\"input\":{}}"))
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertTraceOmitted(trial);
+            assertThat(trial.body()).contains("ada").contains("password").contains("密码");
+
+            HttpResponse<String> api = http.send(HttpRequest.newBuilder(URI.create(crab + "/api/gap_ping/show"))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Authorization", "Bearer " + key.plaintext())
+                    .header("X-Hermit-Account", "ada")
+                    .GET()
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertTraceOmitted(api);
+            assertThat(api.body()).contains("ada").contains("password").contains("密码");
+
+            HttpResponse<String> other = http.send(HttpRequest.newBuilder(URI.create(crab + "/api/missing_conch/show"))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Authorization", "Bearer " + key.plaintext())
+                    .GET()
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(other.headers().firstValue("X-Hermit-Trace")).isPresent();
+            assertThat(ApiJson.tree(other.body()).path("traceId").asText())
+                    .isEqualTo(other.headers().firstValue("X-Hermit-Trace").orElseThrow());
+        } finally {
+            server.close();
+            runtime.close();
+        }
+    }
+
+    private static void assertTraceOmitted(HttpResponse<String> response) {
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(409);
+        assertThat(response.headers().firstValue("X-Hermit-Trace")).isEmpty();
+        JsonNode body = ApiJson.tree(response.body());
+        assertThat(body.has("traceId")).isFalse();
+        assertThat(response.body()).doesNotContain("traceId");
+    }
+
+    private static String gapYaml() {
+        return """
+                conch: gap_ping
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:9
+                title: 缺凭证
+                description: 执行前就被拒绝。
+                credentials:
+                  password: { type: secret, label: 密码, required: true }
+                actions:
+                  show:
+                    title: 看
+                    description: 返回常量。
+                    idempotent: true
+                    mcp: { expose: true, read_only: true }
+                    steps:
+                      - set: { message: seen }
+                    output:
+                      message: { type: string, description: 文本, value: seen }
+                    examples:
+                      - input: {}
+                        output: { message: seen }
+                    notes: 无
+                    related: []
+                """;
+    }
+
     private static void respond(
             com.sun.net.httpserver.HttpExchange exchange,
             int status,

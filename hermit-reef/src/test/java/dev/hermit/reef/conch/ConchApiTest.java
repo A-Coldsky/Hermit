@@ -169,6 +169,102 @@ class ConchApiTest {
     }
 
     @Test
+    void uploadRejectsDuplicateActionNamesAndKeepsOtherWarnings() throws Exception {
+        String yaml = """
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码 }
+                    output:
+                      items: { type: string, description: 结果, value: "{{input.page}}" }
+                    examples:
+                      - input: { page: 1 }
+                        output: { items: ok }
+                    notes: 注意
+                    steps:
+                      - request:
+                          method: GET
+                          path: "/{{input.page | default(1)}}"
+                  list_todo:
+                    title: 重复
+                    description: 说明
+                    output:
+                      items: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { items: ok }
+                    notes: 注意
+                    steps:
+                      - set: { name: ready }
+                      - request:
+                          path: "/{{name | default('ok')}}"
+                """;
+        JsonNode rejected = json(upload(yaml.getBytes(StandardCharsets.UTF_8)));
+        assertThat(rejected.get("success").asBoolean()).isFalse();
+        assertThat(rejected.get("error").get("code").asText()).isEqualTo("INVALID_INPUT");
+        assertThat(rejected.get("error").get("message").asText()).isEqualTo("规则包校验失败");
+        JsonNode errors = rejected.get("data").get("errors");
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0).get("code").asText()).isEqualTo(ValidationCodes.DUPLICATE_ACTION);
+        assertThat(errors.get(0).get("path").asText()).isEqualTo("actions.list_todo");
+        assertThat(errors.get(0).get("message").asText()).isEqualTo("能力名 list_todo 重复");
+        int duplicateLine = 0;
+        int seen = 0;
+        String[] source = yaml.split("\n", -1);
+        for (int i = 0; i < source.length; i++) {
+            if ("  list_todo:".equals(source[i])) {
+                seen++;
+                duplicateLine = i + 1;
+            }
+        }
+        assertThat(seen).isEqualTo(2);
+        assertThat(errors.get(0).get("line").asInt()).isEqualTo(duplicateLine);
+        ConchDoc parsed = ConchParser.parse(yaml);
+        ValidationResult expected = ConchValidator.validate(parsed, ConchValidator.Context.of(null));
+        assertThat(expected.errors()).isEmpty();
+        assertCodes(
+                rejected.get("data").get("warnings"),
+                expected.warnings().stream().map(ValidationIssue::code).toList());
+        assertThat(versionCount()).isZero();
+
+        String once = """
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    output:
+                      items: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { items: ok }
+                    notes: 注意
+                    steps:
+                      - set: { name: ready }
+                      - request:
+                          path: "/{{name | default('ok')}}"
+                """;
+        JsonNode uploaded = json(upload(once.getBytes(StandardCharsets.UTF_8)));
+        assertThat(uploaded.get("success").asBoolean()).as(uploaded.toString()).isTrue();
+        assertCodes(uploaded.get("data").get("warnings"), List.of(ValidationCodes.MISSING_RELATED));
+    }
+
+    @Test
     void uploadsTheSampleAndRejectsDuplicatesAndLowerVersions() throws Exception {
         byte[] sample = sample();
         JsonNode uploaded = json(upload(sample));

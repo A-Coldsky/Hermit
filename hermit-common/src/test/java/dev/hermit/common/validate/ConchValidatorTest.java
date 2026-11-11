@@ -242,6 +242,7 @@ class ConchValidatorTest {
                     description: 说明
                     input:
                       page: { type: integer, description: 页码 }
+                      token: { type: string, description: 令牌 }
                     output:
                       items: { type: string, description: 结果 }
                     examples:
@@ -356,7 +357,7 @@ class ConchValidatorTest {
                       token:
                         type: string
                         description: 令牌
-                        value: "id={{input.id | default(credential.password)}}"
+                        value: "id={{input.page | default(credential.password)}}"
                 """)), ConchValidator.Context.of(null));
         assertThat(viaDefault.errors()).extracting(ValidationIssue::path)
                 .containsExactly("actions.list_todo.output.token");
@@ -726,6 +727,139 @@ class ConchValidatorTest {
         assertThat(loginOnly.warnings()).extracting(ValidationIssue::code)
                 .filteredOn(ValidationCodes.LOGIN_VARIABLE_EMPTY::equals)
                 .hasSize(1);
+    }
+
+    @Test
+    void undeclaredInputFieldsFailWithLineAndFieldAndDeclaredDefaultsStay() {
+        String yaml = """
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    input:
+                      page: { type: integer, description: 页码, default: "{{input.other}}" }
+                    output:
+                      items: { type: string, description: 结果, value: "{{input.page}}" }
+                    examples:
+                      - input: { page: 1, extra: 2 }
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - set:
+                          name: ready
+                      - request:
+                          method: GET
+                          path: "/{{name | default('x')}}"
+                          query:
+                            q: "{{input.missing}}"
+                            p: "{{input.page | default(1)}}"
+                            d: "{{input.missing | default('')}}"
+                            kept: "{{name | default(input.missing)}}"
+                            z: "{{absent | default('ok')}}"
+                """;
+        ValidationResult result = ConchValidator.validate(
+                ConchParser.parse(yaml), ConchValidator.Context.of(null));
+        assertThat(result.errors()).extracting(ValidationIssue::code)
+                .containsOnly(ValidationCodes.UNDECLARED_INPUT);
+        assertThat(result.errors()).extracting(ValidationIssue::message).containsExactly(
+                "引用了未声明的输入字段 other",
+                "引用了未声明的输入字段 missing",
+                "引用了未声明的输入字段 missing",
+                "引用了未声明的输入字段 missing");
+        assertThat(result.errors()).extracting(ValidationIssue::path).containsExactly(
+                "actions.list_todo.input.page.default",
+                "actions.list_todo.steps[1].request.query.q",
+                "actions.list_todo.steps[1].request.query.d",
+                "actions.list_todo.steps[1].request.query.kept");
+        assertThat(result.errors()).extracting(ValidationIssue::message)
+                .noneMatch(message -> message.toString().contains("name") || message.toString().contains("page"));
+        assertThat(result.errors()).extracting(ValidationIssue::path)
+                .noneMatch(path -> path.toString().contains("examples"));
+
+        String[] lines = yaml.split("\n", -1);
+        java.util.List<ValidationIssue> located = IssueLines.locate(yaml, result.errors());
+        assertThat(located).extracting(ValidationIssue::line).doesNotContainNull();
+        for (ValidationIssue issue : located) {
+            String field = issue.message().substring("引用了未声明的输入字段 ".length());
+            assertThat(lines[issue.line() - 1]).contains("input." + field);
+        }
+    }
+
+    @Test
+    void authInputFieldMustBeDeclaredOnEveryAction() {
+        ValidationResult shared = ConchValidator.validate(ConchParser.parse(authUsing("page", true)),
+                ConchValidator.Context.of(null));
+        assertThat(shared.errors()).isEmpty();
+
+        ValidationResult missing = ConchValidator.validate(ConchParser.parse(authUsing("page", false)),
+                ConchValidator.Context.of(null));
+        assertThat(missing.errors()).filteredOn(issue -> ValidationCodes.UNDECLARED_INPUT.equals(issue.code()))
+                .singleElement()
+                .satisfies(issue -> {
+                    assertThat(issue.path()).isEqualTo("auth.steps[2].request.path");
+                    assertThat(issue.message()).isEqualTo("引用了未声明的输入字段 page");
+                });
+        assertThat(missing.errors()).extracting(ValidationIssue::message)
+                .noneMatch(message -> message.toString().contains("name"));
+    }
+
+    private static String authUsing(String field, boolean secondDeclares) {
+        String secondInput = secondDeclares
+                ? field + ": { type: string, description: 字段 }"
+                : "other: { type: string, description: 其它 }";
+        return """
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                auth:
+                  steps:
+                    - set:
+                        name: ready
+                    - request:
+                        method: GET
+                        path: "/{{name | default('ok')}}"
+                    - request:
+                        method: GET
+                        path: "/{{input.%s}}"
+                actions:
+                  first:
+                    title: 甲
+                    description: 说明
+                    input:
+                      %s: { type: string, description: 字段 }
+                    output:
+                      items: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: { %s: a }
+                        output: { items: ok }
+                    notes: 注意
+                    related: []
+                  second:
+                    title: 乙
+                    description: 说明
+                    input:
+                      %s
+                    output:
+                      items: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { items: ok }
+                    notes: 注意
+                    related: []
+                """.formatted(field, field, field, secondInput);
     }
 
     private static String referencing(String steps) {

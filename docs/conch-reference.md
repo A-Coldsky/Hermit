@@ -281,7 +281,7 @@ steps:
 
 模板如 `{{input.page}}`、`{{credential.password | md5}}`、`{{config.base_url}}`、`{{items}}`。支持的过滤器：`md5` 和 `sha256` 对 UTF-8 文本做摘要并输出小写十六进制，不接受参数；`base64`、`urlencode`、`trim` 也不接受参数。`default` 需要一个后备值，原值为空或 null 时用它。`date` 需要一个输出格式；值可以是 `now`，或 `yyyy-MM-dd`、`yyyy/MM/dd`、`yyyy-MM-dd HH:mm:ss`、`yyyy/MM/dd HH:mm:ss`、`yyyy年M月d日`、`yyyyMMdd`。`rsa` 需要一个公钥参数，用 RSA/ECB/PKCS1Padding 加密后再做 Base64；公钥是 X.509，可以是 PEM，也可以是去掉空白的 Base64。完整表达式保留原值类型，拼接字符串则转成文本。
 
-`input`、`credential`、`config`、`response`、`now` 是保留变量，不能通过 set/extract/script.into 覆盖。request 更新 response，extract/set 产生后续步骤可用的变量。同一步骤列表里，后面的步骤可以引用前面 extract、set 或 script.into 声明的名字，例如登录里先提取再写 `{{viewstate}}`，能力里先提取再写 `{{items}}`。`{{input.page}}` 和 `{{credential.password}}` 用的是保留变量。`default` 过滤器算作这个名字已经处理：`{{token | default('')}}` 可以写，不算 `UNDECLARED_VARIABLE`。没加 `default` 的未声明名字，`conch_validate` 仍会报错并给出行号。`{{vars.token}}`、`{{token}}`、`{{auth.token}}` 就是这种。能力步骤引用只在登录步骤里声明、又没有 `default` 的名字，错误是「能力不能引用登录步骤里的变量。」，不是「引用了未定义的变量」。`credential.*` 和 `config.*` 不会因为加了 `default` 就放过未声明的凭证或配置。试跑遇到未定义变量时会点名这个变量，不会说成上游故障或版本不一致。
+`input`、`credential`、`config`、`response`、`now` 是保留变量，不能通过 set/extract/script.into 覆盖。request 更新 response，extract/set 产生后续步骤可用的变量。同一步骤列表里，后面的步骤可以引用前面 extract、set 或 script.into 声明的名字，例如登录里先提取再写 `{{viewstate}}`，能力里先提取再写 `{{items}}`。`{{input.page}}` 和 `{{credential.password}}` 用的是保留变量。`{{input.page}}` 还要这个能力的 `input` 声明了 `page`；没声明的字段报 `UNDECLARED_INPUT`，message 写出字段名，能定位时带行号。登录步骤里的 `{{input.字段}}` 要每个能力都声明了该字段，因为登录用的是这次调用的入参。`{{name | default(...)}}` 里的 `name` 若已由本列表更早的 extract、set 或 script.into 声明，不算未声明。`default` 过滤器算作这个名字已经处理：`{{token | default('')}}` 可以写，不算 `UNDECLARED_VARIABLE`。没加 `default` 的未声明名字，`conch_validate` 仍会报错并给出行号。`{{vars.token}}`、`{{token}}`、`{{auth.token}}` 就是这种。能力步骤引用只在登录步骤里声明、又没有 `default` 的名字，错误是「能力不能引用登录步骤里的变量。」，不是「引用了未定义的变量」。`credential.*` 和 `config.*` 不会因为加了 `default` 就放过未声明的凭证或配置。试跑遇到未定义变量时会点名这个变量，不会说成上游故障或版本不一致。
 
 输出可采用映射模板，也可用说明式字段。说明式字段省略 value 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。校验器禁止在输出中直接引用 credential。
 
@@ -307,7 +307,7 @@ ZIP 只包含 `conch.yaml`、`manifest.json`、`signature.sig`；manifest format
 
 本机可以导入未签名的 YAML，用来在这一台 Crab 上试规则。来源是控制台上传，或 `HERMIT_HOME/local-conches/{conch}.yaml` 加上重新加载。没有在线编辑器。文件名必须等于包名，只认直接放在该目录下的 `*.yaml`。
 
-导入走与 Reef 上传相同的解析和校验。`config` 仍然不能写 `type: secret`。单文件上限 1 MiB。控制台这次请求还受 Crab 现有请求体上限（1_000_000 字节）约束。校验失败返回 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，每项含 `code`、`path`、`message`。能定位到 YAML 行时再加 `line`（从 1 计）；缺字段这类定位不到的情况没有 `line`。失败不写文件。
+导入走与 Reef 上传相同的解析和校验，但 Reef 上传还会拒绝 `actions` 里重复的能力名，导入不另做这项检查。`config` 仍然不能写 `type: secret`。单文件上限 1 MiB。控制台这次请求还受 Crab 现有请求体上限（1_000_000 字节）约束。校验失败返回 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，每项含 `code`、`path`、`message`。能定位到 YAML 行时再加 `line`（从 1 计）；缺字段这类定位不到的情况没有 `line`。失败不写文件。
 
 名字只和本机注册表里的正式包、以及 `subscriptions` 里的名字冲突。冲突是 HTTP 409，错误码仍是 `INVALID_INPUT`。已安装正式包时拒绝更换另一把 Reef 公钥也是 `CONFLICT`。订阅一个已经导入的本地规则包同样是 409，`message` 为「与本机本地规则包同名」。与已有本地规则包同名（含未能载入的坏包，或目录里已经有同名 yaml）必须确认后才覆盖：控制台不带 `confirm=true` 是 409 `CONFLICT`，CLI 不带 `--replace` 退出 1，都不写文件。确认后版本以 YAML 为准。账号和凭证留在 `(LOCAL, conch, account)` 上，删除本地规则包也不清它们。
 

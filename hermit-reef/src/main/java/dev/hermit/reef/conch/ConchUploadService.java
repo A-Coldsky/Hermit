@@ -4,6 +4,7 @@ import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchValidator;
+import dev.hermit.common.validate.DuplicateActions;
 import dev.hermit.common.validate.IssueLines;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
@@ -12,6 +13,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -46,10 +48,14 @@ public class ConchUploadService {
         }
         byte[] yamlBytes = yamlBytes(body);
         String yaml = new String(yamlBytes, StandardCharsets.UTF_8);
+        List<ValidationIssue> duplicates = DuplicateActions.find(yaml);
         ConchDoc doc;
         try {
             doc = ConchParser.parse(yaml);
         } catch (ConchParseException ex) {
+            if (!duplicates.isEmpty()) {
+                throw validationFailed(yaml, duplicates, List.of());
+            }
             throw new ConchRequestException(
                     422,
                     ReefErrorCode.INVALID_INPUT,
@@ -57,16 +63,26 @@ public class ConchUploadService {
                     new ParseFailure(ex.path(), ex.getMessage()));
         }
         ValidationResult result = ConchValidator.validate(doc, ConchValidator.Context.of(null));
-        if (!result.errors().isEmpty()) {
-            throw new ConchRequestException(
-                    422,
-                    ReefErrorCode.INVALID_INPUT,
-                    "规则包校验失败",
-                    new ValidationFailure(
-                            IssueLines.locate(yaml, result.errors()),
-                            IssueLines.locate(yaml, result.warnings())));
+        if (!result.errors().isEmpty() || !duplicates.isEmpty()) {
+            ArrayList<ValidationIssue> errors = new ArrayList<>(result.errors());
+            errors.addAll(duplicates);
+            throw validationFailed(yaml, errors, result.warnings());
         }
         return new PreparedUpload(yamlBytes, doc, result.warnings());
+    }
+
+    private static ConchRequestException validationFailed(
+            String yaml,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
+    ) {
+        return new ConchRequestException(
+                422,
+                ReefErrorCode.INVALID_INPUT,
+                "规则包校验失败",
+                new ValidationFailure(
+                        IssueLines.locate(yaml, errors),
+                        IssueLines.locate(yaml, warnings)));
     }
 
     private static byte[] yamlBytes(byte[] body) {

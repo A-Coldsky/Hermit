@@ -1,15 +1,11 @@
 package dev.hermit.common.parse;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -79,7 +75,6 @@ public final class ConchParser {
         if (yaml == null) {
             throw new ConchParseException("", "YAML 为空");
         }
-        rejectDuplicateActions(yaml);
         JsonNode root;
         try {
             root = YAML.readTree(yaml);
@@ -741,53 +736,6 @@ public final class ConchParser {
             current = next == current ? null : next;
         }
         return null;
-    }
-
-    /**
-     * Jackson 的映射会丢掉重复键。能力名必须在折叠之前查出来，Reef 上传和 Crab 导入才看得到。
-     */
-    private static void rejectDuplicateActions(String yaml) {
-        try (JsonParser parser = YAML.getFactory().createParser(yaml)) {
-            int depth = 0;
-            boolean sawActions = false;
-            int actionsDepth = -1;
-            LinkedHashSet<String> names = new LinkedHashSet<>();
-            while (parser.nextToken() != null) {
-                JsonToken token = parser.currentToken();
-                if (token == JsonToken.START_OBJECT || token == JsonToken.START_ARRAY) {
-                    depth++;
-                    if (sawActions && actionsDepth < 0 && token == JsonToken.START_OBJECT) {
-                        actionsDepth = depth;
-                    }
-                    sawActions = false;
-                } else if (token == JsonToken.END_OBJECT || token == JsonToken.END_ARRAY) {
-                    if (actionsDepth == depth) {
-                        return;
-                    }
-                    depth--;
-                    sawActions = false;
-                } else if (token == JsonToken.FIELD_NAME) {
-                    String name = parser.currentName();
-                    if (actionsDepth > 0 && depth == actionsDepth) {
-                        if (!names.add(name)) {
-                            int line = parser.getCurrentLocation().getLineNr();
-                            String where = line > 0 ? "。第 " + line + " 行" : "";
-                            throw new ConchParseException("actions." + name, "能力名重复：" + name + where);
-                        }
-                    } else if (depth == 1 && "actions".equals(name)) {
-                        sawActions = true;
-                    } else {
-                        sawActions = false;
-                    }
-                } else {
-                    sawActions = false;
-                }
-            }
-        } catch (ConchParseException ex) {
-            throw ex;
-        } catch (IOException ex) {
-            // 非法 YAML 留给后面的解析报原来的错误。
-        }
     }
 
     private static YAMLMapper buildMapper() {

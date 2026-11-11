@@ -76,7 +76,7 @@ export async function updateConch(target: UpdateTarget): Promise<boolean> {
     : ''
   try {
     await ElMessageBox.confirm(
-      `把 ${target.conch} 从 ${from} 更新到 ${to}。更新后不能退回旧版本。${credentials}`,
+      `把 ${target.conch} 从 ${from} 更新到 ${to}。更新后可以退回刚换下的那一版。${credentials}`,
       `更新 ${target.conch}`,
       { confirmButtonText: '更新', cancelButtonText: '暂不更新', type: 'info' },
     )

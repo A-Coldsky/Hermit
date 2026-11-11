@@ -3,6 +3,9 @@ export interface Envelope<T> {
   data: T | null
   error: { code: string; message: string } | null
   traceId: string | null
+  /** Present when the failure did not store a trace. Do not open it as a call. */
+  requestId?: string | null
+  requestNote?: string | null
 }
 
 export class ApiError extends Error {
@@ -12,6 +15,8 @@ export class ApiError extends Error {
     message: string,
     readonly data: unknown = null,
     readonly traceId: string | null = null,
+    readonly requestId: string | null = null,
+    readonly requestNote: string | null = null,
   ) {
     super(message)
   }
@@ -45,6 +50,8 @@ export function createClient(options: ClientOptions = {}) {
       parsed?.error?.message ?? `请求失败（HTTP ${status}）`,
       parsed?.data ?? null,
       parsed?.traceId ?? null,
+      parsed?.requestId ?? null,
+      parsed?.requestNote ?? null,
     )
     if (status === 401) {
       options.onUnauthorized?.(error)

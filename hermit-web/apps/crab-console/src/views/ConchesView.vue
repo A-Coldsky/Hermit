@@ -253,14 +253,15 @@ onMounted(load)
             <strong>
               {{ row.conch }}
               <el-tag type="info" effect="plain" size="small" class="local">本地</el-tag>
-              <el-tag type="danger" effect="plain" size="small" class="local" data-test="broken-tag">文件损坏，无法加载</el-tag>
+              <el-tag type="danger" effect="plain" size="small" class="local" data-test="broken-tag">{{ row.ruleDisabled ? '已停用' : '文件损坏，无法加载' }}</el-tag>
             </strong>
             <span class="mono hm-muted">{{ row.file }}</span>
           </div>
         </div>
         <div class="status bad">
           <el-icon><CircleCloseFilled /></el-icon>
-          <span>未载入，不能调用。修好文件后重新导入覆盖，或先删除再导入</span>
+          <span v-if="row.ruleDisabled">已停用，这版规则暂时不能调用</span>
+          <span v-else>未载入，不能调用。修好文件后重新导入覆盖，或先删除再导入</span>
         </div>
         <p v-if="row.reason" class="broken-reason" data-test="broken-reason">{{ row.reason }}</p>
         <div class="foot hm-muted">

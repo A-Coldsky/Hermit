@@ -421,13 +421,15 @@ public final class RuleEngine implements ConchExecutor {
         Runnable persist = () -> sessions.persist(key);
         DevTraceDraft draft = DevTraceScope.current();
         boolean capture = draft != null;
-        boolean collectDerived = draft != null && "login".equals(phase);
-        if (collectDerived) {
-            draft.collectDerived(true);
-        }
+        boolean loginPhase = "login".equals(phase);
+        boolean deriveNext = false;
         try {
         for (int i = 0; i < definitions.size(); i++) {
             Step step = definitions.get(i);
+            if (draft != null) {
+                boolean extractOrScript = "extract".equals(step.type()) || "script".equals(step.type());
+                draft.collectDerived(loginPhase || (deriveNext && extractOrScript), !loginPhase);
+            }
             if (System.nanoTime() >= deadline) {
                 throw new DeadlineExceeded(i, step.type(), logs);
             }
@@ -455,6 +457,9 @@ public final class RuleEngine implements ConchExecutor {
                 if (capture && outcome.capture() != null && draft != null) {
                     draft.add(phase, i, elapsed(started), outcome.capture());
                 }
+                if (!loginPhase && "request".equals(step.type())) {
+                    deriveNext = templates.referencesCredential(step.def());
+                }
                 // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
                 rejectCapabilityStatus(auth, outcome, i, step.type(), logs, definitions);
             } catch (RuleProblem ex) {
@@ -479,7 +484,7 @@ public final class RuleEngine implements ConchExecutor {
             }
         }
         } finally {
-            if (collectDerived) {
+            if (draft != null) {
                 draft.collectDerived(false);
             }
         }
@@ -566,7 +571,7 @@ public final class RuleEngine implements ConchExecutor {
                     redactor.redact(summary));
         }
         Object masked = success ? OutputMask.apply(data, redactor) : null;
-        commitTrace(request, redactor);
+        commitTrace(request, redactor(credentials, cookies, true));
         return new ExecutionResult(
                 success,
                 masked,
@@ -685,6 +690,10 @@ public final class RuleEngine implements ConchExecutor {
     }
 
     private Redactor redactor(Map<String, String> credentials, List<String> cookies) {
+        return redactor(credentials, cookies, false);
+    }
+
+    private Redactor redactor(Map<String, String> credentials, List<String> cookies, boolean includeTraceDerived) {
         LinkedHashSet<String> secrets = new LinkedHashSet<>(knownSecrets.copy());
         if (credentials != null) {
             for (String value : credentials.values()) {
@@ -703,6 +712,9 @@ public final class RuleEngine implements ConchExecutor {
         DevTraceDraft draft = DevTraceScope.current();
         if (draft != null) {
             secrets.addAll(draft.derivedSecrets());
+            if (includeTraceDerived) {
+                secrets.addAll(draft.traceSecrets());
+            }
         }
         return Redactor.of(secrets);
     }

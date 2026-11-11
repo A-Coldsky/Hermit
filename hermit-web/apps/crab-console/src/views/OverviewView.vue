@@ -39,6 +39,8 @@ const debugBusy = ref(false)
 const authoringPrompt = computed(() => {
   const endpoint = `${window.location.origin}/mcp`
   return [
+    '范围选全部权限，并取消勾选只允许调用只读能力。勾了只读的全部权限 Key 不能保存。全部权限 Key 读不到控制台试跑的追踪。',
+    '',
     '用 MCP 写 Hermit 规则包。',
     `接入地址是 ${endpoint}。请求头用 Authorization: Bearer <API Key> 或 X-Hermit-Key。Key 由 Crab 本机签发。不要把 Key 明文写进对话，也不要向我索要。`,
     '',
@@ -53,7 +55,6 @@ const authoringPrompt = computed(() => {
     '6. 成功后我在控制台导出，再上传 Reef。不要从 MCP 上传或发布。',
     '',
     '正式包不能保存或试跑。先在本地规则包上开发，再导出上传。',
-    '范围选全部权限，并取消勾选只允许调用只读能力。勾了只读的全部权限 Key 不能保存。全部权限 Key 读不到控制台试跑的追踪。',
   ].join('\n')
 })
 const changedConches = computed(

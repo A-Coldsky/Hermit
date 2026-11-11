@@ -15,6 +15,11 @@ const stored = ref<string[]>([])
 const loading = ref(false)
 const saving = ref(false)
 
+function shownField(field: CredentialField) {
+  if (!field.label || field.label === field.name) return field.name
+  return `${field.label}（${field.name}）`
+}
+
 const keepable = (name: string) => !props.unreadable && stored.value.includes(name)
 
 const changes = computed(() => {
@@ -49,11 +54,19 @@ watch(open, async (value) => {
 
 async function save() {
   if (props.unreadable) {
-    const empty = props.fields.filter((f) => f.required && !values[f.name]).map((f) => f.label || f.name)
+    const empty = props.fields.filter((f) => f.required && !values[f.name]).map((f) => shownField(f))
     if (empty.length) {
       ElMessage.warning(`凭证无法解密，需要全部重新填写：${empty.join('、')}`)
       return
     }
+  }
+  const blocked = props.fields.filter((field) => {
+    if (!field.required || values[field.name]) return false
+    return !(keepable(field.name) && !cleared[field.name])
+  })
+  if (blocked.length) {
+    ElMessage.warning(`请填写必填凭证：${blocked.map((field) => shownField(field)).join('、')}`)
+    return
   }
   if (!Object.keys(changes.value).length) {
     open.value = false

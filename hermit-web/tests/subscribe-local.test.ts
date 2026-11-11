@@ -43,6 +43,7 @@ const entry = (over: Record<string, unknown> = {}) => ({
   installedVersion: null,
   disabled: false,
   localConflict: false,
+  ruleDisabled: false,
   ...over,
 })
 
@@ -416,7 +417,7 @@ describe('本地规则包', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('本地规则包：未经 Reef 签名')
     const local = wrapper.findAll('.el-alert').find((node) => node.text().includes('未经 Reef 签名'))
-    expect(local?.text()).toContain('全部权限可以调用这个本地规则包')
+    expect(local?.text()).toContain('全部权限的 Key 可以调用这个本地规则包')
     expect(local?.text()).not.toContain('会被拒绝')
     expect(buttons(wrapper, '导出 YAML')).toHaveLength(1)
     expect(buttons(wrapper, '删除')).toHaveLength(1)
@@ -502,7 +503,7 @@ describe('手动更新', () => {
 
     await buttons(wrapper, '更新到 v1.1.0')[0].trigger('click')
     await flushPromises()
-    expect(confirm.mock.calls[0][0]).toContain('不能退回旧版本')
+    expect(confirm.mock.calls[0][0]).toContain('可以退回刚换下的那一版')
     expect(crab.update).toHaveBeenCalledWith('legacy_oa')
     expect(crab.conch).toHaveBeenCalledTimes(2)
     confirm.mockRestore()
@@ -616,6 +617,33 @@ describe('需要修复的规则包', () => {
     await buttons(wrapper, '修复')[0].trigger('click')
     await flushPromises()
     expect(crab.update).toHaveBeenCalledWith('legacy_oa')
+  })
+
+  it('校验载不进时显示已停用，不显示健康的已安装', async () => {
+    crab.catalog.mockResolvedValue({
+      configured: true,
+      syncedAt: '2026-11-09T00:00:00Z',
+      conches: [
+        entry({
+          subscribed: true,
+          installed: true,
+          installedVersion: '1.0.0',
+          updateAvailable: true,
+          latestVersion: '1.0.1',
+          ruleDisabled: true,
+          repairRequired: false,
+          message: '已停用。这版规则暂时不能调用。能力不能引用登录步骤里的变量。第 12 行。',
+        }),
+      ],
+    })
+    crab.syncStatus.mockResolvedValue({ report: null, latestCrab: null })
+    const wrapper = await mountPage(CatalogView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="rule-disabled-tag"]').text()).toBe('已停用')
+    expect(wrapper.find('[data-test="repair-message"]').text()).toContain('第 12 行')
+    expect(wrapper.text()).not.toContain('已安装 v1.0.0')
+    expect(wrapper.text()).not.toContain('Reef 已停用')
   })
 
   it('签名损坏的详情显示同一句中文和手动修复，不拉取账号', async () => {

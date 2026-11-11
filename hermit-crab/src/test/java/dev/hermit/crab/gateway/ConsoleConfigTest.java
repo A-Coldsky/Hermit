@@ -42,7 +42,14 @@ class ConsoleConfigTest {
 
             TestServer.Reply partial = server.console("PUT", path, "{\"username\":\"carol\"}", true);
             assertThat(partial.status()).isEqualTo(400);
-            assertThat(partial.json().path("error").path("message").asText()).contains("password");
+            assertThat(partial.json().path("error").path("message").asText())
+                    .contains("密码（password）")
+                    .contains("填写凭证")
+                    .doesNotContain("missing required credentials");
+            assertThat(partial.json().has("traceId")).isFalse();
+            assertThat(partial.json().path("requestId").asText()).isNotBlank();
+            assertThat(partial.json().path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
+            assertThat(partial.headers().keySet()).noneMatch(name -> name.equalsIgnoreCase("X-Hermit-Trace"));
 
             TestServer.Reply full = server.console(
                     "PUT", path, "{\"username\":\"carol\",\"password\":\"" + PASSWORD + "\"}", true);
@@ -55,7 +62,9 @@ class ConsoleConfigTest {
 
             TestServer.Reply cleared = server.console("PUT", path, "{\"password\":\"\"}", true);
             assertThat(cleared.status()).isEqualTo(400);
-            assertThat(cleared.json().path("error").path("message").asText()).contains("password");
+            assertThat(cleared.json().path("error").path("message").asText()).contains("密码（password）");
+            assertThat(cleared.json().has("traceId")).isFalse();
+            assertThat(cleared.json().path("requestNote").asText()).contains("不可查追踪");
         }
     }
 
@@ -246,6 +255,10 @@ class ConsoleConfigTest {
                     "POST", "/console/api/conches/legacy_oa/accounts/alice/test-login", "{}", true);
             assertThat(failedLogin.status()).isEqualTo(422);
             assertThat(failedLogin.json().path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
+            assertThat(failedLogin.json().has("traceId")).isFalse();
+            assertThat(failedLogin.json().path("requestId").asText()).isNotBlank();
+            assertThat(failedLogin.json().path("requestNote").asText()).contains("不可查追踪");
+            assertThat(failedLogin.headers().keySet()).noneMatch(name -> name.equalsIgnoreCase("X-Hermit-Trace"));
             assertThat(account(server, "alice").path("loginPaused").asBoolean()).isTrue();
             TestServer.Reply stillPaused = server.call(
                     "GET", "/api/legacy_oa/list_todo", server.apiKey.plaintext(), "alice", null, null);

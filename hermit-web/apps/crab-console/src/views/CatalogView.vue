@@ -188,7 +188,8 @@ onMounted(load)
               <el-tag v-if="row.localConflict" type="warning" effect="plain" size="small">与本地规则包同名</el-tag>
               <el-tag v-if="row.subscribed" type="success" effect="plain" size="small">已订阅</el-tag>
               <el-tag v-else-if="!row.localConflict" type="info" effect="plain" size="small">未订阅</el-tag>
-              <el-tag v-if="row.installed && !row.localConflict && !row.repairRequired" type="info" effect="plain" size="small" class="mono">
+              <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" data-test="rule-disabled-tag">已停用</el-tag>
+              <el-tag v-else-if="row.installed && !row.localConflict && !row.repairRequired" type="info" effect="plain" size="small" class="mono">
                 已安装 v{{ row.installedVersion }}
               </el-tag>
               <span v-if="row.message" class="damage" data-test="repair-message">{{ row.message }}</span>

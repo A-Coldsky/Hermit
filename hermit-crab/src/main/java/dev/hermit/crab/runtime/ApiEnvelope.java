@@ -8,6 +8,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import dev.hermit.common.error.ErrorCode;
 
 public final class ApiEnvelope {
+    public static final String REQUEST_NOTE = "请求编号，不可查追踪";
+
     private ApiEnvelope() {
     }
 
@@ -36,6 +38,15 @@ public final class ApiEnvelope {
         if (!includeTrace) {
             body.remove("traceId");
         }
+        return ApiJson.write(body);
+    }
+
+    /** A failure that never stored a trace. {@code requestId} must not be looked up as a trace. */
+    public static String requestJson(Object data, ErrorCode code, String message, String requestId) {
+        Map<String, Object> body = of(data, code, message, null);
+        body.remove("traceId");
+        body.put("requestId", requestId);
+        body.put("requestNote", REQUEST_NOTE);
         return ApiJson.write(body);
     }
 

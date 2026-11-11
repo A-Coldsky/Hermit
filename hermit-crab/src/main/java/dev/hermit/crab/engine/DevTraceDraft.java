@@ -44,7 +44,9 @@ public final class DevTraceDraft {
     private boolean aliveCheckRan;
     private Boolean aliveCheckOk;
     private boolean collectDerived;
+    private boolean traceOnlyDerived;
     private final LinkedHashSet<String> derived = new LinkedHashSet<>();
+    private final LinkedHashSet<String> traceDerived = new LinkedHashSet<>();
 
     public DevTraceDraft(Instant expiresAt) {
         this.expiresAt = expiresAt;
@@ -56,7 +58,15 @@ public final class DevTraceDraft {
 
     /** Login steps remember extracted, set, and script string values so the later redactor can mask them. */
     public void collectDerived(boolean enabled) {
+        collectDerived(enabled, false);
+    }
+
+    /**
+     * @param traceOnly action-step extracts are masked in the stored trace, not in the call result
+     */
+    public void collectDerived(boolean enabled, boolean traceOnly) {
         this.collectDerived = enabled;
+        this.traceOnlyDerived = enabled && traceOnly;
     }
 
     public boolean collectingDerived() {
@@ -71,13 +81,18 @@ public final class DevTraceDraft {
         return Set.copyOf(derived);
     }
 
+    /** Values taken from a credential-bearing action step. Mask these in the trace only. */
+    public Set<String> traceSecrets() {
+        return Set.copyOf(traceDerived);
+    }
+
     private void rememberDerived(Object value, int depth) {
         if (value == null || depth > 8) {
             return;
         }
         if (value instanceof String text) {
             if (text.length() >= 4 && !"***".equals(text)) {
-                derived.add(text);
+                (traceOnlyDerived ? traceDerived : derived).add(text);
             }
             return;
         }

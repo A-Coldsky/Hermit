@@ -16,6 +16,15 @@ const form = reactive({ open: false, saving: false, name: '', readOnly: true, al
 const created = ref<CreatedApiKey | null>(null)
 
 const localNames = computed(() => conchDetails.value.filter((s) => s.source === 'LOCAL').map((s) => s.conch))
+const endpoint = computed(() => `${window.location.origin}/mcp`)
+const clientExample = computed(() => `{
+  "mcpServers": {
+    "hermit": {
+      "url": "${endpoint.value}",
+      "headers": { "Authorization": "Bearer <API Key>" }
+    }
+  }
+}`)
 
 function conchLabel(s: ConchDetail): string {
   return s.title ? `${s.title}（${s.conch}）` : s.conch
@@ -177,7 +186,8 @@ onMounted(load)
         </el-form-item>
         <el-alert v-if="form.all" type="error" :closable="false" show-icon title="全部权限风险较高" class="risk" data-test="scope-all-risk">
           <div>这把 Key 可以调用本机全部规则包的全部能力，包括本地规则包；以后新订阅的规则包和新导入的本地规则包也自动包含。</div>
-          <div v-if="!form.readOnly"><strong>没有勾选「只允许调用只读能力」，会修改数据的能力也能调用。</strong></div>
+          <div v-if="form.readOnly"><strong>这把 Key 不能保存本地规则包。</strong></div>
+          <div v-else><strong>没有勾选「只允许调用只读能力」，会修改数据的能力也能调用。</strong></div>
           <div>Key 泄露时影响面最大。只给信任的调用方，能指定范围时尽量指定。</div>
         </el-alert>
         <el-form-item v-if="!form.all" label="允许的规则包">
@@ -214,6 +224,8 @@ onMounted(load)
         <code>{{ created.plaintext }}</code>
         <el-button :icon="CopyDocument" @click="copyText(created.plaintext, 'API Key 已复制')">复制</el-button>
       </div>
+      <p class="hint">接入地址 <span class="mono">{{ endpoint }}</span></p>
+      <pre class="example" data-test="key-example">{{ clientExample }}</pre>
       <template #footer>
         <el-button type="primary" @click="created = null">我已保存</el-button>
       </template>

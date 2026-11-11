@@ -421,7 +421,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             resolved = accounts.resolve(Origin.LOCAL, doc.conch(), account == null ? Optional.empty() : account);
         } catch (AccountNotFoundException ex) {
             if (ex.account() == null && accounts.list(Origin.LOCAL, doc.conch()).isEmpty()) {
-                throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "no account configured");
+                throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialMessages.NO_ACCOUNT);
             }
             throw new TrialRejected(404, ErrorCode.ACCOUNT_NOT_FOUND, Invoker.ACCOUNT_NOT_FOUND_MESSAGE);
         } catch (IllegalArgumentException ex) {
@@ -714,6 +714,27 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             }
         }
         return result.outcome();
+    }
+
+    /**
+     * Installs the one previous version kept after the last switch. Does not report the change to Reef.
+     */
+    public ConchOutcome rollback(String conch, String actor) {
+        prepare();
+        if (conchSync == null) {
+            throw new SubscriptionException(
+                    409, ErrorCode.NOT_CONFIGURED, SubscriptionException.NOT_CONFIGURED);
+        }
+        UpdateResult result = conchSync.rollback(conch, actor);
+        result.credentialChange().ifPresent(change -> recordCredentialChange(change, Actors.SYNC));
+        return result.outcome();
+    }
+
+    public String previousVersion(String conch) {
+        if (conchSync == null) {
+            return null;
+        }
+        return conchSync.previousVersion(conch).orElse(null);
     }
 
     public void unsubscribe(String conch, String actor) {

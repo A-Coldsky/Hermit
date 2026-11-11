@@ -14,6 +14,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.engine.DevTraceDraft;
 import dev.hermit.crab.sync.DisabledConches;
+import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
@@ -302,6 +303,9 @@ final class McpCalls {
         }
         DevTraceStore.Trace trace = runtime.devTraces().find(traceId).orElse(null);
         if (trace == null) {
+            if (runtime.deletedTrace(traceId)) {
+                return fail(attempt, "NOT_FOUND", TRACE_DELETED);
+            }
             if (runtime.rejectedTrial(traceId)) {
                 return fail(attempt, "NOT_FOUND", TRACE_REJECTED);
             }
@@ -514,6 +518,35 @@ final class McpCalls {
     /** A trial rejected before execution has no trace. The response must not hand back an id. */
     static McpSchema.CallToolResult failWithoutTrace(Attempt attempt, String code, String message) {
         return toolError(code, message, null, attempt.directory(), null, false);
+    }
+
+    /** The id is a request number. It is not a trace and must not be opened in the call drawer. */
+    static McpSchema.CallToolResult failAsRequest(Attempt attempt, String code, String message) {
+        return failAsRequest(attempt, code, message, null);
+    }
+
+    static McpSchema.CallToolResult failAsRequest(Attempt attempt, String code, String message, String field) {
+        String resolved = code == null || code.isBlank() ? "INTERNAL" : code;
+        String text = message == null ? "" : message;
+        LinkedHashMap<String, String> error = new LinkedHashMap<>();
+        error.put("code", resolved);
+        error.put("message", text);
+        error.put("hint", McpErrors.toolHint(resolved, text, attempt.directory()));
+        error.put("requestId", attempt.traceId());
+        error.put("requestNote", ApiEnvelope.REQUEST_NOTE);
+        String named = field == null || field.isBlank() ? McpErrors.fieldOf(text) : field;
+        if (named != null && !named.isBlank()) {
+            error.put("field", named);
+        }
+        LinkedHashMap<String, Object> structured = new LinkedHashMap<>();
+        structured.put("error", error);
+        structured.put("requestId", attempt.traceId());
+        structured.put("requestNote", ApiEnvelope.REQUEST_NOTE);
+        return McpSchema.CallToolResult.builder()
+                .addTextContent(ApiJson.write(error))
+                .structuredContent(structured)
+                .isError(true)
+                .build();
     }
 
     static McpSchema.CallToolResult fail(Attempt attempt, String code, String message, String field) {

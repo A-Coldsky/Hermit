@@ -514,8 +514,9 @@ public final class McpEndpoint {
         } else {
             envelope.set("id", id);
         }
-        envelope.set("result", McpJson.mapper().valueToTree(result));
-        writeJson(ctx, 200, envelope, session);
+        JsonNode tree = McpJson.mapper().valueToTree(result);
+        envelope.set("result", tree);
+        writeJson(ctx, 200, envelope, session, !requestOnly(tree));
     }
 
     private static void writeRpcError(Context ctx, JsonNode id, McpErrors.Failure failure, McpSession session) {
@@ -539,13 +540,29 @@ public final class McpEndpoint {
     }
 
     private static void writeJson(Context ctx, int status, ObjectNode envelope, McpSession session) {
+        writeJson(ctx, status, envelope, session, true);
+    }
+
+    private static void writeJson(Context ctx, int status, ObjectNode envelope, McpSession session, boolean includeTrace) {
         ctx.status(status);
         ctx.contentType("application/json; charset=utf-8");
-        ctx.header("X-Hermit-Trace", trace(ctx));
+        if (includeTrace) {
+            ctx.header("X-Hermit-Trace", trace(ctx));
+        }
         if (session != null) {
             ctx.header(SESSION_HEADER, session.id);
         }
         ctx.result(McpJson.write(envelope));
+    }
+
+    /** A tool result that carries a request id and no trace id must not set {@code X-Hermit-Trace}. */
+    private static boolean requestOnly(JsonNode tree) {
+        JsonNode structured = tree.path("structuredContent");
+        return requestNumber(structured) || requestNumber(structured.path("error"));
+    }
+
+    private static boolean requestNumber(JsonNode node) {
+        return node.isObject() && node.hasNonNull("requestId") && !node.has("traceId");
     }
 
     private static void accepted(Context ctx, McpSession session) {

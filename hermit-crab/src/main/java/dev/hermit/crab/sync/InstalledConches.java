@@ -2,6 +2,7 @@ package dev.hermit.crab.sync;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.PublicKey;
@@ -14,6 +15,7 @@ import java.util.stream.Stream;
 import dev.hermit.common.pkg.PackageVerificationException;
 import dev.hermit.common.pkg.ConchPackage;
 import dev.hermit.common.pkg.VerifiedConch;
+import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ConchRejectedException;
 import dev.hermit.crab.store.CrabPaths;
@@ -106,8 +108,18 @@ public final class InstalledConches {
         } catch (ConchRejectedException ex) {
             String reason = SyncReasons.REGISTRY_REJECTED;
             failures.add(failure(conch, version, reason));
-            LOG.log(Level.WARNING, "skip installed conch {0} version {1} reason {2}",
-                    new Object[] {conch, version, reason});
+            String yaml = "";
+            try {
+                VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), key);
+                yaml = new String(verified.conchYaml(), StandardCharsets.UTF_8);
+            } catch (RuntimeException | IOException ignored) {
+                yaml = "";
+            }
+            List<ValidationIssue> located = ImportIssueLines.locate(yaml, ex.issues());
+            LOG.warning("skip installed conch " + conch + " version " + version
+                    + " reason " + reason
+                    + " codes=" + RuleDisabled.codes(located)
+                    + " lines=" + RuleDisabled.lines(located));
         } catch (IOException ex) {
             failures.add(failure(conch, version, SyncReasons.PACKAGE_MISSING));
         }

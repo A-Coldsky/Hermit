@@ -1,4 +1,5 @@
 import { flushPromises } from '@vue/test-utils'
+import { ElMessage } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountPage } from './helpers'
 
@@ -7,6 +8,7 @@ const crab = vi.hoisted(() => ({
   accounts: vi.fn(),
   config: vi.fn(),
   credentialNames: vi.fn(),
+  writeCredentials: vi.fn(),
   debug: vi.fn(),
 }))
 
@@ -202,5 +204,44 @@ describe('Crab 凭证对话框', () => {
 
     expect(document.body.querySelector('input[placeholder="已保存，留空保持不变"]')).not.toBeNull()
     wrapper.unmount()
+  })
+
+  it('必填且没有已保存值时，空着不能提交', async () => {
+    crab.credentialNames.mockResolvedValue({ fields: [] })
+    crab.writeCredentials.mockResolvedValue({ updated: true })
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({}) as never)
+    const wrapper = await mountPage(CredentialDialog, {
+      props: { open: false, conch: 'legacy_oa', account: 'zhangsan', fields },
+      attach: true,
+    })
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    const save = [...document.body.querySelectorAll('button')].find((button) => button.textContent?.trim() === '保存')
+    save?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    expect(warning).toHaveBeenCalled()
+    expect(String(warning.mock.calls.at(-1)?.[0])).toContain('密码（password）')
+    expect(crab.writeCredentials).not.toHaveBeenCalled()
+    wrapper.unmount()
+    warning.mockRestore()
+  })
+
+  it('已经保存的必填项留空表示保持不变', async () => {
+    crab.credentialNames.mockResolvedValue({ fields: ['password'] })
+    crab.writeCredentials.mockClear()
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({}) as never)
+    const wrapper = await mountPage(CredentialDialog, {
+      props: { open: false, conch: 'legacy_oa', account: 'zhangsan', fields },
+      attach: true,
+    })
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    const save = [...document.body.querySelectorAll('button')].find((button) => button.textContent?.trim() === '保存')
+    save?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    expect(warning).not.toHaveBeenCalled()
+    expect(crab.writeCredentials).not.toHaveBeenCalled()
+    wrapper.unmount()
+    warning.mockRestore()
   })
 })

@@ -178,13 +178,14 @@ public final class LocalConches {
                 }
                 String name = entry.getKey();
                 rows.put(name, new LocalPackage(
-                        name, name + SUFFIX, entry.getValue().version().toString(), true, false, null));
+                        name, name + SUFFIX, entry.getValue().version().toString(), true, false, null, false));
             }
             for (BrokenLocal failed : broken.values()) {
                 if (rows.containsKey(failed.conch())) {
                     continue;
                 }
-                rows.put(failed.conch(), new LocalPackage(failed.conch(), failed.file(), null, false, true, failed.reason()));
+                rows.put(failed.conch(), new LocalPackage(
+                        failed.conch(), failed.file(), null, false, true, failed.reason(), failed.ruleDisabled()));
             }
             return List.copyOf(rows.values());
         }
@@ -275,7 +276,9 @@ public final class LocalConches {
         }
         for (FileResult result : results) {
             if (!result.ok()) {
-                LOG.warning("local conch skipped file=" + result.file() + " codes=" + codes(result.issues()));
+                LOG.warning("local conch skipped file=" + result.file()
+                        + " codes=" + codes(result.issues())
+                        + " lines=" + RuleDisabled.lines(result.issues()));
             }
         }
         dropMissing(loaded.keySet());
@@ -328,9 +331,13 @@ public final class LocalConches {
         try {
             parsed = parse(raw);
         } catch (LocalConchException ex) {
-            String reason = loadFailureReason(fileName, stemName(stem), ex);
+            boolean disabled = ruleDisabled(ex);
+            String name = ex.parsedConch() != null ? ex.parsedConch() : stemName(stem);
+            String reason = disabled
+                    ? readReason(fileName, name, RuleDisabled.explain(ex.errors()))
+                    : loadFailureReason(fileName, stemName(stem), ex);
             String code = ex.errors().isEmpty() ? "INVALID_INPUT" : ex.errors().get(0).code();
-            return reject(fileName, stem, ex.parsedConch(), null, code, reason, ex.errors(), nextBroken);
+            return reject(fileName, stem, ex.parsedConch(), null, code, reason, ex.errors(), disabled, nextBroken);
         }
         if (!stem.equals(parsed.doc().conch())) {
             String reason = sentence("文件 " + fileName + " 里的规则包是 " + parsed.doc().conch() + "，与文件名不一致");
@@ -358,14 +365,15 @@ public final class LocalConches {
             try {
                 registry.put(parsed.doc(), Origin.LOCAL, allowEmptyMcpActions());
             } catch (ConchRejectedException ex) {
-                String reason = readReason(fileName, parsed.doc().conch(), "未通过校验");
-                rememberBroken(stem, fileName, reason, nextBroken);
+                List<ValidationIssue> located = ImportIssueLines.locate(new String(raw, StandardCharsets.UTF_8), ex.issues());
+                String reason = readReason(fileName, parsed.doc().conch(), RuleDisabled.explain(located));
+                rememberBroken(stem, fileName, reason, true, nextBroken);
                 return new FileResult(
                         fileName,
                         shownConch(stem, parsed.doc().conch()),
                         parsed.doc().version().toString(),
                         false,
-                        failureIssues("INVALID_INPUT", fileName, reason, ex.issues()));
+                        failureIssues("INVALID_INPUT", fileName, reason, located));
             }
         }
         nextBroken.remove(parsed.doc().conch());
@@ -384,9 +392,36 @@ public final class LocalConches {
             List<ValidationIssue> details,
             Map<String, BrokenLocal> nextBroken
     ) {
-        rememberBroken(stem, fileName, reason, nextBroken);
+        return reject(fileName, stem, reportedConch, version, code, reason, details, false, nextBroken);
+    }
+
+    private FileResult reject(
+            String fileName,
+            String stem,
+            String reportedConch,
+            String version,
+            String code,
+            String reason,
+            List<ValidationIssue> details,
+            boolean ruleDisabled,
+            Map<String, BrokenLocal> nextBroken
+    ) {
+        rememberBroken(stem, fileName, reason, ruleDisabled, nextBroken);
         return new FileResult(fileName, shownConch(stem, reportedConch), version, false,
                 failureIssues(code, fileName, reason, details));
+    }
+
+    private static boolean ruleDisabled(LocalConchException ex) {
+        if (ex.errors().isEmpty()) {
+            return false;
+        }
+        for (ValidationIssue issue : ex.errors()) {
+            String code = issue.code();
+            if (!"PARSE".equals(code) && !"CONCH_NAME".equals(code) && !"VERSION_INVALID".equals(code)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -394,12 +429,22 @@ public final class LocalConches {
      * An official package of the same name is left alone. An illegal stem is only reported on the file row.
      */
     private void rememberBroken(String stem, String file, String reason, Map<String, BrokenLocal> nextBroken) {
+        rememberBroken(stem, file, reason, false, nextBroken);
+    }
+
+    private void rememberBroken(
+            String stem,
+            String file,
+            String reason,
+            boolean ruleDisabled,
+            Map<String, BrokenLocal> nextBroken
+    ) {
         String name = stemName(stem);
         if (name == null || registry.origin(name) == Origin.OFFICIAL) {
             return;
         }
         dropStem(name);
-        nextBroken.put(name, new BrokenLocal(name, file, reason));
+        nextBroken.put(name, new BrokenLocal(name, file, reason, ruleDisabled));
     }
 
     private boolean localPackageExists(String conch) {
@@ -776,11 +821,12 @@ public final class LocalConches {
             String version,
             boolean loaded,
             boolean broken,
-            String reason
+            String reason,
+            boolean ruleDisabled
     ) {
     }
 
-    private record BrokenLocal(String conch, String file, String reason) {
+    private record BrokenLocal(String conch, String file, String reason, boolean ruleDisabled) {
     }
 
     public record Export(String conch, String version, byte[] bytes) {

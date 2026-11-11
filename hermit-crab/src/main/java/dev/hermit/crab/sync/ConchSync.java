@@ -2,6 +2,7 @@ package dev.hermit.crab.sync;
 
 import java.io.IOException;
 import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Clock;
 import java.time.Duration;
@@ -335,6 +336,88 @@ public final class ConchSync {
     }
 
     /**
+     * Installs the single previous version kept by the last successful switch.
+     * Sync never calls this. A target the validator rejects is left on disk and the working version stays.
+     */
+    public UpdateResult rollback(String conch, String actor) {
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
+            throw new IllegalArgumentException("actor must be cli or console");
+        }
+        synchronized (this) {
+            if (!ConchValidator.isConchName(conch)) {
+                throw new UpdateException(400, ErrorCode.INVALID_INPUT, SubscriptionException.NAME_INVALID);
+            }
+            if (isLocal(conch)) {
+                throw new UpdateException(409, ErrorCode.CONFLICT, "本地规则包没有可回退的上一版。");
+            }
+            if (!subscriptions.contains(conch)) {
+                throw new UpdateException(404, ErrorCode.NOT_FOUND, SubscriptionException.NOT_SUBSCRIBED);
+            }
+            String target = store.previous(conch).orElse(null);
+            String current = ConchFiles.readCurrent(paths, conch).orElse(null);
+            if (target == null || target.equals(current) || !ConchFiles.safeSegment(target)) {
+                throw new UpdateException(409, ErrorCode.CONFLICT, "没有可回退的上一版。");
+            }
+            VerifiedConch verified;
+            try {
+                java.nio.file.Path zip = ConchFiles.versionDir(paths, conch, target).resolve("package.zip");
+                verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings().reefKey());
+                if (!conch.equals(verified.manifest().conch()) || !target.equals(verified.manifest().version())) {
+                    throw new UpdateException(409, ErrorCode.CONFLICT, "上一版无法读取。当前版本没有改动。");
+                }
+            } catch (UpdateException ex) {
+                throw ex;
+            } catch (RuntimeException | IOException ex) {
+                throw new UpdateException(409, ErrorCode.CONFLICT, "上一版无法读取。当前版本没有改动。");
+            }
+            List<ValidationIssue> issues = registry.inspect(verified.conchDoc());
+            if (!issues.isEmpty()) {
+                String yaml = new String(verified.conchYaml(), StandardCharsets.UTF_8);
+                throw new UpdateException(409, ErrorCode.CONFLICT,
+                        RuleDisabled.explain(ImportIssueLines.locate(yaml, issues)) + "当前可用的版本没有改动。");
+            }
+            ConchDoc previous = previousDoc(conch);
+            Origin previousOrigin = registry.origin(conch);
+            Optional<CredentialDeclarationChange> change = CredentialChanges.between(previous, verified.conchDoc());
+            try {
+                registry.put(verified.conchDoc(), Origin.OFFICIAL);
+            } catch (ConchRejectedException ex) {
+                throw new UpdateException(409, ErrorCode.CONFLICT,
+                        RuleDisabled.explain(ImportIssueLines.locate(
+                                new String(verified.conchYaml(), StandardCharsets.UTF_8), ex.issues()))
+                                + "当前可用的版本没有改动。");
+            }
+            try {
+                ConchFiles.writeCurrent(paths, conch, target);
+            } catch (RuntimeException ex) {
+                registryRestore(conch, previous, previousOrigin == null ? Origin.OFFICIAL : previousOrigin);
+                throw new UpdateException(409, ErrorCode.CONFLICT, SyncReasons.CURRENT_WRITE_FAILED);
+            }
+            if (current != null) {
+                store.setPrevious(conch, current);
+            } else {
+                store.clearPrevious(conch);
+            }
+            store.recordInstalled(conch, target, clock.instant());
+            try {
+                ConchFiles.prune(paths, conch, VersionRetention.keep(
+                        target,
+                        store.latestSuccessExcept(conch, target),
+                        store.previous(conch),
+                        store.installed(conch)));
+            } catch (RuntimeException ex) {
+                LOG.log(Level.WARNING, "rollback prune failed conch={0}", conch);
+            }
+            store.clearRepairNotice(conch);
+            return new UpdateResult(
+                    new ConchOutcome(conch, target, OutcomeKind.INSTALLED, null),
+                    change,
+                    current,
+                    target);
+        }
+    }
+
+    /**
      * The subscription installed this conch before, and it is not loaded. Reload the newest
      * installed zip when it still verifies. Download the manifest version only when it does not.
      * A Reef disable is rejected by {@link #update} before this runs, so a tombstone is not reinstalled.
@@ -342,14 +425,23 @@ public final class ConchSync {
     private UpdateResult updateUnloaded(String conch, String actor, ReefClient.CatalogEntry entry) {
         String recorded = newestInstalled(conch);
         if (recorded != null && localVerifyFailure(conch, recorded).isEmpty()) {
-            if (!reloadVerified(conch, recorded)) {
+            Reload reload = reloadVerified(conch, recorded);
+            if (reload.kind() == ReloadKind.LOADED) {
+                return new UpdateResult(
+                        new ConchOutcome(conch, recorded, OutcomeKind.REPAIRED, SyncReasons.RESTORED),
+                        Optional.empty(),
+                        null,
+                        null);
+            }
+            if (reload.kind() == ReloadKind.WRITE_FAILED) {
                 throw updateRejected(SyncReasons.CURRENT_WRITE_FAILED);
             }
-            return new UpdateResult(
-                    new ConchOutcome(conch, recorded, OutcomeKind.REPAIRED, SyncReasons.RESTORED),
-                    Optional.empty(),
-                    null,
-                    null);
+            if (higherInstallable(entry, recorded)) {
+                String reportedFrom = recorded.equals(entry.version()) ? null : recorded;
+                String reportedTo = reportedFrom == null ? null : entry.version();
+                return downloadActivateAndAudit(entry, actor, recorded, reportedFrom, reportedTo, true);
+            }
+            throw updateRejected(reload.explanation() == null ? RuleDisabled.LEAD : reload.explanation());
         }
         if (!version(entry.version()).isPresent() || !ConchFiles.safeSegment(entry.version())) {
             throw updateRejected(SyncReasons.VERSION_INVALID);
@@ -683,7 +775,8 @@ public final class ConchSync {
                 List.of(),
                 false,
                 null,
-                null);
+                null,
+                false);
     }
 
     private ConchCatalog.Entry catalogRow(ReefClient.CatalogEntry entry) {
@@ -704,6 +797,12 @@ public final class ConchSync {
         boolean updateAvailable = !local && !disabled && subscribed && installed
                 && higherInstallable(entry, installedVersion);
         String latestVersion = local ? null : entry.version();
+        String ruleMessage = null;
+        if (!untrusted && !local && !disabled && subscribed && doc == null && pointer != null
+                && previouslyInstalled(name)) {
+            ruleMessage = validationDisableMessage(name, pointer);
+        }
+        boolean ruleDisabled = ruleMessage != null;
         return new ConchCatalog.Entry(
                 name,
                 entry.version(),
@@ -720,7 +819,8 @@ public final class ConchSync {
                 local ? List.of() : newly,
                 untrusted,
                 untrusted ? PackageReason.BAD_SIGNATURE.name() : null,
-                untrusted ? SignatureDamage.MESSAGE : null);
+                untrusted ? SignatureDamage.MESSAGE : ruleMessage,
+                ruleDisabled);
     }
 
     /**
@@ -760,6 +860,58 @@ public final class ConchSync {
 
     /** A subscribed package whose on-disk signature is not trusted and which is not loaded. */
     public record UntrustedSignature(String conch, String title, String description, String latestVersion) {
+    }
+
+    /**
+     * Subscribed and previously installed, signature verifies, but the current validator will not load it.
+     * Files stay. This is not {@link UntrustedSignature} and not a Reef disable.
+     */
+    public Optional<DisabledRule> disabledRule(String conch) {
+        synchronized (this) {
+            if (conch == null || registry.find(conch).isPresent() || badSignatureUnloaded(conch)) {
+                return Optional.empty();
+            }
+            if (!subscriptions.contains(conch) || !previouslyInstalled(conch) || isLocal(conch)) {
+                return Optional.empty();
+            }
+            String pointer = ConchFiles.readCurrent(paths, conch).orElse(null);
+            String message = validationDisableMessage(conch, pointer);
+            if (message == null) {
+                return Optional.empty();
+            }
+            VerifiedConch verified = readInstalled(conch, pointer);
+            ConchDoc doc = verified == null ? null : verified.conchDoc();
+            String title = doc != null && doc.title() != null && !doc.title().isBlank() ? doc.title() : conch;
+            String description = doc == null ? null : doc.description();
+            ReefClient.CatalogEntry cached = cached(conch).orElse(null);
+            return Optional.of(new DisabledRule(
+                    conch,
+                    pointer,
+                    title,
+                    description,
+                    message,
+                    store.previous(conch).orElse(null),
+                    cached == null ? null : cached.version()));
+        }
+    }
+
+    public Optional<String> previousVersion(String conch) {
+        if (conch == null || !ConchValidator.isConchName(conch)) {
+            return Optional.empty();
+        }
+        return store.previous(conch);
+    }
+
+    /** Display fields for a package the validator will not load. */
+    public record DisabledRule(
+            String conch,
+            String version,
+            String title,
+            String description,
+            String message,
+            String previousVersion,
+            String latestVersion
+    ) {
     }
 
     private Optional<ReefClient.CatalogEntry> cached(String conch) {
@@ -938,8 +1090,10 @@ public final class ConchSync {
             try {
                 registry.put(verified.conchDoc(), Origin.OFFICIAL);
             } catch (ConchRejectedException ex) {
+                String explained = RuleDisabled.explain(ImportIssueLines.locate(
+                        new String(verified.conchYaml(), StandardCharsets.UTF_8), ex.issues()));
                 ConchFiles.deleteVersion(paths, conch, version);
-                return InstallResult.of(rejected(entry, registryReason(ex)));
+                return InstallResult.of(new ConchOutcome(conch, version, OutcomeKind.REJECTED, explained));
             } catch (RuntimeException ex) {
                 ConchFiles.deleteVersion(paths, conch, version);
                 registryRestore(conch, previous, previousOrigin);
@@ -1205,20 +1359,31 @@ public final class ConchSync {
     }
 
     /** Loads a verified installed zip and points {@code current} at it. Does not download. */
-    private boolean reloadVerified(String conch, String versionText) {
+    private Reload reloadVerified(String conch, String versionText) {
         synchronized (ConchFileLocks.of(conch)) {
             if (isLocal(conch) || localVerifyFailure(conch, versionText).isPresent()) {
-                return false;
+                return Reload.other();
             }
+            VerifiedConch verified;
             try {
                 java.nio.file.Path zip = ConchFiles.versionDir(paths, conch, versionText).resolve("package.zip");
-                VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings().reefKey());
-                registry.put(verified.conchDoc(), Origin.OFFICIAL);
+                verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings().reefKey());
             } catch (RuntimeException | IOException ex) {
                 if (!isLocal(conch)) {
                     registry.remove(conch);
                 }
-                return false;
+                return Reload.other();
+            }
+            try {
+                registry.put(verified.conchDoc(), Origin.OFFICIAL);
+            } catch (ConchRejectedException ex) {
+                String yaml = new String(verified.conchYaml(), StandardCharsets.UTF_8);
+                return Reload.validation(RuleDisabled.explain(ImportIssueLines.locate(yaml, ex.issues())));
+            } catch (RuntimeException ex) {
+                if (!isLocal(conch)) {
+                    registry.remove(conch);
+                }
+                return Reload.other();
             }
             try {
                 ConchFiles.writeCurrent(paths, conch, versionText);
@@ -1227,10 +1392,67 @@ public final class ConchSync {
                 if (!isLocal(conch)) {
                     registry.remove(conch);
                 }
-                return false;
+                return Reload.writeFailed();
             }
             store.clearRepairNotice(conch);
-            return true;
+            return Reload.loaded();
+        }
+    }
+
+    private String validationDisableMessage(String conch, String version) {
+        VerifiedConch verified = readInstalled(conch, version);
+        if (verified == null) {
+            return null;
+        }
+        List<ValidationIssue> issues = registry.inspect(verified.conchDoc());
+        if (issues.isEmpty()) {
+            return null;
+        }
+        return RuleDisabled.explain(ImportIssueLines.locate(
+                new String(verified.conchYaml(), StandardCharsets.UTF_8), issues));
+    }
+
+    private VerifiedConch readInstalled(String conch, String version) {
+        if (conch == null || version == null || !ConchFiles.safeSegment(conch) || !ConchFiles.safeSegment(version)) {
+            return null;
+        }
+        try {
+            java.nio.file.Path zip = ConchFiles.versionDir(paths, conch, version).resolve("package.zip");
+            if (Files.isSymbolicLink(zip) || !Files.isRegularFile(zip) || Files.size(zip) > ConchFiles.MAX_ZIP_BYTES) {
+                return null;
+            }
+            VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings().reefKey());
+            if (!conch.equals(verified.manifest().conch()) || !version.equals(verified.manifest().version())) {
+                return null;
+            }
+            return verified;
+        } catch (IOException | RuntimeException ex) {
+            return null;
+        }
+    }
+
+    private enum ReloadKind {
+        LOADED,
+        VALIDATION,
+        WRITE_FAILED,
+        OTHER
+    }
+
+    private record Reload(ReloadKind kind, String explanation) {
+        static Reload loaded() {
+            return new Reload(ReloadKind.LOADED, null);
+        }
+
+        static Reload validation(String explanation) {
+            return new Reload(ReloadKind.VALIDATION, explanation);
+        }
+
+        static Reload writeFailed() {
+            return new Reload(ReloadKind.WRITE_FAILED, null);
+        }
+
+        static Reload other() {
+            return new Reload(ReloadKind.OTHER, null);
         }
     }
 

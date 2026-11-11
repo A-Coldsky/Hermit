@@ -123,6 +123,10 @@ export interface ConchDetail {
    * 已加载的详情没有这个字段。
    */
   message?: string | null
+  /** 签名通过但当前校验载不进。文件还在，暂时不能调用。不是 Reef 停用。 */
+  ruleDisabled?: boolean
+  /** 上一次切换换下来的版本。没有可退回的版本时为 null。 */
+  previousVersion?: string | null
 }
 
 export interface Account {
@@ -397,6 +401,8 @@ export interface LocalConchEntry {
   broken: boolean
   /** 坏包为中文原因，含文件名、包名和原因；已载入为 null。 */
   reason: string | null
+  /** 文件还在，但这版规则过不了当前校验。解析失败仍是 false。 */
+  ruleDisabled?: boolean
 }
 
 /** 同名本地包已存在、未带 `confirm=true` 时 409 `CONFLICT` 的 data。 */
@@ -435,8 +441,13 @@ export interface CatalogConch {
   repairRequired: boolean
   /** `BAD_SIGNATURE`，没有需要修复的签名损坏时为 null。 */
   repairReason: string | null
-  /** `BAD_SIGNATURE` 时为「签名已损坏，当前不可信。」，否则 null。 */
+  /**
+   * 签名损坏时为「签名已损坏，当前不可信。」。
+   * 校验不过、已经停用时是停用说明。其它情况为 null。
+   */
   message: string | null
+  /** 签名通过但当前校验载不进。`installed` 仍为 true，页面不要再显示健康的「已安装」。 */
+  ruleDisabled: boolean
 }
 
 export interface Catalog {
@@ -594,6 +605,7 @@ export const api = {
   subscribe: (conch: string) => http.post<SubscriptionResult>(`${conchPath(conch)}/subscription`),
   /** 安装最近一次同步清单里的更高版本。不重新拉取清单。 */
   update: (conch: string) => http.post<UpdateResult>(`${conchPath(conch)}/update`),
+  rollback: (conch: string) => http.post<UpdateResult>(`${conchPath(conch)}/rollback`),
   unsubscribe: (conch: string) => http.del<UnsubscribeResult>(`${conchPath(conch)}/subscription`),
 
   /** 当前生效的 Reef 连接。令牌只返回前缀。 */

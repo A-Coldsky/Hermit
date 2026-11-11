@@ -43,6 +43,7 @@ public final class ConchAdmin {
     private final ConchRegistry registry;
     private final DisabledConches disabledConches;
     private volatile Function<String, Optional<ConchDoc>> stagedDeclarations = name -> Optional.empty();
+    private volatile Function<String, Origin> originFallback = name -> null;
 
     public ConchAdmin(
             DataSource dataSource,
@@ -72,6 +73,16 @@ public final class ConchAdmin {
      */
     public void bindStagedDeclarations(Function<String, Optional<ConchDoc>> lookup) {
         this.stagedDeclarations = lookup == null ? name -> Optional.empty() : lookup;
+    }
+
+    /** Registry origin, then a local-file fallback, otherwise official. */
+    public Origin originOf(String conch) {
+        return origin(conch);
+    }
+
+    /** Used when the package is not in the registry, for example a disabled local file. */
+    public void bindOriginFallback(Function<String, Origin> lookup) {
+        this.originFallback = lookup == null ? name -> null : lookup;
     }
 
     public Account createAccount(String conch, String name, String actor) {
@@ -160,7 +171,7 @@ public final class ConchAdmin {
         Map<String, String> stored = config.all(source, doc.conch());
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
         if (!missingConfig.isEmpty()) {
-            return failed(doc, traceId, "missing config: " + String.join(", ", missingConfig));
+            return failed(doc, traceId, Invoker.missingConfig(missingConfig));
         }
         List<String> missingCredentials = missingCredentials(doc, resolved.account());
         if (!missingCredentials.isEmpty()) {
@@ -193,10 +204,14 @@ public final class ConchAdmin {
         return found == null ? null : found.orElse(null);
     }
 
-    /** Registry origin, or {@link Origin#OFFICIAL} when the conch is not loaded. */
+    /** Registry origin, then the fallback, otherwise {@link Origin#OFFICIAL}. */
     private Origin origin(String conch) {
         Origin stored = registry.origin(conch);
-        return stored == null ? Origin.OFFICIAL : stored;
+        if (stored != null) {
+            return stored;
+        }
+        Origin fallback = originFallback.apply(conch);
+        return fallback == null ? Origin.OFFICIAL : fallback;
     }
 
     public CreatedApiKey createApiKey(String name, ApiKeyScope scope, String actor) {

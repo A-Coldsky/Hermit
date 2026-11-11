@@ -150,6 +150,7 @@ final class ConsoleApi {
             row.put("source", source(runtime, doc.conch()));
             putReefDisabled(runtime, doc.conch(), row);
             putUpdateFields(catalog.get(doc.conch()), row);
+            putPrevious(runtime, doc.conch(), row);
             rows.add(row);
         }
         appendDisabled(runtime, rows);
@@ -173,7 +174,7 @@ final class ConsoleApi {
             }
             LocalConches.LocalPackage local = localPackage(runtime, name);
             if (local != null && local.ruleDisabled()) {
-                GatewayResponses.writeData(ctx, localDisabledConch(local));
+                GatewayResponses.writeData(ctx, localDisabledConch(runtime, local));
                 return;
             }
             throw new IllegalArgumentException("conch not found");
@@ -183,21 +184,7 @@ final class ConsoleApi {
         body.put("version", doc.version().toString());
         body.put("title", text(doc.title()));
         body.put("description", text(doc.description()));
-        body.put("driver", driver(doc));
-        body.put("credentials", credentialDecls(doc));
-        body.put("config", configDecls(doc));
-        ArrayList<Map<String, Object>> capabilities = new ArrayList<>();
-        for (Action action : doc.actions().values()) {
-            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
-            row.put("action", action.name());
-            row.put("title", text(action.title()));
-            row.put("description", text(action.description()));
-            row.put("method", CapabilityHttp.method(action).name());
-            row.put("readOnly", CapabilityHttp.readOnly(action));
-            row.put("disabled", runtime.disabled(doc.conch(), action.name()));
-            capabilities.add(row);
-        }
-        body.put("capabilities", capabilities);
+        putPackageShape(runtime, doc, body);
         List<Account> accounts = runtime.admin().listAccounts(doc.conch());
         boolean paused = loginPaused(runtime, doc, accounts);
         body.put("subscribed", runtime.subscribed(doc.conch()));
@@ -206,7 +193,7 @@ final class ConsoleApi {
         body.put("source", source(runtime, doc.conch()));
         putReefDisabled(runtime, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
-        body.put("previousVersion", runtime.previousVersion(doc.conch()));
+        putPrevious(runtime, doc.conch(), body);
         body.put("ruleDisabled", false);
         GatewayResponses.writeData(ctx, body);
     }
@@ -240,6 +227,8 @@ final class ConsoleApi {
         body.put("newRequiredCredentials", List.of());
         body.put("ruleDisabled", false);
         body.put("previousVersion", null);
+        body.put("previousDisabled", false);
+        body.put("previousPresent", false);
         return body;
     }
 
@@ -254,6 +243,13 @@ final class ConsoleApi {
         body.put("credentials", List.of());
         body.put("config", List.of());
         body.put("capabilities", List.of());
+        body.put("declarationsLoaded", false);
+        ConchDoc readable = runtime.conchSync() == null
+                ? null
+                : runtime.conchSync().readableInstalled(disabled.conch()).orElse(null);
+        if (readable != null) {
+            putPackageShape(runtime, readable, body);
+        }
         body.put("subscribed", true);
         body.put("needsConfiguration", false);
         body.put("loginPaused", false);
@@ -267,6 +263,7 @@ final class ConsoleApi {
         body.put("ruleDisabled", true);
         body.put("previousVersion", disabled.previousVersion());
         body.put("previousDisabled", disabled.previousDisabled());
+        body.put("previousPresent", disabled.previousPresent());
         body.put("fixHint", disabled.fixHint());
         ConchCatalog.Entry row = catalogByName(runtime).get(disabled.conch());
         body.put("updateAvailable", row != null && row.updateAvailable());
@@ -301,8 +298,12 @@ final class ConsoleApi {
         row.put("conch", disabled.conch());
         row.put("version", disabled.version());
         row.put("title", text(disabled.title()));
-        row.put("driver", "http");
-        row.put("capabilityCount", 0);
+        ConchDoc readable = runtime.conchSync() == null
+                ? null
+                : runtime.conchSync().readableInstalled(disabled.conch()).orElse(null);
+        row.put("driver", readable == null ? "http" : driver(readable));
+        row.put("capabilityCount", readable == null ? 0 : readable.actions().size());
+        row.put("message", disabled.message());
         row.put("subscribed", true);
         row.put("accountCount", accounts.size());
         row.put("needsConfiguration", false);
@@ -317,6 +318,7 @@ final class ConsoleApi {
         row.put("ruleDisabled", true);
         row.put("previousVersion", disabled.previousVersion());
         row.put("previousDisabled", disabled.previousDisabled());
+        row.put("previousPresent", disabled.previousPresent());
         row.put("fixHint", disabled.fixHint());
         return row;
     }
@@ -333,7 +335,7 @@ final class ConsoleApi {
         return null;
     }
 
-    private static Map<String, Object> localDisabledConch(LocalConches.LocalPackage pkg) {
+    private static Map<String, Object> localDisabledConch(CrabRuntime runtime, LocalConches.LocalPackage pkg) {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", pkg.conch());
         body.put("version", pkg.version());
@@ -343,6 +345,16 @@ final class ConsoleApi {
         body.put("credentials", List.of());
         body.put("config", List.of());
         body.put("capabilities", List.of());
+        body.put("declarationsLoaded", false);
+        ConchDoc readable = runtime.localConches() == null
+                ? null
+                : runtime.localConches().readableDoc(pkg.conch()).orElse(null);
+        if (readable != null) {
+            putPackageShape(runtime, readable, body);
+            body.put("version", readable.version().toString());
+            body.put("title", text(readable.title()));
+            body.put("description", text(readable.description()));
+        }
         body.put("subscribed", false);
         body.put("needsConfiguration", false);
         body.put("loginPaused", false);
@@ -356,6 +368,7 @@ final class ConsoleApi {
         body.put("ruleDisabled", true);
         body.put("previousVersion", null);
         body.put("previousDisabled", false);
+        body.put("previousPresent", false);
         body.put("fixHint", RuleDisabled.fixHint(true, false));
         body.put("updateAvailable", false);
         body.put("latestVersion", null);
@@ -363,13 +376,38 @@ final class ConsoleApi {
         return body;
     }
 
+    private static void putPackageShape(CrabRuntime runtime, ConchDoc doc, Map<String, Object> body) {
+        body.put("driver", driver(doc));
+        body.put("declarationsLoaded", true);
+        body.put("credentials", credentialDecls(doc));
+        body.put("config", configDecls(doc));
+        ArrayList<Map<String, Object>> capabilities = new ArrayList<>();
+        for (Action action : doc.actions().values()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("action", action.name());
+            row.put("title", text(action.title()));
+            row.put("description", text(action.description()));
+            row.put("method", CapabilityHttp.method(action).name());
+            row.put("readOnly", CapabilityHttp.readOnly(action));
+            row.put("disabled", runtime.disabled(doc.conch(), action.name()));
+            capabilities.add(row);
+        }
+        body.put("capabilities", capabilities);
+    }
+
+    private static void putPrevious(CrabRuntime runtime, String conch, Map<String, Object> row) {
+        ConchSync.PreviousState previous = runtime.previousState(conch);
+        row.put("previousVersion", previous.version());
+        row.put("previousDisabled", previous.disabled());
+        row.put("previousPresent", previous.present());
+    }
+
     private static void putRuleHint(CrabRuntime runtime, String conch, Map<String, Object> row) {
-        String previous = runtime.previousVersion(conch);
-        ConchSync sync = runtime.conchSync();
-        boolean previousDisabled = previous != null && sync != null && sync.versionRejected(conch, previous);
-        row.put("previousVersion", previous);
-        row.put("previousDisabled", previousDisabled);
-        row.put("fixHint", RuleDisabled.fixHint(false, previous != null && !previousDisabled));
+        putPrevious(runtime, conch, row);
+        ConchSync.PreviousState previous = runtime.previousState(conch);
+        Object update = row.get("updateAvailable");
+        boolean updateAvailable = update instanceof Boolean flag && flag;
+        row.put("fixHint", RuleDisabled.fixHint(false, previous.rollbackable(), updateAvailable));
     }
 
     private static void accounts(CrabRuntime runtime, Context ctx) {
@@ -562,8 +600,7 @@ final class ConsoleApi {
     }
 
     private static Origin origin(CrabRuntime runtime, String conch) {
-        Origin stored = runtime.registry().origin(conch);
-        return stored == null ? Origin.OFFICIAL : stored;
+        return runtime.admin().originOf(conch);
     }
 
     private static void config(CrabRuntime runtime, Context ctx) {
@@ -1289,13 +1326,30 @@ final class ConsoleApi {
         return rows;
     }
 
+    /**
+     * Loaded package, or a verified file the current validator will not load.
+     * Account and config calls keep working while the package is disabled. The gateway still refuses calls.
+     */
     private static ConchDoc requireConch(CrabRuntime runtime, Context ctx) {
         String name = ctx.pathParam("conch");
         ConchDoc doc = runtime.registry().find(name).orElse(null);
-        if (doc == null) {
-            throw new IllegalArgumentException("conch not found");
+        if (doc != null) {
+            return doc;
         }
-        return doc;
+        ConchSync sync = runtime.conchSync();
+        if (sync != null) {
+            doc = sync.readableInstalled(name).orElse(null);
+            if (doc != null) {
+                return doc;
+            }
+        }
+        if (runtime.localConches() != null) {
+            doc = runtime.localConches().readableDoc(name).orElse(null);
+            if (doc != null) {
+                return doc;
+            }
+        }
+        throw new IllegalArgumentException("conch not found");
     }
 
     private static boolean loginPaused(CrabRuntime runtime, ConchDoc doc, List<Account> accounts) {

@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -374,7 +375,7 @@ public final class ConchSync {
             if (!issues.isEmpty()) {
                 String yaml = new String(verified.conchYaml(), StandardCharsets.UTF_8);
                 throw new UpdateException(409, ErrorCode.CONFLICT,
-                        RuleDisabled.explain(ImportIssueLines.locate(yaml, issues)) + "当前可用的版本没有改动。");
+                        RuleDisabled.rollbackBlocked(target, ImportIssueLines.locate(yaml, issues)));
             }
             ConchDoc previous = previousDoc(conch);
             Origin previousOrigin = registry.origin(conch);
@@ -383,9 +384,8 @@ public final class ConchSync {
                 registry.put(verified.conchDoc(), Origin.OFFICIAL);
             } catch (ConchRejectedException ex) {
                 throw new UpdateException(409, ErrorCode.CONFLICT,
-                        RuleDisabled.explain(ImportIssueLines.locate(
-                                new String(verified.conchYaml(), StandardCharsets.UTF_8), ex.issues()))
-                                + "当前可用的版本没有改动。");
+                        RuleDisabled.rollbackBlocked(target, ImportIssueLines.locate(
+                                new String(verified.conchYaml(), StandardCharsets.UTF_8), ex.issues())));
             }
             try {
                 ConchFiles.writeCurrent(paths, conch, target);
@@ -805,7 +805,7 @@ public final class ConchSync {
         boolean installed = (doc != null || pointer != null) && !untrusted;
         List<String> newly = local || doc == null ? List.of() : newlyRequired(doc, entry.requiredCredentials());
         boolean updateAvailable = !local && !disabled && subscribed && installed
-                && higherInstallable(entry, installedVersion);
+                && recommendUpdate(entry, installedVersion);
         String latestVersion = local ? null : entry.version();
         String ruleMessage = null;
         if (!untrusted && !local && !disabled && subscribed && doc == null && pointer != null
@@ -917,25 +917,78 @@ public final class ConchSync {
         String title = doc != null && doc.title() != null && !doc.title().isBlank() ? doc.title() : conch;
         String description = doc == null ? null : doc.description();
         ReefClient.CatalogEntry cached = cached(conch).orElse(null);
-        String previous = store.previous(conch).orElse(null);
-        boolean previousDisabled = previous != null && validationDisableMessage(conch, previous) != null;
+        PreviousState previous = previousStateLocked(conch);
+        boolean updateAvailable = cached != null && recommendUpdate(cached, pointer);
         return Optional.of(new DisabledRule(
                 conch,
                 pointer,
                 title,
                 description,
                 message,
-                previous,
+                previous.version(),
                 cached == null ? null : cached.version(),
-                previousDisabled,
-                RuleDisabled.fixHint(false, previous != null && !previousDisabled)));
+                previous.disabled(),
+                previous.present(),
+                RuleDisabled.fixHint(false, previous.rollbackable(), updateAvailable)));
+    }
+
+    /** On-disk package for a subscribed install, including one the validator will not load. */
+    public Optional<ConchDoc> readableInstalled(String conch) {
+        synchronized (this) {
+            if (conch == null || !ConchValidator.isConchName(conch) || isLocal(conch)) {
+                return Optional.empty();
+            }
+            String pointer = ConchFiles.safeSegment(conch) ? ConchFiles.readCurrent(paths, conch).orElse(null) : null;
+            VerifiedConch verified = readInstalled(conch, pointer);
+            return verified == null ? Optional.empty() : Optional.of(verified.conchDoc());
+        }
+    }
+
+    /**
+     * Recorded previous version, whether or not its files are still on disk and whether or not
+     * the current validator will load it. A missing directory stays recorded so the console can
+     * say the file is gone instead of offering a rollback.
+     */
+    public PreviousState previousState(String conch) {
+        if (conch == null || !ConchValidator.isConchName(conch)) {
+            return PreviousState.none();
+        }
+        synchronized (this) {
+            return previousStateLocked(conch);
+        }
+    }
+
+    private PreviousState previousStateLocked(String conch) {
+        String previous = store.previous(conch).orElse(null);
+        if (previous == null || previous.isBlank() || !ConchFiles.safeSegment(previous)) {
+            return PreviousState.none();
+        }
+        boolean present = versionZipPresent(conch, previous);
+        boolean disabled = present && validationDisableMessage(conch, previous) != null;
+        return new PreviousState(previous, disabled, present);
+    }
+
+    private boolean versionZipPresent(String conch, String version) {
+        if (!ConchFiles.safeSegment(conch) || !ConchFiles.safeSegment(version)) {
+            return false;
+        }
+        Path zip = ConchFiles.versionDir(paths, conch, version).resolve("package.zip");
+        return Files.isRegularFile(zip) && !Files.isSymbolicLink(zip);
+    }
+
+    private boolean recommendUpdate(ReefClient.CatalogEntry entry, String installedVersion) {
+        if (entry == null || !higherInstallable(entry, installedVersion)) {
+            return false;
+        }
+        String rejected = store.rejectedVersion(entry.conch()).orElse(null);
+        if (rejected != null && rejected.equals(entry.version())) {
+            return false;
+        }
+        return validationDisableMessage(entry.conch(), entry.version()) == null;
     }
 
     public Optional<String> previousVersion(String conch) {
-        if (conch == null || !ConchValidator.isConchName(conch)) {
-            return Optional.empty();
-        }
-        return store.previous(conch);
+        return Optional.ofNullable(previousState(conch).version());
     }
 
     /** Display fields for a package the validator will not load. */
@@ -948,8 +1001,25 @@ public final class ConchSync {
             String previousVersion,
             String latestVersion,
             boolean previousDisabled,
+            boolean previousPresent,
             String fixHint
     ) {
+    }
+
+    /**
+     * Previous version kept after the last switch.
+     *
+     * @param disabled the zip is still on disk and the current validator will not load it
+     * @param present  {@code package.zip} is still a regular file on this machine
+     */
+    public record PreviousState(String version, boolean disabled, boolean present) {
+        public static PreviousState none() {
+            return new PreviousState(null, false, false);
+        }
+
+        public boolean rollbackable() {
+            return version != null && present && !disabled;
+        }
     }
 
     private Optional<ReefClient.CatalogEntry> cached(String conch) {
@@ -1136,6 +1206,7 @@ public final class ConchSync {
                 String yaml = new String(verified.conchYaml(), StandardCharsets.UTF_8);
                 List<ValidationIssue> located = ImportIssueLines.locate(yaml, ex.issues());
                 ConchFiles.deleteVersion(paths, conch, version);
+                store.rememberRejected(conch, version);
                 String explained = previous != null
                         ? RuleDisabled.updateBlocked(version, previous.version().toString(), located)
                         : RuleDisabled.explain(located);
@@ -1174,6 +1245,7 @@ public final class ConchSync {
             // Clear only after the new doc is in the registry. In-flight requests keep the snapshot
             // they already authorized (audit A01) and are not switched onto this version.
             releaseReefDisable(conch);
+            store.clearRejected(conch);
             return new InstallResult(outcome(entry, OutcomeKind.INSTALLED, null), change);
         }
     }

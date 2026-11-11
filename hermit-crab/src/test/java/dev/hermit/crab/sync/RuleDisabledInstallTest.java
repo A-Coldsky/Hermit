@@ -6,6 +6,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,11 +26,19 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.pkg.ConchPackage;
+import dev.hermit.common.pkg.Ed25519Keys;
 import dev.hermit.crab.cli.CrabCommand;
+import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.engine.ConchRegistry;
+import dev.hermit.crab.runtime.CrabRuntime;
+import dev.hermit.crab.runtime.CrabServer;
 import dev.hermit.crab.store.Actors;
+import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.testing.FakeReef;
 
 class RuleDisabledInstallTest {
@@ -89,10 +101,15 @@ class RuleDisabledInstallTest {
             assertThat(new SyncStore(crab.dataSource).previous("legacy_oa")).contains("1.0.0");
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
 
+            ConchSync.PreviousState previous = sync.previousState("legacy_oa");
+            assertThat(previous.version()).isEqualTo("1.0.0");
+            assertThat(previous.disabled()).isTrue();
+            assertThat(previous.present()).isTrue();
             assertThatThrownBy(() -> sync.rollback("legacy_oa", Actors.CONSOLE))
                     .isInstanceOf(UpdateException.class)
-                    .hasMessageContaining("已停用")
-                    .hasMessageContaining("当前可用的版本没有改动");
+                    .hasMessageContaining("上一版 v1.0.0 装不上")
+                    .hasMessageContaining("当前版本没有改动")
+                    .hasMessageNotContaining("这版规则暂时不能调用");
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
             assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
@@ -125,6 +142,68 @@ class RuleDisabledInstallTest {
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
             assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.0");
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.1"))).isFalse();
+            assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
+            ConchCatalog.Entry after = sync.catalog().conches().stream()
+                    .filter(entry -> "legacy_oa".equals(entry.conch()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(after.updateAvailable()).isFalse();
+        }
+    }
+
+    @Test
+    void aRejectedUpdateKeepsThePreviousDirectory() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("keep-previous"))) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = new ConchSync(settings(reef), crab.paths, registry, crab.vault, crab.dataSource, Clock.systemUTC());
+            TestSubscriptions.grantKnown(crab.dataSource);
+            sync.syncOnce();
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            sync.syncOnce();
+            assertThat(sync.update("legacy_oa", Actors.CONSOLE).outcome().version()).isEqualTo("1.0.1");
+            reef.publish(blocked("1.0.2"));
+            sync.syncOnce();
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessageContaining("新版本 v1.0.2 装不上")
+                    .hasMessageContaining("本机仍是可用的上一版 v1.0.1");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
+            assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.2"))).isFalse();
+            ConchSync.PreviousState previous = sync.previousState("legacy_oa");
+            assertThat(previous.version()).isEqualTo("1.0.0");
+            assertThat(previous.disabled()).isFalse();
+            assertThat(previous.present()).isTrue();
+            assertThat(previous.rollbackable()).isTrue();
+        }
+    }
+
+    @Test
+    void aMissingPreviousFileStaysRecordedAndCannotRollBack() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("missing-previous"))) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = new ConchSync(settings(reef), crab.paths, registry, crab.vault, crab.dataSource, Clock.systemUTC());
+            TestSubscriptions.grantKnown(crab.dataSource);
+            sync.syncOnce();
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            sync.syncOnce();
+            assertThat(sync.update("legacy_oa", Actors.CONSOLE).outcome().version()).isEqualTo("1.0.1");
+            Files.delete(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"));
+            ConchSync.PreviousState previous = sync.previousState("legacy_oa");
+            assertThat(previous.version()).isEqualTo("1.0.0");
+            assertThat(previous.disabled()).isFalse();
+            assertThat(previous.present()).isFalse();
+            assertThat(previous.rollbackable()).isFalse();
+            assertThat(new SyncStore(crab.dataSource).previous("legacy_oa")).contains("1.0.0");
+            assertThatThrownBy(() -> sync.rollback("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessageContaining("上一版无法读取")
+                    .hasMessageContaining("当前版本没有改动");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(sync.previousState("legacy_oa").version()).isEqualTo("1.0.0");
+            assertThat(sync.previousState("legacy_oa").present()).isFalse();
         }
     }
 
@@ -150,12 +229,14 @@ class RuleDisabledInstallTest {
             ConchSync.DisabledRule disabled = again.disabledRule("legacy_oa").orElseThrow();
             assertThat(disabled.previousVersion()).isEqualTo("1.0.0");
             assertThat(disabled.previousDisabled()).isTrue();
-            assertThat(disabled.fixHint()).isEqualTo("更新到合规的新版本");
+            assertThat(disabled.previousPresent()).isTrue();
+            assertThat(disabled.fixHint()).isEqualTo(RuleDisabled.WAIT_FOR_RELEASE);
             assertThat(disabled.fixHint()).doesNotContain("退回");
             assertThatThrownBy(() -> again.rollback("legacy_oa", Actors.CONSOLE))
                     .isInstanceOf(UpdateException.class)
-                    .hasMessageContaining("已停用")
-                    .hasMessageContaining("当前可用的版本没有改动");
+                    .hasMessageContaining("上一版 v1.0.0 装不上")
+                    .hasMessageContaining("当前版本没有改动")
+                    .hasMessageNotContaining("这版规则暂时不能调用");
             assertThat(restarted.find("legacy_oa")).isEmpty();
             assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
@@ -208,6 +289,7 @@ class RuleDisabledInstallTest {
                     assertThat(pkg.broken()).isTrue();
                     assertThat(pkg.loaded()).isFalse();
                     assertThat(pkg.ruleDisabled()).isTrue();
+                    assertThat(new String(local.export(pkg.conch()).bytes(), StandardCharsets.UTF_8)).contains("legacy_oa");
                     assertThat(pkg.reason()).contains("已停用").contains("第").contains("能力不能引用登录步骤里的变量");
                     assertThat(pkg.reason()).doesNotContain("文件损坏");
                 });
@@ -216,6 +298,107 @@ class RuleDisabledInstallTest {
                 logger.removeHandler(log);
             }
             assertThat(Files.exists(file)).isTrue();
+        }
+    }
+
+    @Test
+    void aFixedUpdateStillReportsTheDisabledPrevious() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("fixed-update"))) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = new ConchSync(settings(reef), crab.paths, registry, crab.vault, crab.dataSource, Clock.systemUTC());
+            TestSubscriptions.grantKnown(crab.dataSource);
+            sync.syncOnce();
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            sync.syncOnce();
+            assertThat(sync.update("legacy_oa", Actors.CONSOLE).outcome().version()).isEqualTo("1.0.1");
+            Files.write(crab.paths.conches().resolve("legacy_oa/1.0.1/package.zip"),
+                    ConchPackage.write(blocked("1.0.1").getBytes(StandardCharsets.UTF_8), reef.keys().getPrivate()));
+            ConchRegistry restarted = new ConchRegistry();
+            ConchSync again = new ConchSync(
+                    settings(reef), crab.paths, restarted, crab.vault, crab.dataSource, Clock.systemUTC());
+            again.syncOnce();
+            assertThat(again.disabledRule("legacy_oa")).isPresent();
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.2"));
+            again.syncOnce();
+            assertThat(again.update("legacy_oa", Actors.CONSOLE).outcome().version()).isEqualTo("1.0.2");
+            assertThat(restarted.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.2");
+            ConchSync.PreviousState previous = again.previousState("legacy_oa");
+            assertThat(previous.version()).isEqualTo("1.0.1");
+            assertThat(previous.disabled()).isTrue();
+            assertThat(previous.present()).isTrue();
+            assertThat(previous.rollbackable()).isFalse();
+            assertThatThrownBy(() -> again.rollback("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessageContaining("上一版 v1.0.1 装不上");
+            assertThat(restarted.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.2");
+        }
+    }
+
+    @Test
+    void detailOfALoadedVersionStillReturnsTheDisabledPrevious() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            CrabConfig config = CrabConfig.defaults()
+                    .withReef(reef.base().toString(), null, Ed25519Keys.writePublicPem(reef.keys().getPublic()))
+                    .withListen("127.0.0.1", 0);
+            Path home = temp.resolve("detail-previous");
+            try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config, name -> null);
+                 CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newHttpClient();
+                HttpResponse<String> subscribed = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/subscription", "{}");
+                assertThat(subscribed.statusCode()).as(subscribed.body()).isEqualTo(200);
+                reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+                HttpResponse<String> synced = send(http, server.port(), "POST", "/console/api/sync", "{}");
+                assertThat(synced.statusCode()).as(synced.body()).isEqualTo(200);
+                HttpResponse<String> updated = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/update", "{}");
+                assertThat(updated.statusCode()).as(updated.body()).isEqualTo(200);
+                HttpResponse<String> created = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/accounts", "{\"name\":\"ada\"}");
+                assertThat(created.statusCode()).as(created.body()).isEqualTo(200);
+            }
+            Files.write(new CrabPaths(home).conches().resolve("legacy_oa/1.0.1/package.zip"),
+                    ConchPackage.write(blocked("1.0.1").getBytes(StandardCharsets.UTF_8), reef.keys().getPrivate()));
+            try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config, name -> null);
+                 CrabServer server = CrabServer.start(runtime)) {
+                HttpClient http = HttpClient.newHttpClient();
+                JsonNode whileDisabled = data(send(http, server.port(), "GET", "/console/api/conches/legacy_oa/accounts", null));
+                assertThat(whileDisabled.path("accounts").get(0).path("name").asText()).isEqualTo("ada");
+                HttpResponse<String> rolled = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/rollback", "{}");
+                assertThat(rolled.statusCode()).as(rolled.body()).isEqualTo(200);
+                JsonNode detail = data(send(http, server.port(), "GET", "/console/api/conches/legacy_oa", null));
+                assertThat(detail.path("version").asText()).isEqualTo("1.0.0");
+                assertThat(detail.path("ruleDisabled").asBoolean()).isFalse();
+                assertThat(detail.path("previousVersion").asText()).isEqualTo("1.0.1");
+                assertThat(detail.path("previousDisabled").asBoolean()).isTrue();
+                assertThat(detail.path("previousPresent").asBoolean()).isTrue();
+                JsonNode listed = data(send(http, server.port(), "GET", "/console/api/conches", null))
+                        .path("conches").get(0);
+                assertThat(listed.path("conch").asText()).isEqualTo("legacy_oa");
+                assertThat(listed.path("previousVersion").asText()).isEqualTo("1.0.1");
+                assertThat(listed.path("previousDisabled").asBoolean()).isTrue();
+                assertThat(listed.path("previousPresent").asBoolean()).isTrue();
+
+                Files.delete(new CrabPaths(home).conches().resolve("legacy_oa/1.0.1/package.zip"));
+                JsonNode missing = data(send(http, server.port(), "GET", "/console/api/conches/legacy_oa", null));
+                assertThat(missing.path("previousVersion").asText()).isEqualTo("1.0.1");
+                assertThat(missing.path("previousDisabled").asBoolean()).isFalse();
+                assertThat(missing.path("previousPresent").asBoolean()).isFalse();
+                JsonNode missingList = data(send(http, server.port(), "GET", "/console/api/conches", null))
+                        .path("conches").get(0);
+                assertThat(missingList.path("previousPresent").asBoolean()).isFalse();
+                assertThat(missingList.path("previousDisabled").asBoolean()).isFalse();
+                HttpResponse<String> blocked = send(
+                        http, server.port(), "POST", "/console/api/conches/legacy_oa/rollback", "{}");
+                assertThat(blocked.statusCode()).isEqualTo(409);
+                assertThat(data(send(http, server.port(), "GET", "/console/api/conches/legacy_oa", null))
+                        .path("version").asText()).isEqualTo("1.0.0");
+                assertThat(data(send(http, server.port(), "GET", "/console/api/conches/legacy_oa", null))
+                        .path("previousVersion").asText()).isEqualTo("1.0.1");
+            }
         }
     }
 
@@ -230,6 +413,26 @@ class RuleDisabledInstallTest {
                 new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
         assertThat(code).isZero();
         assertThat(out.toString(StandardCharsets.UTF_8)).contains("crab rollback <conch>");
+    }
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    private static JsonNode data(HttpResponse<String> response) throws Exception {
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        return JSON.readTree(response.body()).path("data");
+    }
+
+    private static HttpResponse<String> send(HttpClient http, int port, String method, String path, String body)
+            throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+                .timeout(Duration.ofSeconds(10))
+                .header("X-Hermit-Console", "1");
+        if ("GET".equals(method)) {
+            builder.GET();
+        } else {
+            builder.method(method, HttpRequest.BodyPublishers.ofString(body == null ? "" : body));
+        }
+        return http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private static SyncSettings settings(FakeReef reef) {

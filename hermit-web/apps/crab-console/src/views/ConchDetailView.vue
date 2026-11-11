@@ -15,6 +15,7 @@ import ConfigPanel from '../components/ConfigPanel.vue'
 import DeveloperPanel from '../components/DeveloperPanel.vue'
 import { refreshPending } from '../status'
 import { unsubscribeMessage } from '../copy'
+import { canRollback, previousBlockedNote } from '../previous'
 import { repairConch, updateConch } from '../update'
 
 const props = defineProps<{ conch: string }>()
@@ -39,6 +40,8 @@ const disabledReason = computed(() => {
   const message = detail.value?.message ?? ''
   return message.startsWith(DISABLED_LEAD) ? message.slice(DISABLED_LEAD.length) : message
 })
+const rollbackable = computed(() => (detail.value ? canRollback(detail.value) : false))
+const previousNote = computed(() => (detail.value ? previousBlockedNote(detail.value) : null))
 const ready = computed(
   () =>
     !missingConfig.value.length &&
@@ -98,7 +101,7 @@ async function load() {
     loading.value = false
     return
   }
-  if (next.repairRequired || next.ruleDisabled) {
+  if (next.repairRequired) {
     accounts.value = []
     config.value = {}
     partsFailed.value = false
@@ -138,7 +141,8 @@ async function exportYaml() {
     const url = URL.createObjectURL(new Blob([text], { type: 'application/yaml' }))
     const link = document.createElement('a')
     link.href = url
-    link.download = `${props.conch}-${detail.value.version}.yaml`
+    const version = detail.value.version
+    link.download = version ? `${props.conch}-${version}.yaml` : `${props.conch}.yaml`
     link.click()
     URL.revokeObjectURL(url)
   } catch (error) {
@@ -196,7 +200,7 @@ async function repair() {
 }
 
 async function rollback() {
-  if (!detail.value?.previousVersion) return
+  if (!detail.value || !canRollback(detail.value)) return
   try {
     await ElMessageBox.confirm(
       `退回 v${detail.value.previousVersion}。当前版本会留作下一次可退回的版本。`,
@@ -328,10 +332,11 @@ watch(
         <template #default>
           <div v-if="disabledReason">{{ disabledReason }}</div>
           <div v-if="detail.fixHint" data-test="fix-hint">{{ detail.fixHint }}</div>
-          <div v-if="detail.previousDisabled && detail.previousVersion">上一版 v{{ detail.previousVersion }} 也已停用</div>
+          <div v-if="previousNote" data-test="previous-note">{{ previousNote }}</div>
           <el-button
-            v-if="detail.previousVersion && !detail.previousDisabled"
+            v-if="rollbackable"
             class="update-btn"
+            data-test="rollback"
             :loading="working"
             @click="rollback"
           >退回 v{{ detail.previousVersion }}</el-button>
@@ -359,14 +364,25 @@ watch(
         data-test="update-available"
       >
         <template #default>
-          <div>不更新也可以一直使用当前版本。更新后可以退回刚换下的那一版；再更新一次，可退回的就换成新换下的那一版。</div>
+          <div v-if="detail.ruleDisabled">当前版本已经停用，不能继续调用。更新到能通过校验的版本后才能再用。</div>
+          <div v-else>不更新也可以一直使用当前版本。更新后可以退回刚换下的那一版；再更新一次，可退回的就换成新换下的那一版。</div>
           <div v-if="detail.newRequiredCredentials.length">
             新版本需要这些凭证：<span class="mono">{{ detail.newRequiredCredentials.join('、') }}</span>。先在下方默认账号里填好，再点更新。
           </div>
           <el-button type="primary" class="update-btn" :loading="working" @click="update">更新到 v{{ detail.latestVersion }}</el-button>
-          <el-button v-if="detail.previousVersion && !detail.previousDisabled" class="update-btn" :loading="working" @click="rollback">退回 v{{ detail.previousVersion }}</el-button>
         </template>
       </el-alert>
+      <el-alert
+        v-if="!detail.ruleDisabled && previousNote"
+        type="info"
+        show-icon
+        :closable="false"
+        :title="previousNote"
+        data-test="previous-note"
+      />
+      <div v-if="!detail.ruleDisabled && rollbackable">
+        <el-button class="update-btn" data-test="rollback" :loading="working" @click="rollback">退回 v{{ detail.previousVersion }}</el-button>
+      </div>
       <el-alert v-if="local" type="info" show-icon :closable="false" title="本地规则包：未经 Reef 签名，只在本机可用">
         <template #default>
           全部权限的 Key 可以调用这个本地规则包。在范围里点名了它的 Key 也可以调用。调用不会上报 Reef。
@@ -378,7 +394,7 @@ watch(
           <el-button size="small" @click="reloadParts">重新加载</el-button>
         </template>
       </el-alert>
-      <el-alert v-else-if="ready" type="success" show-icon :closable="false" title="配置完整，可以调用" />
+      <el-alert v-else-if="ready && !detail.ruleDisabled" type="success" show-icon :closable="false" title="配置完整，可以调用" />
       <el-alert
         v-else
         type="warning"
@@ -400,7 +416,12 @@ watch(
       </el-alert>
 
       <AccountsPanel :conch="conch" :accounts="accounts" :credentials="detail.credentials" @changed="reloadParts" />
-      <ConfigPanel :conch="conch" :fields="config" @changed="reloadParts" />
+      <ConfigPanel
+        :conch="conch"
+        :fields="config"
+        :empty-text="detail.ruleDisabled && detail.declarationsLoaded !== true && !detail.config.length ? '这版已停用，配置项先不展示' : '这个规则包没有配置项'"
+        @changed="reloadParts"
+      />
       <DeveloperPanel
         v-if="local"
         :conch="conch"
@@ -410,7 +431,11 @@ watch(
         :accounts="accounts"
         @changed="load"
       />
-      <CapabilityToggles :conch="conch" :capabilities="detail.capabilities" />
+      <CapabilityToggles
+        :conch="conch"
+        :capabilities="detail.capabilities"
+        :empty-text="detail.ruleDisabled && detail.declarationsLoaded !== true && !detail.capabilities.length ? '这版已停用，能力先不展示' : '没有能力'"
+      />
     </template>
   </div>
 </template>

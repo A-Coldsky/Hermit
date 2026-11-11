@@ -11,7 +11,7 @@ export const outcomeLabels: Record<string, { text: string; tone: 'success' | 'in
   SKIPPED_LOCAL: { text: '本地同名，未安装', tone: 'warning' },
   NOT_SUBSCRIBED: { text: '未订阅', tone: 'info' },
   REPAIR_REQUIRED: { text: '需要修复', tone: 'warning' },
-  RULE_DISABLED: { text: '新规则下已停用', tone: 'warning' },
+  RULE_DISABLED: { text: '新规则下已停用', tone: 'danger' },
   REPAIRED: { text: '已从本机重新载入', tone: 'success' },
 }
 

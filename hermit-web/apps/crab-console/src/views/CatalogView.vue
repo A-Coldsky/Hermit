@@ -197,7 +197,7 @@ onMounted(load)
               <span v-if="row.fixHint" class="damage" data-test="fix-hint">{{ row.fixHint }}</span>
               <el-tag
                 v-if="needsRepair(row) && !row.message"
-                type="danger"
+                type="warning"
                 effect="plain"
                 size="small"
                 :title="syncReasonLabels[repairReason(row) ?? ''] ?? repairReason(row) ?? ''"

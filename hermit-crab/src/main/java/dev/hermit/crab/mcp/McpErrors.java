@@ -304,7 +304,7 @@ final class McpErrors {
             case "invalid conch" -> "conch";
             case "name is required" -> "name";
             case "arguments must be an object" -> "arguments";
-            case "invalid account name" -> "account";
+            case "账号名不合法。", "invalid account name" -> "account";
             default -> null;
         };
     }

@@ -193,9 +193,13 @@ class McpHttpTest {
             assertThat(deniedError.path("code").asText()).isEqualTo("NOT_FOUND");
             assertThat(deniedError.path("message").asText()).isEqualTo(McpErrors.UNKNOWN_TOOL);
             assertThat(deniedError.path("hint").asText()).contains("tools/list").doesNotContain("search_capabilities");
-            assertThat(deniedError.path("traceId").asText()).isEqualTo(denied.header("X-Hermit-Trace"));
-            assertThat(denied.json().path("result").path("structuredContent").path("error").path("traceId").asText())
-                    .isEqualTo(denied.header("X-Hermit-Trace"));
+            assertThat(denied.header("X-Hermit-Trace")).isNull();
+            assertThat(deniedError.has("traceId")).isFalse();
+            assertThat(deniedError.path("requestId").asText()).isNotBlank();
+            assertThat(deniedError.path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
+            assertThat(denied.json().path("result").path("structuredContent").path("error").path("requestId").asText())
+                    .isEqualTo(deniedError.path("requestId").asText());
+            assertThat(denied.json().path("result").path("structuredContent").path("error").has("traceId")).isFalse();
             assertThat(denied.body()).doesNotContain("legacy_oa");
             Reply extra = server.post(server.apiKey.plaintext(), session, "alice", request(31, "tools/call",
                     Map.of("name", "legacy_oa__list_todo", "arguments",

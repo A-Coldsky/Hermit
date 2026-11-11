@@ -10,9 +10,11 @@ import dev.hermit.common.validate.ValidationIssue;
  */
 public final class RuleDisabled {
     static final String LEAD = "已停用。这版规则暂时不能调用。";
-    public static final String LOCAL_HINT = "改规则后重新导入";
+    public static final String LOCAL_HINT = "改规则后，到「规则包与账号」点「导入本地规则包」重新导入";
     public static final String UPDATE_OR_ROLLBACK = "更新到合规的新版本，或退回上一版";
     public static final String UPDATE_ONLY = "更新到合规的新版本";
+    public static final String WAIT_FOR_RELEASE = "Reef 上还没有可装的合规版本。等发布更高版本后再更新";
+    public static final String ROLLBACK_WHILE_WAITING = "退回上一版。Reef 上还没有可装的合规版本";
 
     private RuleDisabled() {
     }
@@ -42,10 +44,37 @@ public final class RuleDisabled {
 
     /** Next step, kept out of {@link #explain(List)} so the 180-character reason stays the validator text. */
     public static String fixHint(boolean local, boolean rollbackable) {
+        return fixHint(local, rollbackable, true);
+    }
+
+    /**
+     * @param updateAvailable a higher catalog version can still be installed. A version that already
+     *                        failed validation is not available.
+     */
+    public static String fixHint(boolean local, boolean rollbackable, boolean updateAvailable) {
         if (local) {
             return LOCAL_HINT;
         }
-        return rollbackable ? UPDATE_OR_ROLLBACK : UPDATE_ONLY;
+        if (updateAvailable) {
+            return rollbackable ? UPDATE_OR_ROLLBACK : UPDATE_ONLY;
+        }
+        return rollbackable ? ROLLBACK_WHILE_WAITING : WAIT_FOR_RELEASE;
+    }
+
+    /**
+     * Rollback of a previous version the validator rejects. Does not use {@link #LEAD}, so the
+     * sentence is not read as “the version you are on was just disabled”.
+     */
+    public static String rollbackBlocked(String version, List<ValidationIssue> located) {
+        ValidationIssue first = located == null || located.isEmpty() ? null : located.get(0);
+        String reason = first == null || first.message() == null || first.message().isBlank()
+                ? (first == null || first.code() == null ? "校验未通过" : first.code())
+                : first.message();
+        if (!reason.endsWith("。") && !reason.endsWith(".")) {
+            reason = reason + "。";
+        }
+        String line = first != null && first.line() != null ? "第 " + first.line() + " 行。" : "";
+        return "上一版 v" + version + " 装不上：" + reason + line + "当前版本没有改动。";
     }
 
     /**

@@ -154,6 +154,59 @@ describe('Crab 开发者模式', () => {
     page.unmount()
   })
 
+  it('试跑在执行前被拒绝时只显示请求编号，不链到追踪', async () => {
+    crab.conch.mockResolvedValue(detail())
+    crab.debug.mockResolvedValue({ enabled: true, expiresAt: '2026-11-06T08:00:00Z' })
+    crab.runLocal.mockRejectedValue(
+      new ApiError(409, 'NOT_CONFIGURED', '先打开开发者模式。', null, null, 'req-9', '请求编号，不可查追踪'),
+    )
+    const page = await mountPage(ConchDetailView, { attach: true, props: { conch: 'local_echo' } })
+    await flushPromises()
+    await page.get('[data-test="trial-run"]').trigger('click')
+    await flushPromises()
+    const note = document.body.querySelector('[data-test="trial-request"]')
+    expect(note?.textContent).toContain('req-9')
+    expect(note?.textContent).toContain('请求编号，不可查追踪')
+    expect(note?.querySelector('a')).toBeNull()
+    page.unmount()
+  })
+
+  it('当前版本可用、上一版已停用时不给出退回按钮', async () => {
+    crab.conch.mockResolvedValue(detail({
+      source: 'REEF',
+      conch: 'legacy_oa',
+      version: '1.0.0',
+      ruleDisabled: false,
+      previousVersion: '1.0.1',
+      previousDisabled: true,
+      previousPresent: true,
+      subscribed: true,
+      needsConfiguration: false,
+    }))
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    expect(page.get('[data-test="previous-note"]').text()).toContain('上一版 v1.0.1')
+    expect(page.get('[data-test="previous-note"]').text()).toContain('已停用')
+    expect(page.get('[data-test="previous-note"]').text()).toContain('无法退回')
+    expect(page.find('[data-test="rollback"]').exists()).toBe(false)
+    page.unmount()
+  })
+
+  it('上一版字段缺失时不显示退回按钮', async () => {
+    crab.conch.mockResolvedValue(detail({
+      source: 'REEF',
+      conch: 'legacy_oa',
+      previousVersion: '1.0.1',
+      subscribed: true,
+      needsConfiguration: false,
+    }))
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    expect(page.find('[data-test="rollback"]').exists()).toBe(false)
+    expect(page.find('[data-test="previous-note"]').exists()).toBe(false)
+    page.unmount()
+  })
+
   it('本地 MCP 包可以刷新工具列表', async () => {
     crab.conch.mockResolvedValue(detail({ driver: 'mcp', capabilities: [] }))
     crab.debug.mockResolvedValue({ enabled: true, expiresAt: '2026-11-06T08:00:00Z' })

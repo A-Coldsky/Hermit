@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import { notifyError } from '@shared/format'
 import { api, type CapabilityState } from '../api'
 
-const props = defineProps<{ conch: string; capabilities: CapabilityState[] }>()
+const props = defineProps<{ conch: string; capabilities: CapabilityState[]; emptyText?: string }>()
 const busy = ref<string | null>(null)
 
 async function toggle(cap: CapabilityState, enabled: string | number | boolean) {
@@ -25,7 +25,7 @@ async function toggle(cap: CapabilityState, enabled: string | number | boolean) 
   <div class="hm-card">
     <div class="hm-card-title"><span>能力</span></div>
     <p class="hm-muted hint">停用后这个能力不再出现在 OpenAPI 文档和 MCP 工具列表里，调用会被拒绝。</p>
-    <el-table :data="capabilities" empty-text="没有能力">
+    <el-table :data="capabilities" :empty-text="emptyText || '没有能力'">
       <el-table-column label="能力" min-width="200">
         <template #default="{ row }">
           <div class="name">

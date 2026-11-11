@@ -5,7 +5,7 @@ import { notifyError } from '@shared/format'
 import { api, type ConfigValue } from '../api'
 import FieldInput from './FieldInput.vue'
 
-const props = defineProps<{ conch: string; fields: Record<string, ConfigValue> }>()
+const props = defineProps<{ conch: string; fields: Record<string, ConfigValue>; emptyText?: string }>()
 const emit = defineEmits<{ changed: [] }>()
 
 const values = reactive<Record<string, string>>({})
@@ -60,7 +60,7 @@ async function save() {
       <el-button type="primary" :disabled="!Object.keys(changes).length" :loading="saving" @click="save">保存配置</el-button>
     </div>
     <p class="hm-muted hint">配置属于整个规则包，所有账号共用。留空表示使用默认值。</p>
-    <el-empty v-if="!entries.length" :image-size="48" description="这个规则包没有配置项" />
+    <el-empty v-if="!entries.length" :image-size="48" :description="emptyText || '这个规则包没有配置项'" />
     <el-form v-else label-position="top" class="form" @submit.prevent="save">
       <el-form-item v-for="[name, field] in entries" :key="name" :required="field.required" :error="field.missing ? '必填，尚未填写' : ''">
         <template #label>

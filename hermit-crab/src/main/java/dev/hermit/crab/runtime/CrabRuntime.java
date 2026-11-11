@@ -215,6 +215,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(
                 paths, registry, database.dataSource(), () -> debug.get().enabled());
+        this.admin.bindOriginFallback(name -> localConches.occupies(name) ? Origin.LOCAL : null);
         this.instanceId = InstanceIds.loadOrCreate(paths);
         try {
             String initialPassword = environment == null ? null : environment.apply(ConsolePassword.ENV);
@@ -307,6 +308,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     /** Shown when a trial account name is not a single token. The value is not repeated. */
     public static final String TRIAL_ACCOUNT_INVALID = "账号名不合法。";
+    /** 试跑在执行前找不到本地包或能力。控制台和 MCP 用同一句。 */
+    public static final String TRIAL_NOT_FOUND = "没有这个本地规则包或能力。";
 
     /** Records a trial that was refused before execution, so a later debug_trace can explain it. */
     public void noteRejectedTrial(String traceId) {
@@ -348,14 +351,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
         ConchDoc doc = requireLocalDebug(conch);
         if (!"http".equals(doc.driver()) && !"mcp".equals(doc.driver())) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "只支持 HTTP 或 MCP 规则包的试跑。");
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "只支持 HTTP 或 MCP 规则包的试跑。", true);
         }
         Action capability = doc.actions().get(action);
         if (capability == null) {
-            throw new TrialRejected(404, ErrorCode.NOT_FOUND, "not found");
+            throw new TrialRejected(404, ErrorCode.NOT_FOUND, TRIAL_NOT_FOUND, true);
         }
         if (disabled(conch, action)) {
-            throw new TrialRejected(404, ErrorCode.CAPABILITY_DISABLED, Invoker.CAPABILITY_DISABLED_MESSAGE);
+            throw new TrialRejected(404, ErrorCode.CAPABILITY_DISABLED, Invoker.CAPABILITY_DISABLED_MESSAGE, true);
         }
         ReadyAccount ready = openAccount(doc, account);
         ExecutionRequest request = new ExecutionRequest(
@@ -386,7 +389,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
         ConchDoc doc = requireLocalDebug(conch);
         if (!"mcp".equals(doc.driver())) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "只支持刷新 MCP 规则包。");
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "只支持刷新 MCP 规则包。", true);
         }
         ReadyAccount ready = openAccount(doc, account);
         ExecutionRequest request = new ExecutionRequest(
@@ -404,13 +407,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private ConchDoc requireLocalDebug(String conch) {
         ConchDoc doc = registry.find(conch).orElse(null);
         if (doc == null) {
-            throw new TrialRejected(404, ErrorCode.NOT_FOUND, "not found");
+            throw new TrialRejected(404, ErrorCode.NOT_FOUND, TRIAL_NOT_FOUND, true);
         }
         if (registry.origin(conch) != Origin.LOCAL) {
-            throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地规则包上开发，再导出上传。");
+            throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地规则包上开发，再导出上传。", true);
         }
         if (!debug.get().enabled()) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "先打开开发者模式。");
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "先打开开发者模式。", true);
         }
         return doc;
     }
@@ -423,15 +426,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             if (ex.account() == null && accounts.list(Origin.LOCAL, doc.conch()).isEmpty()) {
                 throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialMessages.NO_ACCOUNT, true);
             }
-            throw new TrialRejected(404, ErrorCode.ACCOUNT_NOT_FOUND, Invoker.ACCOUNT_NOT_FOUND_MESSAGE);
+            throw new TrialRejected(404, ErrorCode.ACCOUNT_NOT_FOUND, Invoker.ACCOUNT_NOT_FOUND_MESSAGE, true);
         } catch (IllegalArgumentException ex) {
-            throw new TrialRejected(400, ErrorCode.INVALID_INPUT, TRIAL_ACCOUNT_INVALID);
+            throw new TrialRejected(400, ErrorCode.INVALID_INPUT, TRIAL_ACCOUNT_INVALID, true);
         }
         Map<String, String> stored = conchConfig.all(Origin.LOCAL, doc.conch());
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
         if (!missingConfig.isEmpty()) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED,
-                    "missing config: " + String.join(", ", missingConfig));
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, Invoker.missingConfig(missingConfig), true);
         }
         List<String> missingCredentials = DeclaredSettings.missingCredentials(
                 doc, vault.fieldNames(Origin.LOCAL, doc.conch(), resolved.account()));
@@ -443,7 +445,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         try {
             secrets = vault.decryptForExecution(Origin.LOCAL, doc.conch(), resolved.account());
         } catch (CredentialDecryptException ex) {
-            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE);
+            throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE, true);
         }
         return new ReadyAccount(resolved.account(), secrets, DeclaredSettings.mergedConfig(doc, stored));
     }
@@ -731,10 +733,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     public String previousVersion(String conch) {
+        return previousState(conch).version();
+    }
+
+    public ConchSync.PreviousState previousState(String conch) {
         if (conchSync == null) {
-            return null;
+            return ConchSync.PreviousState.none();
         }
-        return conchSync.previousVersion(conch).orElse(null);
+        return conchSync.previousState(conch);
     }
 
     public void unsubscribe(String conch, String actor) {

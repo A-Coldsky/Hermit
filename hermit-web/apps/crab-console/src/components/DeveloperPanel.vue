@@ -33,6 +33,8 @@ const trialResult = reactive({
   message: '',
   code: '',
   traceId: '' as string | null,
+  requestId: '' as string | null,
+  requestNote: '' as string | null,
 })
 
 const refresh = reactive({
@@ -78,6 +80,8 @@ async function run() {
       message: '',
       code: '',
       traceId: envelope.traceId,
+      requestId: null,
+      requestNote: null,
     })
   } catch (error) {
     Object.assign(trialResult, {
@@ -87,6 +91,8 @@ async function run() {
       message: errorText(error),
       code: error instanceof ApiError ? error.code : '',
       traceId: error instanceof ApiError ? error.traceId : null,
+      requestId: error instanceof ApiError ? error.requestId : null,
+      requestNote: error instanceof ApiError ? error.requestNote : null,
     })
   } finally {
     trial.running = false
@@ -176,6 +182,10 @@ async function refreshTools() {
     <p v-if="trialResult.traceId" class="hm-muted trace">
       开发追踪：
       <router-link :to="{ path: '/calls', query: { trace: trialResult.traceId } }" class="mono">{{ trialResult.traceId }}</router-link>
+    </p>
+    <p v-else-if="trialResult.requestId" class="hm-muted trace" data-test="trial-request">
+      请求编号 <span class="mono">{{ trialResult.requestId }}</span>
+      <template v-if="trialResult.requestNote">。{{ trialResult.requestNote }}</template>
     </p>
   </el-dialog>
 

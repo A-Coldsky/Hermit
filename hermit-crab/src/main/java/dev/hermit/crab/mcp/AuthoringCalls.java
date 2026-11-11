@@ -126,19 +126,19 @@ final class AuthoringCalls {
             McpCalls.Attempt attempt
     ) {
         if (!devMode()) {
-            return McpCalls.fail(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
+            return McpCalls.failAsRequest(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
         }
         String unknown = unknownField(arguments, TRIAL_FIELDS);
         if (unknown != null) {
-            return McpCalls.fail(attempt, "INVALID_INPUT", "未知字段 " + unknown + "。");
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "未知字段 " + unknown + "。");
         }
         String conch = requiredText(arguments, "conch");
         if (conch == null) {
-            return McpCalls.fail(attempt, "INVALID_INPUT", "需要包名。");
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "需要包名。");
         }
         String action = requiredText(arguments, "action");
         if (action == null) {
-            return McpCalls.fail(attempt, "INVALID_INPUT", "需要能力名。");
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "需要能力名。");
         }
         Optional<String> account = Optional.empty();
         if (arguments.containsKey("account")) {
@@ -152,7 +152,7 @@ final class AuthoringCalls {
         if (arguments.containsKey("input")) {
             Object raw = arguments.get("input");
             if (!(raw instanceof Map<?, ?> map)) {
-                return McpCalls.fail(attempt, "INVALID_INPUT", "input 必须是对象。", "input");
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "input 必须是对象。", "input");
             }
             LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
             for (Map.Entry<?, ?> entry : map.entrySet()) {
@@ -161,7 +161,7 @@ final class AuthoringCalls {
             input = copy;
         }
         if (principal != null && principal.scope().readOnlyOnly() && !readableTrial(conch, action)) {
-            return McpCalls.fail(attempt, "FORBIDDEN", READ_ONLY_TRIAL_PREFIX + action + " 不是只读，已拒绝。");
+            return McpCalls.failAsRequest(attempt, "FORBIDDEN", READ_ONLY_TRIAL_PREFIX + action + " 不是只读，已拒绝。");
         }
         ExecutionResult result;
         try {
@@ -177,7 +177,7 @@ final class AuthoringCalls {
             }
             runtime.noteRejectedTrial(attempt.traceId());
             if ("not found".equals(message)) {
-                message = "没有这个本地规则包或能力。";
+                message = CrabRuntime.TRIAL_NOT_FOUND;
             }
             return McpCalls.failWithoutTrace(attempt, ex.code().name(), message);
         } catch (RuntimeException ex) {

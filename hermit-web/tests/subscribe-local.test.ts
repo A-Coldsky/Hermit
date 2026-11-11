@@ -424,6 +424,51 @@ describe('本地规则包', () => {
     expect(buttons(wrapper, '取消订阅')).toHaveLength(0)
   })
 
+  it('停用本地包导出时用读出的版本，读不出版本时不把文件名写成 null', async () => {
+    const names: string[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      names.push(this.download)
+    })
+    const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:draft')
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    try {
+      crab.exportLocalConch.mockResolvedValue('conch: draft_broken\n')
+      crab.conch.mockResolvedValue({
+        ...detail('LOCAL'),
+        conch: 'draft_broken',
+        version: '0.1.0',
+        ruleDisabled: true,
+        declarationsLoaded: true,
+        subscribed: false,
+        needsConfiguration: false,
+      })
+      const page = await mountPage(ConchDetailView, { props: { conch: 'draft_broken' } })
+      await flushPromises()
+      await buttons(page, '导出 YAML')[0].trigger('click')
+      await flushPromises()
+      expect(names).toEqual(['draft_broken-0.1.0.yaml'])
+
+      names.length = 0
+      crab.conch.mockResolvedValue({
+        ...detail('LOCAL'),
+        version: null,
+        ruleDisabled: true,
+        declarationsLoaded: false,
+        subscribed: false,
+        needsConfiguration: false,
+      })
+      const bare = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+      await flushPromises()
+      await buttons(bare, '导出 YAML')[0].trigger('click')
+      await flushPromises()
+      expect(names).toEqual(['legacy_oa.yaml'])
+    } finally {
+      click.mockRestore()
+      create.mockRestore()
+      revoke.mockRestore()
+    }
+  })
+
   it('Reef 停用后详情提示停用但仍可调用，列表带「Reef 已停用」', async () => {
     crab.conch.mockResolvedValue({ ...detail('REEF'), reefDisabled: true, reefDisabledAt: '2026-10-30T00:00:00Z' })
     const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
@@ -575,7 +620,10 @@ describe('需要修复的规则包', () => {
     const wrapper = await mountPage(CatalogView)
     await flushPromises()
 
-    expect(wrapper.find('[data-test="repair-tag"]').text()).toBe('需要修复')
+    const repairTag = wrapper.get('[data-test="repair-tag"]')
+    expect(repairTag.text()).toBe('需要修复')
+    expect(repairTag.html()).toContain('el-tag--warning')
+    expect(repairTag.html()).not.toContain('el-tag--danger')
     expect(wrapper.text()).not.toContain('有新版本 v1.1.0')
     expect(buttons(wrapper, '更新')).toHaveLength(0)
     expect(buttons(wrapper, '管理')).toHaveLength(0)
@@ -640,7 +688,10 @@ describe('需要修复的规则包', () => {
     const wrapper = await mountPage(CatalogView)
     await flushPromises()
 
-    expect(wrapper.find('[data-test="rule-disabled-tag"]').text()).toBe('已停用')
+    const disabledTag = wrapper.get('[data-test="rule-disabled-tag"]')
+    expect(disabledTag.text()).toBe('已停用')
+    expect(disabledTag.html()).toContain('el-tag--danger')
+    expect(disabledTag.html()).not.toContain('el-tag--warning')
     expect(wrapper.find('[data-test="repair-message"]').text()).toContain('第 12 行')
     expect(wrapper.text()).not.toContain('已安装 v1.0.0')
     expect(wrapper.text()).not.toContain('Reef 已停用')

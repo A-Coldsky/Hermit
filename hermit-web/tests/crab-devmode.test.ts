@@ -96,6 +96,7 @@ describe('Crab 开发者模式', () => {
     expect(prompt).not.toContain('必须点名')
     expect(prompt).not.toContain('hk_')
     expect(prompt).toContain('不要把 Key 明文写进对话')
+    expect(prompt).toContain('现在登录步骤取到的令牌带不进能力，请把令牌声明成凭证。')
     const block = wrapper.get('[data-test="authoring-prompt"]')
     expect(block.html().indexOf('copy-authoring')).toBeLessThan(block.html().indexOf('<pre'))
     expect(block.text()).toContain('把下面这段发给 AI')

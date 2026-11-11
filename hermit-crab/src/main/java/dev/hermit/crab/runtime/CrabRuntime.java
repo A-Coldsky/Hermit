@@ -421,7 +421,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             resolved = accounts.resolve(Origin.LOCAL, doc.conch(), account == null ? Optional.empty() : account);
         } catch (AccountNotFoundException ex) {
             if (ex.account() == null && accounts.list(Origin.LOCAL, doc.conch()).isEmpty()) {
-                throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialMessages.NO_ACCOUNT);
+                throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialMessages.NO_ACCOUNT, true);
             }
             throw new TrialRejected(404, ErrorCode.ACCOUNT_NOT_FOUND, Invoker.ACCOUNT_NOT_FOUND_MESSAGE);
         } catch (IllegalArgumentException ex) {
@@ -437,7 +437,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 doc, vault.fieldNames(Origin.LOCAL, doc.conch(), resolved.account()));
         if (!missingCredentials.isEmpty()) {
             throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialMessages.missing(
-                    resolved.account(), missingCredentials, doc.credentials()));
+                    resolved.account(), missingCredentials, doc.credentials()), true);
         }
         Map<String, String> secrets;
         try {

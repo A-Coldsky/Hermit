@@ -42,7 +42,6 @@ public final class DeclaredSettings {
                 missing.add(entry.getKey());
             }
         }
-        Collections.sort(missing);
         return List.copyOf(missing);
     }
 

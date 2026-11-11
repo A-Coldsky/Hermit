@@ -36,6 +36,11 @@ public enum OutcomeKind {
      */
     REPAIR_REQUIRED,
     /**
+     * The installed zip verifies, but the current validator will not load it.
+     * Sync did not download and did not mark the package as a file or pointer repair.
+     */
+    RULE_DISABLED,
+    /**
      * A manual update reloaded the newest installed zip after it verified.
      * {@code version} is that version. {@code current} was not moved to a higher manifest version.
      */

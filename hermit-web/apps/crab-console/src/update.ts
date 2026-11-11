@@ -76,7 +76,7 @@ export async function updateConch(target: UpdateTarget): Promise<boolean> {
     : ''
   try {
     await ElMessageBox.confirm(
-      `把 ${target.conch} 从 ${from} 更新到 ${to}。更新后可以退回刚换下的那一版。${credentials}`,
+      `把 ${target.conch} 从 ${from} 更新到 ${to}。更新后可以退回刚换下的那一版。新版本校验不过时不会替换本机版本。${credentials}`,
       `更新 ${target.conch}`,
       { confirmButtonText: '更新', cancelButtonText: '暂不更新', type: 'info' },
     )
@@ -101,6 +101,12 @@ export async function updateConch(target: UpdateTarget): Promise<boolean> {
         message: `新版本已下载，但默认账号还缺凭证：${missing.join('、')}。在账号里补齐后再点「更新」。`,
         duration: 8000,
       })
+    } else if (
+      error instanceof ApiError &&
+      error.message.startsWith('新版本 v') &&
+      error.message.includes('装不上')
+    ) {
+      ElMessage.error(error.message)
     } else {
       notifyError(error)
     }

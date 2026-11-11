@@ -34,6 +34,11 @@ const incompleteAccounts = computed(() =>
 const unreadableAccounts = computed(() => accounts.value.filter((a) => a.credentialsUnreadable).map((a) => a.name))
 const pausedAccounts = computed(() => accounts.value.filter((a) => a.loginPaused))
 const needsAccount = computed(() => accounts.value.length === 0)
+const DISABLED_LEAD = '已停用。这版规则暂时不能调用。'
+const disabledReason = computed(() => {
+  const message = detail.value?.message ?? ''
+  return message.startsWith(DISABLED_LEAD) ? message.slice(DISABLED_LEAD.length) : message
+})
 const ready = computed(
   () =>
     !missingConfig.value.length &&
@@ -321,9 +326,11 @@ watch(
         data-test="rule-disabled"
       >
         <template #default>
-          <div>{{ detail.message }}</div>
+          <div v-if="disabledReason">{{ disabledReason }}</div>
+          <div v-if="detail.fixHint" data-test="fix-hint">{{ detail.fixHint }}</div>
+          <div v-if="detail.previousDisabled && detail.previousVersion">上一版 v{{ detail.previousVersion }} 也已停用</div>
           <el-button
-            v-if="detail.previousVersion"
+            v-if="detail.previousVersion && !detail.previousDisabled"
             class="update-btn"
             :loading="working"
             @click="rollback"
@@ -357,7 +364,7 @@ watch(
             新版本需要这些凭证：<span class="mono">{{ detail.newRequiredCredentials.join('、') }}</span>。先在下方默认账号里填好，再点更新。
           </div>
           <el-button type="primary" class="update-btn" :loading="working" @click="update">更新到 v{{ detail.latestVersion }}</el-button>
-          <el-button v-if="detail.previousVersion" class="update-btn" :loading="working" @click="rollback">退回 v{{ detail.previousVersion }}</el-button>
+          <el-button v-if="detail.previousVersion && !detail.previousDisabled" class="update-btn" :loading="working" @click="rollback">退回 v{{ detail.previousVersion }}</el-button>
         </template>
       </el-alert>
       <el-alert v-if="local" type="info" show-icon :closable="false" title="本地规则包：未经 Reef 签名，只在本机可用">

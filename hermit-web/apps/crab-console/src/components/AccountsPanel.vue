@@ -227,7 +227,7 @@ async function disconnect(account: Account) {
           <el-tag v-else-if="!row.needsConfiguration" type="success" effect="plain" size="small">已填写</el-tag>
           <template v-else>
             <el-tag type="warning" effect="plain" size="small">缺少</el-tag>
-            <span class="mono missing">{{ row.missingFields.join(', ') }}</span>
+            <span class="mono missing">{{ (row.missingLabels ?? row.missingFields).join('、') }}</span>
           </template>
         </template>
       </el-table-column>

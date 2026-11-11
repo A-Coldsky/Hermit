@@ -23,7 +23,9 @@ import dev.hermit.common.pkg.ConchPackage;
 import dev.hermit.common.pkg.VerifiedConch;
 import dev.hermit.common.validate.ConchDiff;
 import dev.hermit.common.validate.ConchValidator;
+import dev.hermit.common.validate.IssueLines;
 import dev.hermit.common.validate.ValidationCodes;
+import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
 import dev.hermit.reef.security.AgentAccessFilter;
 import dev.hermit.reef.web.ReefErrorCode;
@@ -142,8 +144,20 @@ class ConchApiTest {
                 ConchDoc doc = ConchParser.parse(new String(yaml, StandardCharsets.UTF_8));
                 ValidationResult expected = ConchValidator.validate(doc, ConchValidator.Context.of(null));
                 assertThat(expected.errors()).isNotEmpty();
-                assertThat(body.get("error").get("message").asText()).isEqualTo("输入无效");
-                assertCodes(body.get("data").get("errors"), expected.errors().stream().map(issue -> issue.code()).toList());
+                assertThat(body.get("error").get("message").asText()).isEqualTo("规则包校验失败");
+                java.util.List<ValidationIssue> located = IssueLines.locate(
+                        new String(yaml, java.nio.charset.StandardCharsets.UTF_8), expected.errors());
+                JsonNode reported = body.get("data").get("errors");
+                assertThat(reported.size()).isEqualTo(located.size());
+                for (int i = 0; i < located.size(); i++) {
+                    JsonNode line = reported.get(i).get("line");
+                    if (located.get(i).line() == null) {
+                        assertThat(line == null || line.isNull()).isTrue();
+                    } else {
+                        assertThat(line.asInt()).isEqualTo(located.get(i).line());
+                    }
+                }
+                assertCodes(reported, expected.errors().stream().map(issue -> issue.code()).toList());
                 assertCodes(body.get("data").get("warnings"), expected.warnings().stream().map(issue -> issue.code()).toList());
             } catch (ConchParseException ex) {
                 assertThat(body.get("data").get("path").asText()).isEqualTo(ex.path());

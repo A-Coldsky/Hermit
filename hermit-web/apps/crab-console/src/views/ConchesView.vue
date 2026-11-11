@@ -27,6 +27,7 @@ import {
 } from '../api'
 import { formatImportIssue } from '../import-issue'
 import { refreshPending } from '../status'
+import { updateConch } from '../update'
 
 const router = useRouter()
 const loading = ref(true)
@@ -190,6 +191,52 @@ function open(row: ConchSummary) {
   void router.push(`/conches/${encodeURIComponent(row.conch)}`)
 }
 
+function openBroken(row: LocalConchEntry) {
+  if (!row.ruleDisabled) return
+  void router.push(`/conches/${encodeURIComponent(row.conch)}`)
+}
+
+const acting = ref<string | null>(null)
+
+async function rollbackListed(row: ConchSummary) {
+  if (!row.previousVersion || row.previousDisabled) return
+  try {
+    await ElMessageBox.confirm(
+      `退回 v${row.previousVersion}。当前版本会留作下一次可退回的版本。`,
+      `退回 ${row.conch}`,
+      { confirmButtonText: '退回', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  acting.value = row.conch
+  try {
+    await api.rollback(row.conch)
+    ElMessage.success(`已退回 v${row.previousVersion}`)
+    await load()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    acting.value = null
+  }
+}
+
+async function updateListed(row: ConchSummary) {
+  acting.value = row.conch
+  try {
+    if (await updateConch({
+      conch: row.conch,
+      installedVersion: row.version,
+      latestVersion: row.latestVersion,
+      newRequiredCredentials: row.newRequiredCredentials,
+    })) {
+      await load()
+    }
+  } finally {
+    acting.value = null
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -222,6 +269,7 @@ onMounted(load)
             <strong>
               {{ row.title || row.conch }}
               <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
+              <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
               <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
               <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
             </strong>
@@ -230,11 +278,14 @@ onMounted(load)
         </div>
         <div class="status" :class="row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
           <el-icon><component :is="row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
-          <span v-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
+          <span v-if="row.ruleDisabled">已停用</span>
+          <span v-else-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
           <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
           <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>
           <span v-else>可用：可以通过 OpenAPI 和 MCP 调用</span>
         </div>
+        <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
+        <p v-if="row.previousDisabled && row.previousVersion" class="broken-reason">上一版 v{{ row.previousVersion }} 也已停用</p>
         <p v-if="row.reefDisabled" class="reef-off-note">Reef 已停用：本机版本仍可调用，但不会再更新</p>
         <p v-else-if="row.updateAvailable" class="update-note">
           可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。进入详情更新
@@ -243,10 +294,31 @@ onMounted(load)
           <span><b class="num">{{ row.capabilityCount }}</b> 个能力</span>
           <span><b class="num">{{ row.accountCount }}</b> 个账号</span>
           <span class="spacer" />
+          <el-button
+            v-if="row.previousVersion && !row.previousDisabled"
+            link
+            type="primary"
+            :loading="acting === row.conch"
+            @click.stop="rollbackListed(row)"
+          >退回 v{{ row.previousVersion }}</el-button>
+          <el-button
+            v-if="row.updateAvailable"
+            link
+            type="primary"
+            :loading="acting === row.conch"
+            @click.stop="updateListed(row)"
+          >更新到 v{{ row.latestVersion }}</el-button>
           <span class="manage">管理<el-icon><ArrowRight /></el-icon></span>
         </div>
       </div>
-      <div v-for="row in broken" :key="`broken-${row.conch}`" class="hm-card conch broken" data-test="broken-conch">
+      <div
+        v-for="row in broken"
+        :key="`broken-${row.conch}`"
+        class="hm-card conch broken"
+        :class="{ clickable: row.ruleDisabled }"
+        data-test="broken-conch"
+        @click="openBroken(row)"
+      >
         <div class="top">
           <ConchAvatar :name="row.conch" />
           <div class="name">
@@ -264,6 +336,7 @@ onMounted(load)
           <span v-else>未载入，不能调用。修好文件后重新导入覆盖，或先删除再导入</span>
         </div>
         <p v-if="row.reason" class="broken-reason" data-test="broken-reason">{{ row.reason }}</p>
+        <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
         <div class="foot hm-muted">
           <span class="spacer" />
           <el-button
@@ -272,7 +345,7 @@ onMounted(load)
             size="small"
             :icon="Delete"
             :loading="deleting === row.conch"
-            @click="removeBroken(row)"
+            @click.stop="removeBroken(row)"
           >删除</el-button>
         </div>
       </div>

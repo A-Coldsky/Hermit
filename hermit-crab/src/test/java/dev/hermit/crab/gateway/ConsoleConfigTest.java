@@ -34,11 +34,23 @@ class ConsoleConfigTest {
             TestServer.Reply empty = server.console("PUT", path, "{}", true);
             assertThat(empty.status()).isEqualTo(400);
             assertThat(empty.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
-            assertThat(empty.json().path("error").path("message").asText()).contains("credential fields are required");
+            assertThat(empty.json().path("error").path("message").asText())
+                    .contains("用户名（username）")
+                    .contains("密码（password）")
+                    .doesNotContain("credential fields are required");
+            assertThat(empty.json().path("error").path("message").asText().indexOf("用户名（username）"))
+                    .isLessThan(empty.json().path("error").path("message").asText().indexOf("密码（password）"));
+            assertThat(empty.json().has("traceId")).isFalse();
+            assertThat(empty.json().path("requestId").asText()).isNotBlank();
+            assertThat(empty.json().path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
+            assertThat(empty.headers().keySet()).noneMatch(name -> name.equalsIgnoreCase("X-Hermit-Trace"));
 
             TestServer.Reply blank = server.console("PUT", path, "", true);
             assertThat(blank.status()).isEqualTo(400);
-            assertThat(blank.json().path("error").path("message").asText()).contains("credential fields are required");
+            assertThat(blank.json().path("error").path("message").asText())
+                    .contains("用户名（username）")
+                    .contains("密码（password）")
+                    .doesNotContain("credential fields are required");
 
             TestServer.Reply partial = server.console("PUT", path, "{\"username\":\"carol\"}", true);
             assertThat(partial.status()).isEqualTo(400);

@@ -11,6 +11,7 @@ export const outcomeLabels: Record<string, { text: string; tone: 'success' | 'in
   SKIPPED_LOCAL: { text: '本地同名，未安装', tone: 'warning' },
   NOT_SUBSCRIBED: { text: '未订阅', tone: 'info' },
   REPAIR_REQUIRED: { text: '需要修复', tone: 'warning' },
+  RULE_DISABLED: { text: '新规则下已停用', tone: 'warning' },
   REPAIRED: { text: '已从本机重新载入', tone: 'success' },
 }
 
@@ -78,6 +79,7 @@ export const syncReasonLabels: Record<string, string> = {
   LOCAL_KEPT: '本机已有同名本地规则包',
   POINTER_MISSING: '本机版本指针丢失，同步不会重新下载',
   NOT_LOADED: '本机文件还在，但这次启动没有载入',
+  RULE_DISABLED: '新规则下已停用',
   RESTORED: '已重新载入本机验过签的版本',
   BAD_SIGNATURE: '本机文件验签失败',
   DIGEST_MISMATCH: '本机文件摘要与签名不一致',

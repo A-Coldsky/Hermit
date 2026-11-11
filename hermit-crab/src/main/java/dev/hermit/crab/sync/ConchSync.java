@@ -504,7 +504,11 @@ public final class ConchSync {
         }
         InstallResult activated = activate(entry, verified, fetched.zip(), fromVersion, replaceUnreadable);
         if (activated.outcome().kind() != OutcomeKind.INSTALLED) {
-            throw updateRejected(activated.outcome().reason());
+            String reason = activated.outcome().reason();
+            if (reason != null && reason.startsWith("新版本 v") && reason.contains("装不上")) {
+                throw new UpdateException(409, ErrorCode.CONFLICT, reason);
+            }
+            throw updateRejected(reason);
         }
         String auditedFrom = fromVersion == null ? "" : fromVersion;
         AuditLog.record(
@@ -565,18 +569,24 @@ public final class ConchSync {
             }
             if (!unloadedPreviousInstall(conch)) {
                 ConchOutcome current = rows.get(conch);
-                if (current != null && current.kind() == OutcomeKind.REPAIR_REQUIRED && officiallyLoaded(conch)) {
+                if (current != null
+                        && (current.kind() == OutcomeKind.REPAIR_REQUIRED || current.kind() == OutcomeKind.RULE_DISABLED)
+                        && officiallyLoaded(conch)) {
                     rows.remove(conch);
                     changed = true;
                 }
                 continue;
             }
             ConchOutcome current = rows.get(conch);
-            if (current != null && current.kind() == OutcomeKind.REPAIR_REQUIRED) {
+            String pointer = ConchFiles.readCurrent(paths, conch).orElse(null);
+            boolean ruleDisabled = validationDisableMessage(conch, pointer) != null;
+            OutcomeKind kind = ruleDisabled ? OutcomeKind.RULE_DISABLED : OutcomeKind.REPAIR_REQUIRED;
+            String reason = ruleDisabled ? SyncReasons.RULE_DISABLED : unloadedReason(conch);
+            if (current != null && current.kind() == kind && reason.equals(current.reason())) {
                 continue;
             }
-            String reason = unloadedReason(conch);
-            rows.put(conch, new ConchOutcome(conch, repairVersion(conch, reason), OutcomeKind.REPAIR_REQUIRED, reason));
+            String version = ruleDisabled ? semverOrNull(pointer) : repairVersion(conch, reason);
+            rows.put(conch, new ConchOutcome(conch, version, kind, reason));
             changed = true;
         }
         if (!changed) {
@@ -868,31 +878,57 @@ public final class ConchSync {
      */
     public Optional<DisabledRule> disabledRule(String conch) {
         synchronized (this) {
-            if (conch == null || registry.find(conch).isPresent() || badSignatureUnloaded(conch)) {
-                return Optional.empty();
-            }
-            if (!subscriptions.contains(conch) || !previouslyInstalled(conch) || isLocal(conch)) {
-                return Optional.empty();
-            }
-            String pointer = ConchFiles.readCurrent(paths, conch).orElse(null);
-            String message = validationDisableMessage(conch, pointer);
-            if (message == null) {
-                return Optional.empty();
-            }
-            VerifiedConch verified = readInstalled(conch, pointer);
-            ConchDoc doc = verified == null ? null : verified.conchDoc();
-            String title = doc != null && doc.title() != null && !doc.title().isBlank() ? doc.title() : conch;
-            String description = doc == null ? null : doc.description();
-            ReefClient.CatalogEntry cached = cached(conch).orElse(null);
-            return Optional.of(new DisabledRule(
-                    conch,
-                    pointer,
-                    title,
-                    description,
-                    message,
-                    store.previous(conch).orElse(null),
-                    cached == null ? null : cached.version()));
+            return disabledRuleLocked(conch);
         }
+    }
+
+    /** Subscribed packages the current validator will not load. Caller may hold this lock. */
+    public List<DisabledRule> disabledRules() {
+        synchronized (this) {
+            ArrayList<DisabledRule> found = new ArrayList<>();
+            for (String name : subscriptions.names()) {
+                disabledRuleLocked(name).ifPresent(found::add);
+            }
+            return List.copyOf(found);
+        }
+    }
+
+    /** True when that installed version verifies but the current validator will not load it. */
+    public boolean versionRejected(String conch, String version) {
+        synchronized (this) {
+            return version != null && validationDisableMessage(conch, version) != null;
+        }
+    }
+
+    private Optional<DisabledRule> disabledRuleLocked(String conch) {
+        if (conch == null || registry.find(conch).isPresent() || badSignatureUnloaded(conch)) {
+            return Optional.empty();
+        }
+        if (!subscriptions.contains(conch) || !previouslyInstalled(conch) || isLocal(conch)) {
+            return Optional.empty();
+        }
+        String pointer = ConchFiles.readCurrent(paths, conch).orElse(null);
+        String message = validationDisableMessage(conch, pointer);
+        if (message == null) {
+            return Optional.empty();
+        }
+        VerifiedConch verified = readInstalled(conch, pointer);
+        ConchDoc doc = verified == null ? null : verified.conchDoc();
+        String title = doc != null && doc.title() != null && !doc.title().isBlank() ? doc.title() : conch;
+        String description = doc == null ? null : doc.description();
+        ReefClient.CatalogEntry cached = cached(conch).orElse(null);
+        String previous = store.previous(conch).orElse(null);
+        boolean previousDisabled = previous != null && validationDisableMessage(conch, previous) != null;
+        return Optional.of(new DisabledRule(
+                conch,
+                pointer,
+                title,
+                description,
+                message,
+                previous,
+                cached == null ? null : cached.version(),
+                previousDisabled,
+                RuleDisabled.fixHint(false, previous != null && !previousDisabled)));
     }
 
     public Optional<String> previousVersion(String conch) {
@@ -910,7 +946,9 @@ public final class ConchSync {
             String description,
             String message,
             String previousVersion,
-            String latestVersion
+            String latestVersion,
+            boolean previousDisabled,
+            String fixHint
     ) {
     }
 
@@ -1038,6 +1076,11 @@ public final class ConchSync {
      */
     private InstallResult repairRequired(ReefClient.CatalogEntry entry) {
         String conch = entry.conch();
+        String pointer = ConchFiles.readCurrent(paths, conch).orElse(null);
+        if (validationDisableMessage(conch, pointer) != null) {
+            return InstallResult.of(new ConchOutcome(
+                    conch, semverOrNull(pointer), OutcomeKind.RULE_DISABLED, SyncReasons.RULE_DISABLED));
+        }
         String reason = unloadedReason(conch);
         noteRepair(conch, reason);
         return InstallResult.of(new ConchOutcome(
@@ -1090,9 +1133,12 @@ public final class ConchSync {
             try {
                 registry.put(verified.conchDoc(), Origin.OFFICIAL);
             } catch (ConchRejectedException ex) {
-                String explained = RuleDisabled.explain(ImportIssueLines.locate(
-                        new String(verified.conchYaml(), StandardCharsets.UTF_8), ex.issues()));
+                String yaml = new String(verified.conchYaml(), StandardCharsets.UTF_8);
+                List<ValidationIssue> located = ImportIssueLines.locate(yaml, ex.issues());
                 ConchFiles.deleteVersion(paths, conch, version);
+                String explained = previous != null
+                        ? RuleDisabled.updateBlocked(version, previous.version().toString(), located)
+                        : RuleDisabled.explain(located);
                 return InstallResult.of(new ConchOutcome(conch, version, OutcomeKind.REJECTED, explained));
             } catch (RuntimeException ex) {
                 ConchFiles.deleteVersion(paths, conch, version);

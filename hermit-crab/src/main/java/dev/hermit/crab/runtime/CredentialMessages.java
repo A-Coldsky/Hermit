@@ -35,7 +35,7 @@ public final class CredentialMessages {
     }
 
     /** Shown as {@code 显示名（键名）}. A blank label, or a label equal to the key, is just the key. */
-    static String display(String name, Map<String, CredentialField> fields) {
+    public static String display(String name, Map<String, CredentialField> fields) {
         CredentialField field = fields == null || name == null ? null : fields.get(name);
         String label = field == null ? null : field.label();
         if (name == null) {

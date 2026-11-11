@@ -112,6 +112,38 @@ class GatewayHttpTest {
     }
 
     @Test
+    void anUpstreamFailureStillReturnsALookupableTrace() throws Exception {
+        com.sun.net.httpserver.HttpServer upstream = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        upstream.createContext("/", exchange -> {
+            byte[] body = "upstream-down".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(502, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        upstream.start();
+        try (TestServer server = TestServer.open(
+                temp.resolve("upstream-502"), PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
+            server.configureAccount("alice");
+            var doc = server.runtime.registry().find("legacy_oa").orElseThrow();
+            server.runtime.admin().putConfig(
+                    doc,
+                    "base_url",
+                    "http://127.0.0.1:" + upstream.getAddress().getPort() + "/",
+                    Actors.CLI);
+            TestServer.Reply failed = server.call(
+                    "GET", "/api/legacy_oa/list_todo?page=1", server.apiKey.plaintext(), null, null, null);
+            String traceId = failed.json().path("traceId").asText();
+            assertThat(traceId).isNotBlank();
+            assertThat(failed.json().has("requestId")).isFalse();
+            assertThat(failed.header("X-Hermit-Trace")).isEqualTo(traceId);
+            assertThat(server.runtime.callLogs().findByTraceId(traceId)).isPresent();
+        } finally {
+            upstream.stop(0);
+        }
+    }
+
+    @Test
     void callsCapabilitiesAccountsIdempotencyAndRestoredSessions() throws Exception {
         LogBag logs = new LogBag();
         Logger.getLogger("").addHandler(logs);
@@ -127,14 +159,22 @@ class GatewayHttpTest {
             assertThat(missingAccount.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
             assertThat(missingAccount.json().path("error").path("message").asText())
                     .isEqualTo("还没有账号。请到控制台为这个规则包新建账号并填写凭证。");
-            assertThat(missingAccount.header("X-Hermit-Trace")).isNotBlank();
+            assertThat(missingAccount.header("X-Hermit-Trace")).isNull();
+            assertThat(missingAccount.json().has("traceId")).isFalse();
+            assertThat(missingAccount.json().path("requestId").asText()).isNotBlank();
+            assertThat(missingAccount.json().path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
 
             server.runtime.admin().createAccount("legacy_oa", "alice", Actors.CLI);
             TestServer.Reply missingCredentials = server.call(
                     "GET", "/api/legacy_oa/list_todo", server.apiKey.plaintext(), null, null, null);
             assertThat(missingCredentials.status()).isEqualTo(409);
             String missing = missingCredentials.json().path("error").path("message").asText();
-            assertThat(missing).contains("password").contains("username");
+            assertThat(missing).contains("用户名（username）").contains("密码（password）");
+            assertThat(missing.indexOf("用户名（username）")).isLessThan(missing.indexOf("密码（password）"));
+            assertThat(missingCredentials.header("X-Hermit-Trace")).isNull();
+            assertThat(missingCredentials.json().has("traceId")).isFalse();
+            assertThat(missingCredentials.json().path("requestId").asText()).isNotBlank();
+            assertThat(missingCredentials.json().path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
             SecretChecks.absent(missing, PASSWORD);
 
             server.configureAccount("alice");

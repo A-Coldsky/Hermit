@@ -22,6 +22,7 @@ import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.pkg.ConchPackage;
 import dev.hermit.crab.cli.CrabCommand;
 import dev.hermit.crab.engine.ConchRegistry;
@@ -62,7 +63,8 @@ class RuleDisabledInstallTest {
             SyncReport waiting = sync.syncOnce();
             assertThat(waiting.conches()).anySatisfy(outcome -> {
                 assertThat(outcome.conch()).isEqualTo("legacy_oa");
-                assertThat(outcome.kind()).isEqualTo(OutcomeKind.REPAIR_REQUIRED);
+                assertThat(outcome.kind()).isEqualTo(OutcomeKind.RULE_DISABLED);
+                assertThat(outcome.reason()).isEqualTo(SyncReasons.RULE_DISABLED);
             });
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.1"))).isFalse();
 
@@ -94,6 +96,70 @@ class RuleDisabledInstallTest {
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
             assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
+        }
+    }
+
+    @Test
+    void updatingToAnInvalidVersionKeepsTheLoadedOne() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("blocked-update"))) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = new ConchSync(settings(reef), crab.paths, registry, crab.vault, crab.dataSource, Clock.systemUTC());
+            TestSubscriptions.grantKnown(crab.dataSource);
+            sync.syncOnce();
+            reef.publish(blocked("1.0.1"));
+            sync.syncOnce();
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .satisfies(error -> {
+                        UpdateException update = (UpdateException) error;
+                        assertThat(update.status()).isEqualTo(409);
+                        assertThat(update.code()).isEqualTo(ErrorCode.CONFLICT);
+                        assertThat(update.getMessage())
+                                .startsWith("新版本 v1.0.1 装不上：")
+                                .contains("第")
+                                .contains("本机仍是可用的上一版 v1.0.0")
+                                .doesNotContain("输入无效")
+                                .doesNotContain("已停用");
+                    });
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.0");
+            assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.1"))).isFalse();
+        }
+    }
+
+    @Test
+    void aDisabledPreviousVersionIsMarkedAndRollbackStaysPut() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("both-disabled"))) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = new ConchSync(settings(reef), crab.paths, registry, crab.vault, crab.dataSource, Clock.systemUTC());
+            TestSubscriptions.grantKnown(crab.dataSource);
+            sync.syncOnce();
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            sync.syncOnce();
+            assertThat(sync.update("legacy_oa", Actors.CONSOLE).outcome().version()).isEqualTo("1.0.1");
+            Files.write(crab.paths.conches().resolve("legacy_oa/1.0.1/package.zip"),
+                    ConchPackage.write(blocked("1.0.1").getBytes(StandardCharsets.UTF_8), reef.keys().getPrivate()));
+            Files.write(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"),
+                    ConchPackage.write(blocked("1.0.0").getBytes(StandardCharsets.UTF_8), reef.keys().getPrivate()));
+            ConchRegistry restarted = new ConchRegistry();
+            ConchSync again = new ConchSync(
+                    settings(reef), crab.paths, restarted, crab.vault, crab.dataSource, Clock.systemUTC());
+            again.syncOnce();
+            ConchSync.DisabledRule disabled = again.disabledRule("legacy_oa").orElseThrow();
+            assertThat(disabled.previousVersion()).isEqualTo("1.0.0");
+            assertThat(disabled.previousDisabled()).isTrue();
+            assertThat(disabled.fixHint()).isEqualTo("更新到合规的新版本");
+            assertThat(disabled.fixHint()).doesNotContain("退回");
+            assertThatThrownBy(() -> again.rollback("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessageContaining("已停用")
+                    .hasMessageContaining("当前可用的版本没有改动");
+            assertThat(restarted.find("legacy_oa")).isEmpty();
+            assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
+            assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
+            assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.1/package.zip"))).isTrue();
         }
     }
 

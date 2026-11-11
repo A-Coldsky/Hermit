@@ -52,6 +52,11 @@ export interface ConchSummary {
   latestVersion: string | null
   /** 清单要求、但当前已安装版本未要求的凭证名，已排序。 */
   newRequiredCredentials: string[]
+  /** 当前校验载不进。列表仍给出卡片，可以进详情。 */
+  ruleDisabled?: boolean
+  previousVersion?: string | null
+  previousDisabled?: boolean
+  fixHint?: string | null
 }
 
 export interface CredentialField {
@@ -127,6 +132,10 @@ export interface ConchDetail {
   ruleDisabled?: boolean
   /** 上一次切换换下来的版本。没有可退回的版本时为 null。 */
   previousVersion?: string | null
+  /** 上一版也过不了当前校验。 */
+  previousDisabled?: boolean
+  /** 下一步。正式包是更新或退回，本地规则包是改规则后重新导入。 */
+  fixHint?: string | null
 }
 
 export interface Account {
@@ -135,6 +144,8 @@ export interface Account {
   /** 该账号缺必填凭证，或已存凭证无法用当前主密钥解密。没有账号、自动登录暂停都不计入这里。 */
   needsConfiguration: boolean
   missingFields: string[]
+  /** 按声明顺序的「显示名（键名）」。显示名为空或与键名相同时只剩键名。 */
+  missingLabels?: string[]
   /** 已保存的密文无法解密。为 true 时 needsConfiguration 也为 true。 */
   credentialsUnreadable: boolean
   /** 无法解密时为「凭证无法解密，需重新配置」，否则 null。 */
@@ -361,6 +372,8 @@ export type SyncOutcomeKind =
   | 'NOT_SUBSCRIBED'
   /** 已订阅、装过，但本机文件或版本指针坏了。同步不下载，等使用者修复。 */
   | 'REPAIR_REQUIRED'
+  /** 验签通过但当前校验载不进。不是文件或指针损坏。 */
+  | 'RULE_DISABLED'
   /** 修复时重新载入了本机仍能验签的版本，没有下载。 */
   | 'REPAIRED'
 
@@ -390,7 +403,8 @@ export interface LocalImportResult {
 
 /**
  * `GET /local-conches` 的一行。已载入的本地包和载入失败的坏包都在这里。
- * 坏包不在 `GET /conches` 里，详情、导出和调用都是 404，只能删除后重新导入。
+ * 解析或读失败的坏包不在 `GET /conches` 里，详情、导出和调用都是 404，只能删除后重新导入。
+ * 校验载不进时仍在这份列表，详情返回 200，`fixHint` 为「改规则后重新导入」。
  */
 export interface LocalConchEntry {
   conch: string
@@ -403,6 +417,8 @@ export interface LocalConchEntry {
   reason: string | null
   /** 文件还在，但这版规则过不了当前校验。解析失败仍是 false。 */
   ruleDisabled?: boolean
+  /** 校验载不进时为「改规则后重新导入」。 */
+  fixHint?: string | null
 }
 
 /** 同名本地包已存在、未带 `confirm=true` 时 409 `CONFLICT` 的 data。 */
@@ -448,6 +464,10 @@ export interface CatalogConch {
   message: string | null
   /** 签名通过但当前校验载不进。`installed` 仍为 true，页面不要再显示健康的「已安装」。 */
   ruleDisabled: boolean
+  /** 下一步。没有上一版时不含退回。 */
+  fixHint?: string | null
+  previousVersion?: string | null
+  previousDisabled?: boolean
 }
 
 export interface Catalog {

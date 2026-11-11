@@ -2,6 +2,7 @@ package dev.hermit.crab.engine;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -397,14 +398,51 @@ public final class DevTraceDraft {
         return value;
     }
 
+    /**
+     * Spans are taken from the original text and overlapping ones are masked once.
+     * A base64url token may contain {@code -} or {@code _}. Those characters end a
+     * hex or standard-base64 run, so replacing that inner run first would leave the
+     * prefix. The prefix is then shorter than the next rule and would stay visible.
+     */
     private static String redactShapes(String text) {
         if (text == null || text.length() < 32 && !text.contains(".")) {
             return text;
         }
-        String masked = JWT.matcher(text).replaceAll("***");
-        masked = HEX_RUN.matcher(masked).replaceAll("***");
-        masked = BASE64_RUN.matcher(masked).replaceAll("***");
-        return BASE64URL_RUN.matcher(masked).replaceAll("***");
+        ArrayList<int[]> spans = new ArrayList<>();
+        collectSpans(JWT, text, spans);
+        collectSpans(HEX_RUN, text, spans);
+        collectSpans(BASE64_RUN, text, spans);
+        collectSpans(BASE64URL_RUN, text, spans);
+        if (spans.isEmpty()) {
+            return text;
+        }
+        spans.sort((left, right) -> {
+            int byStart = Integer.compare(left[0], right[0]);
+            return byStart != 0 ? byStart : Integer.compare(left[1], right[1]);
+        });
+        StringBuilder out = new StringBuilder(text.length());
+        int cursor = 0;
+        int index = 0;
+        while (index < spans.size()) {
+            int start = spans.get(index)[0];
+            int end = spans.get(index)[1];
+            index++;
+            while (index < spans.size() && spans.get(index)[0] <= end) {
+                end = Math.max(end, spans.get(index)[1]);
+                index++;
+            }
+            out.append(text, cursor, start).append("***");
+            cursor = end;
+        }
+        out.append(text, cursor, text.length());
+        return out.toString();
+    }
+
+    private static void collectSpans(Pattern pattern, String text, List<int[]> spans) {
+        Matcher matcher = pattern.matcher(text);
+        while (matcher.find()) {
+            spans.add(new int[] {matcher.start(), matcher.end()});
+        }
     }
 
     private static void limitSteps(Map<String, Object> document) {

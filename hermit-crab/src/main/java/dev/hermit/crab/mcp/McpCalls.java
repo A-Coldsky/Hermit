@@ -430,6 +430,9 @@ final class McpCalls {
         }
         String code = envelope.path("error").path("code").asText("INTERNAL");
         String message = envelope.path("error").path("message").asText("");
+        if (outcome.requestOnly()) {
+            return failAsRequest(attempt, code, message);
+        }
         String logged = envelope.path("traceId").asText("");
         String traceId = logged.isBlank() ? attempt.traceId() : logged;
         return toolError(code, message, null, attempt.directory(), traceId);

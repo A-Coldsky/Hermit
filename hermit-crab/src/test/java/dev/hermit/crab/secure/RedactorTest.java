@@ -106,9 +106,17 @@ class RedactorTest {
         body.put("ApiKey", "v");
         body.put("set-cookie", "v");
         body.put("Authorization", "v");
+        body.put("jwt", "v");
+        body.put("ticketId", "v");
+        body.put("sid", "v");
+        body.put("side", "keep-side");
         body.put("note", "keep");
         Map<String, Object> redacted = Redactor.of(Set.of()).redactFields(body);
         assertThat(redacted.get("note")).isEqualTo("keep");
+        assertThat(redacted.get("side")).isEqualTo("keep-side");
+        assertThat(redacted.get("sid")).isEqualTo("***");
+        assertThat(redacted.get("jwt")).isEqualTo("***");
+        assertThat(redacted.get("ticketId")).isEqualTo("***");
         assertThat(redacted.values()).filteredOn(value -> "v".equals(value)).isEmpty();
         assertThat(redacted.get("passwd")).isEqualTo("***");
         assertThat(Redactor.of(Set.of()).redactFields(null)).isNull();

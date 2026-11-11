@@ -32,6 +32,7 @@ import dev.hermit.crab.runtime.CredentialMessages;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.DeclaredSettings;
 import dev.hermit.crab.runtime.ReefBootstrapException;
+import dev.hermit.crab.runtime.RequestOnlyException;
 import dev.hermit.crab.runtime.StatusCodes;
 import dev.hermit.crab.runtime.TrialRejected;
 import dev.hermit.crab.secure.CredentialDecryptException;
@@ -56,6 +57,7 @@ import dev.hermit.crab.sync.ConchCatalog;
 import dev.hermit.crab.sync.CrabRelease;
 import dev.hermit.crab.sync.LocalConchException;
 import dev.hermit.crab.sync.LocalConches;
+import dev.hermit.crab.sync.RuleDisabled;
 import dev.hermit.crab.sync.CredentialDeclarationChange;
 import dev.hermit.crab.sync.ConchOutcome;
 import dev.hermit.crab.sync.OutcomeKind;
@@ -150,6 +152,7 @@ final class ConsoleApi {
             putUpdateFields(catalog.get(doc.conch()), row);
             rows.add(row);
         }
+        appendDisabled(runtime, rows);
         GatewayResponses.writeData(ctx, Map.of("conches", rows));
     }
 
@@ -164,11 +167,16 @@ final class ConsoleApi {
                 return;
             }
             ConchSync.DisabledRule disabled = sync == null ? null : sync.disabledRule(name).orElse(null);
-            if (disabled == null) {
-                throw new IllegalArgumentException("conch not found");
+            if (disabled != null) {
+                GatewayResponses.writeData(ctx, disabledConch(runtime, disabled));
+                return;
             }
-            GatewayResponses.writeData(ctx, disabledConch(runtime, disabled));
-            return;
+            LocalConches.LocalPackage local = localPackage(runtime, name);
+            if (local != null && local.ruleDisabled()) {
+                GatewayResponses.writeData(ctx, localDisabledConch(local));
+                return;
+            }
+            throw new IllegalArgumentException("conch not found");
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", doc.conch());
@@ -258,11 +266,110 @@ final class ConsoleApi {
         body.put("message", disabled.message());
         body.put("ruleDisabled", true);
         body.put("previousVersion", disabled.previousVersion());
+        body.put("previousDisabled", disabled.previousDisabled());
+        body.put("fixHint", disabled.fixHint());
         ConchCatalog.Entry row = catalogByName(runtime).get(disabled.conch());
         body.put("updateAvailable", row != null && row.updateAvailable());
         body.put("latestVersion", row != null && row.latestVersion() != null ? row.latestVersion() : disabled.latestVersion());
         body.put("newRequiredCredentials", row == null ? List.of() : row.newRequiredCredentials());
         return body;
+    }
+
+    private static void appendDisabled(CrabRuntime runtime, ArrayList<Map<String, Object>> rows) {
+        ConchSync sync = runtime.conchSync();
+        if (sync == null) {
+            return;
+        }
+        for (ConchSync.DisabledRule disabled : sync.disabledRules()) {
+            boolean listed = false;
+            for (Map<String, Object> row : rows) {
+                if (disabled.conch().equals(row.get("conch"))) {
+                    listed = true;
+                    break;
+                }
+            }
+            if (!listed) {
+                rows.add(disabledSummary(runtime, disabled));
+            }
+        }
+    }
+
+    private static Map<String, Object> disabledSummary(CrabRuntime runtime, ConchSync.DisabledRule disabled) {
+        List<Account> accounts = runtime.admin().listAccounts(disabled.conch());
+        ConchCatalog.Entry catalog = catalogByName(runtime).get(disabled.conch());
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("conch", disabled.conch());
+        row.put("version", disabled.version());
+        row.put("title", text(disabled.title()));
+        row.put("driver", "http");
+        row.put("capabilityCount", 0);
+        row.put("subscribed", true);
+        row.put("accountCount", accounts.size());
+        row.put("needsConfiguration", false);
+        row.put("loginPaused", false);
+        row.put("source", "REEF");
+        row.put("reefDisabled", false);
+        row.put("reefDisabledAt", null);
+        row.put("updateAvailable", catalog != null && catalog.updateAvailable());
+        row.put("latestVersion", catalog != null && catalog.latestVersion() != null
+                ? catalog.latestVersion() : disabled.latestVersion());
+        row.put("newRequiredCredentials", catalog == null ? List.of() : catalog.newRequiredCredentials());
+        row.put("ruleDisabled", true);
+        row.put("previousVersion", disabled.previousVersion());
+        row.put("previousDisabled", disabled.previousDisabled());
+        row.put("fixHint", disabled.fixHint());
+        return row;
+    }
+
+    private static LocalConches.LocalPackage localPackage(CrabRuntime runtime, String name) {
+        if (runtime.localConches() == null || name == null) {
+            return null;
+        }
+        for (LocalConches.LocalPackage pkg : runtime.localConches().packages()) {
+            if (name.equals(pkg.conch())) {
+                return pkg;
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, Object> localDisabledConch(LocalConches.LocalPackage pkg) {
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conch", pkg.conch());
+        body.put("version", pkg.version());
+        body.put("title", pkg.conch());
+        body.put("description", "");
+        body.put("driver", null);
+        body.put("credentials", List.of());
+        body.put("config", List.of());
+        body.put("capabilities", List.of());
+        body.put("subscribed", false);
+        body.put("needsConfiguration", false);
+        body.put("loginPaused", false);
+        body.put("source", "LOCAL");
+        body.put("reefDisabled", false);
+        body.put("reefDisabledAt", null);
+        body.put("installed", true);
+        body.put("repairRequired", false);
+        body.put("repairReason", null);
+        body.put("message", pkg.reason());
+        body.put("ruleDisabled", true);
+        body.put("previousVersion", null);
+        body.put("previousDisabled", false);
+        body.put("fixHint", RuleDisabled.fixHint(true, false));
+        body.put("updateAvailable", false);
+        body.put("latestVersion", null);
+        body.put("newRequiredCredentials", List.of());
+        return body;
+    }
+
+    private static void putRuleHint(CrabRuntime runtime, String conch, Map<String, Object> row) {
+        String previous = runtime.previousVersion(conch);
+        ConchSync sync = runtime.conchSync();
+        boolean previousDisabled = previous != null && sync != null && sync.versionRejected(conch, previous);
+        row.put("previousVersion", previous);
+        row.put("previousDisabled", previousDisabled);
+        row.put("fixHint", RuleDisabled.fixHint(false, previous != null && !previousDisabled));
     }
 
     private static void accounts(CrabRuntime runtime, Context ctx) {
@@ -277,6 +384,11 @@ final class ConsoleApi {
             row.put("default", account.defaultAccount());
             row.put("needsConfiguration", !missing.isEmpty() || unreadable);
             row.put("missingFields", missing);
+            ArrayList<String> labels = new ArrayList<>();
+            for (String field : missing) {
+                labels.add(CredentialMessages.display(field, doc.credentials()));
+            }
+            row.put("missingLabels", labels);
             row.put("credentialsUnreadable", unreadable);
             row.put("credentialMessage", unreadable ? CredentialDecryptException.MESSAGE : null);
             row.put("loginPaused", paused);
@@ -324,7 +436,12 @@ final class ConsoleApi {
         runtime.admin().requireAccount(doc.conch(), account);
         Map<String, String> fields = stringMap(object(ctx));
         if (fields.isEmpty()) {
-            throw new IllegalArgumentException("credential fields are required");
+            List<String> required = DeclaredSettings.missingCredentials(doc, Set.of());
+            if (required.isEmpty()) {
+                throw new RequestOnlyException(400, ErrorCode.INVALID_INPUT, "没有要保存的凭证字段。");
+            }
+            throw new RequestOnlyException(400, ErrorCode.INVALID_INPUT,
+                    CredentialMessages.missing(account, required, doc.credentials()));
         }
         if (runtime.admin().credentialsUnreadable(doc.conch(), account)) {
             ArrayList<String> pending = new ArrayList<>();
@@ -351,7 +468,8 @@ final class ConsoleApi {
         }
         List<String> missing = DeclaredSettings.missingCredentials(doc, present);
         if (!missing.isEmpty()) {
-            throw new IllegalArgumentException(CredentialMessages.missing(account, missing, doc.credentials()));
+            throw new RequestOnlyException(400, ErrorCode.INVALID_INPUT,
+                    CredentialMessages.missing(account, missing, doc.credentials()));
         }
         runtime.admin().writeCredentials(doc, account, fields, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("updated", true));
@@ -589,13 +707,9 @@ final class ConsoleApi {
             }
             ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
             String message = result.error() == null ? "内部错误" : result.error().message();
-            if (CredentialMessages.untraced(message)) {
-                GatewayResponses.writeRequestError(ctx, StatusCodes.of(code), code, message);
-                return;
-            }
             GatewayResponses.writeError(ctx, StatusCodes.of(code), code, message);
         } catch (TrialRejected ex) {
-            if (CredentialMessages.untraced(ex.getMessage())) {
+            if (ex.requestOnly()) {
                 GatewayResponses.writeRequestError(ctx, ex.status(), ex.code(), ex.getMessage());
                 return;
             }
@@ -619,11 +733,11 @@ final class ConsoleApi {
             return Optional.empty();
         }
         if (!node.isTextual()) {
-            throw new IllegalArgumentException(CrabRuntime.TRIAL_ACCOUNT_INVALID);
+            throw new RequestOnlyException(400, ErrorCode.INVALID_INPUT, CrabRuntime.TRIAL_ACCOUNT_INVALID);
         }
         String name = node.textValue();
         if (name.isBlank()) {
-            throw new IllegalArgumentException(CrabRuntime.TRIAL_ACCOUNT_INVALID);
+            throw new RequestOnlyException(400, ErrorCode.INVALID_INPUT, CrabRuntime.TRIAL_ACCOUNT_INVALID);
         }
         return Optional.of(name);
     }
@@ -768,6 +882,9 @@ final class ConsoleApi {
             row.put("repairReason", entry.repairReason());
             row.put("message", entry.message());
             row.put("ruleDisabled", entry.ruleDisabled());
+            if (entry.ruleDisabled()) {
+                putRuleHint(runtime, entry.conch(), row);
+            }
             rows.add(row);
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
@@ -1033,6 +1150,8 @@ final class ConsoleApi {
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), clientMessage(ex));
             } catch (UpdateException ex) {
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), clientMessage(ex));
+            } catch (RequestOnlyException ex) {
+                GatewayResponses.writeRequestError(ctx, ex.status(), ex.code(), ex.getMessage());
             } catch (IllegalArgumentException | IllegalStateException ex) {
                 String message = ex.getMessage();
                 if ("capability not found".equals(message)
@@ -1041,12 +1160,7 @@ final class ConsoleApi {
                     GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, message);
                     return;
                 }
-                String shown = clientMessage(ex);
-                if (CredentialMessages.untraced(shown)) {
-                    GatewayResponses.writeRequestError(ctx, 400, ErrorCode.INVALID_INPUT, shown);
-                    return;
-                }
-                GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, shown);
+                GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, clientMessage(ex));
             }
         });
     }
@@ -1073,6 +1187,9 @@ final class ConsoleApi {
             row.put("broken", pkg.broken());
             row.put("reason", pkg.reason());
             row.put("ruleDisabled", pkg.ruleDisabled());
+            if (pkg.ruleDisabled()) {
+                row.put("fixHint", RuleDisabled.fixHint(true, false));
+            }
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("conches", rows));

@@ -22,6 +22,7 @@ const catalog = ref<Catalog | null>(null)
 const repairs = ref(new Map<string, string | null>())
 
 function needsRepair(row: CatalogConch): boolean {
+  if (row.ruleDisabled) return false
   return row.repairRequired || repairs.value.has(row.conch)
 }
 
@@ -193,6 +194,7 @@ onMounted(load)
                 已安装 v{{ row.installedVersion }}
               </el-tag>
               <span v-if="row.message" class="damage" data-test="repair-message">{{ row.message }}</span>
+              <span v-if="row.fixHint" class="damage" data-test="fix-hint">{{ row.fixHint }}</span>
               <el-tag
                 v-if="needsRepair(row) && !row.message"
                 type="danger"

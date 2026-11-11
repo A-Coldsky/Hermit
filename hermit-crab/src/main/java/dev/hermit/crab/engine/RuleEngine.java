@@ -455,6 +455,7 @@ public final class RuleEngine implements ConchExecutor {
                         outcome.status(),
                         outcome.extractCount()));
                 if (capture && outcome.capture() != null && draft != null) {
+                    stampCredential(outcome.capture(), credentialBearingRequest(loginPhase, step));
                     draft.add(phase, i, elapsed(started), outcome.capture());
                 }
                 if (!loginPhase && "request".equals(step.type())) {
@@ -472,11 +473,11 @@ public final class RuleEngine implements ConchExecutor {
                     }
                 }
                 logs.add(new StepLog(i, step.type(), elapsed(started), ex.method, ex.path, ex.status, null));
-                recordFailure(phase, i, step, elapsed(started), ex);
+                recordFailure(phase, i, step, elapsed(started), ex, credentialBearingRequest(loginPhase, step));
                 throw new StepFailure(code, summary, i, step.type(), logs);
             } catch (TemplateException ex) {
                 logs.add(new StepLog(i, step.type(), elapsed(started), null, null, null, null));
-                recordFailure(phase, i, step, elapsed(started), null);
+                recordFailure(phase, i, step, elapsed(started), null, credentialBearingRequest(loginPhase, step));
                 ErrorCode code = auth ? ErrorCode.AUTH_FAILED : ErrorCode.RULE_MISMATCH;
                 throw new StepFailure(code, undefinedOr(ex), i, step.type(), logs);
             } catch (DeadlineExceeded ex) {
@@ -620,17 +621,36 @@ public final class RuleEngine implements ConchExecutor {
             return;
         }
         draft.aliveCheck(true, ok);
-        draft.add("alive_check", -1, elapsed(started),
-                DevTraceDraft.requestPiece(spec, method, path, status, responseHeaders, responseBody));
+        Map<String, Object> piece = DevTraceDraft.requestPiece(spec, method, path, status, responseHeaders, responseBody);
+        stampCredential(piece, true);
+        draft.add("alive_check", -1, elapsed(started), piece);
     }
 
-    private static void recordFailure(String phase, int index, Step step, long durationMs, RuleProblem problem) {
+    private boolean credentialBearingRequest(boolean loginPhase, Step step) {
+        return "request".equals(step.type()) && (loginPhase || templates.referencesCredential(step.def()));
+    }
+
+    private static void stampCredential(Map<String, Object> piece, boolean credentialBearing) {
+        if (credentialBearing && piece != null) {
+            piece.put("credentialBearing", Boolean.TRUE);
+        }
+    }
+
+    private static void recordFailure(
+            String phase,
+            int index,
+            Step step,
+            long durationMs,
+            RuleProblem problem,
+            boolean credentialBearing
+    ) {
         DevTraceDraft draft = DevTraceScope.current();
         if (draft == null) {
             return;
         }
         Map<String, Object> pending = DevTraceScope.takePending();
         if (pending != null) {
+            stampCredential(pending, credentialBearing);
             draft.add(phase, index, durationMs, pending);
             return;
         }
@@ -647,6 +667,7 @@ public final class RuleEngine implements ConchExecutor {
                     null);
             default -> Map.of("type", step.type());
         };
+        stampCredential(piece, credentialBearing);
         draft.add(phase, index, durationMs, piece);
     }
 

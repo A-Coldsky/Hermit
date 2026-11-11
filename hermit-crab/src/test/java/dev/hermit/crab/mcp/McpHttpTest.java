@@ -60,6 +60,36 @@ class McpHttpTest {
     Path temp;
 
     @Test
+    void callsRejectedBeforeExecutionUseARequestId() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("request-only"), PASSWORD)) {
+            Reply initialized = server.post(server.apiKey.plaintext(), null, null, initialize("{}"), true);
+            String session = initialized.header("Mcp-Session-Id");
+            Reply noAccount = server.post(server.apiKey.plaintext(), session, null, request(2, "tools/call",
+                    Map.of("name", "legacy_oa__list_todo", "arguments", Map.of("page", 1))));
+            assertThat(noAccount.header("X-Hermit-Trace")).isNull();
+            JsonNode noAccountError = toolError(noAccount);
+            assertThat(noAccountError.has("traceId")).isFalse();
+            assertThat(noAccountError.path("requestId").asText()).isNotBlank();
+            assertThat(noAccountError.path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
+            assertThat(noAccountError.path("message").asText()).contains("还没有账号");
+
+            server.runtime.admin().createAccount("legacy_oa", "alice", Actors.CLI);
+            dev.hermit.common.model.ConchDoc conch = server.runtime.registry().find("legacy_oa").orElseThrow();
+            server.runtime.admin().putConfig(conch, "base_url", server.fixture.baseUrl(), Actors.CLI);
+            Reply missing = server.post(server.apiKey.plaintext(), session, "alice", request(3, "tools/call",
+                    Map.of("name", "legacy_oa__list_todo", "arguments", Map.of("page", 1, "account", "alice"))));
+            assertThat(missing.header("X-Hermit-Trace")).isNull();
+            JsonNode missingError = toolError(missing);
+            assertThat(missingError.has("traceId")).isFalse();
+            String message = missingError.path("message").asText();
+            assertThat(message).contains("用户名（username）").contains("密码（password）");
+            assertThat(message.indexOf("用户名（username）")).isLessThan(message.indexOf("密码（password）"));
+            assertThat(missingError.path("requestId").asText()).isNotBlank();
+            assertThat(missingError.path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
+        }
+    }
+
+    @Test
     void directModeCallsResourcesAndHidesSecrets() throws Exception {
         LogBag logs = new LogBag();
         Logger.getLogger("").addHandler(logs);

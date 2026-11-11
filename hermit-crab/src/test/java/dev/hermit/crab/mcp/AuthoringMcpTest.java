@@ -612,12 +612,16 @@ class AuthoringMcpTest {
             HttpResponse<String> noAccount = server.postRaw(server.key.plaintext(), session, """
                     {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"conch_trial_run","arguments":{"conch":"needs_password","action":"show"}}}
                     """, Map.of());
-            String rejectedId = noAccount.headers().firstValue("X-Hermit-Trace").orElseThrow();
-            assertThat(noAccount.body()).doesNotContain("\"traceId\"").doesNotContain(rejectedId);
-            assertThat(toolMessage(ApiJson.tree(noAccount.body()))).contains("还没有账号").contains("needs_password");
+            assertThat(noAccount.headers().firstValue("X-Hermit-Trace")).isEmpty();
+            JsonNode noAccountBody = ApiJson.tree(noAccount.body());
+            assertThat(noAccountBody.toString()).doesNotContain("\"traceId\"");
+            assertThat(toolMessage(noAccountBody)).contains("还没有账号").contains("needs_password");
+            assertThat(noAccountBody.toString()).contains("不可查追踪");
+            String requestId = toolError(noAccountBody).path("requestId").asText();
+            assertThat(requestId).isNotBlank();
             JsonNode rejectedTrace = server.rpc(session, 8, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", rejectedId)));
-            assertThat(toolMessage(rejectedTrace)).contains("试跑被拒").doesNotContain("没有这个工具");
+                    "name", "debug_trace", "arguments", Map.of("traceId", requestId)));
+            assertThat(toolMessage(rejectedTrace)).doesNotContain("试跑被拒").doesNotContain("没有这个工具");
 
             server.runtime.admin().createAccount("needs_password", "main", Actors.CONSOLE);
             HttpResponse<String> rejected = server.postRaw(server.key.plaintext(), session, """

@@ -4,6 +4,7 @@ import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchValidator;
+import dev.hermit.common.validate.IssueLines;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
 import dev.hermit.reef.web.ReefErrorCode;
@@ -57,7 +58,13 @@ public class ConchUploadService {
         }
         ValidationResult result = ConchValidator.validate(doc, ConchValidator.Context.of(null));
         if (!result.errors().isEmpty()) {
-            throw ConchRequestException.invalid(new ValidationFailure(result.errors(), result.warnings()));
+            throw new ConchRequestException(
+                    422,
+                    ReefErrorCode.INVALID_INPUT,
+                    "规则包校验失败",
+                    new ValidationFailure(
+                            IssueLines.locate(yaml, result.errors()),
+                            IssueLines.locate(yaml, result.warnings())));
         }
         return new PreparedUpload(yamlBytes, doc, result.warnings());
     }

@@ -158,6 +158,29 @@ class DevTraceDraftTest {
         assertThat(ApiJson.tree(merged).path("method").asText()).isEqualTo("tools/call");
     }
 
+    @Test
+    void credentialBearingBodyHidesATokenWhenExtractWouldFail() {
+        String token = "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0";
+        DevTraceDraft draft = new DevTraceDraft(java.time.Instant.parse("2026-11-11T00:00:00Z"));
+        Map<String, Object> login = DevTraceDraft.requestPiece(
+                Map.of("method", "POST", "path", "/login"),
+                "POST", "/login", 200, Map.of(),
+                "{\"session\":\"abc\",\"note\":\"" + token + "\",\"side\":\"left\"}");
+        login.put("credentialBearing", Boolean.TRUE);
+        draft.add("login", 0, 1, login);
+        draft.add("action", 1, 1, DevTraceDraft.requestPiece(
+                Map.of(), "GET", "/items", 200, Map.of(),
+                "{\"side\":\"left\",\"title\":\"hello-business\"}"));
+        Map<String, Object> page = DevTraceDraft.requestPiece(
+                Map.of(), "GET", "/page", 200, Map.of(), "<html>" + token + "</html>");
+        page.put("credentialBearing", Boolean.TRUE);
+        draft.add("alive_check", -1, 1, page);
+        String rendered = draft.render(Redactor.of(Set.of()), List.of(), false);
+        assertThat(rendered).doesNotContain(token).doesNotContain("abc");
+        assertThat(rendered).contains("left").contains("hello-business");
+        assertThat(rendered).contains(DevTraceDraft.HIDDEN_CREDENTIAL_BODY);
+    }
+
     private static Set<String> headerNames(JsonNode headers) {
         java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
         headers.fieldNames().forEachRemaining(names::add);

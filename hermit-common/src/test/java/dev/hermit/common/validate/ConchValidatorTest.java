@@ -719,6 +719,13 @@ class ConchValidatorTest {
         assertThat(loginOnly.errors()).extracting(ValidationIssue::code).containsExactly(
                 ValidationCodes.UNDECLARED_VARIABLE,
                 ValidationCodes.UNDECLARED_CREDENTIAL);
+        assertThat(loginOnly.errors()).extracting(ValidationIssue::message)
+                .noneMatch(message -> message.toString().contains("default"));
+        assertThat(loginOnly.warnings()).extracting(ValidationIssue::message).contains(
+                "能力引用登录步骤变量，运行时为空串；令牌请声明成凭证");
+        assertThat(loginOnly.warnings()).extracting(ValidationIssue::code)
+                .filteredOn(ValidationCodes.LOGIN_VARIABLE_EMPTY::equals)
+                .hasSize(1);
     }
 
     private static String referencing(String steps) {

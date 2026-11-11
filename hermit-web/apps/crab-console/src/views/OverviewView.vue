@@ -45,6 +45,7 @@ const authoringPrompt = computed(() => {
     `接入地址是 ${endpoint}。请求头用 Authorization: Bearer <API Key> 或 X-Hermit-Key。Key 由 Crab 本机签发。不要把 Key 明文写进对话，也不要向我索要。`,
     '',
     '先读资源 hermit://authoring/guide。Crab 不接收、不存储、不解析 HAR。',
+    '现在登录步骤取到的令牌带不进能力，请把令牌声明成凭证。',
     '',
     '推荐顺序：',
     '1. 按指南把 HAR 写成 YAML。',

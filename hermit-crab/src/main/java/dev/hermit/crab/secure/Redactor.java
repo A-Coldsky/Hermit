@@ -34,7 +34,9 @@ public final class Redactor {
             "cookie",
             "authorization",
             "set-cookie",
-            "session");
+            "session",
+            "jwt",
+            "ticket");
     private static final Set<String> SENSITIVE_HEADERS = Set.of(
             "cookie",
             "set-cookie",
@@ -141,6 +143,9 @@ public final class Redactor {
             return false;
         }
         String lower = key.toLowerCase(Locale.ROOT);
+        if ("sid".equals(lower)) {
+            return true;
+        }
         for (String part : SENSITIVE_KEY_PARTS) {
             if (lower.contains(part)) {
                 return true;

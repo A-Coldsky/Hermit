@@ -215,21 +215,21 @@ public final class Invoker {
             resolved = accounts.resolve(origin, conch, account == null ? Optional.empty() : account);
         } catch (AccountNotFoundException ex) {
             if (ex.account() == null && accounts.list(origin, conch).isEmpty()) {
-                return done(traceId, ErrorCode.NOT_CONFIGURED, CredentialMessages.NO_ACCOUNT, null);
+                return requestOnly(traceId, ErrorCode.NOT_CONFIGURED, CredentialMessages.NO_ACCOUNT);
             }
-            return done(traceId, ErrorCode.ACCOUNT_NOT_FOUND, ACCOUNT_NOT_FOUND_MESSAGE, null);
+            return requestOnly(traceId, ErrorCode.ACCOUNT_NOT_FOUND, ACCOUNT_NOT_FOUND_MESSAGE);
         } catch (IllegalArgumentException ex) {
-            return done(traceId, ErrorCode.INVALID_INPUT, INVALID_ACCOUNT_NAME, null);
+            return requestOnly(traceId, ErrorCode.INVALID_INPUT, INVALID_ACCOUNT_NAME);
         }
         Map<String, String> stored = config.all(origin, conch);
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
         if (!missingConfig.isEmpty()) {
-            return done(traceId, ErrorCode.NOT_CONFIGURED, "missing config: " + String.join(", ", missingConfig), null);
+            return requestOnly(traceId, ErrorCode.NOT_CONFIGURED, "missing config: " + String.join(", ", missingConfig));
         }
         List<String> missingCredentials = DeclaredSettings.missingCredentials(
                 doc, vault.fieldNames(origin, conch, resolved.account()));
         if (!missingCredentials.isEmpty()) {
-            return rejectedBeforeExecution(ErrorCode.NOT_CONFIGURED,
+            return requestOnly(traceId, ErrorCode.NOT_CONFIGURED,
                     CredentialMessages.missing(resolved.account(), missingCredentials, doc.credentials()));
         }
         Map<String, String> merged = DeclaredSettings.mergedConfig(doc, stored);
@@ -237,7 +237,7 @@ public final class Invoker {
         try {
             secrets = vault.decryptForExecution(origin, conch, resolved.account());
         } catch (CredentialDecryptException ex) {
-            return done(traceId, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE, null);
+            return requestOnly(traceId, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE);
         }
         Map<String, Object> rawInput = input == null ? Map.of() : input;
         CallChannel recorded = channel == null ? CallChannel.HTTP : channel;
@@ -449,11 +449,11 @@ public final class Invoker {
         return values;
     }
 
-    /** 执行前就拒绝时不留下追踪，响应体和 {@code X-Hermit-Trace} 都不返回编号。 */
-    private static InvokeOutcome rejectedBeforeExecution(ErrorCode code, String message) {
+    /** Rejected before execution. The id is a request number, not a stored trace, and the header is omitted. */
+    private static InvokeOutcome requestOnly(String requestId, ErrorCode code, String message) {
         int status = StatusCodes.of(code);
-        String json = ApiEnvelope.json(null, code, message, "", false);
-        return new InvokeOutcome(status, ApiJson.bytes(json), null, false, null);
+        String json = ApiEnvelope.requestJson(null, code, message, requestId == null ? "" : requestId);
+        return new InvokeOutcome(status, ApiJson.bytes(json), null, false, null, true);
     }
 
     private static InvokeOutcome done(String traceId, ErrorCode code, String message, Object data) {

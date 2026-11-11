@@ -172,7 +172,7 @@ final class AuthoringCalls {
             if (CredentialMessages.NO_ACCOUNT.equals(message) || "no account configured".equals(message)) {
                 message = "还没有账号。请到控制台为本地规则包 " + conch + " 新建账号并填写凭证。不要把口令、Cookie 或令牌发给 AI。";
             }
-            if (CredentialMessages.untraced(message)) {
+            if (ex.requestOnly()) {
                 return McpCalls.failAsRequest(attempt, ex.code().name(), message);
             }
             runtime.noteRejectedTrial(attempt.traceId());

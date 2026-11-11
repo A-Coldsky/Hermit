@@ -107,8 +107,7 @@ async function save() {
     <el-form v-loading="loading" label-position="top" @submit.prevent="save">
       <el-form-item v-for="field in fields" :key="field.name" :required="field.required">
         <template #label>
-          <span>{{ field.label || field.name }}</span>
-          <span class="mono hm-muted name">{{ field.name }}</span>
+          <span>{{ shownField(field) }}</span>
           <el-tag v-if="unreadable" size="small" type="danger" effect="plain">需重填</el-tag>
           <el-tag v-else-if="stored.includes(field.name) && !cleared[field.name]" size="small" type="success" effect="plain">已保存</el-tag>
           <el-tag v-else-if="cleared[field.name]" size="small" type="danger" effect="plain">将清除</el-tag>

@@ -22,6 +22,8 @@ public final class SyncReasons {
      * until a manual update reloads it.
      */
     public static final String NOT_LOADED = "NOT_LOADED";
+    /** The zip verifies, but the current validator will not load it. Not a file or pointer repair. */
+    public static final String RULE_DISABLED = "RULE_DISABLED";
     /** Manual update reloaded a verified installed zip and did not switch versions. */
     public static final String RESTORED = "RESTORED";
     public static final String DISABLED = "DISABLED";

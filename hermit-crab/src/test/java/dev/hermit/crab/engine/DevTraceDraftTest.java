@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.secure.Redactor;
+import dev.hermit.crab.testing.SecretChecks;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -179,6 +180,154 @@ class DevTraceDraftTest {
         assertThat(rendered).doesNotContain(token).doesNotContain("abc");
         assertThat(rendered).contains("left").contains("hello-business");
         assertThat(rendered).contains(DevTraceDraft.HIDDEN_CREDENTIAL_BODY);
+    }
+
+    @Test
+    void base64UrlTokenIsMaskedFromItsFirstCharacterThroughItsLast() {
+        String leak4 = shaped(43, 3, '-');
+        String leak7 = shaped(43, 6, '_');
+        String leak11 = shaped(43, 10, '-');
+        String suffix32 = shaped(36, 3, '_');
+        String leak20 = shaped(64, 19, '-');
+        String leak31 = shaped(86, 30, '_');
+        String leading = shaped(33, 0, '-');
+        String minimum = shaped(32, 10, '_');
+        String split = splitToken();
+        String both = bothSides();
+        String hexTail = "Qq9Z-" + "ab".repeat(16);
+        String embedded = "id=" + leak7 + "&ok=1";
+        String pair = leak4 + "," + leak11;
+        String beside = leak20 + " left";
+        String standard = "G".repeat(3) + "+" + "G".repeat(20) + "/" + "G".repeat(20) + "==";
+        String jwt = "eyJ" + "G".repeat(30) + ".Zz9k." + "G".repeat(30);
+        String keep = "below-threshold-dashed-valueyzz";
+        String business = "M".repeat(20) + "_" + "M".repeat(22);
+        String known = "k9-x_2";
+        List<String> hidden = List.of(
+                leak4, leak7, leak11, suffix32, leak20, leak31, leading, minimum, split, both, hexTail,
+                standard, jwt);
+
+        LinkedHashMap<String, Object> credential = new LinkedHashMap<>();
+        credential.put("leak4", leak4);
+        credential.put("leak7", leak7);
+        credential.put("leak11", leak11);
+        credential.put("suffix32", suffix32);
+        credential.put("leak20", leak20);
+        credential.put("leak31", leak31);
+        credential.put("leading", leading);
+        credential.put("minimum", minimum);
+        credential.put("split", split);
+        credential.put("both", both);
+        credential.put("hexTail", hexTail);
+        credential.put("embedded", embedded);
+        credential.put("pair", pair);
+        credential.put("beside", beside);
+        credential.put("standard", standard);
+        credential.put("jwt", jwt);
+        credential.put("keep", keep);
+        credential.put("side", "left");
+        credential.put("title", "hello-business");
+        credential.put("known", known);
+        credential.put("tiny", "a-b");
+        credential.put("nested", Map.of("label", leak4));
+        credential.put("items", List.of("left", leak11));
+
+        DevTraceDraft draft = new DevTraceDraft(java.time.Instant.parse("2026-11-11T00:00:00Z"));
+        Map<String, Object> login = DevTraceDraft.requestPiece(
+                Map.of("method", "POST", "path", "/login"),
+                "POST", "/login", 200, Map.of(), ApiJson.write(credential));
+        login.put("credentialBearing", Boolean.TRUE);
+        draft.add("login", 0, 1, login);
+        draft.add("action", 1, 1, DevTraceDraft.requestPiece(
+                Map.of(), "GET", "/biz", 200, Map.of(),
+                ApiJson.write(Map.of("title", "hello-business", "ref", business, "known", known, "tiny", "a-b"))));
+        String rendered = draft.render(Redactor.of(Set.of(known)), List.of(), false);
+
+        JsonNode fields = ApiJson.tree(ApiJson.tree(rendered).path("steps").get(0).path("responseBody").asText());
+        for (String name : List.of(
+                "leak4", "leak7", "leak11", "suffix32", "leak20", "leak31", "leading", "minimum",
+                "split", "both", "hexTail", "standard", "jwt")) {
+            assertText(fields.path(name).asText(), "***");
+        }
+        assertText(fields.path("embedded").asText(), "id=***&ok=1");
+        assertText(fields.path("pair").asText(), "***,***");
+        assertText(fields.path("beside").asText(), "*** left");
+        assertText(fields.path("nested").path("label").asText(), "***");
+        assertText(fields.path("items").get(0).asText(), "left");
+        assertText(fields.path("items").get(1).asText(), "***");
+        assertText(fields.path("keep").asText(), keep);
+        assertText(fields.path("side").asText(), "left");
+        assertText(fields.path("title").asText(), "hello-business");
+        assertText(fields.path("known").asText(), "***");
+        assertText(fields.path("tiny").asText(), "a-b");
+
+        for (String token : hidden) {
+            assertNoPlainSegment(rendered, token);
+        }
+        SecretChecks.absent(rendered, "Zz9k");
+        SecretChecks.absent(rendered, known);
+
+        JsonNode plain = ApiJson.tree(ApiJson.tree(rendered).path("steps").get(1).path("responseBody").asText());
+        assertText(plain.path("ref").asText(), business);
+        assertText(plain.path("title").asText(), "hello-business");
+        assertText(plain.path("known").asText(), "***");
+        assertText(plain.path("tiny").asText(), "a-b");
+        assertHas(rendered, business);
+        assertHas(rendered, "hello-business");
+        assertHas(rendered, "a-b");
+    }
+
+    private static String shaped(int length, int separatorAt, char separator) {
+        StringBuilder raw = new StringBuilder(length);
+        String alphabet = "Qq9Z";
+        for (int i = 0; i < length; i++) {
+            raw.append(alphabet.charAt(i % alphabet.length()));
+        }
+        raw.setCharAt(separatorAt, separator);
+        return raw.toString();
+    }
+
+    private static String splitToken() {
+        StringBuilder raw = new StringBuilder(shaped(60, 4, '-'));
+        raw.setCharAt(9, '_');
+        raw.setCharAt(14, '-');
+        return raw.toString();
+    }
+
+    private static String bothSides() {
+        return shaped(70, 34, '-');
+    }
+
+    private static void assertNoPlainSegment(String rendered, String token) {
+        SecretChecks.absent(rendered, token);
+        int start = 0;
+        for (int i = 0; i <= token.length(); i++) {
+            boolean boundary = i == token.length() || token.charAt(i) == '-' || token.charAt(i) == '_';
+            if (!boundary) {
+                continue;
+            }
+            if (i - start >= 4) {
+                SecretChecks.absent(rendered, token.substring(start, i));
+            }
+            start = i + 1;
+        }
+        int last = Math.max(token.lastIndexOf('-'), token.lastIndexOf('_'));
+        if (last >= 3) {
+            SecretChecks.absent(rendered, token.substring(0, last + 1));
+        }
+    }
+
+    private static void assertText(String actual, String expected) {
+        if (!expected.equals(actual)) {
+            throw new AssertionError("text differed; actual length " + (actual == null ? -1 : actual.length())
+                    + ", expected length " + expected.length());
+        }
+    }
+
+    private static void assertHas(String haystack, String plain) {
+        if (haystack == null || !haystack.contains(plain)) {
+            throw new AssertionError("missing plain text of length " + plain.length());
+        }
     }
 
     private static Set<String> headerNames(JsonNode headers) {

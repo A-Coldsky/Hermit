@@ -84,9 +84,14 @@ class DisabledConchInvokeTest {
             InvokeOutcome absent = invoker.invoke(
                     principal, CONCH, "no_such", Map.of(), Optional.empty(), Optional.empty(), "missing-action");
             assertThat(absent.status()).isEqualTo(404);
+            assertThat(absent.requestOnly()).isTrue();
+            assertThat(absent.traceId()).isNull();
             assertThat(new String(absent.body(), StandardCharsets.UTF_8))
                     .contains("NOT_FOUND")
-                    .contains("not found")
+                    .contains("不存在")
+                    .contains("请求编号，不可查追踪")
+                    .doesNotContain("\"traceId\"")
+                    .doesNotContain("not found")
                     .doesNotContain("CAPABILITY_DISABLED");
             capabilityOff[0] = false;
 

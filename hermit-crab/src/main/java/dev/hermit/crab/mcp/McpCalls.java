@@ -19,6 +19,7 @@ import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.InvokeOutcome;
+import dev.hermit.crab.runtime.Invoker;
 import dev.hermit.crab.upstream.McpCallPayload;
 import dev.hermit.crab.store.ApiKeyPrincipal;
 import dev.hermit.crab.store.CallChannel;
@@ -132,7 +133,7 @@ final class McpCalls {
             case McpCatalog.SEARCH -> search(principal, arguments, attempt);
             case McpCatalog.DESCRIBE -> describe(principal, arguments, attempt);
             case McpCatalog.CALL -> callCapability(principal, session, headerAccount, arguments, attempt);
-            default -> fail(attempt, "NOT_FOUND", "not found");
+            default -> failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL);
         };
     }
 
@@ -158,7 +159,7 @@ final class McpCalls {
         }
         return catalog.describe(principal, text)
                 .map(McpCalls::ok)
-                .orElseGet(() -> fail(attempt, "NOT_FOUND", "not found"));
+                .orElseGet(() -> failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL));
     }
 
     private McpSchema.CallToolResult callCapability(
@@ -186,7 +187,7 @@ final class McpCalls {
         }
         Optional<String> account = account(headerAccount, arguments.get("account"));
         if (account == null) {
-            return fail(attempt, "INVALID_INPUT", "invalid account name", "account");
+            return failAsRequest(attempt, "INVALID_INPUT", Invoker.INVALID_ACCOUNT_NAME, "account");
         }
         if (found.get().action().effectiveConfirm()) {
             McpSchema.CallToolResult confirmed = confirm(session, found.get().action(), input, account, attempt);
@@ -211,7 +212,7 @@ final class McpCalls {
         Object rawAccount = input.remove(selector);
         Optional<String> account = account(headerAccount, rawAccount);
         if (account == null) {
-            return fail(attempt, "INVALID_INPUT", "invalid account name", selector);
+            return failAsRequest(attempt, "INVALID_INPUT", Invoker.INVALID_ACCOUNT_NAME, selector);
         }
         if (ref.action().effectiveConfirm()) {
             McpSchema.CallToolResult confirmed = confirm(session, ref.action(), input, account, attempt);
@@ -274,10 +275,10 @@ final class McpCalls {
         if (disabled != null && runtime.registry().find(disabled).isEmpty()) {
             String live = longestConchPrefix(toolName, runtime.registry().snapshot().keySet());
             if (live == null || live.length() <= disabled.length()) {
-                return fail(attempt, "CONCH_DISABLED", DisabledConches.CALL_MESSAGE);
+                return failAsRequest(attempt, "CONCH_DISABLED", DisabledConches.CALL_MESSAGE);
             }
         }
-        return fail(attempt, "NOT_FOUND", "not found");
+        return failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL);
     }
 
     private McpSchema.CallToolResult readTrace(

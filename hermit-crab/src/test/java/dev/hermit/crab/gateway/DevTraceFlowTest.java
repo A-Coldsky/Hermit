@@ -98,6 +98,9 @@ class DevTraceFlowTest {
             assertThat(debugOff.status).isEqualTo(409);
             assertThat(debugOff.json.path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
             assertThat(debugOff.json.path("error").path("message").asText()).isEqualTo("先打开开发者模式。");
+            assertThat(debugOff.json.has("traceId")).isFalse();
+            assertThat(debugOff.json.path("requestId").asText()).isNotBlank();
+            assertThat(debugOff.json.path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
             assertThat(runtime.devTraces().count()).isZero();
 
             runtime.debug().setEnabled(true, Actors.CONSOLE);
@@ -397,9 +400,13 @@ class DevTraceFlowTest {
                     .header("Authorization", "Bearer " + key.plaintext())
                     .GET()
                     .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            assertThat(other.headers().firstValue("X-Hermit-Trace")).isPresent();
-            assertThat(ApiJson.tree(other.body()).path("traceId").asText())
-                    .isEqualTo(other.headers().firstValue("X-Hermit-Trace").orElseThrow());
+            assertThat(other.headers().firstValue("X-Hermit-Trace")).isEmpty();
+            JsonNode missingConch = ApiJson.tree(other.body());
+            assertThat(missingConch.has("traceId")).isFalse();
+            assertThat(missingConch.path("error").path("message").asText()).isEqualTo("不存在");
+            assertThat(missingConch.path("requestId").asText()).isNotBlank();
+            assertThat(missingConch.path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
+            assertThat(runtime.callLogs().findByTraceId(missingConch.path("requestId").asText())).isEmpty();
         } finally {
             server.close();
             runtime.close();

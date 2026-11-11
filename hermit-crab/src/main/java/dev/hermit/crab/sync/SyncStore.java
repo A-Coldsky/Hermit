@@ -250,6 +250,58 @@ final class SyncStore {
             if (notices.remove(conch) != null) {
                 writeRepairNotices(connection, notices);
             }
+            Map<String, String> rejected = readRejected(connection);
+            if (rejected.remove(conch) != null) {
+                if (rejected.isEmpty()) {
+                    try (PreparedStatement drop = connection.prepareStatement(
+                            "DELETE FROM sync_state WHERE name = 'rejected_versions'")) {
+                        drop.executeUpdate();
+                    }
+                } else {
+                    upsertState(connection, "rejected_versions", RepairNotices.encode(rejected));
+                }
+            }
+            return null;
+        });
+    }
+
+    /** Catalog version that failed validation. A later successful install clears it. */
+    Optional<String> rejectedVersion(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return Optional.empty();
+        }
+        return Db.transaction(dataSource, connection -> Optional.ofNullable(readRejected(connection).get(conch)));
+    }
+
+    void rememberRejected(String conch, String version) {
+        if (conch == null || conch.isBlank() || version == null || version.isBlank()) {
+            return;
+        }
+        Db.transaction(dataSource, connection -> {
+            Map<String, String> rejected = readRejected(connection);
+            rejected.put(conch, version);
+            upsertState(connection, "rejected_versions", RepairNotices.encode(rejected));
+            return null;
+        });
+    }
+
+    void clearRejected(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return;
+        }
+        Db.transaction(dataSource, connection -> {
+            Map<String, String> rejected = readRejected(connection);
+            if (rejected.remove(conch) == null) {
+                return null;
+            }
+            if (rejected.isEmpty()) {
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "DELETE FROM sync_state WHERE name = 'rejected_versions'")) {
+                    statement.executeUpdate();
+                }
+                return null;
+            }
+            upsertState(connection, "rejected_versions", RepairNotices.encode(rejected));
             return null;
         });
     }
@@ -370,6 +422,11 @@ final class SyncStore {
         } catch (IllegalArgumentException ex) {
             return right.compareTo(left);
         }
+    }
+
+    private static Map<String, String> readRejected(Connection connection) throws SQLException {
+        return RepairNotices.decode(optionalString(connection,
+                "SELECT \"value\" FROM sync_state WHERE name = 'rejected_versions'").orElse(null));
     }
 
     private static Map<String, String> readRepairNotices(Connection connection) throws SQLException {

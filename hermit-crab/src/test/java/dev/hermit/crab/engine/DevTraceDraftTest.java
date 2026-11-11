@@ -181,6 +181,22 @@ class DevTraceDraftTest {
         assertThat(rendered).contains(DevTraceDraft.HIDDEN_CREDENTIAL_BODY);
     }
 
+    @Test
+    void aBase64UrlTokenWithHyphensIsMaskedAsOneSpan() {
+        String token = "abcdefg-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij";
+        String underscored = "abcd_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop";
+        DevTraceDraft draft = new DevTraceDraft(java.time.Instant.parse("2026-11-11T00:00:00Z"));
+        Map<String, Object> login = DevTraceDraft.requestPiece(
+                Map.of("method", "POST", "path", "/login"),
+                "POST", "/login", 200, Map.of(),
+                "{\"note\":\"" + token + "\",\"other\":\"" + underscored + "\",\"title\":\"hello-business\"}");
+        login.put("credentialBearing", Boolean.TRUE);
+        draft.add("login", 0, 1, login);
+        String rendered = draft.render(Redactor.of(Set.of()), List.of(), false);
+        assertThat(rendered).doesNotContain(token).doesNotContain("abcdefg").doesNotContain(underscored).doesNotContain("abcd_");
+        assertThat(rendered).contains("hello-business");
+    }
+
     private static Set<String> headerNames(JsonNode headers) {
         java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
         headers.fieldNames().forEachRemaining(names::add);

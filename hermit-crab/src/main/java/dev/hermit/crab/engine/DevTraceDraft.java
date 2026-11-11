@@ -403,8 +403,10 @@ public final class DevTraceDraft {
         }
         String masked = JWT.matcher(text).replaceAll("***");
         masked = HEX_RUN.matcher(masked).replaceAll("***");
-        masked = BASE64_RUN.matcher(masked).replaceAll("***");
-        return BASE64URL_RUN.matcher(masked).replaceAll("***");
+        // base64url 把 `-` `_` 算进同一段。先整段遮掉，再处理含 `+` `/` 的普通 base64，
+        // 避免只替换最后一个分隔符后面的长串、留下短前缀。
+        masked = BASE64URL_RUN.matcher(masked).replaceAll("***");
+        return BASE64_RUN.matcher(masked).replaceAll("***");
     }
 
     private static void limitSteps(Map<String, Object> document) {

@@ -85,7 +85,11 @@ class ConsoleHttpTest {
                     "GET", "/api/legacy_oa/no_such_action", server.apiKey.plaintext(), "alice", null, null);
             assertThat(missingAction.status()).isEqualTo(404);
             assertThat(missingAction.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
-            assertThat(missingAction.json().path("error").path("message").asText()).isEqualTo("not found");
+            assertThat(missingAction.json().path("error").path("message").asText()).isEqualTo("不存在");
+            assertThat(missingAction.json().has("traceId")).isFalse();
+            assertThat(missingAction.header("X-Hermit-Trace")).isNull();
+            assertThat(missingAction.json().path("requestId").asText()).isNotBlank();
+            assertThat(missingAction.json().path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
 
             TestServer.Reply debug = server.console("POST", "/console/api/debug", "{\"enabled\":true}", true);
             assertThat(debug.status()).isEqualTo(200);

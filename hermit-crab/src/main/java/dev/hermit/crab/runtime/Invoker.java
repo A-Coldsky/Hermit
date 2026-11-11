@@ -54,7 +54,9 @@ public final class Invoker {
      * Selector is not {@code [A-Za-z0-9_-]{1,64}}. The HTTP gateway uses this exact sentence to
      * tell a header/query conflict from an earlier permission or capability rejection.
      */
-    public static final String INVALID_ACCOUNT_NAME = "invalid account name";
+    public static final String INVALID_ACCOUNT_NAME = "账号名不合法。";
+    /** 能力或规则包不存在。与控制台错误码「不存在」同一句，不再返回英文 not found。 */
+    public static final String NOT_FOUND_MESSAGE = "不存在";
     /** HTTP 破坏性调用缺这个头时返回 409，并且不查、不写幂等缓存。 */
     public static final String CONFIRM_REQUIRED = "该操作需要确认。请带上请求头 X-Hermit-Confirm: true 后重试。";
     /** Power of two. Distinct keys share a stripe; stripes are not removed after a request. */
@@ -182,21 +184,21 @@ public final class Invoker {
             boolean httpConfirmed
     ) {
         if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
-            return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
+            return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
         }
         // 墓碑只表示 Reef 不再分发。包仍在注册表里时，调用继续走后面的权限和能力检查。
         // 注册表里已经没有这份包（旧数据清掉了 current）才返回 CONCH_DISABLED。
         // 已经带着授权快照进入引擎的请求仍执行那份快照（审计 A01）。
         ConchDoc doc = registry.find(conch).orElse(null);
         if (doc == null && disabledConches.contains(conch)) {
-            return done(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE, null);
+            return requestOnly(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE);
         }
         Action capability = doc == null ? null : doc.actions().get(action);
         if (doc == null || capability == null) {
-            return done(traceId, ErrorCode.NOT_FOUND, "not found", null);
+            return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
         }
         if (disabled.disabled(conch, action)) {
-            return done(traceId, ErrorCode.CAPABILITY_DISABLED, CAPABILITY_DISABLED_MESSAGE, null);
+            return requestOnly(traceId, ErrorCode.CAPABILITY_DISABLED, CAPABILITY_DISABLED_MESSAGE);
         }
         Origin origin = registry.origin(conch);
         if (origin == null) {
@@ -205,10 +207,10 @@ public final class Invoker {
         // grantsAllOfficial（all: true，或旧的空 conches 且空 actions）包含本地包。
         // 写了 conches 或 actions 的 Key 仍要求本地包出现在 conches 里。只读由后面的 permits 限制。
         if (origin == Origin.LOCAL && !principal.scope().allowsLocal(conch)) {
-            return done(traceId, ErrorCode.FORBIDDEN, "forbidden", null);
+            return requestOnly(traceId, ErrorCode.FORBIDDEN, "forbidden");
         }
         if (!principal.permits(conch, action, CapabilityHttp.readOnly(capability))) {
-            return done(traceId, ErrorCode.FORBIDDEN, "forbidden", null);
+            return requestOnly(traceId, ErrorCode.FORBIDDEN, "forbidden");
         }
         Account resolved;
         try {
@@ -224,7 +226,7 @@ public final class Invoker {
         Map<String, String> stored = config.all(origin, conch);
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
         if (!missingConfig.isEmpty()) {
-            return requestOnly(traceId, ErrorCode.NOT_CONFIGURED, "missing config: " + String.join(", ", missingConfig));
+            return requestOnly(traceId, ErrorCode.NOT_CONFIGURED, missingConfig(missingConfig));
         }
         List<String> missingCredentials = DeclaredSettings.missingCredentials(
                 doc, vault.fieldNames(origin, conch, resolved.account()));
@@ -242,7 +244,7 @@ public final class Invoker {
         Map<String, Object> rawInput = input == null ? Map.of() : input;
         CallChannel recorded = channel == null ? CallChannel.HTTP : channel;
         if (recorded == CallChannel.HTTP && capability.effectiveConfirm() && !httpConfirmed) {
-            return done(traceId, ErrorCode.CONFLICT, CONFIRM_REQUIRED, null, null);
+            return requestOnly(traceId, ErrorCode.CONFLICT, CONFIRM_REQUIRED);
         }
         if (CapabilityHttp.method(capability) == HttpMethod.POST && idempotencyKey != null && idempotencyKey.isPresent()) {
             return replayOrExecute(
@@ -273,7 +275,7 @@ public final class Invoker {
                     origin, doc.conch(), account.account(), action, key);
             if (stored.isPresent()) {
                 if (!sameBody(stored.get().bodySha256(), bodySha256)) {
-                    return done(traceId, ErrorCode.IDEMPOTENCY_CONFLICT, IDEMPOTENCY_CONFLICT, null);
+                    return requestOnly(traceId, ErrorCode.IDEMPOTENCY_CONFLICT, IDEMPOTENCY_CONFLICT);
                 }
                 return replay(stored.get().envelope());
             }
@@ -447,6 +449,14 @@ public final class Invoker {
             }
         }
         return values;
+    }
+
+    /** 与详情页「缺少必填配置：」同一句，字段名用声明顺序，逗号后有空格。 */
+    public static String missingConfig(java.util.List<String> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return "缺少必填配置";
+        }
+        return "缺少必填配置：" + String.join(", ", fields);
     }
 
     /** Rejected before execution. The id is a request number, not a stored trace, and the header is omitted. */

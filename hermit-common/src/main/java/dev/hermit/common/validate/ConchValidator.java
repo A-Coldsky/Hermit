@@ -175,20 +175,21 @@ public final class ConchValidator {
         if (blank(action.description())) {
             errors.add(issue(ValidationCodes.MISSING_DESCRIPTION, path + ".description", "缺少 description"));
         }
+        Set<String> inputFields = action.input().keySet();
         for (Map.Entry<String, ParamSpec> param : action.input().entrySet()) {
             String paramPath = path + ".input." + param.getKey();
             if (blank(param.getValue().description())) {
                 errors.add(issue(ValidationCodes.MISSING_DESCRIPTION, paramPath, "参数缺少 description"));
             }
-            checkRefs(paramPath + ".default", param.getValue().defaultValue(), doc, errors);
+            checkRefs(paramPath + ".default", param.getValue().defaultValue(), doc, Set.of(), Set.of(), inputFields, errors, null);
         }
         checkOutput(path + ".output", action.output(), errors);
         checkCredentialInOutput(path + ".output", action.outputTemplate(), errors);
         checkSteps(action.steps(), path + ".steps", ctx, errors);
         checkPlainStepList(action.steps(), path + ".steps", errors);
         LinkedHashSet<String> declared = new LinkedHashSet<>();
-        checkOrderedSteps(action.steps(), path + ".steps", doc, declared, loginNames, errors, warnings);
-        checkRefs(path + ".output", action.output(), doc, declared, loginNames, errors, warnings);
+        checkOrderedSteps(action.steps(), path + ".steps", doc, declared, loginNames, inputFields, errors, warnings);
+        checkRefs(path + ".output", action.output(), doc, declared, loginNames, inputFields, errors, warnings);
         if (action.examples().isEmpty()) {
             errors.add(issue(ValidationCodes.MISSING_EXAMPLES, path + ".examples", "缺少 examples"));
         }
@@ -470,6 +471,19 @@ public final class ConchValidator {
             List<ValidationIssue> errors,
             List<ValidationIssue> warnings
     ) {
+        checkOrderedSteps(steps, path, doc, declared, loginNames, null, errors, warnings);
+    }
+
+    private static void checkOrderedSteps(
+            List<Step> steps,
+            String path,
+            ConchDoc doc,
+            Set<String> declared,
+            Set<String> loginNames,
+            Set<String> inputFields,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
+    ) {
         if (steps == null) {
             return;
         }
@@ -480,11 +494,11 @@ public final class ConchValidator {
                 checkScriptStep(typed, step, errors);
                 for (Map.Entry<String, Object> entry : step.def().entrySet()) {
                     if (!"code".equals(entry.getKey())) {
-                        checkRefs(typed + "." + entry.getKey(), entry.getValue(), doc, declared, loginNames, errors, warnings);
+                        checkRefs(typed + "." + entry.getKey(), entry.getValue(), doc, declared, loginNames, inputFields, errors, warnings);
                     }
                 }
             } else {
-                checkRefs(typed, step.def(), doc, declared, loginNames, errors, warnings);
+                checkRefs(typed, step.def(), doc, declared, loginNames, inputFields, errors, warnings);
             }
             declare(step, declared);
         }
@@ -522,7 +536,7 @@ public final class ConchValidator {
             Set<String> loginNames,
             List<ValidationIssue> errors
     ) {
-        checkRefs(path, node, doc, declared, loginNames, errors, null);
+        checkRefs(path, node, doc, declared, loginNames, null, errors, null);
     }
 
     private static void checkRefs(
@@ -534,13 +548,26 @@ public final class ConchValidator {
             List<ValidationIssue> errors,
             List<ValidationIssue> warnings
     ) {
+        checkRefs(path, node, doc, declared, loginNames, null, errors, warnings);
+    }
+
+    private static void checkRefs(
+            String path,
+            Object node,
+            ConchDoc doc,
+            Set<String> declared,
+            Set<String> loginNames,
+            Set<String> inputFields,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
+    ) {
         if (node == null) {
             return;
         }
         if (node instanceof String text) {
             try {
                 for (TemplateRef ref : TEMPLATES.templateRefs(text)) {
-                    classifyRef(path, ref.path(), ref.handledByDefault(), doc, declared, loginNames, errors, warnings);
+                    classifyRef(path, ref.path(), ref.handledByDefault(), doc, declared, loginNames, inputFields, errors, warnings);
                 }
             } catch (TemplateException ex) {
                 errors.add(issue(ValidationCodes.TEMPLATE_SYNTAX, path, ex.getMessage()));
@@ -553,23 +580,23 @@ public final class ConchValidator {
                 checkScriptStep(typed, step, errors);
                 for (Map.Entry<String, Object> entry : step.def().entrySet()) {
                     if (!"code".equals(entry.getKey())) {
-                        checkRefs(typed + "." + entry.getKey(), entry.getValue(), doc, declared, loginNames, errors, warnings);
+                        checkRefs(typed + "." + entry.getKey(), entry.getValue(), doc, declared, loginNames, inputFields, errors, warnings);
                     }
                 }
                 return;
             }
-            checkRefs(typed, step.def(), doc, declared, loginNames, errors, warnings);
+            checkRefs(typed, step.def(), doc, declared, loginNames, inputFields, errors, warnings);
             return;
         }
         if (node instanceof Map<?, ?> map) {
             for (Map.Entry<?, ?> entry : map.entrySet()) {
-                checkRefs(path + "." + entry.getKey(), entry.getValue(), doc, declared, loginNames, errors, warnings);
+                checkRefs(path + "." + entry.getKey(), entry.getValue(), doc, declared, loginNames, inputFields, errors, warnings);
             }
             return;
         }
         if (node instanceof List<?> list) {
             for (int i = 0; i < list.size(); i++) {
-                checkRefs(path + "[" + i + "]", list.get(i), doc, declared, loginNames, errors, warnings);
+                checkRefs(path + "[" + i + "]", list.get(i), doc, declared, loginNames, inputFields, errors, warnings);
             }
         }
     }
@@ -581,6 +608,7 @@ public final class ConchValidator {
             ConchDoc doc,
             Set<String> declared,
             Set<String> loginNames,
+            Set<String> inputFields,
             List<ValidationIssue> errors,
             List<ValidationIssue> warnings
     ) {
@@ -604,7 +632,24 @@ public final class ConchValidator {
             }
             return;
         }
-        String root = ref.contains(".") ? ref.substring(0, ref.indexOf('.')) : ref;
+        String root;
+        if (ref.startsWith("input.") || ref.startsWith("input[")) {
+            root = "input";
+        } else if (ref.contains(".")) {
+            root = ref.substring(0, ref.indexOf('.'));
+        } else {
+            root = bracketRoot(ref);
+        }
+        if ("input".equals(root) && inputFields != null) {
+            String field = inputField(ref);
+            if (field != null && !inputFields.contains(field)) {
+                errors.add(issue(
+                        ValidationCodes.UNDECLARED_VARIABLE,
+                        path,
+                        "引用了未声明的输入字段 " + field));
+            }
+            return;
+        }
         if (BUILTIN_ROOTS.contains(root) || declared.contains(root)) {
             return;
         }
@@ -625,6 +670,35 @@ public final class ConchValidator {
                 ValidationCodes.UNDECLARED_VARIABLE,
                 path,
                 UndefinedVariable.message(ref)));
+    }
+
+    private static String bracketRoot(String ref) {
+        int bracket = ref.indexOf('[');
+        return bracket > 0 ? ref.substring(0, bracket) : ref;
+    }
+
+    /** First field under {@code input}, or null when the template reads the whole object. */
+    private static String inputField(String ref) {
+        String dotted = head(ref, "input");
+        if (dotted != null) {
+            return dotted;
+        }
+        if (ref == null || !ref.startsWith("input[")) {
+            return null;
+        }
+        int end = ref.indexOf(']');
+        if (end <= "input[".length()) {
+            return null;
+        }
+        String inner = ref.substring("input[".length(), end).trim();
+        if (inner.length() >= 2) {
+            char open = inner.charAt(0);
+            char close = inner.charAt(inner.length() - 1);
+            if ((open == '\'' && close == '\'') || (open == '"' && close == '"')) {
+                inner = inner.substring(1, inner.length() - 1);
+            }
+        }
+        return inner.isEmpty() ? null : inner;
     }
 
     private static String head(String ref, String root) {

@@ -54,8 +54,16 @@ export interface ConchSummary {
   newRequiredCredentials: string[]
   /** 当前校验载不进。列表仍给出卡片，可以进详情。 */
   ruleDisabled?: boolean
+  /** 停用原因。已加载的卡片没有这个字段。 */
+  message?: string | null
+  /** 上一次切换换下来的版本。没有记录时为 null。文件不在时仍返回版本号。 */
   previousVersion?: string | null
+  /**
+   * 上一版的包还在，但当前规则载不进。没有这个字段时，页面按不能退回处理。
+   */
   previousDisabled?: boolean
+  /** 上一版的 package.zip 还在本机。没有这个字段时，页面按不能退回处理。 */
+  previousPresent?: boolean
   fixHint?: string | null
 }
 
@@ -130,11 +138,21 @@ export interface ConchDetail {
   message?: string | null
   /** 签名通过但当前校验载不进。文件还在，暂时不能调用。不是 Reef 停用。 */
   ruleDisabled?: boolean
-  /** 上一次切换换下来的版本。没有可退回的版本时为 null。 */
+  /**
+   * 已停用时，声明是从验签通过的包里读出的。为 false 表示能力、配置和凭证还没读出来，
+   * 空列表不表示这份规则没有声明。已加载的详情为 true。
+   */
+  declarationsLoaded?: boolean
+  /** 上一次切换换下来的版本。没有记录时为 null。文件不在时仍返回版本号。 */
   previousVersion?: string | null
-  /** 上一版也过不了当前校验。 */
+  /**
+   * 上一版的包还在，但当前规则载不进。当前版本可用时也会返回。
+   * 没有这个字段时，页面按不能退回处理。
+   */
   previousDisabled?: boolean
-  /** 下一步。正式包是更新或退回，本地规则包是改规则后重新导入。 */
+  /** 上一版的 package.zip 还在本机。没有这个字段时，页面按不能退回处理。 */
+  previousPresent?: boolean
+  /** 下一步。正式包是更新、退回或等发布方出新版，本地规则包是到「规则包与账号」重新导入。 */
   fixHint?: string | null
 }
 
@@ -404,7 +422,7 @@ export interface LocalImportResult {
 /**
  * `GET /local-conches` 的一行。已载入的本地包和载入失败的坏包都在这里。
  * 解析或读失败的坏包不在 `GET /conches` 里，详情、导出和调用都是 404，只能删除后重新导入。
- * 校验载不进时仍在这份列表，详情返回 200，`fixHint` 为「改规则后重新导入」。
+ * 校验载不进时仍在这份列表，详情返回 200，`fixHint` 为「改规则后，到「规则包与账号」点「导入本地规则包」重新导入」。
  */
 export interface LocalConchEntry {
   conch: string
@@ -417,7 +435,7 @@ export interface LocalConchEntry {
   reason: string | null
   /** 文件还在，但这版规则过不了当前校验。解析失败仍是 false。 */
   ruleDisabled?: boolean
-  /** 校验载不进时为「改规则后重新导入」。 */
+  /** 校验载不进时为「改规则后，到「规则包与账号」点「导入本地规则包」重新导入」。 */
   fixHint?: string | null
 }
 
@@ -467,7 +485,10 @@ export interface CatalogConch {
   /** 下一步。没有上一版时不含退回。 */
   fixHint?: string | null
   previousVersion?: string | null
+  /** 没有这个字段时，页面按不能退回处理。 */
   previousDisabled?: boolean
+  /** 上一版的 package.zip 还在本机。没有这个字段时，页面按不能退回处理。 */
+  previousPresent?: boolean
 }
 
 export interface Catalog {

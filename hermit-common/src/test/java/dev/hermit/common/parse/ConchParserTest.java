@@ -223,6 +223,26 @@ class ConchParserTest {
         assertReportedLine(open, 7, true);
     }
 
+    @Test
+    void duplicateActionNamesFailWithTheLine() {
+        String yaml = """
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                actions:
+                  list_todo:
+                    title: 一
+                  list_todo:
+                    title: 二
+                """;
+        assertThatThrownBy(() -> ConchParser.parse(yaml))
+                .isInstanceOf(ConchParseException.class)
+                .hasMessageContaining("能力名重复：list_todo")
+                .hasMessageContaining("第")
+                .hasMessageContaining("行");
+    }
+
     private static void assertReportedLine(String yaml, int snakeLine, boolean jacksonIsEarlier) {
         JsonProcessingException failure = yamlFailure(yaml);
         int jackson = failure.getLocation().getLineNr();

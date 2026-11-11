@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.BooleanSupplier;
@@ -203,27 +204,71 @@ public final class LocalConches {
 
     public Export export(String conch) {
         synchronized (lock) {
-            if (registry.origin(conch) != Origin.LOCAL) {
-                throw LocalConchException.notFound();
-            }
-            ConchDoc doc = registry.find(conch).orElse(null);
-            if (doc == null || !ConchFiles.safeSegment(doc.version().toString())) {
-                throw LocalConchException.notFound();
-            }
-            Path file = yamlPath(conch);
-            if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-                throw LocalConchException.notFound();
-            }
-            try {
-                if (Files.size(file) > MAX_BYTES) {
-                    throw LocalConchException.invalid("yaml exceeds 1 MiB");
+            if (registry.origin(conch) == Origin.LOCAL) {
+                ConchDoc doc = registry.find(conch).orElse(null);
+                if (doc == null || !ConchFiles.safeSegment(doc.version().toString())) {
+                    throw LocalConchException.notFound();
                 }
-                return new Export(doc.conch(), doc.version().toString(), Files.readAllBytes(file));
-            } catch (LocalConchException ex) {
-                throw ex;
-            } catch (IOException ex) {
-                throw LocalConchException.notFound();
+                return exportFile(conch, doc.version().toString());
             }
+            BrokenLocal failed = broken.get(conch);
+            if (failed != null && failed.ruleDisabled()) {
+                String version = "0.0.0";
+                ConchDoc doc = readStored(conch).orElse(null);
+                if (doc != null && doc.version() != null && ConchFiles.safeSegment(doc.version().toString())) {
+                    version = doc.version().toString();
+                }
+                return exportFile(conch, version);
+            }
+            throw LocalConchException.notFound();
+        }
+    }
+
+    /**
+     * Parsed document for a local file, including one the validator will not load.
+     * Empty when the file is missing, unreadable, or names a different package.
+     */
+    public Optional<ConchDoc> readableDoc(String conch) {
+        synchronized (lock) {
+            if (registry.origin(conch) == Origin.LOCAL) {
+                return registry.find(conch);
+            }
+            if (conch == null || !broken.containsKey(conch)) {
+                return Optional.empty();
+            }
+            return readStored(conch).filter(doc -> conch.equals(doc.conch()));
+        }
+    }
+
+    private Export exportFile(String conch, String version) {
+        Path file = yamlPath(conch);
+        if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+            throw LocalConchException.notFound();
+        }
+        try {
+            if (Files.size(file) > MAX_BYTES) {
+                throw LocalConchException.invalid("yaml exceeds 1 MiB");
+            }
+            return new Export(conch, version, Files.readAllBytes(file));
+        } catch (LocalConchException ex) {
+            throw ex;
+        } catch (IOException ex) {
+            throw LocalConchException.notFound();
+        }
+    }
+
+    private Optional<ConchDoc> readStored(String conch) {
+        Path file = yamlPath(conch);
+        try {
+            if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+                return Optional.empty();
+            }
+            if (Files.size(file) > MAX_BYTES) {
+                return Optional.empty();
+            }
+            return Optional.of(ConchParser.parse(Files.readString(file)));
+        } catch (IOException | RuntimeException ex) {
+            return Optional.empty();
         }
     }
 

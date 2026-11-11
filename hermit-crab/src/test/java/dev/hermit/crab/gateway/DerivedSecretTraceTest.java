@@ -124,6 +124,68 @@ class DerivedSecretTraceTest {
         }
     }
 
+    @Test
+    void actionStepExtractsOfCredentialRequestsAreMasked() throws Exception {
+        HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        upstream.createContext("/login", exchange -> {
+            String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            boolean accepted = request.contains(USERNAME) && request.contains(PASSWORD);
+            int status = accepted ? 200 : 401;
+            String body = accepted ? "{\"session\":\"" + TOKEN + "\"}" : "{\"ok\":false}";
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(status, bytes.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(bytes);
+            }
+        });
+        upstream.createContext("/session", exchange -> {
+            String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+            exchange.getRequestBody().readAllBytes();
+            int status = ("Bearer " + TOKEN).equals(authorization) ? 200 : 401;
+            byte[] bytes = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(status, bytes.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(bytes);
+            }
+        });
+        upstream.start();
+        CrabRuntime runtime = CrabRuntime.open(
+                new CrabPaths(temp.resolve("action-crab")),
+                CrabConfig.defaults().withListen("127.0.0.1", 0));
+        CrabHttpServer server = new CrabHttpServer(runtime);
+        try {
+            server.start();
+            String base = "http://127.0.0.1:" + upstream.getAddress().getPort();
+            runtime.localConches().importBytes(actionYaml(base).getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            runtime.admin().createAccount("secret_echo", "ada", Actors.CONSOLE);
+            ConchDoc local = runtime.registry().find("secret_echo").orElseThrow();
+            runtime.admin().writeCredentials(
+                    local, "ada", java.util.Map.of("username", USERNAME, "password", PASSWORD), Actors.CONSOLE);
+            runtime.debug().setEnabled(true, Actors.CONSOLE);
+            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+            HttpResponse<String> ran = http.send(HttpRequest.newBuilder(URI.create(
+                    "http://127.0.0.1:" + server.port() + "/console/api/local-conches/secret_echo/actions/ping/run"))
+                    .header("X-Hermit-Console", "1")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"account\":\"ada\",\"input\":{}}"))
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(ran.statusCode()).as(ran.body()).isEqualTo(200);
+            String stored = runtime.devTraces().find(ApiJson.tree(ran.body()).path("traceId").asText()).orElseThrow().body();
+            assertThat(stored).doesNotContain(TOKEN).doesNotContain(PASSWORD).doesNotContain(USERNAME);
+            assertThat(stored).contains("***").contains("ready");
+            HttpResponse<String> masked = http.send(HttpRequest.newBuilder(URI.create(base + "/session"))
+                    .header("Authorization", "Bearer ***")
+                    .GET()
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(masked.statusCode()).isEqualTo(401);
+        } finally {
+            server.close();
+            runtime.close();
+            upstream.stop(0);
+        }
+    }
+
     private static String yaml(String base) {
         return """
                 conch: secret_echo
@@ -157,6 +219,51 @@ class DerivedSecretTraceTest {
                     mcp: { expose: true, read_only: true }
                     steps:
                       - request: { method: GET, path: /ping }
+                      - assert: { status: 200 }
+                    output:
+                      ok: { type: boolean, description: 是否成功, value: true }
+                    examples:
+                      - input: {}
+                        output: { ok: true }
+                    notes: 本地假上游。
+                    related: []
+                """.formatted(base);
+    }
+
+    private static String actionYaml(String base) {
+        return """
+                conch: secret_echo
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: %s
+                title: 能力里的令牌
+                description: 能力步骤里从凭证换来的值也要打码。
+                credentials:
+                  username: { type: text, label: 用户名, required: true }
+                  password: { type: secret, label: 密码, required: true }
+                actions:
+                  ping:
+                    title: 探测
+                    description: 在能力里登录再带令牌。
+                    idempotent: true
+                    mcp: { expose: true, read_only: true }
+                    steps:
+                      - set: { label: ready }
+                      - request:
+                          method: POST
+                          path: /login
+                          json:
+                            username: "{{credential.username}}"
+                            password: "{{credential.password}}"
+                      - extract:
+                          session: { jsonpath: $.session }
+                      - set: { note: ready }
+                      - request:
+                          method: GET
+                          path: /session
+                          headers:
+                            Authorization: "Bearer {{session}}"
                       - assert: { status: 200 }
                     output:
                       ok: { type: boolean, description: 是否成功, value: true }

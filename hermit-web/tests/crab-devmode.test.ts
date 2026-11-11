@@ -89,6 +89,7 @@ describe('Crab 开发者模式', () => {
     expect(prompt).toContain('conch_trial_run')
     expect(prompt).toContain('/mcp')
     expect(prompt).toContain('Bearer <API Key>')
+    expect(prompt.indexOf('范围选全部权限，并取消勾选只允许调用只读能力')).toBeLessThan(prompt.indexOf('推荐顺序'))
     expect(prompt).toContain('范围选全部权限，并取消勾选只允许调用只读能力')
     expect(prompt).toContain('勾了只读的全部权限 Key 不能保存')
     expect(prompt).toContain('全部权限 Key 读不到控制台试跑的追踪')

@@ -277,11 +277,11 @@ steps:
 
 模板如 `{{input.page}}`、`{{credential.password | md5}}`、`{{config.base_url}}`、`{{items}}`。支持的过滤器：`md5` 和 `sha256` 对 UTF-8 文本做摘要并输出小写十六进制，不接受参数；`base64`、`urlencode`、`trim` 也不接受参数。`default` 需要一个后备值，原值为空或 null 时用它。`date` 需要一个输出格式；值可以是 `now`，或 `yyyy-MM-dd`、`yyyy/MM/dd`、`yyyy-MM-dd HH:mm:ss`、`yyyy/MM/dd HH:mm:ss`、`yyyy年M月d日`、`yyyyMMdd`。`rsa` 需要一个公钥参数，用 RSA/ECB/PKCS1Padding 加密后再做 Base64；公钥是 X.509，可以是 PEM，也可以是去掉空白的 Base64。完整表达式保留原值类型，拼接字符串则转成文本。
 
-`input`、`credential`、`config`、`response`、`now` 是保留变量，不能通过 set/extract/script.into 覆盖。request 更新 response，extract/set 产生后续步骤可用的变量。同一步骤列表里，后面的步骤可以引用前面 extract、set 或 script.into 声明的名字，例如登录里先提取再写 `{{viewstate}}`，能力里先提取再写 `{{items}}`。`{{input.page}}` 和 `{{credential.password}}` 用的是保留变量。`{{vars.token}}`、`{{token}}`、`{{auth.token}}` 这种还没声明的名字，`conch_validate` 会报错并给出行号。试跑遇到未定义变量时会点名这个变量，不会说成上游故障或版本不一致。
+`input`、`credential`、`config`、`response`、`now` 是保留变量，不能通过 set/extract/script.into 覆盖。request 更新 response，extract/set 产生后续步骤可用的变量。同一步骤列表里，后面的步骤可以引用前面 extract、set 或 script.into 声明的名字，例如登录里先提取再写 `{{viewstate}}`，能力里先提取再写 `{{items}}`。`{{input.page}}` 和 `{{credential.password}}` 用的是保留变量。`default` 过滤器算作这个名字已经处理：`{{token | default('')}}` 可以写，不算 `UNDECLARED_VARIABLE`。没加 `default` 的未声明名字，`conch_validate` 仍会报错并给出行号。`{{vars.token}}`、`{{token}}`、`{{auth.token}}` 就是这种。能力步骤引用只在登录步骤里声明、又没有 `default` 的名字，错误是「能力不能引用登录步骤里的变量。」，不是「引用了未定义的变量」。`credential.*` 和 `config.*` 不会因为加了 `default` 就放过未声明的凭证或配置。试跑遇到未定义变量时会点名这个变量，不会说成上游故障或版本不一致。令牌目前要声明成凭证。（F-12 登录令牌自动带到后续请求上线后删掉这句。）
 
 输出可采用映射模板，也可用说明式字段。说明式字段省略 value 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。校验器禁止在输出中直接引用 credential。
 
-实际输出会遍历字符串值，替换长度至少 4 个字符的已知凭证和 Cookie 值及其 URL 编码形式。开发追踪里的响应正文和变量摘要，还会把登录响应中提取、set 或 script 得到的令牌、口令、用户名和 Cookie（长度至少 4）打成掩码。拿这个掩码去登录，上游会拒绝。脱敏不按 `password`、`token` 等字段名自动打码，也不替换映射的键。短值、尚未登记且不是这次登录提取出来的上游秘密，以及哈希等其它派生值，没有普遍保护。规则应只返回业务需要的数据，不能依靠字段名自动脱敏。
+实际输出会遍历字符串值，替换长度至少 4 个字符的已知凭证和 Cookie 值及其 URL 编码形式。开发追踪里的响应正文和变量摘要，还会把登录步骤里提取、set 或 script 得到的值打成掩码。能力步骤里，引用了 `credential` 的请求成功之后，紧跟着的 extract 和 script 得到的值同样打码；能力步骤里的 set 不打码。长度至少 4。拿这个掩码去调上游，上游会拒绝。脱敏不按 `password`、`token` 等字段名自动打码，也不替换映射的键。短于 4 个字符的秘密、尚未登记且不是这次从凭证换出来的上游秘密，以及哈希等其它派生值，没有普遍保护。规则应只返回业务需要的数据，不能依靠字段名自动脱敏。
 
 ```yaml
 - script:

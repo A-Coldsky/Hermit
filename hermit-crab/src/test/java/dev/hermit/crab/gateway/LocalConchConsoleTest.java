@@ -299,7 +299,7 @@ class LocalConchConsoleTest {
                     "GET", "/api/legacy_oa/list_todo?page=1", server.apiKey.plaintext(), null, null, null);
             assertThat(blocked.status()).isEqualTo(409);
             assertThat(blocked.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
-            assertThat(blocked.json().path("error").path("message").asText()).isEqualTo("no account configured");
+            assertThat(blocked.json().path("error").path("message").asText()).isEqualTo("还没有账号。请到控制台为这个规则包新建账号并填写凭证。");
 
             HttpResponse<String> optional = post(
                     server, "/console/api/local-conches", "text/yaml; charset=utf-8", optionalNote());
@@ -326,11 +326,11 @@ class LocalConchConsoleTest {
                     "GET", "/api/optional_note/ping", key.plaintext(), null, null, null);
             assertThat(optionalCall.status()).isEqualTo(409);
             assertThat(optionalCall.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
-            assertThat(optionalCall.json().path("error").path("message").asText()).isEqualTo("no account configured");
+            assertThat(optionalCall.json().path("error").path("message").asText()).isEqualTo("还没有账号。请到控制台为这个规则包新建账号并填写凭证。");
             TestServer.Reply bareCall = server.call(
                     "GET", "/api/bare_ping/ping", key.plaintext(), null, null, null);
             assertThat(bareCall.status()).isEqualTo(409);
-            assertThat(bareCall.json().path("error").path("message").asText()).isEqualTo("no account configured");
+            assertThat(bareCall.json().path("error").path("message").asText()).isEqualTo("还没有账号。请到控制台为这个规则包新建账号并填写凭证。");
 
             server.runtime.admin().createAccount("optional_note", "ada", Actors.CLI);
             server.runtime.admin().createAccount("bare_ping", "ada", Actors.CLI);

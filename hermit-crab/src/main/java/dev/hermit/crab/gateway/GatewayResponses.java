@@ -42,6 +42,15 @@ final class GatewayResponses {
                 includeTrace ? traceId : null, false);
     }
 
+    /** Same id space as a trace, but the body says it cannot be opened and the header is omitted. */
+    static void writeRequestError(Context ctx, int status, ErrorCode code, String message) {
+        writeRequestError(ctx, status, code, message, null);
+    }
+
+    static void writeRequestError(Context ctx, int status, ErrorCode code, String message, Object data) {
+        write(ctx, status, ApiJson.bytes(ApiEnvelope.requestJson(data, code, message, trace(ctx))), null, false);
+    }
+
     static void writeData(Context ctx, Object data) {
         String traceId = trace(ctx);
         write(ctx, 200, ApiJson.bytes(ApiEnvelope.json(data, null, null, traceId)), traceId, false);

@@ -93,7 +93,7 @@ async function load() {
     loading.value = false
     return
   }
-  if (next.repairRequired) {
+  if (next.repairRequired || next.ruleDisabled) {
     accounts.value = []
     config.value = {}
     partsFailed.value = false
@@ -190,6 +190,30 @@ async function repair() {
   }
 }
 
+async function rollback() {
+  if (!detail.value?.previousVersion) return
+  try {
+    await ElMessageBox.confirm(
+      `退回 v${detail.value.previousVersion}。当前版本会留作下一次可退回的版本。`,
+      `退回 ${props.conch}`,
+      { confirmButtonText: '退回', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  working.value = true
+  try {
+    await api.rollback(props.conch)
+    ElMessage.success(`已退回 v${detail.value.previousVersion}`)
+    void refreshPending()
+    await load()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    working.value = false
+  }
+}
+
 async function update() {
   if (!detail.value) return
   working.value = true
@@ -255,6 +279,7 @@ watch(
       <template #badge>
         <el-tag v-if="detail?.version && !detail.repairRequired" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
         <el-tag v-if="local" type="info" effect="plain" round>本地</el-tag>
+        <el-tag v-if="detail?.ruleDisabled" type="danger" effect="plain" round>已停用</el-tag>
         <el-tag v-if="detail?.reefDisabled" type="warning" effect="plain" round>Reef 已停用</el-tag>
         <el-tag v-if="detail?.updateAvailable" type="warning" effect="plain" round class="mono">有新版本 v{{ detail.latestVersion }}</el-tag>
       </template>
@@ -288,6 +313,24 @@ watch(
 
     <template v-else-if="detail">
       <el-alert
+        v-if="detail.ruleDisabled"
+        type="error"
+        show-icon
+        :closable="false"
+        title="已停用。这版规则暂时不能调用。"
+        data-test="rule-disabled"
+      >
+        <template #default>
+          <div>{{ detail.message }}</div>
+          <el-button
+            v-if="detail.previousVersion"
+            class="update-btn"
+            :loading="working"
+            @click="rollback"
+          >退回 v{{ detail.previousVersion }}</el-button>
+        </template>
+      </el-alert>
+      <el-alert
         v-if="detail.reefDisabled"
         type="warning"
         show-icon
@@ -309,16 +352,17 @@ watch(
         data-test="update-available"
       >
         <template #default>
-          <div>不更新也可以一直使用当前版本。更新后不能退回旧版本。</div>
+          <div>不更新也可以一直使用当前版本。更新后可以退回刚换下的那一版；再更新一次，可退回的就换成新换下的那一版。</div>
           <div v-if="detail.newRequiredCredentials.length">
             新版本需要这些凭证：<span class="mono">{{ detail.newRequiredCredentials.join('、') }}</span>。先在下方默认账号里填好，再点更新。
           </div>
           <el-button type="primary" class="update-btn" :loading="working" @click="update">更新到 v{{ detail.latestVersion }}</el-button>
+          <el-button v-if="detail.previousVersion" class="update-btn" :loading="working" @click="rollback">退回 v{{ detail.previousVersion }}</el-button>
         </template>
       </el-alert>
       <el-alert v-if="local" type="info" show-icon :closable="false" title="本地规则包：未经 Reef 签名，只在本机可用">
         <template #default>
-          全部权限可以调用这个本地规则包。在范围里点名了它的 Key 也可以调用。调用不会上报 Reef。
+          全部权限的 Key 可以调用这个本地规则包。在范围里点名了它的 Key 也可以调用。调用不会上报 Reef。
           导出的 YAML 可以直接在 Reef「上传规则包」页面上传，校验签名后发布给其他 Crab。
         </template>
       </el-alert>

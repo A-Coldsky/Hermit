@@ -125,7 +125,8 @@ class GatewayHttpTest {
                     "GET", "/api/legacy_oa/list_todo?page=1", server.apiKey.plaintext(), null, null, null);
             assertThat(missingAccount.status()).isEqualTo(409);
             assertThat(missingAccount.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
-            assertThat(missingAccount.json().path("error").path("message").asText()).isEqualTo("no account configured");
+            assertThat(missingAccount.json().path("error").path("message").asText())
+                    .isEqualTo("还没有账号。请到控制台为这个规则包新建账号并填写凭证。");
             assertThat(missingAccount.header("X-Hermit-Trace")).isNotBlank();
 
             server.runtime.admin().createAccount("legacy_oa", "alice", Actors.CLI);

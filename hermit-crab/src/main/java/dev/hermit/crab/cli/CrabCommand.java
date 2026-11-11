@@ -77,6 +77,7 @@ public final class CrabCommand {
               crab subscribe <conch>
               crab unsubscribe <conch>
               crab update <conch>
+              crab rollback <conch>
               crab account list <conch>
               crab account add|remove|default <conch> <name>
               crab credential set <conch> <account> <field> [--from-env VAR]
@@ -169,6 +170,7 @@ public final class CrabCommand {
             case "subscribe" -> subscribe(args, env, out, err);
             case "unsubscribe" -> unsubscribe(args, env, out, err);
             case "update" -> update(args, env, out, err);
+            case "rollback" -> rollback(args, env, out, err);
             case "account" -> account(args, env, out, err);
             case "credential" -> credential(args, env, in, out, err);
             case "config" -> config(args, env, out, err);
@@ -362,13 +364,37 @@ public final class CrabCommand {
         });
     }
 
+    private int rollback(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 2) {
+            err.print(USAGE);
+            return 1;
+        }
+        return withRuntime(env, runtime -> {
+            try {
+                runtime.loadInstalledConches();
+                ConchOutcome outcome = runtime.rollback(args[1], Actors.CLI);
+                String version = outcome == null || outcome.version() == null ? "" : outcome.version();
+                out.println(args[1] + " " + version);
+                return 0;
+            } catch (SubscriptionException | UpdateException ex) {
+                err.println(clientMessage(ex));
+                return 1;
+            }
+        });
+    }
+
     private static String catalogLine(ConchCatalog.Entry entry) {
         StringBuilder line = new StringBuilder();
         line.append(entry.conch()).append(' ').append(text(entry.version()));
         if (entry.subscribed()) {
             line.append(" subscribed");
         }
-        if (entry.installed()) {
+        if (entry.ruleDisabled()) {
+            line.append(" 已停用");
+            if (entry.message() != null && !entry.message().isBlank()) {
+                line.append(' ').append(entry.message());
+            }
+        } else if (entry.installed()) {
             line.append(" installed ").append(text(entry.installedVersion()));
         }
         if (entry.disabled()) {
@@ -648,7 +674,8 @@ public final class CrabCommand {
             runtime.loadInstalledConches();
             for (LocalConches.LocalPackage pkg : runtime.localConches().packages()) {
                 if (pkg.broken()) {
-                    out.println(pkg.conch() + " - " + pkg.file() + " 未载入 " + pkg.reason());
+                    String state = pkg.ruleDisabled() ? "已停用" : "未载入";
+                    out.println(pkg.conch() + " - " + pkg.file() + " " + state + " " + pkg.reason());
                 } else {
                     out.println(pkg.conch() + " " + pkg.version() + " " + pkg.file());
                 }

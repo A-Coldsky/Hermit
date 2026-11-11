@@ -119,6 +119,7 @@ describe('Crab API Keys', () => {
     const risk = document.body.querySelector('[data-test="scope-all-risk"]')
     expect(risk?.textContent).toContain('全部权限风险较高')
     expect(risk?.textContent).toContain('包括本地规则包')
+    expect(risk?.textContent).toContain('这把 Key 不能保存本地规则包')
     expect(risk?.textContent).not.toContain('会修改数据的能力也能调用')
 
     ;(dialog().querySelector('.el-checkbox') as HTMLElement).click()
@@ -128,6 +129,10 @@ describe('Crab API Keys', () => {
     submit()
     await flushPromises()
     expect(crab.createApiKey).toHaveBeenCalledWith({ name: 'ops', readOnly: false, all: true, conches: [], actions: [] })
+    const example = document.body.querySelector('[data-test="key-example"]')
+    expect(example?.textContent).toContain('Bearer <API Key>')
+    expect(example?.textContent).toContain('/mcp')
+    expect(example?.textContent).not.toContain('hk_a_secret')
     wrapper.unmount()
   })
 })

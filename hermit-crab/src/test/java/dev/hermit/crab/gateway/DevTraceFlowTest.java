@@ -233,6 +233,15 @@ class DevTraceFlowTest {
             JsonNode closedUnknown = mcp(http, crab, localKey.plaintext(), offSession, 11, "tools/call",
                     Map.of("name", "debug_trace", "arguments", Map.of("traceId", "never-opened")));
             assertThat(toolMessage(closedUnknown)).contains("开发者模式没有打开").doesNotContain("没有这个工具");
+
+            runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String reopened = initialize(http, crab, localKey.plaintext());
+            JsonNode deletedAgain = mcp(http, crab, localKey.plaintext(), reopened, 12, "tools/call",
+                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+            assertThat(toolMessage(deletedAgain)).contains("追踪已删").doesNotContain("编号不存在");
+            JsonNode stillMissing = mcp(http, crab, localKey.plaintext(), reopened, 13, "tools/call",
+                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", "never-opened")));
+            assertThat(toolMessage(stillMissing)).contains("编号不存在").doesNotContain("追踪已删");
         } finally {
             server.close();
             runtime.close();

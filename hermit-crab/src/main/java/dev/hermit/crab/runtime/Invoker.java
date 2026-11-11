@@ -215,7 +215,7 @@ public final class Invoker {
             resolved = accounts.resolve(origin, conch, account == null ? Optional.empty() : account);
         } catch (AccountNotFoundException ex) {
             if (ex.account() == null && accounts.list(origin, conch).isEmpty()) {
-                return done(traceId, ErrorCode.NOT_CONFIGURED, "no account configured", null);
+                return done(traceId, ErrorCode.NOT_CONFIGURED, CredentialMessages.NO_ACCOUNT, null);
             }
             return done(traceId, ErrorCode.ACCOUNT_NOT_FOUND, ACCOUNT_NOT_FOUND_MESSAGE, null);
         } catch (IllegalArgumentException ex) {

@@ -24,6 +24,13 @@ const testResult = reactive({
   message: '',
   code: '',
   traceId: '' as string | null,
+  requestId: null as string | null,
+  requestNote: null as string | null,
+})
+const loginFailureTitle = computed(() => errorCodeLabels[testResult.code] ?? '登录失败')
+const loginFailureDetail = computed(() => {
+  const prefix = `${loginFailureTitle.value}：`
+  return testResult.message.startsWith(prefix) ? testResult.message.slice(prefix.length) : testResult.message
 })
 
 const namePattern = /^[A-Za-z0-9_-]{1,64}$/
@@ -91,7 +98,17 @@ async function testLogin(account: Account) {
   busy.value = account.name
   try {
     const data = await api.testLogin(props.conch, account.name)
-    Object.assign(testResult, { open: true, account: account.name, success: true, data, message: '', code: '', traceId: null })
+    Object.assign(testResult, {
+      open: true,
+      account: account.name,
+      success: true,
+      data,
+      message: '',
+      code: '',
+      traceId: null,
+      requestId: null,
+      requestNote: null,
+    })
   } catch (error) {
     Object.assign(testResult, {
       open: true,
@@ -100,7 +117,9 @@ async function testLogin(account: Account) {
       data: null,
       message: errorText(error),
       code: error instanceof ApiError ? error.code : '',
-      traceId: error instanceof ApiError ? error.traceId : null,
+      traceId: null,
+      requestId: error instanceof ApiError ? error.requestId : null,
+      requestNote: error instanceof ApiError ? error.requestNote : null,
     })
   } finally {
     busy.value = null
@@ -311,12 +330,12 @@ async function disconnect(account: Account) {
     <el-result
       v-else
       icon="error"
-      :title="errorCodeLabels[testResult.code] ?? '登录失败'"
-      :sub-title="testResult.message"
+      :title="loginFailureTitle"
+      :sub-title="loginFailureDetail"
     >
-      <template v-if="testResult.traceId" #extra>
-        <span class="hm-muted">traceId：</span>
-        <router-link :to="{ path: '/calls', query: { trace: testResult.traceId } }" class="mono">{{ testResult.traceId }}</router-link>
+      <template v-if="testResult.requestId" #extra>
+        <span class="hm-muted">{{ testResult.requestNote || '请求编号，不可查追踪' }}</span>
+        <span class="mono">{{ testResult.requestId }}</span>
       </template>
     </el-result>
   </el-dialog>

@@ -137,6 +137,52 @@ public final class TemplateEngine {
         return resolved.value;
     }
 
+    /**
+     * Paths referenced by a template. A {@code default} filter marks that path handled.
+     * Arguments of any filter stay unhandled, so {@code {{ok | default(token)}}} still sees {@code token}.
+     */
+    public List<TemplateRef> templateRefs(String template) {
+        if (template == null) {
+            return List.of();
+        }
+        ArrayList<TemplateRef> refs = new ArrayList<>();
+        Expressions.Parsed parsed = Expressions.parse(template);
+        for (Expressions.Segment segment : parsed.segments()) {
+            if (!(segment instanceof Expressions.Expr expr)) {
+                continue;
+            }
+            boolean handled = false;
+            for (Expressions.FilterCall call : expr.filters()) {
+                if ("default".equals(call.name())) {
+                    handled = true;
+                }
+                for (Expressions.Arg arg : call.args()) {
+                    if (arg instanceof Expressions.PathArg path) {
+                        refs.add(new TemplateRef(path.path(), false));
+                    }
+                }
+            }
+            refs.add(new TemplateRef(expr.path(), handled));
+        }
+        return List.copyOf(refs);
+    }
+
+    /** True when any template under {@code node} reads {@code credential} or {@code credential.*}. */
+    public boolean referencesCredential(Object node) {
+        try {
+            LinkedHashSet<String> paths = new LinkedHashSet<>();
+            collect(node, paths);
+            for (String path : paths) {
+                if ("credential".equals(path) || path.startsWith("credential.") || path.startsWith("credential[")) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
     private void collect(Object node, Set<String> paths) {
         if (node instanceof String text) {
             Expressions.Parsed parsed = Expressions.parse(text);

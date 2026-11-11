@@ -267,7 +267,25 @@ class AuthoringMcpTest {
                 check.join(15_000);
                 assertThat(structured(checked.get()).path("next").asText())
                         .doesNotContain("新建账号")
-                        .contains("核对");
+                        .contains("可以直接试跑")
+                        .doesNotContain("测试登录");
+
+                String changed = later.replace("version: 1.0.2", "version: 1.0.3")
+                        .replace("credentials: {}", """
+                                credentials:
+                                  password: { type: secret, required: true, label: 密码 }""");
+                AtomicReference<JsonNode> relogin = new AtomicReference<>();
+                Thread login = new Thread(() -> relogin.set(
+                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", changed))));
+                login.start();
+                JsonNode fourth = sse.awaitMethod("elicitation/create");
+                server.answer(confirming, fourth, "accept", true);
+                login.join(15_000);
+                assertThat(structured(relogin.get()).path("next").asText())
+                        .contains("测试登录")
+                        .contains("凭证字段有变化")
+                        .doesNotContain("可以直接试跑")
+                        .doesNotContain("新建账号");
             }
 
             server.runtime.registry().put(ConchParser.parse(LocalConchBehaviorTest.ping("official_ping", "1.0.0")));
@@ -591,24 +609,33 @@ class AuthoringMcpTest {
                     """;
             String session = server.initialize(false);
             assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            HttpResponse<String> noAccount = server.postRaw(server.key.plaintext(), session, """
+                    {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"conch_trial_run","arguments":{"conch":"needs_password","action":"show"}}}
+                    """, Map.of());
+            String rejectedId = noAccount.headers().firstValue("X-Hermit-Trace").orElseThrow();
+            assertThat(noAccount.body()).doesNotContain("\"traceId\"").doesNotContain(rejectedId);
+            assertThat(toolMessage(ApiJson.tree(noAccount.body()))).contains("还没有账号").contains("needs_password");
+            JsonNode rejectedTrace = server.rpc(session, 8, "tools/call", Map.of(
+                    "name", "debug_trace", "arguments", Map.of("traceId", rejectedId)));
+            assertThat(toolMessage(rejectedTrace)).contains("试跑被拒").doesNotContain("没有这个工具");
+
             server.runtime.admin().createAccount("needs_password", "main", Actors.CONSOLE);
             HttpResponse<String> rejected = server.postRaw(server.key.plaintext(), session, """
                     {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_trial_run","arguments":{"conch":"needs_password","action":"show","account":"main"}}}
                     """, Map.of());
-            String rejectedId = rejected.headers().firstValue("X-Hermit-Trace").orElseThrow();
+            assertThat(rejected.headers().firstValue("X-Hermit-Trace")).isEmpty();
             JsonNode missing = ApiJson.tree(rejected.body());
-            assertThat(missing.toString()).doesNotContain("\"traceId\"").doesNotContain(rejectedId);
-            assertThat(toolMessage(missing)).contains("main").contains("password").contains("密码")
-                    .contains("控制台").doesNotContain("missing credentials");
-            assertThat(missing.toString()).doesNotContain("s3cret-value");
-            JsonNode rejectedTrace = server.rpc(session, 8, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", rejectedId)));
-            assertThat(toolMessage(rejectedTrace)).contains("试跑被拒").doesNotContain("没有这个工具");
+            assertThat(missing.toString()).doesNotContain("\"traceId\"");
+            assertThat(toolMessage(missing)).contains("main").contains("密码（password）").contains("填写凭证")
+                    .doesNotContain("missing credentials");
+            assertThat(missing.toString()).contains("不可查追踪").doesNotContain("s3cret-value");
 
             JsonNode illegal = server.call(session, "conch_trial_run", Map.of(
                     "conch", "needs_password", "action", "show", "account", "s3cret-value!!"));
             assertThat(toolMessage(illegal)).isEqualTo(CrabRuntime.TRIAL_ACCOUNT_INVALID);
             assertThat(toolError(illegal).path("field").asText()).isEqualTo("account");
+            assertThat(toolError(illegal).has("traceId")).isFalse();
+            assertThat(toolError(illegal).path("requestNote").asText()).contains("不可查追踪");
             assertThat(illegal.toString()).doesNotContain("s3cret-value").doesNotContain("invalid account name");
         }
     }
@@ -814,7 +841,7 @@ class AuthoringMcpTest {
                     toolMessage(mcp),
                     api.body(),
                     login.body())) {
-                assertThat(text).contains("ada").contains("token").contains("访问令牌").contains("控制台");
+                assertThat(text).contains("ada").contains("访问令牌（token）").contains("填写凭证");
                 assertThat(text).doesNotContain("missing credentials").doesNotContain("password（密码）").doesNotContain("filled-secret");
             }
         }

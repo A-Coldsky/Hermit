@@ -28,6 +28,7 @@ import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.ConsoleSessions;
+import dev.hermit.crab.runtime.CredentialMessages;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.DeclaredSettings;
 import dev.hermit.crab.runtime.ReefBootstrapException;
@@ -111,6 +112,7 @@ final class ConsoleApi {
         get(app, "/console/api/catalog", ctx -> catalog(runtime, ctx));
         post(app, "/console/api/conches/{conch}/subscription", ctx -> subscribe(runtime, ctx));
         post(app, "/console/api/conches/{conch}/update", ctx -> update(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/rollback", ctx -> rollback(runtime, ctx));
         delete(app, "/console/api/conches/{conch}/subscription", ctx -> unsubscribe(runtime, ctx));
         get(app, "/console/api/reef", ctx -> reef(runtime, ctx));
         post(app, "/console/api/reef/bootstrap", ctx -> importReef(runtime, ctx));
@@ -157,10 +159,15 @@ final class ConsoleApi {
         if (doc == null) {
             ConchSync sync = runtime.conchSync();
             ConchSync.UntrustedSignature damaged = sync == null ? null : sync.untrustedSignature(name).orElse(null);
-            if (damaged == null) {
+            if (damaged != null) {
+                GatewayResponses.writeData(ctx, untrustedConch(damaged));
+                return;
+            }
+            ConchSync.DisabledRule disabled = sync == null ? null : sync.disabledRule(name).orElse(null);
+            if (disabled == null) {
                 throw new IllegalArgumentException("conch not found");
             }
-            GatewayResponses.writeData(ctx, untrustedConch(damaged));
+            GatewayResponses.writeData(ctx, disabledConch(runtime, disabled));
             return;
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
@@ -191,6 +198,8 @@ final class ConsoleApi {
         body.put("source", source(runtime, doc.conch()));
         putReefDisabled(runtime, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
+        body.put("previousVersion", runtime.previousVersion(doc.conch()));
+        body.put("ruleDisabled", false);
         GatewayResponses.writeData(ctx, body);
     }
 
@@ -221,6 +230,38 @@ final class ConsoleApi {
         body.put("updateAvailable", false);
         body.put("latestVersion", damaged.latestVersion());
         body.put("newRequiredCredentials", List.of());
+        body.put("ruleDisabled", false);
+        body.put("previousVersion", null);
+        return body;
+    }
+
+    /** Signature verified, files kept, but this version cannot be called until it is replaced or fixed. */
+    private static Map<String, Object> disabledConch(CrabRuntime runtime, ConchSync.DisabledRule disabled) {
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conch", disabled.conch());
+        body.put("version", disabled.version());
+        body.put("title", disabled.title());
+        body.put("description", text(disabled.description()));
+        body.put("driver", null);
+        body.put("credentials", List.of());
+        body.put("config", List.of());
+        body.put("capabilities", List.of());
+        body.put("subscribed", true);
+        body.put("needsConfiguration", false);
+        body.put("loginPaused", false);
+        body.put("source", "REEF");
+        body.put("reefDisabled", false);
+        body.put("reefDisabledAt", null);
+        body.put("installed", true);
+        body.put("repairRequired", false);
+        body.put("repairReason", null);
+        body.put("message", disabled.message());
+        body.put("ruleDisabled", true);
+        body.put("previousVersion", disabled.previousVersion());
+        ConchCatalog.Entry row = catalogByName(runtime).get(disabled.conch());
+        body.put("updateAvailable", row != null && row.updateAvailable());
+        body.put("latestVersion", row != null && row.latestVersion() != null ? row.latestVersion() : disabled.latestVersion());
+        body.put("newRequiredCredentials", row == null ? List.of() : row.newRequiredCredentials());
         return body;
     }
 
@@ -310,7 +351,7 @@ final class ConsoleApi {
         }
         List<String> missing = DeclaredSettings.missingCredentials(doc, present);
         if (!missing.isEmpty()) {
-            throw new IllegalArgumentException("missing required credentials: " + String.join(", ", missing));
+            throw new IllegalArgumentException(CredentialMessages.missing(account, missing, doc.credentials()));
         }
         runtime.admin().writeCredentials(doc, account, fields, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("updated", true));
@@ -325,7 +366,7 @@ final class ConsoleApi {
         }
         ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
         String message = result.error() == null ? "internal error" : result.error().message();
-        GatewayResponses.writeError(ctx, StatusCodes.of(code), code, message == null ? "" : message);
+        GatewayResponses.writeRequestError(ctx, StatusCodes.of(code), code, message == null ? "" : message);
     }
 
     private static void oauthStart(CrabRuntime runtime, Context ctx) {
@@ -548,8 +589,16 @@ final class ConsoleApi {
             }
             ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
             String message = result.error() == null ? "内部错误" : result.error().message();
+            if (CredentialMessages.untraced(message)) {
+                GatewayResponses.writeRequestError(ctx, StatusCodes.of(code), code, message);
+                return;
+            }
             GatewayResponses.writeError(ctx, StatusCodes.of(code), code, message);
         } catch (TrialRejected ex) {
+            if (CredentialMessages.untraced(ex.getMessage())) {
+                GatewayResponses.writeRequestError(ctx, ex.status(), ex.code(), ex.getMessage());
+                return;
+            }
             runtime.noteRejectedTrial(GatewayResponses.trace(ctx));
             GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage(), false);
         }
@@ -718,6 +767,7 @@ final class ConsoleApi {
             row.put("repairRequired", entry.repairRequired());
             row.put("repairReason", entry.repairReason());
             row.put("message", entry.message());
+            row.put("ruleDisabled", entry.ruleDisabled());
             rows.add(row);
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
@@ -748,6 +798,15 @@ final class ConsoleApi {
     private static void update(CrabRuntime runtime, Context ctx) {
         String conch = ctx.pathParam("conch");
         ConchOutcome outcome = runtime.update(conch, Actors.CONSOLE);
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conch", conch);
+        body.put("outcome", outcomeView(outcome));
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void rollback(CrabRuntime runtime, Context ctx) {
+        String conch = ctx.pathParam("conch");
+        ConchOutcome outcome = runtime.rollback(conch, Actors.CONSOLE);
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", conch);
         body.put("outcome", outcomeView(outcome));
@@ -957,26 +1016,14 @@ final class ConsoleApi {
                     LinkedHashMap<String, Object> data = new LinkedHashMap<>();
                     data.put("conch", ex.replaceConch());
                     data.put("confirm", true);
-                    String traceId = GatewayResponses.trace(ctx);
-                    GatewayResponses.write(
-                            ctx,
-                            ex.status(),
-                            ApiJson.bytes(ApiEnvelope.json(data, ex.code(), ex.getMessage(), traceId)),
-                            traceId,
-                            false);
+                    GatewayResponses.writeRequestError(ctx, ex.status(), ex.code(), ex.getMessage(), data);
                     return;
                 }
                 if (ex.hasIssues()) {
                     LinkedHashMap<String, Object> data = new LinkedHashMap<>();
                     data.put("errors", issues(ex.errors()));
                     data.put("warnings", issues(ex.warnings()));
-                    String traceId = GatewayResponses.trace(ctx);
-                    GatewayResponses.write(
-                            ctx,
-                            ex.status(),
-                            ApiJson.bytes(ApiEnvelope.json(data, ex.code(), ex.getMessage(), traceId)),
-                            traceId,
-                            false);
+                    GatewayResponses.writeRequestError(ctx, ex.status(), ex.code(), ex.getMessage(), data);
                     return;
                 }
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
@@ -994,7 +1041,12 @@ final class ConsoleApi {
                     GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, message);
                     return;
                 }
-                GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, clientMessage(ex));
+                String shown = clientMessage(ex);
+                if (CredentialMessages.untraced(shown)) {
+                    GatewayResponses.writeRequestError(ctx, 400, ErrorCode.INVALID_INPUT, shown);
+                    return;
+                }
+                GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, shown);
             }
         });
     }
@@ -1020,6 +1072,7 @@ final class ConsoleApi {
             row.put("loaded", pkg.loaded());
             row.put("broken", pkg.broken());
             row.put("reason", pkg.reason());
+            row.put("ruleDisabled", pkg.ruleDisabled());
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("conches", rows));

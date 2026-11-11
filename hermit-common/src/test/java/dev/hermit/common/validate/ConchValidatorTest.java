@@ -137,6 +137,7 @@ class ConchValidatorTest {
 
         ValidationResult plaintext = Fixtures.validate("plaintext_password.yaml");
         assertThat(codes(plaintext)).containsExactly(ValidationCodes.PLAINTEXT_CREDENTIAL);
+        assertThat(plaintext.errors().get(0).message()).isEqualTo("疑似明文凭证。把它声明成凭证字段，不要写进规则。");
         assertThat(plaintext.errors().get(0).path()).isEqualTo("auth.steps[2].request.form.password");
 
         ValidationResult undeclared = Fixtures.validate("undeclared_credential.yaml");
@@ -673,6 +674,51 @@ class ConchValidatorTest {
                           path: "/item/{{items}}"
                 """), ConchValidator.Context.of(null));
         assertThat(declared.errors()).isEmpty();
+
+        ValidationResult loginOnly = ConchValidator.validate(ConchParser.parse("""
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true, label: 密码 }
+                auth:
+                  steps:
+                    - extract:
+                        token: { jsonpath: $.token }
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    output:
+                      items: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { items: ok }
+                    notes: 注意
+                    related: [list_todo]
+                    steps:
+                      - request:
+                          method: GET
+                          path: "/{{token}}"
+                      - request:
+                          method: GET
+                          path: "/{{token | default('')}}"
+                      - request:
+                          method: GET
+                          path: "/{{missing | default('')}}"
+                      - request:
+                          method: GET
+                          path: "/{{credential.absent | default('')}}"
+                """), ConchValidator.Context.of(null));
+        assertThat(loginOnly.errors()).extracting(ValidationIssue::message).containsExactly(
+                "能力不能引用登录步骤里的变量。",
+                "引用了未声明的凭证 absent");
+        assertThat(loginOnly.errors()).extracting(ValidationIssue::code).containsExactly(
+                ValidationCodes.UNDECLARED_VARIABLE,
+                ValidationCodes.UNDECLARED_CREDENTIAL);
     }
 
     private static String referencing(String steps) {

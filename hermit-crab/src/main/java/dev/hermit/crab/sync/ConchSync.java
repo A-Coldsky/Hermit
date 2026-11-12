@@ -20,9 +20,11 @@ import java.util.TreeSet;
 import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -57,6 +59,7 @@ import dev.hermit.crab.store.Origin;
 public final class ConchSync {
 
     private static final Logger LOG = Logger.getLogger(ConchSync.class.getName());
+    static final Duration DISPLAY_WAIT = Duration.ofSeconds(2);
 
     private final AtomicReference<SyncSettings> settings;
     private final CrabPaths paths;
@@ -71,6 +74,11 @@ public final class ConchSync {
     private final HttpClient client;
     private final SemVer crabVersion = CrabVersion.CURRENT;
     private final AtomicBoolean started = new AtomicBoolean();
+    /**
+     * 同步、订阅、更新、回滚的互斥锁。同步拿着它下载清单和包，最长要等 Reef 超时；
+     * 控制台的只读查询用 {@link #forDisplay} 限时等待，不再一直卡在同步后面。
+     */
+    private final ReentrantLock syncLock = new ReentrantLock();
     private volatile Consumer<SyncReport> reportListener;
     private int credentialDeleteFailures;
 
@@ -149,8 +157,11 @@ public final class ConchSync {
      * so a download is not verified with a different key than the one that started the sync.
      */
     public void retarget(SyncSettings next) {
-        synchronized (this) {
+        syncLock.lock();
+        try {
             settings.set(Objects.requireNonNull(next, "settings"));
+        } finally {
+            syncLock.unlock();
         }
     }
 
@@ -168,8 +179,11 @@ public final class ConchSync {
     }
 
     public SyncReport syncOnce() {
-        synchronized (this) {
+        syncLock.lock();
+        try {
             return syncOnceLocked();
+        } finally {
+            syncLock.unlock();
         }
     }
 
@@ -203,9 +217,7 @@ public final class ConchSync {
     }
 
     public ConchCatalog catalog() {
-        synchronized (this) {
-            return readCatalog();
-        }
+        return forDisplay(this::readCatalog);
     }
 
     /**
@@ -220,7 +232,8 @@ public final class ConchSync {
         if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
             throw new IllegalArgumentException("actor must be cli or console");
         }
-        synchronized (this) {
+        syncLock.lock();
+        try {
             if (!ConchValidator.isConchName(conch)) {
                 throw new SubscriptionException(400, ErrorCode.INVALID_INPUT, SubscriptionException.NAME_INVALID);
             }
@@ -256,6 +269,8 @@ public final class ConchSync {
                 auditSubscribed(conch, actor);
             }
             return outcome;
+        } finally {
+            syncLock.unlock();
         }
     }
 
@@ -284,7 +299,28 @@ public final class ConchSync {
 
     public void unsubscribe(String conch, String actor) {
         SubscriptionCommands.unsubscribe(
-                this, paths, registry, disabledConches, subscriptions, dataSource, conch, actor);
+                syncLock, paths, registry, disabledConches, subscriptions, dataSource, conch, actor);
+    }
+
+    /**
+     * 只给控制台显示用。同步正在下载时最多等 {@link #DISPLAY_WAIT}，等不到就不加锁直接读：
+     * 文件按原子替换写入，库读在各自的事务里，读到的是切换前或切换后的样子，最多短暂不一致。
+     * 切换、授权和调用都不走这里。
+     */
+    private <T> T forDisplay(Supplier<T> read) {
+        boolean locked = false;
+        try {
+            locked = syncLock.tryLock(DISPLAY_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+        try {
+            return read.get();
+        } finally {
+            if (locked) {
+                syncLock.unlock();
+            }
+        }
     }
 
     /**
@@ -300,7 +336,8 @@ public final class ConchSync {
         if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
             throw new IllegalArgumentException("actor must be cli or console");
         }
-        synchronized (this) {
+        syncLock.lock();
+        try {
             if (!ConchValidator.isConchName(conch)) {
                 throw new UpdateException(400, ErrorCode.INVALID_INPUT, SubscriptionException.NAME_INVALID);
             }
@@ -333,6 +370,8 @@ public final class ConchSync {
                 throw new UpdateException(409, ErrorCode.INVALID_INPUT, UpdateException.NOT_HIGHER);
             }
             return downloadActivateAndAudit(entry, actor, installedText, installedText, entry.version(), false);
+        } finally {
+            syncLock.unlock();
         }
     }
 
@@ -344,7 +383,8 @@ public final class ConchSync {
         if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
             throw new IllegalArgumentException("actor must be cli or console");
         }
-        synchronized (this) {
+        syncLock.lock();
+        try {
             if (!ConchValidator.isConchName(conch)) {
                 throw new UpdateException(400, ErrorCode.INVALID_INPUT, SubscriptionException.NAME_INVALID);
             }
@@ -414,6 +454,8 @@ public final class ConchSync {
                     change,
                     current,
                     target);
+        } finally {
+            syncLock.unlock();
         }
     }
 
@@ -534,8 +576,11 @@ public final class ConchSync {
      * Callers that already hold the lock must not call this method.
      */
     public Optional<ConchDoc> stagedDeclaration(String conch) {
-        synchronized (this) {
+        syncLock.lock();
+        try {
             return readStagedDeclaration(conch);
+        } finally {
+            syncLock.unlock();
         }
     }
 
@@ -856,7 +901,7 @@ public final class ConchSync {
      * not subscribed, or failed for any other reason.
      */
     public Optional<UntrustedSignature> untrustedSignature(String conch) {
-        synchronized (this) {
+        return forDisplay(() -> {
             if (!badSignatureUnloaded(conch)) {
                 return Optional.empty();
             }
@@ -865,7 +910,7 @@ public final class ConchSync {
             String description = cached == null ? null : cached.description();
             String latest = cached == null ? null : cached.version();
             return Optional.of(new UntrustedSignature(conch, title, description, latest));
-        }
+        });
     }
 
     /** A subscribed package whose on-disk signature is not trusted and which is not loaded. */
@@ -877,26 +922,27 @@ public final class ConchSync {
      * Files stay. This is not {@link UntrustedSignature} and not a Reef disable.
      */
     public Optional<DisabledRule> disabledRule(String conch) {
-        synchronized (this) {
-            return disabledRuleLocked(conch);
-        }
+        return forDisplay(() -> disabledRuleLocked(conch));
     }
 
     /** Subscribed packages the current validator will not load. Caller may hold this lock. */
     public List<DisabledRule> disabledRules() {
-        synchronized (this) {
+        return forDisplay(() -> {
             ArrayList<DisabledRule> found = new ArrayList<>();
             for (String name : subscriptions.names()) {
                 disabledRuleLocked(name).ifPresent(found::add);
             }
             return List.copyOf(found);
-        }
+        });
     }
 
     /** True when that installed version verifies but the current validator will not load it. */
     public boolean versionRejected(String conch, String version) {
-        synchronized (this) {
+        syncLock.lock();
+        try {
             return version != null && validationDisableMessage(conch, version) != null;
+        } finally {
+            syncLock.unlock();
         }
     }
 
@@ -934,14 +980,14 @@ public final class ConchSync {
 
     /** On-disk package for a subscribed install, including one the validator will not load. */
     public Optional<ConchDoc> readableInstalled(String conch) {
-        synchronized (this) {
+        return forDisplay(() -> {
             if (conch == null || !ConchValidator.isConchName(conch) || isLocal(conch)) {
                 return Optional.empty();
             }
             String pointer = ConchFiles.safeSegment(conch) ? ConchFiles.readCurrent(paths, conch).orElse(null) : null;
             VerifiedConch verified = readInstalled(conch, pointer);
-            return verified == null ? Optional.empty() : Optional.of(verified.conchDoc());
-        }
+            return verified == null ? Optional.<ConchDoc>empty() : Optional.of(verified.conchDoc());
+        });
     }
 
     /**
@@ -953,9 +999,7 @@ public final class ConchSync {
         if (conch == null || !ConchValidator.isConchName(conch)) {
             return PreviousState.none();
         }
-        synchronized (this) {
-            return previousStateLocked(conch);
-        }
+        return forDisplay(() -> previousStateLocked(conch));
     }
 
     private PreviousState previousStateLocked(String conch) {

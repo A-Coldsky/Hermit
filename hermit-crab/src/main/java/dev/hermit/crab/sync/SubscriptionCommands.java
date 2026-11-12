@@ -1,5 +1,7 @@
 package dev.hermit.crab.sync;
 
+import java.util.concurrent.locks.Lock;
+
 import javax.sql.DataSource;
 
 import dev.hermit.common.error.ErrorCode;
@@ -20,7 +22,7 @@ public final class SubscriptionCommands {
     }
 
     public static void unsubscribe(
-            Object syncLock,
+            Lock syncLock,
             CrabPaths paths,
             ConchRegistry registry,
             DisabledConches disabledConches,
@@ -36,8 +38,11 @@ public final class SubscriptionCommands {
             unsubscribeLocked(paths, registry, disabledConches, subscriptions, dataSource, conch, actor);
             return;
         }
-        synchronized (syncLock) {
+        syncLock.lock();
+        try {
             unsubscribeLocked(paths, registry, disabledConches, subscriptions, dataSource, conch, actor);
+        } finally {
+            syncLock.unlock();
         }
     }
 

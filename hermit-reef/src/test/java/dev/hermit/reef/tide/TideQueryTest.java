@@ -213,6 +213,29 @@ class TideQueryTest {
         assertThat(filtered.get(0).get("conch").asText()).isEqualTo("other_app");
     }
 
+    /** 分组改在库里做之后，计数相同的组仍按最近一次发生排在前面。 */
+    @Test
+    void failuresWithEqualCountsListTheNewestGroupFirst() throws Exception {
+        failure("legacy_oa", "1.0.0", "list_todo", 2, "extract", "RULE_MISMATCH", "old", "old-1", DAY);
+        failure("legacy_oa", "1.0.0", "list_todo", 1, "extract", "RULE_MISMATCH", "new", "new-1", DAY.plusSeconds(60));
+        for (int i = 0; i < 30; i++) {
+            failure("legacy_oa", "1.0.0", "list_todo", 3, "request", "UPSTREAM_ERROR", "bulk-" + i, "bulk-" + i,
+                    DAY.plusSeconds(i));
+        }
+
+        JsonNode groups = admin(get("/api/admin/tide/failures")
+                .param("conch", "legacy_oa")
+                .param("from", DAY.toString())
+                .param("to", "2026-06-02T00:00:00Z"))
+                .get("data").get("groups");
+        assertThat(groups).hasSize(3);
+        assertThat(groups.get(0).get("count").asLong()).isEqualTo(30);
+        assertThat(texts(groups.get(0).get("recent"), "traceId"))
+                .containsExactly("bulk-29", "bulk-28", "bulk-27", "bulk-26", "bulk-25");
+        assertThat(groups.get(1).get("stepIndex").asInt()).isEqualTo(1);
+        assertThat(groups.get(2).get("stepIndex").asInt()).isEqualTo(2);
+    }
+
     @Test
     void compareReturnsCallsFailuresAndRateInRequestOrder() throws Exception {
         hour("legacy_oa", "1.0.0", "list_todo", DAY, "a", 80, 20, 1, 1);

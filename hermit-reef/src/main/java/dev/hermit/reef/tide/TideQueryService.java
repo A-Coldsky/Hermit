@@ -8,6 +8,8 @@ import dev.hermit.reef.tide.TideSummary.TidePoint;
 import dev.hermit.reef.tide.VersionCompare.VersionStats;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
@@ -17,6 +19,7 @@ import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,16 +50,24 @@ public class TideQueryService {
         }
         TimeRange range = range(from, to);
         String conchFilter = blankToNull(conch);
+        // 实例和版本在库里先合并到每小时一行，Java 只再按天合并，不把所有实例的明细读进内存。
         List<CountRow> rows = jdbc.query(
-                "SELECT conch, action, hour_start, success, failure, avg_millis, p95_millis FROM hermit_hourly_counts "
-                        + "WHERE hour_start >= ? AND hour_start < ? AND (? IS NULL OR conch = ?)",
+                "SELECT conch, action, hour_start, SUM(success) AS success, SUM(failure) AS failure, "
+                        + "SUM(CASE WHEN avg_millis IS NOT NULL AND success + failure > 0 "
+                        + "THEN avg_millis * (success + failure) ELSE 0 END) AS weighted, "
+                        + "SUM(CASE WHEN avg_millis IS NOT NULL AND success + failure > 0 "
+                        + "THEN success + failure ELSE 0 END) AS weight, "
+                        + "MAX(p95_millis) AS p95_millis FROM hermit_hourly_counts "
+                        + "WHERE hour_start >= ? AND hour_start < ? AND (? IS NULL OR conch = ?) "
+                        + "GROUP BY conch, action, hour_start",
                 (rs, rowNum) -> new CountRow(
                         rs.getString("conch"),
                         rs.getString("action"),
                         rs.getTimestamp("hour_start").toInstant(),
                         rs.getLong("success"),
                         rs.getLong("failure"),
-                        asLong(rs.getObject("avg_millis")),
+                        decimal(rs.getBigDecimal("weighted")),
+                        rs.getLong("weight"),
                         asLong(rs.getObject("p95_millis"))),
                 Timestamp.from(range.from()),
                 Timestamp.from(range.to()),
@@ -86,24 +97,11 @@ public class TideQueryService {
         String conchFilter = blankToNull(conch);
         String versionFilter = blankToNull(version);
         String actionFilter = blankToNull(action);
-        List<FailureRow> rows = jdbc.query(
-                "SELECT f.id, f.conch, f.conch_version, f.action, f.step_index, f.step_type, f.error_code, "
-                        + "f.summary, f.trace_id, u.username AS owner "
-                        + "FROM hermit_failure_reports f "
-                        + "LEFT JOIN hermit_admin_users u ON u.id = f.owner_user_id "
-                        + "WHERE f.occurred_at >= ? AND f.occurred_at < ? "
-                        + "AND (? IS NULL OR f.conch = ?) AND (? IS NULL OR f.conch_version = ?) "
-                        + "AND (? IS NULL OR f.action = ?) ORDER BY f.occurred_at DESC, f.id DESC",
-                (rs, rowNum) -> new FailureRow(
-                        rs.getString("conch"),
-                        rs.getString("conch_version"),
-                        rs.getString("action"),
-                        (Integer) rs.getObject("step_index"),
-                        rs.getString("step_type"),
-                        rs.getString("error_code"),
-                        rs.getString("summary"),
-                        rs.getString("trace_id"),
-                        rs.getString("owner")),
+        // 计数在库里分组；每组最新 5 条用窗口函数取，不把整个时间段的失败明细读进内存。
+        String where = "WHERE f.occurred_at >= ? AND f.occurred_at < ? "
+                + "AND (? IS NULL OR f.conch = ?) AND (? IS NULL OR f.conch_version = ?) "
+                + "AND (? IS NULL OR f.action = ?) ";
+        Object[] args = {
                 Timestamp.from(range.from()),
                 Timestamp.from(range.to()),
                 conchFilter,
@@ -111,23 +109,46 @@ public class TideQueryService {
                 versionFilter,
                 versionFilter,
                 actionFilter,
-                actionFilter);
+                actionFilter
+        };
         Map<FailureKey, FailureAccum> grouped = new LinkedHashMap<>();
-        for (FailureRow row : rows) {
-            FailureAccum accum = grouped.computeIfAbsent(
-                    new FailureKey(row.conch(), row.conchVersion(), row.action(), row.stepIndex(), row.stepType(),
-                            row.errorCode(), row.owner()),
-                    key -> new FailureAccum());
-            accum.count++;
-            if (accum.recent.size() < RECENT_SUMMARIES) {
-                accum.recent.add(new FailureSample(row.summary(), row.traceId(), row.owner()));
-            }
-        }
+        jdbc.query(
+                "SELECT f.conch, f.conch_version, f.action, f.step_index, f.step_type, f.error_code, "
+                        + "u.username AS owner, COUNT(*) AS n, MAX(f.occurred_at) AS latest "
+                        + "FROM hermit_failure_reports f "
+                        + "LEFT JOIN hermit_admin_users u ON u.id = f.owner_user_id "
+                        + where
+                        + "GROUP BY f.conch, f.conch_version, f.action, f.step_index, f.step_type, f.error_code, u.username",
+                rs -> {
+                    FailureAccum accum = grouped.computeIfAbsent(failureKey(rs), key -> new FailureAccum());
+                    accum.count = rs.getLong("n");
+                    accum.latest = rs.getTimestamp("latest").toInstant();
+                },
+                args);
+        jdbc.query(
+                "SELECT conch, conch_version, action, step_index, step_type, error_code, owner, summary, trace_id "
+                        + "FROM (SELECT f.conch, f.conch_version, f.action, f.step_index, f.step_type, f.error_code, "
+                        + "u.username AS owner, f.summary, f.trace_id, ROW_NUMBER() OVER ("
+                        + "PARTITION BY f.conch, f.conch_version, f.action, f.step_index, f.step_type, f.error_code, "
+                        + "u.username ORDER BY f.occurred_at DESC, f.id DESC) AS rn "
+                        + "FROM hermit_failure_reports f "
+                        + "LEFT JOIN hermit_admin_users u ON u.id = f.owner_user_id "
+                        + where
+                        + ") ranked WHERE rn <= " + RECENT_SUMMARIES + " ORDER BY rn",
+                rs -> {
+                    FailureAccum accum = grouped.get(failureKey(rs));
+                    if (accum != null && accum.recent.size() < RECENT_SUMMARIES) {
+                        accum.recent.add(new FailureSample(
+                                rs.getString("summary"), rs.getString("trace_id"), rs.getString("owner")));
+                    }
+                },
+                args);
         List<FailureGroup> groups = new ArrayList<>();
+        Map<FailureGroup, Instant> latest = new IdentityHashMap<>();
         for (Map.Entry<FailureKey, FailureAccum> entry : grouped.entrySet()) {
             FailureKey key = entry.getKey();
             FailureAccum accum = entry.getValue();
-            groups.add(new FailureGroup(
+            FailureGroup group = new FailureGroup(
                     key.conch(),
                     key.conchVersion(),
                     key.action(),
@@ -136,14 +157,19 @@ public class TideQueryService {
                     key.errorCode(),
                     key.owner(),
                     accum.count,
-                    List.copyOf(accum.recent)));
+                    List.copyOf(accum.recent));
+            groups.add(group);
+            latest.put(group, accum.latest);
         }
         groups.sort(Comparator.comparingLong(FailureGroup::count).reversed()
                 .thenComparing(FailureGroup::conch, Comparator.nullsFirst(Comparator.naturalOrder()))
                 .thenComparing(FailureGroup::conchVersion, Comparator.nullsFirst(Comparator.naturalOrder()))
                 .thenComparing(FailureGroup::action, Comparator.nullsFirst(Comparator.naturalOrder()))
                 .thenComparing(FailureGroup::errorCode, Comparator.nullsFirst(Comparator.naturalOrder()))
-                .thenComparing(FailureGroup::owner, Comparator.nullsFirst(Comparator.naturalOrder())));
+                .thenComparing(FailureGroup::owner, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparing(latest::get, Comparator.reverseOrder())
+                .thenComparing(FailureGroup::stepIndex, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparing(FailureGroup::stepType, Comparator.nullsFirst(Comparator.naturalOrder())));
         return new FailureDrilldown(List.copyOf(groups));
     }
 
@@ -261,13 +287,15 @@ public class TideQueryService {
     private record TimeRange(Instant from, Instant to) {
     }
 
+    /** 一小时内所有实例、版本合在一起。{@code weighted} 是平均耗时乘调用数之和，{@code weight} 是对应的调用数。 */
     private record CountRow(
             String conch,
             String action,
             Instant hourStart,
             long success,
             long failure,
-            Long avgMillis,
+            BigDecimal weighted,
+            long weight,
             Long p95Millis) {
     }
 
@@ -284,11 +312,8 @@ public class TideQueryService {
         void add(CountRow row) {
             success += row.success();
             failure += row.failure();
-            long calls = row.success() + row.failure();
-            if (row.avgMillis() != null && calls > 0) {
-                weighted = weighted.add(BigDecimal.valueOf(row.avgMillis()).multiply(BigDecimal.valueOf(calls)));
-                weight += calls;
-            }
+            weighted = weighted.add(row.weighted());
+            weight += row.weight();
             if (row.p95Millis() != null) {
                 p95 = p95 == null ? row.p95Millis() : Math.max(p95, row.p95Millis());
             }
@@ -303,18 +328,6 @@ public class TideQueryService {
         }
     }
 
-    private record FailureRow(
-            String conch,
-            String conchVersion,
-            String action,
-            Integer stepIndex,
-            String stepType,
-            String errorCode,
-            String summary,
-            String traceId,
-            String owner) {
-    }
-
     private record FailureKey(
             String conch,
             String conchVersion,
@@ -325,8 +338,24 @@ public class TideQueryService {
             String owner) {
     }
 
+    private static FailureKey failureKey(ResultSet rs) throws SQLException {
+        return new FailureKey(
+                rs.getString("conch"),
+                rs.getString("conch_version"),
+                rs.getString("action"),
+                rs.getObject("step_index", Integer.class),
+                rs.getString("step_type"),
+                rs.getString("error_code"),
+                rs.getString("owner"));
+    }
+
+    private static BigDecimal decimal(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
     private static final class FailureAccum {
         private long count;
+        private Instant latest;
         private final List<FailureSample> recent = new ArrayList<>();
     }
 }

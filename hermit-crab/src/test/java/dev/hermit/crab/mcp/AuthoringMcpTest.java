@@ -1033,6 +1033,135 @@ class AuthoringMcpTest {
         throw new AssertionError("no non-loopback address");
     }
 
+    /** 只点名了别的包的 Key：可以建新包，但不能覆盖或试跑它没点名的已有本地包。 */
+    @org.junit.jupiter.api.Test
+    void namedKeysCannotOverwriteOrTrialOtherLocalPackages() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("scope"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            assertThat(server.consoleImport(writable("other_pkg", "1.0.0")).statusCode()).isEqualTo(200);
+            server.runtime.admin().createAccount("other_pkg", "main", Actors.CONSOLE);
+            CreatedApiKey named = server.runtime.apiKeys().create(
+                    "mine-only", new ApiKeyScope(Set.of("mine_pkg"), Set.of(), false), Actors.CONSOLE);
+            String session = server.initialize(named.plaintext(), false);
+
+            JsonNode trial = server.rpc(named.plaintext(), session, 3, "tools/call", Map.of(
+                    "name", "conch_trial_run", "arguments", Map.of("conch", "other_pkg", "action", "write_note")));
+            assertThat(toolError(trial).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(trial)).isEqualTo(AuthoringCalls.NOT_IN_SCOPE_PREFIX + "other_pkg"
+                    + AuthoringCalls.NOT_IN_SCOPE_SUFFIX);
+            assertThat(trial.toString()).doesNotContain("wrote-other_pkg");
+
+            Path stored = server.runtime.paths().localConches().resolve("other_pkg.yaml");
+            String before = Files.readString(stored);
+            JsonNode overwrite = server.rpc(named.plaintext(), session, 4, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", writable("other_pkg", "1.0.1"))));
+            assertThat(toolError(overwrite).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(overwrite)).startsWith(AuthoringCalls.NOT_IN_SCOPE_PREFIX + "other_pkg");
+            assertThat(Files.readString(stored)).isEqualTo(before);
+
+            JsonNode fresh = server.rpc(named.plaintext(), session, 5, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", writable("new_pkg", "1.0.0"))));
+            assertThat(structured(fresh).path("ok").asBoolean()).as(fresh.toString()).isTrue();
+        }
+    }
+
+    /** 破坏性能力的试跑和普通调用一样要确认；确认期间包被换掉就不执行。 */
+    @org.junit.jupiter.api.Test
+    void destructiveTrialNeedsConfirmationOfTheSameSnapshot() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("trial-confirm"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            assertThat(server.consoleImport(writable("write_pkg", "1.0.0")).statusCode()).isEqualTo(200);
+            server.runtime.admin().createAccount("write_pkg", "main", Actors.CONSOLE);
+
+            String plain = server.initialize(false);
+            JsonNode refused = server.call(plain, "conch_trial_run", Map.of("conch", "write_pkg", "action", "write_note"));
+            assertThat(toolError(refused).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(refused)).isEqualTo(McpCalls.NO_CONFIRM);
+
+            String confirming = server.initialize(true);
+            try (Sse sse = Sse.open(server, confirming)) {
+                sse.awaitPrefix(": open");
+                AtomicReference<JsonNode> accepted = new AtomicReference<>();
+                Thread accept = new Thread(() -> accepted.set(server.callUnchecked(
+                        confirming, "conch_trial_run", Map.of("conch", "write_pkg", "action", "write_note"))));
+                accept.start();
+                server.answer(confirming, sse.awaitMethod("elicitation/create"), "accept", true);
+                accept.join(15_000);
+                assertThat(structured(accepted.get()).path("data").path("message").asText())
+                        .as(String.valueOf(accepted.get())).isEqualTo("wrote-write_pkg");
+
+                AtomicReference<JsonNode> swapped = new AtomicReference<>();
+                Thread swap = new Thread(() -> swapped.set(server.callUnchecked(
+                        confirming, "conch_trial_run", Map.of("conch", "write_pkg", "action", "write_note"))));
+                swap.start();
+                JsonNode question = sse.awaitMethod("elicitation/create");
+                server.runtime.registry().put(
+                        ConchParser.parse(writable("write_pkg", "1.0.0").replace("wrote-write_pkg", "changed")),
+                        dev.hermit.crab.store.Origin.LOCAL);
+                server.answer(confirming, question, "accept", true);
+                swap.join(15_000);
+                assertThat(toolError(swapped.get()).path("code").asText()).isEqualTo("CONFLICT");
+                assertThat(toolMessage(swapped.get())).isEqualTo(dev.hermit.crab.runtime.Invoker.CHANGED_AFTER_CONFIRM);
+                assertThat(swapped.get().toString()).doesNotContain("\"changed\"");
+            }
+        }
+    }
+
+    /** 普通工具调用：确认的是旧版本，执行前发现注册表换了版本就拒绝（审计 A01 的 MCP 部分）。 */
+    @org.junit.jupiter.api.Test
+    void confirmedToolCallRefusesAVersionSwappedDuringConfirmation() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("call-confirm"))) {
+            assertThat(server.consoleImport(writable("swap_pkg", "1.0.0")).statusCode()).isEqualTo(200);
+            server.runtime.admin().createAccount("swap_pkg", "main", Actors.CONSOLE);
+            String confirming = server.initialize(true);
+            try (Sse sse = Sse.open(server, confirming)) {
+                sse.awaitPrefix(": open");
+                AtomicReference<JsonNode> result = new AtomicReference<>();
+                Thread call = new Thread(() -> result.set(server.callUnchecked(
+                        confirming, "swap_pkg__write_note", Map.of())));
+                call.start();
+                JsonNode question = sse.awaitMethod("elicitation/create");
+                server.runtime.registry().put(
+                        ConchParser.parse(writable("swap_pkg", "1.0.1").replace("wrote-swap_pkg", "changed")),
+                        dev.hermit.crab.store.Origin.LOCAL);
+                server.answer(confirming, question, "accept", true);
+                call.join(15_000);
+                assertThat(result.get().toString()).as(String.valueOf(result.get()))
+                        .contains("CONFLICT")
+                        .contains(dev.hermit.crab.runtime.Invoker.CHANGED_AFTER_CONFIRM)
+                        .doesNotContain("\"changed\"");
+            }
+        }
+    }
+
+    private static String writable(String name, String version) {
+        return """
+                conch: %s
+                version: %s
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:9/
+                title: 写入探测
+                description: 只在本机。
+                credentials: {}
+                actions:
+                  write_note:
+                    title: 写入
+                    description: 返回常量，模拟写操作。
+                    idempotent: false
+                    mcp: {expose: true, read_only: false, destructive: true}
+                    steps:
+                      - set: {message: wrote-%s}
+                    output:
+                      message: {type: string, description: 文本}
+                    examples:
+                      - input: {}
+                        output: {message: wrote-%s}
+                    notes: 无
+                    related: []
+                """.formatted(name, version, name, name);
+    }
+
     private static final class Harness implements AutoCloseable {
         final CrabRuntime runtime;
         final CrabHttpServer httpServer;

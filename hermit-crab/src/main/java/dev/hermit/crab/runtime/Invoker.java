@@ -7,7 +7,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -59,8 +62,8 @@ public final class Invoker {
     public static final String NOT_FOUND_MESSAGE = "不存在";
     /** HTTP 破坏性调用缺这个头时返回 409，并且不查、不写幂等缓存。 */
     public static final String CONFIRM_REQUIRED = "该操作需要确认。请带上请求头 X-Hermit-Confirm: true 后重试。";
-    /** Power of two. Distinct keys share a stripe; stripes are not removed after a request. */
-    static final int IDEMPOTENCY_STRIPES = 64;
+    /** 等待确认期间规则包被更新、回滚或重新导入。409，不执行。 */
+    public static final String CHANGED_AFTER_CONFIRM = "确认期间规则包已经变化，没有执行。请重新发起，并确认新版本。";
 
     private final ConchRegistry registry;
     private final AccountStore accounts;
@@ -72,7 +75,11 @@ public final class Invoker {
     private final CapabilityGate disabled;
     private final DisabledConches disabledConches;
     private final List<CrabRuntime.ExecutionListener> listeners = new CopyOnWriteArrayList<>();
-    private final Object[] idempotencyLocks = newIdempotencyLocks();
+    /**
+     * 同一幂等键正在执行时，后到的请求等它结束再查缓存。只有同一个键互相等待；
+     * 执行结束就移除，不随历史键的数量增长（审计 A05）。
+     */
+    private final ConcurrentHashMap<String, CompletableFuture<Void>> idempotencyInFlight = new ConcurrentHashMap<>();
     private volatile ReportQueue reportQueue;
     private volatile KnownSecrets knownSecrets = KnownSecrets.empty();
     private volatile DataSource versionSuccess;
@@ -183,6 +190,27 @@ public final class Invoker {
             String traceId,
             boolean httpConfirmed
     ) {
+        return invoke(principal, conch, action, input, account, idempotencyKey, bodySha256, channel, traceId,
+                httpConfirmed, null);
+    }
+
+    /**
+     * {@code confirmedAgainst} 是调用方已经据此做过确认（MCP elicitation）的那份规则包。
+     * 注册表里的版本和它不一样时拒绝，不执行用户没有确认过的新版本。null 表示调用方没有做过确认。
+     */
+    public InvokeOutcome invoke(
+            ApiKeyPrincipal principal,
+            String conch,
+            String action,
+            Map<String, Object> input,
+            Optional<String> account,
+            Optional<String> idempotencyKey,
+            String bodySha256,
+            CallChannel channel,
+            String traceId,
+            boolean httpConfirmed,
+            ConchDoc confirmedAgainst
+    ) {
         if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
         }
@@ -192,6 +220,9 @@ public final class Invoker {
         ConchDoc doc = registry.find(conch).orElse(null);
         if (doc == null && disabledConches.contains(conch)) {
             return requestOnly(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE);
+        }
+        if (confirmedAgainst != null && doc != null && !sameSnapshot(doc, confirmedAgainst)) {
+            return requestOnly(traceId, ErrorCode.CONFLICT, CHANGED_AFTER_CONFIRM);
         }
         Action capability = doc == null ? null : doc.actions().get(action);
         if (doc == null || capability == null) {
@@ -269,8 +300,22 @@ public final class Invoker {
             String traceId
     ) {
         String lockId = origin.name() + "\0" + doc.conch() + "\0" + account.account() + "\0" + action + "\0" + key;
-        Object lock = idempotencyLocks[stripe(lockId)];
-        synchronized (lock) {
+        CompletableFuture<Void> mine = new CompletableFuture<>();
+        while (true) {
+            CompletableFuture<Void> running = idempotencyInFlight.putIfAbsent(lockId, mine);
+            if (running == null) {
+                break;
+            }
+            try {
+                running.get();
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return requestOnly(traceId, ErrorCode.INTERNAL, "内部错误");
+            } catch (ExecutionException ignored) {
+                // 前一个请求失败也只是让出位置，这里重新查缓存。
+            }
+        }
+        try {
             Optional<IdempotencyStore.Cached> stored = idempotency.findFresh(
                     origin, doc.conch(), account.account(), action, key);
             if (stored.isPresent()) {
@@ -290,7 +335,15 @@ public final class Invoker {
                     new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8),
                     bodySha256);
             return outcome;
+        } finally {
+            idempotencyInFlight.remove(lockId, mine);
+            mine.complete(null);
         }
+    }
+
+    /** Same instance, or the same content reloaded (records compare by value). */
+    public static boolean sameSnapshot(ConchDoc current, ConchDoc confirmed) {
+        return current == confirmed || current.equals(confirmed);
     }
 
     /** Both absent matches. A stored null (schema &lt; 10) does not match a real digest. */
@@ -476,23 +529,9 @@ public final class Invoker {
         return new InvokeOutcome(status, ApiJson.bytes(json), traceId, false, payload);
     }
 
-    int idempotencyStripes() {
-        return idempotencyLocks.length;
-    }
-
-    private static Object[] newIdempotencyLocks() {
-        if (Integer.bitCount(IDEMPOTENCY_STRIPES) != 1) {
-            throw new IllegalStateException("idempotency stripes must be a power of two");
-        }
-        Object[] locks = new Object[IDEMPOTENCY_STRIPES];
-        for (int index = 0; index < locks.length; index++) {
-            locks[index] = new Object();
-        }
-        return locks;
-    }
-
-    private static int stripe(String lockId) {
-        return lockId.hashCode() & (IDEMPOTENCY_STRIPES - 1);
+    /** Keys currently executing. Empty once every call has returned. */
+    int idempotencyInFlight() {
+        return idempotencyInFlight.size();
     }
 
     /** Capability disable flags, config file union in-memory switches. */

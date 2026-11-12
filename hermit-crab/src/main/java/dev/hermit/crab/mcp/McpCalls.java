@@ -108,7 +108,7 @@ final class McpCalls {
             return authoring.save(principal, session, arguments, attempt);
         }
         if (McpCatalog.TRIAL_RUN.equals(name)) {
-            return authoring.trial(principal, arguments, attempt);
+            return authoring.trial(principal, session, arguments, attempt);
         }
         if (attempt.directory()) {
             return directory(principal, session, headerAccount, name, arguments, attempt);
@@ -189,13 +189,14 @@ final class McpCalls {
         if (account == null) {
             return failAsRequest(attempt, "INVALID_INPUT", Invoker.INVALID_ACCOUNT_NAME, "account");
         }
-        if (found.get().action().effectiveConfirm()) {
+        boolean confirm = found.get().action().effectiveConfirm();
+        if (confirm) {
             McpSchema.CallToolResult confirmed = confirm(session, found.get().action(), input, account, attempt);
             if (confirmed != null) {
                 return confirmed;
             }
         }
-        return invoke(principal, found.get(), input, account, attempt);
+        return invoke(principal, found.get(), input, account, attempt, confirm);
     }
 
     private McpSchema.CallToolResult invokeDirect(
@@ -214,16 +215,18 @@ final class McpCalls {
         if (account == null) {
             return failAsRequest(attempt, "INVALID_INPUT", Invoker.INVALID_ACCOUNT_NAME, selector);
         }
-        if (ref.action().effectiveConfirm()) {
+        boolean confirm = ref.action().effectiveConfirm();
+        if (confirm) {
             McpSchema.CallToolResult confirmed = confirm(session, ref.action(), input, account, attempt);
             if (confirmed != null) {
                 return confirmed;
             }
         }
-        return invoke(principal, ref, input, account, attempt);
+        return invoke(principal, ref, input, account, attempt, confirm);
     }
 
-    private McpSchema.CallToolResult confirm(
+    /** Elicitation for a destructive call. {@code null} means the user accepted. */
+    static McpSchema.CallToolResult confirm(
             McpSession session,
             Action action,
             Map<String, Object> input,
@@ -395,11 +398,13 @@ final class McpCalls {
             McpCatalog.CapabilityRef ref,
             Map<String, Object> input,
             Optional<String> account,
-            Attempt attempt
+            Attempt attempt,
+            boolean confirmed
     ) {
         InvokeOutcome outcome;
         try {
             // MCP 不传 Idempotency-Key。同键回放只在 HTTP POST。
+            // 确认过的调用带上确认时那份规则包：等待期间换了版本就拒绝，不执行没确认过的内容。
             outcome = runtime.invoker().invoke(
                     principal,
                     ref.conch().conch(),
@@ -409,7 +414,9 @@ final class McpCalls {
                     Optional.empty(),
                     null,
                     CallChannel.MCP,
-                    attempt.traceId());
+                    attempt.traceId(),
+                    false,
+                    confirmed ? ref.conch() : null);
         } catch (RuntimeException ex) {
             return fail(attempt, "INTERNAL", "internal error");
         }

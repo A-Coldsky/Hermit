@@ -348,8 +348,27 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             String traceId,
             String apiKeyId
     ) {
+        return trialLocal(conch, action, account, input, traceId, apiKeyId, null);
+    }
+
+    /**
+     * {@code confirmedAgainst} 是 MCP 已经据此让用户确认过的那份本地包。确认期间被重新导入时拒绝，
+     * 不执行没确认过的内容。控制台试跑和不需要确认的试跑传 null。
+     */
+    public ExecutionResult trialLocal(
+            String conch,
+            String action,
+            Optional<String> account,
+            Map<String, Object> input,
+            String traceId,
+            String apiKeyId,
+            ConchDoc confirmedAgainst
+    ) {
         String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
         ConchDoc doc = requireLocalDebug(conch);
+        if (confirmedAgainst != null && !Invoker.sameSnapshot(doc, confirmedAgainst)) {
+            throw new TrialRejected(409, ErrorCode.CONFLICT, Invoker.CHANGED_AFTER_CONFIRM, true);
+        }
         if (!"http".equals(doc.driver()) && !"mcp".equals(doc.driver())) {
             throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "只支持 HTTP 或 MCP 规则包的试跑。", true);
         }

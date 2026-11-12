@@ -13,3 +13,4 @@ reef-data/
 node_modules/
 hermit-web/dist/
 .env
+/dist/

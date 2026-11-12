@@ -1,5 +1,6 @@
 package dev.hermit.crab.engine;
 
+import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
@@ -11,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.management.ThreadMXBean;
 
 import org.mozilla.javascript.ClassShutter;
 import org.mozilla.javascript.ConsString;
@@ -44,6 +46,12 @@ final class ScriptStep {
     static final int MAX_TIMEOUT_MS = 5000;
     static final int MAX_SOURCE_BYTES = 64 * 1024;
     static final int MAX_RESULT_BYTES = 1024 * 1024;
+    static final String MEMORY_EXCEEDED = "脚本内存超限";
+    /**
+     * 一次脚本（含把变量转成 JS 对象）在本线程上最多分配的字节数，按 JVM 的线程分配计数，包含已回收的垃圾。
+     * 同一个 JVM 里没有真正的内存隔离；这里挡住循环里不断变大的脚本。单次巨大的分配在 {@link #run} 里接住。
+     */
+    static volatile long maxAllocatedBytes = 256L * 1024 * 1024;
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> FIELDS = Set.of("code", "into", "timeout_ms");
@@ -58,6 +66,7 @@ final class ScriptStep {
             "java", "javax", "org", "com", "edu", "net", "getClass"
     };
     private static final ClassShutter SHUTTER = name -> false;
+    private static final ThreadMXBean THREADS = threadBean();
     private static final WrapFactory WRAP = new SandboxWrap();
     private static final String PREFIX = "(function(){\n";
     private static final String SUFFIX = "\n})()";
@@ -72,6 +81,9 @@ final class ScriptStep {
             throw ex;
         } catch (ScriptTimeExceeded ex) {
             throw timeout(ex);
+        } catch (ScriptMemoryExceeded | OutOfMemoryError ex) {
+            // OOM 多半来自脚本里一次巨大的分配（如超长 repeat），那次分配没有成功，放手后可以回收。
+            throw mismatch(MEMORY_EXCEEDED);
         } catch (StackOverflowError ex) {
             throw mismatch("脚本调用栈过深");
         } catch (RuntimeException ex) {
@@ -89,7 +101,7 @@ final class ScriptStep {
             throw new DeadlineExceeded(-1, "script", List.of());
         }
         long scriptDeadline = deadline(now, timeoutMs);
-        windows.set(new Window(scriptDeadline, capabilityDeadlineNanos));
+        windows.set(new Window(scriptDeadline, capabilityDeadlineNanos, allocated()));
         try {
             Object raw = factory.call(cx -> evaluate(cx, code, vars));
             Object converted = fromJs(raw, new IdentityHashMap<>());
@@ -424,6 +436,9 @@ final class ScriptStep {
             if (now >= window.capabilityDeadline) {
                 throw new ScriptTimeExceeded(true);
             }
+            if (window.allocationStart >= 0 && allocated() - window.allocationStart > maxAllocatedBytes) {
+                throw new ScriptMemoryExceeded();
+            }
         }
     }
 
@@ -449,7 +464,29 @@ final class ScriptStep {
         }
     }
 
-    private record Window(long scriptDeadline, long capabilityDeadline) {
+    /** {@code allocationStart} 为 -1 时这个 JVM 不提供线程分配计数，只靠超时。 */
+    private record Window(long scriptDeadline, long capabilityDeadline, long allocationStart) {
+    }
+
+    private static long allocated() {
+        return THREADS == null ? -1 : THREADS.getCurrentThreadAllocatedBytes();
+    }
+
+    private static ThreadMXBean threadBean() {
+        if (ManagementFactory.getThreadMXBean() instanceof ThreadMXBean bean
+                && bean.isThreadAllocatedMemorySupported()) {
+            if (!bean.isThreadAllocatedMemoryEnabled()) {
+                bean.setThreadAllocatedMemoryEnabled(true);
+            }
+            return bean;
+        }
+        return null;
+    }
+
+    private static final class ScriptMemoryExceeded extends Error {
+        private ScriptMemoryExceeded() {
+            super("memory", null, false, false);
+        }
     }
 
     private static final class ScriptTimeExceeded extends Error {

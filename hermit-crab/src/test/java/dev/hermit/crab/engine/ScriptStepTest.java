@@ -212,6 +212,45 @@ class ScriptStepTest {
         assertThat(defaultElapsed).isBetween(500L, 4_000L);
     }
 
+    /** 循环里不断变大的脚本按分配预算停下，不等超时把整个进程的堆吃光。 */
+    @Test
+    void stopsScriptsThatKeepAllocating() {
+        long previous = ScriptStep.maxAllocatedBytes;
+        ScriptStep.maxAllocatedBytes = 16L * 1024 * 1024;
+        try {
+            long started = System.nanoTime();
+            ExecutionResult result = run("""
+                    - script:
+                        code: |
+                          var kept = [];
+                          while (true) { kept.push(new Array(4096).join('x')); }
+                        timeout_ms: 5000
+                        into: value
+                    """, """
+                    value: { type: string, description: 结果 }
+                    """);
+            long elapsed = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(result.error().message()).isEqualTo(ScriptStep.MEMORY_EXCEEDED);
+            assertThat(elapsed).isLessThan(4_000);
+
+            ExecutionResult small = run("""
+                    - script:
+                        code: |
+                          var s = '';
+                          for (var i = 0; i < 100; i++) { s += 'x'; }
+                          return s;
+                        into: value
+                    """, """
+                    value: { type: string, description: 结果 }
+                    """);
+            assertThat(small.success()).as(String.valueOf(small.error())).isTrue();
+        } finally {
+            ScriptStep.maxAllocatedBytes = previous;
+        }
+    }
+
     @Test
     void usesTheCapabilityDeadlineWhenItIsShorter() {
         long started = System.nanoTime();

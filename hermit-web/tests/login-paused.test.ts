@@ -61,7 +61,7 @@ describe('Crab 规则包详情：账号状态', () => {
     await flushPromises()
 
     const text = wrapper.text()
-    expect(text).not.toContain('配置完整，可以调用')
+    expect(text).not.toContain('配置完整')
     expect(text).toContain('默认账号 zhangsan 已暂停自动登录')
     expect(text).toContain('连续登录失败已达上限')
     expect(text).toContain('已暂停')
@@ -89,7 +89,7 @@ describe('Crab 规则包详情：账号状态', () => {
     const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('配置完整，可以调用')
+    expect(wrapper.text()).toContain('配置完整')
   })
 
   it('没有凭证声明也没有账号时不显示可以调用', async () => {
@@ -100,7 +100,7 @@ describe('Crab 规则包详情：账号状态', () => {
 
     expect(wrapper.text()).toContain('还没有账号，调用会返回「待配置」')
     expect(wrapper.text()).toContain('先新建一个账号。')
-    expect(wrapper.text()).not.toContain('配置完整，可以调用')
+    expect(wrapper.text()).not.toContain('配置完整')
     expect(wrapper.text()).not.toContain('并填写凭证')
   })
 
@@ -114,7 +114,7 @@ describe('Crab 规则包详情：账号状态', () => {
     const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('配置完整，可以调用')
+    expect(wrapper.text()).toContain('配置完整')
     expect(wrapper.text()).not.toContain('还没有账号')
     expect(wrapper.text()).not.toContain('缺少凭证')
   })

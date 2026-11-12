@@ -62,6 +62,9 @@ public final class Invoker {
     public static final String NOT_FOUND_MESSAGE = "不存在";
     /** HTTP 破坏性调用缺这个头时返回 409，并且不查、不写幂等缓存。 */
     public static final String CONFIRM_REQUIRED = "该操作需要确认。请带上请求头 X-Hermit-Confirm: true 后重试。";
+    /** 装在本机但当前校验不让载入的包。不是「不存在」，409 CONCH_DISABLED。 */
+    public static final String RULE_DISABLED_CALL =
+            "规则包已停用：这版规则没有通过当前校验，所有账号暂时都不能调用。到 Crab 控制台的规则包详情里更新、退回或改好后重新导入，再调用。";
     /** 等待确认期间规则包被更新、回滚或重新导入。409，不执行。 */
     public static final String CHANGED_AFTER_CONFIRM = "确认期间规则包已经变化，没有执行。请重新发起，并确认新版本。";
 
@@ -85,6 +88,7 @@ public final class Invoker {
     private volatile DataSource versionSuccess;
     private volatile Clock versionClock = Clock.systemUTC();
     private volatile McpForwarder mcpForwarder;
+    private volatile java.util.function.Predicate<String> ruleDisabled = name -> false;
 
     public Invoker(
             ConchRegistry registry,
@@ -131,6 +135,11 @@ public final class Invoker {
 
     public void bindKnownSecrets(KnownSecrets knownSecrets) {
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
+    }
+
+    /** 包不在注册表里时，用它分清「已停用」和「不存在」。 */
+    public void bindRuleDisabled(java.util.function.Predicate<String> lookup) {
+        this.ruleDisabled = lookup == null ? name -> false : lookup;
     }
 
     /** {@code driver: mcp} 走转发器。没绑定时这类包失败关闭，不会落到 HTTP 步骤引擎。 */
@@ -220,6 +229,9 @@ public final class Invoker {
         ConchDoc doc = registry.find(conch).orElse(null);
         if (doc == null && disabledConches.contains(conch)) {
             return requestOnly(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE);
+        }
+        if (doc == null && ruleDisabled.test(conch)) {
+            return requestOnly(traceId, ErrorCode.CONCH_DISABLED, RULE_DISABLED_CALL);
         }
         if (confirmedAgainst != null && doc != null && !sameSnapshot(doc, confirmedAgainst)) {
             return requestOnly(traceId, ErrorCode.CONFLICT, CHANGED_AFTER_CONFIRM);

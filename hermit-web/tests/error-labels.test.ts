@@ -11,7 +11,7 @@ describe('错误码标签', () => {
   it('message 已经表达错误码时不再加前缀', () => {
     expect(errorText(new ApiError(403, 'FORBIDDEN', '没有权限执行这个操作'))).toBe('没有权限执行这个操作')
     expect(errorText(new ApiError(404, 'NOT_FOUND', '资源不存在'))).toBe('资源不存在')
-    expect(errorText(new ApiError(404, 'NOT_FOUND', 'conch 不存在'))).toBe('conch 不存在')
+    expect(errorText(new ApiError(404, 'NOT_FOUND', '规则包不存在'))).toBe('规则包不存在')
     expect(errorText(new ApiError(500, 'INTERNAL', '服务器内部错误'))).toBe('服务器内部错误')
     expect(errorText(new ApiError(500, 'INTERNAL', '内部错误'))).toBe('内部错误')
     expect(errorText(new ApiError(409, 'SESSION_EXPIRED', '会话已失效'))).toBe('会话已失效')

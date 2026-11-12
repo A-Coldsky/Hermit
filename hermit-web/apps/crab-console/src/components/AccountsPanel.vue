@@ -2,14 +2,19 @@
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
-import JsonBlock from '@shared/components/JsonBlock.vue'
 import { ApiError } from '@shared/http'
 import { errorCodeLabels, errorText, formatTime, notifyError } from '@shared/format'
 import { useNarrow } from '@shared/narrow'
 import { api, type Account, type CredentialField } from '../api'
 import CredentialDialog from './CredentialDialog.vue'
 
-const props = defineProps<{ conch: string; accounts: Account[]; credentials: CredentialField[] }>()
+const props = defineProps<{
+  conch: string
+  accounts: Account[]
+  credentials: CredentialField[]
+  /** 这版规则已停用：不在调用路径上，测试登录也跑不了，按钮不出现。 */
+  ruleDisabled?: boolean
+}>()
 const emit = defineEmits<{ changed: [] }>()
 
 const creating = reactive({ open: false, name: '', saving: false })
@@ -281,7 +286,14 @@ async function disconnect(account: Account) {
               </el-button>
             </template>
             <el-button link type="primary" :disabled="!credentials.length" @click="editCredentials(row)">填写凭证</el-button>
-            <el-button link type="primary" :loading="busy === row.name" @click="testLogin(row)">测试登录</el-button>
+            <el-button
+              v-if="!ruleDisabled"
+              link
+              type="primary"
+              data-test="test-login"
+              :loading="busy === row.name"
+              @click="testLogin(row)"
+            >测试登录</el-button>
             <el-button v-if="!row.default" link @click="makeDefault(row)">设为默认</el-button>
             <el-button link type="danger" @click="remove(row)">删除</el-button>
           </div>
@@ -322,11 +334,7 @@ async function disconnect(account: Account) {
   </el-dialog>
 
   <el-dialog v-model="testResult.open" :title="`测试登录 · ${testResult.account}`" width="560px">
-    <el-result v-if="testResult.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存">
-      <template v-if="testResult.data" #extra>
-        <JsonBlock :value="testResult.data" class="data" />
-      </template>
-    </el-result>
+    <el-result v-if="testResult.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存" />
     <el-result
       v-else
       icon="error"
@@ -369,11 +377,6 @@ async function disconnect(account: Account) {
 div.note {
   margin-left: 0;
   margin-top: 4px;
-}
-
-.data {
-  text-align: left;
-  max-width: 480px;
 }
 
 .ops.stacked {

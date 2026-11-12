@@ -281,6 +281,14 @@ final class McpCalls {
                 return failAsRequest(attempt, "CONCH_DISABLED", DisabledConches.CALL_MESSAGE);
             }
         }
+        // 装着、但当前校验不让载入的包：工具不在列表里，也不能说成没有这个工具。
+        String rejected = longestConchPrefix(toolName, runtime.ruleDisabledNames());
+        if (rejected != null) {
+            String live = longestConchPrefix(toolName, runtime.registry().snapshot().keySet());
+            if (live == null || live.length() <= rejected.length()) {
+                return failAsRequest(attempt, "CONCH_DISABLED", Invoker.RULE_DISABLED_CALL);
+            }
+        }
         return failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL);
     }
 

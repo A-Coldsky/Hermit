@@ -60,7 +60,11 @@ function blockReason(account: Account): string | null {
 
 const defaultAccount = computed(() => accounts.value.find((a) => a.default) ?? null)
 
+/** 停用包不在调用路径上，账号是否齐全都不能调用，横幅要先说这一点。 */
+const RULE_DISABLED_BANNER = '这版已停用，所有账号暂时都不能调用'
+
 const bannerTitle = computed(() => {
+  if (detail.value?.ruleDisabled) return RULE_DISABLED_BANNER
   if (missingConfig.value.length) return '缺少必填配置，调用会返回「待配置」'
   if (needsAccount.value) return '还没有账号，调用会返回「待配置」'
   const account = defaultAccount.value
@@ -394,7 +398,7 @@ watch(
           <el-button size="small" @click="reloadParts">重新加载</el-button>
         </template>
       </el-alert>
-      <el-alert v-else-if="ready && !detail.ruleDisabled" type="success" show-icon :closable="false" title="配置完整，可以调用" />
+      <el-alert v-else-if="ready && !detail.ruleDisabled" type="success" show-icon :closable="false" title="配置完整" data-test="ready" />
       <el-alert
         v-else
         type="warning"
@@ -404,18 +408,24 @@ watch(
       >
         <template #default>
           <div v-if="needsAccount">先新建一个账号。</div>
-          <div v-if="missingConfig.length">缺少必填配置：<span class="mono">{{ missingConfig.join(', ') }}</span></div>
+          <div v-if="missingConfig.length">缺少必填配置：<span class="mono">{{ missingConfig.join('、') }}</span></div>
           <div v-if="unreadableAccounts.length">
-            凭证无法解密，需全部重新填写：<span class="mono">{{ unreadableAccounts.join(', ') }}</span>
+            凭证无法解密，需全部重新填写：<span class="mono">{{ unreadableAccounts.join('、') }}</span>
           </div>
-          <div v-if="incompleteAccounts.length">账号缺少凭证：<span class="mono">{{ incompleteAccounts.join(', ') }}</span></div>
+          <div v-if="incompleteAccounts.length">账号缺少凭证：<span class="mono">{{ incompleteAccounts.join('、') }}</span></div>
           <div v-for="a in pausedAccounts" :key="a.name">
             账号 <span class="mono">{{ a.name }}</span> 已暂停自动登录<template v-if="a.loginPauseReason">：{{ a.loginPauseReason }}</template>。重新填写凭证后在下方账号列表点「测试登录」，登录成功即恢复。
           </div>
         </template>
       </el-alert>
 
-      <AccountsPanel :conch="conch" :accounts="accounts" :credentials="detail.credentials" @changed="reloadParts" />
+      <AccountsPanel
+        :conch="conch"
+        :accounts="accounts"
+        :credentials="detail.credentials"
+        :rule-disabled="detail.ruleDisabled === true"
+        @changed="reloadParts"
+      />
       <ConfigPanel
         :conch="conch"
         :fields="config"

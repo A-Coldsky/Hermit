@@ -123,6 +123,8 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 
 本机关掉的能力（控制台开关，或 `config.yml` 的 `capabilities.disabled`）返回 404 `CAPABILITY_DISABLED`，`message` 为「该能力已在本机停用，调用前需要重新启用。」。能力不存在、规则包不在注册表且没有停用墓碑，仍是 404 `NOT_FOUND`，`message` 为「不存在」。这类执行前的拒绝带 `requestId` 和 `requestNote`「请求编号，不可查追踪」，不带 `traceId`。OpenAPI 不列出已关掉的能力。MCP 在交给 `Invoker` 之前就从目录里去掉这些能力，直接调用隐藏的工具名仍是 `NOT_FOUND`，message 为「没有这个工具，或当前 API Key 看不到它。」。直接模式的 hint 只建议 `tools/list`，不提到 `search_capabilities`；目录模式的 hint 可以建议 `tools/list` 和 `search_capabilities`。若调用已经进入 `Invoker` 后才发现能力被关掉，MCP 的 `code` 与 HTTP 同为 `CAPABILITY_DISABLED`，hint 说明到控制台重新启用，或从 `capabilities.disabled` 里去掉。
 
+装在本机、但当前校验不让载入的包（控制台标「已停用」）不是「不存在」：HTTP 调用和 MCP 工具调用都是 409 `CONCH_DISABLED`，`message` 为「规则包已停用：这版规则没有通过当前校验，所有账号暂时都不能调用。到 Crab 控制台的规则包详情里更新、退回或改好后重新导入，再调用。」，只带 `requestId`。真正不存在的包仍是 404 `NOT_FOUND`「不存在」。
+
 `CONCH_DISABLED` 在墓碑还在、注册表已经没有这份包时，`message` 为「Reef 已停用该规则包，本机没有可调用的副本。」。Reef 的 Agent 清单没有停用标志：`ConchDistributionService` 的当前行只列出可分发的包，已停用、从未发布和已撤回的名字都不在清单里，Crab 也读不到 `hermit_conch_availability`。因此 Crab 只在下面这条契约下写 `disabled_conches`：本机注册表里已经有这份包、本机已订阅、来源是 OFFICIAL，并且这次同步的清单里没有这个名字。墓碑是「Reef 已停用」标记。已安装版本留在注册表里，`current` 保留，版本文件、账号和凭证都保留。HTTP 与 MCP 仍经 `Invoker` 调用，权限、能力开关、账号和凭证检查不变。墓碑存在期间，同步不下载、不重试、不重装该包，也不把它算作可重试失败。同步结果里它只出现一行 `kind=DISABLED`、`reason=DISABLED`，`version` 是本机保留的版本，名字不进入 `removed`。随后的 304 原始结果不再带这一行，控制台读取时仍按墓碑投影成一行 `DISABLED`，`removed` 里仍然没有它。`disabled_at` 只记第一次看到缺席的时间，后来的同步不刷新，也不再写第二条审计。
 
 从未装进注册表的名字不写墓碑。清单再次列出该名字时清掉墓碑，然后按普通更新继续：版本与已安装版本相同则 `SKIPPED_SAME`、不下载；更高版本记 `UPDATE_AVAILABLE`，不下载，本机已安装的版本继续可调用；更低版本记 `SKIPPED_OLDER`，不下载、不降级。停用和撤回在清单上相同。已经装在本机的包都按停用处理：继续调用，停止更新。
@@ -150,7 +152,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | DELETE | `/conches/{conch}/accounts/{account}` | 删除账号/凭证并使会话失效 |
 | POST | `/conches/{conch}/accounts/{account}/default` | 设默认账号 |
 | GET / PUT | `/conches/{conch}/accounts/{account}/credentials` | 仅字段名 / `{字段:字符串}` 写入；空字符串表示删除。空 body、`{}`，或写入后仍缺必填字段，返回 400 `INVALID_INPUT`。有必填字段时，空 body 和 `{}` 与只填了部分字段用同一句：`message` 为「账号 {账号名} 还没填写凭证：{控制台显示名}（{字段名}）。请点账号 {账号名} 的「填写凭证」补上。不要把口令、Cookie 或令牌发给 AI。」，字段按声明顺序，不是字母序。没有必填字段时 `message` 为「没有要保存的凭证字段。」。正文用 `requestId` 和 `requestNote`「请求编号，不可查追踪」，不带 `traceId`，也不写 `X-Hermit-Trace`。已保存字段可以只改其中几项。凭证无法解密时，必须把已存字段都重新写成非空值。`oauth_token` 不出现在字段名里，也无法解密时也不要求重填；PUT 写它是 400，message 为「oauth_token 由控制台连接上游写入，不能手工填写。」 |
-| POST | `/conches/{conch}/accounts/{account}/test-login` | 测试登录。成功才解除自动登录暂停；失败、缺凭证或无法解密都不解除。不写调用记录。失败响应用 `requestId` 和 `requestNote`「请求编号，不可查追踪」，不带 `traceId`，也不写 `X-Hermit-Trace`，控制台不把这个编号链到调用详情 |
+| POST | `/conches/{conch}/accounts/{account}/test-login` | 测试登录。包已停用（当前校验不让载入）时 409 `CONCH_DISABLED`，正式包是「规则包已停用，暂时不能测试登录。更新到能通过校验的版本后再试。」，本地包是「…改好规则重新导入后再试。」，控制台不给这个按钮。成功才解除自动登录暂停；失败、缺凭证或无法解密都不解除。不写调用记录。失败响应用 `requestId` 和 `requestNote`「请求编号，不可查追踪」，不带 `traceId`，也不写 `X-Hermit-Trace`，控制台不把这个编号链到调用详情 |
 | POST | `/conches/{conch}/accounts/{account}/oauth/start` | 开始上游 OAuth。OAuth 包返回 `{authorizationUrl}`。不是 OAuth 是 409 `NOT_CONFIGURED`，message 为「这个规则包不是 OAuth 登录。」。授权端点或令牌端点的主机不在 `allowed_hosts` 是同一错误码，「上游主机不在允许列表中。」。发现不到端点是「无法发现上游的授权端点。」。state 和 PKCE verifier 只放内存，10 分钟，用过即丢。已设置控制台口令时这条要 Cookie |
 | DELETE | `/conches/{conch}/accounts/{account}/oauth` | 删掉该账号的 `oauth_token`，并使本机登录会话失效。返回 `{oauth:{connected:false, expiresAt:null}}`。不是 OAuth 是 409，message 与 start 相同。账号不存在是 404 |
 | GET / PUT | `/conches/{conch}/config` | 配置声明/值 / `{字段:字符串}`；空字符串清除覆盖。先校验全部字段再在一个事务里写入，任一项未声明或格式不对时 400，其余项也不改 |

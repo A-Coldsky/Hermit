@@ -211,6 +211,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 registry, accounts, vault, conchConfig, engine, callLogs, idempotency, this, disabledConches);
         this.invoker.bindKnownSecrets(knownSecrets);
         this.invoker.bindMcpForwarder(mcpForwarder);
+        this.invoker.bindRuleDisabled(this::ruleDisabled);
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(
@@ -568,6 +569,59 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public ConchSync conchSync() {
         return conchSync;
+    }
+
+    /**
+     * 装在本机、但当前校验不让载入的包（正式包或本地包）。不在注册表里，调用、测试登录都不能用，
+     * 但它不是「不存在」：控制台和外部调用要明说已停用。
+     */
+    public boolean ruleDisabled(String conch) {
+        if (conch == null || registry.find(conch).isPresent()) {
+            return false;
+        }
+        LocalConches.LocalPackage local = localPackage(conch);
+        if (local != null) {
+            return local.ruleDisabled();
+        }
+        ConchSync sync = conchSync;
+        return sync != null && sync.disabledRule(conch).isPresent();
+    }
+
+    /** 本地包被停用时下一步是改规则重新导入；正式包是更新或退回。 */
+    public boolean localRuleDisabled(String conch) {
+        LocalConches.LocalPackage local = localPackage(conch);
+        return local != null && local.ruleDisabled();
+    }
+
+    /** {@link #ruleDisabled} 为 true 的全部包名。 */
+    public java.util.Set<String> ruleDisabledNames() {
+        java.util.TreeSet<String> names = new java.util.TreeSet<>();
+        if (localConches != null) {
+            for (LocalConches.LocalPackage pkg : localConches.packages()) {
+                if (pkg.ruleDisabled() && pkg.conch() != null) {
+                    names.add(pkg.conch());
+                }
+            }
+        }
+        ConchSync sync = conchSync;
+        if (sync != null) {
+            for (ConchSync.DisabledRule rule : sync.disabledRules()) {
+                names.add(rule.conch());
+            }
+        }
+        return names;
+    }
+
+    private LocalConches.LocalPackage localPackage(String conch) {
+        if (localConches == null) {
+            return null;
+        }
+        for (LocalConches.LocalPackage pkg : localConches.packages()) {
+            if (conch.equals(pkg.conch())) {
+                return pkg;
+            }
+        }
+        return null;
     }
 
     public ReportSender reportSender() {

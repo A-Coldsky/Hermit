@@ -111,7 +111,7 @@ public final class RuleEngine implements ConchExecutor {
         try {
             ConchDoc conch = authorizedConch(request, authorized);
             if (conch == null) {
-                return finish(false, null, ErrorCode.NOT_FOUND, "conch 不存在", null, null, "conch 不存在",
+                return finish(false, null, ErrorCode.NOT_FOUND, "规则包不存在", null, null, "规则包不存在",
                         List.of(), version, request, credentials, List.of(), start);
             }
             version = conch.version().toString();
@@ -174,7 +174,7 @@ public final class RuleEngine implements ConchExecutor {
         try {
             ConchDoc conch = registry.find(request.conch()).orElse(null);
             if (conch == null) {
-                return finish(false, null, ErrorCode.NOT_FOUND, "conch 不存在", null, null, "conch 不存在",
+                return finish(false, null, ErrorCode.NOT_FOUND, "规则包不存在", null, null, "规则包不存在",
                         List.of(), version, request, credentials, List.of(), start);
             }
             version = conch.version().toString();

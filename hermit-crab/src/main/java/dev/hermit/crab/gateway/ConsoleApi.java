@@ -513,7 +513,17 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of("updated", true));
     }
 
+    /** 测试登录在停用包上不能跑：不是「不存在」，要说清楚停用和下一步。 */
+    static final String TEST_LOGIN_DISABLED = "规则包已停用，暂时不能测试登录。更新到能通过校验的版本后再试。";
+    static final String TEST_LOGIN_DISABLED_LOCAL = "规则包已停用，暂时不能测试登录。改好规则重新导入后再试。";
+
     private static void testLogin(CrabRuntime runtime, Context ctx) {
+        String name = ctx.pathParam("conch");
+        if (runtime.registry().find(name).isEmpty() && runtime.ruleDisabled(name)) {
+            GatewayResponses.writeRequestError(ctx, 409, ErrorCode.CONCH_DISABLED,
+                    runtime.localRuleDisabled(name) ? TEST_LOGIN_DISABLED_LOCAL : TEST_LOGIN_DISABLED);
+            return;
+        }
         ConchDoc doc = requireConch(runtime, ctx);
         ExecutionResult result = runtime.admin().testLogin(doc, ctx.pathParam("account"), GatewayResponses.trace(ctx), Actors.CONSOLE);
         if (result.success()) {

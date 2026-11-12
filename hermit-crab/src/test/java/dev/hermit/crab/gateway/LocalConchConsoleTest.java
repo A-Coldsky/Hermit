@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import dev.hermit.crab.config.CrabConfig;
+import dev.hermit.crab.runtime.Invoker;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.CreatedApiKey;
@@ -103,6 +104,68 @@ class LocalConchConsoleTest {
             assertThat(removed.status()).isEqualTo(200);
             assertThat(removed.body()).contains("\"deleted\":true");
             assertThat(server.runtime.registry().find("local_two")).isEmpty();
+        }
+    }
+
+    /** 停用的包要明说已停用：外部调用、MCP 工具和测试登录都不能和「不存在」混在一起。 */
+    @Test
+    void ruleDisabledPackageSaysDisabledNotMissing() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp, PASSWORD, config)) {
+            Path file = server.paths.localConches().resolve("blocked_pkg.yaml");
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, """
+                    conch: blocked_pkg
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    base_url: http://127.0.0.1:9/
+                    title: 停用探针
+                    description: 能力引用了登录步骤的变量，当前校验不让载入。
+                    credentials:
+                      password: { type: secret, required: true, label: 密码 }
+                    auth:
+                      steps:
+                        - extract:
+                            token: { jsonpath: $.token }
+                    actions:
+                      list_todo:
+                        title: 能力
+                        description: 说明
+                        output:
+                          value: { type: string, description: 结果, value: ok }
+                        examples:
+                          - input: {}
+                            output: { value: ok }
+                        notes: 注意
+                        steps:
+                          - request:
+                              method: GET
+                              path: "/{{token}}"
+                    """);
+            TestServer.Reply reloaded = server.console("POST", "/console/api/local-conches/reload", "{}", true);
+            assertThat(reloaded.status()).as(reloaded.body()).isEqualTo(200);
+            assertThat(server.runtime.registry().find("blocked_pkg")).isEmpty();
+            assertThat(server.runtime.ruleDisabled("blocked_pkg")).isTrue();
+            server.runtime.admin().createAccount("blocked_pkg", "alice", Actors.CLI);
+
+            TestServer.Reply call = server.call("GET", "/api/blocked_pkg/list_todo", server.apiKey.plaintext(), null, null, null);
+            assertThat(call.status()).isEqualTo(409);
+            assertThat(call.json().path("error").path("code").asText()).isEqualTo("CONCH_DISABLED");
+            assertThat(call.json().path("error").path("message").asText()).isEqualTo(Invoker.RULE_DISABLED_CALL);
+            assertThat(call.json().path("requestId").asText()).isNotBlank();
+            assertThat(call.json().has("traceId")).isFalse();
+
+            TestServer.Reply absent = server.call("GET", "/api/no_such_pkg/list_todo", server.apiKey.plaintext(), null, null, null);
+            assertThat(absent.status()).isEqualTo(404);
+            assertThat(absent.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+
+            TestServer.Reply login = server.console(
+                    "POST", "/console/api/conches/blocked_pkg/accounts/alice/test-login", "{}", true);
+            assertThat(login.status()).isEqualTo(409);
+            assertThat(login.json().path("error").path("code").asText()).isEqualTo("CONCH_DISABLED");
+            assertThat(login.json().path("error").path("message").asText()).isEqualTo(ConsoleApi.TEST_LOGIN_DISABLED_LOCAL);
+            assertThat(login.body()).doesNotContain("不存在").doesNotContain("not found");
         }
     }
 

@@ -28,6 +28,8 @@ public final class SyncReasons {
     public static final String RESTORED = "RESTORED";
     public static final String DISABLED = "DISABLED";
     public static final String DISABLE_FAILED = "DISABLE_FAILED";
+    /** Manual update to this catalog version failed validation; it is no longer offered. */
+    public static final String UPDATE_FAILED = "UPDATE_FAILED";
     /** Manifest entry left untouched because a local conch already uses that name. */
     public static final String LOCAL_KEPT = "LOCAL_KEPT";
 

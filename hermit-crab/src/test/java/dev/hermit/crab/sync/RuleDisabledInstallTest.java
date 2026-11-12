@@ -125,7 +125,11 @@ class RuleDisabledInstallTest {
             TestSubscriptions.grantKnown(crab.dataSource);
             sync.syncOnce();
             reef.publish(blocked("1.0.1"));
-            sync.syncOnce();
+            SyncReport offered = sync.syncOnce();
+            assertThat(sync.visibleStatus(offered).conches()).anySatisfy(outcome -> {
+                assertThat(outcome.conch()).isEqualTo("legacy_oa");
+                assertThat(outcome.kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+            });
             assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
                     .isInstanceOf(UpdateException.class)
                     .satisfies(error -> {
@@ -148,6 +152,13 @@ class RuleDisabledInstallTest {
                     .findFirst()
                     .orElseThrow();
             assertThat(after.updateAvailable()).isFalse();
+            // 概览读的是上次同步的结果：更新失败后不能再催用户去更新这个版本。
+            assertThat(sync.visibleStatus(offered).conches()).anySatisfy(outcome -> {
+                assertThat(outcome.conch()).isEqualTo("legacy_oa");
+                assertThat(outcome.version()).isEqualTo("1.0.1");
+                assertThat(outcome.kind()).isEqualTo(OutcomeKind.REJECTED);
+                assertThat(outcome.reason()).isEqualTo(SyncReasons.UPDATE_FAILED);
+            });
         }
     }
 
@@ -241,6 +252,38 @@ class RuleDisabledInstallTest {
             assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.1/package.zip"))).isTrue();
+        }
+    }
+
+    /** 同版本重装不能把当前版记成上一版；旧数据里上一版等于当前版时也当没有上一版。 */
+    @Test
+    void sameVersionReinstallDoesNotOfferRollbackToItself() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("self"))) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = new ConchSync(settings(reef), crab.paths, registry, crab.vault, crab.dataSource, Clock.systemUTC());
+            TestSubscriptions.grantKnown(crab.dataSource);
+            sync.syncOnce();
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            sync.syncOnce();
+            assertThat(sync.update("legacy_oa", Actors.CLI).outcome().version()).isEqualTo("1.0.1");
+            SyncStore store = new SyncStore(crab.dataSource);
+            assertThat(store.previous("legacy_oa")).contains("1.0.0");
+
+            // 当前版的包坏了、注册表里也没有：修复会重新下载同一个版本。
+            Files.write(crab.paths.conches().resolve("legacy_oa/1.0.1/package.zip"), new byte[] {1, 2, 3});
+            registry.remove("legacy_oa");
+            assertThat(sync.update("legacy_oa", Actors.CLI).outcome().version()).isEqualTo("1.0.1");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(store.previous("legacy_oa")).contains("1.0.0");
+            assertThat(sync.previousState("legacy_oa").version()).isEqualTo("1.0.0");
+
+            // 旧版本 Crab 写下的「上一版 = 当前版」：读出来当没有。
+            store.setPrevious("legacy_oa", "1.0.1");
+            assertThat(sync.previousState("legacy_oa").version()).isNull();
+            assertThatThrownBy(() -> sync.rollback("legacy_oa", Actors.CLI))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessageContaining("没有可回退的上一版");
         }
     }
 

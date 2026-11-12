@@ -76,6 +76,7 @@ export const syncReasonLabels: Record<string, string> = {
   PACKAGE_MISSING: '本机缺少这个版本的文件',
   DISABLED: 'Reef 已停用，本机版本仍可调用，不再更新',
   DISABLE_FAILED: '记录停用状态失败',
+  UPDATE_FAILED: '上次更新到这个版本没成功：它没有通过当前校验，等发布方出新版后再更新',
   LOCAL_KEPT: '本机已有同名本地规则包',
   POINTER_MISSING: '本机版本指针丢失，同步不会重新下载',
   NOT_LOADED: '本机文件还在，但这次启动没有载入',

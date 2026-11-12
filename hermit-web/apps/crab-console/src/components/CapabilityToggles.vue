@@ -4,7 +4,13 @@ import { ref } from 'vue'
 import { notifyError } from '@shared/format'
 import { api, type CapabilityState } from '../api'
 
-const props = defineProps<{ conch: string; capabilities: CapabilityState[]; emptyText?: string }>()
+const props = defineProps<{
+  conch: string
+  capabilities: CapabilityState[]
+  emptyText?: string
+  /** 这版已停用：能力调不了，开关也先不能拨，免得看起来还能用。 */
+  ruleDisabled?: boolean
+}>()
 const busy = ref<string | null>(null)
 
 async function toggle(cap: CapabilityState, enabled: string | number | boolean) {
@@ -24,7 +30,8 @@ async function toggle(cap: CapabilityState, enabled: string | number | boolean) 
 <template>
   <div class="hm-card">
     <div class="hm-card-title"><span>能力</span></div>
-    <p class="hm-muted hint">停用后这个能力不再出现在 OpenAPI 文档和 MCP 工具列表里，调用会被拒绝。</p>
+    <p v-if="ruleDisabled" class="hm-muted hint" data-test="toggles-disabled">这版已停用，下面的能力暂时都不能调用，开关先不能用。</p>
+    <p v-else class="hm-muted hint">停用后这个能力不再出现在 OpenAPI 文档和 MCP 工具列表里，调用会被拒绝。</p>
     <el-table :data="capabilities" :empty-text="emptyText || '没有能力'">
       <el-table-column label="能力" min-width="200">
         <template #default="{ row }">
@@ -47,7 +54,12 @@ async function toggle(cap: CapabilityState, enabled: string | number | boolean) 
       </el-table-column>
       <el-table-column label="启用" width="72" align="right" fixed="right">
         <template #default="{ row }">
-          <el-switch :model-value="!row.disabled" :loading="busy === row.action" @change="(v: string | number | boolean) => toggle(row, v)" />
+          <el-switch
+            :model-value="!row.disabled && !ruleDisabled"
+            :disabled="ruleDisabled"
+            :loading="busy === row.action"
+            @change="(v: string | number | boolean) => toggle(row, v)"
+          />
         </template>
       </el-table-column>
     </el-table>

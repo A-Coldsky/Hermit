@@ -433,9 +433,9 @@ public final class ConchSync {
                 registryRestore(conch, previous, previousOrigin == null ? Origin.OFFICIAL : previousOrigin);
                 throw new UpdateException(409, ErrorCode.CONFLICT, SyncReasons.CURRENT_WRITE_FAILED);
             }
-            if (current != null) {
+            if (current != null && !current.equals(target)) {
                 store.setPrevious(conch, current);
-            } else {
+            } else if (current == null) {
                 store.clearPrevious(conch);
             }
             store.recordInstalled(conch, target, clock.instant());
@@ -593,7 +593,33 @@ public final class ConchSync {
         if (last == null) {
             return null;
         }
-        return projectDisabled(projectRepairs(last));
+        return projectRejected(projectDisabled(projectRepairs(last)));
+    }
+
+    /**
+     * 上次同步说「有新版本」，但手动更新到这个版本已经因为校验失败被拒：概览不能再催用户去更新它，
+     * 改成失败行。Reef 出了更高版本后，下一次同步会给出新的行。
+     */
+    private SyncReport projectRejected(SyncReport last) {
+        ArrayList<ConchOutcome> rows = new ArrayList<>();
+        boolean changed = false;
+        for (ConchOutcome outcome : last.conches()) {
+            // UPDATE_AVAILABLE 行带的是已安装版本；清单上推的版本在目录缓存里。
+            String offered = outcome.kind() == OutcomeKind.UPDATE_AVAILABLE && outcome.conch() != null
+                    ? cached(outcome.conch()).map(ReefClient.CatalogEntry::version).orElse(null)
+                    : null;
+            if (offered != null && offered.equals(store.rejectedVersion(outcome.conch()).orElse(null))) {
+                rows.add(new ConchOutcome(outcome.conch(), offered, OutcomeKind.REJECTED, SyncReasons.UPDATE_FAILED));
+                changed = true;
+            } else {
+                rows.add(outcome);
+            }
+        }
+        if (!changed) {
+            return last;
+        }
+        return new SyncReport(last.notModified(), List.copyOf(rows), last.removed(),
+                last.credentialChanges(), last.latestCrab(), last.error());
     }
 
     /**
@@ -1007,6 +1033,10 @@ public final class ConchSync {
         if (previous == null || previous.isBlank() || !ConchFiles.safeSegment(previous)) {
             return PreviousState.none();
         }
+        // 旧版本同版本重装时会把当前版记成上一版；读出来等于当前版就当没有上一版。
+        if (ConchFiles.safeSegment(conch) && previous.equals(ConchFiles.readCurrent(paths, conch).orElse(null))) {
+            return PreviousState.none();
+        }
         boolean present = versionZipPresent(conch, previous);
         boolean disabled = present && validationDisableMessage(conch, previous) != null;
         return new PreviousState(previous, disabled, present);
@@ -1269,11 +1299,12 @@ public final class ConchSync {
                 return InstallResult.of(rejected(entry, SyncReasons.CURRENT_WRITE_FAILED));
             }
             String switchedFrom = currentNow.orElse(previousCurrent);
-            if (switchedFrom != null) {
-                store.setPrevious(conch, switchedFrom);
-            } else {
+            if (switchedFrom == null) {
                 store.clearPrevious(conch);
+            } else if (!switchedFrom.equals(version)) {
+                store.setPrevious(conch, switchedFrom);
             }
+            // 同版本重装没有换版本：上一版保持原样，不能把当前版记成上一版（否则会出现「退回到自己」）。
             store.recordInstalled(conch, version, clock.instant());
             try {
                 ConchFiles.prune(paths, conch, VersionRetention.keep(

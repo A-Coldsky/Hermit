@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
@@ -43,6 +44,8 @@ public final class McpUpstreamClient implements AutoCloseable {
     static final int MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
     static final int MAX_EVENT_BYTES = 1024 * 1024;
     static final String ACCEPT = "application/json, text/event-stream";
+    /** 读超时在定时取消之后多等的时间，让取消先到并记下原因。 */
+    static final long SOCKET_GRACE_MS = 1_000;
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ThreadLocal<Boolean> ALLOW_LOOPBACK = new ThreadLocal<>();
@@ -89,8 +92,10 @@ public final class McpUpstreamClient implements AutoCloseable {
         long cancelAt = Math.min(upstreamNanos, post.deadlineNanos());
         HttpUriRequestBase request = new HttpUriRequestBase(post.httpMethod(), post.uri());
         long remainingMs = Math.max(1, TimeUnit.NANOSECONDS.toMillis(cancelAt - now));
+        // 读超时比定时取消晚一点。两者同一时刻到期时，读超时可能先抛，此时还没记下原因，
+        // 会被当成连接失败，也发不出 notifications/cancelled。
         request.setConfig(RequestConfig.custom()
-                .setResponseTimeout(Timeout.ofMilliseconds(remainingMs))
+                .setResponseTimeout(Timeout.ofMilliseconds(remainingMs + SOCKET_GRACE_MS))
                 .setConnectionRequestTimeout(Timeout.ofMilliseconds(Math.min(remainingMs, 15_000)))
                 .setRedirectsEnabled(false)
                 .build());
@@ -105,10 +110,7 @@ public final class McpUpstreamClient implements AutoCloseable {
                 return;
             }
             String reason = upstreamFirst && System.nanoTime() < post.deadlineNanos() ? "upstream" : "deadline";
-            stop.set(reason);
-            if ("deadline".equals(reason) && post.notifyCancel() && post.awaitId() != null) {
-                sendCancelled(post);
-            }
+            stopped(stop, reason, post);
             request.cancel();
         }, Math.max(1, cancelAt - System.nanoTime()), TimeUnit.NANOSECONDS);
         ALLOW_LOOPBACK.set(post.allowLoopback());
@@ -155,6 +157,10 @@ public final class McpUpstreamClient implements AutoCloseable {
             if ("hermit-rejected-address".equals(ex.getMessage())
                     || (ex.getCause() != null && "hermit-rejected-address".equals(ex.getCause().getMessage()))) {
                 return RpcResult.address();
+            }
+            if (causedBy(ex, SocketTimeoutException.class)) {
+                // 读超时抢在定时取消之前：按到期的是哪一个记原因，截止时间到了照样通知上游取消。
+                stopped(stop, upstreamFirst ? "upstream" : "deadline", post);
             }
             if ("upstream".equals(stop.get())) {
                 return RpcResult.upstreamTimeout();
@@ -336,6 +342,16 @@ public final class McpUpstreamClient implements AutoCloseable {
             exchange(notice);
         } catch (RuntimeException ignored) {
             // 取消通知失败时仍然结束这次读取。
+        }
+    }
+
+    /** 只有第一次记下的原因算数；截止时间到期的那一次负责发 {@code notifications/cancelled}。 */
+    private void stopped(AtomicReference<String> stop, String reason, Post post) {
+        if (!stop.compareAndSet(null, reason)) {
+            return;
+        }
+        if ("deadline".equals(reason) && post.notifyCancel() && post.awaitId() != null) {
+            sendCancelled(post);
         }
     }
 

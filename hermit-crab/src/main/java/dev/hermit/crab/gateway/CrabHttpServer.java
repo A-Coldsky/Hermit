@@ -92,7 +92,11 @@ public final class CrabHttpServer implements AutoCloseable {
         http.before(ctx -> {
             GatewayResponses.trace(ctx);
             String path = ctx.path();
-            if (consoleApi(path)) {
+            if (consolePage(path) && Loopback.address(ctx.req().getRemoteAddr()) && !ConsoleHosts.allowed(ctx.req())) {
+                // 回环连接但浏览器解析的是别的名字：DNS rebinding。页面和 API 都挡。
+                GatewayResponses.writeError(ctx, 403, ErrorCode.FORBIDDEN, ConsoleHosts.DENIED);
+                ctx.skipRemainingHandlers();
+            } else if (consoleApi(path)) {
                 if (!Loopback.address(ctx.req().getRemoteAddr()) || !"1".equals(ctx.header("X-Hermit-Console"))) {
                     GatewayResponses.writeError(ctx, 403, ErrorCode.FORBIDDEN, "console access denied");
                     ctx.skipRemainingHandlers();

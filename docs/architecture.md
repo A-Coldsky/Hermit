@@ -103,7 +103,7 @@ Reef 与 Crab 的浏览器页面都是同一份静态 `index.html`，不用请�
 | API Key | 创建时返回一次明文；后续前缀和哈希查验 |
 | 上报 | 错误类型/脱敏摘要、小时计数/延迟、回滚事件，不是完整请求响应 |
 
-Reef 管理 JWT、Agent 令牌（每用户哈希，外加可选的配置令牌）和签名公钥是不同用途的信任边界。Crab 在 Reef 上的身份是用户加上实例 UUID。Crab 控制台依靠真实连接地址为回环地址且 API 带 `X-Hermit-Console: 1`。口令未设置时没有登录。设置之后 `/console/api/**` 还要会话 Cookie `hermit_console`，只有口令、没有用户名。页面和静态资源仍不认这张 Cookie。不能当成可公开反向代理的远程控制台。
+Reef 管理 JWT、Agent 令牌（每用户哈希，外加可选的配置令牌）和签名公钥是不同用途的信任边界。Crab 在 Reef 上的身份是用户加上实例 UUID。Crab 控制台依靠真实连接地址为回环地址、`Host`/`Origin` 为回环名字（防 DNS rebinding），且 API 带 `X-Hermit-Console: 1`。口令未设置时没有登录。设置之后 `/console/api/**` 还要会话 Cookie `hermit_console`，只有口令、没有用户名。页面和静态资源仍不认这张 Cookie。不能当成可公开反向代理的远程控制台。
 
 ## 生命周期与扩展
 

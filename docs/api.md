@@ -10,8 +10,8 @@
 | Reef 其他 `/api/admin/**` | `Authorization: Bearer <JWT>`。`USER` 可以读规则包、Tide、告警，并管理自己的口令和 Agent 令牌；其余管理写操作、审计、清理和用户管理是 403 `FORBIDDEN`。账号已禁用时已发出的 JWT 也是 401 |
 | Reef `/agent/**` | `X-Hermit-Instance: <UUID>` 和 `X-Hermit-Token`。令牌可以是配置里的 `HERMIT_REEF_AGENT_TOKEN`，或某个用户签发且未吊销、用户也未禁用的 Agent 令牌。禁用用户会把他名下未吊销的库内令牌写上 `revoked_at`，重新启用不清除，这些令牌与错误令牌一样 401。配置令牌归 id 最小的 `ADMIN`。这个管理员已禁用，或当前配置值的 SHA-256 在作废表里，配置令牌也 401；重新启用且配置值没改仍然 401。把配置改成另一个非空字符串后，新值可用（归属管理员须为启用），旧值仍 401。库里还没有任何 `ADMIN`、且当前值未作废时，配置令牌仍可通过，上报的 owner 为空，也不记 Crab 实例 |
 | Crab `/api/**`、别名、`/mcp` | `Authorization: Bearer <API Key>` 或 `X-Hermit-Key` |
-| Crab `/console/api/**` | 实际连接来源必须回环地址，且 `X-Hermit-Console: 1`。设置了控制台口令时，除 `GET/POST /console/api/session` 外还要带登录后发的 Cookie `hermit_console`，没带或已过期是 401 `AUTH_FAILED`「需要控制台登录。」 |
-| Crab `/console/` | 页面请求来源必须回环地址；页面 JS 再加控制台头 |
+| Crab `/console/api/**` | 实际连接来源必须回环地址，且 `X-Hermit-Console: 1`。`Host` 和带了的 `Origin` 只能是 `localhost`、`127.0.0.1` 或 `[::1]`（端口不限），否则 403 `FORBIDDEN`「控制台只接受 localhost、127.0.0.1 或 [::1] 作为访问地址。」，防 DNS rebinding。设置了控制台口令时，除 `GET/POST /console/api/session` 外还要带登录后发的 Cookie `hermit_console`，没带或已过期是 401 `AUTH_FAILED`「需要控制台登录。」 |
+| Crab `/console/` | 页面请求来源必须回环地址，`Host`/`Origin` 规则与 `/console/api/**` 相同；页面 JS 再加控制台头 |
 | Crab `/openapi.json` | 当前无需 API Key，可能展示能力元数据 |
 
 常规 JSON envelope：
@@ -223,7 +223,7 @@ Conch 列表和详情的包级 `needsConfiguration` 用同一套计算：账号�
 | `loginPauseRecovery` | 暂停时说明恢复方法：修正凭证后对该账号执行测试登录，成功才恢复。否则 `null` |
 | `oauth` | 非 OAuth 包为 JSON `null`。OAuth 包为 `{connected, expiresAt}`。未连接，或上游没有给到期时间时，`expiresAt` 为 JSON `null`。`needsConfiguration` 不把「还没连接上游」算进去 |
 
-`GET /console/oauth/callback` 不在 `/console/api` 下。它只认回环套接字，不要求 `X-Hermit-Console`，也不认控制台 Cookie：授权服务器在另一个站点时带不回 `SameSite=Strict`。成功是 200 的 HTML，「已连接上游。可以关闭这个页面，回到控制台。」，知道到期时间时再写一行。失败是 400 的 HTML，只用固定中文，不回显 `code`、`state`、`error` 或令牌。响应带 `Cache-Control: no-store` 和 `Referrer-Policy: no-referrer`。
+`GET /console/oauth/callback` 不在 `/console/api` 下。它只认回环套接字和回环 `Host`，不要求 `X-Hermit-Console`，也不认控制台 Cookie：授权服务器在另一个站点时带不回 `SameSite=Strict`。成功是 200 的 HTML，「已连接上游。可以关闭这个页面，回到控制台。」，知道到期时间时再写一行。失败是 400 的 HTML，只用固定中文，不回显 `code`、`state`、`error` 或令牌。响应带 `Cache-Control: no-store` 和 `Referrer-Policy: no-referrer`。
 
 测试登录仍会尝试登录，不看暂停旗标。只有登录成功（`recordAuthSuccess`）才清掉暂停和失败计数。失败、缺配置、缺凭证或无法解密都保持暂停，下一次能力调用仍直接返回「该账号已暂停自动登录」。页面应读这些字段显示「已暂停」和恢复方法，不要只看 `needsConfiguration`。
 

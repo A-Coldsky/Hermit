@@ -150,6 +150,14 @@ public final class ConchAdmin {
         config.put(origin(doc.conch()), doc.conch(), key, value, actor);
     }
 
+    /** 先校验每一项，全部合法才在一个事务里写入。空串表示删除该项。 */
+    public void putConfigs(ConchDoc doc, Map<String, String> values, String actor) {
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            DeclaredSettings.checkConfigValue(doc.config().get(entry.getKey()), entry.getValue());
+        }
+        config.putAll(origin(doc.conch()), doc.conch(), values, actor);
+    }
+
     public void deleteConfig(ConchDoc doc, String key, String actor) {
         if (!doc.config().containsKey(key)) {
             throw new IllegalArgumentException("unknown config field");

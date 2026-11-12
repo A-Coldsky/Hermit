@@ -47,13 +47,7 @@ public final class ConchConfigStore {
         String checkedActor = Checks.actor(actor);
         Objects.requireNonNull(value, "value");
         Db.transaction(dataSource, connection -> {
-            upsert(connection, checkedOrigin, checkedConch, checkedKey, value, Instant.now());
-            ConfigAudit.append(
-                    connection,
-                    checkedActor,
-                    AuditKind.CONFIG_PUT,
-                    ConfigAudit.target(checkedOrigin, checkedConch),
-                    Json.write(Map.of("key", checkedKey)));
+            putOne(connection, checkedOrigin, checkedConch, checkedKey, value, checkedActor, Instant.now());
             return null;
         });
     }
@@ -64,26 +58,75 @@ public final class ConchConfigStore {
         String checkedKey = Checks.configKey(key);
         String checkedActor = Checks.actor(actor);
         Db.transaction(dataSource, connection -> {
-            int deleted;
-            try (PreparedStatement statement = connection.prepareStatement("""
-                    DELETE FROM conch_config
-                    WHERE origin = ? AND conch = ? AND "key" = ?
-                    """)) {
-                statement.setString(1, checkedOrigin.name());
-                statement.setString(2, checkedConch);
-                statement.setString(3, checkedKey);
-                deleted = statement.executeUpdate();
-            }
-            if (deleted > 0) {
-                ConfigAudit.append(
-                        connection,
-                        checkedActor,
-                        AuditKind.CONFIG_DELETED,
-                        ConfigAudit.target(checkedOrigin, checkedConch),
-                        Json.write(Map.of("key", checkedKey)));
+            deleteOne(connection, checkedOrigin, checkedConch, checkedKey, checkedActor);
+            return null;
+        });
+    }
+
+    /**
+     * 一次事务写完：空串删除该项，其余写入。任何一项失败都不留下前面已经写的值。
+     * 调用方先把每一项校验完再调这里。
+     */
+    public void putAll(Origin origin, String conch, Map<String, String> values, String actor) {
+        Origin checkedOrigin = Checks.origin(origin);
+        String checkedConch = Checks.conch(conch);
+        String checkedActor = Checks.actor(actor);
+        Objects.requireNonNull(values, "values");
+        LinkedHashMap<String, String> checked = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            checked.put(Checks.configKey(entry.getKey()), Objects.requireNonNull(entry.getValue(), "value"));
+        }
+        Db.transaction(dataSource, connection -> {
+            Instant now = Instant.now();
+            for (Map.Entry<String, String> entry : checked.entrySet()) {
+                if (entry.getValue().isEmpty()) {
+                    deleteOne(connection, checkedOrigin, checkedConch, entry.getKey(), checkedActor);
+                } else {
+                    putOne(connection, checkedOrigin, checkedConch, entry.getKey(), entry.getValue(), checkedActor, now);
+                }
             }
             return null;
         });
+    }
+
+    private static void putOne(
+            Connection connection,
+            Origin origin,
+            String conch,
+            String key,
+            String value,
+            String actor,
+            Instant now
+    ) throws SQLException {
+        upsert(connection, origin, conch, key, value, now);
+        ConfigAudit.append(
+                connection,
+                actor,
+                AuditKind.CONFIG_PUT,
+                ConfigAudit.target(origin, conch),
+                Json.write(Map.of("key", key)));
+    }
+
+    private static void deleteOne(Connection connection, Origin origin, String conch, String key, String actor)
+            throws SQLException {
+        int deleted;
+        try (PreparedStatement statement = connection.prepareStatement("""
+                DELETE FROM conch_config
+                WHERE origin = ? AND conch = ? AND "key" = ?
+                """)) {
+            statement.setString(1, origin.name());
+            statement.setString(2, conch);
+            statement.setString(3, key);
+            deleted = statement.executeUpdate();
+        }
+        if (deleted > 0) {
+            ConfigAudit.append(
+                    connection,
+                    actor,
+                    AuditKind.CONFIG_DELETED,
+                    ConfigAudit.target(origin, conch),
+                    Json.write(Map.of("key", key)));
+        }
     }
 
     public Map<String, String> all(Origin origin, String conch) {

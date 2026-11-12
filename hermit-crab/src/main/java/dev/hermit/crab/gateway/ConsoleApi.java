@@ -626,9 +626,8 @@ final class ConsoleApi {
 
     private static void writeConfig(CrabRuntime runtime, Context ctx) throws Exception {
         ConchDoc doc = requireConch(runtime, ctx);
-        for (Map.Entry<String, String> entry : stringMap(object(ctx)).entrySet()) {
-            runtime.admin().putConfig(doc, entry.getKey(), entry.getValue(), Actors.CONSOLE);
-        }
+        // 先全部校验再一次写入：后面某项不合法时，前面的项也不生效。
+        runtime.admin().putConfigs(doc, stringMap(object(ctx)), Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("updated", true));
     }
 

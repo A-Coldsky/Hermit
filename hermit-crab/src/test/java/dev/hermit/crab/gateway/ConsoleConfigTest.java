@@ -22,6 +22,39 @@ class ConsoleConfigTest {
     @TempDir
     Path temp;
 
+    /** 批量写配置：后面一项不合法时，前面的项也不生效。 */
+    @Test
+    void configPutIsAllOrNothing() throws Exception {
+        try (TestServer server = TestServer.open(temp.resolve("config-atomic"), PASSWORD,
+                CrabConfig.defaults().withListen("127.0.0.1", 0))) {
+            String path = "/console/api/conches/" + server.conch.conch() + "/config";
+            TestServer.Reply first = server.console("PUT", path, "{\"base_url\":\"http://before.example\"}", true);
+            assertThat(first.status()).isEqualTo(200);
+            int audits = audits(server);
+
+            TestServer.Reply mixed = server.console(
+                    "PUT", path, "{\"base_url\":\"http://after.example\",\"no_such_field\":\"x\"}", true);
+            assertThat(mixed.status()).isEqualTo(400);
+            assertThat(server.runtime.admin().storedConfig(server.conch.conch())).containsEntry("base_url", "http://before.example");
+            assertThat(audits(server)).isEqualTo(audits);
+
+            TestServer.Reply badShape = server.console(
+                    "PUT", path, "{\"base_url\":\"not a url\"}", true);
+            assertThat(badShape.status()).isEqualTo(400);
+            assertThat(server.runtime.admin().storedConfig(server.conch.conch())).containsEntry("base_url", "http://before.example");
+
+            TestServer.Reply cleared = server.console("PUT", path, "{\"base_url\":\"\"}", true);
+            assertThat(cleared.status()).isEqualTo(200);
+            assertThat(server.runtime.admin().storedConfig(server.conch.conch())).doesNotContainKey("base_url");
+        }
+    }
+
+    private static int audits(TestServer server) throws Exception {
+        TestServer.Reply page = server.console("GET", "/console/api/audit?limit=100", null, true);
+        assertThat(page.status()).isEqualTo(200);
+        return page.json().path("data").path("entries").size();
+    }
+
     @Test
     void credentialPutRejectsEmptyBodyAndMissingRequiredFields() throws Exception {
         CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);

@@ -13,10 +13,6 @@
   <artifactId>hermit-reef</artifactId>
   <name>Hermit Reef</name>
 
-  <properties>
-    <spring-boot.version>3.5.16</spring-boot.version>
-  </properties>
-
   <dependencyManagement>
     <dependencies>
       <dependency>

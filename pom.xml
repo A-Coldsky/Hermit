@@ -30,6 +30,8 @@
     <assertj.version>3.27.7</assertj.version>
     <rhino.version>1.9.1</rhino.version>
     <mcp.version>2.0.1</mcp.version>
+    <!-- Spring Boot 的依赖管理和插件在各模块共用这一个版本。 -->
+    <spring-boot.version>3.5.16</spring-boot.version>
     <mysql.version>9.7.0</mysql.version>
     <hermit.web.skip>false</hermit.web.skip>
     <frontend-maven-plugin.version>1.15.1</frontend-maven-plugin.version>

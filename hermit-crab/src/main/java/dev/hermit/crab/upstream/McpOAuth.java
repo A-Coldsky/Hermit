@@ -401,6 +401,11 @@ public final class McpOAuth implements AutoCloseable {
         return login;
     }
 
+    /** 账号已删除时丢掉它的刷新锁，不让这张表随账号增删一直变大。 */
+    void forget(Origin origin, String conch, String account) {
+        refreshLocks.remove(origin.name() + "\0" + conch + "\0" + account);
+    }
+
     private Object lock(Origin origin, String conch, String account) {
         return refreshLocks.computeIfAbsent(origin.name() + "\0" + conch + "\0" + account, key -> new Object());
     }

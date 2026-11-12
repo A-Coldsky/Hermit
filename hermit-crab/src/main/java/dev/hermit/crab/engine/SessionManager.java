@@ -82,13 +82,41 @@ public final class SessionManager implements AutoCloseable {
         }
     }
 
-    public boolean tryLock(SessionKey key, long deadlineNanos) throws InterruptedException {
-        AccountState state = states.computeIfAbsent(key, this::newState);
-        long wait = deadlineNanos - System.nanoTime();
-        if (wait <= 0) {
-            return false;
+    /**
+     * 账号已删除：丢掉这把锁、客户端和 Cookie，不再留在内存里。以前只 {@link #invalidate} 重开客户端，
+     * 删掉的账号各自留着一个连接池。
+     */
+    public void forget(SessionKey key) {
+        persistence.delete(key);
+        AccountState state = states.get(key);
+        if (state == null) {
+            return;
         }
-        return state.lock.tryLock(wait, TimeUnit.NANOSECONDS);
+        state.lock.lock();
+        try {
+            states.remove(key, state);
+            closeClient(state);
+        } finally {
+            state.lock.unlock();
+        }
+    }
+
+    public boolean tryLock(SessionKey key, long deadlineNanos) throws InterruptedException {
+        while (true) {
+            AccountState state = states.computeIfAbsent(key, this::newState);
+            long wait = deadlineNanos - System.nanoTime();
+            if (wait <= 0) {
+                return false;
+            }
+            if (!state.lock.tryLock(wait, TimeUnit.NANOSECONDS)) {
+                return false;
+            }
+            if (states.get(key) == state) {
+                return true;
+            }
+            // 等锁期间被 forget 了：这份状态已经关掉，换新的再等。
+            state.lock.unlock();
+        }
     }
 
     public void unlock(SessionKey key) {
@@ -178,6 +206,11 @@ public final class SessionManager implements AutoCloseable {
             rememberCookieValue(state.seenCookieValues, cookie.value());
         }
         persistence.save(key, List.copyOf(cookies));
+    }
+
+    /** Accounts with state in memory. */
+    int size() {
+        return states.size();
     }
 
     List<String> seenCookieValues(SessionKey key) {

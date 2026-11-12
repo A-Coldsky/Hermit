@@ -30,8 +30,15 @@ public final class ConsoleSessions {
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
         String token = HexFormat.of().formatHex(bytes);
-        expiry.put(token, clock.instant().plus(TTL));
+        Instant now = clock.instant();
+        // 过期的会话只有被拿来校验时才删，没人再用的会一直留着。签发时顺手清掉。
+        expiry.values().removeIf(until -> !until.isAfter(now));
+        expiry.put(token, now.plus(TTL));
         return token;
+    }
+
+    int size() {
+        return expiry.size();
     }
 
     public boolean valid(String token) {

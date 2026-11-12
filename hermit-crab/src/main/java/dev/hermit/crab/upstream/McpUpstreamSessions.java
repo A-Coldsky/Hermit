@@ -530,6 +530,18 @@ final class McpUpstreamSessions implements AutoCloseable {
         }
     }
 
+    /** 账号已删除：会话和并发通道都不再保留。通道正在用时留着，用完也只是一个空的 Semaphore。 */
+    void forget(SessionKey key) {
+        if (key == null) {
+            return;
+        }
+        handles.remove(key);
+        Semaphore lane = lanes.get(key);
+        if (lane != null && lane.availablePermits() == permits) {
+            lanes.remove(key, lane);
+        }
+    }
+
     @Override
     public void close() {
         handles.clear();

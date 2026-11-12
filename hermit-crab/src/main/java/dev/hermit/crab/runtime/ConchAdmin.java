@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import dev.hermit.common.error.ErrorCode;
@@ -42,6 +43,7 @@ public final class ConchAdmin {
     private final RuleEngine engine;
     private final ConchRegistry registry;
     private final DisabledConches disabledConches;
+    private volatile Consumer<SessionKey> accountRemoved = key -> { };
     private volatile Function<String, Optional<ConchDoc>> stagedDeclarations = name -> Optional.empty();
     private volatile Function<String, Origin> originFallback = name -> null;
 
@@ -92,7 +94,14 @@ public final class ConchAdmin {
     public void deleteAccount(String conch, String name, String actor) {
         Origin source = origin(conch);
         accounts.delete(source, conch, name, actor);
-        sessions.invalidate(new SessionKey(source, conch, name));
+        SessionKey key = new SessionKey(source, conch, name);
+        sessions.forget(key);
+        accountRemoved.accept(key);
+    }
+
+    /** 删除账号后清掉别处按账号缓存的状态（MCP 上游会话、OAuth 刷新锁）。 */
+    public void bindAccountRemoved(Consumer<SessionKey> hook) {
+        this.accountRemoved = hook == null ? key -> { } : hook;
     }
 
     public void setDefault(String conch, String name, String actor) {

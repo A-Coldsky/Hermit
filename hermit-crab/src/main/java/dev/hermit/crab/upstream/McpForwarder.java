@@ -95,6 +95,12 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         this.oauth = new McpOAuth(vault, accounts, sessions::discard, this.knownSecrets, clock);
     }
 
+    /** 账号已删除：丢掉上游会话、并发通道和 OAuth 刷新锁。 */
+    public void forgetAccount(SessionKey key) {
+        sessions.forget(key);
+        oauth.forget(key.origin(), key.conch(), key.account());
+    }
+
     public McpOAuth oauth() {
         return oauth;
     }

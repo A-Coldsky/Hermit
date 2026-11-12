@@ -216,6 +216,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.localConches = new LocalConches(
                 paths, registry, database.dataSource(), () -> debug.get().enabled());
         this.admin.bindOriginFallback(name -> localConches.occupies(name) ? Origin.LOCAL : null);
+        this.admin.bindAccountRemoved(mcpForwarder::forgetAccount);
         this.instanceId = InstanceIds.loadOrCreate(paths);
         try {
             String initialPassword = environment == null ? null : environment.apply(ConsolePassword.ENV);

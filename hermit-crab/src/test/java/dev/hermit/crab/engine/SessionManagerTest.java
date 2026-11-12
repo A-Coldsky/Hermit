@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.hc.client5.http.impl.cookie.BasicClientCookie;
 import org.junit.jupiter.api.Test;
@@ -56,6 +58,44 @@ class SessionManagerTest {
             } finally {
                 sessions.unlock(key);
             }
+        }
+    }
+
+    /** 删掉的账号不再留着状态和连接池；正在等锁的请求拿到的是新状态，不会用到已关闭的客户端。 */
+    @Test
+    void forgetDropsTheStateAndWaitersGetAFreshClient() throws Exception {
+        try (SessionManager sessions = new SessionManager()) {
+            SessionKey key = new SessionKey(Origin.LOCAL, "forget_probe", "alice");
+            assertThat(sessions.tryLock(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            putCookie(sessions, key, "cookie-before-forget");
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            AtomicBoolean usable = new AtomicBoolean();
+            Thread waiter = new Thread(() -> {
+                try {
+                    if (sessions.tryLock(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(10))) {
+                        try {
+                            usable.set(sessions.client(key) != null && sessions.cookies(key) != null);
+                        } finally {
+                            sessions.unlock(key);
+                        }
+                    }
+                } catch (Throwable ex) {
+                    failure.set(ex);
+                }
+            });
+            Thread forgetter = new Thread(() -> sessions.forget(key));
+            waiter.start();
+            forgetter.start();
+            Thread.sleep(100);
+            sessions.unlock(key);
+            waiter.join(10_000);
+            forgetter.join(10_000);
+            assertThat(failure.get()).isNull();
+            assertThat(usable).isTrue();
+
+            sessions.forget(key);
+            assertThat(sessions.size()).isZero();
+            assertThat(sessions.seenCookieValues(key)).isEmpty();
         }
     }
 

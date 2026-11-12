@@ -81,10 +81,29 @@ copy_pub() {
     chmod 644 "$home/reef.pub"
 }
 
+# 签名公钥是规则的信任根。明文 HTTP 上中间人可以换掉它，还能看到管理员口令。
+# 只在 https 或本机地址上自动去取；可信内网确实只有 http 时，要显式放行。
+secure_key_url() {
+    case "$reef_url" in
+        https://*) return 0 ;;
+        http://127.0.0.1|http://127.0.0.1:*|http://127.0.0.1/*) return 0 ;;
+        http://localhost|http://localhost:*|http://localhost/*) return 0 ;;
+        'http://[::1]'|'http://[::1]:'*|'http://[::1]/'*) return 0 ;;
+    esac
+    return 1
+}
+
 fetch_pub() {
     if [ -z "${HERMIT_REEF_ADMIN_USER:-}" ] || [ -z "${HERMIT_REEF_ADMIN_PASSWORD:-}" ]; then
         echo "还没有 reef.pub。设置 HERMIT_REEF_PUBLIC_KEY_FILE，或提供 HERMIT_REEF_ADMIN_USER 和 HERMIT_REEF_ADMIN_PASSWORD 以便登录 Reef 获取签名公钥。" >&2
         exit 1
+    fi
+    if ! secure_key_url; then
+        if [ "${HERMIT_REEF_ALLOW_INSECURE_KEY_FETCH:-}" != "1" ]; then
+            echo "HERMIT_REEF_URL 不是 https，也不是本机地址。经明文 HTTP 登录取签名公钥时，中间人可以换掉信任根并看到管理员口令。请用 HERMIT_REEF_PUBLIC_KEY_FILE 挂载公钥，或让 Reef 走 https；确认是可信内网时再设 HERMIT_REEF_ALLOW_INSECURE_KEY_FETCH=1。" >&2
+            exit 1
+        fi
+        echo "警告：经明文 HTTP 从 ${reef_url} 取签名公钥（HERMIT_REEF_ALLOW_INSECURE_KEY_FETCH=1）。" >&2
     fi
     echo "waiting for reef login at ${reef_url}"
     login_token=""

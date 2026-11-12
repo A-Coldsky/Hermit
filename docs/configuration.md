@@ -68,8 +68,9 @@ mcp:
 | `HERMIT_HOME` | 两份 Compose 都设置为 `/var/lib/hermit` |
 | `HERMIT_REEF_URL` | 与令牌一起设置时，同机 profile 自动设为 `http://127.0.0.1:${HTTP_PORT:-80}`，独立部署自行填写。已有 `reef-bootstrap.json`，或 URL 与令牌都未设置时，不再要求它 |
 | `HERMIT_REEF_AGENT_TOKEN` | 与 URL 一起设置时必须非空白且与 Reef 相同，写入 `reef.token`。只设置 URL 或只设置令牌、又没有引导文件时拒绝启动。引导文件存在时不把环境变量里的令牌写进新生成的 config.yml |
-| `HERMIT_REEF_ADMIN_USER` / `HERMIT_REEF_ADMIN_PASSWORD` | 仅在用环境变量首次生成 config.yml、且还没有公钥时登录 Reef 取公钥；不是 Crab 日常调用的凭据。已有引导文件时不登录 |
-| `HERMIT_REEF_PUBLIC_KEY_FILE` | 可选，容器内 PEM 文件路径；独立 Compose 传入此变量，同机 profile 需额外 override |
+| `HERMIT_REEF_ADMIN_USER` / `HERMIT_REEF_ADMIN_PASSWORD` | 仅在用环境变量首次生成 config.yml、且还没有公钥时登录 Reef 取公钥；不是 Crab 日常调用的凭据。已有引导文件时不登录。`HERMIT_REEF_URL` 必须是 `https://`，或 `http://` 加 `127.0.0.1`、`localhost`、`[::1]`；其它明文 HTTP 地址拒绝启动，因为中间人可以换掉公钥（规则的信任根）并看到管理员口令 |
+| `HERMIT_REEF_PUBLIC_KEY_FILE` | 可选，容器内 PEM 文件路径；独立 Compose 传入此变量，同机 profile 需额外 override。Reef 只有内网明文 HTTP 时推荐用它 |
+| `HERMIT_REEF_ALLOW_INSECURE_KEY_FETCH` | 可选。设为 `1` 才允许经远端明文 HTTP 登录取公钥，并打印一行警告。只在确认是可信内网时使用 |
 | `HERMIT_CRAB_PORT` | 默认 7777，容器入口要求 1–65535 |
 | `HERMIT_CRAB_INSTANCE_ID` | 可选 UUID；已有实例 ID 不同则拒绝覆盖 |
 | `HERMIT_MASTER_KEY` | 非空时优先使用环境主密钥，Java 不再读取或生成 `data/master.key`；容器入口将空白值视为未配置。非法值由 Java 拒绝并说明原因 |

@@ -54,6 +54,57 @@ class CrabEntrypointTest {
         assertThat(result.err).contains("reef.pub");
     }
 
+    /** 公钥是信任根：远端明文 HTTP 不自动去取，除非显式放行。 */
+    @Test
+    void plainHttpReefDoesNotFetchThePublicKeyUnlessAllowed() throws Exception {
+        Map<String, String> env = Map.of(
+                "HERMIT_REEF_URL", "http://reef.example",
+                "HERMIT_REEF_AGENT_TOKEN", "token-value",
+                "HERMIT_REEF_ADMIN_USER", "admin",
+                "HERMIT_REEF_ADMIN_PASSWORD", "admin-entry-secret");
+        Result refused = runWithCurl(env);
+        assertThat(refused.status).isEqualTo(1);
+        assertThat(refused.err).contains("HERMIT_REEF_PUBLIC_KEY_FILE").contains("HERMIT_REEF_ALLOW_INSECURE_KEY_FETCH");
+        assertThat(temp.resolve("home/curl-calls")).doesNotExist();
+        assertThat(temp.resolve("home/reef.pub")).doesNotExist();
+
+        java.util.HashMap<String, String> allowed = new java.util.HashMap<>(env);
+        allowed.put("HERMIT_REEF_ALLOW_INSECURE_KEY_FETCH", "1");
+        Result fetched = runWithCurl(allowed);
+        assertThat(fetched.status).as(fetched.err).isZero();
+        assertThat(fetched.err).contains("警告").contains("http://reef.example");
+        assertThat(Files.readString(temp.resolve("home/reef.pub"))).contains("-----BEGIN PUBLIC KEY-----");
+        assertThat(Files.readString(temp.resolve("home/curl-calls"))).contains("http://reef.example/api/admin/login");
+    }
+
+    @Test
+    void httpsReefFetchesThePublicKeyWithoutWarning() throws Exception {
+        Result result = runWithCurl(Map.of(
+                "HERMIT_REEF_URL", "https://reef.example",
+                "HERMIT_REEF_AGENT_TOKEN", "token-value",
+                "HERMIT_REEF_ADMIN_USER", "admin",
+                "HERMIT_REEF_ADMIN_PASSWORD", "admin-entry-secret"));
+        assertThat(result.status).as(result.err).isZero();
+        assertThat(result.err).doesNotContain("警告");
+        assertThat(Files.readString(temp.resolve("home/reef.pub"))).contains("-----BEGIN PUBLIC KEY-----");
+    }
+
+    private Result runWithCurl(Map<String, String> extra) throws Exception {
+        Path bin = temp.resolve("bin");
+        Files.createDirectories(bin);
+        Files.writeString(bin.resolve("curl"), """
+                #!/bin/sh
+                printf '%s\\n' "$*" >> "$HERMIT_HOME/curl-calls"
+                case "$*" in
+                    */api/admin/login*) printf '{"data":{"token":"jwt-for-test"}}' ;;
+                    */api/admin/signing-key*) printf '%s' '{"data":{"publicKey":"-----BEGIN PUBLIC KEY-----\\nMCowBQYDK2VwAyEA\\n-----END PUBLIC KEY-----\\n"}}' ;;
+                    *) exit 22 ;;
+                esac
+                """);
+        Files.setPosixFilePermissions(bin.resolve("curl"), SetExec.EXEC);
+        return run(extra);
+    }
+
     @Test
     void existingConfigWithoutEnvKeepsReefLinesAndChecksThePort() throws Exception {
         Path home = temp.resolve("home");

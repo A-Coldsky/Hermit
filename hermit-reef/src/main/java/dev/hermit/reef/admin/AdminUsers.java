@@ -55,7 +55,7 @@ public class AdminUsers {
 
     public AdminAccount find(String username) {
         return jdbc.query(
-                "SELECT id, username, password_hash, disabled, role, created_at FROM hermit_admin_users "
+                "SELECT id, username, password_hash, disabled, role, created_at, token_version FROM hermit_admin_users "
                         + "WHERE username = ?",
                 rs -> rs.next() ? map(rs) : null,
                 username);
@@ -66,14 +66,14 @@ public class AdminUsers {
      */
     public AdminAccount initialAdmin() {
         return jdbc.query(
-                "SELECT id, username, password_hash, disabled, role, created_at FROM hermit_admin_users "
+                "SELECT id, username, password_hash, disabled, role, created_at, token_version FROM hermit_admin_users "
                         + "WHERE role = 'ADMIN' ORDER BY id LIMIT 1",
                 rs -> rs.next() ? map(rs) : null);
     }
 
     public List<UserSummary> list() {
         List<AdminAccount> accounts = jdbc.query(
-                "SELECT id, username, password_hash, disabled, role, created_at FROM hermit_admin_users ORDER BY id",
+                "SELECT id, username, password_hash, disabled, role, created_at, token_version FROM hermit_admin_users ORDER BY id",
                 (rs, rowNum) -> map(rs));
         return accounts.stream().map(this::summarize).toList();
     }
@@ -161,8 +161,9 @@ public class AdminUsers {
         if (!passwordEncoder.matches(oldPassword, user.passwordHash())) {
             throw new ApiException(400, ReefErrorCode.INVALID_INPUT, OLD_PASSWORD_MISMATCH);
         }
+        // 版本号加一，已经签出的 JWT（包括调用方自己这一张）随即失效。
         jdbc.update(
-                "UPDATE hermit_admin_users SET password_hash = ? WHERE id = ?",
+                "UPDATE hermit_admin_users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
                 passwordEncoder.encode(newPassword),
                 user.id());
         auditService.record(username, AuditAction.PASSWORD_CHANGED, null, null,
@@ -179,8 +180,9 @@ public class AdminUsers {
         if (user == null) {
             throw notFound();
         }
+        // 版本号加一，已经签出的 JWT（包括调用方自己这一张）随即失效。
         jdbc.update(
-                "UPDATE hermit_admin_users SET password_hash = ? WHERE id = ?",
+                "UPDATE hermit_admin_users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
                 passwordEncoder.encode(newPassword),
                 user.id());
         auditService.record(actor, AuditAction.USER_PASSWORD_RESET, null, null,
@@ -212,7 +214,7 @@ public class AdminUsers {
 
     private AdminAccount lockByUsername(String username) {
         return jdbc.query(
-                "SELECT id, username, password_hash, disabled, role, created_at FROM hermit_admin_users "
+                "SELECT id, username, password_hash, disabled, role, created_at, token_version FROM hermit_admin_users "
                         + "WHERE username = ? FOR UPDATE",
                 rs -> rs.next() ? map(rs) : null,
                 username);
@@ -232,7 +234,8 @@ public class AdminUsers {
                 rs.getString("password_hash"),
                 rs.getBoolean("disabled"),
                 AdminRole.valueOf(rs.getString("role")),
-                rs.getTimestamp("created_at").toInstant());
+                rs.getTimestamp("created_at").toInstant(),
+                rs.getInt("token_version"));
     }
 
     private String detail(Map<String, ?> values) {

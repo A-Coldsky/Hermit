@@ -8,7 +8,8 @@ public record AdminAccount(
         String passwordHash,
         boolean disabled,
         AdminRole role,
-        Instant createdAt) {
+        Instant createdAt,
+        int tokenVersion) {
 
     @Override
     public String toString() {

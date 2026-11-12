@@ -6,7 +6,7 @@
 
 | 接口 | 认证 |
 | --- | --- |
-| Reef `/api/admin/login` | username/password；成功返回 data.token、data.expiresAt。JWT 带 `role`（`ADMIN` 或 `USER`）。每次请求按数据库里的当前角色授权，不看 JWT 里的 `role` |
+| Reef `/api/admin/login` | username/password；成功返回 data.token、data.expiresAt。JWT 带 `role`（`ADMIN` 或 `USER`）和 `tv`（签发时该用户的 `token_version`）。每次请求按数据库里的当前角色授权，不看 JWT 里的 `role`；`tv` 和库里的版本号对不上是 401，没有 `tv` 的旧令牌按 0 处理 |
 | Reef 其他 `/api/admin/**` | `Authorization: Bearer <JWT>`。`USER` 可以读规则包、Tide、告警，并管理自己的口令和 Agent 令牌；其余管理写操作、审计、清理和用户管理是 403 `FORBIDDEN`。账号已禁用时已发出的 JWT 也是 401 |
 | Reef `/agent/**` | `X-Hermit-Instance: <UUID>` 和 `X-Hermit-Token`。令牌可以是配置里的 `HERMIT_REEF_AGENT_TOKEN`，或某个用户签发且未吊销、用户也未禁用的 Agent 令牌。禁用用户会把他名下未吊销的库内令牌写上 `revoked_at`，重新启用不清除，这些令牌与错误令牌一样 401。配置令牌归 id 最小的 `ADMIN`。这个管理员已禁用，或当前配置值的 SHA-256 在作废表里，配置令牌也 401；重新启用且配置值没改仍然 401。把配置改成另一个非空字符串后，新值可用（归属管理员须为启用），旧值仍 401。库里还没有任何 `ADMIN`、且当前值未作废时，配置令牌仍可通过，上报的 owner 为空，也不记 Crab 实例 |
 | Crab `/api/**`、别名、`/mcp` | `Authorization: Bearer <API Key>` 或 `X-Hermit-Key` |
@@ -38,13 +38,13 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 
 | 方法 | 路径 | 输入/用途 |
 | --- | --- | --- |
-| POST | `/login` | `{username,password}`；失败锁定窗口 15 分钟，阈值 5 次 |
+| POST | `/login` | `{username,password}`；失败锁定窗口 15 分钟，阈值 5 次。同一用户名的尝试在本进程内排队执行，并发的错误口令也只记到第 5 次 |
 | GET | `/me` | `{username, role}`。`role` 为 `ADMIN` 或 `USER` |
-| POST | `/me/password` | `{oldPassword, newPassword}`。旧口令不对是 400，message 为 `当前密码不正确`。`Cache-Control: no-store`。改口令不使已发出的 JWT 失效 |
+| POST | `/me/password` | `{oldPassword, newPassword}`。旧口令不对是 400，message 为 `当前密码不正确`。`Cache-Control: no-store`。成功后该用户的 `token_version` 加一，之前签出的 JWT（包括这次请求用的）全部 401；管理端随即退出并回到登录页，提示用新密码重新登录 |
 | GET | `/users` | 仅 `ADMIN`。`[{username, role, disabled, createdAt, tokenCount}]`。`tokenCount` 是未吊销的库内令牌数；该用户若是当前配置令牌的归属人（id 最小的 `ADMIN`），且配置了令牌，且当前值未作废，再加 1。不返回口令或令牌明文 |
 | POST | `/users` | 仅 `ADMIN`。`{username, password, role}`。用户名非空、最长 128，口令规则与登录相同。重复用户名 409，message 为 `用户名已存在`。不支持删除，只能禁用。`Cache-Control: no-store` |
 | PATCH | `/users/{username}` | 仅 `ADMIN`。`{role?, disabled?}`，至少给一个。不能取消最后一个启用中的 `ADMIN`，409，message 为 `至少要保留一个启用中的管理员`。不能改自己的角色，也不能禁用自己，409，message 为 `不能修改自己的角色或禁用自己`。自己就是最后一个启用中的管理员时，先返回前一条。空对象 400，message 为 `输入无效`。不存在 404，message 为 `资源不存在`。从启用改为禁用时，该用户 `revoked_at IS NULL` 的库内令牌全部写上 `revoked_at`，每个令牌一条 `AGENT_TOKEN_REVOKED`（detail 与 `DELETE /tokens/{id}` 相同：id、name、prefix、owner）。若请求开始时该用户是配置令牌的归属人且配置了令牌，同时作废当前配置值，再写一条 `AGENT_TOKEN_REVOKED`，detail 为 `{"name":"HERMIT_REEF_AGENT_TOKEN","owner":"<用户名>","source":"CONFIG"}`。已经禁用再传 `disabled: true` 不重复吊销、不重复审计。`disabled: false` 只清除禁用位，不清除 `revoked_at`，也不删作废摘要；该用户可以再登录，旧令牌仍是 401，需要再签发。只改角色、不禁用时，不吊销库内令牌，也不作废配置令牌。响应仍是用户摘要，不含令牌明文 |
-| POST | `/users/{username}/password` | 仅 `ADMIN`。`{password}`，重置别人的口令。重置自己是 400，message 为 `不能重置自己的密码，请用右上角「修改密码」`。`Cache-Control: no-store`。审计 `USER_PASSWORD_RESET`，detail 只有用户名 |
+| POST | `/users/{username}/password` | 仅 `ADMIN`。`{password}`，重置别人的口令。重置自己是 400，message 为 `不能重置自己的密码，请用右上角「修改密码」`。`Cache-Control: no-store`。被重置的用户 `token_version` 加一，已签出的 JWT 立即 401。审计 `USER_PASSWORD_RESET`，detail 只有用户名 |
 | GET | `/tokens` | 自己的令牌。`ADMIN` 加 `?all=true` 看全部；`USER` 即使带 `all=true` 也只看自己。项为 `{id, owner, name, prefix, createdAt, lastUsedAt, revokedAt, source}`。`source` 为 `DATABASE` 或 `CONFIG`。配置令牌：`id`、`prefix`、`createdAt`、`lastUsedAt` 为 null，`name` 为 `HERMIT_REEF_AGENT_TOKEN`；当前配置值已作废时 `revokedAt` 为作废时间，否则为 null。不能用 `DELETE /tokens/{id}` 作废，走下面的作废接口。已吊销的库内令牌和已作废的配置令牌仍列出。响应和审计都不含明文或摘要 |
 | POST | `/tokens` | `{name}`，非空，最长 64。`USER` 和 `ADMIN` 都可以给自己签发。返回 `{token, secret, publicKey}`。`secret` 是 `hat_` 加 32 个随机字节的 base64url（无填充），只出现在这一次响应里。库里只存 SHA-256 的小写十六进制。`publicKey` 与 `GET /signing-key` 的 PEM 相同。`Cache-Control: no-store`。审计 `AGENT_TOKEN_CREATED`，detail 含 id、name、prefix、owner |
 | POST | `/tokens/config/revoke` | 仅 `ADMIN`，无请求体。把当前 `HERMIT_REEF_AGENT_TOKEN` 的 SHA-256 写入 `hermit_voided_config_tokens`（Flyway V7）。成功 200，`data` 与列表中的配置令牌项相同，`revokedAt` 为作废时间。响应和审计不含明文，也不含摘要。第一次写入审计 `AGENT_TOKEN_REVOKED`，detail 为 `{"name":"HERMIT_REEF_AGENT_TOKEN","owner":"<当前归属用户名>","source":"CONFIG"}`。同一配置值再调用仍是 200，`revokedAt` 不变，不再写审计。没有配置令牌（空或空白）时 404 `NOT_FOUND`，message 为 `没有配置令牌`。`USER` 为 403 `FORBIDDEN`，message 为 `没有权限执行这个操作`。未登录 401 `UNAUTHORIZED`，message 为 `未登录或登录已过期`。换成新的非空配置值后旧摘要仍作废，新值可用；要停用新值需再调一次 |

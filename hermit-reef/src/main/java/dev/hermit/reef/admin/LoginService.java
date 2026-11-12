@@ -12,7 +12,8 @@ import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class LoginService {
@@ -20,6 +21,8 @@ public class LoginService {
     public static final Duration LOCK_WINDOW = Duration.ofMinutes(15);
     public static final int MAX_FAILURES = 5;
     public static final String FAILURE_MESSAGE = "authentication failed";
+    /** 2 的幂。同一用户名的尝试落在同一把锁上，排队执行。 */
+    static final int LOCK_STRIPES = 64;
 
     private final JdbcTemplate jdbc;
     private final PasswordEncoder passwordEncoder;
@@ -28,9 +31,11 @@ public class LoginService {
     private final AdminUsers users;
     private final Clock clock;
     private final String dummyHash;
+    private final TransactionTemplate transactions;
+    private final Object[] stripes = new Object[LOCK_STRIPES];
 
     public LoginService(JdbcTemplate jdbc, PasswordEncoder passwordEncoder, JwtService jwtService,
-            AuditService auditService, AdminUsers users, Clock clock) {
+            AuditService auditService, AdminUsers users, Clock clock, PlatformTransactionManager transactionManager) {
         this.jdbc = jdbc;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
@@ -39,10 +44,24 @@ public class LoginService {
         this.clock = clock;
         // 用户不存在时也做一次 BCrypt，避免响应时间暴露账号是否存在。
         this.dummyHash = passwordEncoder.encode("dummy-password-not-used-for-login");
+        this.transactions = new TransactionTemplate(transactionManager);
+        for (int i = 0; i < stripes.length; i++) {
+            stripes[i] = new Object();
+        }
     }
 
-    @Transactional
+    /**
+     * 同一用户名的尝试串行：先数失败、再比口令、再记失败，整段在一个事务里，锁在事务提交之后才放。
+     * 否则并发请求都读到同一个失败数，锁定前能多猜很多次。多个 Reef 进程共用一个库时仍各算各的。
+     */
     public Optional<LoginResponse> login(String username, String password) {
+        Object lock = stripes[String.valueOf(username).hashCode() & (LOCK_STRIPES - 1)];
+        synchronized (lock) {
+            return transactions.execute(status -> attempt(username, password));
+        }
+    }
+
+    private Optional<LoginResponse> attempt(String username, String password) {
         Instant now = clock.instant();
         AdminAccount user = users.find(username);
         boolean locked = failureCount(username, now) >= MAX_FAILURES;
@@ -62,7 +81,7 @@ public class LoginService {
             return Optional.empty();
         }
         auditService.record(username, AuditAction.LOGIN_SUCCESS, null, null, null);
-        IssuedJwt issued = jwtService.issue(username, user.role());
+        IssuedJwt issued = jwtService.issue(username, user.role(), user.tokenVersion());
         return Optional.of(new LoginResponse(issued.token(), issued.expiresAt()));
     }
 

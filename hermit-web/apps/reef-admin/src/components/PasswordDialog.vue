@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ApiError } from '@shared/http'
 import { notifyError } from '@shared/format'
 import { api } from '../api'
+import { signOut } from '../auth'
 import { userErrorText } from '../labels'
+
+const router = useRouter()
 
 const open = defineModel<boolean>({ required: true })
 const formRef = ref<FormInstance>()
@@ -40,8 +44,11 @@ async function submit() {
   saving.value = true
   try {
     await api.changePassword(form.oldPassword, form.newPassword)
-    ElMessage.success('密码已修改，下次登录使用新密码')
+    // 服务端改口令时作废了所有已签出的令牌，包括这一张。
     open.value = false
+    signOut()
+    ElMessage.success('密码已修改，请用新密码重新登录')
+    await router.replace({ name: 'login' })
   } catch (error) {
     const text = error instanceof ApiError ? userErrorText(error.message) : null
     if (text) ElMessage.error(text)

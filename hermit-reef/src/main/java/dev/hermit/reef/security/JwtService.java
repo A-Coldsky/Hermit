@@ -27,6 +27,8 @@ public class JwtService {
 
     static final Duration CLOCK_SKEW = Duration.ofSeconds(60);
     public static final String ROLE_CLAIM = "role";
+    /** 签发时管理员的 token_version。改口令后版本号变了，旧令牌就对不上。 */
+    public static final String VERSION_CLAIM = "tv";
 
     private final JwtEncoder encoder;
     private final ReefProperties properties;
@@ -47,12 +49,13 @@ public class JwtService {
         return decoder;
     }
 
-    public IssuedJwt issue(String username, AdminRole role) {
+    public IssuedJwt issue(String username, AdminRole role, int tokenVersion) {
         Instant now = clock.instant();
         Instant expiresAt = now.plus(properties.getJwtTtl());
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .subject(username)
                 .claim(ROLE_CLAIM, role.name())
+                .claim(VERSION_CLAIM, tokenVersion)
                 .issuedAt(now)
                 .expiresAt(expiresAt)
                 .build();

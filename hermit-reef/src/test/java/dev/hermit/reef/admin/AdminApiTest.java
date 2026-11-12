@@ -32,7 +32,14 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -157,6 +164,35 @@ class AdminApiTest {
                 Integer.class,
                 TestSecrets.USERNAME);
         assertThat(failures).isEqualTo(LoginService.MAX_FAILURES);
+    }
+
+    /** 并发的错误口令不能绕过锁定：同一用户名的尝试排队，最多记 5 次失败。 */
+    @Test
+    void concurrentWrongPasswordsStillLockAfterFive(@Autowired LoginService logins) throws Exception {
+        int threads = 16;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Boolean>> results = new ArrayList<>();
+        try {
+            for (int i = 0; i < threads; i++) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    return logins.login(TestSecrets.USERNAME, "wrong-password").isPresent();
+                }));
+            }
+            start.countDown();
+            for (Future<Boolean> result : results) {
+                assertThat(result.get(30, TimeUnit.SECONDS)).isFalse();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        Integer failures = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM hermit_admin_login_failures WHERE username = ?",
+                Integer.class,
+                TestSecrets.USERNAME);
+        assertThat(failures).isEqualTo(LoginService.MAX_FAILURES);
+        assertThat(logins.login(TestSecrets.USERNAME, TestSecrets.PASSWORD)).isEmpty();
     }
 
     @Test
@@ -504,7 +540,7 @@ class AdminApiTest {
                 .isEqualTo(2);
     }
 
-    private static java.util.List<String> linesSince(int before) {
+    private static List<String> linesSince(int before) {
         return MemoryLogAppender.LINES.subList(before, MemoryLogAppender.LINES.size());
     }
 

@@ -209,6 +209,41 @@ class ReefUsersAndTokensTest {
                 .isNull();
     }
 
+    /** 改口令或被重置口令后，之前签出的 JWT 立即失效，不再等 8 小时过期。 */
+    @Test
+    void passwordChangeAndResetRevokeIssuedJwts() throws Exception {
+        String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        String otherTab = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        mockMvc.perform(post("/api/admin/me/password")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "oldPassword", TestSecrets.PASSWORD,
+                                "newPassword", CHANGED_PASSWORD))))
+                .andExpect(status().isOk());
+        for (String stale : new String[] {admin, otherTab}) {
+            mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + stale))
+                    .andExpect(status().isUnauthorized());
+        }
+        String fresh = login(TestSecrets.USERNAME, CHANGED_PASSWORD);
+        mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + fresh))
+                .andExpect(status().isOk());
+
+        createUser(fresh, USER_NAME, USER_PASSWORD, "USER");
+        String user = login(USER_NAME, USER_PASSWORD);
+        mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/admin/users/" + USER_NAME + "/password")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + fresh)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"password\":\"" + RESET_PASSWORD + "\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + user))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + fresh))
+                .andExpect(status().isOk());
+    }
+
     @Test
     void passwordChangeAndResetLeaveTheSecretOutOfAuditAndLists() throws Exception {
         String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);

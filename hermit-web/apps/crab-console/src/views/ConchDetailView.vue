@@ -336,7 +336,7 @@ watch(
           <div v-if="previousNote" data-test="previous-note">{{ previousNote }}</div>
           <el-button
             v-if="rollbackable"
-            class="update-btn"
+            class="update-btn neutral"
             data-test="rollback"
             :loading="working"
             @click="rollback"
@@ -457,6 +457,13 @@ watch(
 
 .update-btn {
   margin-top: 8px;
+}
+
+/* 红条里的「退回」不用灰字灰框：跟随正文色和边框色，在红底上也看得清。 */
+.update-btn.neutral {
+  --el-button-text-color: var(--hm-text);
+  --el-button-border-color: var(--hm-border);
+  --el-button-bg-color: var(--hm-surface);
 }
 
 .detail :deep(.hm-card + .hm-card) {

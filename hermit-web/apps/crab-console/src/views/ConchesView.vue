@@ -259,7 +259,7 @@ onMounted(load)
         v-for="row in conches"
         :key="row.conch"
         class="hm-card conch clickable"
-        :class="{ warn: row.needsConfiguration }"
+        :class="{ warn: row.needsConfiguration && !row.ruleDisabled, broken: row.ruleDisabled }"
         role="link"
         tabindex="0"
         @click="open(row)"
@@ -301,6 +301,7 @@ onMounted(load)
             v-if="canRollback(row)"
             link
             type="primary"
+            class="card-action"
             data-test="rollback"
             :loading="acting === row.conch"
             @click.stop="rollbackListed(row)"
@@ -309,6 +310,7 @@ onMounted(load)
             v-if="row.updateAvailable"
             link
             type="primary"
+            class="card-action"
             :loading="acting === row.conch"
             @click.stop="updateListed(row)"
           >更新到 v{{ row.latestVersion }}</el-button>
@@ -399,6 +401,11 @@ onMounted(load)
 </template>
 
 <style scoped>
+/* 卡片上的「退回」「更新到」和正文同一字号。 */
+.card-action {
+  font-size: 12.5px;
+}
+
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));

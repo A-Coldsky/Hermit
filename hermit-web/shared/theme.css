@@ -32,7 +32,8 @@ html:root {
   --hm-brand-soft: #5eead4;
   --hm-login-from: #0f2e2f;
   --hm-login-to: #0b1620;
-  --hm-success: #16a34a;
+  /* 成功绿也当小字用：#16a34a 在白底上只有 3.3:1，换成 #15803d（5.0:1）。 */
+  --hm-success: #15803d;
   --hm-topbar: rgba(255, 255, 255, 0.82);
   --hm-code-bg: #0f1d20;
   --hm-code-text: #d6e4e6;
@@ -44,12 +45,12 @@ html:root {
 
   /* 明暗阶是对应 --hm-* 与白/黑按 Element 的比例混合，改主色时要一起重算。 */
   --el-color-success: var(--hm-success);
-  --el-color-success-light-3: #5cbf80;
-  --el-color-success-light-5: #8bd1a5;
-  --el-color-success-light-7: #b9e3c9;
-  --el-color-success-light-8: #d0eddb;
-  --el-color-success-light-9: #e8f6ed;
-  --el-color-success-dark-2: #12823b;
+  --el-color-success-light-3: #5ba677;
+  --el-color-success-light-5: #8ac09e;
+  --el-color-success-light-7: #b9d9c5;
+  --el-color-success-light-8: #d0e6d8;
+  --el-color-success-light-9: #e8f2ec;
+  --el-color-success-dark-2: #116631;
   /* 明暗阶按 --hm-accent 混合，保持琥珀色块；文字色和 dark-2 用加深后的 --hm-warning。 */
   --el-color-warning: var(--hm-warning);
   --el-color-warning-light-3: #f8bb54;
@@ -510,4 +511,12 @@ html .el-table,
   .hm-scroll-hint {
     display: block;
   }
+}
+
+/* 暗色主按钮：白字配 #14a394 只有 3.14:1，改用深色字（5.8:1）。只改实心主按钮，链接和描边按钮不受影响。 */
+html.dark .el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
+  --el-button-text-color: #0b1620;
+  --el-button-hover-text-color: #0b1620;
+  --el-button-active-text-color: #0b1620;
+  --el-button-disabled-text-color: rgba(11, 22, 32, 0.6);
 }

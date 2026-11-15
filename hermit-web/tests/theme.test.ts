@@ -80,6 +80,19 @@ describe('Element 语义色', () => {
   })
 })
 
+describe('文字对比度', () => {
+  it('成功绿当小字用时在白底上不低于 4.5:1', () => {
+    expect(contrast(resolve('--hm-success'), '#ffffff')).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('暗色实心主按钮的文字对比度不低于 4.5:1', () => {
+    const rule = /html\.dark \.el-button--primary[^{]*\{([^}]*)\}/.exec(css)
+    expect(rule).not.toBeNull()
+    const text = /--el-button-text-color:\s*(#[0-9a-f]{6})/i.exec(rule![1])![1]
+    expect(contrast(resolve('--el-color-primary', dark), text)).toBeGreaterThanOrEqual(4.5)
+  })
+})
+
 describe('暗色语义色', () => {
   const darkOwn = block('html.dark')
   it.each(semantic)('暗色块显式声明 %s，避免被 Element 暗色样式盖回默认色', (name, token) => {

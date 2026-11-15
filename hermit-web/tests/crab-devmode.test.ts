@@ -166,7 +166,10 @@ describe('Crab 开发者模式', () => {
     await flushPromises()
     const note = document.body.querySelector('[data-test="trial-request"]')
     expect(note?.textContent).toContain('req-9')
-    expect(note?.textContent).toContain('请求编号，不可查追踪')
+    // 「请求编号」只出现一次，说清楚为什么查不到，并能复制。
+    expect(note?.textContent?.split('请求编号').length).toBe(2)
+    expect(note?.textContent).toContain('执行前就被拒绝了，没有追踪可查')
+    expect(note?.querySelector('[aria-label="复制请求编号"]')).not.toBeNull()
     expect(note?.querySelector('a')).toBeNull()
     page.unmount()
   })

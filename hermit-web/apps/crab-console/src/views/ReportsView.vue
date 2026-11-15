@@ -137,7 +137,7 @@ onMounted(() => {
       </template>
       <template v-else>
         <strong>还没有连接 Reef</strong>
-        <span class="hm-muted">在<router-link to="/reef">连接 Reef</router-link>导入初始化 JSON 后开始上报。</span>
+        <span class="hm-muted">在「<router-link to="/reef">连接 Reef</router-link>」页导入初始化 JSON 后开始上报。</span>
       </template>
     </div>
 

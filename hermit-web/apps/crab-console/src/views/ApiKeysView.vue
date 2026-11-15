@@ -17,6 +17,16 @@ const created = ref<CreatedApiKey | null>(null)
 
 const localNames = computed(() => conchDetails.value.filter((s) => s.source === 'LOCAL').map((s) => s.conch))
 const endpoint = computed(() => `${window.location.origin}/mcp`)
+/** HTTP 调用示例。能力清单和参数在 /openapi.json。 */
+const openapiExample = computed(() => {
+  const origin = window.location.origin
+  return [
+    `curl -H "Authorization: Bearer <API Key>" \\`,
+    `  "${origin}/api/<规则包>/<能力>?参数=值"`,
+    '',
+    `# 全部能力和参数：${origin}/openapi.json`,
+  ].join('\n')
+})
 const clientExample = computed(() => `{
   "mcpServers": {
     "hermit": {
@@ -113,7 +123,7 @@ async function revoke(key: ApiKey) {
 }
 
 function scopeText(list: string[] | null, all: string): string {
-  return list && list.length ? list.join(', ') : all
+  return list && list.length ? list.join('、') : all
 }
 
 onMounted(load)
@@ -224,8 +234,10 @@ onMounted(load)
         <code>{{ created.plaintext }}</code>
         <el-button :icon="CopyDocument" @click="copyText(created.plaintext, 'API Key 已复制')">复制</el-button>
       </div>
-      <p class="hint">接入地址 <span class="mono">{{ endpoint }}</span></p>
+      <p class="hint">MCP 客户端配置（接入地址 <span class="mono">{{ endpoint }}</span>）</p>
       <pre class="example" data-test="key-example">{{ clientExample }}</pre>
+      <p class="hint">OpenAPI 调用</p>
+      <pre class="example" data-test="key-openapi-example">{{ openapiExample }}</pre>
       <template #footer>
         <el-button type="primary" @click="created = null">我已保存</el-button>
       </template>
@@ -234,6 +246,21 @@ onMounted(load)
 </template>
 
 <style scoped>
+/* 示例完整显示：换行而不是截断，带底色和等宽字。 */
+.example {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--hm-code-bg);
+  color: var(--hm-code-text);
+  font-family: var(--el-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
+}
+
 .once {
   margin-bottom: 16px;
 }

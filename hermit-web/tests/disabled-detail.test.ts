@@ -4,6 +4,8 @@ import { mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
   conch: vi.fn(),
+  conches: vi.fn(),
+  localConches: vi.fn(),
   accounts: vi.fn(),
   config: vi.fn(),
   debug: vi.fn(),
@@ -13,6 +15,7 @@ vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
 vi.mock('../apps/crab-console/src/status', () => ({ refreshPending: vi.fn() }))
 
 import ConchDetailView from '../apps/crab-console/src/views/ConchDetailView.vue'
+import ConchesView from '../apps/crab-console/src/views/ConchesView.vue'
 
 const account = { name: 'alice', default: true, needsConfiguration: false, credentialsUnreadable: false, loginPaused: false }
 
@@ -64,5 +67,36 @@ describe('停用状态说真话', () => {
     expect(page.find('[data-test="ready"]').text()).toContain('配置完整')
     expect(page.text()).not.toContain('已停用')
     expect(page.find('[data-test="test-login"]').exists()).toBe(true)
+  })
+
+  it('停用卡片上「已停用」只出现一次，原因段只写原因', async () => {
+    crab.conches.mockResolvedValue({
+      conches: [
+        {
+          conch: 'legacy_oa',
+          version: '1.0.1',
+          title: '协同办公 OA',
+          capabilityCount: 2,
+          subscribed: true,
+          accountCount: 1,
+          needsConfiguration: false,
+          loginPaused: false,
+          source: 'REEF',
+          reefDisabled: false,
+          reefDisabledAt: null,
+          updateAvailable: false,
+          latestVersion: null,
+          newRequiredCredentials: [],
+          ruleDisabled: true,
+          message: '已停用。这版规则暂时不能调用。能力不能引用登录步骤里的变量。第 12 行。',
+        },
+      ],
+    })
+    crab.localConches.mockResolvedValue({ conches: [] })
+    const page = await mountPage(ConchesView)
+    await flushPromises()
+
+    expect(page.text().split('已停用').length - 1).toBe(1)
+    expect(page.get('[data-test="rule-message"]').text()).toBe('能力不能引用登录步骤里的变量。第 12 行。')
   })
 })

@@ -638,7 +638,9 @@ export const api = {
   debug: () => http.get<DebugState>(`${base}/debug`),
   setDebug: (enabled: boolean) => http.post<DebugState>(`${base}/debug`, { enabled }),
 
-  syncStatus: () => http.get<{ report: SyncReport | null; latestCrab: CrabRelease | null }>(`${base}/sync`),
+  /** `intervalSeconds` 是自动同步的间隔（config.yml 的 sync.interval_seconds）。 */
+  syncStatus: () =>
+    http.get<{ report: SyncReport | null; latestCrab: CrabRelease | null; intervalSeconds?: number }>(`${base}/sync`),
   sync: () => http.post<SyncReport>(`${base}/sync`),
 
   /** Reef 未配置时 `configured` 为 false，`conches` 为空。 */

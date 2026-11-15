@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { Plus } from '@element-plus/icons-vue'
+import { CopyDocument, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { ApiError } from '@shared/http'
-import { errorCodeLabels, errorText, formatTime, notifyError } from '@shared/format'
+import { copyText, errorCodeLabels, errorText, formatTime, notifyError } from '@shared/format'
 import { useNarrow } from '@shared/narrow'
 import { api, type Account, type CredentialField } from '../api'
 import CredentialDialog from './CredentialDialog.vue'
@@ -342,8 +342,10 @@ async function disconnect(account: Account) {
       :sub-title="loginFailureDetail"
     >
       <template v-if="testResult.requestId" #extra>
-        <span class="hm-muted">{{ testResult.requestNote || '请求编号，不可查追踪' }}</span>
+        <span class="hm-muted">请求编号</span>
         <span class="mono">{{ testResult.requestId }}</span>
+        <el-button link :icon="CopyDocument" aria-label="复制请求编号" @click="copyText(testResult.requestId, '请求编号已复制')" />
+        <span class="hm-muted">执行前就被拒绝了，没有追踪可查。</span>
       </template>
     </el-result>
   </el-dialog>

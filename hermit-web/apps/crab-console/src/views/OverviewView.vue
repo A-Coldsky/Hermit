@@ -62,10 +62,23 @@ const authoringPrompt = computed(() => {
     '正式包不能保存或试跑。先在本地规则包上开发，再导出上传。',
   ].join('\n')
 })
+// 「有新版本」已经在上面的提示块里列过；结果列表不再重复同一件事。
 const changedConches = computed(
   () =>
-    report.value?.conches.filter((s) => s.kind !== 'SKIPPED_SAME' && s.kind !== 'NOT_SUBSCRIBED' && s.kind !== 'REPAIR_REQUIRED') ?? [],
+    report.value?.conches.filter(
+      (s) =>
+        s.kind !== 'SKIPPED_SAME' &&
+        s.kind !== 'NOT_SUBSCRIBED' &&
+        s.kind !== 'REPAIR_REQUIRED' &&
+        !(s.kind === 'UPDATE_AVAILABLE' && updatable.value.some((u) => u.conch === s.conch)),
+    ) ?? [],
 )
+const syncInterval = ref<number | null>(null)
+const syncIntervalText = computed(() => {
+  const seconds = syncInterval.value
+  if (!seconds) return ''
+  return seconds % 60 === 0 ? `每 ${seconds / 60} 分钟自动同步一次` : `每 ${seconds} 秒自动同步一次`
+})
 const updatable = computed(() => conches.value.filter((s) => s.updateAvailable))
 const unsubscribedCount = computed(() => report.value?.conches.filter((s) => s.kind === 'NOT_SUBSCRIBED').length ?? 0)
 
@@ -75,6 +88,7 @@ async function loadSync() {
     syncConfigured.value = true
     report.value = status.report
     latestCrab.value = status.latestCrab
+    syncInterval.value = status.intervalSeconds ?? null
   } catch (error) {
     if (error instanceof ApiError && error.code === 'NOT_CONFIGURED') {
       syncConfigured.value = false
@@ -248,6 +262,9 @@ onMounted(load)
           <span>同步状态</span>
           <span v-if="syncedAt" class="hm-muted small">{{ relativeTime(syncedAt) }}同步</span>
         </div>
+        <p v-if="syncIntervalText" class="hm-muted small sync-interval" data-test="sync-interval">
+          {{ syncIntervalText }}。Reef 发布新版后，要等下次同步或点「立即同步」才看得到。
+        </p>
         <template v-if="report">
           <el-alert
             v-if="report.error"
@@ -327,7 +344,7 @@ onMounted(load)
           <el-icon :size="22"><Connection /></el-icon>
           <div>
             <strong>没有配置 Reef，只使用本地规则包。</strong>
-            <div class="hm-muted">在<router-link to="/reef">连接 Reef</router-link>导入 Reef 管理页生成的初始化 JSON，不用重启。</div>
+            <div class="hm-muted">在「<router-link to="/reef">连接 Reef</router-link>」页导入 Reef 管理页生成的初始化 JSON，不用重启。</div>
           </div>
         </div>
         <div v-else-if="!loading" class="state">
@@ -423,6 +440,10 @@ onMounted(load)
 
 .pending {
   margin-left: 6px;
+}
+
+.sync-interval {
+  margin: -4px 0 8px;
 }
 
 .small {

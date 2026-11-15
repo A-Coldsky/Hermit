@@ -1044,6 +1044,7 @@ final class ConsoleApi {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("report", report == null ? null : syncView(report));
         body.put("latestCrab", report == null ? null : crabView(report.latestCrab().orElse(null)));
+        body.put("intervalSeconds", runtime.config().syncIntervalSeconds());
         GatewayResponses.writeData(ctx, body);
     }
 

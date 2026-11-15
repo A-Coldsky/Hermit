@@ -210,10 +210,10 @@ onMounted(async () => {
               <dt>错误码</dt>
               <dd class="mono" data-test="error-code">{{ drawer.call.errorCode }}</dd>
             </template>
-            <dt>traceId</dt>
+            <dt>追踪编号</dt>
             <dd>
               <code>{{ drawer.call.traceId }}</code>
-              <el-button link :icon="CopyDocument" aria-label="复制 traceId" @click="copyText(drawer.call.traceId, 'traceId 已复制')" />
+              <el-button link :icon="CopyDocument" aria-label="复制追踪编号" @click="copyText(drawer.call.traceId, '追踪编号已复制')" />
             </dd>
             <dt>时间</dt>
             <dd>{{ formatTime(drawer.call.at) }}</dd>

@@ -17,6 +17,7 @@ import { refreshPending } from '../status'
 import { unsubscribeMessage } from '../copy'
 import { canRollback, previousBlockedNote } from '../previous'
 import { repairConch, updateConch } from '../update'
+import { disabledReasonOnly } from '../disabled'
 
 const props = defineProps<{ conch: string }>()
 const router = useRouter()
@@ -35,11 +36,7 @@ const incompleteAccounts = computed(() =>
 const unreadableAccounts = computed(() => accounts.value.filter((a) => a.credentialsUnreadable).map((a) => a.name))
 const pausedAccounts = computed(() => accounts.value.filter((a) => a.loginPaused))
 const needsAccount = computed(() => accounts.value.length === 0)
-const DISABLED_LEAD = '已停用。这版规则暂时不能调用。'
-const disabledReason = computed(() => {
-  const message = detail.value?.message ?? ''
-  return message.startsWith(DISABLED_LEAD) ? message.slice(DISABLED_LEAD.length) : message
-})
+const disabledReason = computed(() => disabledReasonOnly(detail.value?.message))
 const rollbackable = computed(() => (detail.value ? canRollback(detail.value) : false))
 const previousNote = computed(() => (detail.value ? previousBlockedNote(detail.value) : null))
 const ready = computed(

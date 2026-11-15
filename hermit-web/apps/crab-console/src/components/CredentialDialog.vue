@@ -56,6 +56,7 @@ async function save() {
   if (props.unreadable) {
     const empty = props.fields.filter((f) => f.required && !values[f.name]).map((f) => shownField(f))
     if (empty.length) {
+      ElMessage.closeAll()
       ElMessage.warning(`凭证无法解密，需要全部重新填写：${empty.join('、')}`)
       return
     }
@@ -65,6 +66,7 @@ async function save() {
     return !(keepable(field.name) && !cleared[field.name])
   })
   if (blocked.length) {
+    ElMessage.closeAll()
     ElMessage.warning(`请填写必填凭证：${blocked.map((field) => shownField(field)).join('、')}`)
     return
   }
@@ -75,6 +77,8 @@ async function save() {
   saving.value = true
   try {
     await api.writeCredentials(props.conch, props.account, changes.value)
+    // 连续保存两次时，新提示替换上一条，屏上只留一条。
+    ElMessage.closeAll()
     ElMessage.success('凭证已保存，已有会话会在下次调用时重新登录')
     open.value = false
     emit('saved')

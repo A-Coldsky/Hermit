@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import { CopyDocument } from '@element-plus/icons-vue'
 import { computed, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import JsonBlock from '@shared/components/JsonBlock.vue'
 import { ApiError, type Envelope } from '@shared/http'
-import { errorCodeLabels, errorText, notifyError } from '@shared/format'
+import { copyText, errorCodeLabels, errorText, notifyError } from '@shared/format'
 import { api, type Account, type CapabilityState, type McpRefreshResult } from '../api'
 
 const props = defineProps<{
@@ -180,12 +181,13 @@ async function refreshTools() {
       </template>
     </el-result>
     <p v-if="trialResult.traceId" class="hm-muted trace">
-      开发追踪：
+      追踪编号：
       <router-link :to="{ path: '/calls', query: { trace: trialResult.traceId } }" class="mono">{{ trialResult.traceId }}</router-link>
     </p>
     <p v-else-if="trialResult.requestId" class="hm-muted trace" data-test="trial-request">
       请求编号 <span class="mono">{{ trialResult.requestId }}</span>
-      <template v-if="trialResult.requestNote">。{{ trialResult.requestNote }}</template>
+      <el-button link :icon="CopyDocument" aria-label="复制请求编号" @click="copyText(trialResult.requestId, '请求编号已复制')" />
+      执行前就被拒绝了，没有追踪可查。
     </p>
   </el-dialog>
 

@@ -90,7 +90,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="涉及字段" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
-            <span v-if="row.fields.length" class="mono">{{ row.fields.join(', ') }}</span>
+            <span v-if="row.fields.length" class="mono">{{ row.fields.join('、') }}</span>
             <span v-else class="hm-muted">—</span>
           </template>
         </el-table-column>

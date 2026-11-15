@@ -18,13 +18,35 @@ export function bucketLabel(value: string, bucket: string): string {
   return bucket === 'hour' ? `${day} ${pad(date.getHours())}:00` : day
 }
 
+/** 本地时区的零点（按天）或整点（按小时）。服务端按同一个时区切日，键能对上。 */
+function bucketFloor(time: number, bucket: string): number {
+  const date = new Date(time)
+  if (bucket === 'hour') {
+    date.setMinutes(0, 0, 0)
+  } else {
+    date.setHours(0, 0, 0, 0)
+  }
+  return date.getTime()
+}
+
+function nextBucket(time: number, bucket: string): number {
+  const date = new Date(time)
+  if (bucket === 'hour') {
+    date.setHours(date.getHours() + 1)
+  } else {
+    date.setDate(date.getDate() + 1)
+  }
+  return date.getTime()
+}
+
 export function toBars(series: TidePoint[], bucket: string, from?: string, to?: string): BarPoint[] {
-  const step = bucket === 'hour' ? 3_600_000 : 86_400_000
   const byBucket = new Map<number, BarPoint>()
-  const start = from ? Math.floor(new Date(from).getTime() / step) * step : NaN
+  const start = from ? bucketFloor(new Date(from).getTime(), bucket) : NaN
   const end = to ? new Date(to).getTime() : NaN
-  if (Number.isFinite(start) && Number.isFinite(end) && (end - start) / step <= 24 * 92) {
-    for (let t = start; t < end; t += step) {
+  const limit = bucket === 'hour' ? 24 * 92 : 400
+  if (Number.isFinite(start) && Number.isFinite(end)) {
+    let count = 0
+    for (let t = start; t < end && count < limit; t = nextBucket(t, bucket), count++) {
       byBucket.set(t, { label: bucketLabel(new Date(t).toISOString(), bucket), success: 0, failure: 0 })
     }
   }

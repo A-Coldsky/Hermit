@@ -60,7 +60,7 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | DELETE | `/conches/{conch}/versions/{version}` | 仅 `ADMIN`，无请求体。只删除 `status = UPLOADED` 的版本。成功 200，`data` 为 `{conch, version}`。已发布 409 `CONFLICT`，message 为 `只能丢弃已上传、尚未发布的版本`，不删除该版本的 YAML 和签名 ZIP。不存在、重复删除、版本号不是 semver，或名字不是单个路径段时 404 `NOT_FOUND`，message 为 `资源不存在`。`USER` 与未登录分别是 403、401。审计见下文 |
 | POST | `/conches/{conch}/disable` | `{reason}`。停用已有 Conch。原因去掉首尾空白后 1–500 个字符，不能含控制字符。已经停用时 409，`message` 为 `规则包已经停用` |
 | POST | `/conches/{conch}/enable` | `{reason}`，规则与停用相同。未停用时 409，`message` 为 `规则包尚未停用`。启用原因只写入审计 |
-| GET | `/tide/summary` | conch/from/to/bucket |
+| GET | `/tide/summary` | conch/from/to/bucket/tz。`bucket=day` 时按 `tz`（IANA 时区名，例如 `Asia/Shanghai`）的零点切日，`bucketStart` 是那个零点的 UTC 时刻；不传 `tz` 按北京时间，非法时区 422。管理端传浏览器所在时区 |
 | GET | `/tide/failures` | conch/version/action/from/to |
 | GET | `/tide/compare` | conch/versions（逗号分隔版本） |
 | GET | `/tide/rollbacks` | conch/from/to |

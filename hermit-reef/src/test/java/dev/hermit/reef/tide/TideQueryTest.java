@@ -145,7 +145,8 @@ class TideQueryTest {
                 .param("conch", "legacy_oa")
                 .param("from", DAY.toString())
                 .param("to", "2026-06-02T00:00:00Z")
-                .param("bucket", "day"));
+                .param("bucket", "day")
+                .param("tz", "UTC"));
         JsonNode series = day.get("data").get("series");
         assertThat(series).hasSize(2);
         JsonNode list = point(series, "legacy_oa", "list_todo", "2026-06-01T00:00:00Z");
@@ -174,6 +175,34 @@ class TideQueryTest {
         assertThat(secondHour.get("p95Millis").asLong()).isEqualTo(40);
         assertThat(point(hours.get("data").get("series"), "other_app", "list_todo", DAY.toString())
                 .get("success").asLong()).isEqualTo(7);
+    }
+
+    /** 不传时区按北京时间切日：北京时间凌晨（UTC 前一天下午）的调用记在当天。 */
+    @Test
+    void dailyBucketsFollowBeijingTimeByDefaultAndAcceptATimeZone() throws Exception {
+        Instant beijingEarlyMorning = Instant.parse("2026-06-01T17:00:00Z");
+        hour("legacy_oa", "1.0.0", "list_todo", beijingEarlyMorning, "a", 3, 0, 10, 10);
+
+        JsonNode beijing = admin(get("/api/admin/tide/summary")
+                .param("from", "2026-06-01T00:00:00Z")
+                .param("to", "2026-06-03T00:00:00Z")
+                .param("bucket", "day"));
+        JsonNode point = point(beijing.get("data").get("series"), "legacy_oa", "list_todo", "2026-06-01T16:00:00Z");
+        assertThat(point.get("success").asLong()).isEqualTo(3);
+
+        JsonNode utc = admin(get("/api/admin/tide/summary")
+                .param("from", "2026-06-01T00:00:00Z")
+                .param("to", "2026-06-03T00:00:00Z")
+                .param("bucket", "day")
+                .param("tz", "UTC"));
+        assertThat(point(utc.get("data").get("series"), "legacy_oa", "list_todo", "2026-06-01T00:00:00Z")
+                .get("success").asLong()).isEqualTo(3);
+
+        mockMvc.perform(get("/api/admin/tide/summary")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token())
+                        .param("bucket", "day")
+                        .param("tz", "Mars/Olympus"))
+                .andExpect(status().isUnprocessableEntity());
     }
 
     @Test

@@ -12,9 +12,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Clock;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -30,6 +32,8 @@ import org.springframework.stereotype.Service;
 public class TideQueryService {
 
     static final Duration DEFAULT_SPAN = Duration.ofDays(7);
+    /** 按天汇总时在哪个时区切日。不传 {@code tz} 时按北京时间，北京时间凌晨的调用不再记到前一天。 */
+    static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
     static final Duration MAX_SPAN = Duration.ofDays(400);
     private static final int RECENT_SUMMARIES = 5;
     private static final int RATE_SCALE = 6;
@@ -44,10 +48,16 @@ public class TideQueryService {
     }
 
     public TideSummary summary(String conch, String from, String to, String bucket) {
+        return summary(conch, from, to, bucket, null);
+    }
+
+    /** {@code tz} 是 IANA 时区名，例如 {@code Asia/Shanghai}；只影响按天汇总从哪个零点切开。 */
+    public TideSummary summary(String conch, String from, String to, String bucket, String tz) {
         String unit = bucket == null || bucket.isBlank() ? "day" : bucket;
         if (!unit.equals("hour") && !unit.equals("day")) {
             throw TideErrors.unprocessable();
         }
+        ZoneId zone = zone(tz);
         TimeRange range = range(from, to);
         String conchFilter = blankToNull(conch);
         // 实例和版本在库里先合并到每小时一行，Java 只再按天合并，不把所有实例的明细读进内存。
@@ -77,7 +87,7 @@ public class TideQueryService {
         for (CountRow row : rows) {
             Instant bucketStart = "hour".equals(unit)
                     ? row.hourStart()
-                    : row.hourStart().truncatedTo(ChronoUnit.DAYS);
+                    : row.hourStart().atZone(zone).truncatedTo(ChronoUnit.DAYS).toInstant();
             grouped.computeIfAbsent(new BucketKey(row.conch(), row.action(), bucketStart), key -> new Accumulator())
                     .add(row);
         }
@@ -241,6 +251,17 @@ public class TideQueryService {
             throw TideErrors.unprocessable();
         }
         return new TimeRange(start, end);
+    }
+
+    private static ZoneId zone(String tz) {
+        if (tz == null || tz.isBlank()) {
+            return DEFAULT_ZONE;
+        }
+        try {
+            return ZoneId.of(tz.trim());
+        } catch (DateTimeException ex) {
+            throw TideErrors.unprocessable();
+        }
     }
 
     private static Instant parseInstant(String text) {

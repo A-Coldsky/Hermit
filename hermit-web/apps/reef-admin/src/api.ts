@@ -318,6 +318,14 @@ export interface PurgeCounts {
   loginFailures: number
 }
 
+function browserZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
+  } catch {
+    return undefined
+  }
+}
+
 export const api = {
   login: (username: string, password: string) =>
     http.post<{ token: string; expiresAt: string }>('/api/admin/login', { username, password }),
@@ -364,8 +372,9 @@ export const api = {
   enableConch: (conch: string, reason: string) =>
     http.post<ConchAvailability>(`/api/admin/conches/${seg(conch)}/enable`, { reason }),
 
+  /** 按浏览器所在时区切日，北京时间凌晨的调用记在当天。 */
   tideSummary: (query: { conch?: string; from?: string; to?: string; bucket?: string }) =>
-    http.get<TideSummary>('/api/admin/tide/summary', query),
+    http.get<TideSummary>('/api/admin/tide/summary', { tz: browserZone(), ...query }),
   tideFailures: (query: { conch?: string; version?: string; action?: string; from?: string; to?: string }) =>
     http.get<{ groups: FailureGroup[] }>('/api/admin/tide/failures', query),
   tideCompare: (conch: string, versions?: string) =>

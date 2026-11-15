@@ -24,8 +24,9 @@ public class TideController {
             @RequestParam(name = "from", required = false) String from,
             @RequestParam(name = "to", required = false) String to,
             @RequestParam(name = "bucket", required = false) String bucket,
+            @RequestParam(name = "tz", required = false) String tz,
             HttpServletRequest request) {
-        return ApiResponse.ok(tideQueryService.summary(conch, from, to, bucket), TraceIds.current(request));
+        return ApiResponse.ok(tideQueryService.summary(conch, from, to, bucket, tz), TraceIds.current(request));
     }
 
     @GetMapping("/failures")

@@ -623,6 +623,26 @@ public class LocalConchBehaviorTest {
                 """.formatted(name, version);
     }
 
+    /** 同名能力在本地也要拦下，和 Reef 上传同一条规则，并给出行号。 */
+    @Test
+    void duplicateActionNamesAreRejectedLocallyWithALine() throws Exception {
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("duplicate-actions"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource);
+            String once = ping("dup_ping", "1.0.0");
+            String action = once.substring(once.indexOf("  ping:"));
+            String twice = once + action.replace("返回标记。", "第二次声明。");
+            LocalConches.CheckResult checked = local.check(twice.getBytes(StandardCharsets.UTF_8));
+            assertThat(checked.ok()).isFalse();
+            assertThat(checked.errors()).anySatisfy(issue -> {
+                assertThat(issue.code()).isEqualTo("DUPLICATE_ACTION");
+                assertThat(issue.line()).isNotNull();
+            });
+            assertThatThrownBy(() -> local.importBytes(twice.getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                    .isInstanceOf(LocalConchException.class);
+            assertThat(crab.paths.localConches().resolve("dup_ping.yaml")).doesNotExist();
+        }
+    }
+
     public static String ping(String name, String version) {
         return """
                 conch: %s

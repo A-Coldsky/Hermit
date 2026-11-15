@@ -28,6 +28,7 @@ import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchValidator;
+import dev.hermit.common.validate.DuplicateActions;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
 import dev.hermit.crab.engine.ConchRegistry;
@@ -606,10 +607,14 @@ public final class LocalConches {
                 && errorPaths.contains(issue.path()));
         List<ValidationIssue> locatedWarnings = ImportIssueLines.locate(yaml, warnings);
         List<ValidationIssue> structural = registry.inspect(doc, allowEmpty);
-        if (!structural.isEmpty()) {
+        // 解析时同名能力只留下一个，要回到 YAML 节点上找。Reef 上传用同一条规则，本地不能先放过。
+        List<ValidationIssue> duplicates = DuplicateActions.find(yaml);
+        if (!structural.isEmpty() || !duplicates.isEmpty()) {
+            ArrayList<ValidationIssue> errors = new ArrayList<>(duplicates);
+            errors.addAll(ImportIssueLines.locate(yaml, structural));
             throw LocalConchException.invalid(
                     "规则包校验失败",
-                    ImportIssueLines.locate(yaml, structural),
+                    errors,
                     locatedWarnings,
                     doc.conch());
         }

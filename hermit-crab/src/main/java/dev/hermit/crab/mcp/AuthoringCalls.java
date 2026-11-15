@@ -209,6 +209,8 @@ final class AuthoringCalls {
         } catch (RuntimeException ex) {
             return McpCalls.fail(attempt, "INTERNAL", "internal error");
         }
+        // 走到这里就执行过了：调用记录和追踪都已经写下，这个编号能查。
+        attempt.stored().set(true);
         String traceId = result.traceId() == null || result.traceId().isBlank() ? attempt.traceId() : result.traceId();
         if (result.success()) {
             LinkedHashMap<String, Object> body = new LinkedHashMap<>();

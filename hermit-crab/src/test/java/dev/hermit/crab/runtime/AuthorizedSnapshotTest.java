@@ -134,7 +134,7 @@ class AuthorizedSnapshotTest {
             ExecutionResult wrongConch = engine.execute(request, otherConch);
             assertThat(wrongConch.success()).isFalse();
             assertThat(wrongConch.error().code()).isEqualTo(ErrorCode.NOT_FOUND);
-            assertThat(wrongConch.error().message()).contains("conch");
+            assertThat(wrongConch.error().message()).isEqualTo("规则包不存在");
             assertThat(wrongConch.conchVersion()).isNull();
             assertThat(String.valueOf(wrongConch.data())).doesNotContain(NEW_MARKER);
         }

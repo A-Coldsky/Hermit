@@ -144,10 +144,10 @@ class SignatureDamageTest {
                 HttpResponse<String> accounts = send(
                         http, server.port(), "GET", "/console/api/conches/legacy_oa/accounts", null);
                 assertThat(accounts.statusCode()).isEqualTo(404);
-                assertThat(JSON.readTree(accounts.body()).path("error").path("message").asText()).isEqualTo("conch not found");
+                assertThat(JSON.readTree(accounts.body()).path("error").path("message").asText()).isEqualTo("规则包不存在");
                 HttpResponse<String> missing = send(http, server.port(), "GET", "/console/api/conches/missing_conch", null);
                 assertThat(missing.statusCode()).isEqualTo(404);
-                assertThat(JSON.readTree(missing.body()).path("error").path("message").asText()).isEqualTo("conch not found");
+                assertThat(JSON.readTree(missing.body()).path("error").path("message").asText()).isEqualTo("规则包不存在");
 
                 HttpResponse<String> repaired = send(http, server.port(), "POST", "/console/api/conches/legacy_oa/update", "{}");
                 assertThat(repaired.statusCode()).as(repaired.body()).isEqualTo(200);
@@ -196,7 +196,7 @@ class SignatureDamageTest {
                 assertThat(row.path("message").isNull()).isTrue();
                 HttpResponse<String> detail = send(http, server.port(), "GET", "/console/api/conches/legacy_oa", null);
                 assertThat(detail.statusCode()).isEqualTo(404);
-                assertThat(JSON.readTree(detail.body()).path("error").path("message").asText()).isEqualTo("conch not found");
+                assertThat(JSON.readTree(detail.body()).path("error").path("message").asText()).isEqualTo("规则包不存在");
             }
         }
     }

@@ -32,14 +32,18 @@ final class GatewayResponses {
         return Boolean.TRUE.equals(ctx.attribute(WRITTEN));
     }
 
+    /**
+     * 网关和控制台自己写出的报错都发生在执行之前，没有调用记录可查：只给请求编号和
+     * 「请求编号，不可查追踪」，不写 X-Hermit-Trace。执行过的结果走 {@link #writeOutcome}。
+     */
     static void writeError(Context ctx, int status, ErrorCode code, String message) {
-        writeError(ctx, status, code, message, true);
+        writeRequestError(ctx, status, code, message);
     }
 
-    static void writeError(Context ctx, int status, ErrorCode code, String message, boolean includeTrace) {
+    /** 已经执行过、记了调用或追踪的失败：给能查的追踪编号，也写 X-Hermit-Trace。 */
+    static void writeTracedError(Context ctx, int status, ErrorCode code, String message) {
         String traceId = trace(ctx);
-        write(ctx, status, ApiJson.bytes(ApiEnvelope.json(null, code, message, traceId, includeTrace)),
-                includeTrace ? traceId : null, false);
+        write(ctx, status, ApiJson.bytes(ApiEnvelope.json(null, code, message, traceId)), traceId, false);
     }
 
     /** Same id space as a trace, but the body says it cannot be opened and the header is omitted. */
@@ -48,7 +52,7 @@ final class GatewayResponses {
     }
 
     static void writeRequestError(Context ctx, int status, ErrorCode code, String message, Object data) {
-        write(ctx, status, ApiJson.bytes(ApiEnvelope.requestJson(data, code, message, trace(ctx))), null, false);
+        write(ctx, status, ApiJson.bytes(ApiEnvelope.requestJson(data, code, UserMessages.zh(message), trace(ctx))), null, false);
     }
 
     static void writeData(Context ctx, Object data) {

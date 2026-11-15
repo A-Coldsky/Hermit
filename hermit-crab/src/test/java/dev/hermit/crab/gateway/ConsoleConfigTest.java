@@ -198,7 +198,7 @@ class ConsoleConfigTest {
                     true);
             assertThat(nested.status()).isEqualTo(400);
             assertThat(nested.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
-            assertThat(nested.json().path("error").path("message").asText()).isEqualTo("unknown field: scope");
+            assertThat(nested.json().path("error").path("message").asText()).isEqualTo("未知字段：scope。");
 
             TestServer.Reply extra = server.console(
                     "POST",
@@ -206,7 +206,7 @@ class ConsoleConfigTest {
                     "{\"name\":\"extra\",\"readOnly\":false,\"comment\":\"nope\"}",
                     true);
             assertThat(extra.status()).isEqualTo(400);
-            assertThat(extra.json().path("error").path("message").asText()).isEqualTo("unknown field: comment");
+            assertThat(extra.json().path("error").path("message").asText()).isEqualTo("未知字段：comment。");
 
             TestServer.Reply open = server.console(
                     "POST", "/console/api/apikeys", "{\"name\":\"open-reef\"}", true);

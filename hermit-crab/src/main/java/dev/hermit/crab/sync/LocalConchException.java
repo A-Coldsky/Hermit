@@ -78,7 +78,7 @@ public final class LocalConchException extends RuntimeException {
     }
 
     public static LocalConchException notFound() {
-        return new LocalConchException(404, ErrorCode.NOT_FOUND, "not found", List.of(), List.of(), null, null);
+        return new LocalConchException(404, ErrorCode.NOT_FOUND, "没有这个本地规则包。", List.of(), List.of(), null, null);
     }
 
     public int status() {

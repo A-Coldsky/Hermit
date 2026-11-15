@@ -700,7 +700,7 @@ final class ConsoleApi {
     private static void call(CrabRuntime runtime, Context ctx) {
         CallLogStore.CallDetail detail = runtime.callLogs().findByTraceId(ctx.pathParam("traceId")).orElse(null);
         if (detail == null) {
-            GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "not found");
+            GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "没有这条调用记录：编号不存在，或执行前就被拒绝（请求编号查不到记录）。");
             return;
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>(summary(detail.call()));
@@ -753,14 +753,12 @@ final class ConsoleApi {
             }
             ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
             String message = result.error() == null ? "内部错误" : result.error().message();
-            GatewayResponses.writeError(ctx, StatusCodes.of(code), code, message);
+            GatewayResponses.writeTracedError(ctx, StatusCodes.of(code), code, message);
         } catch (TrialRejected ex) {
-            if (ex.requestOnly()) {
-                GatewayResponses.writeRequestError(ctx, ex.status(), ex.code(), ex.getMessage());
-                return;
+            if (!ex.requestOnly()) {
+                runtime.noteRejectedTrial(GatewayResponses.trace(ctx));
             }
-            runtime.noteRejectedTrial(GatewayResponses.trace(ctx));
-            GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage(), false);
+            GatewayResponses.writeRequestError(ctx, ex.status(), ex.code(), ex.getMessage());
         }
     }
 
@@ -1171,7 +1169,12 @@ final class ConsoleApi {
             } catch (RequestBodies.BodyTooLargeException ex) {
                 GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, "request body too large");
             } catch (TrialRejected ex) {
-                GatewayResponses.writeError(ctx, ex.status(), ex.code(), ex.getMessage());
+                // 执行前被拒只给请求编号；连过上游、写了开发追踪的失败（例如刷新工具列表）给能查的追踪编号。
+                if (ex.requestOnly()) {
+                    GatewayResponses.writeRequestError(ctx, ex.status(), ex.code(), ex.getMessage());
+                } else {
+                    GatewayResponses.writeTracedError(ctx, ex.status(), ex.code(), ex.getMessage());
+                }
             } catch (AccountNotFoundException ex) {
                 GatewayResponses.writeError(ctx, 404, ErrorCode.ACCOUNT_NOT_FOUND, "account not found");
             } catch (LocalConchException ex) {

@@ -1,6 +1,7 @@
 package dev.hermit.crab.mcp;
 
 import dev.hermit.crab.runtime.CrabRuntime;
+import dev.hermit.crab.runtime.Invoker;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.ProtocolVersions;
 
@@ -217,6 +218,12 @@ final class McpErrors {
         }
         if (McpCalls.TRACE_DENIED.equals(message)) {
             return "点名该本地规则包，或用试跑的那把全部权限 Key 读取自己的试跑追踪。正式包的追踪不能读。";
+        }
+        if (McpCalls.TRACE_OUT_OF_SCOPE.equals(message)) {
+            return "到 Crab 控制台「调用记录」按这个编号查看步骤和错误。只有开发者模式下的本地规则包调用才有开发追踪。";
+        }
+        if (Invoker.RULE_DISABLED_CALL.equals(message)) {
+            return "这版规则没有通过当前校验。到 Crab 控制台的规则包详情里更新、退回或改好后重新导入，再调用。";
         }
         if (message != null && message.contains("编号不存在")) {
             return "核对追踪编号。这条编号没有对应的追踪。";

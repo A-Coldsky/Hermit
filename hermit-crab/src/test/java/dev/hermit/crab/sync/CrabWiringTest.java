@@ -301,7 +301,7 @@ class CrabWiringTest {
                 HttpResponse<String> broken = send(http, server.port(), "POST", "/console/api/sync", "{}");
                 assertThat(broken.statusCode()).as(broken.body()).isEqualTo(500);
                 assertThat(JSON.readTree(broken.body()).path("error").path("code").asText()).isEqualTo("INTERNAL");
-                assertThat(JSON.readTree(broken.body()).path("error").path("message").asText()).isEqualTo("internal error");
+                assertThat(JSON.readTree(broken.body()).path("error").path("message").asText()).isEqualTo("内部错误");
                 assertThat(broken.body()).doesNotContain("无法连接").doesNotContain(SyncException.TOKEN_REJECTED);
                 assertThat(syncData(http, server.port())).isEqualTo(previous);
                 assertThat(Files.readAllBytes(file)).isEqualTo(kept);

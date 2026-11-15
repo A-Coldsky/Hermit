@@ -28,7 +28,7 @@ class ConsoleHttpTest {
             TestServer.Reply denied = server.console("GET", "/console/api/conches", null, false);
             assertThat(denied.status()).isEqualTo(403);
             assertThat(denied.json().path("error").path("code").asText()).isEqualTo("FORBIDDEN");
-            assertThat(denied.json().path("error").path("message").asText()).isEqualTo("console access denied");
+            assertThat(denied.json().path("error").path("message").asText()).isEqualTo("控制台只接受本机访问。");
 
             server.configureAccount("alice");
             TestServer.Reply names = server.console(

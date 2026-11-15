@@ -148,17 +148,19 @@ public final class CrabHttpServer implements AutoCloseable {
         Optional<Action> enabled = runtime.enabledAction(conch, action);
         String token = token(ctx);
         if (token == null) {
-            GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, "invalid api key");
+            GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, UserMessages.MISSING_KEY);
             return;
         }
         Optional<ApiKeyPrincipal> principal = runtime.apiKeys().authenticate(token);
         if (principal.isEmpty()) {
-            GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, "invalid api key");
+            GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, UserMessages.INVALID_KEY);
             return;
         }
         String method = ctx.req().getMethod();
         if (enabled.isPresent() && !enabled.get().effectiveMethod().name().equals(method)) {
-            GatewayResponses.writeError(ctx, 405, ErrorCode.INVALID_INPUT, "method not allowed");
+            String expected = enabled.get().effectiveMethod().name();
+            ctx.header("Allow", expected);
+            GatewayResponses.writeError(ctx, 405, ErrorCode.INVALID_INPUT, "这个能力要用 " + expected + " 调用。");
             return;
         }
         Map<String, Object> input = Map.of();

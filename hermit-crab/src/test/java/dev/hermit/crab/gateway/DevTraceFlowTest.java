@@ -214,7 +214,8 @@ class DevTraceFlowTest {
             assertThat(toolMessage(allHidden)).isEqualTo(toolMessage(hidden));
             JsonNode officialHidden = mcp(http, crab, allKey.plaintext(), initialize(http, crab, allKey.plaintext()),
                     9, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", "official-trace")));
-            assertThat(toolMessage(officialHidden)).contains("编号不存在").doesNotContain("没有这个工具");
+            // 正式包的调用有调用记录但没有开发追踪：说「不在可查范围」，不说成编号不存在。
+            assertThat(toolMessage(officialHidden)).contains("不在可查范围").contains("调用记录").doesNotContain("没有这个工具");
             assertThat(officialHidden.toString()).doesNotContain("devTrace");
 
             JsonNode called = mcp(http, crab, localKey.plaintext(), sessionId, 6, "tools/call",

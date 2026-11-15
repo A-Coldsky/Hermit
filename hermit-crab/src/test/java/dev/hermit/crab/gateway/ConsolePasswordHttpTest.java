@@ -108,7 +108,7 @@ class ConsolePasswordHttpTest {
                     .GET()
                     .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             assertThat(api.statusCode()).isEqualTo(401);
-            assertThat(api.body()).contains("invalid api key");
+            assertThat(api.body()).contains(UserMessages.MISSING_KEY);
             assertThat(api.body()).doesNotContain(ConsoleSessions.LOGIN_REQUIRED);
 
             TestServer.Reply keyed = server.call(

@@ -56,9 +56,12 @@ class UnknownRouteTest {
         assertThat(reply.json().path("success").asBoolean()).isFalse();
         assertThat(reply.json().path("data").isNull()).isTrue();
         assertThat(reply.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
-        assertThat(reply.json().path("error").path("message").asText()).isEqualTo("not found");
-        assertThat(reply.json().path("traceId").asText()).isNotBlank();
-        assertThat(reply.header("X-Hermit-Trace")).isEqualTo(reply.json().path("traceId").asText());
+        assertThat(reply.json().path("error").path("message").asText()).isEqualTo("不存在");
+        // 没有执行，没有记录可查：只给请求编号。
+        assertThat(reply.json().has("traceId")).isFalse();
+        assertThat(reply.json().path("requestId").asText()).isNotBlank();
+        assertThat(reply.json().path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
+        assertThat(reply.header("X-Hermit-Trace")).isNull();
         assertThat(reply.body()).doesNotContain("\"title\"");
         assertThat(reply.body()).doesNotContain("javalin");
         assertThat(reply.body()).doesNotContain("timestamp");

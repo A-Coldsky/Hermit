@@ -37,6 +37,8 @@ import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.EngineSettings;
 import dev.hermit.crab.engine.ExecutionRequest;
 import dev.hermit.crab.engine.ExecutionResult;
+import dev.hermit.crab.engine.InvalidInput;
+import dev.hermit.crab.engine.InputPreparer;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.upstream.McpCallPayload;
@@ -380,6 +382,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
         if (disabled(conch, action)) {
             throw new TrialRejected(404, ErrorCode.CAPABILITY_DISABLED, Invoker.CAPABILITY_DISABLED_MESSAGE, true);
+        }
+        try {
+            new InputPreparer().prepare(capability, input == null ? Map.of() : input);
+        } catch (InvalidInput ex) {
+            throw new TrialRejected(400, ErrorCode.INVALID_INPUT, ex.getMessage(), true);
         }
         ReadyAccount ready = openAccount(doc, account);
         ExecutionRequest request = new ExecutionRequest(

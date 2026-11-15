@@ -89,6 +89,59 @@ class McpHttpTest {
         }
     }
 
+    /** 没有执行就没有追踪：Key 无效、开发者模式关着、入参不对都只给请求编号；只有真执行过的调用才带 X-Hermit-Trace。 */
+    @Test
+    void onlyExecutedCallsCarryATraceId() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("trace-contract"), PASSWORD)) {
+            Reply badKey = server.post("hk_notARealKeyAtAll000000000000", null, null, initialize("{}"));
+            assertThat(badKey.status()).isEqualTo(401);
+            assertThat(badKey.header("X-Hermit-Trace")).isNull();
+            assertThat(badKey.json().path("error").path("data").has("traceId")).isFalse();
+            assertThat(badKey.json().path("error").path("data").path("requestId").asText()).isNotBlank();
+
+            Reply initialized = server.post(server.apiKey.plaintext(), null, null, initialize("{}"), true);
+            String session = initialized.header("Mcp-Session-Id");
+            assertThat(initialized.header("X-Hermit-Trace")).isNull();
+            Reply ping = server.post(server.apiKey.plaintext(), session, null, request(2, "ping", null));
+            assertThat(ping.header("X-Hermit-Trace")).isNull();
+            Reply listed = server.post(server.apiKey.plaintext(), session, null, request(3, "tools/list", null));
+            assertThat(listed.status()).isEqualTo(200);
+            assertThat(listed.header("X-Hermit-Trace")).isNull();
+
+            Reply validate = server.post(server.apiKey.plaintext(), session, null, request(4, "tools/call",
+                    Map.of("name", "conch_validate", "arguments", Map.of("yaml", "conch: x"))));
+            assertThat(validate.header("X-Hermit-Trace")).isNull();
+            assertThat(toolError(validate).has("traceId")).isFalse();
+            assertThat(toolError(validate).path("requestId").asText()).isNotBlank();
+            Reply guide = server.post(server.apiKey.plaintext(), session, null, request(5, "resources/read",
+                    Map.of("uri", "hermit://authoring/guide")));
+            assertThat(guide.header("X-Hermit-Trace")).isNull();
+            assertThat(guide.json().path("error").path("data").has("traceId")).isFalse();
+            assertThat(guide.json().path("error").path("data").path("requestId").asText()).isNotBlank();
+
+            server.configure("alice");
+            int callsBefore = server.runtime.callLogs().list(null, null, 500).size();
+            Reply undeclared = server.post(server.apiKey.plaintext(), session, "alice", request(6, "tools/call",
+                    Map.of("name", "legacy_oa__list_todo", "arguments", Map.of("page", 1, "nope", "x"))));
+            assertThat(undeclared.header("X-Hermit-Trace")).isNull();
+            assertThat(toolError(undeclared).path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(toolError(undeclared).has("traceId")).isFalse();
+            assertThat(toolError(undeclared).path("requestId").asText()).isNotBlank();
+            assertThat(server.runtime.callLogs().list(null, null, 500)).hasSize(callsBefore);
+
+            Reply executed = server.post(server.apiKey.plaintext(), session, "alice", request(7, "tools/call",
+                    Map.of("name", "legacy_oa__list_todo", "arguments", Map.of("page", 1))));
+            String traceId = executed.header("X-Hermit-Trace");
+            assertThat(traceId).isNotBlank();
+            assertThat(server.runtime.callLogs().findByTraceId(traceId)).isPresent();
+
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            Reply official = server.post(server.apiKey.plaintext(), session, null, request(8, "tools/call",
+                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId))));
+            assertThat(toolError(official).path("message").asText()).isEqualTo(McpCalls.TRACE_OUT_OF_SCOPE);
+        }
+    }
+
     @Test
     void directModeCallsResourcesAndHidesSecrets() throws Exception {
         LogBag logs = new LogBag();
@@ -105,9 +158,11 @@ class McpHttpTest {
             assertThat(missing.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.AUTH_MISSING);
             assertThat(missing.json().path("error").path("message").asText()).contains("Authorization").contains("X-Hermit-Key");
             assertThat(missing.json().path("error").path("data").path("hint").asText()).contains("X-Hermit-Key");
-            assertThat(missing.header("X-Hermit-Trace")).isNotBlank();
-            assertThat(missing.json().path("error").path("data").path("traceId").asText())
-                    .isEqualTo(missing.header("X-Hermit-Trace"));
+            // 执行前就被拒：只有请求编号，不给查不到的追踪编号，也不写 X-Hermit-Trace。
+            assertThat(missing.header("X-Hermit-Trace")).isNull();
+            assertThat(missing.json().path("error").path("data").has("traceId")).isFalse();
+            assertThat(missing.json().path("error").path("data").path("requestId").asText()).isNotBlank();
+            assertThat(missing.json().path("error").path("data").path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
             SecretChecks.absent(missing.body(), PASSWORD);
             SecretChecks.absent(missing.body(), server.apiKey.plaintext());
 
@@ -207,9 +262,13 @@ class McpHttpTest {
             assertThat(toolError(extra).path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(toolError(extra).path("message").asText()).contains("nope").doesNotContain("account");
             assertThat(extra.body()).doesNotContain("leak-me");
-            assertThat(toolError(extra).path("traceId").asText()).isEqualTo(extra.header("X-Hermit-Trace"));
+            // 未声明的入参在执行前就拒：只给请求编号，不写调用记录。
+            assertThat(extra.header("X-Hermit-Trace")).isNull();
+            assertThat(toolError(extra).has("traceId")).isFalse();
+            String extraRequest = toolError(extra).path("requestId").asText();
+            assertThat(extraRequest).isNotBlank();
             assertThat(server.runtime.callLogs().list("legacy_oa", "list_todo", 5))
-                    .anyMatch(row -> extra.header("X-Hermit-Trace").equals(row.traceId()));
+                    .noneMatch(row -> extraRequest.equals(row.traceId()));
 
             Reply resources = server.post(server.apiKey.plaintext(), session, null, request(6, "resources/list", null));
             assertThat(resources.body()).contains("hermit://conches/legacy_oa/guide");
@@ -573,7 +632,8 @@ class McpHttpTest {
             assertThat(rpc.path("error").path("code").asInt()).isEqualTo(McpErrors.AUTH_RPC);
             assertThat(rpc.path("error").path("data").path("code").asText()).isEqualTo(McpErrors.AUTH_INVALID);
             assertThat(rpc.path("id").asInt()).isEqualTo(1);
-            assertThat(rpc.path("error").path("data").path("traceId").asText()).isNotBlank();
+            assertThat(rpc.path("error").path("data").path("requestId").asText()).isNotBlank();
+            assertThat(rpc.path("error").path("data").has("traceId")).isFalse();
             assertThat(deniedErr.toString(StandardCharsets.UTF_8)).contains("authentication failed");
             SecretChecks.absent(deniedOut.toString(StandardCharsets.UTF_8), "not-a-real-key");
             SecretChecks.absent(deniedErr.toString(StandardCharsets.UTF_8), "not-a-real-key");
@@ -756,8 +816,8 @@ class McpHttpTest {
             assertThat(unstarted.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.SESSION_REQUIRED);
             assertThat(unstarted.json().path("error").path("message").asText()).contains("initialize").contains("Mcp-Session-Id");
             assertThat(unstarted.json().path("error").path("data").path("hint").asText()).contains("initialize");
-            assertThat(unstarted.json().path("error").path("data").path("traceId").asText())
-                    .isEqualTo(unstarted.header("X-Hermit-Trace"));
+            assertThat(unstarted.json().path("error").path("data").path("requestId").asText()).isNotBlank();
+            assertThat(unstarted.header("X-Hermit-Trace")).isNull();
 
             CreatedApiKey other = server.runtime.admin().createApiKey(
                     "other", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
@@ -782,9 +842,11 @@ class McpHttpTest {
             assertThat(negativeError.path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(negativeError.path("field").asText()).isEqualTo("page");
             assertThat(negativeError.path("hint").asText()).contains("minimum");
-            assertThat(negativeError.path("traceId").asText()).isEqualTo(negative.header("X-Hermit-Trace"));
-            assertThat(server.runtime.callLogs().list("bounds_conch", "page_items", 5).get(0).traceId())
-                    .isEqualTo(negative.header("X-Hermit-Trace"));
+            assertThat(negative.header("X-Hermit-Trace")).isNull();
+            assertThat(negativeError.has("traceId")).isFalse();
+            assertThat(negativeError.path("requestId").asText()).isNotBlank();
+            assertThat(server.runtime.callLogs().list("bounds_conch", "page_items", 5))
+                    .noneMatch(row -> negativeError.path("requestId").asText().equals(row.traceId()));
             assertThat(negativeError.path("code").asText()).isNotEqualTo(McpErrors.AUTH_INVALID);
             assertThat(negative.json().path("result").path("structuredContent").has("seen")).isFalse();
 

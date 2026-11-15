@@ -268,7 +268,7 @@ class EngineUnitTest {
                     Origin.LOCAL, "missing", "list_todo", "alice", Map.of(), context));
             assertThat(missingConch.success()).isFalse();
             assertThat(missingConch.error().code()).isEqualTo(ErrorCode.NOT_FOUND);
-            assertThat(missingConch.error().message()).contains("conch");
+            assertThat(missingConch.error().message()).isEqualTo("规则包不存在");
 
             registry.put(EngineTestSupport.legacy());
             ExecutionResult missingAction = engine.execute(EngineTestSupport.request(

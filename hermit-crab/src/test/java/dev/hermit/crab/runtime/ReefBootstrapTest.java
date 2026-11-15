@@ -58,12 +58,12 @@ class ReefBootstrapTest {
             assertThat(invalid.path("error").path("message").asText()).isEqualTo("invalid bootstrap");
 
             Reply unknown = post(server, bootstrap(reef, TOKEN, reef.keys().getPublic()).put("extra", 1).toString(), 400);
-            assertThat(unknown.path("error").path("message").asText()).isEqualTo("unknown field: extra");
+            assertThat(unknown.path("error").path("message").asText()).isEqualTo("未知字段：extra。");
 
             ObjectNode nested = bootstrap(reef, TOKEN, reef.keys().getPublic());
             ((ObjectNode) nested.get("reef")).put("extra", true);
             Reply nestedUnknown = post(server, nested.toString(), 400);
-            assertThat(nestedUnknown.path("error").path("message").asText()).isEqualTo("unknown field: reef.extra");
+            assertThat(nestedUnknown.path("error").path("message").asText()).isEqualTo("未知字段：reef.extra。");
 
             reef.expectToken("other-token-value-not-this");
             Reply rejected = post(server, bootstrap(reef, TOKEN, reef.keys().getPublic()).toString(), 400);
@@ -206,7 +206,7 @@ class ReefBootstrapTest {
                 assertThat(send(server, "GET", "/console/api/reports/preview", null).path("success").asBoolean()).isTrue();
                 Reply extra = send(server, "PUT", "/console/api/reports/settings",
                         "{\"enabled\":true,\"intervalSeconds\":60,\"extra\":1}");
-                assertThat(extra.path("error").path("message").asText()).isEqualTo("unknown field: extra");
+                assertThat(extra.path("error").path("message").asText()).isEqualTo("未知字段：extra。");
                 Reply low = send(server, "PUT", "/console/api/reports/settings",
                         "{\"enabled\":true,\"intervalSeconds\":30}");
                 assertThat(low.status()).isEqualTo(400);

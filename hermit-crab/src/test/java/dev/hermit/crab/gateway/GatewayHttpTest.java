@@ -204,7 +204,10 @@ class GatewayHttpTest {
             TestServer.Reply noKey = server.call("GET", "/api/legacy_oa/list_todo", null, null, null, null);
             assertThat(noKey.status()).isEqualTo(401);
             assertThat(noKey.json().path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
-            assertThat(noKey.json().path("error").path("message").asText()).isEqualTo("invalid api key");
+            assertThat(noKey.json().path("error").path("message").asText()).isEqualTo(UserMessages.MISSING_KEY);
+            assertThat(noKey.json().has("traceId")).isFalse();
+            assertThat(noKey.json().path("requestId").asText()).isNotBlank();
+            assertThat(noKey.header("X-Hermit-Trace")).isNull();
 
             TestServer.Reply aliased = headerKey(server);
             assertThat(aliased.status()).isEqualTo(200);
@@ -227,12 +230,15 @@ class GatewayHttpTest {
             TestServer.Reply wrongMethod = server.call(
                     "POST", "/api/legacy_oa/list_todo", server.apiKey.plaintext(), "alice", null, "{}");
             assertThat(wrongMethod.status()).isEqualTo(405);
-            assertThat(wrongMethod.json().path("error").path("message").asText()).isEqualTo("method not allowed");
+            assertThat(wrongMethod.json().path("error").path("message").asText()).isEqualTo("这个能力要用 GET 调用。");
+            assertThat(wrongMethod.header("Allow")).isEqualTo("GET");
+            assertThat(wrongMethod.json().has("traceId")).isFalse();
+            assertThat(wrongMethod.json().path("requestId").asText()).isNotBlank();
 
             TestServer.Reply badJson = server.call(
                     "POST", "/notes", server.apiKey.plaintext(), "alice", null, "not-json " + PASSWORD);
             assertThat(badJson.status()).isEqualTo(400);
-            assertThat(badJson.json().path("error").path("message").asText()).isEqualTo("invalid json");
+            assertThat(badJson.json().path("error").path("message").asText()).isEqualTo("请求体不是合法的 JSON。");
             SecretChecks.absent(badJson.body(), PASSWORD);
 
             int listsBefore = server.fixture.count("GET", "/todo/list.aspx");

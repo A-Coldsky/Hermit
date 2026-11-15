@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -14,6 +15,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.engine.DevTraceDraft;
 import dev.hermit.crab.sync.DisabledConches;
+import dev.hermit.crab.gateway.UserMessages;
 import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
@@ -34,6 +36,9 @@ final class McpCalls {
     static final String TRACE_DENIED =
             "这把 API Key 不能读取这条追踪。点名了该本地规则包的 Key 可以读。全部权限 Key 只能读自己用 conch_trial_run 试跑出来的本地规则包追踪。正式包的追踪不能读。";
     static final String TRACE_ABSENT = "没有这条追踪。编号不存在。";
+    /** 编号对得上一条调用记录，但那次调用没有开发追踪（正式规则包，或开发者模式关着时的调用）。 */
+    static final String TRACE_OUT_OF_SCOPE =
+            "这条调用不在可查范围：它没有开发追踪（正式规则包和开发者模式关着时的调用都不记）。可以在 Crab 控制台的调用记录里按这个编号查看。";
     static final String TRACE_REJECTED = "试跑被拒，没有留下追踪。";
     static final String TRACE_DELETED = "追踪已删。关掉开发者模式时会删除全部追踪。";
     static final String CONFIRM_TIMEOUT = "等待确认超时。请重新发起，并在客户端确认。";
@@ -49,7 +54,18 @@ final class McpCalls {
     }
 
     /** 调用记录、响应头和失败体共用的这一次编号。目录模式决定未知工具的 hint。 */
-    record Attempt(boolean directory, String traceId) {
+    /**
+     * {@code traceId} 在执行前被拒时就是请求编号。{@code stored} 在真正执行（写了调用记录或追踪）后置为 true，
+     * 只有这时编号才能拿去查，响应头才带 {@code X-Hermit-Trace}。
+     */
+    record Attempt(boolean directory, String traceId, AtomicBoolean stored) {
+        Attempt(boolean directory, String traceId) {
+            this(directory, traceId, new AtomicBoolean());
+        }
+    }
+
+    /** 工具结果，以及这次调用有没有留下能查的记录。 */
+    record Called(McpSchema.CallToolResult result, boolean traced) {
     }
 
     McpSchema.CallToolResult call(
@@ -79,9 +95,32 @@ final class McpCalls {
             String traceId,
             boolean localCaller
     ) {
+        return callTraced(principal, session, headerAccount, params, traceId, localCaller).result();
+    }
+
+    Called callTraced(
+            ApiKeyPrincipal principal,
+            McpSession session,
+            Optional<String> headerAccount,
+            JsonNode params,
+            String traceId,
+            boolean localCaller
+    ) {
         Attempt attempt = new Attempt(catalog.directory(principal), traceId == null || traceId.isBlank()
                 ? UUID.randomUUID().toString()
                 : traceId);
+        McpSchema.CallToolResult result = dispatch(principal, session, headerAccount, params, localCaller, attempt);
+        return new Called(result, attempt.stored().get());
+    }
+
+    private McpSchema.CallToolResult dispatch(
+            ApiKeyPrincipal principal,
+            McpSession session,
+            Optional<String> headerAccount,
+            JsonNode params,
+            boolean localCaller,
+            Attempt attempt
+    ) {
         McpSchema.CallToolRequest request;
         try {
             request = McpJson.convert(params, McpSchema.CallToolRequest.class);
@@ -321,6 +360,9 @@ final class McpCalls {
             if (runtime.rejectedTrial(traceId)) {
                 return fail(attempt, "NOT_FOUND", TRACE_REJECTED);
             }
+            if (runtime.callLogs().findByTraceId(traceId).isPresent()) {
+                return fail(attempt, "NOT_FOUND", TRACE_OUT_OF_SCOPE);
+            }
             return fail(attempt, "NOT_FOUND", TRACE_ABSENT);
         }
         if (!visible(principal, trace)) {
@@ -432,6 +474,9 @@ final class McpCalls {
     }
 
     private static McpSchema.CallToolResult fromOutcome(InvokeOutcome outcome, Attempt attempt) {
+        if (!outcome.requestOnly()) {
+            attempt.stored().set(true);
+        }
         JsonNode envelope;
         try {
             envelope = ApiJson.tree(outcome.body());
@@ -530,8 +575,12 @@ final class McpCalls {
                 .build();
     }
 
+    /**
+     * 没有执行就失败：参数不对、开发者模式关着、确认没过、查不到追踪等。这些都没有留下记录，
+     * 只给请求编号，不给查不到的追踪编号。执行过的失败走 {@link #fromOutcome}。
+     */
     static McpSchema.CallToolResult fail(Attempt attempt, String code, String message) {
-        return toolError(code, message, null, attempt.directory(), attempt.traceId());
+        return failAsRequest(attempt, code, message);
     }
 
     /** A trial rejected before execution has no trace. The response must not hand back an id. */
@@ -546,14 +595,15 @@ final class McpCalls {
 
     static McpSchema.CallToolResult failAsRequest(Attempt attempt, String code, String message, String field) {
         String resolved = code == null || code.isBlank() ? "INTERNAL" : code;
-        String text = message == null ? "" : message;
+        String english = message == null ? "" : message;
+        String text = UserMessages.zh(english);
         LinkedHashMap<String, String> error = new LinkedHashMap<>();
         error.put("code", resolved);
         error.put("message", text);
-        error.put("hint", McpErrors.toolHint(resolved, text, attempt.directory()));
+        error.put("hint", McpErrors.toolHint(resolved, english, attempt.directory()));
         error.put("requestId", attempt.traceId());
         error.put("requestNote", ApiEnvelope.REQUEST_NOTE);
-        String named = field == null || field.isBlank() ? McpErrors.fieldOf(text) : field;
+        String named = field == null || field.isBlank() ? McpErrors.fieldOf(english) : field;
         if (named != null && !named.isBlank()) {
             error.put("field", named);
         }
@@ -569,7 +619,7 @@ final class McpCalls {
     }
 
     static McpSchema.CallToolResult fail(Attempt attempt, String code, String message, String field) {
-        return toolError(code, message, field, attempt.directory(), attempt.traceId());
+        return failAsRequest(attempt, code, message, field);
     }
 
     static McpSchema.CallToolResult toolError(

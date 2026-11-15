@@ -566,7 +566,7 @@ class AuthoringMcpTest {
                     .GET()
                     .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             assertThat(console.statusCode()).isEqualTo(403);
-            assertThat(console.body()).contains("console access denied");
+            assertThat(console.body()).contains("控制台只接受本机访问。");
 
             JsonNode saved = server.call(localSession, "conch_save_local", Map.of("yaml", yaml));
             assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();

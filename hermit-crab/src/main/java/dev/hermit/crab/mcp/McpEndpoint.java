@@ -26,6 +26,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.gateway.Loopback;
 import dev.hermit.crab.gateway.RequestBodies;
+import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.store.ApiKeyPrincipal;
 import io.javalin.Javalin;
@@ -479,13 +480,14 @@ public final class McpEndpoint {
     private void callTool(Context ctx, ApiKeyPrincipal principal, JsonNode id, JsonNode params, McpSession session) {
         String traceId = trace(ctx);
         try {
-            writeResult(ctx, id, calls.call(
+            McpCalls.Called called = calls.callTraced(
                     principal,
                     session,
                     headerAccount(ctx),
                     params,
                     traceId,
-                    Loopback.address(ctx.req().getRemoteAddr())), session);
+                    Loopback.address(ctx.req().getRemoteAddr()));
+            writeResult(ctx, id, called.result(), session, called.traced());
         } catch (McpProtocolException ex) {
             writeRpcError(ctx, id, McpErrors.invalidParams(), session);
         }
@@ -506,7 +508,12 @@ public final class McpEndpoint {
         return created;
     }
 
+    /** initialize、ping、各种 list/read：不执行能力，不留记录，响应头不带追踪编号。 */
     private static void writeResult(Context ctx, JsonNode id, Object result, McpSession session) {
+        writeResult(ctx, id, result, session, false);
+    }
+
+    private static void writeResult(Context ctx, JsonNode id, Object result, McpSession session, boolean traced) {
         ObjectNode envelope = McpJson.mapper().createObjectNode();
         envelope.put("jsonrpc", "2.0");
         if (id == null) {
@@ -516,7 +523,7 @@ public final class McpEndpoint {
         }
         JsonNode tree = McpJson.mapper().valueToTree(result);
         envelope.set("result", tree);
-        writeJson(ctx, 200, envelope, session, !requestOnly(tree));
+        writeJson(ctx, 200, envelope, session, traced && !requestOnly(tree));
     }
 
     private static void writeRpcError(Context ctx, JsonNode id, McpErrors.Failure failure, McpSession session) {
@@ -533,14 +540,13 @@ public final class McpEndpoint {
         ObjectNode data = McpJson.mapper().createObjectNode();
         data.put("code", failure.code());
         data.put("hint", failure.hint());
-        data.put("traceId", trace(ctx));
+        // 协议层的错误（Key 无效、会话不对、方法不存在、开发者模式关着…）都发生在执行之前，
+        // 没有调用记录可查：只给请求编号，响应头也不带 X-Hermit-Trace。
+        data.put("requestId", trace(ctx));
+        data.put("requestNote", ApiEnvelope.REQUEST_NOTE);
         error.set("data", data);
         envelope.set("error", error);
-        writeJson(ctx, failure.status(), envelope, session);
-    }
-
-    private static void writeJson(Context ctx, int status, ObjectNode envelope, McpSession session) {
-        writeJson(ctx, status, envelope, session, true);
+        writeJson(ctx, failure.status(), envelope, session, false);
     }
 
     private static void writeJson(Context ctx, int status, ObjectNode envelope, McpSession session, boolean includeTrace) {

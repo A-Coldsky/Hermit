@@ -24,6 +24,8 @@ import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.engine.ExecutionError;
 import dev.hermit.crab.engine.ExecutionRequest;
 import dev.hermit.crab.engine.ExecutionResult;
+import dev.hermit.crab.engine.InputPreparer;
+import dev.hermit.crab.engine.InvalidInput;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.upstream.McpCallPayload;
 import dev.hermit.crab.upstream.McpForwarder;
@@ -78,6 +80,7 @@ public final class Invoker {
     private final CapabilityGate disabled;
     private final DisabledConches disabledConches;
     private final List<CrabRuntime.ExecutionListener> listeners = new CopyOnWriteArrayList<>();
+    private final InputPreparer inputs = new InputPreparer();
     /**
      * 同一幂等键正在执行时，后到的请求等它结束再查缓存。只有同一个键互相等待；
      * 执行结束就移除，不随历史键的数量增长（审计 A05）。
@@ -285,6 +288,12 @@ public final class Invoker {
             return requestOnly(traceId, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE);
         }
         Map<String, Object> rawInput = input == null ? Map.of() : input;
+        // 入参不合法（含未声明的字段）在执行前就拒：不开追踪、不写调用记录，只给请求编号。
+        try {
+            inputs.prepare(capability, rawInput);
+        } catch (InvalidInput ex) {
+            return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
+        }
         CallChannel recorded = channel == null ? CallChannel.HTTP : channel;
         if (recorded == CallChannel.HTTP && capability.effectiveConfirm() && !httpConfirmed) {
             return requestOnly(traceId, ErrorCode.CONFLICT, CONFIRM_REQUIRED);

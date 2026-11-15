@@ -37,6 +37,9 @@ li {
   padding: 8px 12px;
   border-radius: 0 6px 6px 0;
   font-size: 13px;
+  /* 很长的路径和英文原文要能折行，不撑出横向滚动。 */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .error li {

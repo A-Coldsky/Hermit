@@ -278,7 +278,11 @@ final class McpErrors {
             case "AUTH_FAILED" -> "这是上游登录失败，不是 API Key 错误。请检查该账号的凭证，或在控制台执行测试登录。";
             case "SESSION_EXPIRED" -> "上游会话已失效。请检查凭证后重试。";
             case "TIMEOUT" -> "调用超时。请稍后重试。";
-            case "UPSTREAM_ERROR" -> "上游返回错误。请稍后重试。";
+            case "UPSTREAM_ERROR" -> message != null && message.startsWith("上游状态码 4")
+                    // 4xx 不是暂时故障，重试结果一样，要改请求。
+                    ? "上游拒绝了这个请求（" + message.substring("上游状态码 ".length()).trim()
+                            + "），重试结果一样。核对规则里的请求路径、方法和参数是否与 HAR 一致。"
+                    : "上游返回错误。请稍后重试。";
             case "RULE_MISMATCH" -> "规则与上游响应不一致。请检查已安装的规则包版本。";
             case "INTERNAL" -> "内部错误。请稍后重试。";
             case "IDEMPOTENCY_CONFLICT" -> "这个 Idempotency-Key 已经用于另一个请求体。请换一个新键，或原样重发上一次的请求体。";

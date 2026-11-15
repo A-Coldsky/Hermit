@@ -24,4 +24,12 @@ class McpErrorsTest {
                 .contains("capabilities.disabled")
                 .doesNotContain("search_capabilities");
     }
+
+    /** 上游 4xx 不是暂时故障：不再叫人「稍后重试」。5xx 仍可以重试。 */
+    @Test
+    void upstreamClientErrorsDoNotSayRetryLater() {
+        assertThat(McpErrors.toolHint("UPSTREAM_ERROR", "上游状态码 404"))
+                .contains("404").contains("重试结果一样").doesNotContain("稍后重试");
+        assertThat(McpErrors.toolHint("UPSTREAM_ERROR", "上游状态码 503")).contains("稍后重试");
+    }
 }

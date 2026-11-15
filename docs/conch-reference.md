@@ -275,7 +275,7 @@ steps:
   - assert: {status: 200}
 ```
 
-提取规格必须且只能有一种选择器：`css`、`xpath`、`jsonpath`、`regex`。上面 `sample_oa` 的 `list_todo` 用 `css` 加 `each` 取出表格行。`attr` 取属性，`html` 取内部 HTML，两者不能同时写；都省略时取文本。`regex` 的 `group` 默认 1。`each` 是子规格映射，可配 `min` 要求至少匹配这么多条。`optional: true` 时匹配 0 条得到空值，而不是失败。`from` 指定从哪个变量读，省略则用上一次 `request` 的响应。`filter` 用和模板一样的过滤器。request 失败会形成步骤索引、类型和错误摘要。持续慢速输出会在能力 deadline 被取消并返回 `TIMEOUT`。TCP 连接一直挂起没有单独回归。
+提取规格必须且只能有一种选择器：`css`、`xpath`、`jsonpath`、`regex`。上面 `sample_oa` 的 `list_todo` 用 `css` 加 `each` 取出表格行。`attr` 取属性，`html` 取内部 HTML，两者不能同时写；都省略时取文本。`regex` 的 `group` 默认 1。`each` 是子规格映射，可配 `min` 要求至少匹配这么多条。`optional: true` 时匹配 0 条得到空值，而不是失败。`from` 指定从哪个变量读，省略则用上一次 `request` 的响应。`filter` 用和模板一样的过滤器。request 失败会形成步骤索引、类型和错误摘要。提取失败的摘要写出变量名和表达式，例如「提取 todos 失败：css tr.todo 匹配 0 条」「提取 name 失败：响应不是 JSON（jsonpath $.name）」，表达式超过 80 个字符时截断。持续慢速输出会在能力 deadline 被取消并返回 `TIMEOUT`。TCP 连接一直挂起没有单独回归。
 
 ## 模板、输出与脚本
 

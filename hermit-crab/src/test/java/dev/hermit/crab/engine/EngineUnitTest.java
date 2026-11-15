@@ -237,7 +237,7 @@ class EngineUnitTest {
     void extractMissesAndNonJsonAreRuleMismatches() {
         RuleProblem none = catchProblem(() -> Extractors.apply(
                 Map.of("missing", Map.of("css", "#missing")), vars("<html></html>"), filters, templates));
-        assertThat(none.summary).isEqualTo("选择器匹配 0 条");
+        assertThat(none.summary).isEqualTo("提取 missing 失败：css #missing 匹配 0 条");
 
         Map<String, Object> optional = vars("<html></html>");
         int count = Extractors.apply(
@@ -255,7 +255,7 @@ class EngineUnitTest {
 
         RuleProblem notJson = catchProblem(() -> Extractors.apply(
                 Map.of("name", Map.of("jsonpath", "$.name")), vars("<html></html>"), filters, templates));
-        assertThat(notJson.summary).isEqualTo("响应不是 JSON");
+        assertThat(notJson.summary).isEqualTo("提取 name 失败：响应不是 JSON（jsonpath $.name）");
     }
 
     @Test

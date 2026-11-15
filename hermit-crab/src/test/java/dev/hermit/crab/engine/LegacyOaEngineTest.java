@@ -171,7 +171,7 @@ class LegacyOaEngineTest {
             running.fixture.breakTable(true);
             ExecutionResult result = running.list("alice", EngineTestSupport.PASSWORD, Map.of());
             assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
-            assertThat(result.error().summary()).contains("选择器匹配 0 条");
+            assertThat(result.error().summary()).contains("匹配 0 条").contains("提取 ");
             assertThat(result.error().failedStepType()).isEqualTo("extract");
             SecretChecks.absent(result.error().summary(), EngineTestSupport.PASSWORD);
         }

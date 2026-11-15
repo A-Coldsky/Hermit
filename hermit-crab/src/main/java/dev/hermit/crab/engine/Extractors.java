@@ -56,7 +56,13 @@ final class Extractors {
             if (child == null) {
                 throw problem("提取规格必须是映射");
             }
-            Object value = extractSpec(child, responseSource(vars, child.get("from") == null), vars, filters, templates);
+            Object value;
+            try {
+                value = extractSpec(child, responseSource(vars, child.get("from") == null), vars, filters, templates);
+            } catch (RuleProblem ex) {
+                // 试跑失败时要能看出是哪个变量、哪条表达式没取到。
+                throw problem("提取 " + entry.getKey() + " 失败：" + ex.summary);
+            }
             vars.put(entry.getKey(), value);
             count += countOf(value);
         }
@@ -72,11 +78,18 @@ final class Extractors {
     ) {
         Source source = spec.get("from") == null ? inherited : sourceFrom(Values.text(spec.get("from")), vars);
         String kind = selectorKind(spec);
-        List<Source> matches = select(kind, Values.text(spec.get(kind)), spec, source);
+        String selector = Values.text(spec.get(kind));
+        String where = kind + " " + clip(selector);
+        List<Source> matches;
+        try {
+            matches = select(kind, selector, spec, source);
+        } catch (RuleProblem ex) {
+            throw problem(ex.summary + "（" + where + "）");
+        }
         if (spec.get("each") != null) {
             Integer min = Values.integerOrNull(spec.get("min"));
             if (min != null && matches.size() < min) {
-                throw problem("选择器匹配 " + matches.size() + " 条，少于 " + min + " 条");
+                throw problem(where + " 匹配 " + matches.size() + " 条，少于 " + min + " 条");
             }
             Map<String, Object> children = Values.map(spec.get("each"));
             if (children == null) {
@@ -100,7 +113,7 @@ final class Extractors {
             if (Values.bool(spec.get("optional"), false)) {
                 return applyFilter(spec, null, vars, filters, templates);
             }
-            throw problem("选择器匹配 0 条");
+            throw problem(where + " 匹配 0 条");
         }
         Object value = scalar(matches.get(0), spec);
         return applyFilter(spec, value, vars, filters, templates);
@@ -331,6 +344,14 @@ final class Extractors {
             return "";
         }
         return text.replaceAll("\\s+", " ").trim();
+    }
+
+    /** 规则里写的表达式，太长时截断，免得一条报错占满屏。 */
+    private static String clip(String selector) {
+        if (selector == null) {
+            return "";
+        }
+        return selector.length() <= 80 ? selector : selector.substring(0, 80) + "…";
     }
 
     private static RuleProblem problem(String summary) {

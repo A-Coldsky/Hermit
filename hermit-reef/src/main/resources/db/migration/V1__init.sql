@@ -14,6 +14,7 @@ CREATE TABLE hermit_admin_users (
 );
 
 CREATE TABLE hermit_admin_login_failures (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(128) NOT NULL,
     failed_at TIMESTAMP NOT NULL
 );

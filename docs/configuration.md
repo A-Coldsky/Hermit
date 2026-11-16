@@ -177,7 +177,7 @@ schema 15 增加 `dev_traces`（`trace_id`、`origin`、`conch`、`account`、`a
 
 `local-conches/` 只放这一台机器的未签名规则。文件名是 `{conch}.yaml`，不递归，不跟随符号链接。进程启动时加载；`crab local reload` 或 `POST /console/api/local-conches/reload` 让目录里的增删改生效。单个文件上限 1 MiB。控制台上传还受现有请求体上限（1_000_000 字节）约束。与已订阅或已安装的正式包重名时拒绝导入。解析失败、读失败或文件名与包名不符时不另存上一份，该包不能调用；合法文件名仍留在 `GET /console/api/local-conches` 和 `crab local list`，删掉后才能不经确认再导入。同名覆盖要 `confirm=true` 或 `--replace`。文件从目录消失则卸载，不再留下坏包记录。
 
-Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，Flyway 历史表是 `hermit_flyway_schema_history`。V1–V4 在发布前就地改写，没有把旧表改名的迁移。V1 又给 `hermit_admin_login_failures` 增加自增主键，校验和变了。已经应用过旧 V1 的本地 `reef-data`（H2）和 MySQL 库必须重建：删除 `reef-data/db` 下的 H2 文件，或删除并重建 Compose 的 MySQL 卷 `reef-mysql`。`reef-data` 里的 `keys/` 和 `conches/` 可以留下；整卷删除会同时丢掉密钥和已发布包。Crab 的 `crab-data` 不在这次变更里。
+Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，Flyway 历史表是 `hermit_flyway_schema_history`。V1–V4 在发布前就地改写，没有把旧表改名的迁移。V1 在投产前还给 `hermit_admin_login_failures` 补了自增主键，生产执行的就是这一版 V1–V7。之后一律新增迁移（V8 起），已执行的迁移不再改动，生产升级不需要重建库。投产前用旧 V1 建的开发库启动时会报 V1 校验和不一致，只能重建：删除 `reef-data/db` 下的 H2 文件，或删除并重建 Compose 的 MySQL 卷 `reef-mysql`。`reef-data` 里的 `keys/` 和 `conches/` 可以留下；整卷删除会同时丢掉密钥和已发布包。Crab 的 `crab-data` 不在这次变更里。
 
 之后的升级要一致备份数据库、conches、keys。Compose 的 `reef-mysql` 与 `reef-data` 分别保存 MySQL 与 `/data`，升级必须保留两个卷。容器 Crab 的 `crab-data` 保存整个实例目录；要同时备份外部主密钥（如有），不能只备份数据库。实际卷名通常带 Compose 项目前缀，切换部署目录/项目名时要核对卷，避免意外创建新实例。恢复主密钥、公钥和实例 ID 时保持对应关系。H2 文件复制前停止所属进程，MySQL 使用数据库一致性备份；恢复应先在隔离实例验证。本次审计未实际做生产备份恢复演练。
 

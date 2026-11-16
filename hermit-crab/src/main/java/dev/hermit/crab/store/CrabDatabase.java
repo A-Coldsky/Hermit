@@ -62,8 +62,9 @@ import dev.hermit.common.validate.ConchValidator;
  * Later versions must not edit {@link #applyV15}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
- * or create later tables. Before the first official release these statements may be edited in
- * place when there is no stored data. After release, add a new version instead of rewriting one.
+ * or create later tables. Crab has been released with versions 1–15. Do not edit any released
+ * step; add a new version instead. {@code CrabSchemaHistoryTest} upgrades the frozen released
+ * schema and compares it with a fresh install.
  */
 public final class CrabDatabase implements AutoCloseable {
     /**

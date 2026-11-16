@@ -28,7 +28,7 @@ import dev.hermit.common.validate.ConchValidator;
 
 /**
  * 把上游 {@code tools/list} 合并进本地 MCP 包的 YAML。
- * 已有 action 保留本地名字、标题、描述和权限；新工具才清洗描述。
+ * 已有 action 保留本地名字、标题、描述和权限；新工具清洗描述，权限不采用上游注解。
  * {@code tools_sha256} 覆盖过滤前的完整列表。
  */
 public final class McpToolMerge {
@@ -266,8 +266,6 @@ public final class McpToolMerge {
         Map<String, Object> input = inputSchema(tool.get("inputSchema"));
         Map<String, Object> output = outputSchema(tool.get("outputSchema"));
         Map<String, Object> annotations = annotations(tool.get("annotations"));
-        boolean readOnly = Boolean.TRUE.equals(annotations.get("readOnlyHint"));
-        boolean destructive = destructive(annotations, readOnly);
         String title = text(tool.get("title"));
         if (title == null && annotations.get("title") instanceof String annotated) {
             title = annotated;
@@ -276,11 +274,12 @@ public final class McpToolMerge {
         action.put("tool", text(tool.get("name")));
         action.put("title", cleanText(title, local));
         action.put("description", cleanText(text(tool.get("description")), DESCRIPTION_FALLBACK));
+        // 上游注解只留在 upstream_annotations，不决定能否直接调用。
         ObjectNode mcp = action.putObject("mcp");
         mcp.put("expose", true);
-        mcp.put("read_only", readOnly);
-        mcp.put("destructive", destructive);
-        action.put("confirm", destructive);
+        mcp.put("read_only", false);
+        mcp.put("destructive", true);
+        action.put("confirm", true);
         action.set("input_schema", YAML.valueToTree(input));
         if (output != null) {
             action.set("output_schema", YAML.valueToTree(output));
@@ -288,14 +287,6 @@ public final class McpToolMerge {
         action.set("upstream_annotations", YAML.valueToTree(annotations));
         action.put("schema_sha256", ToolSnapshots.schemaSha256(input, output));
         return action;
-    }
-
-    private static boolean destructive(Map<String, Object> annotations, boolean readOnly) {
-        Object hint = annotations.get("destructiveHint");
-        if (hint instanceof Boolean value) {
-            return value;
-        }
-        return !readOnly;
     }
 
     private static Map<String, Object> inputSchema(JsonNode node) {

@@ -57,7 +57,12 @@ public class ReefProperties {
     }
 
     public String crabDownloadUrlOrNull() {
-        return blankToNull(crabDownloadUrl);
+        String value = blankToNull(crabDownloadUrl);
+        // 控制台会把这个地址放进链接。不是 http/https 就不下发，避免 javascript: 在源站执行。不因此拒绝启动。
+        if (value == null || !httpDownloadUrl(value)) {
+            return null;
+        }
+        return value;
     }
 
     public String getDataDir() {
@@ -121,5 +126,22 @@ public class ReefProperties {
             return null;
         }
         return value;
+    }
+
+    /** 写成 scheme://，并且协议名是 http 或 https。 */
+    private static boolean httpDownloadUrl(String value) {
+        int separator = value.indexOf("://");
+        if (separator <= 0) {
+            return false;
+        }
+        String scheme = value.substring(0, separator);
+        for (int i = 0; i < scheme.length(); i++) {
+            char c = scheme.charAt(i);
+            boolean letter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+            if (!letter) {
+                return false;
+            }
+        }
+        return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
     }
 }

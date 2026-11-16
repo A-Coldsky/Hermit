@@ -7,6 +7,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -19,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -32,6 +34,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.pkg.Ed25519Keys;
 import dev.hermit.common.pkg.PackageReason;
 import dev.hermit.common.pkg.ConchPackage;
@@ -84,12 +88,12 @@ class ConchSyncTest {
 
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.INSTALLED, null))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_SAME, SyncReasons.SAME_VERSION))).isFalse();
-        assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_MIN_VERSION, SyncReasons.MIN_CRAB_VERSION)))
-                .isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.UPDATE_AVAILABLE, SyncReasons.UPDATE_AVAILABLE))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_OLDER, SyncReasons.OLDER_MANIFEST))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.DISABLED, SyncReasons.DISABLED))).isFalse();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_LOCAL, SyncReasons.LOCAL_KEPT))).isFalse();
+        assertThat(SyncFailures.retryable(outcome(OutcomeKind.SKIPPED_MIN_VERSION, SyncReasons.MIN_CRAB_VERSION)))
+                .isTrue();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.REPAIR_REQUIRED, SyncReasons.POINTER_MISSING))).isTrue();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.REPAIR_REQUIRED, "BAD_SIGNATURE"))).isTrue();
         assertThat(SyncFailures.retryable(outcome(OutcomeKind.RULE_DISABLED, SyncReasons.RULE_DISABLED))).isTrue();
@@ -777,6 +781,262 @@ class ConchSyncTest {
             assertThat(sync.disabledConches().contains("local_ping")).isFalse();
             assertThat(auditCount(crab, "REEF_CONCH_DISABLED")).isZero();
         }
+    }
+
+    @Test
+    void aLowMinVersionDoesNotFreezeTheManifestSoTheNextSyncTriesAgain() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("min"))) {
+            reef.publish(ConchTexts.of("future_oa", "1.0.0", "9.0.0", """
+                    username: { type: text, required: true }
+                    """));
+            ConchSync sync = sync(reef, crab, new ConchRegistry(), Optional.empty(), Clock.systemUTC());
+
+            SyncReport first = sync.syncOnce();
+
+            assertThat(first.notModified()).isFalse();
+            assertThat(outcome(first, "future_oa").kind()).isEqualTo(OutcomeKind.SKIPPED_MIN_VERSION);
+            assertThat(syncState(crab, "manifest_etag")).isNull();
+            assertThat(syncState(crab, "manifest_snapshot")).isNull();
+            assertThat(Files.exists(crab.paths.conches().resolve("future_oa"))).isFalse();
+
+            SyncReport second = sync.syncOnce();
+
+            assertThat(second.notModified()).isFalse();
+            assertThat(outcome(second, "future_oa").kind()).isEqualTo(OutcomeKind.SKIPPED_MIN_VERSION);
+            assertThat(syncState(crab, "manifest_etag")).isNull();
+
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            assertThat(outcome(sync.syncOnce(), "legacy_oa").kind()).isEqualTo(OutcomeKind.INSTALLED);
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            sync.syncOnce();
+            assertThat(sync.update("legacy_oa", Actors.CONSOLE).outcome().kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
+        }
+    }
+
+    @Test
+    void updateDoesNotDeleteCredentialsListedOnlyInAnUnsignedYaml() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("yaml"))) {
+            crab.accounts.create(Origin.OFFICIAL, "legacy_oa", "alice", "cli");
+            crab.vault.write(Origin.OFFICIAL, "legacy_oa", "alice",
+                    Map.of("password", SECRET, "username", "alice", "pin", "pin-value"), "cli");
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            replaceCurrentYamlWithUnsignedPin(reef, crab, registry);
+
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            assertThat(outcome(sync.syncOnce(), "legacy_oa").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+            UpdateResult updated = sync.update("legacy_oa", Actors.CONSOLE);
+
+            assertThat(updated.outcome().kind()).isEqualTo(OutcomeKind.INSTALLED);
+            assertThat(updated.outcome().version()).isEqualTo("1.0.1");
+            assertThat(updated.credentialChange().map(CredentialDeclarationChange::removed).orElse(Set.of()))
+                    .doesNotContain("pin");
+            assertThat(crab.vault.fieldNames(Origin.OFFICIAL, "legacy_oa", "alice"))
+                    .contains("pin", "password", "username");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(registry.find("legacy_oa").orElseThrow().credentials()).doesNotContainKey("pin");
+        }
+    }
+
+    @Test
+    void failedCurrentWriteDoesNotRestoreAnUnsignedYaml() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("restore"))) {
+            crab.accounts.create(Origin.OFFICIAL, "legacy_oa", "alice", "cli");
+            crab.vault.write(Origin.OFFICIAL, "legacy_oa", "alice",
+                    Map.of("password", SECRET, "username", "alice", "pin", "pin-value"), "cli");
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            replaceCurrentYamlWithUnsignedPin(reef, crab, registry);
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            assertThat(outcome(sync.syncOnce(), "legacy_oa").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+
+            Path conchDir = crab.paths.conches().resolve("legacy_oa");
+            Path staged = conchDir.resolve("1.0.1");
+            Files.createDirectories(staged);
+            Files.setPosixFilePermissions(staged, ownerWritable());
+            Set<PosixFilePermission> previous = Files.getPosixFilePermissions(conchDir);
+            Files.setPosixFilePermissions(conchDir, ownerSearchable());
+            try {
+                assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                        .isInstanceOf(RuntimeException.class);
+                ConchDoc restored = registry.find("legacy_oa").orElseThrow();
+                assertThat(restored.version().toString()).isEqualTo("1.0.0");
+                assertThat(restored.credentials()).doesNotContainKey("pin");
+                assertThat(registry.origin("legacy_oa")).isEqualTo(Origin.OFFICIAL);
+                assertThat(crab.vault.fieldNames(Origin.OFFICIAL, "legacy_oa", "alice")).contains("pin");
+            } finally {
+                Files.setPosixFilePermissions(conchDir, previous);
+            }
+        }
+    }
+
+    @Test
+    void aLoadedDocumentStillDecidesCredentialDeletesWhenTheYamlDiffers() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("loaded"))) {
+            crab.accounts.create(Origin.OFFICIAL, "legacy_oa", "alice", "cli");
+            crab.vault.write(Origin.OFFICIAL, "legacy_oa", "alice",
+                    Map.of("password", SECRET, "username", "alice", "pin", "pin-value"), "cli");
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+            sync.syncOnce();
+            Files.writeString(crab.paths.conches().resolve("legacy_oa/1.0.0/conch.yaml"), unsignedWithPin());
+            reef.publish(ConchTexts.withoutPassword("legacy_oa", "1.0.1"));
+            assertThat(outcome(sync.syncOnce(), "legacy_oa").kind()).isEqualTo(OutcomeKind.UPDATE_AVAILABLE);
+            crab.vault.write(Origin.OFFICIAL, "legacy_oa", "alice", Map.of("otp", "123456"), "cli");
+
+            UpdateResult updated = sync.update("legacy_oa", Actors.CONSOLE);
+
+            assertThat(updated.outcome().version()).isEqualTo("1.0.1");
+            assertThat(updated.credentialChange().orElseThrow().removed()).containsExactly("password");
+            assertThat(crab.vault.fieldNames(Origin.OFFICIAL, "legacy_oa", "alice"))
+                    .contains("pin", "username", "otp")
+                    .doesNotContain("password");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+        }
+    }
+
+    @Test
+    void installDoesNotFollowASymlinkOutsideTheConchesDirectory() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("home"))) {
+            Path outside = temp.resolve("outside");
+            Files.createDirectories(outside);
+            Files.createSymbolicLink(crab.paths.conches().resolve("legacy_oa"), outside.toAbsolutePath());
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+
+            SyncReport report = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC()).syncOnce();
+
+            assertThat(outcome(report, "legacy_oa").kind()).isEqualTo(OutcomeKind.REJECTED);
+            assertThat(registry.find("legacy_oa")).isEmpty();
+            assertThat(Files.isSymbolicLink(crab.paths.conches().resolve("legacy_oa"))).isTrue();
+            assertThat(Files.exists(outside.resolve("package.zip"))).isFalse();
+            assertThat(Files.exists(outside.resolve("1.0.0"))).isFalse();
+            assertThat(Files.exists(outside.resolve("current"))).isFalse();
+            try (var walk = Files.walk(outside)) {
+                assertThat(walk.filter(path -> "package.zip".equals(path.getFileName().toString()))).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void dotDotAndAbsoluteConchPathsStayRejected() throws Exception {
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("paths"))) {
+            assertThatThrownBy(() -> ConchFiles.conchDir(crab.paths, ".."))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> ConchFiles.versionDir(crab.paths, "legacy_oa", ".."))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> ConchFiles.versionDir(crab.paths, "legacy_oa", "/tmp"))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
+    void rollbackDoesNotFollowASymlinkedPreviousZip() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("linkzip"))) {
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = publishAndUpdate(reef, crab, registry);
+            Path zip = crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip");
+            Path stash = temp.resolve("previous.zip");
+            Files.move(zip, stash);
+            Files.createSymbolicLink(zip, stash.toAbsolutePath());
+
+            assertThatThrownBy(() -> sync.rollback("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessage("上一版无法读取。当前版本没有改动。");
+            assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(Files.isSymbolicLink(zip)).isTrue();
+        }
+    }
+
+    @Test
+    void rollbackDoesNotFollowASymlinkedConchDirectory() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("linkdir"))) {
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = publishAndUpdate(reef, crab, registry);
+            Path conchDir = crab.paths.conches().resolve("legacy_oa");
+            Path outside = temp.resolve("moved");
+            Files.move(conchDir, outside);
+            Files.createSymbolicLink(conchDir, outside.toAbsolutePath());
+
+            assertThatThrownBy(() -> sync.rollback("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessage("上一版无法读取。当前版本没有改动。");
+            assertThat(Files.readString(outside.resolve("current")).trim()).isEqualTo("1.0.1");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(Files.exists(outside.resolve("1.0.0/package.zip"))).isTrue();
+        }
+    }
+
+    @Test
+    void rollbackDoesNotReadAPreviousZipLargerThanTheInstallLimit() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("oversize"))) {
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = publishAndUpdate(reef, crab, registry);
+            Path zip = crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip");
+            byte[] original = Files.readAllBytes(zip);
+            byte[] padded = new byte[ConchFiles.MAX_ZIP_BYTES + 1];
+            System.arraycopy(original, 0, padded, 0, original.length);
+            assertThat(ConchPackage.readVerified(padded, reef.keys().getPublic()).manifest().version())
+                    .isEqualTo("1.0.0");
+            Files.write(zip, padded);
+
+            assertThatThrownBy(() -> sync.rollback("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .hasMessage("上一版无法读取。当前版本没有改动。");
+            assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.1");
+            assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.1");
+            assertThat(Files.size(zip)).isEqualTo(ConchFiles.MAX_ZIP_BYTES + 1L);
+        }
+    }
+
+    private static ConchSync publishAndUpdate(FakeReef reef, OpenCrab crab, ConchRegistry registry) {
+        reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+        ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
+        sync.syncOnce();
+        reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+        sync.syncOnce();
+        assertThat(sync.update("legacy_oa", Actors.CONSOLE).outcome().version()).isEqualTo("1.0.1");
+        return sync;
+    }
+
+    private static void replaceCurrentYamlWithUnsignedPin(FakeReef reef, OpenCrab crab, ConchRegistry registry)
+            throws Exception {
+        registry.remove("legacy_oa");
+        new SyncStore(crab.dataSource).clearInstallHistory("legacy_oa");
+        String unsigned = unsignedWithPin();
+        assertThat(new ConchRegistry().inspect(ConchParser.parse(unsigned))).isEmpty();
+        Files.writeString(crab.paths.conches().resolve("legacy_oa/1.0.0/conch.yaml"), unsigned);
+        assertThat(registry.find("legacy_oa")).isEmpty();
+        assertThat(Files.readString(crab.paths.conches().resolve("legacy_oa/current")).trim()).isEqualTo("1.0.0");
+        assertThat(ConchPackage.readVerified(
+                Files.readAllBytes(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip")),
+                reef.keys().getPublic()).conchDoc().credentials()).doesNotContainKey("pin");
+    }
+
+    private static String unsignedWithPin() {
+        return ConchTexts.of("legacy_oa", "8.8.8", "1.0.0", """
+                username: { type: text, required: true }
+                password: { type: secret, required: true }
+                pin: { type: secret, required: true }
+                """);
+    }
+
+    private static Set<PosixFilePermission> ownerWritable() {
+        return Set.of(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.OWNER_EXECUTE);
+    }
+
+    private static Set<PosixFilePermission> ownerSearchable() {
+        return Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_EXECUTE);
     }
 
     private static String ping(String name, String version) {

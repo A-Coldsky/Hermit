@@ -113,7 +113,9 @@ class McpAcceptanceTest {
                     assertThat(echoOp.path("x-hermit-driver").asText()).isEqualTo("mcp");
                     assertThat(ticketOp.path("x-hermit-driver").asText()).isEqualTo("mcp");
                     assertThat(parameter(echoOp, "X-Hermit-Confirm")).isNull();
+                    assertThat(parameter(echoOp, "X-Hermit-Confirm-Token")).isNull();
                     assertThat(parameter(ticketOp, "X-Hermit-Confirm").path("required").asBoolean()).isTrue();
+                    assertThat(parameter(ticketOp, "X-Hermit-Confirm-Token").path("required").asBoolean()).isTrue();
 
                     McpClient mcp = new McpClient(crabBase, apiKey);
                     JsonNode listed = mcp.call("tools/list", null);
@@ -146,11 +148,13 @@ class McpAcceptanceTest {
                             crabBase, "/api/" + CONCH + "/create_ticket", apiKey, "{}", null);
                     assertThat(unconfirmed.statusCode()).isEqualTo(409);
                     assertThat(json(unconfirmed).path("error").path("code").asText()).isEqualTo("CONFLICT");
-                    assertThat(json(unconfirmed).path("error").path("message").asText()).isEqualTo(Invoker.CONFIRM_REQUIRED);
+                    String confirmToken = unconfirmed.headers().firstValue("X-Hermit-Confirm-Token").orElseThrow();
+                    assertThat(json(unconfirmed).path("error").path("message").asText())
+                            .isEqualTo(Invoker.confirmRequired(confirmToken));
                     assertThat(upstream.toolHits()).hasSize(beforeConfirm);
 
                     HttpResponse<String> confirmed = postApi(
-                            crabBase, "/api/" + CONCH + "/create_ticket", apiKey, "{}", "true");
+                            crabBase, "/api/" + CONCH + "/create_ticket", apiKey, "{}", "true", confirmToken);
                     assertThat(confirmed.statusCode()).as(safe(confirmed.body())).isEqualTo(200);
                     assertThat(json(confirmed).path("success").asBoolean()).isTrue();
                     assertThat(json(confirmed).path("data").path("ticket").asText()).isEqualTo("T-1");
@@ -589,12 +593,21 @@ class McpAcceptanceTest {
 
     private HttpResponse<String> postApi(String base, String path, String apiKey, String body, String confirm)
             throws Exception {
+        return postApi(base, path, apiKey, body, confirm, null);
+    }
+
+    private HttpResponse<String> postApi(
+            String base, String path, String apiKey, String body, String confirm, String confirmToken
+    ) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(base + path))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + apiKey)
                 .header("Content-Type", "application/json");
         if (confirm != null) {
             builder.header("X-Hermit-Confirm", confirm);
+        }
+        if (confirmToken != null) {
+            builder.header("X-Hermit-Confirm-Token", confirmToken);
         }
         builder.POST(HttpRequest.BodyPublishers.ofString(body));
         return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));

@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
@@ -24,7 +25,10 @@ import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
+import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.McpAuth;
+import dev.hermit.common.model.McpUpstream;
 import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchValidator;
@@ -34,11 +38,14 @@ import dev.hermit.common.validate.ValidationResult;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ConchRejectedException;
 import dev.hermit.crab.engine.CrabVersion;
+import dev.hermit.crab.secure.CredentialCipher;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.AuditKind;
 import dev.hermit.crab.store.AuditLog;
 import dev.hermit.crab.store.CrabPaths;
+import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.Origin;
+import dev.hermit.crab.upstream.McpOAuthToken;
 
 /**
  * Unsigned conches stored as {@code local-conches/{conch}.yaml}. The bytes on disk are the
@@ -239,6 +246,35 @@ public final class LocalConches {
             }
             return readStored(conch).filter(doc -> conch.equals(doc.conch()));
         }
+    }
+
+    /**
+     * 覆盖确认文案。上游地址的主机和已声明的令牌端点主机都没变时，沿用短句。
+     * 主机会变时写明旧主机、新主机，并说明确认后会清掉已保存的上游令牌。
+     */
+    public static String overwriteConfirm(String conch, ConchDoc before, ConchDoc after) {
+        String unchanged = "将覆盖已有的本地规则包 " + conch + "。确认后才会写入。";
+        UpstreamIdentity left = identity(before);
+        UpstreamIdentity right = identity(after);
+        boolean urlHostChanged = !Objects.equals(left.host, right.host);
+        boolean tokenHostChanged = !Objects.equals(left.tokenHost, right.tokenHost);
+        if (!urlHostChanged && !tokenHostChanged) {
+            return unchanged;
+        }
+        StringBuilder text = new StringBuilder("将覆盖已有的本地规则包 ").append(conch).append('。');
+        boolean tokenFollowsUrl = urlHostChanged
+                && Objects.equals(left.tokenHost, left.host)
+                && Objects.equals(right.tokenHost, right.host);
+        if (urlHostChanged) {
+            text.append("上游主机将从 ").append(hostText(left.host)).append(" 改为 ")
+                    .append(hostText(right.host)).append('，');
+        }
+        if (tokenHostChanged && !tokenFollowsUrl) {
+            text.append("令牌端点主机将从 ").append(hostText(left.tokenHost)).append(" 改为 ")
+                    .append(hostText(right.tokenHost)).append('，');
+        }
+        text.append("确认后会清掉已保存的上游令牌。确认后才会写入。");
+        return text.toString();
     }
 
     private Export exportFile(String conch, String version) {
@@ -544,6 +580,7 @@ public final class LocalConches {
                     throw new IllegalStateException("local conch file was not read");
                 }
             }
+            ConchDoc before = baseline(doc.conch(), previous);
             try {
                 atomicWrite(file, raw);
                 registry.put(doc, Origin.LOCAL, allowEmptyMcpActions());
@@ -554,7 +591,85 @@ public final class LocalConches {
                 restore(file, previous, existed);
                 throw ex;
             }
+            if (dropUpstreamSecrets(before, doc, existed)) {
+                deleteUpstreamSecrets(doc.conch());
+            }
         }
+    }
+
+    /** 注册表里已载入的文档优先；否则解析覆盖前的文件。解析失败返回 null。 */
+    private ConchDoc baseline(String conch, byte[] previous) {
+        if (registry.origin(conch) == Origin.LOCAL) {
+            ConchDoc loaded = registry.find(conch).orElse(null);
+            if (loaded != null) {
+                return loaded;
+            }
+        }
+        if (previous == null || previous.length == 0) {
+            return null;
+        }
+        try {
+            ConchDoc parsed = ConchParser.parse(new String(previous, StandardCharsets.UTF_8));
+            return conch.equals(parsed.conch()) ? parsed : null;
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * 上游 URL 的 scheme、host、port，认证类型，或已声明的令牌端点主机变了就清令牌。
+     * 读不出旧文档时也清，避免旧 Bearer 打到对不上的上游。
+     */
+    private static boolean dropUpstreamSecrets(ConchDoc before, ConchDoc after, boolean fileExisted) {
+        if (before == null) {
+            return fileExisted;
+        }
+        return !identity(before).equals(identity(after));
+    }
+
+    private void deleteUpstreamSecrets(String conch) {
+        // deleteFields 只按字段名删行，不读写明文。构造凭证库仍要一把密钥，这把不会用来加密。
+        CredentialVault vault = new CredentialVault(dataSource, new CredentialCipher(new byte[32]));
+        vault.deleteFields(
+                Origin.LOCAL,
+                conch,
+                Set.of(McpOAuthToken.FIELD, McpOAuthToken.CLIENT_SECRET));
+    }
+
+    private static UpstreamIdentity identity(ConchDoc doc) {
+        if (doc == null || doc.upstream() == null) {
+            return new UpstreamIdentity(null, null, -1, null, null);
+        }
+        McpUpstream upstream = doc.upstream();
+        String scheme = null;
+        String host = null;
+        int port = -1;
+        if (upstream.url() != null && !upstream.url().isBlank()) {
+            McpAddresses.ParseResult parsed = McpAddresses.parse(upstream.url());
+            if (parsed.ok()) {
+                scheme = parsed.url().scheme();
+                host = parsed.url().host();
+                port = parsed.url().port();
+            } else {
+                scheme = "";
+                host = upstream.url();
+                port = -1;
+            }
+        }
+        String authType = upstream.auth() == null ? null : upstream.auth().type();
+        return new UpstreamIdentity(scheme, host, port, authType, tokenHost(upstream.auth()));
+    }
+
+    private static String tokenHost(McpAuth auth) {
+        if (auth == null || auth.tokenEndpoint() == null || auth.tokenEndpoint().isBlank()) {
+            return null;
+        }
+        McpAddresses.ParseResult parsed = McpAddresses.parse(auth.tokenEndpoint());
+        return parsed.ok() ? parsed.url().host() : auth.tokenEndpoint();
+    }
+
+    private static String hostText(String host) {
+        return host == null || host.isBlank() ? "（无）" : host;
     }
 
     private void rejectClash(String conch) {
@@ -877,6 +992,10 @@ public final class LocalConches {
     }
 
     private record BrokenLocal(String conch, String file, String reason, boolean ruleDisabled) {
+    }
+
+    /** 上游身份。端口 -1 表示没有可比较的 URL。令牌端点只比主机。 */
+    private record UpstreamIdentity(String scheme, String host, int port, String authType, String tokenHost) {
     }
 
     public record Export(String conch, String version, byte[] bytes) {

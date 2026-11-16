@@ -1,5 +1,6 @@
 package dev.hermit.reef.conch;
 
+import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.version.SemVer;
 import dev.hermit.reef.audit.AuditAction;
 import dev.hermit.reef.audit.AuditService;
@@ -80,7 +81,8 @@ public class ConchDiscardService {
     }
 
     private static String canonical(String conch, String version) {
-        if (!ConchPaths.singleSegment(conch) || !ConchPaths.singleSegment(version)) {
+        // 包名要先通过 ConchValidator，不通过则 404，不拿锁、不进 SQL。版本仍按 SemVer 规范化。
+        if (!ConchValidator.isConchName(conch) || !ConchPaths.singleSegment(version)) {
             throw notFound();
         }
         try {

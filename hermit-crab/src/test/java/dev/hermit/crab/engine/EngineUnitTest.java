@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
@@ -202,16 +203,16 @@ class EngineUnitTest {
                 """;
         Map<String, Object> vars = vars(html);
         vars.put("credential", Map.of("password", EngineTestSupport.PASSWORD));
-        Extractors.apply(Map.of("viewstate", Map.of("css", "#__VIEWSTATE", "attr", "value")), vars, filters, templates);
+        apply(Map.of("viewstate", Map.of("css", "#__VIEWSTATE", "attr", "value")), vars, filters, templates);
         assertThat(vars.get("viewstate")).isEqualTo("vs-fixture");
 
-        Extractors.apply(Map.of("name", Map.of("xpath", "//span[@id='name']")), vars, filters, templates);
+        apply(Map.of("name", Map.of("xpath", "//span[@id='name']")), vars, filters, templates);
         assertThat(vars.get("name")).isEqualTo("张三");
 
-        Extractors.apply(Map.of("code", Map.of("regex", ">(A\\d+)<")), vars, filters, templates);
+        apply(Map.of("code", Map.of("regex", ">(A\\d+)<")), vars, filters, templates);
         assertThat(vars.get("code")).isEqualTo("A1024");
 
-        Extractors.apply(Map.of(
+        apply(Map.of(
                 "items", Map.of(
                         "css", "table#todo tr:not(:first-child)",
                         "each", Map.of(
@@ -224,36 +225,36 @@ class EngineUnitTest {
                 "title", "张三的请假申请",
                 "date", "2026-10-12")));
 
-        Extractors.apply(Map.of("literal", Map.of("css", "#v")), vars, filters, templates);
+        apply(Map.of("literal", Map.of("css", "#v")), vars, filters, templates);
         assertThat(vars.get("literal")).isEqualTo("{{credential.password}}");
         SecretChecks.absent(String.valueOf(vars.get("literal")), EngineTestSupport.PASSWORD);
 
         Map<String, Object> json = vars("{\"name\":\"张三\"}");
-        Extractors.apply(Map.of("name", Map.of("jsonpath", "$.name")), json, filters, templates);
+        apply(Map.of("name", Map.of("jsonpath", "$.name")), json, filters, templates);
         assertThat(json.get("name")).isEqualTo("张三");
     }
 
     @Test
     void extractMissesAndNonJsonAreRuleMismatches() {
-        RuleProblem none = catchProblem(() -> Extractors.apply(
+        RuleProblem none = catchProblem(() -> apply(
                 Map.of("missing", Map.of("css", "#missing")), vars("<html></html>"), filters, templates));
         assertThat(none.summary).isEqualTo("提取 missing 失败：css #missing 匹配 0 条");
 
         Map<String, Object> optional = vars("<html></html>");
-        int count = Extractors.apply(
+        int count = apply(
                 Map.of("missing", Map.of("css", "#missing", "optional", true)), optional, filters, templates);
         assertThat(optional.get("missing")).isNull();
         assertThat(count).isZero();
 
         Map<String, Object> noRows = vars("<table id=\"todo\"><tr><th>单号</th></tr></table>");
-        Extractors.apply(Map.of(
+        apply(Map.of(
                 "items", Map.of(
                         "css", "table#todo tr:not(:first-child)",
                         "each", Map.of("id", Map.of("css", "td")))),
                 noRows, filters, templates);
         assertThat(noRows.get("items")).isEqualTo(List.of());
 
-        RuleProblem notJson = catchProblem(() -> Extractors.apply(
+        RuleProblem notJson = catchProblem(() -> apply(
                 Map.of("name", Map.of("jsonpath", "$.name")), vars("<html></html>"), filters, templates));
         assertThat(notJson.summary).isEqualTo("提取 name 失败：响应不是 JSON（jsonpath $.name）");
     }
@@ -285,6 +286,16 @@ class EngineUnitTest {
         assertThatThrownBy(() -> new ExecutionRequest(
                 "t", Origin.OFFICIAL, "legacy_oa", "list_todo", Map.of(), null, context))
                 .isInstanceOf(NullPointerException.class);
+    }
+
+    private int apply(
+            Map<String, Object> spec,
+            Map<String, Object> vars,
+            FilterRegistry filters,
+            TemplateEngine templates
+    ) {
+        return Extractors.apply(
+                spec, vars, filters, templates, System.nanoTime() + TimeUnit.MINUTES.toNanos(1));
     }
 
     private static InvalidInput assertInvalid(InputPreparer preparer, Action action, Map<String, Object> raw) {

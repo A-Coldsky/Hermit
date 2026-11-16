@@ -216,7 +216,9 @@ public final class CrabHttpServer implements AutoCloseable {
                 bodySha256,
                 CallChannel.HTTP,
                 GatewayResponses.trace(ctx),
-                confirmed(ctx));
+                confirmed(ctx),
+                null,
+                confirmToken(ctx));
         GatewayResponses.writeOutcome(ctx, outcome);
     }
 
@@ -233,8 +235,13 @@ public final class CrabHttpServer implements AutoCloseable {
 
     /** 只有去空白后恰好是 {@code true} 才算确认。 */
     static boolean confirmed(io.javalin.http.Context ctx) {
-        String header = ctx.header("X-Hermit-Confirm");
+        String header = ctx.header(Invoker.CONFIRM_HEADER);
         return header != null && "true".equals(header.trim());
+    }
+
+    /** 原文交给 Invoker，由它去掉首尾空白后再和当前快照比较。 */
+    static String confirmToken(io.javalin.http.Context ctx) {
+        return ctx.header(Invoker.CONFIRM_TOKEN_HEADER);
     }
 
     static String accountMismatch(String selector) {

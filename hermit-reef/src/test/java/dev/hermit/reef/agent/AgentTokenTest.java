@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import dev.hermit.reef.config.ReefProperties;
 import dev.hermit.reef.security.AgentAccessFilter;
 import dev.hermit.reef.testsupport.ReefTestConfig;
 import dev.hermit.reef.testsupport.TestDataDirs;
@@ -43,6 +44,9 @@ class AgentTokenTest {
 
     @Autowired
     MockMvc mockMvc;
+
+    @Autowired
+    ReefProperties properties;
 
     @Test
     void missingOrInvalidInstanceIs400BeforeTheTokenIsConsidered() throws Exception {
@@ -104,6 +108,23 @@ class AgentTokenTest {
                 .andExpect(jsonPath("$.traceId").value("trace-agent-ok"))
                 .andExpect(jsonPath("$.data.latestVersion").value("1.2.3"))
                 .andExpect(jsonPath("$.data.downloadUrl").value("https://example.invalid/crab.jar"));
+    }
+
+    @Test
+    void nonHttpDownloadUrlIsAbsentFromTheVersionResponse() throws Exception {
+        String previous = properties.getCrabDownloadUrl();
+        properties.setCrabDownloadUrl("javascript:alert(1)");
+        try {
+            mockMvc.perform(get("/agent/version")
+                            .header(AgentAccessFilter.INSTANCE_HEADER, INSTANCE)
+                            .header(AgentAccessFilter.TOKEN_HEADER, TOKEN))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.latestVersion").value("1.2.3"))
+                    .andExpect(jsonPath("$.data.downloadUrl").value(nullValue()))
+                    .andExpect(content().string(not(containsString("javascript:"))));
+        } finally {
+            properties.setCrabDownloadUrl(previous);
+        }
     }
 
     private void assertNotOk(URI uri) throws Exception {

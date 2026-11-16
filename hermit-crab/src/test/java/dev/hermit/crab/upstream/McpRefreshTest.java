@@ -108,7 +108,11 @@ class McpRefreshTest {
                         ToolSnapshots.schemaSha256(search.tool().inputSchema(), search.tool().outputSchema()));
                 assertThat(updated.actions().get("gzip_file").description()).contains("https://example.test/a")
                         .doesNotContain("\u001B").doesNotContain("\u200B");
-                assertThat(updated.actions().get("gzip_file").mcp().destructive()).isFalse();
+                assertThat(updated.actions().get("gzip_file").mcp().readOnly()).isFalse();
+                assertThat(updated.actions().get("gzip_file").mcp().destructive()).isTrue();
+                assertThat(updated.actions().get("gzip_file").tool().confirm()).isTrue();
+                assertThat(updated.actions().get("gzip_file").tool().upstreamAnnotations())
+                        .containsEntry("destructiveHint", false);
                 assertThat(updated.actions().get("purge_file").mcp().destructive()).isTrue();
                 assertThat(updated.actions().get("purge_file").tool().confirm()).isTrue();
                 assertThat(updated.actions()).doesNotContainKey("admin_drop");

@@ -124,7 +124,11 @@ public final class OpenApiDocument {
             parameters.add(parameter("X-Hermit-Confirm", "header", true, Map.of(
                     "type", "string",
                     "enum", List.of("true"),
-                    "description", "破坏性操作必须带 true，否则拒绝且不会调用上游。")));
+                    "description", "去空白后必须是 true，并与 X-Hermit-Confirm-Token 一起对应当前规则包。缺一或令牌不一致则拒绝，不会调用上游。")));
+            parameters.add(parameter("X-Hermit-Confirm-Token", "header", true, Map.of(
+                    "type", "string",
+                    "pattern", "^[0-9a-f]{64}$",
+                    "description", "当前规则包的快照令牌。未确认时由 409 响应头给出；与当前文档不一致则拒绝，不会调用上游。")));
         }
         if (method == HttpMethod.GET) {
             Set<String> required = stringSet(action.inputJsonSchema().get("required"));

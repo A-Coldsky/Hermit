@@ -138,6 +138,40 @@ class ReefPropertiesTest {
         });
     }
 
+    @Test
+    void nonHttpDownloadUrlIsOmittedWithoutFailingStartup() {
+        ReefProperties javascript = new ReefProperties();
+        javascript.setLatestCrabVersion("1.2.3");
+        javascript.setCrabDownloadUrl("javascript:alert(1)");
+        javascript.validate();
+        assertThat(javascript.crabDownloadUrlOrNull()).isNull();
+        assertThat(javascript.latestCrabVersionOrNull()).isEqualTo("1.2.3");
+
+        ReefProperties disguised = new ReefProperties();
+        disguised.setCrabDownloadUrl("javascript:alert(\"https://example.invalid\")");
+        disguised.validate();
+        assertThat(disguised.crabDownloadUrlOrNull()).isNull();
+
+        ReefProperties https = new ReefProperties();
+        https.setCrabDownloadUrl("https://example.invalid/crab.jar");
+        https.validate();
+        assertThat(https.crabDownloadUrlOrNull()).isEqualTo("https://example.invalid/crab.jar");
+
+        ReefProperties http = new ReefProperties();
+        http.setCrabDownloadUrl("http://127.0.0.1:9/crab.jar");
+        http.validate();
+        assertThat(http.crabDownloadUrlOrNull()).isEqualTo("http://127.0.0.1:9/crab.jar");
+
+        runner.withPropertyValues(
+                        "hermit.reef.latest-crab-version=1.2.3",
+                        "hermit.reef.crab-download-url=javascript:alert(1)")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(ReefProperties.class).crabDownloadUrlOrNull()).isNull();
+                    assertThat(context.getBean(ReefProperties.class).latestCrabVersionOrNull()).isEqualTo("1.2.3");
+                });
+    }
+
     private static List<String> warningTexts(String token) {
         return capture(token).stream()
                 .filter(event -> event.getLevel() == Level.WARN)

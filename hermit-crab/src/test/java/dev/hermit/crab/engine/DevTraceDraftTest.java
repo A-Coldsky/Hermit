@@ -183,6 +183,57 @@ class DevTraceDraftTest {
     }
 
     @Test
+    void credentialBearingJsonDoesNotRestoreEscapedSecrets() {
+        String secret = "secret/value";
+        String quote = "se\"cret";
+        String body = "{\"msg\":\"secret\\/value\","
+                + "\"note\":\"id=secret\\/value&ok=1\","
+                + "\"nested\":{\"label\":\"secret\\u002fvalue\"},"
+                + "\"items\":[\"left\",\"secret\\/value\",{\"label\":\"secret\\/value\"}],"
+                + "\"quote\":\"se\\\"cret\","
+                + "\"password\":\"secret\\/value-tail-keep-91\","
+                + "\"path\":\"a/b\","
+                + "\"side\":\"left\",\"count\":1}";
+        String arrayBody = "[\"secret\\/value\",{\"label\":\"se\\\"cret\"}]";
+        assertThat(body).doesNotContain(secret).doesNotContain(quote);
+        assertThat(arrayBody).doesNotContain(secret).doesNotContain(quote);
+
+        DevTraceDraft draft = new DevTraceDraft(null);
+        Map<String, Object> login = DevTraceDraft.requestPiece(
+                Map.of("method", "POST", "path", "/login"),
+                "POST", "/login", 200, Map.of(), body);
+        login.put("credentialBearing", Boolean.TRUE);
+        draft.add("login", 0, 1, login);
+        Map<String, Object> array = DevTraceDraft.requestPiece(
+                Map.of(), "POST", "/tokens", 200, Map.of(), arrayBody);
+        array.put("credentialBearing", Boolean.TRUE);
+        draft.add("alive_check", -1, 1, array);
+
+        String rendered = draft.render(Redactor.of(Set.of(secret, quote)), List.of(), false);
+        SecretChecks.absent(rendered, secret);
+        SecretChecks.absent(rendered, quote);
+        SecretChecks.absent(rendered, "tail-keep-91");
+        assertThat(rendered).contains("left").contains("a/b").contains("***");
+
+        JsonNode fields = ApiJson.tree(ApiJson.tree(rendered).path("steps").get(0).path("responseBody").asText());
+        assertText(fields.path("msg").asText(), "***");
+        assertText(fields.path("note").asText(), "id=***&ok=1");
+        assertText(fields.path("nested").path("label").asText(), "***");
+        assertText(fields.path("items").get(0).asText(), "left");
+        assertText(fields.path("items").get(1).asText(), "***");
+        assertText(fields.path("items").get(2).path("label").asText(), "***");
+        assertText(fields.path("quote").asText(), "***");
+        assertText(fields.path("password").asText(), "***");
+        assertText(fields.path("path").asText(), "a/b");
+        assertText(fields.path("side").asText(), "left");
+        assertThat(fields.path("count").asInt()).isEqualTo(1);
+
+        JsonNode listed = ApiJson.tree(ApiJson.tree(rendered).path("steps").get(1).path("responseBody").asText());
+        assertText(listed.get(0).asText(), "***");
+        assertText(listed.get(1).path("label").asText(), "***");
+    }
+
+    @Test
     void base64UrlTokenIsMaskedFromItsFirstCharacterThroughItsLast() {
         String leak4 = shaped(43, 3, '-');
         String leak7 = shaped(43, 6, '_');

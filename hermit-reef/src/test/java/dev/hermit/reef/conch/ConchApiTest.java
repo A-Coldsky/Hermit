@@ -887,6 +887,71 @@ class ConchApiTest {
     }
 
     @Test
+    void nonCanonicalNamesCannotDisableOrDiscardTheStoredConch() throws Exception {
+        byte[] legacy = withConch(sample(), "legacy");
+        assertThat(json(upload(legacy)).get("success").asBoolean()).isTrue();
+        mockMvc.perform(post("/api/admin/conches/legacy/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+        assertThat(json(upload(withVersion(legacy, "1.1.0"))).get("success").asBoolean()).isTrue();
+        // H2 区分大小写且保留尾随空格，所以放一行同文的未发布版本。
+        // 非规范名必须 404，不能写成 availability 主键，也不能删掉这行。
+        plantUploaded("Legacy");
+        plantUploaded("legacy ");
+
+        mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].conch").value("legacy"))
+                .andExpect(jsonPath("$.data[0].version").value("1.0.0"));
+
+        for (String alias : List.of("Legacy", "legacy ")) {
+            assertAliasMissing(alias);
+        }
+        assertThat(availabilityNames()).isEmpty();
+        assertThat(countVersions("Legacy")).isEqualTo(1);
+        assertThat(countVersions("legacy ")).isEqualTo(1);
+        assertVersions("legacy", "1.1.0 UPLOADED", "1.0.0 PUBLISHED");
+        assertThat(Files.exists(versionFile("legacy", "1.1.0", "conch.yaml"))).isTrue();
+        assertThat(Files.exists(versionFile("legacy", "1.0.0", "package.zip"))).isTrue();
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM hermit_audit_log WHERE action IN ('DISABLE', 'ENABLE', 'DISCARD')",
+                Integer.class)).isZero();
+        mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].conch").value("legacy"));
+
+        mockMvc.perform(post("/api/admin/conches/legacy/disable")
+                        .header(HttpHeaders.AUTHORIZATION, bearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"合同到期\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conch").value("legacy"))
+                .andExpect(jsonPath("$.data.disabled").value(true));
+        mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+        assertThat(availabilityNames()).containsExactly("legacy");
+
+        for (String alias : List.of("Legacy", "legacy ")) {
+            mockMvc.perform(post("/api/admin/conches/{conch}/enable", alias)
+                            .header(HttpHeaders.AUTHORIZATION, bearer())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"reason\":\"别名\"}"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                    .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        }
+        mockMvc.perform(agent("/agent/conches/manifest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+        assertThat(availabilityNames()).containsExactly("legacy");
+        assertThat(countVersions("Legacy")).isEqualTo(1);
+        assertThat(countVersions("legacy ")).isEqualTo(1);
+    }
+
+    @Test
     void signingKeyEndpointReturnsOnlyThePublicPem() throws Exception {
         MvcResult result = mockMvc.perform(get("/api/admin/signing-key").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(status().isOk())
@@ -1479,6 +1544,47 @@ class ConchApiTest {
 
     private int versionCount() {
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM hermit_conch_versions", Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    private void assertAliasMissing(String alias) throws Exception {
+        for (String action : List.of("disable", "enable")) {
+            mockMvc.perform(post("/api/admin/conches/{conch}/" + action, alias)
+                            .header(HttpHeaders.AUTHORIZATION, bearer())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"reason\":\"别名\"}"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                    .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        }
+        for (String version : List.of("9.9.9", "1.1.0")) {
+            mockMvc.perform(delete("/api/admin/conches/{conch}/versions/{version}", alias, version)
+                            .header(HttpHeaders.AUTHORIZATION, bearer()))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                    .andExpect(jsonPath("$.error.message").value("资源不存在"));
+        }
+    }
+
+    private void plantUploaded(String conch) {
+        jdbc.update(
+                "INSERT INTO hermit_conch_versions (conch, version, sha256, package_path, status, uploaded_by, uploaded_at) "
+                        + "VALUES (?, '9.9.9', ?, 'unused', 'UPLOADED', ?, ?)",
+                conch,
+                "a".repeat(64),
+                TestSecrets.USERNAME,
+                Timestamp.from(ReefTestConfig.START));
+    }
+
+    private List<String> availabilityNames() {
+        return jdbc.queryForList("SELECT conch FROM hermit_conch_availability ORDER BY conch", String.class);
+    }
+
+    private int countVersions(String conch) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM hermit_conch_versions WHERE conch = ?",
+                Integer.class,
+                conch);
         return count == null ? 0 : count;
     }
 

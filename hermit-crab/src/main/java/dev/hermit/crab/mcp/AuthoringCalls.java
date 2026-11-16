@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.runtime.ApiEnvelope;
@@ -114,7 +115,7 @@ final class AuthoringCalls {
             if (!inScope(principal, ex.replaceConch())) {
                 return McpCalls.failAsRequest(attempt, "FORBIDDEN", notInScope(ex.replaceConch()));
             }
-            McpSchema.CallToolResult confirmed = confirmOverwrite(session, ex.replaceConch(), attempt);
+            McpSchema.CallToolResult confirmed = confirmOverwrite(session, ex.replaceConch(), raw, attempt);
             if (confirmed != null) {
                 return confirmed;
             }
@@ -285,10 +286,17 @@ final class AuthoringCalls {
     }
 
     /** {@code null} means the user accepted. Any other result refuses the write. */
-    private McpSchema.CallToolResult confirmOverwrite(McpSession session, String conch, McpCalls.Attempt attempt) {
+    private McpSchema.CallToolResult confirmOverwrite(
+            McpSession session,
+            String conch,
+            byte[] raw,
+            McpCalls.Attempt attempt
+    ) {
         if (session == null || !session.supportsElicitation() || !session.streaming()) {
             return McpCalls.failAsRequest(attempt, "FORBIDDEN", NO_OVERWRITE);
         }
+        ConchDoc after = ConchParser.parse(new String(raw, StandardCharsets.UTF_8));
+        ConchDoc before = runtime.localConches().readableDoc(conch).orElse(null);
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", Map.of(
@@ -296,7 +304,7 @@ final class AuthoringCalls {
         JsonNode answer;
         try {
             answer = session.elicit(McpSchema.ElicitFormRequest.builder(
-                    "将覆盖已有的本地规则包 " + conch + "。确认后才会写入。",
+                    LocalConches.overwriteConfirm(conch, before, after),
                     schema).build());
         } catch (TimeoutException ex) {
             return McpCalls.fail(attempt, "TIMEOUT", McpCalls.CONFIRM_TIMEOUT);

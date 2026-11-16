@@ -83,9 +83,11 @@ copy_pub() {
 
 # 签名公钥是规则的信任根。明文 HTTP 上中间人可以换掉它，还能看到管理员口令。
 # 只在 https 或本机地址上自动去取；可信内网确实只有 http 时，要显式放行。
+# 含 @ 的明文地址不算本机：curl 会连 @ 后面的主机，首次取公钥时把管理员口令 POST 出去。
 secure_key_url() {
     case "$reef_url" in
         https://*) return 0 ;;
+        *@*) return 1 ;;
         http://127.0.0.1|http://127.0.0.1:*|http://127.0.0.1/*) return 0 ;;
         http://localhost|http://localhost:*|http://localhost/*) return 0 ;;
         'http://[::1]'|'http://[::1]:'*|'http://[::1]/'*) return 0 ;;

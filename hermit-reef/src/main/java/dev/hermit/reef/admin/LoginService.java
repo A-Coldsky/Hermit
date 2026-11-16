@@ -8,6 +8,7 @@ import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -53,12 +54,28 @@ public class LoginService {
     /**
      * 同一用户名的尝试串行：先数失败、再比口令、再记失败，整段在一个事务里，锁在事务提交之后才放。
      * 否则并发请求都读到同一个失败数，锁定前能多猜很多次。多个 Reef 进程共用一个库时仍各算各的。
+     * 选锁键去掉尾随的 U+0020，再按 {@link Locale#ROOT} 小写，让 MySQL utf8mb4_unicode_ci 下的同一账号落在同一条带。
+     * 查询和写入仍用调用方传入的原文。
      */
     public Optional<LoginResponse> login(String username, String password) {
-        Object lock = stripes[String.valueOf(username).hashCode() & (LOCK_STRIPES - 1)];
+        Object lock = stripes[lockStripe(username)];
         synchronized (lock) {
             return transactions.execute(status -> attempt(username, password));
         }
+    }
+
+    static int lockStripe(String username) {
+        return lockKey(username).hashCode() & (LOCK_STRIPES - 1);
+    }
+
+    /** 去掉尾随的 U+0020，再按 ROOT 小写。前导空格留在键里。 */
+    static String lockKey(String username) {
+        String value = String.valueOf(username);
+        int end = value.length();
+        while (end > 0 && value.charAt(end - 1) == ' ') {
+            end--;
+        }
+        return value.substring(0, end).toLowerCase(Locale.ROOT);
     }
 
     private Optional<LoginResponse> attempt(String username, String password) {

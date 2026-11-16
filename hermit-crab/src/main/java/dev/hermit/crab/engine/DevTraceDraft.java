@@ -317,7 +317,8 @@ public final class DevTraceDraft {
 
     /**
      * Second pass for login requests, credential-referencing action requests, and alive checks.
-     * Value redaction has already run. Field names and token shapes are masked even when extract failed.
+     * Parsing restores JSON escapes, so each string is masked again and then by token shape.
+     * Sensitive field names are still replaced in full when extract failed.
      */
     private static void maskCredentialBodies(Map<String, Object> document, Redactor redactor) {
         Object raw = document.get("steps");
@@ -360,7 +361,7 @@ public final class DevTraceDraft {
             Map<String, Object> named = redactor.redactFields(copy);
             LinkedHashMap<String, Object> shaped = new LinkedHashMap<>();
             for (Map.Entry<String, Object> entry : named.entrySet()) {
-                shaped.put(entry.getKey(), shapeValue(entry.getValue()));
+                shaped.put(entry.getKey(), shapeValue(entry.getValue(), redactor));
             }
             return shaped;
         }
@@ -372,30 +373,34 @@ public final class DevTraceDraft {
             return copy;
         }
         if (value instanceof String text) {
-            return redactShapes(text);
+            return redactText(text, redactor);
         }
         return value;
     }
 
-    private static Object shapeValue(Object value) {
+    private static Object shapeValue(Object value, Redactor redactor) {
         if (value instanceof String text) {
-            return redactShapes(text);
+            return redactText(text, redactor);
         }
         if (value instanceof Map<?, ?> map) {
             LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
             for (Map.Entry<?, ?> entry : map.entrySet()) {
-                copy.put(String.valueOf(entry.getKey()), shapeValue(entry.getValue()));
+                copy.put(String.valueOf(entry.getKey()), shapeValue(entry.getValue(), redactor));
             }
             return copy;
         }
         if (value instanceof List<?> list) {
             ArrayList<Object> copy = new ArrayList<>(list.size());
             for (Object item : list) {
-                copy.add(shapeValue(item));
+                copy.add(shapeValue(item, redactor));
             }
             return copy;
         }
         return value;
+    }
+
+    private static String redactText(String text, Redactor redactor) {
+        return redactShapes(redactor.redact(text));
     }
 
     /**

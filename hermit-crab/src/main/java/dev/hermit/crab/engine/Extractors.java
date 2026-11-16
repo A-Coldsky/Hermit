@@ -6,6 +6,13 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -37,6 +44,14 @@ final class Extractors {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final List<String> SELECTORS = List.of("css", "xpath", "jsonpath", "regex");
+    /**
+     * 一次 {@code Matcher.find} 不看能力 deadline，也不响应中断。可能回溯很久的匹配放到这组守护线程上，
+     * 调用方只等到 deadline：到点就按超时返回，账号锁由 {@code RuleEngine} 的 finally 放开。
+     * 卡住的那次 find 继续占着一个池槽，直到自己返回。池没有等待队列，满了立刻按超时失败，
+     * 不为每次提取新建线程。没有量词或只有一个量词的正则仍在调用线程上匹配。
+     */
+    private static final int MATCH_THREADS = 32;
+    private static final ThreadPoolExecutor MATCHES = newMatchPool();
 
     private Extractors() {
     }
@@ -45,7 +60,8 @@ final class Extractors {
             Map<String, Object> spec,
             Map<String, Object> vars,
             FilterRegistry filters,
-            TemplateEngine templates
+            TemplateEngine templates,
+            long deadlineNanos
     ) {
         int count = 0;
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
@@ -58,7 +74,13 @@ final class Extractors {
             }
             Object value;
             try {
-                value = extractSpec(child, responseSource(vars, child.get("from") == null), vars, filters, templates);
+                value = extractSpec(
+                        child,
+                        responseSource(vars, child.get("from") == null),
+                        vars,
+                        filters,
+                        templates,
+                        deadlineNanos);
             } catch (RuleProblem ex) {
                 // 试跑失败时要能看出是哪个变量、哪条表达式没取到。
                 throw problem("提取 " + entry.getKey() + " 失败：" + ex.summary);
@@ -74,7 +96,8 @@ final class Extractors {
             Source inherited,
             Map<String, Object> vars,
             FilterRegistry filters,
-            TemplateEngine templates
+            TemplateEngine templates,
+            long deadlineNanos
     ) {
         Source source = spec.get("from") == null ? inherited : sourceFrom(Values.text(spec.get("from")), vars);
         String kind = selectorKind(spec);
@@ -82,7 +105,7 @@ final class Extractors {
         String where = kind + " " + clip(selector);
         List<Source> matches;
         try {
-            matches = select(kind, selector, spec, source);
+            matches = select(kind, selector, spec, source, deadlineNanos);
         } catch (RuleProblem ex) {
             throw problem(ex.summary + "（" + where + "）");
         }
@@ -103,7 +126,7 @@ final class Extractors {
                     if (child == null) {
                         throw problem("子规格必须是映射");
                     }
-                    row.put(entry.getKey(), extractSpec(child, match, vars, filters, templates));
+                    row.put(entry.getKey(), extractSpec(child, match, vars, filters, templates, deadlineNanos));
                 }
                 rows.add(Collections.unmodifiableMap(row));
             }
@@ -152,12 +175,18 @@ final class Extractors {
         return kind;
     }
 
-    private static List<Source> select(String kind, String selector, Map<String, Object> spec, Source source) {
+    private static List<Source> select(
+            String kind,
+            String selector,
+            Map<String, Object> spec,
+            Source source,
+            long deadlineNanos
+    ) {
         return switch (kind) {
             case "css" -> css(selector, source);
             case "xpath" -> xpath(selector, source);
             case "jsonpath" -> jsonpath(selector, source);
-            case "regex" -> regex(selector, spec, source);
+            case "regex" -> regex(selector, spec, source, deadlineNanos);
             default -> throw problem("提取规格必须且只能有一种选择器");
         };
     }
@@ -229,7 +258,12 @@ final class Extractors {
         return List.of(Source.json(read));
     }
 
-    private static List<Source> regex(String selector, Map<String, Object> spec, Source source) {
+    private static List<Source> regex(
+            String selector,
+            Map<String, Object> spec,
+            Source source,
+            long deadlineNanos
+    ) {
         Pattern pattern;
         try {
             pattern = Pattern.compile(selector);
@@ -237,16 +271,94 @@ final class Extractors {
             throw problem("正则无效");
         }
         int group = spec.get("group") == null ? 1 : Values.integer(spec.get("group"), 1);
-        Matcher matcher = pattern.matcher(source.text());
+        String text = source.text();
+        if (RegexShape.callerSafe(selector)) {
+            return scan(pattern, group, text, deadlineNanos);
+        }
+        return scanBounded(pattern, group, text, deadlineNanos);
+    }
+
+    private static List<Source> scan(Pattern pattern, int group, String text, long deadlineNanos) {
+        ensureDeadline(deadlineNanos);
+        Matcher matcher = pattern.matcher(text);
         ArrayList<Source> matches = new ArrayList<>();
         while (matcher.find()) {
+            // 一次 find 返回之后再看时间。卡住的那一次 find 靠外层的等待上限结束。
+            ensureDeadline(deadlineNanos);
             if (group < 0 || group > matcher.groupCount()) {
                 throw problem("正则没有该分组");
             }
-            String text = matcher.group(group);
-            matches.add(Source.text(text == null ? "" : text));
+            String captured = matcher.group(group);
+            matches.add(Source.text(captured == null ? "" : captured));
         }
+        ensureDeadline(deadlineNanos);
         return matches;
+    }
+
+    private static List<Source> scanBounded(Pattern pattern, int group, String text, long deadlineNanos) {
+        ensureDeadline(deadlineNanos);
+        Future<List<Source>> pending;
+        try {
+            pending = MATCHES.submit(() -> scan(pattern, group, text, deadlineNanos));
+        } catch (RejectedExecutionException ex) {
+            throw new DeadlineExceeded(-1, "extract", List.of());
+        }
+        long left = deadlineNanos - System.nanoTime();
+        if (left < 0) {
+            left = 0;
+        }
+        try {
+            return pending.get(left, TimeUnit.NANOSECONDS);
+        } catch (TimeoutException ex) {
+            // find 不会因为中断停下来，也不使用 Thread.stop。取消只是不再等。
+            // 这次匹配继续占着一个池槽，直到 find 自己返回。
+            pending.cancel(false);
+            throw new DeadlineExceeded(-1, "extract", List.of());
+        } catch (InterruptedException ex) {
+            pending.cancel(false);
+            Thread.currentThread().interrupt();
+            throw new DeadlineExceeded(-1, "extract", List.of());
+        } catch (ExecutionException ex) {
+            throw unwrap(ex);
+        }
+    }
+
+    private static void ensureDeadline(long deadlineNanos) {
+        if (System.nanoTime() >= deadlineNanos) {
+            throw new DeadlineExceeded(-1, "extract", List.of());
+        }
+    }
+
+    private static RuntimeException unwrap(ExecutionException ex) {
+        Throwable cause = ex.getCause();
+        if (cause instanceof DeadlineExceeded exceeded) {
+            return exceeded;
+        }
+        if (cause instanceof RuleProblem problem) {
+            return problem;
+        }
+        if (cause instanceof Error error) {
+            throw error;
+        }
+        if (cause instanceof RuntimeException runtime) {
+            return runtime;
+        }
+        return new IllegalStateException(cause);
+    }
+
+    private static ThreadPoolExecutor newMatchPool() {
+        return new ThreadPoolExecutor(
+                MATCH_THREADS,
+                MATCH_THREADS,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new SynchronousQueue<>(),
+                runnable -> {
+                    Thread thread = new Thread(runnable, "hermit-regex-match");
+                    thread.setDaemon(true);
+                    return thread;
+                },
+                new ThreadPoolExecutor.AbortPolicy());
     }
 
     private static Object scalar(Source match, Map<String, Object> spec) {
@@ -356,6 +468,302 @@ final class Extractors {
 
     private static RuleProblem problem(String summary) {
         return new RuleProblem(ErrorCode.RULE_MISMATCH, summary, null, null, null);
+    }
+
+    /**
+     * 分不清会不会在一次 find 里耗过 deadline 时，交给带超时的匹配。
+     * 嵌套量词、量词作用在含 {@code |} 的组上、以及两个以上会回溯的量词，都走线程池。
+     */
+    private static final class RegexShape {
+
+        private final String pattern;
+        private int index;
+
+        private RegexShape(String pattern) {
+            this.pattern = pattern;
+        }
+
+        private static boolean callerSafe(String pattern) {
+            try {
+                RegexShape shape = new RegexShape(pattern);
+                Shape node = shape.parseAlt();
+                if (shape.index != pattern.length()) {
+                    return false;
+                }
+                if (node.risky || node.quantifiers > 1) {
+                    return false;
+                }
+                return true;
+            } catch (RuntimeException ex) {
+                return false;
+            }
+        }
+
+        private Shape parseAlt() {
+            Shape node = parseSeq();
+            if (index < pattern.length() && pattern.charAt(index) == '|') {
+                index++;
+                return Shape.alt(node, parseAlt());
+            }
+            return node;
+        }
+
+        private Shape parseSeq() {
+            Shape node = Shape.LEAF;
+            while (index < pattern.length()) {
+                char current = pattern.charAt(index);
+                if (current == '|' || current == ')') {
+                    break;
+                }
+                node = Shape.seq(node, maybeQuantify(parseAtom()));
+            }
+            return node;
+        }
+
+        private Shape parseAtom() {
+            if (index >= pattern.length()) {
+                throw fail();
+            }
+            char current = pattern.charAt(index);
+            if (current == '\\') {
+                return escape();
+            }
+            if (current == '[') {
+                skipClass();
+                return Shape.LEAF;
+            }
+            if (current == '(') {
+                return group();
+            }
+            if (current == '.' || current == '^' || current == '$') {
+                index++;
+                return Shape.LEAF;
+            }
+            if (current == '*' || current == '+' || current == '?' || current == '{'
+                    || current == ')' || current == '|') {
+                throw fail();
+            }
+            index++;
+            return Shape.LEAF;
+        }
+
+        private Shape group() {
+            index++;
+            if (index < pattern.length() && pattern.charAt(index) == '?') {
+                index++;
+                if (index >= pattern.length()) {
+                    throw fail();
+                }
+                char kind = pattern.charAt(index);
+                if (kind == '#') {
+                    index++;
+                    int end = pattern.indexOf(')', index);
+                    if (end < 0) {
+                        throw fail();
+                    }
+                    index = end + 1;
+                    return Shape.LEAF;
+                }
+                if (kind == '<' || kind == '\'') {
+                    return namedOrLookbehind();
+                }
+                if (kind == ':' || kind == '=' || kind == '!' || kind == '>') {
+                    index++;
+                    return close(parseAlt());
+                }
+                boolean extended = false;
+                while (index < pattern.length()) {
+                    char flag = pattern.charAt(index);
+                    if ("imsdUux-".indexOf(flag) < 0) {
+                        break;
+                    }
+                    if (flag == 'x') {
+                        extended = true;
+                    }
+                    index++;
+                }
+                if (extended) {
+                    throw fail();
+                }
+                if (index < pattern.length() && pattern.charAt(index) == ':') {
+                    index++;
+                    return close(parseAlt());
+                }
+                if (index < pattern.length() && pattern.charAt(index) == ')') {
+                    index++;
+                    return Shape.LEAF;
+                }
+                throw fail();
+            }
+            return close(parseAlt());
+        }
+
+        private Shape namedOrLookbehind() {
+            char quote = pattern.charAt(index);
+            index++;
+            if (quote == '<' && index < pattern.length()
+                    && (pattern.charAt(index) == '=' || pattern.charAt(index) == '!')) {
+                index++;
+                return close(parseAlt());
+            }
+            char end = quote == '<' ? '>' : '\'';
+            int closeAt = pattern.indexOf(end, index);
+            if (closeAt < 0) {
+                throw fail();
+            }
+            index = closeAt + 1;
+            return close(parseAlt());
+        }
+
+        private Shape close(Shape inner) {
+            if (index >= pattern.length() || pattern.charAt(index) != ')') {
+                throw fail();
+            }
+            index++;
+            return inner;
+        }
+
+        private Shape maybeQuantify(Shape atom) {
+            if (index >= pattern.length()) {
+                return atom;
+            }
+            char current = pattern.charAt(index);
+            if (current != '*' && current != '+' && current != '?' && current != '{') {
+                return atom;
+            }
+            if (current == '{') {
+                if (!consumeBrace()) {
+                    throw fail();
+                }
+            } else {
+                index++;
+            }
+            boolean possessive = false;
+            if (index < pattern.length() && pattern.charAt(index) == '+') {
+                possessive = true;
+                index++;
+            } else if (index < pattern.length() && pattern.charAt(index) == '?') {
+                index++;
+            }
+            if (index < pattern.length() && (pattern.charAt(index) == '+' || pattern.charAt(index) == '?')) {
+                throw fail();
+            }
+            if (possessive) {
+                return atom;
+            }
+            boolean nested = atom.quantifiers > 0 || atom.alternation || atom.risky;
+            return new Shape(atom.quantifiers + 1, atom.alternation, nested);
+        }
+
+        private boolean consumeBrace() {
+            int start = index;
+            index++;
+            if (index >= pattern.length() || !Character.isDigit(pattern.charAt(index))) {
+                index = start;
+                return false;
+            }
+            while (index < pattern.length() && Character.isDigit(pattern.charAt(index))) {
+                index++;
+            }
+            if (index < pattern.length() && pattern.charAt(index) == ',') {
+                index++;
+                while (index < pattern.length() && Character.isDigit(pattern.charAt(index))) {
+                    index++;
+                }
+            }
+            if (index < pattern.length() && pattern.charAt(index) == '}') {
+                index++;
+                return true;
+            }
+            index = start;
+            return false;
+        }
+
+        private Shape escape() {
+            index++;
+            if (index >= pattern.length()) {
+                throw fail();
+            }
+            char current = pattern.charAt(index++);
+            if (current == 'Q') {
+                int end = pattern.indexOf("\\E", index);
+                if (end < 0) {
+                    index = pattern.length();
+                } else {
+                    index = end + 2;
+                }
+                return Shape.LEAF;
+            }
+            if ((current == 'p' || current == 'P' || current == 'x' || current == 'u')
+                    && index < pattern.length() && pattern.charAt(index) == '{') {
+                int end = pattern.indexOf('}', index);
+                if (end < 0) {
+                    throw fail();
+                }
+                index = end + 1;
+                return Shape.LEAF;
+            }
+            if (current == 'k' && index < pattern.length()) {
+                char quote = pattern.charAt(index);
+                if (quote == '<' || quote == '\'') {
+                    char end = quote == '<' ? '>' : '\'';
+                    int closeAt = pattern.indexOf(end, index + 1);
+                    if (closeAt < 0) {
+                        throw fail();
+                    }
+                    index = closeAt + 1;
+                }
+            }
+            return Shape.LEAF;
+        }
+
+        private void skipClass() {
+            index++;
+            if (index < pattern.length() && pattern.charAt(index) == '^') {
+                index++;
+            }
+            if (index < pattern.length() && pattern.charAt(index) == ']') {
+                index++;
+            }
+            while (index < pattern.length()) {
+                char current = pattern.charAt(index);
+                if (current == '\\') {
+                    index += 2;
+                    continue;
+                }
+                index++;
+                if (current == ']') {
+                    return;
+                }
+                if (current == '[') {
+                    index--;
+                    skipClass();
+                }
+            }
+            throw fail();
+        }
+
+        private static IllegalArgumentException fail() {
+            return new IllegalArgumentException("regex shape");
+        }
+    }
+
+    private record Shape(int quantifiers, boolean alternation, boolean risky) {
+        private static final Shape LEAF = new Shape(0, false, false);
+
+        private static Shape seq(Shape left, Shape right) {
+            return new Shape(
+                    left.quantifiers + right.quantifiers,
+                    left.alternation || right.alternation,
+                    left.risky || right.risky);
+        }
+
+        private static Shape alt(Shape left, Shape right) {
+            return new Shape(
+                    Math.max(left.quantifiers, right.quantifiers),
+                    true,
+                    left.risky || right.risky);
+        }
     }
 
     private static final class Source {

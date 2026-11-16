@@ -1,6 +1,7 @@
 package dev.hermit.crab.secure;
 
 import java.net.URLEncoder;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -15,13 +16,19 @@ import java.util.Set;
 
 /**
  * Masks known secret values and sensitive field or header names. {@link #redact(String)}
- * also masks the UTF-8 URL encoding of each secret, with spaces as {@code +} and as
- * {@code %20}. Callers that need both behaviors apply {@link #redact(String)} and
+ * also masks each secret's URL encoding in UTF-8, GBK, GB18030, and ISO-8859-1, with
+ * spaces as {@code +} and as {@code %20}, and with uppercase or lowercase hex digits.
+ * Callers that need both behaviors apply {@link #redact(String)} and
  * {@link #redactFields(Map)} themselves.
  */
 public final class Redactor {
     static final String MASK = "***";
     private static final int MIN_SECRET_LENGTH = 4;
+    private static final List<Charset> URL_CHARSETS = List.of(
+            StandardCharsets.UTF_8,
+            Charset.forName("GBK"),
+            Charset.forName("GB18030"),
+            StandardCharsets.ISO_8859_1);
     private static final List<String> SENSITIVE_KEY_PARTS = List.of(
             "password",
             "passwd",
@@ -61,9 +68,9 @@ public final class Redactor {
                 continue;
             }
             needles.add(secret);
-            String formEncoded = URLEncoder.encode(secret, StandardCharsets.UTF_8);
-            needles.add(formEncoded);
-            needles.add(formEncoded.replace("+", "%20"));
+            for (Charset charset : URL_CHARSETS) {
+                addUrlEncodings(needles, URLEncoder.encode(secret, charset));
+            }
         }
         List<String> ordered = needles.stream()
                 .sorted(Comparator.comparingInt(String::length).reversed().thenComparing(Comparator.naturalOrder()))
@@ -152,5 +159,47 @@ public final class Redactor {
             }
         }
         return false;
+    }
+
+    private static void addUrlEncodings(Set<String> needles, String encoded) {
+        needles.add(encoded);
+        needles.add(lowercasePercentHex(encoded));
+        String percent20 = encoded.replace("+", "%20");
+        needles.add(percent20);
+        needles.add(lowercasePercentHex(percent20));
+    }
+
+    /** Lowercases hex digits in {@code %HH} sequences. Other characters keep their case. */
+    private static String lowercasePercentHex(String encoded) {
+        if (encoded.indexOf('%') < 0) {
+            return encoded;
+        }
+        StringBuilder out = new StringBuilder(encoded.length());
+        int i = 0;
+        while (i < encoded.length()) {
+            char c = encoded.charAt(i);
+            if (c == '%' && i + 2 < encoded.length()
+                    && isHex(encoded.charAt(i + 1)) && isHex(encoded.charAt(i + 2))) {
+                out.append('%');
+                out.append(lowerHex(encoded.charAt(i + 1)));
+                out.append(lowerHex(encoded.charAt(i + 2)));
+                i += 3;
+            } else {
+                out.append(c);
+                i++;
+            }
+        }
+        return out.toString();
+    }
+
+    private static boolean isHex(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
+    }
+
+    private static char lowerHex(char c) {
+        if (c >= 'A' && c <= 'F') {
+            return (char) (c - 'A' + 'a');
+        }
+        return c;
     }
 }

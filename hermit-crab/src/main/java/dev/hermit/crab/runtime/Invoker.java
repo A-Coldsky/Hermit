@@ -15,7 +15,12 @@ import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
@@ -62,13 +67,22 @@ public final class Invoker {
     public static final String INVALID_ACCOUNT_NAME = "账号名不合法。";
     /** 能力或规则包不存在。与控制台错误码「不存在」同一句，不再返回英文 not found。 */
     public static final String NOT_FOUND_MESSAGE = "不存在";
-    /** HTTP 破坏性调用缺这个头时返回 409，并且不查、不写幂等缓存。 */
-    public static final String CONFIRM_REQUIRED = "该操作需要确认。请带上请求头 X-Hermit-Confirm: true 后重试。";
+    public static final String CONFIRM_HEADER = "X-Hermit-Confirm";
+    /** 当前规则包的快照令牌。不是秘密，只放在这次 409 的响应头和 message 里。 */
+    public static final String CONFIRM_TOKEN_HEADER = "X-Hermit-Confirm-Token";
     /** 装在本机但当前校验不让载入的包。不是「不存在」，409 CONCH_DISABLED。 */
     public static final String RULE_DISABLED_CALL =
             "规则包已停用：这版规则没有通过当前校验，所有账号暂时都不能调用。到 Crab 控制台的规则包详情里更新、退回或改好后重新导入，再调用。";
     /** 等待确认期间规则包被更新、回滚或重新导入。409，不执行。 */
     public static final String CHANGED_AFTER_CONFIRM = "确认期间规则包已经变化，没有执行。请重新发起，并确认新版本。";
+    /**
+     * 键按字典序的紧凑 JSON。同一份文档两次相同；不用对象标识 {@code hashCode}。
+     * 记录组件和嵌套映射都参与，所以步骤、confirm、read_only、上游 URL 变了令牌就变。
+     */
+    private static final ObjectMapper CANONICAL = JsonMapper.builder()
+            .enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY)
+            .enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+            .build();
 
     private final ConchRegistry registry;
     private final AccountStore accounts;
@@ -203,7 +217,7 @@ public final class Invoker {
             boolean httpConfirmed
     ) {
         return invoke(principal, conch, action, input, account, idempotencyKey, bodySha256, channel, traceId,
-                httpConfirmed, null);
+                httpConfirmed, null, null);
     }
 
     /**
@@ -222,6 +236,28 @@ public final class Invoker {
             String traceId,
             boolean httpConfirmed,
             ConchDoc confirmedAgainst
+    ) {
+        return invoke(principal, conch, action, input, account, idempotencyKey, bodySha256, channel, traceId,
+                httpConfirmed, confirmedAgainst, null);
+    }
+
+    /**
+     * {@code confirmToken} 是 HTTP 请求头 {@code X-Hermit-Confirm-Token} 的原文。
+     * 需要确认时，必须和 {@code X-Hermit-Confirm: true} 一起对上这次读到的文档。MCP 不看它。
+     */
+    public InvokeOutcome invoke(
+            ApiKeyPrincipal principal,
+            String conch,
+            String action,
+            Map<String, Object> input,
+            Optional<String> account,
+            Optional<String> idempotencyKey,
+            String bodySha256,
+            CallChannel channel,
+            String traceId,
+            boolean httpConfirmed,
+            ConchDoc confirmedAgainst,
+            String confirmToken
     ) {
         if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
@@ -295,8 +331,11 @@ public final class Invoker {
             return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
         }
         CallChannel recorded = channel == null ? CallChannel.HTTP : channel;
-        if (recorded == CallChannel.HTTP && capability.effectiveConfirm() && !httpConfirmed) {
-            return requestOnly(traceId, ErrorCode.CONFLICT, CONFIRM_REQUIRED);
+        if (recorded == CallChannel.HTTP) {
+            InvokeOutcome confirm = httpConfirm(doc, capability, httpConfirmed, confirmToken, traceId);
+            if (confirm != null) {
+                return confirm;
+            }
         }
         if (CapabilityHttp.method(capability) == HttpMethod.POST && idempotencyKey != null && idempotencyKey.isPresent()) {
             return replayOrExecute(
@@ -365,6 +404,84 @@ public final class Invoker {
     /** Same instance, or the same content reloaded (records compare by value). */
     public static boolean sameSnapshot(ConchDoc current, ConchDoc confirmed) {
         return current == confirmed || current.equals(confirmed);
+    }
+
+    /**
+     * 当前文档的快照令牌：规范 JSON 的 SHA-256，小写十六进制。
+     * 同一对象或同一份内容两次计算相同。本地覆盖可以不改版本号，所以不能只比版本。
+     */
+    public static String snapshotToken(ConchDoc doc) {
+        try {
+            return BodyDigests.sha256(CANONICAL.writeValueAsBytes(doc));
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("snapshot token", ex);
+        }
+    }
+
+    /** 需要确认、但还没带上匹配令牌时的 message。令牌写在句子里，响应头用同一值。 */
+    public static String confirmRequired(String token) {
+        return "该操作需要确认。请带上请求头 " + CONFIRM_HEADER + ": true 和 "
+                + CONFIRM_TOKEN_HEADER + ": " + token + " 后重试。";
+    }
+
+    /** 上面这句里的令牌。其它 message 返回 null。 */
+    public static String issuedConfirmToken(String message) {
+        if (message == null || !message.startsWith("该操作需要确认。")) {
+            return null;
+        }
+        String marker = CONFIRM_TOKEN_HEADER + ": ";
+        int at = message.indexOf(marker);
+        if (at < 0) {
+            return null;
+        }
+        int start = at + marker.length();
+        int end = message.indexOf(' ', start);
+        if (end < 0) {
+            end = message.length();
+        }
+        String token = message.substring(start, end);
+        if (token.length() == 64 && token.chars().allMatch(Invoker::lowerHex)) {
+            return token;
+        }
+        return null;
+    }
+
+    /**
+     * 需要确认却还没确认，或带了和当前文档不一致的令牌。null 表示可以执行这份 {@code doc}。
+     * 不查、不写幂等缓存。
+     */
+    private static InvokeOutcome httpConfirm(
+            ConchDoc doc,
+            Action capability,
+            boolean httpConfirmed,
+            String confirmToken,
+            String traceId
+    ) {
+        String presented = presentedConfirmToken(confirmToken);
+        boolean needsConfirm = capability.effectiveConfirm();
+        if (!needsConfirm && presented == null) {
+            return null;
+        }
+        String snapshot = snapshotToken(doc);
+        if (presented != null && !presented.equals(snapshot)) {
+            return requestOnly(traceId, ErrorCode.CONFLICT, CHANGED_AFTER_CONFIRM);
+        }
+        if (needsConfirm && (!httpConfirmed || presented == null)) {
+            return requestOnly(traceId, ErrorCode.CONFLICT, confirmRequired(snapshot));
+        }
+        return null;
+    }
+
+    private static String presentedConfirmToken(String header) {
+        if (header == null) {
+            return null;
+        }
+        String value = header.trim();
+        return value.isEmpty() ? null : value;
+    }
+
+    private static boolean lowerHex(int ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
     }
 
     /** Both absent matches. A stored null (schema &lt; 10) does not match a real digest. */

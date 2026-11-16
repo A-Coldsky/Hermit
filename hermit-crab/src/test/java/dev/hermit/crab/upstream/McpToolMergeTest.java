@@ -83,16 +83,19 @@ class McpToolMergeTest {
         assertThat(gzip.title()).isEqualTo("打包");
         assertThat(gzip.description()).isEqualTo("打包文件。见 https://example.test/a");
         assertThat(gzip.mcp().readOnly()).isFalse();
-        assertThat(gzip.mcp().destructive()).isFalse();
+        assertThat(gzip.mcp().destructive()).isTrue();
         assertThat(gzip.mcp().destructiveSpecified()).isTrue();
-        assertThat(gzip.tool().confirm()).isFalse();
+        assertThat(gzip.tool().confirm()).isTrue();
         assertThat(gzip.idempotent()).isFalse();
         assertThat(gzip.tool().upstreamAnnotations()).containsEntry("idempotentHint", true);
+        assertThat(gzip.tool().upstreamAnnotations()).containsEntry("readOnlyHint", false);
+        assertThat(gzip.tool().upstreamAnnotations()).containsEntry("destructiveHint", false);
 
         Action note = doc.actions().get("create_note");
-        assertThat(note.mcp().readOnly()).isTrue();
-        assertThat(note.mcp().destructive()).isFalse();
-        assertThat(note.tool().confirm()).isFalse();
+        assertThat(note.mcp().readOnly()).isFalse();
+        assertThat(note.mcp().destructive()).isTrue();
+        assertThat(note.tool().confirm()).isTrue();
+        assertThat(note.tool().upstreamAnnotations()).containsEntry("readOnlyHint", true);
         assertThat(note.idempotent()).isFalse();
 
         Action drop = doc.actions().get("drop_row");

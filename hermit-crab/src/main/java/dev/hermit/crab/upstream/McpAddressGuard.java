@@ -41,11 +41,14 @@ public final class McpAddressGuard {
     }
 
     /**
-     * 链路本地、云元数据，以及包本身不是回环时的回环地址。
-     * IPv4 映射的 IPv6 按里面的 IPv4 判断。
+     * 通配地址、链路本地、云元数据，以及包本身不是回环时的回环地址。
+     * IPv4 映射的 IPv6 按里面的 IPv4 判断。{@code 0.0.0.0} 和 {@code ::} 与回环开关无关。
      */
     public static boolean rejected(InetAddress address, boolean allowLoopback) {
         if (address == null) {
+            return true;
+        }
+        if (anyLocal(address)) {
             return true;
         }
         if (loopback(address)) {
@@ -68,6 +71,16 @@ public final class McpAddressGuard {
             return first == 0xfe && (second & 0xc0) == 0x80;
         }
         return false;
+    }
+
+    /** {@link InetAddress#isAnyLocalAddress()}，以及 IPv4 映射的 {@code 0.0.0.0}。 */
+    private static boolean anyLocal(InetAddress address) {
+        if (address.isAnyLocalAddress()) {
+            return true;
+        }
+        byte[] bytes = address.getAddress();
+        return bytes.length == 16 && mapped(bytes)
+                && bytes[12] == 0 && bytes[13] == 0 && bytes[14] == 0 && bytes[15] == 0;
     }
 
     private static boolean loopback(InetAddress address) {

@@ -78,7 +78,7 @@ final class StepRunner {
         }
         return switch (step.type()) {
             case "request" -> request(spec, vars, expectPrefix, client, afterExchange, base, deadlineNanos, capture);
-            case "extract" -> extract(spec, vars, capture);
+            case "extract" -> extract(spec, vars, deadlineNanos, capture);
             case "assert" -> check(spec, vars, cookies, capture);
             case "set" -> set(spec, vars, capture);
             case "script" -> script(spec, vars, deadlineNanos, capture);
@@ -134,9 +134,14 @@ final class StepRunner {
                         spec, result.method(), result.path(), result.status(), result.headers(), result.body()));
     }
 
-    private Outcome extract(Map<String, Object> spec, Map<String, Object> vars, boolean capture) {
+    private Outcome extract(
+            Map<String, Object> spec,
+            Map<String, Object> vars,
+            long deadlineNanos,
+            boolean capture
+    ) {
         Map<String, Object> before = capture ? new LinkedHashMap<>(vars) : null;
-        int count = Extractors.apply(spec, vars, filters, templates);
+        int count = Extractors.apply(spec, vars, filters, templates, deadlineNanos);
         if (!capture) {
             return new Outcome(null, null, null, count, false);
         }

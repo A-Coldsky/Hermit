@@ -77,6 +77,37 @@ class CrabEntrypointTest {
         assertThat(Files.readString(temp.resolve("home/curl-calls"))).contains("http://reef.example/api/admin/login");
     }
 
+    /** 127.0.0.1:80@其它主机这种明文 URL 不是本机。没有放行时不能经明文 HTTP 取公钥。 */
+    @Test
+    void plainHttpUserInfoDoesNotFetchThePublicKey() throws Exception {
+        String[] urls = {
+                "http://127.0.0.1:80@other.example",
+                "http://localhost:80@other.example",
+                "http://[::1]:80@other.example",
+        };
+        for (String url : urls) {
+            Result refused = runWithCurl(Map.of(
+                    "HERMIT_REEF_URL", url,
+                    "HERMIT_REEF_AGENT_TOKEN", "token-value",
+                    "HERMIT_REEF_ADMIN_USER", "admin",
+                    "HERMIT_REEF_ADMIN_PASSWORD", "admin-entry-secret"));
+            assertThat(refused.status).as(url + "\n" + refused.err).isEqualTo(1);
+            assertThat(refused.err).contains("经明文 HTTP").contains("签名公钥");
+            assertThat(temp.resolve("home/curl-calls")).as(url).doesNotExist();
+            assertThat(temp.resolve("home/reef.pub")).as(url).doesNotExist();
+        }
+
+        Result local = runWithCurl(Map.of(
+                "HERMIT_REEF_URL", "http://127.0.0.1:9",
+                "HERMIT_REEF_AGENT_TOKEN", "token-value",
+                "HERMIT_REEF_ADMIN_USER", "admin",
+                "HERMIT_REEF_ADMIN_PASSWORD", "admin-entry-secret"));
+        assertThat(local.status).as(local.err).isZero();
+        assertThat(local.err).doesNotContain("经明文 HTTP");
+        assertThat(Files.readString(temp.resolve("home/curl-calls"))).contains("http://127.0.0.1:9/api/admin/login");
+        assertThat(Files.readString(temp.resolve("home/reef.pub"))).contains("-----BEGIN PUBLIC KEY-----");
+    }
+
     @Test
     void httpsReefFetchesThePublicKeyWithoutWarning() throws Exception {
         Result result = runWithCurl(Map.of(

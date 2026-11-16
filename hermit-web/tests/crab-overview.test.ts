@@ -153,5 +153,29 @@ describe('Crab 概览', () => {
     expect(box.text()).toContain('本机版本指针丢失，同步不会重新下载')
     expect(box.findAll('button').map((b) => b.text())).toContain('修复')
   })
+
+  it('只有 http 或 https 的下载地址才是链接', async () => {
+    crab.syncStatus.mockResolvedValue({
+      report: null,
+      latestCrab: { latestVersion: '9.9.9', downloadUrl: 'javascript:alert(1)' },
+    })
+    const blocked = await mountPage(OverviewView)
+    await flushPromises()
+    const isDownloadLink = (blocked.vm as unknown as { isDownloadLink: (url: string) => boolean }).isDownloadLink
+    expect(isDownloadLink('javascript:alert(1)')).toBe(false)
+    expect(isDownloadLink('https://example.invalid/crab.jar')).toBe(true)
+    expect(isDownloadLink('http://127.0.0.1:9/crab.jar')).toBe(true)
+
+    expect(blocked.text()).toContain('javascript:alert(1)')
+    expect(blocked.html()).not.toMatch(/href\s*=\s*["']\s*javascript:/i)
+
+    crab.syncStatus.mockResolvedValue({
+      report: null,
+      latestCrab: { latestVersion: '9.9.9', downloadUrl: 'https://example.invalid/crab.jar' },
+    })
+    const linked = await mountPage(OverviewView)
+    await flushPromises()
+    expect(linked.get('a[href="https://example.invalid/crab.jar"]').text()).toBe('https://example.invalid/crab.jar')
+  })
 })
 

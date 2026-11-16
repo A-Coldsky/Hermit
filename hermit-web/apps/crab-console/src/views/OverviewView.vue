@@ -32,6 +32,16 @@ const unconfigured = computed(() => pending.value.filter((s) => !s.loginPaused))
 const disabledInSync = computed(() => report.value?.conches.filter((s) => s.kind === 'DISABLED').map((s) => s.conch) ?? [])
 const removedOnly = computed(() => report.value?.removed.filter((name) => !disabledInSync.value.includes(name)) ?? [])
 const show = (value: number | string) => (loaded.value ? value : '—')
+/** 只有 http/https 才放进 href。javascript: 点下去会在控制台源站执行。 */
+function isDownloadLink(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol
+    return protocol === 'http:' || protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+defineExpose({ isDownloadLink })
 /** 停用的包调不了，它们的能力不算进概览。 */
 const callableCapabilities = computed(() =>
   conches.value.filter((s) => !s.ruleDisabled).reduce((n, s) => n + s.capabilityCount, 0),
@@ -209,7 +219,7 @@ onMounted(load)
       class="notice"
     >
       <template v-if="latestCrab.downloadUrl" #default>
-        下载地址：<a :href="latestCrab.downloadUrl" target="_blank" rel="noopener">{{ latestCrab.downloadUrl }}</a>
+        下载地址：<a v-if="isDownloadLink(latestCrab.downloadUrl)" :href="latestCrab.downloadUrl" target="_blank" rel="noopener">{{ latestCrab.downloadUrl }}</a><template v-else>{{ latestCrab.downloadUrl }}</template>
       </template>
     </el-alert>
 

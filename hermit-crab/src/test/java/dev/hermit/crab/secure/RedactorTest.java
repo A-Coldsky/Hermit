@@ -3,6 +3,9 @@ package dev.hermit.crab.secure;
 import dev.hermit.crab.testing.SecretChecks;
 import org.junit.jupiter.api.Test;
 
+import java.net.URLEncoder;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +46,57 @@ class RedactorTest {
         SecretChecks.absent(spacedRedactor.redact("a+b%21c a%20b%21c a b!c"), spaced);
         SecretChecks.absent(spacedRedactor.redact("a+b%21c a%20b%21c a b!c"), "a+b%21c");
         SecretChecks.absent(spacedRedactor.redact("a+b%21c a%20b%21c a b!c"), "a%20b%21c");
+    }
+
+    @Test
+    void redactsLegacyCharsetsAndLowercaseHex() {
+        String password = "A密码B";
+        Redactor redactor = Redactor.of(Set.of(password));
+        String gbk = "A%C3%DC%C2%EBB";
+        String gbkLower = "A%c3%dc%c2%ebB";
+        assertThat(URLEncoder.encode(password, Charset.forName("GBK"))).isEqualTo(gbk);
+        assertThat(redactor.redact("q=" + gbk + "&n=1")).isEqualTo("q=***&n=1");
+        assertThat(redactor.redact("q=" + gbkLower + "&n=1")).isEqualTo("q=***&n=1");
+        assertThat(redactor.redact(URLEncoder.encode(password, StandardCharsets.UTF_8))).isEqualTo("***");
+        SecretChecks.absent(redactor.redact(gbk + " " + gbkLower), password);
+        SecretChecks.absent(redactor.redact(gbk + " " + gbkLower), gbk);
+        SecretChecks.absent(redactor.redact(gbkLower), gbkLower);
+
+        Redactor slash = Redactor.of(Set.of("secret/value"));
+        assertThat(slash.redact("secret%2Fvalue")).isEqualTo("***");
+        assertThat(slash.redact("secret%2fvalue")).isEqualTo("***");
+        SecretChecks.absent(slash.redact("secret%2Fvalue secret%2fvalue"), "secret/value");
+        SecretChecks.absent(slash.redact("secret%2Fvalue secret%2fvalue"), "secret%2Fvalue");
+        SecretChecks.absent(slash.redact("secret%2Fvalue secret%2fvalue"), "secret%2fvalue");
+
+        Redactor spaced = Redactor.of(Set.of("a b/c"));
+        assertThat(spaced.redact("a+b%2Fc")).isEqualTo("***");
+        assertThat(spaced.redact("a+b%2fc")).isEqualTo("***");
+        assertThat(spaced.redact("a%20b%2Fc")).isEqualTo("***");
+        assertThat(spaced.redact("a%20b%2fc")).isEqualTo("***");
+
+        String latin = "caf\u00e9";
+        Redactor latinRedactor = Redactor.of(Set.of(latin));
+        assertThat(URLEncoder.encode(latin, StandardCharsets.ISO_8859_1)).isEqualTo("caf%E9");
+        assertThat(latinRedactor.redact("caf%E9")).isEqualTo("***");
+        assertThat(latinRedactor.redact("caf%e9")).isEqualTo("***");
+        SecretChecks.absent(latinRedactor.redact("caf%E9 caf%e9"), latin);
+        SecretChecks.absent(latinRedactor.redact("caf%E9 caf%e9"), "caf%E9");
+        SecretChecks.absent(latinRedactor.redact("caf%e9"), "caf%e9");
+
+        String rare = "ab" + new String(Character.toChars(0x20000)) + "c";
+        Redactor rareRedactor = Redactor.of(Set.of(rare));
+        String gb18030 = URLEncoder.encode(rare, Charset.forName("GB18030"));
+        assertThat(gb18030).isNotEqualTo(URLEncoder.encode(rare, Charset.forName("GBK")));
+        assertThat(gb18030).isNotEqualTo(URLEncoder.encode(rare, StandardCharsets.UTF_8));
+        assertThat(rareRedactor.redact(gb18030)).isEqualTo("***");
+        SecretChecks.absent(rareRedactor.redact(gb18030), gb18030);
+
+        String shortPassword = "密码";
+        Redactor floor = Redactor.of(Set.of(shortPassword));
+        String shortGbk = URLEncoder.encode(shortPassword, Charset.forName("GBK"));
+        assertThat(shortPassword.length()).isLessThan(4);
+        assertThat(floor.redact(shortPassword + " " + shortGbk)).isEqualTo(shortPassword + " " + shortGbk);
     }
 
     @Test

@@ -34,7 +34,6 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.crab.upstream.McpOAuthToken;
 import dev.hermit.common.model.ConchDoc;
-import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.pkg.PackageReason;
 import dev.hermit.common.pkg.PackageVerificationException;
 import dev.hermit.common.pkg.ConchManifest;
@@ -401,8 +400,8 @@ public final class ConchSync {
             }
             VerifiedConch verified;
             try {
-                java.nio.file.Path zip = ConchFiles.versionDir(paths, conch, target).resolve("package.zip");
-                verified = ConchPackage.readVerified(Files.readAllBytes(zip), settings().reefKey());
+                Path zip = ConchFiles.versionDir(paths, conch, target).resolve("package.zip");
+                verified = ConchPackage.readVerified(ConchFiles.readZip(paths, zip), settings().reefKey());
                 if (!conch.equals(verified.manifest().conch()) || !target.equals(verified.manifest().version())) {
                     throw new UpdateException(409, ErrorCode.CONFLICT, "上一版无法读取。当前版本没有改动。");
                 }
@@ -1825,21 +1824,27 @@ public final class ConchSync {
         }
     }
 
+    /**
+     * 注册表里已有的文档优先。没有时只从 {@code current} 指向的 package.zip 验签读取。
+     * 验签失败、不是普通文件、超过大小上限、路径上有符号链接，或身份对不上时返回 null，
+     * 不用旁边未签名的 conch.yaml 删凭证，也不把它放回注册表。
+     */
     private ConchDoc previousDoc(String conch) {
         Optional<ConchDoc> live = registry.find(conch);
         if (live.isPresent()) {
             return live.get();
         }
         Optional<String> current = ConchFiles.readCurrent(paths, conch);
-        if (current.isEmpty()) {
-            return null;
-        }
-        java.nio.file.Path yaml = ConchFiles.versionDir(paths, conch, current.get()).resolve("conch.yaml");
-        if (!Files.isRegularFile(yaml)) {
+        if (current.isEmpty() || !ConchFiles.safeSegment(conch)) {
             return null;
         }
         try {
-            return ConchParser.parse(Files.readString(yaml));
+            Path zip = ConchFiles.versionDir(paths, conch, current.get()).resolve("package.zip");
+            VerifiedConch verified = ConchPackage.readVerified(ConchFiles.readZip(paths, zip), settings().reefKey());
+            if (!conch.equals(verified.manifest().conch()) || !current.get().equals(verified.manifest().version())) {
+                return null;
+            }
+            return verified.conchDoc();
         } catch (RuntimeException | IOException ex) {
             return null;
         }

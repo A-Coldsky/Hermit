@@ -17,6 +17,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -42,6 +44,7 @@ import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.sync.LocalConchBehaviorTest;
+import dev.hermit.crab.upstream.McpOAuthToken;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -296,6 +299,51 @@ class AuthoringMcpTest {
             assertThat(server.runtime.paths().localConches().resolve("official_ping.yaml")).doesNotExist();
             JsonNode trial = server.call(session, "conch_trial_run", Map.of("conch", "official_ping", "action", "ping"));
             assertThat(toolMessage(trial)).isEqualTo(AuthoringCalls.OFFICIAL);
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void overwriteNamesTheNewHostAndDropsTheSavedUpstreamToken() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("hosts"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String session = server.initialize(false);
+            JsonNode saved = server.call(session, "conch_save_local",
+                    Map.of("yaml", hostYaml("1.0.0", "https://old.example/mcp")));
+            assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();
+            server.runtime.admin().createAccount("host_mcp", "ada", Actors.CONSOLE);
+            insertToken(server.runtime, "host_mcp", "ada");
+
+            String same = hostYaml("1.0.1", "https://old.example:443/mcp/v2");
+            String moved = hostYaml("1.0.2", "https://new.example/mcp");
+            String confirming = server.initialize(true);
+            try (Sse sse = Sse.open(server, confirming)) {
+                sse.awaitPrefix(": open");
+                AtomicReference<JsonNode> kept = new AtomicReference<>();
+                Thread first = new Thread(() -> kept.set(
+                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", same))));
+                first.start();
+                JsonNode question = sse.awaitMethod("elicitation/create");
+                assertThat(question.path("params").path("message").asText())
+                        .isEqualTo("将覆盖已有的本地规则包 host_mcp。确认后才会写入。");
+                server.answer(confirming, question, "accept", true);
+                first.join(15_000);
+                assertThat(structured(kept.get()).path("ok").asBoolean()).as(String.valueOf(kept.get())).isTrue();
+                assertThat(server.runtime.admin().credentialNames("host_mcp", "ada")).contains(McpOAuthToken.FIELD);
+
+                AtomicReference<JsonNode> replaced = new AtomicReference<>();
+                Thread second = new Thread(() -> replaced.set(
+                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", moved))));
+                second.start();
+                JsonNode again = sse.awaitMethod("elicitation/create");
+                assertThat(again.path("params").path("message").asText())
+                        .isEqualTo("将覆盖已有的本地规则包 host_mcp。上游主机将从 old.example 改为 new.example，"
+                                + "确认后会清掉已保存的上游令牌。确认后才会写入。");
+                server.answer(confirming, again, "accept", true);
+                second.join(15_000);
+                assertThat(structured(replaced.get()).path("ok").asBoolean()).as(String.valueOf(replaced.get())).isTrue();
+                assertThat(server.runtime.admin().credentialNames("host_mcp", "ada"))
+                        .doesNotContain(McpOAuthToken.FIELD);
+            }
         }
     }
 
@@ -1132,6 +1180,44 @@ class AuthoringMcpTest {
                         .contains(dev.hermit.crab.runtime.Invoker.CHANGED_AFTER_CONFIRM)
                         .doesNotContain("\"changed\"");
             }
+        }
+    }
+
+    private static String hostYaml(String version, String url) {
+        return """
+                conch: host_mcp
+                version: %s
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 上游
+                description: 本地。
+                credentials: {}
+                upstream:
+                  url: %s
+                  transport: streamable_http
+                  auth:
+                    type: oauth
+                    client_id: hermit
+                actions:
+                  search:
+                    tool: search
+                    title: 搜索
+                    description: 查询。
+                    input_schema: {type: object}
+                """.formatted(version, url);
+    }
+
+    private static void insertToken(CrabRuntime runtime, String conch, String account) throws Exception {
+        try (Connection connection = runtime.dataSource().getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     INSERT INTO credentials (origin, conch, account, field, ciphertext, updated_at)
+                     VALUES ('LOCAL', ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                     """)) {
+            statement.setString(1, conch);
+            statement.setString(2, account);
+            statement.setString(3, McpOAuthToken.FIELD);
+            statement.setBytes(4, new byte[] {1, 2, 3, 4});
+            statement.executeUpdate();
         }
     }
 

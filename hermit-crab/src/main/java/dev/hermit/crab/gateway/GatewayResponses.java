@@ -2,10 +2,13 @@ package dev.hermit.crab.gateway;
 
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.InvokeOutcome;
+import dev.hermit.crab.runtime.Invoker;
 import io.javalin.http.Context;
 import org.eclipse.jetty.http.HttpField;
 import org.eclipse.jetty.http.HttpHeader;
@@ -61,7 +64,7 @@ final class GatewayResponses {
     }
 
     static void writeOutcome(Context ctx, InvokeOutcome outcome) {
-        write(ctx, outcome.status(), outcome.body(), outcome.traceId(), outcome.replayed());
+        write(ctx, outcome.status(), outcome.body(), outcome.traceId(), outcome.replayed(), confirmToken(outcome.body()));
     }
 
     static void writeBytes(Context ctx, int status, String contentType, String cacheControl, byte[] body) {
@@ -81,6 +84,10 @@ final class GatewayResponses {
     }
 
     static void write(Context ctx, int status, byte[] body, String traceId, boolean replayed) {
+        write(ctx, status, body, traceId, replayed, null);
+    }
+
+    static void write(Context ctx, int status, byte[] body, String traceId, boolean replayed, String confirmToken) {
         if (written(ctx)) {
             return;
         }
@@ -93,6 +100,21 @@ final class GatewayResponses {
         if (replayed) {
             ctx.header("Idempotent-Replayed", "true");
         }
+        if (confirmToken != null) {
+            ctx.header(Invoker.CONFIRM_TOKEN_HEADER, confirmToken);
+        }
         ctx.result(body == null ? ApiJson.bytes("{}") : body);
+    }
+
+    /** 确认挑战的 message 里那枚令牌。其它响应不带头。 */
+    private static String confirmToken(byte[] body) {
+        if (body == null || body.length == 0) {
+            return null;
+        }
+        JsonNode message = ApiJson.tree(body).path("error").path("message");
+        if (!message.isTextual()) {
+            return null;
+        }
+        return Invoker.issuedConfirmToken(message.asText());
     }
 }

@@ -106,7 +106,9 @@ class McpForwardTest {
             assertThat(search.path("responses").path("200").path("content").path("application/json")
                     .path("schema").path("properties").path("data").path("type").asText()).isEqualTo("object");
             assertThat(parameter(search, "X-Hermit-Confirm")).isNull();
+            assertThat(parameter(search, "X-Hermit-Confirm-Token")).isNull();
             assertThat(parameter(write, "X-Hermit-Confirm").path("required").asBoolean()).isTrue();
+            assertThat(parameter(write, "X-Hermit-Confirm-Token").path("required").asBoolean()).isTrue();
             assertThat(lab.mcp("tools/list", null).path("result").path("tools").toString()).doesNotContain("来源：");
             String guide = lab.mcp("resources/read", Map.of("uri", "hermit://conches/vendor_crm/guide"))
                     .path("result").path("contents").get(0).path("text").asText();
@@ -255,14 +257,22 @@ class McpForwardTest {
             JsonNode missing = lab.call("create_ticket", Map.of(), "same-key", null);
             assertThat(lab.lastStatus).isEqualTo(409);
             assertThat(missing.path("error").path("code").asText()).isEqualTo("CONFLICT");
-            assertThat(missing.path("error").path("message").asText()).isEqualTo(Invoker.CONFIRM_REQUIRED);
+            String token = lab.lastConfirmToken;
+            assertThat(token).isEqualTo(Invoker.snapshotToken(lab.doc)).matches("[0-9a-f]{64}");
+            assertThat(missing.path("error").path("message").asText()).isEqualTo(Invoker.confirmRequired(token));
             assertThat(upstream.hits).isEmpty();
 
             JsonNode almost = lab.call("create_ticket", Map.of(), "same-key", "TRUE");
             assertThat(almost.path("error").path("code").asText()).isEqualTo("CONFLICT");
+            assertThat(almost.path("error").path("message").asText()).isEqualTo(Invoker.confirmRequired(token));
             assertThat(upstream.hits).isEmpty();
 
-            JsonNode created = lab.call("create_ticket", Map.of(), "same-key", " true ");
+            JsonNode onlyTrue = lab.call("create_ticket", Map.of(), "same-key", " true ");
+            assertThat(lab.lastStatus).isEqualTo(409);
+            assertThat(onlyTrue.path("error").path("message").asText()).isEqualTo(Invoker.confirmRequired(token));
+            assertThat(upstream.hits).isEmpty();
+
+            JsonNode created = lab.call("create_ticket", Map.of(), "same-key", " true ", " " + token + " ");
             assertThat(created.path("success").asBoolean()).isTrue();
             assertThat(upstream.tools()).isEqualTo(1);
 
@@ -270,7 +280,7 @@ class McpForwardTest {
             assertThat(again.path("error").path("code").asText()).isEqualTo("CONFLICT");
             assertThat(upstream.tools()).isEqualTo(1);
 
-            JsonNode replay = lab.call("create_ticket", Map.of(), "same-key", "true");
+            JsonNode replay = lab.call("create_ticket", Map.of(), "same-key", "true", token);
             assertThat(replay.path("success").asBoolean()).isTrue();
             assertThat(replay.path("traceId").asText()).isEqualTo(created.path("traceId").asText());
             assertThat(upstream.tools()).isEqualTo(1);
@@ -295,6 +305,65 @@ class McpForwardTest {
                     "arguments", Map.of()));
             assertThat(refused.toString()).contains(McpCallsNeed.NO_CONFIRM);
             assertThat(upstream.tools()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void confirmTokenBindsTheSnapshotAndRejectsReplacedContent() throws Exception {
+        ConchDoc note = ConchParser.parse(noteYaml("http://127.0.0.1:9/old", false));
+        ConchDoc noteAgain = ConchParser.parse(noteYaml("http://127.0.0.1:9/old", false));
+        assertThat(noteAgain).isNotSameAs(note);
+        String noteToken = Invoker.snapshotToken(note);
+        assertThat(Invoker.snapshotToken(note)).isEqualTo(noteToken);
+        assertThat(Invoker.snapshotToken(noteAgain)).isEqualTo(noteToken);
+        assertThat(Invoker.snapshotToken(ConchParser.parse(noteYaml("http://127.0.0.1:9/new", false))))
+                .isNotEqualTo(noteToken);
+        assertThat(Invoker.snapshotToken(ConchParser.parse(noteYaml("http://127.0.0.1:9/old", true))))
+                .isNotEqualTo(noteToken);
+        assertThat(Invoker.snapshotToken(ConchParser.parse(noteYamlReorderedHeaders())))
+                .isEqualTo(Invoker.snapshotToken(ConchParser.parse(noteYamlOrderedHeaders())));
+
+        String confirmed = Invoker.snapshotToken(ConchParser.parse(mcpYaml("http://127.0.0.1:9/mcp", "true")));
+        assertThat(Invoker.snapshotToken(ConchParser.parse(mcpYaml("http://127.0.0.1:9/mcp", "false"))))
+                .isNotEqualTo(confirmed);
+        assertThat(Invoker.snapshotToken(ConchParser.parse(mcpYaml("http://127.0.0.1:9/other", "true"))))
+                .isNotEqualTo(confirmed);
+
+        try (Upstream upstream = new Upstream();
+                Upstream replaced = new Upstream();
+                Lab lab = Lab.open(temp.resolve("confirm-snapshot"), upstream, 4, 30)) {
+            JsonNode missing = lab.call("create_ticket", Map.of(), null, null);
+            assertThat(lab.lastStatus).isEqualTo(409);
+            String token = lab.lastConfirmToken;
+            assertThat(token).isEqualTo(Invoker.snapshotToken(lab.doc));
+            assertThat(missing.path("error").path("message").asText()).isEqualTo(Invoker.confirmRequired(token));
+            assertThat(upstream.hits).isEmpty();
+
+            JsonNode onlyTrue = lab.call("create_ticket", Map.of(), null, "true");
+            assertThat(lab.lastStatus).isEqualTo(409);
+            assertThat(onlyTrue.path("error").path("message").asText()).isEqualTo(Invoker.confirmRequired(token));
+            assertThat(upstream.hits).isEmpty();
+
+            JsonNode created = lab.call("create_ticket", Map.of(), null, "true", token);
+            assertThat(created.path("success").asBoolean()).isTrue();
+            assertThat(upstream.toolNames()).containsExactly("createTicket");
+
+            String swappedYaml = packageYaml(replaced.port(), "1.0.0", "headers", null, "")
+                    .replace("tool: createTicket", "tool: createTicketV2");
+            ConchDoc swapped = ConchParser.parse(swappedYaml);
+            assertThat(swapped.version()).isEqualTo(lab.doc.version());
+            assertThat(Invoker.snapshotToken(swapped)).isNotEqualTo(token);
+            lab.doc = swapped;
+            lab.install();
+
+            int before = replaced.tools();
+            JsonNode rejected = lab.call("create_ticket", Map.of(), null, "true", token);
+            assertThat(lab.lastStatus).isEqualTo(409);
+            assertThat(rejected.path("error").path("message").asText()).isEqualTo(Invoker.CHANGED_AFTER_CONFIRM);
+            assertThat(lab.lastConfirmToken).isNull();
+            assertThat(replaced.tools()).isEqualTo(before);
+            assertThat(replaced.hits).isEmpty();
+            assertThat(upstream.toolNames()).containsExactly("createTicket");
         }
     }
 
@@ -485,6 +554,91 @@ class McpForwardTest {
         return JSON.missingNode();
     }
 
+    private static String noteYaml(String stepUrl, boolean readOnly) {
+        return """
+                conch: note_pad
+                version: 1.0.0
+                min_crab_version: 1.0.0
+                title: 笔记
+                description: 记一笔。
+                actions:
+                  save:
+                    title: 保存
+                    description: 保存一笔。
+                    mcp: {read_only: %s, destructive: true}
+                    steps:
+                      - request:
+                          method: POST
+                          url: %s
+                """.formatted(readOnly, stepUrl);
+    }
+
+    private static String noteYamlOrderedHeaders() {
+        return """
+                conch: note_pad
+                version: 1.0.0
+                min_crab_version: 1.0.0
+                title: 笔记
+                description: 记一笔。
+                actions:
+                  save:
+                    title: 保存
+                    description: 保存一笔。
+                    mcp: {read_only: false, destructive: true}
+                    steps:
+                      - request:
+                          method: POST
+                          url: http://127.0.0.1:9/old
+                          headers:
+                            A: "1"
+                            B: "2"
+                """;
+    }
+
+    private static String noteYamlReorderedHeaders() {
+        return """
+                conch: note_pad
+                version: 1.0.0
+                min_crab_version: 1.0.0
+                title: 笔记
+                description: 记一笔。
+                actions:
+                  save:
+                    title: 保存
+                    description: 保存一笔。
+                    mcp: {read_only: false, destructive: true}
+                    steps:
+                      - request:
+                          method: POST
+                          url: http://127.0.0.1:9/old
+                          headers:
+                            B: "2"
+                            A: "1"
+                """;
+    }
+
+    private static String mcpYaml(String url, String confirm) {
+        return """
+                conch: vendor_crm
+                version: 1.0.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 客户系统
+                description: 源站提供的服务。
+                upstream:
+                  url: %s
+                  transport: streamable_http
+                  auth: {type: headers}
+                actions:
+                  create_ticket:
+                    tool: createTicket
+                    title: 创建工单
+                    description: 创建一张工单。
+                    confirm: %s
+                    mcp: {read_only: false, destructive: true}
+                """.formatted(url, confirm);
+    }
+
     private static String packageYaml(int port, String version, String auth, Integer timeout, String extra) {
         String timeoutLine = timeout == null ? "" : "timeout_ms: " + timeout + "\n";
         return """
@@ -605,6 +759,7 @@ class McpForwardTest {
         ConchDoc doc;
         String accountHeader;
         int lastStatus;
+        String lastConfirmToken;
 
         Lab(Upstream upstream, CrabRuntime runtime, CrabHttpServer server, CreatedApiKey key, ConchDoc doc) {
             this.upstream = upstream;
@@ -651,6 +806,10 @@ class McpForwardTest {
         }
 
         JsonNode call(String action, Map<String, Object> body, String idempotency, String confirm) {
+            return call(action, body, idempotency, confirm, null);
+        }
+
+        JsonNode call(String action, Map<String, Object> body, String idempotency, String confirm, String confirmToken) {
             try {
                 HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(base() + "/api/vendor_crm/" + action))
                         .timeout(Duration.ofSeconds(8))
@@ -665,9 +824,13 @@ class McpForwardTest {
                 if (confirm != null) {
                     builder.header("X-Hermit-Confirm", confirm);
                 }
+                if (confirmToken != null) {
+                    builder.header("X-Hermit-Confirm-Token", confirmToken);
+                }
                 builder.POST(HttpRequest.BodyPublishers.ofString(ApiJson.write(body)));
                 HttpResponse<String> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
                 lastStatus = response.statusCode();
+                lastConfirmToken = response.headers().firstValue("X-Hermit-Confirm-Token").orElse(null);
                 return ApiJson.tree(response.body());
             } catch (Exception ex) {
                 throw new IllegalStateException(ex);

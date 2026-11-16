@@ -2,6 +2,7 @@ package dev.hermit.reef.conch;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.reef.audit.AuditAction;
 import dev.hermit.reef.audit.AuditService;
 import dev.hermit.reef.web.ApiException;
@@ -74,7 +75,8 @@ public class ConchAvailabilityService {
     }
 
     private List<VersionRow> lockExisting(String conch) {
-        if (conch == null || conch.isBlank() || conch.length() > 128 || !ConchPaths.singleSegment(conch)) {
+        // 停用主键必须是校验器接受的包名。大小写或尾随空格进 SQL 之前就 404，避免写成另一行。
+        if (!ConchValidator.isConchName(conch)) {
             throw notFound();
         }
         List<VersionRow> rows = conches.lockConch(conch);

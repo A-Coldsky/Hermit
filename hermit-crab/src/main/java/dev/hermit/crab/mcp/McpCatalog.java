@@ -99,7 +99,7 @@ final class McpCatalog {
         if (devMode.getAsBoolean() && localCaller) {
             resources.add(McpSchema.Resource.builder(AuthoringGuide.URI, "写规则包")
                     .title("从 HAR 写规则")
-                    .description("写规则的方法、能通过校验的示例，以及当前字段说明。Crab 不解析 HAR。")
+                    .description("写规则的方法、能通过校验的示例，以及当前字段说明。分析 HAR 之前先和用户确认要做哪些功能。Crab 不解析 HAR。")
                     .mimeType("text/markdown")
                     .build());
         }
@@ -323,7 +323,8 @@ final class McpCatalog {
         ArrayList<McpSchema.Tool> tools = new ArrayList<>();
         tools.add(tool(VALIDATE,
                         "校验一份规则包 YAML，不写文件。错误码、路径、行号和中文原因与控制台导入、命令行导入一致。"
-                                + "明文口令、Cookie 和请求头里的 Bearer 会报错并给出行号，不回显这些值。",
+                                + "明文口令、Cookie 和请求头里的 Bearer 会报错并给出行号，不回显这些值。"
+                                + "写 YAML 之前先和用户确认要做哪些功能，只为确认过的功能写能力。",
                         yaml,
                         issues,
                         true,

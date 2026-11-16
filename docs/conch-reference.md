@@ -4,9 +4,20 @@
 
 Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里，由你分析。这一节只讲怎么把它写成 Hermit 能校验的规则。字段是否合法以校验器为准，后面的字段说明是同一份规则的展开。
 
+### 先和用户确定要做哪些功能
+
+分析 HAR 之前，先问用户这个规则包要做哪些功能，等用户确认后再动手。一份 HAR 里通常混着登录、静态资源、埋点和好几个业务接口，哪些要做成能力只有用户知道，不要自己猜。
+
+- 请用户说清每个功能：做什么，需要哪些入参，返回哪些字段，是只查询还是会修改数据（提交、审批、删除等）。
+- 用户只给了 HAR、没说要做什么时，可以按时间列出看起来像业务接口的请求，只写方法、路径和一句话用途，不带查询参数、正文、Cookie、令牌或口令，请用户挑选，然后停下来等回复。
+- 只为用户确认过的功能写 `actions`。用户没点名的接口不要顺手加进去，会修改数据的接口尤其如此。
+- 之后要加功能，或改入参、返回字段，也先和用户确认再改。
+
+### 把 HAR 写成规则
+
 按时间看 HAR。业务请求之前，找出真正登录的那一次：常见是 GET 登录页再 POST 表单，或一次 JSON POST。响应若有 `Set-Cookie`，记下 Cookie 的名字，后面用 `assert` 的 `cookie_exists` 写这个名字，不要写 Cookie 的值。登录 POST 前面的 GET 若带隐藏字段，用 `extract` 取出，再放进下一次 POST。
 
-业务接口选用户要封装的那一次。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
+业务接口只选用户确认过的功能对应的那一次请求。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
 
 凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.1.0。`driver: mcp` 还要不低于 1.1.0。
 

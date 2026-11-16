@@ -33,6 +33,10 @@ class AuthoringGuideTest {
         String guide = AuthoringGuide.text();
         assertThat(guide).isEqualTo(AuthoringGuide.stripDocLinks(source));
         assertThat(guide).contains("从 HAR 写规则").contains("conch: demo_status").contains("conch: sample_oa");
+        assertThat(guide.indexOf("先和用户确定要做哪些功能"))
+                .as("先确认功能，再分析 HAR")
+                .isPositive()
+                .isLessThan(guide.indexOf("按时间看 HAR"));
         assertThat(guide).doesNotContain("](").doesNotContain("github.com");
         assertThat(guide).doesNotContain(
                 "legacy_oa",

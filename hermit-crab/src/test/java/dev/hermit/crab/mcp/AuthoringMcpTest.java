@@ -59,6 +59,7 @@ class AuthoringMcpTest {
                     "conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
             assertThat(tool(tools, "conch_validate").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
             assertThat(tool(tools, "conch_validate").path("annotations").path("destructiveHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "conch_validate").path("description").asText()).contains("先和用户确认要做哪些功能");
             assertThat(tool(tools, "conch_save_local").path("annotations").path("readOnlyHint").asBoolean()).isFalse();
             assertThat(tool(tools, "conch_save_local").path("annotations").path("destructiveHint").asBoolean()).isTrue();
             assertThat(tool(tools, "conch_trial_run").path("annotations").path("readOnlyHint").asBoolean()).isFalse();

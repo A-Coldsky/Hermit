@@ -186,4 +186,35 @@ describe('Reef 原生 MCP 展示：版本对比', () => {
     expect(text).toContain('有新的破坏性工具')
     expect(wrapper.text()).not.toContain('没有结构变化')
   })
+
+  it('列出新增、删除和改过源码的脚本库，只有这些变化时也不算没有结构变化', () => {
+    const wrapper = mount(DiffSummary, {
+      props: {
+        diff: {
+          addedScripts: ['fresh'],
+          removedScripts: ['old_lib'],
+          changedScripts: ['pack'],
+          changedActions: [{ name: 'run', input: false, output: false, steps: true, method: false, mcp: false }],
+        },
+      },
+      global: { plugins: [ElementPlus] },
+    })
+
+    const text = wrapper.get('[data-test="script-changes"]').text()
+    expect(text).toContain('+ fresh')
+    expect(text).toContain('− old_lib')
+    expect(text).toContain('~ pack')
+    expect(text).toContain('源码')
+    expect(wrapper.text()).toContain('~ run')
+    expect(wrapper.text()).toContain('步骤')
+    expect(wrapper.text()).not.toContain('没有结构变化')
+    expect(wrapper.text()).not.toContain('function')
+
+    const scriptsOnly = mount(DiffSummary, {
+      props: { diff: { changedScripts: ['pack'] } },
+      global: { plugins: [ElementPlus] },
+    })
+    expect(scriptsOnly.get('[data-test="script-changes"]').text()).toContain('~ pack')
+    expect(scriptsOnly.text()).not.toContain('没有结构变化')
+  })
 })

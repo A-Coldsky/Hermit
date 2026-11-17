@@ -2,9 +2,11 @@ package dev.hermit.crab.engine;
 
 import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -35,6 +37,7 @@ import org.mozilla.javascript.WrappedException;
 import org.mozilla.javascript.lc.type.TypeInfo;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.validate.ScriptLibraries;
 
 /**
  * Rhino 只在解释模式下计数。setOptimizationLevel(-1) 在 1.9 里等价于 setInterpretedMode(true)。
@@ -54,7 +57,7 @@ final class ScriptStep {
     static volatile long maxAllocatedBytes = 256L * 1024 * 1024;
 
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Set<String> FIELDS = Set.of("code", "into", "timeout_ms");
+    private static final Set<String> FIELDS = Set.of("code", "into", "timeout_ms", "use", "credential");
     private static final Set<String> SAFE_NAMES = Set.of(
             "Error", "EvalError", "InternalError", "RangeError", "ReferenceError",
             "SyntaxError", "TypeError", "URIError", "EvaluatorException",
@@ -73,10 +76,21 @@ final class ScriptStep {
 
     private final SandboxFactory factory = new SandboxFactory();
     private final ThreadLocal<Window> windows = new ThreadLocal<>();
+    private static final ThreadLocal<Integer> lineBias = ThreadLocal.withInitial(() -> 1);
+    private final Clock clock;
 
-    Outcome run(Map<String, Object> spec, Map<String, Object> vars, long capabilityDeadlineNanos) {
+    ScriptStep(Clock clock) {
+        this.clock = clock == null ? Clock.systemUTC() : clock;
+    }
+
+    Outcome run(
+            Map<String, Object> spec,
+            Map<String, Object> vars,
+            long capabilityDeadlineNanos,
+            Map<String, String> libraries
+    ) {
         try {
-            return execute(spec, vars, capabilityDeadlineNanos);
+            return execute(spec, vars, capabilityDeadlineNanos, libraries);
         } catch (RuleProblem | DeadlineExceeded ex) {
             throw ex;
         } catch (ScriptTimeExceeded ex) {
@@ -91,9 +105,16 @@ final class ScriptStep {
         }
     }
 
-    private Outcome execute(Map<String, Object> spec, Map<String, Object> vars, long capabilityDeadlineNanos) {
+    private Outcome execute(
+            Map<String, Object> spec,
+            Map<String, Object> vars,
+            long capabilityDeadlineNanos,
+            Map<String, String> libraries
+    ) {
         rejectUnknown(spec);
-        String code = code(spec.get("code"));
+        boolean withCredential = credential(spec.get("credential"));
+        String prelude = libraries(spec.get("use"), libraries);
+        String code = prelude + code(spec.get("code"));
         String into = into(spec.get("into"));
         int timeoutMs = timeoutMs(spec.get("timeout_ms"));
         long now = System.nanoTime();
@@ -102,23 +123,89 @@ final class ScriptStep {
         }
         long scriptDeadline = deadline(now, timeoutMs);
         windows.set(new Window(scriptDeadline, capabilityDeadlineNanos, allocated()));
+        lineBias.set(1);
         try {
-            Object raw = factory.call(cx -> evaluate(cx, code, vars));
+            Object raw = factory.call(cx -> evaluate(cx, code, vars, withCredential, newlines(prelude)));
             Object converted = fromJs(raw, new IdentityHashMap<>());
             enforceSize(converted);
             apply(into, converted, vars);
             return new Outcome(null, null, null, null, false);
+        } catch (RuleProblem | DeadlineExceeded ex) {
+            throw ex;
         } catch (ScriptTimeExceeded ex) {
             throw timeout(ex);
+        } catch (RuntimeException ex) {
+            throw described(ex);
         } finally {
+            lineBias.remove();
             windows.remove();
         }
     }
 
-    private Object evaluate(Context cx, String code, Map<String, Object> vars) {
+    private Object evaluate(Context cx, String code, Map<String, Object> vars, boolean withCredential, int libraryNewlines) {
         Scriptable scope = newScope(cx);
-        ScriptableObject.putProperty(scope, "vars", toJs(cx, scope, copyWithoutCredential(vars), new IdentityHashMap<>()));
+        HermitPrelude.install(cx, scope, clock);
+        Map<String, Object> exposed = withCredential ? copyWithCredential(vars) : copyWithoutCredential(vars);
+        ScriptableObject.putProperty(scope, "vars", toJs(cx, scope, exposed, new IdentityHashMap<>()));
+        lineBias.set(1 + libraryNewlines);
         return cx.evaluateString(scope, PREFIX + code + SUFFIX, "script", 1, null);
+    }
+
+    private static String libraries(Object use, Map<String, String> libraries) {
+        if (use == null) {
+            return "";
+        }
+        if (!(use instanceof List<?> list)) {
+            throw mismatch(ScriptLibraries.USE_TYPE);
+        }
+        Map<String, String> known = libraries == null ? Map.of() : libraries;
+        StringBuilder body = new StringBuilder();
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        for (Object item : list) {
+            if (!(item instanceof String name) || !ScriptLibraries.name(name)) {
+                throw mismatch(ScriptLibraries.NAME_INVALID);
+            }
+            if (!seen.add(name)) {
+                throw mismatch(ScriptLibraries.duplicate(name));
+            }
+            if (!known.containsKey(name)) {
+                throw mismatch(ScriptLibraries.missing(name));
+            }
+            String source = known.get(name);
+            if (source == null) {
+                throw mismatch(ScriptLibraries.missing(name));
+            }
+            if (source.getBytes(StandardCharsets.UTF_8).length > ScriptLibraries.MAX_BYTES) {
+                throw mismatch(ScriptLibraries.TOO_LARGE);
+            }
+            if (!source.isEmpty()) {
+                body.append(source);
+                if (!source.endsWith("\n")) {
+                    body.append('\n');
+                }
+            }
+        }
+        return body.toString();
+    }
+
+    private static int newlines(String text) {
+        int count = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n') {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static boolean credential(Object value) {
+        if (value == null) {
+            return false;
+        }
+        if (!(value instanceof Boolean flag)) {
+            throw mismatch(ScriptLibraries.CREDENTIAL_TYPE);
+        }
+        return flag;
     }
 
     private Scriptable newScope(Context cx) {
@@ -146,6 +233,23 @@ final class ScriptStep {
         LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : vars.entrySet()) {
             if (!"credential".equals(entry.getKey())) {
+                copy.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return copy;
+    }
+
+    /** A new map so a script cannot mutate the account credential fields used by later templates. */
+    private static Map<String, Object> copyWithCredential(Map<String, Object> vars) {
+        LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : vars.entrySet()) {
+            if ("credential".equals(entry.getKey())) {
+                Map<String, Object> fields = Values.map(entry.getValue());
+                if (fields == null) {
+                    throw mismatch("脚本变量类型无效");
+                }
+                copy.put("credential", new LinkedHashMap<>(fields));
+            } else {
                 copy.put(entry.getKey(), entry.getValue());
             }
         }
@@ -203,6 +307,10 @@ final class ScriptStep {
         if (value instanceof Number number) {
             return javaNumber(number.doubleValue());
         }
+        if (isTypedArray(value)) {
+            // Uint8Array 是 NativeArray 的子类。直接返回会变成数字列表，调用方无法区分字节。
+            throw mismatch("脚本返回值类型无效");
+        }
         if (value instanceof NativeArray array) {
             return fromArray(array, seen);
         }
@@ -253,6 +361,10 @@ final class ScriptStep {
         }
         seen.remove(object);
         return map;
+    }
+
+    private static boolean isTypedArray(Object value) {
+        return value.getClass().getName().startsWith("org.mozilla.javascript.typedarrays.");
     }
 
     private static Object property(Scriptable object, String key) {
@@ -379,7 +491,7 @@ final class ScriptStep {
             line = rhino.lineNumber();
         }
         if (line > 0) {
-            line = Math.max(0, line - 1);
+            line = Math.max(0, line - lineBias.get());
         }
         return mismatch("Rhino " + name + " line " + line);
     }

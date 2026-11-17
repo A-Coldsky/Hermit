@@ -58,7 +58,10 @@ export const issueHints: Record<string, IssueHint> = {
   CREDENTIAL_IN_OUTPUT: { title: '输出会带出凭证', hint: '不要把 credential 放进 output，调用结果会返回给调用方。' },
   MIN_CRAB_VERSION: { title: '要求的 Crab 版本过高', hint: 'min_crab_version 高于当前 Crab 支持的版本。降低它，或先升级 Crab。' },
   TEMPLATE_SYNTAX: { title: '模板写法有误', hint: '检查 {{ }} 是否成对，过滤器名是否拼错。' },
-  SCRIPT_STEP: { title: 'script 步骤不合规', hint: 'script 只允许 code、into、timeout_ms；code 必须是不超过 64KB 的字符串。' },
+  SCRIPT_STEP: {
+    title: 'script 步骤不合规',
+    hint: 'script 允许 code、into、timeout_ms、use、credential。code 不超过 64KB。use 引用顶层 scripts 里的库，每个库不超过 256KB。用了 scripts 或 use 时，min_crab_version 不低于 1.2.0。',
+  },
   MISSING_NOTES: {
     title: '能力没有写使用注意',
     hint: 'notes 会写进 MCP 工具说明，帮 AI 少犯错，例如分页从 1 开始、提交前先查询。不写也能发布。',

@@ -58,6 +58,10 @@ export interface ConchDiff {
   configDefaultChanges: { name: string; before: unknown; after: unknown }[]
   newRequiredCredentials: string[]
   toolChanges: ToolChange[]
+  /** 脚本库名字。不含源码。 */
+  addedScripts: string[]
+  removedScripts: string[]
+  changedScripts: string[]
 }
 
 /** 只含 `auth.type`。请求头模板和 OAuth 的 client_id、端点不在这个对象里。 */

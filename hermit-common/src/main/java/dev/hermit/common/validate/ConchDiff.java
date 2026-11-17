@@ -5,6 +5,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import dev.hermit.common.mcp.ToolSnapshots;
 import dev.hermit.common.model.Action;
@@ -12,6 +13,7 @@ import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.McpTool;
+import dev.hermit.common.model.Step;
 
 public record ConchDiff(
         List<String> addedActions,
@@ -24,7 +26,10 @@ public record ConchDiff(
         List<String> removedConfig,
         List<ConfigDefaultChange> configDefaultChanges,
         List<String> newRequiredCredentials,
-        List<ToolChange> toolChanges
+        List<ToolChange> toolChanges,
+        List<String> addedScripts,
+        List<String> removedScripts,
+        List<String> changedScripts
 ) {
     public ConchDiff {
         addedActions = List.copyOf(addedActions);
@@ -38,11 +43,15 @@ public record ConchDiff(
         configDefaultChanges = List.copyOf(configDefaultChanges);
         newRequiredCredentials = List.copyOf(newRequiredCredentials);
         toolChanges = List.copyOf(toolChanges);
+        addedScripts = List.copyOf(addedScripts);
+        removedScripts = List.copyOf(removedScripts);
+        changedScripts = List.copyOf(changedScripts);
     }
 
     public static ConchDiff between(ConchDoc oldDoc, ConchDoc newDoc) {
         Objects.requireNonNull(oldDoc, "oldDoc");
         Objects.requireNonNull(newDoc, "newDoc");
+        ScriptDiff scripts = scriptDiff(oldDoc, newDoc);
         List<String> addedActions = new ArrayList<>();
         List<String> removedActions = new ArrayList<>();
         List<ActionChange> changedActions = new ArrayList<>();
@@ -60,7 +69,9 @@ public record ConchDiff(
             Action current = entry.getValue();
             boolean input = !Objects.equals(previous.input(), current.input());
             boolean output = !Objects.equals(previous.output(), current.output());
-            boolean steps = !Objects.equals(previous.steps(), current.steps());
+            boolean steps = !Objects.equals(previous.steps(), current.steps())
+                    || referencesScript(previous.steps(), scripts.affectingSteps())
+                    || referencesScript(current.steps(), scripts.affectingSteps());
             boolean method = previous.effectiveMethod() != current.effectiveMethod();
             boolean mcp = !Objects.equals(previous.mcp(), current.mcp());
             if (input || output || steps || method || mcp) {
@@ -117,7 +128,63 @@ public record ConchDiff(
                 addedActions, removedActions, changedActions,
                 addedCredentials, removedCredentials, requiredChanges,
                 addedConfig, removedConfig, defaultChanges, newRequired,
-                toolChanges(oldDoc, newDoc));
+                toolChanges(oldDoc, newDoc),
+                scripts.added(), scripts.removed(), scripts.changed());
+    }
+
+    /**
+     * 名字按各自文档里的顺序。改过或删掉的库会影响仍引用它们的能力步骤；
+     * 新增的库只有在步骤 {@code use} 本身变了时才算步骤变化。
+     */
+    private static ScriptDiff scriptDiff(ConchDoc oldDoc, ConchDoc newDoc) {
+        Map<String, String> oldScripts = oldDoc.scripts() == null ? Map.of() : oldDoc.scripts();
+        Map<String, String> newScripts = newDoc.scripts() == null ? Map.of() : newDoc.scripts();
+        List<String> added = new ArrayList<>();
+        List<String> removed = new ArrayList<>();
+        List<String> changed = new ArrayList<>();
+        for (Map.Entry<String, String> entry : oldScripts.entrySet()) {
+            if (!newScripts.containsKey(entry.getKey())) {
+                removed.add(entry.getKey());
+            } else if (!Objects.equals(entry.getValue(), newScripts.get(entry.getKey()))) {
+                changed.add(entry.getKey());
+            }
+        }
+        for (String name : newScripts.keySet()) {
+            if (!oldScripts.containsKey(name)) {
+                added.add(name);
+            }
+        }
+        return new ScriptDiff(added, removed, changed);
+    }
+
+    private static boolean referencesScript(List<Step> steps, Set<String> names) {
+        if (steps == null || names.isEmpty()) {
+            return false;
+        }
+        for (Step step : steps) {
+            if (!"script".equals(step.type()) || step.def() == null) {
+                continue;
+            }
+            Object use = step.def().get("use");
+            if (!(use instanceof List<?> list)) {
+                continue;
+            }
+            for (Object item : list) {
+                if (item instanceof String name && names.contains(name)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private record ScriptDiff(List<String> added, List<String> removed, List<String> changed) {
+        private Set<String> affectingSteps() {
+            LinkedHashSet<String> names = new LinkedHashSet<>();
+            names.addAll(changed);
+            names.addAll(removed);
+            return names;
+        }
     }
 
     private static List<ToolChange> toolChanges(ConchDoc oldDoc, ConchDoc newDoc) {

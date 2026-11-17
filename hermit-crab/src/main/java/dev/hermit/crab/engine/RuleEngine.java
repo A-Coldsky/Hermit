@@ -71,7 +71,7 @@ public final class RuleEngine implements ConchExecutor {
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
         this.filters = FilterRegistry.defaults();
         this.templates = new TemplateEngine(filters);
-        this.steps = new StepRunner(templates, filters);
+        this.steps = new StepRunner(templates, filters, sessions.clock());
     }
 
     /**
@@ -94,11 +94,13 @@ public final class RuleEngine implements ConchExecutor {
      * A null snapshot looks the conch up in the registry, matching {@link #execute(ExecutionRequest)}.
      */
     public ExecutionResult execute(ExecutionRequest request, ConchDoc authorized) {
+        CallSecrets.begin();
         DevTraceScope.begin(openDraft(request, authorized));
         try {
             return executeCaptured(request, authorized);
         } finally {
             DevTraceScope.end();
+            CallSecrets.end();
         }
     }
 
@@ -166,6 +168,15 @@ public final class RuleEngine implements ConchExecutor {
      * Success does not include auth step logs; {@code login} keeps those logs on the failure path.
      */
     public ExecutionResult testLogin(ExecutionRequest request) {
+        CallSecrets.begin();
+        try {
+            return testLoginCaptured(request);
+        } finally {
+            CallSecrets.end();
+        }
+    }
+
+    private ExecutionResult testLoginCaptured(ExecutionRequest request) {
         long start = System.nanoTime();
         long deadline = Math.addExact(start, settings.capabilityTimeout().toNanos());
         Map<String, String> credentials = copyStrings(request.accountContext().credentials());
@@ -357,7 +368,7 @@ public final class RuleEngine implements ConchExecutor {
         ArrayList<StepLog> logs = new ArrayList<>();
         Map<String, Object> vars = baseVars(input, credentials, config);
         try {
-            runSteps(auth.steps(), vars, true, null, logs, key, base, deadline, "login");
+            runSteps(auth.steps(), vars, true, null, logs, key, base, deadline, "login", conch.scripts());
             sessions.markLoggedIn(key);
             sessions.recordAuthSuccess(key);
             if (draft != null) {
@@ -397,7 +408,8 @@ public final class RuleEngine implements ConchExecutor {
         ArrayList<StepLog> logs = new ArrayList<>();
         Map<String, Object> vars = baseVars(input, credentials, config);
         try {
-            runSteps(action.steps(), vars, false, expectPrefix(conch), logs, key, base, deadline, "action");
+            runSteps(action.steps(), vars, false, expectPrefix(conch), logs, key, base, deadline, "action",
+                    conch.scripts());
             return Attempt.ok(vars, logs);
         } catch (SessionLost ex) {
             return Attempt.lost(logs);
@@ -415,7 +427,8 @@ public final class RuleEngine implements ConchExecutor {
             SessionKey key,
             URI base,
             long deadline,
-            String phase
+            String phase,
+            Map<String, String> libraries
     ) {
         CloseableHttpClient client = sessions.client(key);
         Runnable persist = () -> sessions.persist(key);
@@ -445,7 +458,8 @@ public final class RuleEngine implements ConchExecutor {
                         sessions.cookies(key),
                         base,
                         deadline,
-                        capture);
+                        capture,
+                        libraries);
                 logs.add(new StepLog(
                         i,
                         step.type(),
@@ -730,6 +744,7 @@ public final class RuleEngine implements ConchExecutor {
                 }
             }
         }
+        secrets.addAll(CallSecrets.current());
         DevTraceDraft draft = DevTraceScope.current();
         if (draft != null) {
             secrets.addAll(draft.derivedSecrets());

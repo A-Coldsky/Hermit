@@ -90,6 +90,9 @@ class ConchDiffTest {
         assertThat(diff.configDefaultChanges())
                 .containsExactly(new ConfigDefaultChange("base_url", "http://old", "http://new"));
         assertThat(diff.toolChanges()).isEmpty();
+        assertThat(diff.addedScripts()).isEmpty();
+        assertThat(diff.removedScripts()).isEmpty();
+        assertThat(diff.changedScripts()).isEmpty();
     }
 
     @Test
@@ -133,6 +136,138 @@ class ConchDiffTest {
                 """));
         assertThat(ConchDiff.between(implicitPost, implicitGet).changedActions())
                 .containsExactly(new ActionChange("list_todo", false, false, false, true, false));
+    }
+
+    @Test
+    void scriptLibraryChangesAreNamedAndMarkCapabilitiesThatStillUseThem() {
+        ConchDoc oldDoc = conch("""
+                scripts:
+                  alpha: "return 1; // MARKER_ALPHA_OLD"
+                  gamma: "return 3; // MARKER_GAMMA_OLD"
+                  beta: "return 2; // MARKER_BETA"
+                  login_pack: "return 0; // MARKER_LOGIN_OLD"
+                auth:
+                  steps:
+                    - script:
+                        use: [login_pack]
+                        code: "return login_pack();"
+                actions:
+                  run:
+                    title: 加密
+                    steps:
+                      - script:
+                          use: [gamma, beta]
+                          code: "return gamma();"
+                  gone:
+                    title: 仍引用
+                    steps:
+                      - script:
+                          use: [alpha]
+                          code: "return alpha();"
+                  idle:
+                    title: 闲置
+                    steps:
+                      - set:
+                          marker: ok
+                """);
+        ConchDoc newDoc = conch("""
+                scripts:
+                  gamma: "return 30; // MARKER_GAMMA_NEW"
+                  beta: "return 2; // MARKER_BETA"
+                  login_pack: "return 9; // MARKER_LOGIN_NEW"
+                  delta: "return 4; // MARKER_DELTA_NEW"
+                auth:
+                  steps:
+                    - script:
+                        use: [login_pack]
+                        code: "return login_pack();"
+                actions:
+                  run:
+                    title: 加密
+                    steps:
+                      - script:
+                          use: [gamma, beta]
+                          code: "return gamma();"
+                  gone:
+                    title: 仍引用
+                    steps:
+                      - script:
+                          use: [alpha]
+                          code: "return alpha();"
+                  idle:
+                    title: 闲置
+                    steps:
+                      - set:
+                          marker: ok
+                """);
+
+        assertThat(oldDoc.actions().get("run").steps())
+                .isEqualTo(newDoc.actions().get("run").steps());
+        assertThat(oldDoc.actions().get("gone").steps())
+                .isEqualTo(newDoc.actions().get("gone").steps());
+
+        ConchDiff diff = ConchDiff.between(oldDoc, newDoc);
+        assertThat(diff.removedScripts()).containsExactly("alpha");
+        assertThat(diff.changedScripts()).containsExactly("gamma", "login_pack");
+        assertThat(diff.addedScripts()).containsExactly("delta");
+        assertThat(diff.changedActions()).containsExactly(
+                new ActionChange("run", false, false, true, false, false),
+                new ActionChange("gone", false, false, true, false, false));
+        assertThat(diff.toString())
+                .doesNotContain("MARKER_GAMMA_NEW")
+                .doesNotContain("MARKER_LOGIN_NEW")
+                .doesNotContain("MARKER_ALPHA_OLD")
+                .doesNotContain("MARKER_DELTA_NEW");
+    }
+
+    @Test
+    void addedScriptLibraryDoesNotMarkACapabilityUntilUseChanges() {
+        ConchDoc oldDoc = conch("""
+                scripts:
+                  pack: "return 1;"
+                actions:
+                  run:
+                    title: 能力
+                    steps:
+                      - script:
+                          use: [pack]
+                          code: "return pack();"
+                """);
+        ConchDoc addedOnly = conch("""
+                scripts:
+                  pack: "return 1;"
+                  extra: "return 2; // MARKER_EXTRA"
+                actions:
+                  run:
+                    title: 能力
+                    steps:
+                      - script:
+                          use: [pack]
+                          code: "return pack();"
+                """);
+        ConchDiff unused = ConchDiff.between(oldDoc, addedOnly);
+        assertThat(unused.addedScripts()).containsExactly("extra");
+        assertThat(unused.removedScripts()).isEmpty();
+        assertThat(unused.changedScripts()).isEmpty();
+        assertThat(unused.changedActions()).isEmpty();
+        assertThat(unused.toString()).doesNotContain("MARKER_EXTRA");
+
+        ConchDoc used = conch("""
+                scripts:
+                  pack: "return 1;"
+                  extra: "return 2;"
+                actions:
+                  run:
+                    title: 能力
+                    steps:
+                      - script:
+                          use: [pack, extra]
+                          code: "return extra();"
+                """);
+        assertThat(ConchDiff.between(oldDoc, used).changedActions())
+                .containsExactly(new ActionChange("run", false, false, true, false, false));
+        assertThat(ConchDiff.between(oldDoc, oldDoc).addedScripts()).isEmpty();
+        assertThat(ConchDiff.between(oldDoc, oldDoc).changedActions()).isEmpty();
     }
 
     private static ConchDoc conch(String body) {

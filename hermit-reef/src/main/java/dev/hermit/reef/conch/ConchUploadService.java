@@ -5,6 +5,7 @@ import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.DuplicateActions;
+import dev.hermit.common.validate.DuplicateScripts;
 import dev.hermit.common.validate.IssueLines;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
@@ -48,7 +49,9 @@ public class ConchUploadService {
         }
         byte[] yamlBytes = yamlBytes(body);
         String yaml = new String(yamlBytes, StandardCharsets.UTF_8);
-        List<ValidationIssue> duplicates = DuplicateActions.find(yaml);
+        ArrayList<ValidationIssue> duplicates = new ArrayList<>();
+        duplicates.addAll(DuplicateActions.find(yaml));
+        duplicates.addAll(DuplicateScripts.find(yaml));
         ConchDoc doc;
         try {
             doc = ConchParser.parse(yaml);

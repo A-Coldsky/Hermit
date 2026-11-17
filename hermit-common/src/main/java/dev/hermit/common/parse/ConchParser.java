@@ -41,7 +41,7 @@ public final class ConchParser {
     private static final Set<String> TOP_LEVEL = Set.of(
             "conch", "connector", "version", "driver", "min_crab_version", "min_agent_version",
             "base_url", "title", "description", "owner", "tags", "changelog", "credentials",
-            "config", "auth", "actions", "health_check", "upstream", "tools", "snapshot");
+            "config", "auth", "actions", "health_check", "upstream", "tools", "snapshot", "scripts");
     private static final Set<String> FIELD_TYPES = Set.of("text", "secret", "select", "url");
     private static final Set<String> CREDENTIAL_KEYS = Set.of("type", "label", "required", "description", "options");
     private static final Set<String> CONFIG_KEYS = Set.of(
@@ -112,9 +112,53 @@ public final class ConchParser {
         McpUpstream upstream = upstream(node.get("upstream"), "upstream");
         ToolFilter tools = toolFilter(node.get("tools"), "tools");
         McpSnapshot snapshot = snapshot(node.get("snapshot"), "snapshot");
+        Map<String, String> scripts = scripts(node);
         return new ConchDoc(
                 conch, version, driver, minCrabVersion, baseUrl, title, description, owner, tags,
-                changelog, credentials, config, auth, actions, healthCheck, upstream, tools, snapshot);
+                changelog, credentials, config, auth, actions, healthCheck, upstream, tools, snapshot, scripts);
+    }
+
+    private static Map<String, String> scripts(ObjectNode node) {
+        if (!node.has("scripts") || node.get("scripts").isNull()) {
+            return Map.of();
+        }
+        JsonNode value = node.get("scripts");
+        if (!value.isObject()) {
+            throw new ConchParseException("scripts", "必须是映射");
+        }
+        LinkedHashMap<String, String> scripts = new LinkedHashMap<>();
+        value.properties().forEach(entry -> {
+            JsonNode source = entry.getValue();
+            if (source == null || source.isNull() || !source.isTextual()) {
+                throw new ConchParseException(scriptKeyPath(entry.getKey()), "必须是字符串");
+            }
+            scripts.put(entry.getKey(), source.textValue());
+        });
+        return scripts;
+    }
+
+    private static String scriptKeyPath(String name) {
+        if (name != null && name.length() <= 64 && scriptKey(name)) {
+            return "scripts." + name;
+        }
+        return "scripts";
+    }
+
+    private static boolean scriptKey(String name) {
+        if (name.isEmpty()) {
+            return false;
+        }
+        char first = name.charAt(0);
+        if (first != '_' && !Character.isLetter(first)) {
+            return false;
+        }
+        for (int i = 1; i < name.length(); i++) {
+            char current = name.charAt(i);
+            if (current != '_' && !Character.isLetter(current) && !Character.isDigit(current)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static String resolveAlias(ObjectNode node, String canonical, String alias) {

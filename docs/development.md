@@ -83,6 +83,7 @@ npm run dev:reef
 | 同步/上报 | `ConchSyncTest`、`ConchRepairTest`、`SubscriptionTest`、`InstalledConchesTest`、`RuleMismatchStaysTest`、`ReportSenderTest`、`CrabWiringTest`、`SyncExceptionTest` | ETag、订阅安装、手动更新、丢失安装不下载、失败重试、验签、失配不切换版本、Reef 不可达、定时任务 |
 | 验收 | [Phase1AcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/Phase1AcceptanceTest.java) | 独立 Reef + Crab + 模拟 OA，发布后手动更新、失配不回退、反馈与敏感数据检查 |
 | 验收 | [BosLoginAcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/BosLoginAcceptanceTest.java) | 本机模拟 BOS：脚本库加密登录，`{{login.sid}}` 与 Cookie 同一会话，幂等重放，口令和令牌打码 |
+| 验收 | [LoginCaptchaAcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/LoginCaptchaAcceptanceTest.java) | 本机图片验证码与短信验证码：409 后在控制台提交，再调用成功；输错、换图或重发、版本更新丢弃旧待输入；验证码和登录令牌不进日志 |
 
 Java 结果位于各模块 `target/surefire-reports/`。2026-10-16 同步到 `48daca7` 后完整 verify：common 41、Reef 97、Crab 170、验收 1，共 309 项 Java 测试，以及 4 个前端测试文件中的 18 项 Vitest 测试均通过，无失败或跳过。没有 JaCoCo 配置，测试条数不是行/分支覆盖率。
 

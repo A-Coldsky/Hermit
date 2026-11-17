@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 import dev.hermit.common.model.Action;
@@ -25,16 +26,24 @@ public final class ConchRegistry {
     private static final Logger LOG = Logger.getLogger(ConchRegistry.class.getName());
 
     static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now", "login");
-    private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script");
+    private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script", "ask");
 
     private final AtomicReference<Map<String, ConchDoc>> conches = new AtomicReference<>(Map.of());
     private final AtomicReference<Map<String, Origin>> origins = new AtomicReference<>(Map.of());
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
+    private final List<Consumer<String>> removals = new CopyOnWriteArrayList<>();
 
     /** Fired after a conch is added, replaced, or removed. */
     public void addListener(Listener listener) {
         if (listener != null) {
             listeners.add(listener);
+        }
+    }
+
+    /** 文档确实被移出注册表时调用。替换版本不走这里。 */
+    public void onRemove(Consumer<String> listener) {
+        if (listener != null) {
+            removals.add(listener);
         }
     }
 
@@ -132,6 +141,7 @@ public final class ConchRegistry {
             return Collections.unmodifiableMap(copy);
         });
         if (conches.get() != docsBefore || origins.get() != originsBefore) {
+            removed(conch);
             changed();
         }
     }
@@ -152,6 +162,16 @@ public final class ConchRegistry {
             return Origin.OFFICIAL;
         }
         return null;
+    }
+
+    private void removed(String conch) {
+        for (Consumer<String> listener : removals) {
+            try {
+                listener.accept(conch);
+            } catch (RuntimeException ex) {
+                LOG.warning("conch registry remove listener failed: " + ex.getClass().getName());
+            }
+        }
     }
 
     private void changed() {
@@ -200,6 +220,16 @@ public final class ConchRegistry {
                     issues.add(new ValidationIssue(
                             "RESERVED_VARIABLE",
                             path + "[" + i + "].into",
+                            "不能写入保留变量 " + name));
+                }
+                continue;
+            }
+            if ("ask".equals(step.type())) {
+                Object into = step.def().get("into");
+                if (into instanceof String name && RESERVED.contains(name)) {
+                    issues.add(new ValidationIssue(
+                            "RESERVED_VARIABLE",
+                            path + "[" + i + "].ask.into",
                             "不能写入保留变量 " + name));
                 }
                 continue;

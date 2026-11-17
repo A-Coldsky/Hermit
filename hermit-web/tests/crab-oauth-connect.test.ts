@@ -24,6 +24,8 @@ function account(name: string, oauth: Account['oauth'], extra: Partial<Account> 
     loginPaused: false,
     loginPauseReason: null,
     loginPauseRecovery: null,
+    loginInputRequired: false,
+    loginInputExpiresAt: null,
     oauth,
     ...extra,
   } as Account

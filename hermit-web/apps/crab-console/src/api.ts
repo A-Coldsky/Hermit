@@ -174,11 +174,34 @@ export interface Account {
   /** 暂停时为恢复方法（修正凭证后测试登录成功才恢复），否则 null。 */
   loginPauseRecovery: string | null
   /**
+   * 有一条待输入的登录（图片验证码、短信或动态口令）。为 true 时账号页显示「需要验证码」。
+   * 没有待输入时为 false。
+   */
+  loginInputRequired: boolean
+  /** 待输入登录的过期时间，ISO-8601。没有待输入时为 null。 */
+  loginInputExpiresAt: string | null
+  /**
    * 非 OAuth 包为 null。OAuth 包给出是否已连接，以及访问令牌的到期时间。
    * 未连接，或上游没有给到期时间时 expiresAt 为 null。
    * needsConfiguration 不把「还没连接上游」算进去。
    */
   oauth: OAuthStatus | null
+}
+
+/**
+ * `GET .../login-input` 的正文。没有待输入登录时该接口是 404。
+ * `resendAfter` 是距下次可换图或重发的秒数，0 表示冷却已过。
+ * `canResend` 表示次数还没用完；冷却中仍为 true，次数用尽为 false 且 `resendAfter` 为 0。
+ */
+export interface LoginInput {
+  kind: 'image' | 'code'
+  label: string
+  hint: string | null
+  /** ISO-8601。 */
+  expiresAt: string
+  hasImage: boolean
+  canResend: boolean
+  resendAfter: number
 }
 
 export interface OAuthStatus {

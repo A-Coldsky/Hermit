@@ -116,6 +116,33 @@ class ReportIngestTest {
     }
 
     @Test
+    void loginInputRequiredIsAFailureAndDoesNotOpenARollback() throws Exception {
+        ReportBatch batch = new ReportBatch(
+                INSTANCE,
+                "1.4.0",
+                SENT,
+                List.of(new FailureReport(
+                        "t-ask",
+                        "legacy_oa",
+                        "1.0.0",
+                        "list_todo",
+                        1,
+                        "ask",
+                        ErrorCode.LOGIN_INPUT_REQUIRED,
+                        "这个账号登录需要输入验证码",
+                        SENT)),
+                List.of(),
+                List.of());
+        MvcResult result = send(ReportJson.write(batch), INSTANCE);
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        assertThat(count("hermit_failure_reports")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT error_code FROM hermit_failure_reports", String.class))
+                .isEqualTo("LOGIN_INPUT_REQUIRED");
+        assertThat(jdbc.queryForObject("SELECT step_type FROM hermit_failure_reports", String.class)).isEqualTo("ask");
+        assertThat(count("hermit_rollback_events")).isZero();
+    }
+
+    @Test
     void anyIllegalFieldRejectsTheWholeBatch() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         JsonNode valid = mapper.readTree(ReportJson.write(sample("1.2.3")));

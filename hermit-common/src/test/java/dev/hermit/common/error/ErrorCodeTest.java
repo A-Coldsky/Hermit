@@ -23,6 +23,7 @@ class ErrorCodeTest {
                 ErrorCode.CONCH_DISABLED,
                 ErrorCode.IDEMPOTENCY_CONFLICT,
                 ErrorCode.CONFLICT,
+                ErrorCode.LOGIN_INPUT_REQUIRED,
                 ErrorCode.INTERNAL);
     }
 }

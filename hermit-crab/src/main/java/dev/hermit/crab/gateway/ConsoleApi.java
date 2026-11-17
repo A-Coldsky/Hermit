@@ -25,6 +25,8 @@ import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.LoginPause;
 import dev.hermit.crab.runtime.ApiEnvelope;
+import dev.hermit.crab.engine.LoginInputMessages;
+import dev.hermit.crab.engine.PendingLogins;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.ConsoleSessions;
@@ -94,6 +96,11 @@ final class ConsoleApi {
         get(app, "/console/api/conches/{conch}/accounts/{account}/credentials", ctx -> credentialNames(runtime, ctx));
         put(app, "/console/api/conches/{conch}/accounts/{account}/credentials", ctx -> writeCredentials(runtime, ctx));
         post(app, "/console/api/conches/{conch}/accounts/{account}/test-login", ctx -> testLogin(runtime, ctx));
+        get(app, "/console/api/conches/{conch}/accounts/{account}/login-input", ctx -> loginInput(runtime, ctx));
+        get(app, "/console/api/conches/{conch}/accounts/{account}/login-input/image", ctx -> loginInputImage(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/accounts/{account}/login-input", ctx -> submitLoginInput(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/accounts/{account}/login-input/resend", ctx -> resendLoginInput(runtime, ctx));
+        delete(app, "/console/api/conches/{conch}/accounts/{account}/login-input", ctx -> abandonLoginInput(runtime, ctx));
         post(app, "/console/api/conches/{conch}/accounts/{account}/oauth/start", ctx -> oauthStart(runtime, ctx));
         delete(app, "/console/api/conches/{conch}/accounts/{account}/oauth", ctx -> oauthDisconnect(runtime, ctx));
         app.get("/console/oauth/callback", ctx -> oauthCallback(runtime, ctx));
@@ -432,6 +439,10 @@ final class ConsoleApi {
             row.put("loginPaused", paused);
             row.put("loginPauseReason", paused ? LoginPause.REASON : null);
             row.put("loginPauseRecovery", paused ? LoginPause.RECOVERY : null);
+            PendingLogins.View loginInput = runtime.admin().loginInput(doc.conch(), account.account());
+            row.put("loginInputRequired", loginInput != null);
+            row.put("loginInputExpiresAt",
+                    loginInput == null ? null : DateTimeFormatter.ISO_INSTANT.format(loginInput.expiresAt()));
             row.put("oauth", oauthStatus(runtime, doc, account.account()));
             rows.add(row);
         }
@@ -533,6 +544,85 @@ final class ConsoleApi {
         ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
         String message = result.error() == null ? "internal error" : result.error().message();
         GatewayResponses.writeRequestError(ctx, StatusCodes.of(code), code, message == null ? "" : message);
+    }
+
+    private static void loginInput(CrabRuntime runtime, Context ctx) {
+        ConchDoc doc = requireConch(runtime, ctx);
+        PendingLogins.View view = runtime.admin().loginInput(doc.conch(), ctx.pathParam("account"));
+        if (view == null) {
+            GatewayResponses.writeRequestError(ctx, 404, ErrorCode.NOT_FOUND, LoginInputMessages.NONE);
+            return;
+        }
+        GatewayResponses.writeData(ctx, loginInputView(view));
+    }
+
+    private static void loginInputImage(CrabRuntime runtime, Context ctx) {
+        ConchDoc doc = requireConch(runtime, ctx);
+        PendingLogins.Image image = runtime.admin().loginInputImage(doc.conch(), ctx.pathParam("account"));
+        if (image == null) {
+            GatewayResponses.writeRequestError(ctx, 404, ErrorCode.NOT_FOUND, LoginInputMessages.NONE);
+            return;
+        }
+        ctx.header("X-Content-Type-Options", "nosniff");
+        GatewayResponses.writeBytes(ctx, 200, image.mediaType(), "no-store", image.bytes());
+    }
+
+    private static void submitLoginInput(CrabRuntime runtime, Context ctx) throws Exception {
+        ConchDoc doc = requireConch(runtime, ctx);
+        JsonNode body = object(ctx);
+        JsonNode node = body.get("value");
+        if (node == null || !node.isTextual()) {
+            GatewayResponses.writeRequestError(ctx, 400, ErrorCode.INVALID_INPUT, LoginInputMessages.NOT_STRING);
+            return;
+        }
+        ExecutionResult result = runtime.admin().submitLoginInput(
+                doc, ctx.pathParam("account"), GatewayResponses.trace(ctx), node.textValue());
+        writeLoginResult(ctx, result);
+    }
+
+    private static void resendLoginInput(CrabRuntime runtime, Context ctx) throws Exception {
+        ConchDoc doc = requireConch(runtime, ctx);
+        object(ctx);
+        ExecutionResult result = runtime.admin().resendLoginInput(
+                doc, ctx.pathParam("account"), GatewayResponses.trace(ctx));
+        if (!result.success()) {
+            writeLoginResult(ctx, result);
+            return;
+        }
+        PendingLogins.View view = runtime.admin().loginInput(doc.conch(), ctx.pathParam("account"));
+        if (view == null) {
+            GatewayResponses.writeData(ctx, Map.of("ok", true));
+            return;
+        }
+        GatewayResponses.writeData(ctx, loginInputView(view));
+    }
+
+    private static void abandonLoginInput(CrabRuntime runtime, Context ctx) {
+        ConchDoc doc = requireConch(runtime, ctx);
+        runtime.admin().abandonLoginInput(doc.conch(), ctx.pathParam("account"));
+        GatewayResponses.writeData(ctx, Map.of("abandoned", true));
+    }
+
+    private static void writeLoginResult(Context ctx, ExecutionResult result) {
+        if (result.success()) {
+            GatewayResponses.writeData(ctx, result.data() == null ? Map.of("ok", true) : result.data());
+            return;
+        }
+        ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
+        String message = result.error() == null ? "internal error" : result.error().message();
+        GatewayResponses.writeRequestError(ctx, StatusCodes.of(code), code, message == null ? "" : message);
+    }
+
+    private static Map<String, Object> loginInputView(PendingLogins.View view) {
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("kind", view.kind());
+        body.put("label", view.label());
+        body.put("hint", view.hint());
+        body.put("expiresAt", DateTimeFormatter.ISO_INSTANT.format(view.expiresAt()));
+        body.put("hasImage", view.hasImage());
+        body.put("canResend", view.canResend());
+        body.put("resendAfter", view.resendAfterSeconds());
+        return body;
     }
 
     private static void oauthStart(CrabRuntime runtime, Context ctx) {

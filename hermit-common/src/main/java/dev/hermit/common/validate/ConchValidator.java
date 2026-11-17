@@ -40,11 +40,17 @@ import dev.hermit.common.version.SemVer;
 public final class ConchValidator {
 
     private static final Set<String> DEFAULT_STEP_TYPES = Set.of(
-            "request", "extract", "assert", "set", "script");
+            "request", "extract", "assert", "set", "script", "ask");
     private static final Set<String> BUILTIN_ROOTS = Set.of("input", "response", "now");
     /** 与 {@code ConchRegistry.RESERVED} 一致；这里只拦 {@code login}，Reef 上传不经过注册表。 */
     private static final String RESERVED_LOGIN = "login";
+    /** 与 {@code ConchRegistry.RESERVED} 一致。{@code ask.into} 在上传时也要拦住。 */
+    private static final Set<String> RESERVED_NAMES = Set.of(
+            "input", "credential", "config", "response", "now", "login");
     private static final SemVer LOGIN_MIN_CRAB = SemVer.parse("1.3.0");
+    private static final SemVer ASK_MIN_CRAB = SemVer.parse("1.4.0");
+    private static final Set<String> ASK_KEYS = Set.of("into", "kind", "label", "hint", "timeout_s");
+    private static final int ASK_HINT_BYTES = 256;
     private static final int COOKIE_NAME_LIMIT = 256;
     private static final Pattern HEADER_BEARER = Pattern.compile("(?i)bearer\\s+[A-Za-z0-9._~+/=-]{8,}");
     private static final List<String> SECRET_KEYS = List.of(
@@ -198,6 +204,12 @@ public final class ConchValidator {
                     ValidationCodes.MIN_CRAB_VERSION,
                     "min_crab_version",
                     "使用 login 或 auth.cookies 时 min_crab_version 必须不低于 1.3.0"));
+        }
+        if (containsAsk(doc) && doc.minCrabVersion().compareTo(ASK_MIN_CRAB) < 0) {
+            errors.add(issue(
+                    ValidationCodes.MIN_CRAB_VERSION,
+                    "min_crab_version",
+                    "使用 ask 时 min_crab_version 必须不低于 1.4.0"));
         }
         return new ValidationResult(errors, warnings);
     }
@@ -629,6 +641,10 @@ public final class ConchValidator {
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
             String typed = path + "[" + i + "]." + step.type();
+            boolean declareAsk = false;
+            if ("ask".equals(step.type())) {
+                declareAsk = checkAsk(path, i, steps, step, declared, errors);
+            }
             if ("script".equals(step.type())) {
                 checkScriptStep(typed, step, doc.scripts() == null ? Map.of() : doc.scripts(), errors);
                 for (Map.Entry<String, Object> entry : step.def().entrySet()) {
@@ -662,6 +678,9 @@ public final class ConchValidator {
                         inputFields);
             }
             declare(step, declared);
+            if (declareAsk && step.def().get("into") instanceof String into) {
+                declared.add(into);
+            }
         }
     }
 
@@ -949,9 +968,117 @@ public final class ConchValidator {
         return true;
     }
 
+    /** {@code ask.into} 只进入 loginNames，不进入登录快照，也不能写成 {@code {{login.into}}}。 */
+    private static boolean containsAsk(ConchDoc doc) {
+        if (doc.auth() != null && hasAsk(doc.auth().steps())) {
+            return true;
+        }
+        for (Action action : doc.actions().values()) {
+            if (hasAsk(action.steps())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasAsk(List<Step> steps) {
+        if (steps == null) {
+            return false;
+        }
+        for (Step step : steps) {
+            if ("ask".equals(step.type())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @return 这个 {@code into} 可以交给后面的登录步骤使用
+     */
+    private static boolean checkAsk(
+            String path,
+            int index,
+            List<Step> steps,
+            Step step,
+            Set<String> declared,
+            List<ValidationIssue> errors
+    ) {
+        String typed = path + "[" + index + "].ask";
+        if (!"auth.steps".equals(path)) {
+            errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed, "ask 只能写在 auth.steps"));
+            return false;
+        }
+        int seen = 0;
+        for (int i = 0; i <= index; i++) {
+            if ("ask".equals(steps.get(i).type())) {
+                seen++;
+            }
+        }
+        if (seen > 2) {
+            errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed, "一个登录最多 2 个 ask"));
+        }
+        boolean declareInto = false;
+        Object into = step.def().get("into");
+        if (!(into instanceof String name) || name.isBlank()) {
+            errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed + ".into", "ask 缺少 into"));
+        } else if (!templateIdentifier(name)) {
+            errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed + ".into", "ask into 必须是模板标识符"));
+        } else if (RESERVED_NAMES.contains(name)) {
+            errors.add(issue(ValidationCodes.RESERVED_VARIABLE, typed + ".into", "不能写入保留变量 " + name));
+        } else if (declared.contains(name)) {
+            errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed + ".into", "ask into 与已声明的名字重复"));
+        } else {
+            declareInto = true;
+        }
+        Object kind = step.def().get("kind");
+        if (!"image".equals(kind) && !"code".equals(kind)) {
+            errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed + ".kind", "ask kind 只允许 image 或 code"));
+        } else if ("image".equals(kind)
+                && (index == 0 || !"request".equals(steps.get(index - 1).type()))) {
+            errors.add(issue(
+                    ValidationCodes.UNSUPPORTED_STEP,
+                    typed + ".kind",
+                    "kind 为 image 时，前一步必须是 request"));
+        }
+        Object label = step.def().get("label");
+        if (!(label instanceof String text) || text.isBlank()) {
+            errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed + ".label", "ask 缺少 label"));
+        }
+        if (step.def().containsKey("hint")) {
+            Object hint = step.def().get("hint");
+            if (!(hint instanceof String text)) {
+                errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed + ".hint", "ask hint 必须是字符串"));
+            } else if (text.getBytes(StandardCharsets.UTF_8).length > ASK_HINT_BYTES) {
+                errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed + ".hint", "ask hint 超过 256 字节"));
+            }
+        }
+        if (step.def().containsKey("timeout_s") && !validAskTimeout(step.def().get("timeout_s"))) {
+            errors.add(issue(
+                    ValidationCodes.UNSUPPORTED_STEP,
+                    typed + ".timeout_s",
+                    "ask timeout_s 必须是 60 到 900 的整数"));
+        }
+        for (String key : step.def().keySet()) {
+            if (!ASK_KEYS.contains(key)) {
+                errors.add(issue(ValidationCodes.UNSUPPORTED_STEP, typed + "." + key, "未知的 ask 字段 " + key));
+            }
+        }
+        return declareInto;
+    }
+
+    private static boolean validAskTimeout(Object value) {
+        if (!(value instanceof Integer || value instanceof Long)) {
+            return false;
+        }
+        long timeout = ((Number) value).longValue();
+        return timeout >= 60 && timeout <= 900;
+    }
+
     /**
      * 登录变量的声明来自登录步骤：extract、set、script.into 的模板标识符，
      * assert.cookie_exists 的值本身是模板标识符，以及 auth.cookies 的键。
+     * {@code ask.into} 只进 loginNames，供能力里的裸名字继续报「不能引用登录步骤里的变量」。
      * loginNames 仍是登录步骤产出的全部名字，供裸 {@code {{sid}}} 继续报原来的错。
      */
     private static void collectLoginVars(Auth auth, Set<String> loginNames, Set<String> loginVars) {
@@ -970,6 +1097,10 @@ public final class ConchValidator {
                 if (templateIdentifier(name)) {
                     loginVars.add(name);
                 }
+            } else if ("ask".equals(step.type())
+                    && step.def().get("into") instanceof String name
+                    && templateIdentifier(name)) {
+                loginNames.add(name);
             } else if ("assert".equals(step.type())
                     && step.def().get("cookie_exists") instanceof String value
                     && templateIdentifier(value)) {

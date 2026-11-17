@@ -32,5 +32,10 @@ public enum ErrorCode {
      * 与正式包或订阅重名仍用 {@code INVALID_INPUT}，不用这个码。
      */
     CONFLICT,
+    /**
+     * 登录停在 {@code ask}，等用户到 Crab 控制台输入验证码。HTTP 409。
+     * 不是规则失配，不触发回滚。同一幂等键不缓存这次响应。
+     */
+    LOGIN_INPUT_REQUIRED,
     INTERNAL
 }

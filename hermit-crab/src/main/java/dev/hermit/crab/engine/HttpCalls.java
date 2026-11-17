@@ -245,7 +245,7 @@ final class HttpCalls {
                 String location = headerMap.get("location");
                 String redirect = isRedirect(status) ? location : null;
                 String decoded = decode(bytes, headerMap.get("content-type"), stepEncoding);
-                return new Exchange(status, target.toString(), method, path, headerMap, decoded, redirect);
+                return new Exchange(status, target.toString(), method, path, headerMap, decoded, redirect, bytes);
             });
             if (System.nanoTime() >= deadlineNanos) {
                 cancellable.cancel();
@@ -587,7 +587,8 @@ final class HttpCalls {
             String path,
             Map<String, String> headers,
             String body,
-            String redirect
+            String redirect,
+            byte[] bodyBytes
     ) {
         private HttpResult toResult(boolean sessionLost) {
             return new HttpResult(
@@ -598,7 +599,8 @@ final class HttpCalls {
                     Collections.unmodifiableMap(headers),
                     body,
                     redirect,
-                    sessionLost);
+                    sessionLost,
+                    bodyBytes);
         }
     }
 }
@@ -611,7 +613,8 @@ record HttpResult(
         Map<String, String> headers,
         String body,
         String redirect,
-        boolean sessionLost
+        boolean sessionLost,
+        byte[] bodyBytes
 ) {
     Map<String, Object> view() {
         LinkedHashMap<String, Object> view = new LinkedHashMap<>();

@@ -11,6 +11,7 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.engine.ExecutionError;
+import dev.hermit.crab.engine.PendingLogins;
 import dev.hermit.crab.engine.ExecutionRequest;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.RuleEngine;
@@ -210,6 +211,65 @@ public final class ConchAdmin {
                 resolved.account(),
                 new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
         return engine.testLogin(request);
+    }
+
+    public PendingLogins.View loginInput(String conch, String account) {
+        Account resolved = requireAccount(conch, account);
+        return sessions.pending().view(new SessionKey(origin(conch), conch, resolved.account()));
+    }
+
+    public PendingLogins.Image loginInputImage(String conch, String account) {
+        Account resolved = requireAccount(conch, account);
+        return sessions.pending().image(new SessionKey(origin(conch), conch, resolved.account()));
+    }
+
+    public void abandonLoginInput(String conch, String account) {
+        Account resolved = requireAccount(conch, account);
+        sessions.pending().discard(new SessionKey(origin(conch), conch, resolved.account()));
+    }
+
+    /** 不使会话失效。验证码留在这次调用的打码名单里，不写审计。 */
+    public ExecutionResult submitLoginInput(ConchDoc doc, String account, String traceId, String value) {
+        return runLoginInput(doc, account, traceId, request -> engine.continueLogin(request, value));
+    }
+
+    public ExecutionResult resendLoginInput(ConchDoc doc, String account, String traceId) {
+        return runLoginInput(doc, account, traceId, engine::resendLogin);
+    }
+
+    private ExecutionResult runLoginInput(
+            ConchDoc doc,
+            String account,
+            String traceId,
+            Function<ExecutionRequest, ExecutionResult> call
+    ) {
+        Account resolved = requireAccount(doc.conch(), account);
+        Origin source = origin(doc.conch());
+        Map<String, String> stored = config.all(source, doc.conch());
+        List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
+        if (!missingConfig.isEmpty()) {
+            return failed(doc, traceId, Invoker.missingConfig(missingConfig));
+        }
+        List<String> missingCredentials = missingCredentials(doc, resolved.account());
+        if (!missingCredentials.isEmpty()) {
+            return failed(doc, traceId, CredentialMessages.missing(
+                    resolved.account(), missingCredentials, doc.credentials()));
+        }
+        Map<String, String> secrets;
+        try {
+            secrets = vault.decryptForExecution(source, doc.conch(), resolved.account());
+        } catch (CredentialDecryptException ex) {
+            return failed(doc, traceId, CredentialDecryptException.MESSAGE);
+        }
+        ExecutionRequest request = new ExecutionRequest(
+                traceId,
+                source,
+                doc.conch(),
+                "login_input",
+                Map.of(),
+                resolved.account(),
+                new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
+        return call.apply(request);
     }
 
     private ConchDoc staged(String conch) {

@@ -12,6 +12,9 @@ public final class LoginInputMessages {
 
     public static final String NONE = "没有待输入的登录。";
 
+    /** 待输入还在，但这一步不是图片验证码。 */
+    public static final String NO_IMAGE = "没有验证码图片。";
+
     public static final String TOO_FAST = "换得太快，请稍后再试。";
 
     public static final String QUOTA = "换验证码的次数已经用完。请放弃这次登录后重新登录。";

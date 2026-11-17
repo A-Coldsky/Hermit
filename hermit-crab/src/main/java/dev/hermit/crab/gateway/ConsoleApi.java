@@ -558,9 +558,15 @@ final class ConsoleApi {
 
     private static void loginInputImage(CrabRuntime runtime, Context ctx) {
         ConchDoc doc = requireConch(runtime, ctx);
-        PendingLogins.Image image = runtime.admin().loginInputImage(doc.conch(), ctx.pathParam("account"));
+        String account = ctx.pathParam("account");
+        PendingLogins.Image image = runtime.admin().loginInputImage(doc.conch(), account);
         if (image == null) {
-            GatewayResponses.writeRequestError(ctx, 404, ErrorCode.NOT_FOUND, LoginInputMessages.NONE);
+            PendingLogins.View view = runtime.admin().loginInput(doc.conch(), account);
+            GatewayResponses.writeRequestError(
+                    ctx,
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    view == null ? LoginInputMessages.NONE : LoginInputMessages.NO_IMAGE);
             return;
         }
         ctx.header("X-Content-Type-Options", "nosniff");

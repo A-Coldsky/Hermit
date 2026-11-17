@@ -155,6 +155,38 @@ class ConsoleLoginInputTest {
     }
 
     @Test
+    void codeLoginHasNoImageAndDoesNotClaimTheWaitIsGone() throws Exception {
+        startUpstream();
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("code"), PASSWORD, config)) {
+            server.runtime.localConches().importBytes(codeYaml(baseUrl()).getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            ConchDoc doc = server.runtime.registry().find("captcha_oa").orElseThrow();
+            server.runtime.admin().createAccount("captcha_oa", "alice", Actors.CONSOLE);
+            server.runtime.admin().writeCredentials(
+                    doc, "alice", Map.of("username", "alice", "password", PASSWORD), Actors.CONSOLE);
+            TestServer.Reply paused = server.call(
+                    "POST", "/api/captcha_oa/tick", server.apiKey.plaintext(), "alice", null, "{}");
+            assertThat(paused.status()).isEqualTo(409);
+
+            TestServer.Reply waiting = server.console(
+                    "GET", "/console/api/conches/captcha_oa/accounts/alice/login-input", null, true);
+            assertThat(waiting.status()).isEqualTo(200);
+            assertThat(waiting.json().path("data").path("kind").asText()).isEqualTo("code");
+            assertThat(waiting.json().path("data").path("hasImage").asBoolean()).isFalse();
+
+            TestServer.Reply image = server.console(
+                    "GET", "/console/api/conches/captcha_oa/accounts/alice/login-input/image", null, true);
+            assertThat(image.status()).isEqualTo(404);
+            assertThat(image.json().path("error").path("message").asText()).isEqualTo(LoginInputMessages.NO_IMAGE);
+            SecretChecks.absent(image.body(), CODE);
+
+            TestServer.Reply stillWaiting = server.console(
+                    "GET", "/console/api/conches/captcha_oa/accounts/alice/login-input", null, true);
+            assertThat(stillWaiting.status()).isEqualTo(200);
+        }
+    }
+
+    @Test
     void credentialChangeAndReefDisableDropThePendingLogin() throws Exception {
         startUpstream();
         CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
@@ -205,6 +237,10 @@ class ConsoleLoginInputTest {
             send(exchange, 200, "image/png", body);
             return;
         }
+        if ("/sms".equals(path)) {
+            send(exchange, 200, "application/json", "{\"sent\":true}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
         if (path.startsWith("/login/")) {
             send(exchange, 200, "application/json", "{\"token\":\"session-token-value\"}".getBytes(StandardCharsets.UTF_8));
             return;
@@ -247,6 +283,52 @@ class ConsoleLoginInputTest {
 
     private String baseUrl() {
         return "http://127.0.0.1:" + upstream.getAddress().getPort();
+    }
+
+    private static String codeYaml(String baseUrl) {
+        return """
+                conch: captcha_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.4.0
+                base_url: %s
+                title: 短信验证码
+                description: 测试夹具。
+                credentials:
+                  username: { type: text, required: true, label: 用户名 }
+                  password: { type: secret, required: true, label: 密码 }
+                auth:
+                  steps:
+                    - request: { method: POST, path: /sms }
+                    - ask:
+                        into: captcha
+                        kind: code
+                        label: 短信验证码
+                        hint: 看短信
+                        timeout_s: 300
+                    - request:
+                        method: POST
+                        path: "/login/{{captcha}}"
+                        form:
+                          code: "{{captcha}}"
+                    - extract:
+                        token: { jsonpath: $.token }
+                actions:
+                  tick:
+                    title: 打点
+                    description: 用登录令牌打点。
+                    method: POST
+                    output:
+                      seen: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { seen: ok }
+                    notes: 测试。
+                    related: []
+                    steps:
+                      - request: { method: GET, path: "/tick/{{login.token}}" }
+                      - set: { seen: ok }
+                """.formatted(baseUrl);
     }
 
     private static String yaml(String baseUrl) {

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,11 +37,19 @@ class LoginInputEngineTest {
     private static final String CODE = "WXYZ9";
     private static final String SHORT = "abc";
     private static final String TOKEN = "session-token-value";
+    private static final String ISSUED = "pre+asktoken";
+    private static final String PAUSE_PASSWORD = "pause-secret-91ab";
+    private static final String RESUME_PASSWORD = "resume-secret-92cd";
+    private static final String PAUSE_SITE = "site-at-pause";
+    private static final String RESUME_SITE = "site-at-resume";
+    private static final String PAUSE_NOTE = "note-at-pause";
+    private static final String RESUME_NOTE = "note-at-resume";
 
     private HttpServer server;
     private ExecutorService executor;
     private EngineTestSupport.MutableClock clock;
     private final CopyOnWriteArrayList<String> paths = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<String> posted = new CopyOnWriteArrayList<>();
     private volatile byte[] imageBody = png(1);
 
     @BeforeEach
@@ -98,6 +107,89 @@ class LoginInputEngineTest {
             assertThat(engine.execute(call("bob")).error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
             assertThat(sessions.pending().current(key("alice"))).isNull();
             assertThat(sessions.pending().current(key("bob"))).isNotNull();
+        }
+    }
+
+    @Test
+    void resumeUsesFreshCredentialsAndLeavesThemOutOfThePendingLogin() {
+        try (SessionManager sessions = sessions(EngineSettings.defaults())) {
+            RuleEngine engine = engine(sessions, doc(freshCredentialSteps(), actionSteps()));
+            ExecutionResult paused = engine.execute(call("alice", PAUSE_PASSWORD, PAUSE_SITE, PAUSE_NOTE));
+            assertThat(paused.error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+            Map<String, Object> frozen = sessions.pending().current(key("alice")).vars();
+            assertThat(frozen).doesNotContainKeys("input", "credential", "config", "now", "login");
+            assertThat(frozen.get("response")).isInstanceOf(Map.class);
+            assertThat(((Map<?, ?>) frozen.get("response")).get("body")).isEqualTo("");
+            SecretChecks.absent(EngineTestSupport.flatten(frozen), PAUSE_PASSWORD);
+            SecretChecks.absent(EngineTestSupport.flatten(frozen), PAUSE_SITE);
+            SecretChecks.absent(EngineTestSupport.flatten(frozen), PAUSE_NOTE);
+
+            ExecutionResult resumed = engine.continueLogin(
+                    call("alice", RESUME_PASSWORD, RESUME_SITE, RESUME_NOTE), CODE);
+            assertThat(resumed.success()).isTrue();
+            assertThat(posted).anySatisfy(body -> {
+                assertThat(body).contains("password=" + RESUME_PASSWORD);
+                assertThat(body).contains("site=" + RESUME_SITE);
+                assertThat(body).contains("note=" + RESUME_NOTE);
+                assertThat(body).doesNotContain(PAUSE_PASSWORD);
+                assertThat(body).doesNotContain(PAUSE_SITE);
+                assertThat(body).doesNotContain(PAUSE_NOTE);
+            });
+        }
+    }
+
+    @Test
+    void resumeMasksValuesCapturedBeforeAskWhenLaterStepsFail() {
+        try (SessionManager sessions = sessions(EngineSettings.defaults())) {
+            Hold traces = new Hold();
+            RuleEngine engine = engine(sessions, doc(issuedTokenSteps(), """
+                    - set: { seen: ok }
+                    """), Origin.LOCAL);
+            engine.bindDevTraceSink(traces);
+            ExecutionRequest request = call("alice", Origin.LOCAL);
+            assertThat(engine.execute(request).error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+
+            ExecutionResult failed = engine.continueLogin(request, CODE);
+            String encoded = URLEncoder.encode(ISSUED, StandardCharsets.UTF_8);
+            String flat = EngineTestSupport.flatten(failed);
+            assertThat(failed.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(failed.error().message()).contains("提取 again 失败").contains("***");
+            SecretChecks.absent(failed.error().message(), ISSUED);
+            SecretChecks.absent(failed.error().message(), encoded);
+            assertThat(flat).contains("/use/***");
+            SecretChecks.absent(flat, ISSUED);
+            SecretChecks.absent(flat, encoded);
+            SecretChecks.absent(failed.stepLogs().toString(), ISSUED);
+            SecretChecks.absent(failed.stepLogs().toString(), encoded);
+            assertThat(traces.bodies).hasSize(2);
+            SecretChecks.absent(traces.bodies.get(1), ISSUED);
+            SecretChecks.absent(traces.bodies.get(1), encoded);
+            assertThat(traces.bodies.get(1)).contains("/use/***").contains("***");
+        }
+    }
+
+    @Test
+    void updatedPackageRestartsLoginInsteadOfWaiting() {
+        try (SessionManager sessions = sessions(EngineSettings.defaults())) {
+            ConchRegistry registry = new ConchRegistry();
+            registry.put(doc(successSteps(), actionSteps()));
+            RuleEngine engine = new RuleEngine(registry, sessions, EngineSettings.defaults());
+            assertThat(engine.execute(call("alice")).error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+            String oldHash = sessions.pending().current(key("alice")).contentHash();
+            assertThat(sessions.pending().current(key("alice")).version()).isEqualTo("1.0.0");
+
+            registry.put(doc(successSteps("/captcha-v2.png"), actionSteps(), "1.0.1", "另一份说明"));
+            ExecutionResult restarted = engine.execute(call("alice"));
+            assertThat(restarted.error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+            assertThat(paths).contains("/captcha-v2.png");
+            PendingLogins.Pending next = sessions.pending().current(key("alice"));
+            assertThat(next.version()).isEqualTo("1.0.1");
+            assertThat(next.contentHash()).isNotEqualTo(oldHash)
+                    .isEqualTo(ConchDigest.sha256(registry.find("captcha_oa").orElseThrow()));
+
+            int size = paths.size();
+            assertThat(engine.execute(call("alice")).error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+            assertThat(paths).hasSize(size);
         }
     }
 
@@ -249,10 +341,24 @@ class LoginInputEngineTest {
     }
 
     private void handle(HttpExchange exchange) throws IOException {
-        exchange.getRequestBody().readAllBytes();
+        String payload = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         String path = exchange.getRequestURI().getPath();
         paths.add(path);
-        if ("/captcha.png".equals(path)) {
+        if (!payload.isEmpty()) {
+            posted.add(path + "?" + payload);
+        }
+        if ("/issue".equals(path)) {
+            send(exchange, 200, "application/json",
+                    ("{\"ticket\":\"" + ISSUED + "\"}").getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if (path.startsWith("/use/")) {
+            String encoded = URLEncoder.encode(ISSUED, StandardCharsets.UTF_8);
+            String json = "{\"echo\":\"" + ISSUED + "\",\"encoded\":\"" + encoded + "\"}";
+            send(exchange, 200, "application/json", json.getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if ("/captcha.png".equals(path) || "/captcha-v2.png".equals(path)) {
             byte[] body = imageBody;
             String type = body.length >= 8 && body[1] == 'P' ? "image/png" : "image/svg+xml";
             send(exchange, 200, type, body);
@@ -305,6 +411,18 @@ class LoginInputEngineTest {
                 EngineTestSupport.account(account, EngineTestSupport.PASSWORD, base()));
     }
 
+    private ExecutionRequest call(String account, String password, String site, String note) {
+        return EngineTestSupport.request(
+                Origin.OFFICIAL,
+                "captcha_oa",
+                "tick",
+                account,
+                Map.of("note", note),
+                new EngineTestSupport.MapAccount(
+                        Map.of("username", account, "password", password),
+                        Map.of("base_url", base(), "site", site)));
+    }
+
     private SessionKey key(String account) {
         return new SessionKey(Origin.OFFICIAL, "captcha_oa", account);
     }
@@ -329,6 +447,8 @@ class LoginInputEngineTest {
                 credentials:
                   username: { type: text, required: true }
                   password: { type: secret, required: true }
+                config:
+                  site: { type: text, required: false, description: 站点标记 }
                 auth:
                   steps:
                 %s
@@ -337,6 +457,8 @@ class LoginInputEngineTest {
                     title: 能力
                     description: 说明
                     method: POST
+                    input:
+                      note: { type: string, required: false, description: 备注 }
                     output:
                       seen: { type: string, description: 结果, value: ok }
                     examples:
@@ -355,8 +477,12 @@ class LoginInputEngineTest {
     }
 
     private static String successSteps() {
+        return successSteps("/captcha.png");
+    }
+
+    private static String successSteps(String captchaPath) {
         return """
-                - request: { method: GET, path: /captcha.png }
+                - request: { method: GET, path: %s }
                 - ask:
                     into: captcha
                     kind: image
@@ -372,6 +498,46 @@ class LoginInputEngineTest {
                       code: "{{captcha}}"
                 - extract:
                     token: { jsonpath: $.token }
+                """.formatted(captchaPath);
+    }
+
+    private static String freshCredentialSteps() {
+        return """
+                - request: { method: GET, path: /captcha.png }
+                - ask:
+                    into: captcha
+                    kind: image
+                    label: 验证码
+                    timeout_s: 60
+                - request:
+                    method: POST
+                    path: "/login/{{captcha}}"
+                    form:
+                      username: "{{credential.username}}"
+                      password: "{{credential.password}}"
+                      site: "{{config.site}}"
+                      note: "{{input.note}}"
+                      code: "{{captcha}}"
+                - extract:
+                    token: { jsonpath: $.token }
+                """;
+    }
+
+    private static String issuedTokenSteps() {
+        return """
+                - request: { method: GET, path: /issue }
+                - extract:
+                    ticket: { jsonpath: $.ticket }
+                - ask:
+                    into: captcha
+                    kind: code
+                    label: 验证码
+                    timeout_s: 60
+                - request:
+                    method: GET
+                    path: "/use/{{ticket}}"
+                - extract:
+                    again: { regex: "(nope-{{ticket}})" }
                 """;
     }
 

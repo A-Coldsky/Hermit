@@ -38,6 +38,9 @@ public final class RuleEngine implements ConchExecutor {
     /** 能力请求被上游以 HTTP 400 拒绝。不是规则失配，不计入回滚。 */
     static final String UPSTREAM_INPUT_REJECTED = "上游拒绝了输入（HTTP 400）。请修改参数后重试。";
 
+    /** 这次请求现取的入参、凭证、配置和时钟。待输入登录不保存，接着登录也不覆盖回去。 */
+    private static final Set<String> EPHEMERAL_VARS = Set.of("input", "credential", "config", "now", "login");
+
     /** 登录 assert cookie 失败时给调用方的说明：原因，以及下一步。 */
     private static final String LOGIN_COOKIE_MISSING =
             "登录未建立会话：上游没有发回会话 Cookie。请核对用户名和密码；若凭证正确，请重新测试登录，或检查登录页是否已改版。";
@@ -682,7 +685,7 @@ public final class RuleEngine implements ConchExecutor {
             return;
         }
         for (Map.Entry<String, Object> entry : saved.entrySet()) {
-            if (!"login".equals(entry.getKey())) {
+            if (!EPHEMERAL_VARS.contains(entry.getKey())) {
                 vars.put(entry.getKey(), entry.getValue());
             }
         }
@@ -691,7 +694,7 @@ public final class RuleEngine implements ConchExecutor {
     private static Map<String, Object> freezeVars(Map<String, Object> vars, boolean dropResponseBody) {
         LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : vars.entrySet()) {
-            if ("login".equals(entry.getKey())) {
+            if (EPHEMERAL_VARS.contains(entry.getKey())) {
                 continue;
             }
             Object value = entry.getValue();
@@ -731,8 +734,11 @@ public final class RuleEngine implements ConchExecutor {
         try {
             if (resume == null) {
                 PendingLogins.Pending waiting = sessions.pending().current(scope.key);
-                if (waiting != null) {
+                if (waiting != null && samePackage(scope.conch, waiting)) {
                     throw waitingFailure(scope, waiting);
+                }
+                if (waiting != null) {
+                    sessions.pending().discard(scope.key);
                 }
             }
             Auth auth = scope.conch.auth();
@@ -751,6 +757,7 @@ public final class RuleEngine implements ConchExecutor {
             List<Step> steps = auth.steps();
             int indexBase = 0;
             if (resume != null) {
+                scope.rememberFrozen(resume.vars());
                 overlay(vars, resume.vars());
                 vars.put(resume.into(), supplied);
                 scope.remember(supplied);
@@ -1479,6 +1486,34 @@ public final class RuleEngine implements ConchExecutor {
         private void remember(String value) {
             if (value != null && !value.isEmpty()) {
                 seenLogin.add(value);
+            }
+        }
+
+        /** 接着登录一开始就打码。规则与 {@link CallSecrets} 相同：长度至少 4，且不是掩码本身。 */
+        private void rememberFrozen(Map<String, Object> vars) {
+            rememberTree(vars, 0);
+        }
+
+        private void rememberTree(Object value, int depth) {
+            if (value == null || depth > 8) {
+                return;
+            }
+            if (value instanceof String text) {
+                if (text.length() >= 4 && !"***".equals(text)) {
+                    seenLogin.add(text);
+                }
+                return;
+            }
+            if (value instanceof Map<?, ?> map) {
+                for (Object item : map.values()) {
+                    rememberTree(item, depth + 1);
+                }
+                return;
+            }
+            if (value instanceof List<?> list) {
+                for (Object item : list) {
+                    rememberTree(item, depth + 1);
+                }
             }
         }
 

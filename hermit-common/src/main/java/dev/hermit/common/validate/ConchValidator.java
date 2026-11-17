@@ -60,7 +60,7 @@ public final class ConchValidator {
     private static final Pattern DESCRIPTION_URL = Pattern.compile("(?i)\\bhttps?://|\\bwww\\.");
     private static final int SCRIPT_SOURCE_LIMIT = 64 * 1024;
     private static final int SCRIPT_TIMEOUT_MAX = 5000;
-    private static final Set<String> SCRIPT_KEYS = Set.of("code", "into", "timeout_ms");
+    private static final Set<String> SCRIPT_KEYS = Set.of("code", "into", "timeout_ms", "use", "credential");
 
     private ConchValidator() {
     }
@@ -114,6 +114,7 @@ public final class ConchValidator {
                     "min_crab_version",
                     "min_crab_version " + doc.minCrabVersion() + " 高于当前 Crab " + ctx.currentCrabVersion()));
         }
+        checkScriptLibraries(doc, errors);
         if (mcp) {
             if (doc.minCrabVersion().compareTo(McpLimits.MIN_CRAB_VERSION) < 0) {
                 errors.add(issue(
@@ -423,7 +424,61 @@ public final class ConchValidator {
         }
     }
 
-    private static void checkScriptStep(String path, Step step, List<ValidationIssue> errors) {
+    private static void checkScriptLibraries(ConchDoc doc, List<ValidationIssue> errors) {
+        Map<String, String> scripts = doc.scripts() == null ? Map.of() : doc.scripts();
+        for (Map.Entry<String, String> entry : scripts.entrySet()) {
+            String name = entry.getKey();
+            if (!ScriptLibraries.name(name)) {
+                errors.add(issue(ValidationCodes.SCRIPT_STEP, "scripts", ScriptLibraries.NAME_INVALID));
+            }
+            String source = entry.getValue();
+            if (source != null && source.getBytes(StandardCharsets.UTF_8).length > ScriptLibraries.MAX_BYTES) {
+                errors.add(issue(
+                        ValidationCodes.SCRIPT_STEP,
+                        ScriptLibraries.path(name),
+                        ScriptLibraries.TOO_LARGE));
+            }
+        }
+        if (!scripts.isEmpty() || usesLibraries(doc)) {
+            if (doc.minCrabVersion().compareTo(ScriptLibraries.MIN_CRAB_VERSION) < 0) {
+                errors.add(issue(
+                        ValidationCodes.MIN_CRAB_VERSION,
+                        "min_crab_version",
+                        ScriptLibraries.VERSION));
+            }
+        }
+    }
+
+    private static boolean usesLibraries(ConchDoc doc) {
+        if (doc.auth() != null && usesLibraries(doc.auth().steps())) {
+            return true;
+        }
+        for (Action action : doc.actions().values()) {
+            if (action != null && usesLibraries(action.steps())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean usesLibraries(List<Step> steps) {
+        if (steps == null) {
+            return false;
+        }
+        for (Step step : steps) {
+            if (step != null && "script".equals(step.type()) && step.def().containsKey("use")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void checkScriptStep(
+            String path,
+            Step step,
+            Map<String, String> scripts,
+            List<ValidationIssue> errors
+    ) {
         Map<String, Object> def = step.def();
         for (String key : def.keySet()) {
             if (!SCRIPT_KEYS.contains(key)) {
@@ -445,6 +500,35 @@ public final class ConchValidator {
                     ValidationCodes.SCRIPT_STEP,
                     path + ".timeout_ms",
                     "script timeout_ms 必须是 1 到 5000 的整数"));
+        }
+        if (def.containsKey("credential") && !(def.get("credential") instanceof Boolean)) {
+            errors.add(issue(ValidationCodes.SCRIPT_STEP, path + ".credential", ScriptLibraries.CREDENTIAL_TYPE));
+        }
+        if (def.containsKey("use")) {
+            checkUse(path, def.get("use"), scripts, errors);
+        }
+    }
+
+    private static void checkUse(String path, Object use, Map<String, String> scripts, List<ValidationIssue> errors) {
+        if (!(use instanceof List<?> list)) {
+            errors.add(issue(ValidationCodes.SCRIPT_STEP, path + ".use", ScriptLibraries.USE_TYPE));
+            return;
+        }
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        for (int i = 0; i < list.size(); i++) {
+            Object item = list.get(i);
+            String itemPath = path + ".use[" + i + "]";
+            if (!(item instanceof String name) || !ScriptLibraries.name(name)) {
+                errors.add(issue(ValidationCodes.SCRIPT_STEP, itemPath, ScriptLibraries.NAME_INVALID));
+                continue;
+            }
+            if (!seen.add(name)) {
+                errors.add(issue(ValidationCodes.SCRIPT_STEP, itemPath, ScriptLibraries.duplicate(name)));
+                continue;
+            }
+            if (!scripts.containsKey(name)) {
+                errors.add(issue(ValidationCodes.SCRIPT_STEP, itemPath, ScriptLibraries.missing(name)));
+            }
         }
     }
 
@@ -478,9 +562,11 @@ public final class ConchValidator {
             Step step = steps.get(i);
             String typed = path + "[" + i + "]." + step.type();
             if ("script".equals(step.type())) {
-                checkScriptStep(typed, step, errors);
+                checkScriptStep(typed, step, doc.scripts() == null ? Map.of() : doc.scripts(), errors);
                 for (Map.Entry<String, Object> entry : step.def().entrySet()) {
-                    if (!"code".equals(entry.getKey())) {
+                    if (!"code".equals(entry.getKey())
+                            && !"use".equals(entry.getKey())
+                            && !"credential".equals(entry.getKey())) {
                         checkRefs(
                                 typed + "." + entry.getKey(),
                                 entry.getValue(),
@@ -560,9 +646,11 @@ public final class ConchValidator {
         if (node instanceof Step step) {
             String typed = path + "." + step.type();
             if ("script".equals(step.type())) {
-                checkScriptStep(typed, step, errors);
+                checkScriptStep(typed, step, doc.scripts() == null ? Map.of() : doc.scripts(), errors);
                 for (Map.Entry<String, Object> entry : step.def().entrySet()) {
-                    if (!"code".equals(entry.getKey())) {
+                    if (!"code".equals(entry.getKey())
+                            && !"use".equals(entry.getKey())
+                            && !"credential".equals(entry.getKey())) {
                         checkRefs(
                                 typed + "." + entry.getKey(),
                                 entry.getValue(),

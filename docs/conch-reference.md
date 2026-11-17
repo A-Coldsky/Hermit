@@ -19,7 +19,7 @@ Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里�
 
 业务接口只选用户确认过的功能对应的那一次请求。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
 
-凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.1.0。`driver: mcp` 还要不低于 1.1.0。
+凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.2.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。
 
 ### 令牌
 
@@ -170,7 +170,7 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.1.0。`driver: mcp` 还要求不低于 1.1.0 |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.2.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0 |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -246,7 +246,7 @@ actions:
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
-`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.1.0，可以载入 1.1.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求 1.2.0 时会报高于当前 Crab。
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.2.0，可以载入 1.1.0 和 1.2.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.2.0 时会报高于当前 Crab。
 
 `GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
@@ -269,7 +269,7 @@ actions:
 | extract | CSS、XPath、JSONPath、regex；可 each 遍历及 filter 转换 |
 | assert | status、contains、not_contains、cookie_exists、header_exists、not_redirected_to |
 | set | 设置后续步骤/输出使用的变量 |
-| script | JavaScript，对 vars 运算并 return 结果；可指定 into |
+| script | JavaScript，对 vars 运算并 return 结果；可指定 into、use 和 credential |
 
 request 的 path 与 url 必须二选一，form 与 json 互斥。默认 GET、UTF-8、不跟随重定向；响应最多 5 MiB。未写 `timeout_ms` 时，空闲读超时等于剩余的能力 deadline（`engine.capability_timeout_seconds`，默认 60 秒），不再固定 15 秒，到点是 `TIMEOUT`。写了 `timeout_ms` 时使用该毫秒数，且不超过剩余 deadline；更短的空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。解码优先 Content-Type charset，其次 HTML meta，再使用步骤 encoding。开启重定向最多 5 跳，只允许同源；Cookie 由账号客户端管理，规则不能自行覆盖 Cookie 头。最终响应仍是 3xx 时：非 GET 且不是登录重定向（表单常见 `follow_redirects: false` 的 302/303）不拒绝；GET 只在后面没有覆盖该状态码的 `assert.status` 时才是 `UPSTREAM_ERROR`。
 
@@ -296,7 +296,7 @@ steps:
 
 输出可采用映射模板，也可用说明式字段。说明式字段省略 value 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。校验器禁止在输出中直接引用 credential。
 
-实际输出会遍历字符串值，替换长度至少 4 个字符的已知凭证和 Cookie 值及其 URL 编码形式。开发追踪里的响应正文和变量摘要，还会把登录步骤里提取、set 或 script 得到的值打成掩码。能力步骤里，引用了 `credential` 的请求成功之后，紧跟着的 extract 和 script 得到的值同样打码；能力步骤里的 set 不打码。长度至少 4。拿这个掩码去调上游，上游会拒绝。登录请求、引用了凭证的能力请求，以及存活检查，响应正文还会再按字段名和令牌形状打一遍，提取失败也一样：键名包含 token、session、secret、password、authorization、jwt、ticket 的值换成 `***`，键名正好是 `sid` 时也换成 `***`（`side` 不会）。JWT 形态，以及 32 位以上的十六进制或 base64 长串，同样换成 `***`。不是 JSON 的这类正文整段换成「登录响应正文已隐藏，可能含凭证」。不带凭证的能力步骤响应体不按字段名打码。映射的键不替换。短于 4 个字符的秘密、尚未登记且不是这次从凭证换出来的上游秘密，以及哈希等其它派生值，在不带凭证的步骤里没有普遍保护。规则应只返回业务需要的数据。
+实际输出会遍历字符串值，替换长度至少 4 个字符的已知凭证和 Cookie 值及其 URL 编码形式。开发追踪里的响应正文和变量摘要，还会把登录步骤里提取、set 或 script 得到的值打成掩码。写了 `credential: true` 的 script，返回的长度至少 4 的字符串还会进入这一次调用的打码名单：正式调用的结果、错误、步骤日志和开发追踪都会换成 `***`，包含 URL 编码。短于 4 的不打。这些字符串不写入配置审计，也不进入进程级已知秘密。能力步骤里，引用了 `credential` 的请求成功之后，紧跟着的 extract 和 script 得到的值同样打码；能力步骤里的 set 不打码。长度至少 4。拿这个掩码去调上游，上游会拒绝。登录请求、引用了凭证的能力请求，以及存活检查，响应正文还会再按字段名和令牌形状打一遍，提取失败也一样：键名包含 token、session、secret、password、authorization、jwt、ticket 的值换成 `***`，键名正好是 `sid` 时也换成 `***`（`side` 不会）。JWT 形态，以及 32 位以上的十六进制或 base64 长串，同样换成 `***`。不是 JSON 的这类正文整段换成「登录响应正文已隐藏，可能含凭证」。不带凭证的能力步骤响应体不按字段名打码。映射的键不替换。短于 4 个字符的秘密、尚未登记且不是这次从凭证换出来的上游秘密，以及哈希等其它派生值，在不带凭证的步骤里没有普遍保护。规则应只返回业务需要的数据。
 
 ```yaml
 - script:
@@ -306,7 +306,31 @@ steps:
     timeout_ms: 1000
 ```
 
-脚本在解释模式与受限全局对象中执行，不提供 Java 类、文件或网络访问入口，vars 不包含 credential 顶层。默认 1000ms、最大 5000ms，源码最多 64 KiB，结果最多 1 MiB。`into` 可保存结果；省略时要求适合合并的对象结果。一次脚本在执行线程上累计分配超过 256 MiB（含已回收的临时对象）时停下，单次过大的分配导致内存不足时也停下，都是 `RULE_MISMATCH`「脚本内存超限」。脚本执行仍在同一 JVM，这不是进程级内存隔离。
+```yaml
+scripts:
+  pack: |
+    function pack(text) {
+      return hermit.hex(hermit.utf8(text));
+    }
+steps:
+  - script:
+      use: [pack]
+      credential: true
+      code: |
+        return { packed: pack(vars.credential.password) };
+```
+
+顶层 `scripts` 是脚本库，名字对应一段源码。名字与模板标识符相同：字母或下划线开头，后面是字母、数字或下划线。每个库按 UTF-8 计不超过 256 KiB。整份 YAML 仍受 1 MiB 和本地上传 1_000_000 字节限制。库源码不是模板，`{{ }}` 不会替换。每次执行重新解析，不缓存。
+
+script 步骤的 `use` 按顺序把这些库接在 `code` 前面，同一个函数作用域。`code` 仍最多 64 KiB，也不是模板。`use` 里的名字必须存在，不能重复。写了 `scripts`（非空）或 `use` 时，`min_crab_version` 必须不低于 1.2.0。Reef 上传和 Crab 载入用同一条校验。没写这两项的包仍可以低于 1.2.0。只写 `credential: true`、没有脚本库也没有 `use`，不因此抬高版本。
+
+`credential: true` 时，脚本里的 `vars.credential` 是当前账号凭证字段的副本。脚本改这份副本，不影响后面的 `{{credential.password}}`。不写或写 false 时，脚本看不到顶层 credential。登录步骤和能力步骤都可以写。要在脚本里使用凭证，写 `credential: true`。先用 set 把 `{{credential.password}}` 抄进普通变量，再被没有这个标记的脚本读到，仍不会因为这次读取而自动打码。
+
+脚本在解释模式与受限全局对象中执行，不提供 Java 类、文件或网络访问入口。全局对象 `hermit` 已冻结，不能改写，里面的函数也不能改。`utf8` / `fromUtf8` 在字符串和 Uint8Array 之间转换。`hex` / `unhex` 使用小写十六进制。`base64` / `unbase64` 是标准 Base64。`base64url` / `unbase64url` 使用 URL 安全字母表，填充的 `=` 可以不写。`randomBytes(n)` 取 1 到 1024 个随机字节。`now()` 是引擎时钟的毫秒数。没有 BigInt，也没有加密原语。返回值只能是字符串、数字、布尔或普通数组和对象。超出安全整数的数会丢精度。Uint8Array 不能直接返回，先转成十六进制或 Base64。不能写 `class` 或 `async`。需要浏览器加密接口的算法，用纯 JavaScript 放进脚本库。SM2、SM3、SM4 也可以这样贴进去，但必须落在下面的预算里。脚本仍然不能访问网络。
+
+默认 1000ms、最大 5000ms，`code` 最多 64 KiB，结果最多 1 MiB，调用栈 1000，一次脚本在执行线程上累计分配超过 256 MiB（含已回收的临时对象）时停下。单次过大的分配导致内存不足时也停下，都是 `RULE_MISMATCH`「脚本内存超限」。脚本执行仍在同一 JVM，这不是进程级内存隔离。`into` 可保存结果；省略时要求适合合并的对象结果。这一版不新增过滤器，仍只有 `md5`、`sha256`、`base64`、`urlencode`、`trim`、`default`、`date`、`rsa`。
+
+只改脚本库、步骤里的 `use` 没有变时，版本对比不会把这次改动算成能力步骤变化。哈希和签名仍覆盖整份 YAML。
 
 ## 发布包与验收
 
@@ -318,7 +342,7 @@ ZIP 只包含 `conch.yaml`、`manifest.json`、`signature.sig`；manifest format
 
 本机可以导入未签名的 YAML，用来在这一台 Crab 上试规则。来源是控制台上传，或 `HERMIT_HOME/local-conches/{conch}.yaml` 加上重新加载。没有在线编辑器。文件名必须等于包名，只认直接放在该目录下的 `*.yaml`。
 
-导入走与 Reef 上传相同的解析和校验，也同样拒绝 `actions` 里重复的能力名（`DUPLICATE_ACTION`，带行号）：MCP 的 `conch_validate`、`conch_save_local`，控制台导入和 CLI 导入都会拦下，不会在本地通过、到 Reef 上传才被拒。`config` 仍然不能写 `type: secret`。单文件上限 1 MiB。控制台这次请求还受 Crab 现有请求体上限（1_000_000 字节）约束。校验失败返回 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，每项含 `code`、`path`、`message`。能定位到 YAML 行时再加 `line`（从 1 计）；缺字段这类定位不到的情况没有 `line`。失败不写文件。
+导入走与 Reef 上传相同的解析和校验，也同样拒绝 `actions` 里重复的能力名（`DUPLICATE_ACTION`，带行号），以及顶层 `scripts` 里重复的库名（`SCRIPT_STEP`，带行号，message 为「脚本库 名字 重复」，不回显源码）：MCP 的 `conch_validate`、`conch_save_local`，控制台导入和 CLI 导入都会拦下，不会在本地通过、到 Reef 上传才被拒。`config` 仍然不能写 `type: secret`。单文件上限 1 MiB。控制台这次请求还受 Crab 现有请求体上限（1_000_000 字节）约束。校验失败返回 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，每项含 `code`、`path`、`message`。能定位到 YAML 行时再加 `line`（从 1 计）；缺字段这类定位不到的情况没有 `line`。失败不写文件。
 
 名字只和本机注册表里的正式包、以及 `subscriptions` 里的名字冲突。冲突是 HTTP 409，错误码仍是 `INVALID_INPUT`。已安装正式包时拒绝更换另一把 Reef 公钥也是 `CONFLICT`。订阅一个已经导入的本地规则包同样是 409，`message` 为「与本机本地规则包同名」。与已有本地规则包同名（含未能载入的坏包，或目录里已经有同名 yaml）必须确认后才覆盖：控制台不带 `confirm=true` 是 409 `CONFLICT`，CLI 不带 `--replace` 退出 1，都不写文件。确认后版本以 YAML 为准。账号和凭证留在 `(LOCAL, conch, account)` 上，删除本地规则包也不清它们。
 

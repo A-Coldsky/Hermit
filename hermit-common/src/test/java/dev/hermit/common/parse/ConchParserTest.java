@@ -38,6 +38,7 @@ class ConchParserTest {
         assertThat(doc.auth().aliveCheck().expectNotRedirect()).isEqualTo("/login.aspx");
         assertThat(doc.auth().aliveCheck().request()).containsEntry("path", "/home.aspx");
         assertThat(doc.healthCheck()).containsExactly(Map.of("action", "list_todo"));
+        assertThat(doc.scripts()).isEmpty();
         assertThat(doc.actions().get("list_todo").input().get("page").defaultValue()).isEqualTo(1);
         assertThat(doc.actions().get("list_todo").idempotent()).isTrue();
         assertThat(doc.actions().get("list_todo").mcp().readOnly()).isTrue();
@@ -221,6 +222,41 @@ class ConchParserTest {
                 "base_url: http://example.test",
                 "tags: [");
         assertReportedLine(open, 7, true);
+    }
+
+    @Test
+    void scriptsKeepSourceAndRejectNonStrings() {
+        ConchDoc doc = ConchParser.parse("""
+                conch: sample_conch
+                version: 1.0.0
+                min_crab_version: 1.2.0
+                scripts:
+                  lib: |
+                    function raw() { return "X{{credential.password}}Y"; }
+                """);
+        assertThat(doc.scripts()).containsEntry("lib", "function raw() { return \"X{{credential.password}}Y\"; }\n");
+
+        assertThatThrownBy(() -> ConchParser.parse("""
+                conch: sample_conch
+                version: 1.0.0
+                min_crab_version: 1.2.0
+                scripts: [lib]
+                """)).isInstanceOf(ConchParseException.class)
+                .hasMessageContaining("必须是映射");
+
+        String bulky = "secret-source-marker";
+        ConchParseException bad = org.assertj.core.api.Assertions.catchThrowableOfType(
+                () -> ConchParser.parse("""
+                        conch: sample_conch
+                        version: 1.0.0
+                        min_crab_version: 1.2.0
+                        scripts:
+                          lib: { leak: %s }
+                        """.formatted(bulky)),
+                ConchParseException.class);
+        assertThat(bad).isNotNull();
+        assertThat(bad.getMessage()).contains("必须是字符串").doesNotContain(bulky);
+        assertThat(bad.path()).isEqualTo("scripts.lib");
     }
 
     private static void assertReportedLine(String yaml, int snakeLine, boolean jacksonIsEarlier) {

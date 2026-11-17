@@ -1,6 +1,7 @@
 package dev.hermit.crab.engine;
 
 import java.net.URI;
+import java.time.Clock;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -35,11 +36,16 @@ final class StepRunner {
 
     private final TemplateEngine templates;
     private final FilterRegistry filters;
-    private final ScriptStep scripts = new ScriptStep();
+    private final ScriptStep scripts;
 
     StepRunner(TemplateEngine templates, FilterRegistry filters) {
+        this(templates, filters, Clock.systemUTC());
+    }
+
+    StepRunner(TemplateEngine templates, FilterRegistry filters, Clock clock) {
         this.templates = templates;
         this.filters = filters;
+        this.scripts = new ScriptStep(clock);
     }
 
     /**
@@ -55,7 +61,7 @@ final class StepRunner {
             URI base,
             long deadlineNanos
     ) {
-        return run(step, vars, expectPrefix, client, afterExchange, cookies, base, deadlineNanos, false);
+        return run(step, vars, expectPrefix, client, afterExchange, cookies, base, deadlineNanos, false, Map.of());
     }
 
     Outcome run(
@@ -67,7 +73,8 @@ final class StepRunner {
             BasicCookieStore cookies,
             URI base,
             long deadlineNanos,
-            boolean capture
+            boolean capture,
+            Map<String, String> libraries
     ) {
         Object rendered = "script".equals(step.type())
                 ? renderScript(step.def(), vars)
@@ -81,18 +88,18 @@ final class StepRunner {
             case "extract" -> extract(spec, vars, deadlineNanos, capture);
             case "assert" -> check(spec, vars, cookies, capture);
             case "set" -> set(spec, vars, capture);
-            case "script" -> script(spec, vars, deadlineNanos, capture);
+            case "script" -> script(spec, vars, deadlineNanos, capture, libraries);
             default -> throw new RuleProblem(
                     ErrorCode.RULE_MISMATCH, "不支持的步骤类型 " + step.type(), null, null, null);
         };
     }
 
-    /** code 是字面量。into 和 timeout_ms 仍走模板。 */
+    /** code、use 和 credential 是字面量。into 和 timeout_ms 仍走模板。 */
     private Map<String, Object> renderScript(Map<String, Object> def, Map<String, Object> vars) {
         LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : def.entrySet()) {
-            if ("code".equals(entry.getKey())) {
-                copy.put("code", entry.getValue());
+            if ("code".equals(entry.getKey()) || "use".equals(entry.getKey()) || "credential".equals(entry.getKey())) {
+                copy.put(entry.getKey(), entry.getValue());
             } else {
                 copy.put(entry.getKey(), templates.render(entry.getValue(), vars));
             }
@@ -165,10 +172,20 @@ final class StepRunner {
         return new Outcome(null, null, null, null, false, DevTraceDraft.variablePiece("set", spec));
     }
 
-    private Outcome script(Map<String, Object> spec, Map<String, Object> vars, long deadlineNanos, boolean capture) {
-        Map<String, Object> before = capture ? new LinkedHashMap<>(vars) : null;
-        Outcome outcome = scripts.run(spec, vars, deadlineNanos);
+    private Outcome script(
+            Map<String, Object> spec,
+            Map<String, Object> vars,
+            long deadlineNanos,
+            boolean capture,
+            Map<String, String> libraries
+    ) {
+        boolean mask = Boolean.TRUE.equals(spec.get("credential"));
+        Map<String, Object> before = (capture || mask) ? new LinkedHashMap<>(vars) : null;
+        Outcome outcome = scripts.run(spec, vars, deadlineNanos, libraries);
         Map<String, Object> produced = changed(before, vars);
+        if (mask) {
+            CallSecrets.remember(produced);
+        }
         rememberDerived(produced);
         if (!capture) {
             return outcome;

@@ -643,6 +643,54 @@ public class LocalConchBehaviorTest {
         }
     }
 
+    @Test
+    void duplicateScriptLibrariesAreRejectedLocallyWithALine() throws Exception {
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("duplicate-scripts"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource);
+            String yaml = """
+                    conch: script_dup
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.2.0
+                    title: 标题
+                    description: 说明
+                    scripts:
+                      lib: |
+                        function tag() { return "A"; }
+                      lib: |
+                        function tag() { return "source-marker"; }
+                    credentials: {}
+                    actions:
+                      run:
+                        title: 能力
+                        description: 说明
+                        output:
+                          value: { type: string, description: 结果, value: ok }
+                        examples:
+                          - input: {}
+                            output: { value: ok }
+                        notes: 注意
+                        related: [run]
+                        steps:
+                          - script:
+                              use: [lib]
+                              code: |
+                                return { value: tag() };
+                    """;
+            LocalConches.CheckResult checked = local.check(yaml.getBytes(StandardCharsets.UTF_8));
+            assertThat(checked.ok()).isFalse();
+            assertThat(checked.errors()).anySatisfy(issue -> {
+                assertThat(issue.code()).isEqualTo("SCRIPT_STEP");
+                assertThat(issue.message()).isEqualTo("脚本库 lib 重复");
+                assertThat(issue.message()).doesNotContain("source-marker");
+                assertThat(issue.line()).isNotNull();
+            });
+            assertThatThrownBy(() -> local.importBytes(yaml.getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                    .isInstanceOf(LocalConchException.class);
+            assertThat(crab.paths.localConches().resolve("script_dup.yaml")).doesNotExist();
+        }
+    }
+
     public static String ping(String name, String version) {
         return """
                 conch: %s

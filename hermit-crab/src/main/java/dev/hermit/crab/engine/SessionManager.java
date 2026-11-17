@@ -53,6 +53,10 @@ public final class SessionManager implements AutoCloseable {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
+    public Clock clock() {
+        return clock;
+    }
+
     public void resetLoginPause(SessionKey key) {
         AccountState state = states.computeIfAbsent(key, this::newState);
         state.lock.lock();

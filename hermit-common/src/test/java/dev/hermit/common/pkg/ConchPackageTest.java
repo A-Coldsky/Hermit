@@ -157,6 +157,45 @@ class ConchPackageTest {
         return new ObjectMapper().writeValueAsBytes(node);
     }
 
+    @Test
+    void signatureCoversScriptLibraryBytes() throws Exception {
+        String yaml = """
+                conch: sample_conch
+                version: 1.0.0
+                min_crab_version: 1.2.0
+                scripts:
+                  lib: |
+                    function tag() { return "A"; }
+                """;
+        byte[] zip = ConchPackage.write(yaml.getBytes(StandardCharsets.UTF_8), keys.getPrivate());
+        VerifiedConch verified = ConchPackage.readVerified(zip, keys.getPublic());
+        assertThat(verified.conchDoc().scripts().get("lib")).contains("return \"A\"");
+
+        Map<String, byte[]> entries = unzip(zip);
+        byte[] tampered = entries.get("conch.yaml").clone();
+        byte[] marker = "return \"A\"".getBytes(StandardCharsets.UTF_8);
+        int at = indexOf(tampered, marker);
+        assertThat(at).isGreaterThanOrEqualTo(0);
+        tampered[at + "return \"".length()] = 'B';
+        assertReason(rezip(replaced(entries, "conch.yaml", tampered)), PackageReason.DIGEST_MISMATCH);
+    }
+
+    private static int indexOf(byte[] data, byte[] needle) {
+        for (int i = 0; i + needle.length <= data.length; i++) {
+            boolean match = true;
+            for (int j = 0; j < needle.length; j++) {
+                if (data[i + j] != needle[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private void assertReason(byte[] zip, PackageReason reason) {
         assertReason(zip, keys.getPublic(), reason);
     }

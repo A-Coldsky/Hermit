@@ -53,6 +53,8 @@ class LoginSnapshotEngineTest {
     private final AtomicInteger logins = new AtomicInteger();
     private final AtomicInteger failUses = new AtomicInteger();
     private final CopyOnWriteArrayList<String> paths = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<String> order = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<String> queries = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<String> issued = new CopyOnWriteArrayList<>();
     private CrabDatabase database;
     private EncryptedSessionPersistence cookies;
@@ -383,8 +385,83 @@ class LoginSnapshotEngineTest {
         }
     }
 
+    @Test
+    void lostSessionMasksTheBodyTokenSentOnTheQueryString() throws Exception {
+        try (SessionManager sessions = open(EngineSettings.defaults(), Clock.systemUTC())) {
+            ConchRegistry registry = registry(doc(auth(loginSteps("/login", true)), querySteps(), false));
+            RuleEngine engine = new RuleEngine(registry, sessions);
+            assertThat(engine.execute(call("alice", Origin.OFFICIAL)).success()).isTrue();
+            failUses.set(1);
+            ExecutionResult expired = engine.execute(call("alice", Origin.OFFICIAL));
+            assertThat(expired.success()).isFalse();
+            assertThat(expired.error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(logins).hasValue(1);
+            assertThat(count("SELECT COUNT(*) FROM session_login")).isZero();
+            String token = issued.get(0);
+            assertMasked(exposed(expired), token);
+            assertThat(queries).anyMatch(query -> query.contains(URLEncoder.encode(token, StandardCharsets.UTF_8)));
+            assertThat(paths).contains("/lost/" + token);
+        }
+    }
+
+    @Test
+    void idempotentReplayMasksBothBodyTokens() throws Exception {
+        try (SessionManager sessions = open(EngineSettings.defaults(), Clock.systemUTC())) {
+            ConchRegistry registry = registry(doc(auth(loginSteps("/login", true)), querySteps(), true));
+            RuleEngine engine = new RuleEngine(registry, sessions);
+            assertThat(engine.execute(call("alice", Origin.LOCAL)).success()).isTrue();
+            failUses.set(1);
+            CapturingSink sink = new CapturingSink();
+            engine.bindDevTraceSink(sink);
+            ExecutionResult replayed = engine.execute(call("alice", Origin.LOCAL));
+            assertThat(replayed.success()).isTrue();
+            assertThat(logins).hasValue(2);
+            assertThat(sink.opens).isEqualTo(1);
+            String oldToken = issued.get(0);
+            String newToken = issued.get(1);
+            assertMasked(exposed(replayed), oldToken, newToken);
+            assertMasked(sink.body, oldToken, newToken);
+            assertThat(queries).anyMatch(query -> query.contains(URLEncoder.encode(oldToken, StandardCharsets.UTF_8)));
+            assertThat(queries).anyMatch(query -> query.contains(URLEncoder.encode(newToken, StandardCharsets.UTF_8)));
+        }
+    }
+
+    @Test
+    void supplementalLoginRunsBeforeTheFirstCapabilityRequest() throws Exception {
+        try (SessionManager sessions = open(EngineSettings.defaults(), Clock.systemUTC())) {
+            ConchRegistry registry = new ConchRegistry();
+            registry.put(doc(auth("""
+                    - request: { method: POST, path: /login-cookie, form: { username: "{{credential.username}}" } }
+                    - assert: { cookie_exists: sid }
+                    """), """
+                    - request: { method: POST, path: /ready, form: { q: ping } }
+                    """, false));
+            RuleEngine engine = new RuleEngine(registry, sessions);
+            assertThat(engine.execute(call("alice", Origin.OFFICIAL)).success()).isTrue();
+            assertThat(count("SELECT COUNT(*) FROM session_login")).isZero();
+
+            registry.put(doc(auth(loginSteps("/login", true)), """
+                    - request: { method: POST, path: /first, form: { q: ping } }
+                    - request: { method: GET, path: "/second/{{login.token}}" }
+                    """, false));
+            ExecutionResult filled = engine.execute(call("alice", Origin.OFFICIAL));
+            assertThat(filled.success()).isTrue();
+            assertThat(logins).hasValue(2);
+            int loginAt = order.lastIndexOf("/login");
+            int firstAt = order.lastIndexOf("/first");
+            assertThat(loginAt).isGreaterThanOrEqualTo(0);
+            assertThat(firstAt).isGreaterThan(loginAt);
+            assertThat(order.get(firstAt + 1)).startsWith("/second/");
+        }
+    }
+
     private void handle(HttpExchange exchange) throws IOException {
         String path = exchange.getRequestURI().getPath();
+        String rawQuery = exchange.getRequestURI().getRawQuery();
+        order.add(path);
+        if (rawQuery != null) {
+            queries.add(rawQuery);
+        }
         exchange.getRequestBody().readAllBytes();
         if (path.equals("/huge")) {
             logins.incrementAndGet();
@@ -418,7 +495,7 @@ class LoginSnapshotEngineTest {
             respond(exchange, 500, "{}".getBytes(StandardCharsets.UTF_8), "application/json");
             return;
         }
-        if (path.startsWith("/use") && failUses.get() > 0) {
+        if ((path.startsWith("/use") || path.startsWith("/lost")) && failUses.get() > 0) {
             failUses.decrementAndGet();
             respond(exchange, 401, "{}".getBytes(StandardCharsets.UTF_8), "application/json");
             return;
@@ -512,6 +589,36 @@ class LoginSnapshotEngineTest {
         return """
                 - request: { method: GET, path: "/use/{{login.token}}/{{login.sid}}" }
                 """;
+    }
+
+    /** 令牌只来自登录正文，能力把它放进查询串，也放进路径，好让返回的步骤日志能看见打码结果。 */
+    private static String querySteps() {
+        return """
+                - request:
+                    method: GET
+                    path: "/lost/{{login.token}}"
+                    query: { sid: "{{login.token}}" }
+                """;
+    }
+
+    private static String exposed(ExecutionResult result) {
+        StringBuilder text = new StringBuilder();
+        text.append(result.stepLogs());
+        if (result.error() != null) {
+            text.append(result.error().message());
+            if (result.error().summary() != null) {
+                text.append(result.error().summary());
+            }
+        }
+        return text.toString();
+    }
+
+    private static void assertMasked(String text, String... secrets) {
+        assertThat(text).contains("***");
+        for (String secret : secrets) {
+            SecretChecks.absent(text, secret);
+            SecretChecks.absent(text, URLEncoder.encode(secret, StandardCharsets.UTF_8));
+        }
     }
 
     private static String conch(

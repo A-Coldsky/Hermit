@@ -15,17 +15,13 @@ import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.MapperFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.json.JsonMapper;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.crab.engine.ConchDigest;
 import dev.hermit.crab.engine.ExecutionError;
 import dev.hermit.crab.engine.ExecutionRequest;
 import dev.hermit.crab.engine.ExecutionResult;
@@ -75,15 +71,6 @@ public final class Invoker {
             "规则包已停用：这版规则没有通过当前校验，所有账号暂时都不能调用。到 Crab 控制台的规则包详情里更新、退回或改好后重新导入，再调用。";
     /** 等待确认期间规则包被更新、回滚或重新导入。409，不执行。 */
     public static final String CHANGED_AFTER_CONFIRM = "确认期间规则包已经变化，没有执行。请重新发起，并确认新版本。";
-    /**
-     * 键按字典序的紧凑 JSON。同一份文档两次相同；不用对象标识 {@code hashCode}。
-     * 记录组件和嵌套映射都参与，所以步骤、confirm、read_only、上游 URL 变了令牌就变。
-     */
-    private static final ObjectMapper CANONICAL = JsonMapper.builder()
-            .enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY)
-            .enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
-            .build();
-
     private final ConchRegistry registry;
     private final AccountStore accounts;
     private final CredentialVault vault;
@@ -386,14 +373,16 @@ public final class Invoker {
             }
             InvokeOutcome outcome = execute(
                     principal, doc, origin, action, input, account, secrets, merged, Optional.of(key), channel, traceId);
-            idempotency.save(
-                    origin,
-                    doc.conch(),
-                    account.account(),
-                    action,
-                    key,
-                    new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8),
-                    bodySha256);
+            if (!loginInputRequired(outcome)) {
+                idempotency.save(
+                        origin,
+                        doc.conch(),
+                        account.account(),
+                        action,
+                        key,
+                        new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8),
+                        bodySha256);
+            }
             return outcome;
         } finally {
             idempotencyInFlight.remove(lockId, mine);
@@ -411,11 +400,16 @@ public final class Invoker {
      * 同一对象或同一份内容两次计算相同。本地覆盖可以不改版本号，所以不能只比版本。
      */
     public static String snapshotToken(ConchDoc doc) {
-        try {
-            return BodyDigests.sha256(CANONICAL.writeValueAsBytes(doc));
-        } catch (JsonProcessingException ex) {
-            throw new IllegalStateException("snapshot token", ex);
+        return ConchDigest.sha256(doc);
+    }
+
+    /** 待输入登录不能缓存 24 小时，否则同一幂等键在用户提交之后仍回放 409。 */
+    private static boolean loginInputRequired(InvokeOutcome outcome) {
+        if (outcome == null || outcome.body() == null) {
+            return false;
         }
+        JsonNode code = ApiJson.tree(outcome.body()).path("error").path("code");
+        return code.isTextual() && ErrorCode.LOGIN_INPUT_REQUIRED.name().equals(code.asText());
     }
 
     /** 需要确认、但还没带上匹配令牌时的 message。令牌写在句子里，响应头用同一值。 */

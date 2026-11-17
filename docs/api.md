@@ -101,7 +101,7 @@ POST /api/{conch}/{action}           JSON object body
 
 使用 action 的 effectiveMethod，方法不匹配返回 405。账号用请求头 `X-Hermit-Account` 或查询参数 `account` 选择。两个都没有时使用默认账号；只有一个时用那一个；两个都有且相同则用该账号；两个都有且不相同，并且这次调用已经通过权限、能力停用和能力是否存在这些检查时，返回 400 `INVALID_INPUT`，message 为「请求头 X-Hermit-Account 与查询参数 account 不一致。」，不调用上游。没有权限仍是 403，能力已停用或不存在仍是原来的 404。空白的头或查询参数视为没传。选出的账号在组能力入参之前拿掉，所以 `?account=` 不会因为入参 `additionalProperties: false` 变成「输入无效」。GET 的能力入参已经有字段 `account` 时，查询参数改为 `_account`，`account` 仍传给能力；这时冲突 message 点名 `_account`。POST 的查询参数始终是 `account`，JSON 正文里的同名字段仍是能力入参。未知账号是 404 `ACCOUNT_NOT_FOUND`，message 为「没有这个账号。」。HTTP 与 MCP 共用 `Invoker`，不绕过权限和能力停用检查，账号仍按 `(origin, conch, account)` 隔离。动态 `/openapi.json` 在每个能力上声明这个查询参数，并保留请求头。API Key 按 conches/actions/readOnly 限制能力，**没有按账号限制的 scope**；能调用能力的 Key 可以选择该 Conch 下的账号。已经入库的空 `conches` 在 `ApiKeyPrincipal` 里仍表示不按包名限制，空 `actions` 仍表示不按能力名限制。`conches` 与 `actions` 都为空（`all: true`，或更早的空范围行）可以调用本地规则包。写了 `conches` 或 `actions` 的 Key，本地规则包仍要出现在 `conches` 里才能调用，`tools/list` 也不列出未点名的本地规则包。只读限制仍然有效。新 Key 不能再靠留空得到这个范围。`conches` 里的每个名字必须是当前已加载的规则包，或仍在停用墓碑 `disabled_conches` 里的名字；未知名字创建时返回 `INVALID_INPUT`，并在 message 里列出这些名字。`actions` 里的每一项必须是当前已加载能力的 `conch.action`。裸能力名（例如 `list_todo`）或尚不存在的能力在创建时返回 `INVALID_INPUT`，不会先收下再让调用一律 `FORBIDDEN`。停用墓碑只放行规则包名，不放行该包上已经卸下的能力。CLI `apikey create --all` / `--conches` / `--actions` 使用同一规则。
 
-POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，有效期 24 小时，另存请求体的 SHA-256（小写十六进制，schema 10 的 `idempotency.body_sha256`）。摘要是网关读到的原始字节，不是规范化 JSON：空格或字段顺序不同算另一个请求体。同一个键正在执行时，后到的请求等它结束再查缓存；不同的键互不等待，执行结束后不留锁。相同键且摘要相同，回放第一次的响应（含旧 traceId），响应头 `Idempotent-Replayed: true`，不再执行。摘要不同返回 409 `IDEMPOTENCY_CONFLICT`，message 为 `Idempotency-Key was already used with a different request body`，不执行、不覆盖已存响应。升级前写入、摘要为 null 的行也无法证明请求体相同，重放同样是这个冲突，直到 24 小时过期。键仍不包含 API Key 身份或规则版本。
+POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，有效期 24 小时，另存请求体的 SHA-256（小写十六进制，schema 10 的 `idempotency.body_sha256`）。摘要是网关读到的原始字节，不是规范化 JSON：空格或字段顺序不同算另一个请求体。同一个键正在执行时，后到的请求等它结束再查缓存；不同的键互不等待，执行结束后不留锁。相同键且摘要相同，回放第一次的响应（含旧 traceId），响应头 `Idempotent-Replayed: true`，不再执行。摘要不同返回 409 `IDEMPOTENCY_CONFLICT`，message 为 `Idempotency-Key was already used with a different request body`，不执行、不覆盖已存响应。升级前写入、摘要为 null 的行也无法证明请求体相同，重放同样是这个冲突，直到 24 小时过期。键仍不包含 API Key 身份或规则版本。登录停在 `ask` 时的 409 `LOGIN_INPUT_REQUIRED` 不写入这份缓存：同一键在用户提交验证码之后会重新执行，不会回放那次 409。
 
 `effectiveConfirm()` 为 true 的 HTTP 调用必须同时带请求头 `X-Hermit-Confirm: true`（去空白后恰好是 `true`）和 `X-Hermit-Confirm-Token`（去掉首尾空白后等于当前规则包的快照令牌）。缺确认、值不是 `true`，或没有令牌时，在权限、能力停用、账号和凭证检查之后、幂等缓存之前返回 409 `CONFLICT`，message 为「该操作需要确认。请带上请求头 X-Hermit-Confirm: true 和 X-Hermit-Confirm-Token: {令牌} 后重试。」，响应头 `X-Hermit-Confirm-Token` 是这次读到的文档的令牌。带了令牌但和当前快照不一致时，同样是 409 `CONFLICT`，message 为「确认期间规则包已经变化，没有执行。请重新发起，并确认新版本。」。能力已经不再要求确认时，只要带了对不上的令牌，也是这句，不执行。这两次都不读、不写幂等缓存，也不访问上游。令牌是当前 `ConchDoc` 规范 JSON 的 SHA-256，小写十六进制；步骤、`confirm`、`read_only` 或上游 URL 变了令牌就变，同一份文档两次相同。不是秘密，只出现在这次响应里。两个头都一致才执行这次读到的文档。MCP 入口不看这两个头，确认走 elicitation。
 
@@ -113,7 +113,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | AUTH_FAILED | 网关 Key 无效 401；清单令牌失效导致的同步 401；上游登录失败 422 |
 | FORBIDDEN | 403 |
 | NOT_FOUND / ACCOUNT_NOT_FOUND / CAPABILITY_DISABLED | 404 |
-| NOT_CONFIGURED / CONCH_DISABLED / IDEMPOTENCY_CONFLICT / CONFLICT | 409 |
+| NOT_CONFIGURED / CONCH_DISABLED / IDEMPOTENCY_CONFLICT / CONFLICT / LOGIN_INPUT_REQUIRED | 409 |
 | SESSION_EXPIRED / RULE_MISMATCH | 422 |
 | UPSTREAM_ERROR | 502 |
 | TIMEOUT | 504 |
@@ -152,6 +152,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | DELETE | `/conches/{conch}/accounts/{account}` | 删除账号/凭证并使会话失效 |
 | POST | `/conches/{conch}/accounts/{account}/default` | 设默认账号 |
 | GET / PUT | `/conches/{conch}/accounts/{account}/credentials` | 仅字段名 / `{字段:字符串}` 写入；空字符串表示删除。空 body、`{}`，或写入后仍缺必填字段，返回 400 `INVALID_INPUT`。有必填字段时，空 body 和 `{}` 与只填了部分字段用同一句：`message` 为「账号 {账号名} 还没填写凭证：{控制台显示名}（{字段名}）。请点账号 {账号名} 的「填写凭证」补上。不要把口令、Cookie 或令牌发给 AI。」，字段按声明顺序，不是字母序。没有必填字段时 `message` 为「没有要保存的凭证字段。」。正文用 `requestId` 和 `requestNote`「请求编号，不可查追踪」，不带 `traceId`，也不写 `X-Hermit-Trace`。已保存字段可以只改其中几项。凭证无法解密时，必须把已存字段都重新写成非空值。`oauth_token` 不出现在字段名里，也无法解密时也不要求重填；PUT 写它是 400，message 为「oauth_token 由控制台连接上游写入，不能手工填写。」 |
+| GET / POST / DELETE | `/conches/{conch}/accounts/{account}/login-input` | 待输入的登录。GET 没有时 404，message 为「没有待输入的登录。」。有时 `data` 为 `{kind, label, hint, expiresAt, hasImage, canResend, resendAfter}`。`kind` 是 `image` 或 `code`。`canResend` 表示次数还没用完，冷却中仍是 true。`resendAfter` 是剩余冷却秒数，次数用完时为 0。POST 正文 `{"value":"..."}`，接着跑完剩余登录步骤；`value` 不是字符串时 400，message 为「验证码必须是字符串。」。空、超过 64 个字符或含控制字符是 400「验证码必须是 1 到 64 个字符，且不能含控制字符。」。规则包已变是 409 `CONFLICT`「规则包已经更新，请重新登录」，并丢掉这次等待。DELETE 放弃。图片字节是 GET `.../login-input/image`，忽略查询参数；`Content-Type` 按魔数，`Cache-Control: no-store`，`X-Content-Type-Options: nosniff`。没有图片是 404。POST `.../login-input/resend` 正文 `{}`，重跑 `ask` 的前一个 request。没到间隔是 409 `CONFLICT`「换得太快，请稍后再试。」。次数用完是「换验证码的次数已经用完。请放弃这次登录后重新登录。」。这一步不能重发是「这一步不能重新发送。」。图片至少间隔 2 秒、最多 10 次；验证码至少间隔 60 秒、最多 3 次 |
 | POST | `/conches/{conch}/accounts/{account}/test-login` | 测试登录。包已停用（当前校验不让载入）时 409 `CONCH_DISABLED`，正式包是「规则包已停用，暂时不能测试登录。更新到能通过校验的版本后再试。」，本地包是「…改好规则重新导入后再试。」，控制台不给这个按钮。成功才解除自动登录暂停；失败、缺凭证或无法解密都不解除。不写调用记录。失败响应用 `requestId` 和 `requestNote`「请求编号，不可查追踪」，不带 `traceId`，也不写 `X-Hermit-Trace`，控制台不把这个编号链到调用详情 |
 | POST | `/conches/{conch}/accounts/{account}/oauth/start` | 开始上游 OAuth。OAuth 包返回 `{authorizationUrl}`。不是 OAuth 是 409 `NOT_CONFIGURED`，message 为「这个规则包不是 OAuth 登录。」。授权端点或令牌端点的主机不在 `allowed_hosts` 是同一错误码，「上游主机不在允许列表中。」。发现不到端点是「无法发现上游的授权端点。」。state 和 PKCE verifier 只放内存，10 分钟，用过即丢。已设置控制台口令时这条要 Cookie |
 | DELETE | `/conches/{conch}/accounts/{account}/oauth` | 删掉该账号的 `oauth_token`，并使本机登录会话失效。返回 `{oauth:{connected:false, expiresAt:null}}`。不是 OAuth 是 409，message 与 start 相同。账号不存在是 404 |
@@ -220,7 +221,9 @@ Conch 列表和详情的包级 `needsConfiguration` 用同一套计算：账号�
 | `missingLabels` | 同一批名字的「显示名（键名）」，顺序与 `missingFields` 相同。显示名为空或与键名相同时只剩键名 |
 | `credentialsUnreadable` | 已存密文无法解密 |
 | `credentialMessage` | 无法解密时为「凭证无法解密，需重新配置」，否则 JSON `null` |
-| `loginPaused` | 连续登录失败达到 `engine.max_login_failures` 后为 true |
+| `loginPaused` | 连续登录失败达到 `engine.max_login_failures` 后为 true。停在 `ask` 等待输入不算一次失败 |
+| `loginInputRequired` | 该账号有一条还没过期的待输入登录时为 true |
+| `loginInputExpiresAt` | 这条等待的到期时间，ISO-8601；没有时为 JSON `null` |
 | `loginPauseReason` | 暂停时为原因，否则 `null` |
 | `loginPauseRecovery` | 暂停时说明恢复方法：修正凭证后对该账号执行测试登录，成功才恢复。否则 `null` |
 | `oauth` | 非 OAuth 包为 JSON `null`。OAuth 包为 `{connected, expiresAt}`。未连接，或上游没有给到期时间时，`expiresAt` 为 JSON `null`。`needsConfiguration` 不把「还没连接上游」算进去 |

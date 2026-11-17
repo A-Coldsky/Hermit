@@ -6,10 +6,14 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.time.Instant;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
@@ -24,6 +28,8 @@ import dev.hermit.crab.store.Db;
  * A manual update while the package is still loaded uses {@link #UPDATE_MESSAGE} and also does not download.
  */
 public final class DisabledConches {
+
+    private static final Logger LOG = Logger.getLogger(DisabledConches.class.getName());
 
     /**
      * HTTP/MCP call, and manual update, when the tombstone remains and the registry has no package.
@@ -41,6 +47,7 @@ public final class DisabledConches {
     private final Set<String> names = ConcurrentHashMap.newKeySet();
     private final Map<String, String> versions = new ConcurrentHashMap<>();
     private final Map<String, Instant> disabledAt = new ConcurrentHashMap<>();
+    private final List<Consumer<String>> disabledListeners = new CopyOnWriteArrayList<>();
 
     public DisabledConches(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -89,6 +96,20 @@ public final class DisabledConches {
         }
         if (at != null) {
             disabledAt.put(conch, at);
+        }
+        for (Consumer<String> listener : disabledListeners) {
+            try {
+                listener.accept(conch);
+            } catch (RuntimeException ex) {
+                LOG.warning("disabled conch listener failed: " + ex.getClass().getName());
+            }
+        }
+    }
+
+    /** Reef 停用后丢掉该包的待输入登录。包仍留在注册表里，所以不能只靠移除回调。 */
+    public void onDisabled(Consumer<String> listener) {
+        if (listener != null) {
+            disabledListeners.add(listener);
         }
     }
 

@@ -286,6 +286,7 @@ final class McpErrors {
             case "RULE_MISMATCH" -> "规则与上游响应不一致。请检查已安装的规则包版本。";
             case "INTERNAL" -> "内部错误。请稍后重试。";
             case "IDEMPOTENCY_CONFLICT" -> "这个 Idempotency-Key 已经用于另一个请求体。请换一个新键，或原样重发上一次的请求体。";
+            case "LOGIN_INPUT_REQUIRED" -> "到 Crab 控制台的账号页输入验证码后再试。不要把验证码发给 AI。";
             default -> "查看 error.code 后重试。";
         };
     }

@@ -129,7 +129,8 @@ final class StepRunner {
         }
         vars.put("response", result.view());
         if (!capture) {
-            return new Outcome(result.method(), result.path(), result.status(), null, result.sessionLost());
+            return new Outcome(
+                    result.method(), result.path(), result.status(), null, result.sessionLost(), result.bodyBytes());
         }
         return new Outcome(
                 result.method(),
@@ -138,7 +139,8 @@ final class StepRunner {
                 null,
                 result.sessionLost(),
                 DevTraceDraft.requestPiece(
-                        spec, result.method(), result.path(), result.status(), result.headers(), result.body()));
+                        spec, result.method(), result.path(), result.status(), result.headers(), result.body()),
+                result.bodyBytes());
     }
 
     private Outcome extract(
@@ -347,9 +349,25 @@ record Outcome(
         Integer status,
         Integer extractCount,
         boolean sessionLost,
-        Map<String, Object> capture
+        Map<String, Object> capture,
+        byte[] bodyBytes
 ) {
     Outcome(String method, String path, Integer status, Integer extractCount, boolean sessionLost) {
-        this(method, path, status, extractCount, sessionLost, null);
+        this(method, path, status, extractCount, sessionLost, null, null);
+    }
+
+    Outcome(
+            String method,
+            String path,
+            Integer status,
+            Integer extractCount,
+            boolean sessionLost,
+            Map<String, Object> capture
+    ) {
+        this(method, path, status, extractCount, sessionLost, capture, null);
+    }
+
+    Outcome(String method, String path, Integer status, Integer extractCount, boolean sessionLost, byte[] bodyBytes) {
+        this(method, path, status, extractCount, sessionLost, null, bodyBytes);
     }
 }

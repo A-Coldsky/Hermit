@@ -39,6 +39,7 @@ public final class SessionManager implements AutoCloseable {
     private final LoginSnapshotStore loginSnapshots;
     private final EngineSettings settings;
     private final Clock clock;
+    private final PendingLogins pending;
     private final ConcurrentMap<SessionKey, AccountState> states = new ConcurrentHashMap<>();
     private volatile boolean closed;
 
@@ -64,6 +65,11 @@ public final class SessionManager implements AutoCloseable {
         this.loginSnapshots = Objects.requireNonNull(loginSnapshots, "loginSnapshots");
         this.settings = Objects.requireNonNull(settings, "settings");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.pending = new PendingLogins(this.clock);
+    }
+
+    public PendingLogins pending() {
+        return pending;
     }
 
     public Clock clock() {
@@ -86,10 +92,12 @@ public final class SessionManager implements AutoCloseable {
         loginSnapshots.delete(key);
         AccountState state = states.get(key);
         if (state == null) {
+            pending.discard(key);
             return;
         }
         state.lock.lock();
         try {
+            pending.discard(key);
             state.loggedIn = false;
             state.lastActive = null;
             state.seenCookieValues.clear();
@@ -110,10 +118,12 @@ public final class SessionManager implements AutoCloseable {
         loginSnapshots.delete(key);
         AccountState state = states.get(key);
         if (state == null) {
+            pending.discard(key);
             return;
         }
         state.lock.lock();
         try {
+            pending.discard(key);
             states.remove(key, state);
             closeClient(state);
         } finally {

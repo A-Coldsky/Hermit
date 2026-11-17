@@ -41,6 +41,8 @@ function account(overrides: Record<string, unknown>) {
     loginPaused: false,
     loginPauseReason: null,
     loginPauseRecovery: null,
+    loginInputRequired: false,
+    loginInputExpiresAt: null,
     ...overrides,
   }
 }

@@ -353,10 +353,388 @@ public final class RuleEngine implements ConchExecutor {
         sessions.touch(scope.key);
     }
 
+    /**
+     * 用户在控制台提交验证码后，从 {@code ask} 的下一步接着登录。不使会话失效，Cookie 还在。
+     * 失败丢掉待输入，并且不记入自动登录暂停。
+     */
+    public ExecutionResult continueLogin(ExecutionRequest request, String value) {
+        CallSecrets.begin();
+        DevTraceScope.begin(openDraft(request, null));
+        try {
+            return continueCaptured(request, value);
+        } finally {
+            DevTraceScope.end();
+            CallSecrets.end();
+        }
+    }
+
+    /** 重跑 {@code ask} 前一个 request。图片验证码换图，短信或口令则重新发送。 */
+    public ExecutionResult resendLogin(ExecutionRequest request) {
+        CallSecrets.begin();
+        DevTraceScope.begin(openDraft(request, null));
+        try {
+            return resendCaptured(request);
+        } finally {
+            DevTraceScope.end();
+            CallSecrets.end();
+        }
+    }
+
+    private ExecutionResult continueCaptured(ExecutionRequest request, String value) {
+        long start = System.nanoTime();
+        long deadline = Math.addExact(start, settings.capabilityTimeout().toNanos());
+        Map<String, String> credentials = copyStrings(request.accountContext().credentials());
+        Map<String, String> config = copyStrings(request.accountContext().config());
+        String rejected = LoginInputMessages.rejectValue(value);
+        List<String> supplied = value == null ? List.of() : List.of(value);
+        String version = null;
+        try {
+            ConchDoc conch = registry.find(request.conch()).orElse(null);
+            version = conch == null ? null : conch.version().toString();
+            if (rejected != null) {
+                return finish(false, null, ErrorCode.INVALID_INPUT, rejected, null, null, rejected, List.of(),
+                        version, request, credentials, supplied, start);
+            }
+            if (conch == null) {
+                return finish(false, null, ErrorCode.NOT_FOUND, "规则包不存在", null, null, "规则包不存在",
+                        List.of(), version, request, credentials, supplied, start);
+            }
+            SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
+            boolean locked;
+            try {
+                locked = sessions.tryLock(key, deadline);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return internal(request, credentials, supplied, version, start, ex);
+            }
+            if (!locked) {
+                return finish(false, null, ErrorCode.TIMEOUT, "执行超时", null, null, "执行超时",
+                        List.of(), version, request, credentials, supplied, start);
+            }
+            LoginScope scope = null;
+            try {
+                PendingLogins.Pending pending = sessions.pending().current(key);
+                if (pending == null) {
+                    return finish(false, null, ErrorCode.NOT_FOUND, LoginInputMessages.NONE, null, null,
+                            LoginInputMessages.NONE, List.of(), version, request, credentials, supplied, start);
+                }
+                if (!samePackage(conch, pending)) {
+                    sessions.pending().discard(key);
+                    return finish(false, null, ErrorCode.CONFLICT, LoginInputMessages.UPDATED, null, null,
+                            LoginInputMessages.UPDATED, List.of(), version, request, credentials, supplied, start);
+                }
+                sessions.pending().discard(key);
+                URI base = baseUri(conch, config);
+                scope = new LoginScope(conch, request.rawInput(), credentials, config, key, base, deadline);
+                scope.remember(value);
+                login(scope, pending, value, false);
+                return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
+                        credentials, scope.redactionValues(), start);
+            } catch (StepFailure ex) {
+                Integer index = ex.index < 0 ? null : ex.index;
+                return finish(false, null, ex.code, ex.summary, index, ex.type, ex.summary, ex.logs, version,
+                        request, credentials, redactionOf(scope, key, supplied), start);
+            } catch (DeadlineExceeded ex) {
+                Integer index = ex.index < 0 ? null : ex.index;
+                return finish(false, null, ErrorCode.TIMEOUT, "执行超时", index, ex.type, "执行超时", ex.logs, version,
+                        request, credentials, redactionOf(scope, key, supplied), start);
+            } catch (RuleProblem ex) {
+                return finish(false, null, ex.code, ex.summary, null, null, ex.summary, List.of(), version, request,
+                        credentials, redactionOf(scope, key, supplied), start);
+            } catch (RuntimeException ex) {
+                return internal(request, credentials, redactionOf(scope, key, supplied), version, start, ex);
+            } finally {
+                sessions.unlock(key);
+            }
+        } catch (RuntimeException ex) {
+            return internal(request, credentials, supplied, version, start, ex);
+        }
+    }
+
+    private ExecutionResult resendCaptured(ExecutionRequest request) {
+        long start = System.nanoTime();
+        long deadline = Math.addExact(start, settings.capabilityTimeout().toNanos());
+        Map<String, String> credentials = copyStrings(request.accountContext().credentials());
+        Map<String, String> config = copyStrings(request.accountContext().config());
+        String version = null;
+        try {
+            ConchDoc conch = registry.find(request.conch()).orElse(null);
+            version = conch == null ? null : conch.version().toString();
+            if (conch == null) {
+                return finish(false, null, ErrorCode.NOT_FOUND, "规则包不存在", null, null, "规则包不存在",
+                        List.of(), version, request, credentials, List.of(), start);
+            }
+            SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
+            boolean locked;
+            try {
+                locked = sessions.tryLock(key, deadline);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return internal(request, credentials, List.of(), version, start, ex);
+            }
+            if (!locked) {
+                return finish(false, null, ErrorCode.TIMEOUT, "执行超时", null, null, "执行超时",
+                        List.of(), version, request, credentials, List.of(), start);
+            }
+            LoginScope scope = null;
+            try {
+                PendingLogins.Pending pending = sessions.pending().current(key);
+                if (pending == null) {
+                    return finish(false, null, ErrorCode.NOT_FOUND, LoginInputMessages.NONE, null, null,
+                            LoginInputMessages.NONE, List.of(), version, request, credentials, List.of(), start);
+                }
+                if (!samePackage(conch, pending)) {
+                    sessions.pending().discard(key);
+                    return finish(false, null, ErrorCode.CONFLICT, LoginInputMessages.UPDATED, null, null,
+                            LoginInputMessages.UPDATED, List.of(), version, request, credentials, List.of(), start);
+                }
+                Auth auth = conch.auth();
+                PendingLogins.ResendDecision decision = sessions.pending().beginResend(key);
+                if (!decision.accepted()) {
+                    return finish(false, null, decision.code(), decision.message(), null, null, decision.message(),
+                            List.of(), version, request, credentials, List.of(), start);
+                }
+                PendingLogins.Pending ticket = decision.pending();
+                int stepIndex = ticket.askIndex() - 1;
+                if (auth == null || stepIndex < 0 || stepIndex >= auth.steps().size()) {
+                    return finish(false, null, ErrorCode.AUTH_FAILED, LoginInputMessages.NO_RESEND, null, null,
+                            LoginInputMessages.NO_RESEND, List.of(), version, request, credentials, List.of(), start);
+                }
+                URI base = baseUri(conch, config);
+                scope = new LoginScope(conch, request.rawInput(), credentials, config, key, base, deadline);
+                Map<String, Object> vars = baseVars(scope);
+                overlay(vars, ticket.vars());
+                ArrayList<StepLog> logs = new ArrayList<>();
+                Outcome outcome = runSteps(
+                        List.of(auth.steps().get(stepIndex)),
+                        vars,
+                        true,
+                        null,
+                        logs,
+                        key,
+                        base,
+                        deadline,
+                        "login",
+                        conch.scripts(),
+                        stepIndex,
+                        "image".equals(ticket.kind()),
+                        conch);
+                if ("image".equals(ticket.kind())) {
+                    byte[] bytes = outcome == null ? null : outcome.bodyBytes();
+                    String reason = CaptchaImages.reject(bytes);
+                    if (reason != null) {
+                        return finish(false, null, ErrorCode.AUTH_FAILED, reason, stepIndex, "request", reason, logs,
+                                version, request, credentials, scope.redactionValues(), start);
+                    }
+                    CaptchaImages.Accepted accepted = CaptchaImages.accept(bytes);
+                    if (!sessions.pending().completeResend(key, ticket.id(), accepted.bytes(), accepted.mediaType())) {
+                        return finish(false, null, ErrorCode.NOT_FOUND, LoginInputMessages.NONE, null, null,
+                                LoginInputMessages.NONE, logs, version, request, credentials, scope.redactionValues(),
+                                start);
+                    }
+                } else if (!sessions.pending().completeResend(key, ticket.id(), null, null)) {
+                    return finish(false, null, ErrorCode.NOT_FOUND, LoginInputMessages.NONE, null, null,
+                            LoginInputMessages.NONE, logs, version, request, credentials, scope.redactionValues(),
+                            start);
+                }
+                return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
+                        credentials, scope.redactionValues(), start);
+            } catch (StepFailure ex) {
+                Integer index = ex.index < 0 ? null : ex.index;
+                return finish(false, null, ex.code, ex.summary, index, ex.type, ex.summary, ex.logs, version,
+                        request, credentials, redactionOf(scope, key, List.of()), start);
+            } catch (DeadlineExceeded ex) {
+                Integer index = ex.index < 0 ? null : ex.index;
+                return finish(false, null, ErrorCode.TIMEOUT, "执行超时", index, ex.type, "执行超时", ex.logs, version,
+                        request, credentials, redactionOf(scope, key, List.of()), start);
+            } catch (RuleProblem ex) {
+                return finish(false, null, ex.code, ex.summary, null, null, ex.summary, List.of(), version, request,
+                        credentials, redactionOf(scope, key, List.of()), start);
+            } catch (RuntimeException ex) {
+                return internal(request, credentials, redactionOf(scope, key, List.of()), version, start, ex);
+            } finally {
+                sessions.unlock(key);
+            }
+        } catch (RuntimeException ex) {
+            return internal(request, credentials, List.of(), version, start, ex);
+        }
+    }
+
+    private static boolean samePackage(ConchDoc conch, PendingLogins.Pending pending) {
+        return conch.version().toString().equals(pending.version())
+                && ConchDigest.sha256(conch).equals(pending.contentHash());
+    }
+
+    private List<String> redactionOf(LoginScope scope, SessionKey key, List<String> extra) {
+        LinkedHashSet<String> values = new LinkedHashSet<>(redactionOf(scope, key));
+        if (extra != null) {
+            values.addAll(extra);
+        }
+        return List.copyOf(values);
+    }
+
+    private StepFailure waitingFailure(LoginScope scope, PendingLogins.Pending pending) {
+        ArrayList<StepLog> logs = new ArrayList<>();
+        logs.add(askLog(pending.askIndex(), 0));
+        traceAsk(pending.askIndex(), 0, pending.kind(), pending.label());
+        return new StepFailure(
+                ErrorCode.LOGIN_INPUT_REQUIRED,
+                LoginInputMessages.required(scope.conch.conch()),
+                pending.askIndex(),
+                "ask",
+                logs);
+    }
+
+    private StepFailure pauseForAsk(
+            Step step,
+            int at,
+            Map<String, Object> vars,
+            boolean previousRequest,
+            byte[] previousBytes,
+            List<StepLog> logs,
+            long started,
+            ConchDoc conch,
+            SessionKey key,
+            boolean auth
+    ) {
+        long took = elapsed(started);
+        if (!auth || conch == null) {
+            logs.add(askLog(at, took));
+            return new StepFailure(ErrorCode.RULE_MISMATCH, "ask 只能写在 auth.steps", at, "ask", logs);
+        }
+        String kind = step.def().get("kind") instanceof String text ? text : "";
+        String label = step.def().get("label") instanceof String text ? text : "";
+        String into = step.def().get("into") instanceof String text ? text : "";
+        String hint = step.def().get("hint") instanceof String text ? text : null;
+        int timeout = askTimeout(step.def().get("timeout_s"));
+        byte[] image = null;
+        String media = null;
+        if ("image".equals(kind)) {
+            String reason = previousRequest ? CaptchaImages.reject(previousBytes) : CaptchaImages.UNSUPPORTED;
+            if (reason != null) {
+                logs.add(askLog(at, took));
+                traceAsk(at, took, kind, label);
+                return new StepFailure(ErrorCode.AUTH_FAILED, reason, at, "ask", logs);
+            }
+            CaptchaImages.Accepted accepted = CaptchaImages.accept(previousBytes);
+            image = accepted.bytes();
+            media = accepted.mediaType();
+        }
+        sessions.pending().store(key, new PendingLogins.Draft(
+                conch.version().toString(),
+                ConchDigest.sha256(conch),
+                at,
+                into,
+                kind,
+                label,
+                hint,
+                timeout,
+                previousRequest,
+                freezeVars(vars, "image".equals(kind)),
+                image,
+                media));
+        logs.add(askLog(at, took));
+        traceAsk(at, took, kind, label);
+        return new StepFailure(
+                ErrorCode.LOGIN_INPUT_REQUIRED,
+                LoginInputMessages.required(conch.conch()),
+                at,
+                "ask",
+                logs);
+    }
+
+    private static int askTimeout(Object raw) {
+        if (raw instanceof Number number) {
+            int value = number.intValue();
+            if (value >= 60 && value <= 900) {
+                return value;
+            }
+        }
+        return 300;
+    }
+
+    private static StepLog askLog(int index, long took) {
+        return new StepLog(index, "ask", took, null, LoginInputMessages.WAITING, null, null);
+    }
+
+    private static void traceAsk(int index, long took, String kind, String label) {
+        DevTraceDraft draft = DevTraceScope.current();
+        if (draft == null) {
+            return;
+        }
+        LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
+        piece.put("type", "ask");
+        piece.put("kind", kind);
+        piece.put("label", label);
+        draft.add("login", index, took, piece);
+    }
+
+    private static boolean imageAskFollows(List<Step> steps, int index) {
+        if (index + 1 >= steps.size()) {
+            return false;
+        }
+        Step next = steps.get(index + 1);
+        return "ask".equals(next.type()) && "image".equals(next.def().get("kind"));
+    }
+
+    private static void overlay(Map<String, Object> vars, Map<String, Object> saved) {
+        if (saved == null) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : saved.entrySet()) {
+            if (!"login".equals(entry.getKey())) {
+                vars.put(entry.getKey(), entry.getValue());
+            }
+        }
+    }
+
+    private static Map<String, Object> freezeVars(Map<String, Object> vars, boolean dropResponseBody) {
+        LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : vars.entrySet()) {
+            if ("login".equals(entry.getKey())) {
+                continue;
+            }
+            Object value = entry.getValue();
+            if (dropResponseBody && "response".equals(entry.getKey()) && value instanceof Map<?, ?> map) {
+                LinkedHashMap<String, Object> response = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> item : map.entrySet()) {
+                    response.put(String.valueOf(item.getKey()), "body".equals(item.getKey()) ? "" : item.getValue());
+                }
+                copy.put("response", response);
+                continue;
+            }
+            if (value instanceof Map<?, ?> map) {
+                copy.put(entry.getKey(), new LinkedHashMap<>(map));
+            } else {
+                copy.put(entry.getKey(), value);
+            }
+        }
+        return copy;
+    }
+
     private void login(LoginScope scope) {
+        login(scope, null, null, true);
+    }
+
+    /**
+     * {@code resume} 非空时从 {@code ask} 的下一步接着跑。失败不记入自动登录暂停。
+     * 调用方已经丢掉待输入，避免再次进入时被「已经在等输入」短路。
+     */
+    private void login(
+            LoginScope scope,
+            PendingLogins.Pending resume,
+            String supplied,
+            boolean countAuthFailure
+    ) {
         scope.loggedInThisCall = true;
         scope.loggingIn = true;
         try {
+            if (resume == null) {
+                PendingLogins.Pending waiting = sessions.pending().current(scope.key);
+                if (waiting != null) {
+                    throw waitingFailure(scope, waiting);
+                }
+            }
             Auth auth = scope.conch.auth();
             if (auth == null || auth.steps().isEmpty()) {
                 scope.replaceSnapshot(Map.of());
@@ -370,9 +748,19 @@ public final class RuleEngine implements ConchExecutor {
             }
             ArrayList<StepLog> logs = new ArrayList<>();
             Map<String, Object> vars = baseVars(scope);
+            List<Step> steps = auth.steps();
+            int indexBase = 0;
+            if (resume != null) {
+                overlay(vars, resume.vars());
+                vars.put(resume.into(), supplied);
+                scope.remember(supplied);
+                indexBase = resume.askIndex() + 1;
+                int from = Math.min(indexBase, auth.steps().size());
+                steps = auth.steps().subList(from, auth.steps().size());
+            }
             try {
-                runSteps(auth.steps(), vars, true, null, logs, scope.key, scope.base, scope.deadline, "login",
-                        scope.conch.scripts());
+                runSteps(steps, vars, true, null, logs, scope.key, scope.base, scope.deadline, "login",
+                        scope.conch.scripts(), indexBase, false, scope.conch);
                 Map<String, String> snapshot = LoginSnapshots.capture(auth.steps(), vars);
                 LoginSnapshots.checkSize(snapshot);
                 scope.replaceSnapshot(snapshot);
@@ -385,7 +773,7 @@ public final class RuleEngine implements ConchExecutor {
                 if (draft != null) {
                     draft.login(true, false);
                 }
-                if (ex.code == ErrorCode.AUTH_FAILED) {
+                if (countAuthFailure && ex.code == ErrorCode.AUTH_FAILED) {
                     sessions.recordAuthFailure(scope.key);
                 }
                 throw ex;
@@ -419,7 +807,7 @@ public final class RuleEngine implements ConchExecutor {
         }
     }
 
-    private void runSteps(
+    private Outcome runSteps(
             List<Step> definitions,
             Map<String, Object> vars,
             boolean auth,
@@ -431,23 +819,49 @@ public final class RuleEngine implements ConchExecutor {
             String phase,
             Map<String, String> libraries
     ) {
+        return runSteps(definitions, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
+                0, false, null);
+    }
+
+    private Outcome runSteps(
+            List<Step> definitions,
+            Map<String, Object> vars,
+            boolean auth,
+            String expectPrefix,
+            List<StepLog> logs,
+            SessionKey key,
+            URI base,
+            long deadline,
+            String phase,
+            Map<String, String> libraries,
+            int indexBase,
+            boolean hideResponseBody,
+            ConchDoc conch
+    ) {
         CloseableHttpClient client = sessions.client(key);
         Runnable persist = () -> sessions.persist(key);
         DevTraceDraft draft = DevTraceScope.current();
         boolean capture = draft != null;
         boolean loginPhase = "login".equals(phase);
         boolean deriveNext = false;
+        byte[] previousBytes = null;
+        boolean previousRequest = false;
+        Outcome last = null;
         try {
         for (int i = 0; i < definitions.size(); i++) {
             Step step = definitions.get(i);
+            int at = indexBase + i;
             if (draft != null) {
                 boolean extractOrScript = "extract".equals(step.type()) || "script".equals(step.type());
                 draft.collectDerived(loginPhase || (deriveNext && extractOrScript), !loginPhase);
             }
             if (System.nanoTime() >= deadline) {
-                throw new DeadlineExceeded(i, step.type(), logs);
+                throw new DeadlineExceeded(at, step.type(), logs);
             }
             long started = System.nanoTime();
+            if ("ask".equals(step.type())) {
+                throw pauseForAsk(step, at, vars, previousRequest, previousBytes, logs, started, conch, key, auth);
+            }
             DevTraceScope.takePending();
             try {
                 Outcome outcome = steps.run(
@@ -461,8 +875,14 @@ public final class RuleEngine implements ConchExecutor {
                         deadline,
                         capture,
                         libraries);
+                last = outcome;
+                if (outcome.capture() != null
+                        && "request".equals(step.type())
+                        && (hideResponseBody || imageAskFollows(definitions, i))) {
+                    outcome.capture().put("responseBody", null);
+                }
                 logs.add(new StepLog(
-                        i,
+                        at,
                         step.type(),
                         elapsed(started),
                         outcome.method(),
@@ -471,12 +891,15 @@ public final class RuleEngine implements ConchExecutor {
                         outcome.extractCount()));
                 if (capture && outcome.capture() != null && draft != null) {
                     stampCredential(outcome.capture(), credentialBearingRequest(loginPhase, step));
-                    draft.add(phase, i, elapsed(started), outcome.capture());
+                    draft.add(phase, at, elapsed(started), outcome.capture());
                 }
                 if (!loginPhase && "request".equals(step.type())) {
                     deriveNext = templates.referencesCredential(step.def());
                 }
+                previousRequest = "request".equals(step.type());
+                previousBytes = previousRequest ? outcome.bodyBytes() : null;
                 // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
+                // 下标用这一段里的位置：能力步骤的 indexBase 是 0，登录续跑不会进这里。
                 rejectCapabilityStatus(auth, outcome, i, step.type(), logs, definitions);
             } catch (RuleProblem ex) {
                 ErrorCode code = ex.code;
@@ -487,16 +910,16 @@ public final class RuleEngine implements ConchExecutor {
                         summary = LOGIN_COOKIE_MISSING;
                     }
                 }
-                logs.add(new StepLog(i, step.type(), elapsed(started), ex.method, ex.path, ex.status, null));
-                recordFailure(phase, i, step, elapsed(started), ex, credentialBearingRequest(loginPhase, step));
-                throw new StepFailure(code, summary, i, step.type(), logs);
+                logs.add(new StepLog(at, step.type(), elapsed(started), ex.method, ex.path, ex.status, null));
+                recordFailure(phase, at, step, elapsed(started), ex, credentialBearingRequest(loginPhase, step));
+                throw new StepFailure(code, summary, at, step.type(), logs);
             } catch (TemplateException ex) {
-                logs.add(new StepLog(i, step.type(), elapsed(started), null, null, null, null));
-                recordFailure(phase, i, step, elapsed(started), null, credentialBearingRequest(loginPhase, step));
+                logs.add(new StepLog(at, step.type(), elapsed(started), null, null, null, null));
+                recordFailure(phase, at, step, elapsed(started), null, credentialBearingRequest(loginPhase, step));
                 ErrorCode code = auth ? ErrorCode.AUTH_FAILED : ErrorCode.RULE_MISMATCH;
-                throw new StepFailure(code, undefinedOr(ex), i, step.type(), logs);
+                throw new StepFailure(code, undefinedOr(ex), at, step.type(), logs);
             } catch (DeadlineExceeded ex) {
-                throw new DeadlineExceeded(i, step.type(), logs);
+                throw new DeadlineExceeded(at, step.type(), logs);
             }
         }
         } finally {
@@ -504,6 +927,7 @@ public final class RuleEngine implements ConchExecutor {
                 draft.collectDerived(false);
             }
         }
+        return last;
     }
 
     private static String undefinedOr(TemplateException ex) {

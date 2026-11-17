@@ -29,6 +29,9 @@ describe('错误码标签', () => {
     expect(errorText(new ApiError(409, 'CONCH_DISABLED', 'Reef 已停用该规则包，不再下载。'))).toBe(
       '规则包已停用：Reef 已停用该规则包，不再下载。',
     )
+    expect(errorText(new ApiError(409, 'LOGIN_INPUT_REQUIRED', '请到控制台输入'))).toBe(
+      '需要验证码：请到控制台输入',
+    )
   })
 
   it('没有对应标签或不是接口错误时用原文', () => {

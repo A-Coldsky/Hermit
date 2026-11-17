@@ -626,6 +626,24 @@ export const api = {
     http.put<{ updated: boolean }>(`${accountPath(conch, account)}/credentials`, values),
   testLogin: (conch: string, account: string) => http.post<unknown>(`${accountPath(conch, account)}/test-login`),
   /**
+   * 待输入登录。路径接在账号接口下：
+   * `GET/POST/DELETE /console/api/conches/{conch}/accounts/{account}/login-input`，
+   * `POST .../login-input/resend`，`GET .../login-input/image?t=`（时间戳防缓存）。
+   * 没有待输入时 GET 为 404。POST 正文是 `{value}`，接着登录；成功的 data 与测试登录相同。
+   * 后面还有一次输入时，POST 为 409 `LOGIN_INPUT_REQUIRED`。
+   * 重发成功后再 GET 一次，用新的过期时间和冷却刷新页面；不依赖 POST 的 data 字段。
+   * DELETE 只看成功信封。图片走二进制响应，带 `X-Hermit-Console`，`cache: no-store`。
+   */
+  loginInput: (conch: string, account: string) => http.get<LoginInput>(`${accountPath(conch, account)}/login-input`),
+  loginInputImage: (conch: string, account: string) =>
+    http.blob(`${accountPath(conch, account)}/login-input/image`, { t: Date.now() }),
+  submitLoginInput: (conch: string, account: string, value: string) =>
+    http.post<unknown>(`${accountPath(conch, account)}/login-input`, { value }),
+  resendLoginInput: (conch: string, account: string) =>
+    http.post<unknown>(`${accountPath(conch, account)}/login-input/resend`),
+  abandonLoginInput: (conch: string, account: string) =>
+    http.del<unknown>(`${accountPath(conch, account)}/login-input`),
+  /**
    * 开始上游 OAuth。浏览器打开 authorizationUrl；授权端点再跳回 {@link oauthCallbackPath}。
    * 回调不在 /console/api 下，响应是 HTML，不是 JSON。
    */

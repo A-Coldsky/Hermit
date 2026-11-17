@@ -127,6 +127,7 @@ export async function copyText(value: string, label = '已复制'): Promise<void
 export const errorCodeLabels: Record<string, string> = {
   INVALID_INPUT: '输入无效',
   AUTH_FAILED: '认证失败',
+  LOGIN_INPUT_REQUIRED: '需要验证码',
   SESSION_EXPIRED: '会话失效',
   UPSTREAM_ERROR: '老系统错误',
   RULE_MISMATCH: '规则不匹配',

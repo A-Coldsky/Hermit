@@ -26,6 +26,9 @@ const empty = computed(() => {
     v.removedConfig,
     v.configDefaultChanges,
     v.toolChanges,
+    v.addedScripts,
+    v.removedScripts,
+    v.changedScripts,
   ].some((list) => list && list.length)
 })
 
@@ -86,6 +89,22 @@ function show(value: unknown): string {
             <el-tag v-for="part in changeParts.filter((p) => change[p.key])" :key="part.key" size="small" type="warning" effect="plain">
               {{ part.label }}
             </el-tag>
+          </li>
+        </ul>
+      </section>
+      <section
+        v-if="d.addedScripts?.length || d.removedScripts?.length || d.changedScripts?.length"
+        data-test="script-changes"
+      >
+        <h4>脚本库</h4>
+        <div class="chips">
+          <el-tag v-for="name in d.addedScripts" :key="`a-${name}`" type="success" class="mono">+ {{ name }}</el-tag>
+          <el-tag v-for="name in d.removedScripts" :key="`r-${name}`" type="danger" class="mono">− {{ name }}</el-tag>
+        </div>
+        <ul v-if="d.changedScripts?.length" class="changes">
+          <li v-for="name in d.changedScripts" :key="name">
+            <span class="mono">~ {{ name }}</span>
+            <el-tag size="small" type="warning" effect="plain">源码</el-tag>
           </li>
         </ul>
       </section>

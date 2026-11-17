@@ -86,7 +86,7 @@ public final class CrabDatabase implements AutoCloseable {
 
     public CrabDatabase(CrabPaths paths) {
         this.paths = paths;
-        this.pool = JdbcConnectionPool.create(jdbcUrl(paths.databaseFile()), "sa", "");
+        this.pool = openPool(paths);
         try {
             migrate();
         } catch (RuntimeException ex) {
@@ -94,7 +94,18 @@ public final class CrabDatabase implements AutoCloseable {
             if (fileLocked(ex)) {
                 throw new DatabaseInUseException();
             }
+            throw new DatabaseOpenException(ex);
+        }
+    }
+
+    private static JdbcConnectionPool openPool(CrabPaths paths) {
+        try {
+            return JdbcConnectionPool.create(jdbcUrl(paths.databaseFile()), "sa", "");
+        } catch (IllegalArgumentException ex) {
+            // Semicolon rejection is already a short Chinese message. Do not wrap it.
             throw ex;
+        } catch (RuntimeException ex) {
+            throw new DatabaseOpenException(ex);
         }
     }
 
@@ -697,9 +708,21 @@ public final class CrabDatabase implements AutoCloseable {
     }
 
     private static String jdbcUrl(Path databaseFile) {
-        String path = databaseFile.toAbsolutePath().normalize().toString().replace('\\', '/');
-        if (!path.startsWith("/")) {
-            path = "/" + path;
+        return jdbcUrl(databaseFile.toAbsolutePath().normalize().toString());
+    }
+
+    /**
+     * H2 file URL for an absolute path string. Separators are {@code /}.
+     * A Windows drive ({@code C:/...}) must not gain a leading slash:
+     * {@code jdbc:h2:file:/C:/...} is not a drive path. Unix absolute paths and
+     * UNC paths already start with {@code /} and stay that way.
+     * H2 treats the first {@code ;} as the end of the database name, so a path
+     * that contains one is rejected before the driver is called.
+     */
+    static String jdbcUrl(String absolutePath) {
+        String path = absolutePath.replace('\\', '/');
+        if (path.indexOf(';') >= 0) {
+            throw new IllegalArgumentException("数据目录路径含有分号，无法打开本地数据库。");
         }
         return "jdbc:h2:file:" + path + H2_OPTIONS;
     }

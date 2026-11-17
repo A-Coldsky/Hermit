@@ -59,6 +59,7 @@ import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.ConsolePassword;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.DatabaseInUseException;
+import dev.hermit.crab.store.DatabaseOpenException;
 import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.store.DevTraceStore;
 
@@ -134,6 +135,9 @@ public final class CrabCommand {
             for (ValidationIssue issue : ex.errors()) {
                 printIssue(err, issue);
             }
+            return 1;
+        } catch (DatabaseOpenException ex) {
+            printDatabaseOpenFailure(ex, err);
             return 1;
         } catch (IllegalArgumentException | IllegalStateException ex) {
             err.println(clientMessage(ex));
@@ -1394,6 +1398,18 @@ public final class CrabCommand {
 
     private static String text(String value) {
         return value == null ? "-" : value;
+    }
+
+    /**
+     * Startup could not open H2. Keep the existing line, then the root-cause line
+     * that names the path. Do not print the stack or intermediate SQL text.
+     */
+    static void printDatabaseOpenFailure(DatabaseOpenException ex, PrintStream err) {
+        err.println("database operation failed");
+        String detail = ex.getMessage();
+        if (detail != null && !detail.isBlank() && !"database operation failed".equals(detail)) {
+            err.println(detail);
+        }
     }
 
     private static String clientMessage(RuntimeException ex) {

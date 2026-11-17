@@ -76,7 +76,7 @@ npm run dev:reef
 | Reef | `AdminApiTest`、`AgentToken*Test`、`ConchApiTest`、`ConchConcurrencyTest`、`SigningKeyStoreTest` | 鉴权、令牌缺失拒绝、发布必须更高、并发、密钥 |
 | Tide | `ReportIngestTest`、`TideQueryTest`、`AlertEvaluationTest`、`TidePropertiesTest` | 上报校验、失败去重、聚合与告警、阈值负值拒绝 |
 | 执行 | `EngineUnitTest`、`LegacyOaEngineTest`、`ScriptStepTest`、`CapabilityDeadlineTest`、`StepTimeoutTest` | 模拟 OA、登录隔离、编码/提取、脚本、显式 `status` 断言与非 GET 3xx 放行、没有覆盖期望的 GET 非 2xx 不抽成空列表、步骤超时与能力 deadline |
-| 数据 | `SecretFlowTest`、`CredentialCipherTest`、`MasterKeyProviderTest`、`*StoreTest` | 加密、绑定、账户、主密钥、日志 |
+| 数据 | `SecretFlowTest`、`CredentialCipherTest`、`MasterKeyProviderTest`、`*StoreTest`、`CrabDatabaseUrlTest` | 加密、绑定、账户、主密钥、日志。H2 文件 URL 在 Linux 上只断言字符串（盘符、Unix 绝对路径、UNC、分号拒绝），不连接 `C:/`。真正开库的用例是 `@EnabledOnOs(WINDOWS)`，Linux CI 会跳过 |
 | 网关/MCP | `GatewayHttpTest`、`ConsoleHttpTest`、`LoopbackTest`、`McpHttpTest`、`McpForwardTest`、`McpOAuthTest`、`McpRefreshTest`、`McpToolMergeTest` | 作用域、幂等冲突与同体回放、本机限制、调用渠道、MCP 模式与 SSE、未知工具 hint、traceId、多余入参、stdio `--help` 与 401 的 JSON-RPC 请求 id、OAuth 令牌、本地 `tools/list` 刷新与合并 |
 | CLI | `CliTest` | 未知包 `config get` 退出 1；`apikey list` 对全部正式包打印 `all=true`（不打印 `conches=-`），有限范围打印名字、只读和吊销且不明文；`--help` 与无参数把用法打到 stdout 并退出 0，未知命令退出 1 |
 | 前端 | `loading-empty.test.ts`、`copy.test.ts`、`theme.test.ts`、`version-panel.test.ts`、`bar-chart.test.ts` | 初始加载、说明文案、浅色/暗色颜色映射、版本警告详情和图表刻度 |

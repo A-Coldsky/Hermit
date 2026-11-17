@@ -20,6 +20,10 @@ public final class ValidationCodes {
     public static final String CONFIG_SECRET = "CONFIG_SECRET";
     public static final String PLAINTEXT_CREDENTIAL = "PLAINTEXT_CREDENTIAL";
     public static final String CREDENTIAL_IN_OUTPUT = "CREDENTIAL_IN_OUTPUT";
+    public static final String LOGIN_IN_OUTPUT = "LOGIN_IN_OUTPUT";
+    public static final String LOGIN_DEFAULT = "LOGIN_DEFAULT";
+    public static final String AUTH_COOKIES = "AUTH_COOKIES";
+    public static final String RESERVED_VARIABLE = "RESERVED_VARIABLE";
     public static final String MIN_CRAB_VERSION = "MIN_CRAB_VERSION";
     public static final String TEMPLATE_SYNTAX = "TEMPLATE_SYNTAX";
     public static final String MISSING_NOTES = "MISSING_NOTES";

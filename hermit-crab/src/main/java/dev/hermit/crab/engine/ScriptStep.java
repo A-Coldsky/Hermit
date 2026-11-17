@@ -232,7 +232,7 @@ final class ScriptStep {
     private static Map<String, Object> copyWithoutCredential(Map<String, Object> vars) {
         LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : vars.entrySet()) {
-            if (!"credential".equals(entry.getKey())) {
+            if (!"credential".equals(entry.getKey()) && !"login".equals(entry.getKey())) {
                 copy.put(entry.getKey(), entry.getValue());
             }
         }
@@ -243,6 +243,9 @@ final class ScriptStep {
     private static Map<String, Object> copyWithCredential(Map<String, Object> vars) {
         LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : vars.entrySet()) {
+            if ("login".equals(entry.getKey())) {
+                continue;
+            }
             if ("credential".equals(entry.getKey())) {
                 Map<String, Object> fields = Values.map(entry.getValue());
                 if (fields == null) {

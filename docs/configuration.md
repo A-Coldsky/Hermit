@@ -173,6 +173,8 @@ schema 14 增加 `console_password`（一行：`id`、`salt`、`hash`、`iterati
 
 schema 15 增加 `dev_traces`（`trace_id`、`origin`、`conch`、`account`、`action`、`created_at`、`expires_at`、`body`）。判断依据是版本 15 这一行是否已经记下，不改 schema 14 的语句。`body` 是已经脱敏的 JSON，不进 `config.yml`，也不上报 Tide。单步正文截断到 256 KiB，整条截断到 2 MiB。`Cookie`、`Set-Cookie`、`Authorization`、`Mcp-Session-Id` 整头不入库。
 
+schema 16 增加 `session_login`（`origin`、`conch`、`account`、`ciphertext`、`updated_at`，主键是前三列）。判断依据是版本 16 这一行是否已经记下，不改 schema 15，也不改 `schema/crab-v15.sql`。升级不回填。密文是一个账号的登录快照，AAD 字段是 `login`，和 Cookie 的 `session` 分开。空快照不插行。解密失败只删这一行。不进 `config.yml`，也不进 `config_audit`。
+
 小时成功/失败计数和失败明细先留在内存。每 30 秒、每次发送前，以及进程正常关闭时，一起写入 H2。批次为空时不向 Reef 发 HTTP。发送的小时统计是合并后的全量，不是增量。异常退出可能丢掉尚未刷盘的最近 30 秒计数，以及还在内存里的失败明细。回滚事件仍在入队时立即写入 H2。导入的 Reef 令牌和 config.yml 里的令牌都会进入脱敏用的已知秘密列表（长度至少 4，并包含其 URL 编码）。签名校验和公钥信任根不变：已安装的正式包在下载和加载时仍用当前公钥验签。
 
 `local-conches/` 只放这一台机器的未签名规则。文件名是 `{conch}.yaml`，不递归，不跟随符号链接。进程启动时加载；`crab local reload` 或 `POST /console/api/local-conches/reload` 让目录里的增删改生效。单个文件上限 1 MiB。控制台上传还受现有请求体上限（1_000_000 字节）约束。与已订阅或已安装的正式包重名时拒绝导入。解析失败、读失败或文件名与包名不符时不另存上一份，该包不能调用；合法文件名仍留在 `GET /console/api/local-conches` 和 `crab local list`，删掉后才能不经确认再导入。同名覆盖要 `confirm=true` 或 `--replace`。文件从目录消失则卸载，不再留下坏包记录。

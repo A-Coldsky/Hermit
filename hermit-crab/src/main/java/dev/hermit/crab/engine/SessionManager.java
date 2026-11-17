@@ -6,8 +6,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,6 +36,7 @@ public final class SessionManager implements AutoCloseable {
     private static final int MAX_SEEN_COOKIE_VALUES = 64;
 
     private final SessionPersistence persistence;
+    private final LoginSnapshotStore loginSnapshots;
     private final EngineSettings settings;
     private final Clock clock;
     private final ConcurrentMap<SessionKey, AccountState> states = new ConcurrentHashMap<>();
@@ -48,7 +51,17 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public SessionManager(SessionPersistence persistence, EngineSettings settings, Clock clock) {
+        this(persistence, new NopLoginSnapshotStore(), settings, clock);
+    }
+
+    public SessionManager(
+            SessionPersistence persistence,
+            LoginSnapshotStore loginSnapshots,
+            EngineSettings settings,
+            Clock clock
+    ) {
         this.persistence = Objects.requireNonNull(persistence, "persistence");
+        this.loginSnapshots = Objects.requireNonNull(loginSnapshots, "loginSnapshots");
         this.settings = Objects.requireNonNull(settings, "settings");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -70,6 +83,7 @@ public final class SessionManager implements AutoCloseable {
 
     public void invalidate(SessionKey key) {
         persistence.delete(key);
+        loginSnapshots.delete(key);
         AccountState state = states.get(key);
         if (state == null) {
             return;
@@ -79,6 +93,7 @@ public final class SessionManager implements AutoCloseable {
             state.loggedIn = false;
             state.lastActive = null;
             state.seenCookieValues.clear();
+            state.loginSnapshot.clear();
             closeClient(state);
             openClient(state);
         } finally {
@@ -92,6 +107,7 @@ public final class SessionManager implements AutoCloseable {
      */
     public void forget(SessionKey key) {
         persistence.delete(key);
+        loginSnapshots.delete(key);
         AccountState state = states.get(key);
         if (state == null) {
             return;
@@ -171,7 +187,64 @@ public final class SessionManager implements AutoCloseable {
         state.loggedIn = false;
         state.lastActive = null;
         state.cookies.clear();
+        state.loginSnapshot.clear();
+        loginSnapshots.delete(key);
         persist(key);
+    }
+
+    /** 登录成功后整表替换。空映射删掉这一行。调用方持有账号锁。 */
+    void replaceLoginSnapshot(SessionKey key, Map<String, String> snapshot) {
+        AccountState state = state(key);
+        state.loginSnapshot.clear();
+        if (snapshot != null) {
+            state.loginSnapshot.putAll(snapshot);
+        }
+        loginSnapshots.save(key, Map.copyOf(state.loginSnapshot));
+    }
+
+    Map<String, String> loginSnapshot(SessionKey key) {
+        return Map.copyOf(state(key).loginSnapshot);
+    }
+
+    /** Cookie 罐里同名的值。没有则为 null。空字符串算有值。 */
+    String cookieValue(SessionKey key, String name) {
+        AccountState state = state(key);
+        if (name == null || state.cookies == null) {
+            return null;
+        }
+        for (Cookie cookie : state.cookies.getCookies()) {
+            if (name.equals(cookie.getName())) {
+                return cookie.getValue();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 本次打码用的值：已见 Cookie、当前罐里的值，以及登录快照。短于 4 个字符的不放入。
+     * 不写 {@code config_audit}，也不写进程级已知秘密。
+     */
+    public List<String> redactionValues(SessionKey key) {
+        AccountState state = states.get(key);
+        if (state == null) {
+            return List.of();
+        }
+        state.lock.lock();
+        try {
+            LinkedHashSet<String> values = new LinkedHashSet<>();
+            addRedaction(values, state.seenCookieValues);
+            if (state.cookies != null) {
+                ArrayList<String> jar = new ArrayList<>();
+                for (Cookie cookie : state.cookies.getCookies()) {
+                    jar.add(cookie.getValue());
+                }
+                addRedaction(values, jar);
+            }
+            addRedaction(values, state.loginSnapshot.values());
+            return List.copyOf(values);
+        } finally {
+            state.lock.unlock();
+        }
     }
 
     void recordAuthSuccess(SessionKey key) {
@@ -286,7 +359,28 @@ public final class SessionManager implements AutoCloseable {
             state.loggedIn = true;
             state.lastActive = Instant.EPOCH;
         }
+        Map<String, String> snapshot;
+        try {
+            snapshot = loginSnapshots.load(key);
+        } catch (RuntimeException ex) {
+            closeClient(state);
+            throw ex;
+        }
+        if (snapshot != null) {
+            state.loginSnapshot.putAll(snapshot);
+        }
         return state;
+    }
+
+    private static void addRedaction(Set<String> into, Iterable<String> values) {
+        if (values == null) {
+            return;
+        }
+        for (String value : values) {
+            if (value != null && value.length() >= 4) {
+                into.add(value);
+            }
+        }
     }
 
     private static void openClient(AccountState state) {
@@ -372,6 +466,7 @@ public final class SessionManager implements AutoCloseable {
     private static final class AccountState {
         final ReentrantLock lock = new ReentrantLock(true);
         final Set<String> seenCookieValues = new LinkedHashSet<>();
+        final Map<String, String> loginSnapshot = new LinkedHashMap<>();
         CloseableHttpClient client;
         BasicCookieStore cookies;
         boolean loggedIn;

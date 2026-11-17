@@ -72,6 +72,7 @@ import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.CallChannel;
 import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.store.DevTraceStore;
+import dev.hermit.crab.store.EncryptedLoginSnapshotStore;
 import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
@@ -184,7 +185,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.conchConfig = new ConchConfigStore(database.dataSource());
         this.apiKeys = new ApiKeyService(database.dataSource());
         this.settings = config.engineSettings();
-        this.sessions = new SessionManager(new EncryptedSessionPersistence(database.dataSource(), cipher), settings, clock);
+        this.sessions = new SessionManager(
+                new EncryptedSessionPersistence(database.dataSource(), cipher),
+                new EncryptedLoginSnapshotStore(database.dataSource(), cipher),
+                settings,
+                clock);
         this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
         this.mcpForwarder = new McpForwarder(
                 sessions,

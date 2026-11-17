@@ -3,12 +3,14 @@ package dev.hermit.crab.engine;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.URI;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -203,22 +205,24 @@ public final class RuleEngine implements ConchExecutor {
             }
             try {
                 URI base = baseUri(conch, config);
-                login(conch, request.rawInput(), credentials, config, key, base, deadline);
+                LoginScope scope = new LoginScope(
+                        conch, request.rawInput(), credentials, config, key, base, deadline);
+                login(scope);
                 return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
-                        credentials, sessions.seenCookieValues(key), start);
+                        credentials, sessions.redactionValues(key), start);
             } catch (StepFailure ex) {
                 Integer index = ex.index < 0 ? null : ex.index;
                 return finish(false, null, ex.code, ex.summary, index, ex.type, ex.summary, ex.logs, version, request,
-                        credentials, sessions.seenCookieValues(key), start);
+                        credentials, sessions.redactionValues(key), start);
             } catch (DeadlineExceeded ex) {
                 Integer index = ex.index < 0 ? null : ex.index;
                 return finish(false, null, ErrorCode.TIMEOUT, "执行超时", index, ex.type, "执行超时", ex.logs, version,
-                        request, credentials, sessions.seenCookieValues(key), start);
+                        request, credentials, sessions.redactionValues(key), start);
             } catch (RuleProblem ex) {
                 return finish(false, null, ex.code, ex.summary, null, null, ex.summary, List.of(), version, request,
-                        credentials, sessions.seenCookieValues(key), start);
+                        credentials, sessions.redactionValues(key), start);
             } catch (RuntimeException ex) {
-                return internal(request, credentials, sessions.seenCookieValues(key), version, start, ex);
+                return internal(request, credentials, sessions.redactionValues(key), version, start, ex);
             } finally {
                 sessions.unlock(key);
             }
@@ -243,18 +247,19 @@ public final class RuleEngine implements ConchExecutor {
             if (sessions.loginPaused(key)) {
                 return finish(false, null, ErrorCode.AUTH_FAILED, "该账号已暂停自动登录", null, null,
                         "该账号已暂停自动登录", List.of(), version, request, credentials,
-                        sessions.seenCookieValues(key), start);
+                        sessions.redactionValues(key), start);
             }
             URI base = baseUri(conch, config);
-            ensureSession(conch, input, credentials, config, key, base, deadline);
-            Attempt attempt = runAction(conch, action, input, credentials, config, key, base, deadline);
+            LoginScope scope = new LoginScope(conch, input, credentials, config, key, base, deadline);
+            ensureSession(scope);
+            Attempt attempt = runAction(action, scope);
             if (attempt.lost) {
                 sessions.markLoggedOut(key);
                 if (!action.idempotent()) {
                     return expired(attempt.logs, version, request, credentials, key, start);
                 }
-                ensureSession(conch, input, credentials, config, key, base, deadline);
-                attempt = runAction(conch, action, input, credentials, config, key, base, deadline);
+                ensureSession(scope);
+                attempt = runAction(action, scope);
                 if (attempt.lost) {
                     sessions.markLoggedOut(key);
                     return expired(attempt.logs, version, request, credentials, key, start);
@@ -264,7 +269,7 @@ public final class RuleEngine implements ConchExecutor {
                 StepFailure failure = attempt.failure;
                 Integer index = failure.index < 0 ? null : failure.index;
                 return finish(false, null, failure.code, failure.summary, index, failure.type, failure.summary,
-                        failure.logs, version, request, credentials, sessions.seenCookieValues(key), start);
+                        failure.logs, version, request, credentials, sessions.redactionValues(key), start);
             }
             Object data;
             try {
@@ -272,46 +277,38 @@ public final class RuleEngine implements ConchExecutor {
             } catch (TemplateException ex) {
                 String text = undefinedOr(ex);
                 return finish(false, null, ErrorCode.RULE_MISMATCH, text, null, null, text,
-                        attempt.logs, version, request, credentials, sessions.seenCookieValues(key), start);
+                        attempt.logs, version, request, credentials, sessions.redactionValues(key), start);
             }
             sessions.touch(key);
             return finish(true, data, null, null, null, null, null, attempt.logs, version, request, credentials,
-                    sessions.seenCookieValues(key), start);
+                    sessions.redactionValues(key), start);
         } catch (StepFailure ex) {
             Integer index = ex.index < 0 ? null : ex.index;
             return finish(false, null, ex.code, ex.summary, index, ex.type, ex.summary, ex.logs, version, request,
-                    credentials, sessions.seenCookieValues(key), start);
+                    credentials, sessions.redactionValues(key), start);
         } catch (DeadlineExceeded ex) {
             Integer index = ex.index < 0 ? null : ex.index;
             return finish(false, null, ErrorCode.TIMEOUT, "执行超时", index, ex.type, "执行超时", ex.logs, version,
-                    request, credentials, sessions.seenCookieValues(key), start);
+                    request, credentials, sessions.redactionValues(key), start);
         } catch (RuleProblem ex) {
             return finish(false, null, ex.code, ex.summary, null, null, ex.summary, List.of(), version, request,
-                    credentials, sessions.seenCookieValues(key), start);
+                    credentials, sessions.redactionValues(key), start);
         } catch (RuntimeException ex) {
-            return internal(request, credentials, sessions.seenCookieValues(key), version, start, ex);
+            return internal(request, credentials, sessions.redactionValues(key), version, start, ex);
         }
     }
 
-    private void ensureSession(
-            ConchDoc conch,
-            Map<String, Object> input,
-            Map<String, String> credentials,
-            Map<String, String> config,
-            SessionKey key,
-            URI base,
-            long deadline
-    ) {
-        if (!sessions.loggedIn(key)) {
-            login(conch, input, credentials, config, key, base, deadline);
+    private void ensureSession(LoginScope scope) {
+        if (!sessions.loggedIn(scope.key)) {
+            login(scope);
             return;
         }
-        Auth auth = conch.auth();
+        Auth auth = scope.conch.auth();
         AliveCheck alive = auth == null ? null : auth.aliveCheck();
-        if (!sessions.idle(key) || alive == null) {
+        if (!sessions.idle(scope.key) || alive == null) {
             return;
         }
-        Map<String, Object> vars = baseVars(input, credentials, config);
+        Map<String, Object> vars = baseVars(scope);
         Object rendered;
         try {
             rendered = templates.render(alive.request(), vars);
@@ -327,11 +324,11 @@ public final class RuleEngine implements ConchExecutor {
         try {
             result = HttpCalls.execute(
                     spec,
-                    sessions.client(key),
-                    () -> sessions.persist(key),
-                    base,
+                    sessions.client(scope.key),
+                    () -> sessions.persist(scope.key),
+                    scope.base,
                     alive.expectNotRedirect(),
-                    deadline);
+                    scope.deadline);
         } catch (RuleProblem ex) {
             recordAlive(spec, ex.method, ex.path, ex.status, null, null, started, false);
             throw ex;
@@ -339,77 +336,71 @@ public final class RuleEngine implements ConchExecutor {
         boolean aliveOk = !(result.sessionLost() || result.status() == 401 || result.status() == 403);
         recordAlive(spec, result.method(), result.path(), result.status(), result.headers(), result.body(), started, aliveOk);
         if (result.sessionLost() || result.status() == 401 || result.status() == 403) {
-            sessions.markLoggedOut(key);
-            login(conch, input, credentials, config, key, base, deadline);
+            sessions.markLoggedOut(scope.key);
+            login(scope);
             return;
         }
-        sessions.touch(key);
+        sessions.touch(scope.key);
     }
 
-    private void login(
-            ConchDoc conch,
-            Map<String, Object> input,
-            Map<String, String> credentials,
-            Map<String, String> config,
-            SessionKey key,
-            URI base,
-            long deadline
-    ) {
-        Auth auth = conch.auth();
-        if (auth == null || auth.steps().isEmpty()) {
-            sessions.markLoggedIn(key);
-            sessions.recordAuthSuccess(key);
-            return;
-        }
-        DevTraceDraft draft = DevTraceScope.current();
-        if (draft != null) {
-            draft.login(true, null);
-        }
-        ArrayList<StepLog> logs = new ArrayList<>();
-        Map<String, Object> vars = baseVars(input, credentials, config);
+    private void login(LoginScope scope) {
+        scope.loggedInThisCall = true;
+        scope.loggingIn = true;
         try {
-            runSteps(auth.steps(), vars, true, null, logs, key, base, deadline, "login", conch.scripts());
-            sessions.markLoggedIn(key);
-            sessions.recordAuthSuccess(key);
+            Auth auth = scope.conch.auth();
+            if (auth == null || auth.steps().isEmpty()) {
+                sessions.replaceLoginSnapshot(scope.key, Map.of());
+                sessions.markLoggedIn(scope.key);
+                sessions.recordAuthSuccess(scope.key);
+                return;
+            }
+            DevTraceDraft draft = DevTraceScope.current();
             if (draft != null) {
-                draft.login(true, true);
+                draft.login(true, null);
             }
-        } catch (StepFailure ex) {
-            if (draft != null) {
-                draft.login(true, false);
+            ArrayList<StepLog> logs = new ArrayList<>();
+            Map<String, Object> vars = baseVars(scope);
+            try {
+                runSteps(auth.steps(), vars, true, null, logs, scope.key, scope.base, scope.deadline, "login",
+                        scope.conch.scripts());
+                Map<String, String> snapshot = LoginSnapshots.capture(auth.steps(), vars);
+                LoginSnapshots.checkSize(snapshot);
+                sessions.replaceLoginSnapshot(scope.key, snapshot);
+                sessions.markLoggedIn(scope.key);
+                sessions.recordAuthSuccess(scope.key);
+                if (draft != null) {
+                    draft.login(true, true);
+                }
+            } catch (StepFailure ex) {
+                if (draft != null) {
+                    draft.login(true, false);
+                }
+                if (ex.code == ErrorCode.AUTH_FAILED) {
+                    sessions.recordAuthFailure(scope.key);
+                }
+                throw ex;
+            } catch (SessionLost ex) {
+                if (draft != null) {
+                    draft.login(true, false);
+                }
+                throw new StepFailure(ErrorCode.AUTH_FAILED, "登录失败", -1, "request", logs);
+            } catch (RuntimeException ex) {
+                if (draft != null) {
+                    draft.login(true, false);
+                }
+                throw ex;
             }
-            if (ex.code == ErrorCode.AUTH_FAILED) {
-                sessions.recordAuthFailure(key);
-            }
-            throw ex;
-        } catch (SessionLost ex) {
-            if (draft != null) {
-                draft.login(true, false);
-            }
-            throw new StepFailure(ErrorCode.AUTH_FAILED, "登录失败", -1, "request", logs);
-        } catch (RuntimeException ex) {
-            if (draft != null) {
-                draft.login(true, false);
-            }
-            throw ex;
+        } finally {
+            scope.loggingIn = false;
         }
     }
 
-    private Attempt runAction(
-            ConchDoc conch,
-            Action action,
-            Map<String, Object> input,
-            Map<String, String> credentials,
-            Map<String, String> config,
-            SessionKey key,
-            URI base,
-            long deadline
-    ) {
+    private Attempt runAction(Action action, LoginScope scope) {
         ArrayList<StepLog> logs = new ArrayList<>();
-        Map<String, Object> vars = baseVars(input, credentials, config);
+        Map<String, Object> vars = baseVars(scope);
         try {
-            runSteps(action.steps(), vars, false, expectPrefix(conch), logs, key, base, deadline, "action",
-                    conch.scripts());
+            runSteps(action.steps(), vars, false, expectPrefix(scope.conch), logs, scope.key, scope.base,
+                    scope.deadline, "action", scope.conch.scripts());
             return Attempt.ok(vars, logs);
         } catch (SessionLost ex) {
             return Attempt.lost(logs);
@@ -526,7 +517,7 @@ public final class RuleEngine implements ConchExecutor {
             type = last.type();
         }
         return finish(false, null, ErrorCode.SESSION_EXPIRED, "会话已失效", index, type, "会话已失效", logs, version,
-                request, credentials, sessions.seenCookieValues(key), start);
+                request, credentials, sessions.redactionValues(key), start);
     }
 
     private ExecutionResult internal(
@@ -755,15 +746,12 @@ public final class RuleEngine implements ConchExecutor {
         return Redactor.of(secrets);
     }
 
-    private static Map<String, Object> baseVars(
-            Map<String, Object> input,
-            Map<String, String> credentials,
-            Map<String, String> config
-    ) {
+    private static Map<String, Object> baseVars(LoginScope scope) {
         LinkedHashMap<String, Object> vars = new LinkedHashMap<>();
-        vars.put("input", input);
-        vars.put("credential", credentials);
-        vars.put("config", config);
+        vars.put("input", scope.input);
+        vars.put("credential", scope.credentials);
+        vars.put("config", scope.config);
+        vars.put("login", scope.view);
         return vars;
     }
 
@@ -933,6 +921,105 @@ public final class RuleEngine implements ConchExecutor {
 
         private static Attempt failed(StepFailure failure) {
             return new Attempt(Map.of(), failure.logs, false, failure);
+        }
+    }
+
+    /**
+     * 一次调用持有的规则包。版本切换不在这次调用里重读注册表。
+     * {@code loggedInThisCall} 挡住同一次调用里的第二次自动登录；幂等重放直接再调 {@link #login}。
+     */
+    private final class LoginScope {
+        private final ConchDoc conch;
+        private final Map<String, Object> input;
+        private final Map<String, String> credentials;
+        private final Map<String, String> config;
+        private final SessionKey key;
+        private final URI base;
+        private final long deadline;
+        private final LoginView view = new LoginView();
+        private boolean loggingIn;
+        private boolean loggedInThisCall;
+
+        private LoginScope(
+                ConchDoc conch,
+                Map<String, Object> input,
+                Map<String, String> credentials,
+                Map<String, String> config,
+                SessionKey key,
+                URI base,
+                long deadline
+        ) {
+            this.conch = conch;
+            this.input = input;
+            this.credentials = credentials;
+            this.config = config;
+            this.key = key;
+            this.base = base;
+            this.deadline = deadline;
+        }
+
+        private String lookup(String name) {
+            String stored = sessions.loginSnapshot(key).get(name);
+            if (stored != null) {
+                return stored;
+            }
+            return sessions.cookieValue(key, cookieName(name));
+        }
+
+        private String cookieName(String name) {
+            Auth auth = conch.auth();
+            if (auth == null) {
+                return name;
+            }
+            String alias = auth.cookies().get(name);
+            return alias == null || alias.isBlank() ? name : alias;
+        }
+
+        private void require(String name) {
+            if (lookup(name) != null) {
+                return;
+            }
+            if (loggingIn || loggedInThisCall) {
+                throw missing(name);
+            }
+            login(this);
+            if (lookup(name) == null) {
+                throw missing(name);
+            }
+        }
+
+        private StepFailure missing(String name) {
+            return new StepFailure(ErrorCode.AUTH_FAILED, "登录没有建立变量 " + name, -1, "request", List.of());
+        }
+
+        private final class LoginView extends AbstractMap<String, Object> {
+            @Override
+            public boolean containsKey(Object key) {
+                if (!(key instanceof String name)) {
+                    return false;
+                }
+                require(name);
+                return true;
+            }
+
+            @Override
+            public Object get(Object key) {
+                if (!(key instanceof String name)) {
+                    return null;
+                }
+                require(name);
+                return lookup(name);
+            }
+
+            @Override
+            public Set<Map.Entry<String, Object>> entrySet() {
+                return Set.of();
+            }
+
+            @Override
+            public String toString() {
+                return "login";
+            }
         }
     }
 }

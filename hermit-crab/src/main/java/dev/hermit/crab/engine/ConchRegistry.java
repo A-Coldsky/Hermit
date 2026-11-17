@@ -3,6 +3,7 @@ package dev.hermit.crab.engine;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -23,7 +24,7 @@ import dev.hermit.crab.store.Origin;
 public final class ConchRegistry {
     private static final Logger LOG = Logger.getLogger(ConchRegistry.class.getName());
 
-    static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now");
+    static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now", "login");
     private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script");
 
     private final AtomicReference<Map<String, ConchDoc>> conches = new AtomicReference<>(Map.of());
@@ -104,6 +105,7 @@ public final class ConchRegistry {
         ValidationResult result = ConchValidator.validate(doc, context);
         issues.addAll(result.errors());
         reserved(doc, issues);
+        dedupe(issues);
         return List.copyOf(issues);
     }
 
@@ -171,6 +173,12 @@ public final class ConchRegistry {
             return Optional.empty();
         }
         return Optional.ofNullable(conches.get().get(conch));
+    }
+
+    /** 校验器和注册表都会报 {@code login}，本地导入只保留一条。 */
+    private static void dedupe(List<ValidationIssue> issues) {
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        issues.removeIf(issue -> !seen.add(issue.code() + "\0" + issue.path() + "\0" + issue.message()));
     }
 
     private static void reserved(ConchDoc doc, List<ValidationIssue> issues) {

@@ -19,7 +19,7 @@
 - `hermit-it`：独立 Reef 进程、Crab 和模拟 OA 的跨模块验收。
 - 前端使用 Vitest + Vue Test Utils + jsdom，`npm test`，也接入 Maven test 阶段。
 - Crab 容器入口为 `deploy/crab-entrypoint.sh`；Compose `client` profile 用于同机部署，`docker-compose.crab.yml` 用于独立客户端。
-- Maven 制品版本 `0.1.0-SNAPSHOT` 与规则兼容版本 `CrabVersion.CURRENT = 1.2.0` 用途不同。
+- Maven 制品版本 `0.1.0-SNAPSHOT` 与规则兼容版本 `CrabVersion.CURRENT = 1.3.0` 用途不同。1.1.0 起可载入 `driver: mcp`；1.2.0 起可载入脚本库；1.3.0 起可载入 `login` 与非空 `auth.cookies`。
 - Conch 指 YAML 规则包。`driver: http` 走步骤引擎。`driver: mcp` 由 Crab 按 Streamable HTTP 转发：`headers` 用请求头模板；`oauth` 在控制台做 PKCE，令牌在凭证库。开发者模式打开时，本地 MCP 包可以试跑，也可以刷新上游 `tools/list`（OAuth 包复用已连接的令牌和 401 后的刷新）。Reef 管理 API 与 Agent 清单从包内读出上游和工具表，不连上游。它不是操作系统命令脚本，也不支持 stdio。
 
 ## 修改入口
@@ -47,6 +47,6 @@
 - 输出脱敏替换已知凭证/Cookie 的字符串值及其 URL 编码形式，以及登录步骤、能力步骤里从凭证换来的值（extract，以及凭证请求之后的 script；能力步骤的 set 除外）。长度需至少 4 个字符。不能假定敏感字段名、短秘密或其它派生值会自动屏蔽，详见规则包（Conch）参考。
 - 账号/会话按 `(origin, conch, account)` 隔离；HTTP/MCP 调用共用 `Invoker`，不得绕过权限和能力禁用检查。
 - 规则快照/权限修改需检查审计 A01 的版本切换竞态。
-- Reef 和 Crab 已经投产。生产基线：Reef Flyway V1–V7（V1 含 `hermit_admin_login_failures` 的自增主键），Crab `schema_version` 1–15。已发布的迁移和升级步骤一律不改，结构变化只新增更高版本，并写清它对存量数据的效果（新列默认值、旧行回填、约束在已有数据上能否成立）。Flyway 校验已执行迁移的校验和，就地改过的迁移会让生产 Reef 起不来；Crab 就地改旧步骤只影响新装，已有客户端拿不到。Reef 的 `MigrationHistoryTest` 钉住已合入迁移的哈希并从 V7 带数据升级，新迁移合入时追加哈希、补上数据效果断言；Crab 的 `CrabSchemaHistoryTest` 从冻结的已发布结构（`schema/crab-v15.sql`）升级，结果须与全新安装一致，发布新版本时另存一份快照。需要按库现状判断的变更用 Java 迁移，并在 H2 和 MySQL 8.4 上验证。Crab 建表与升级在 `CrabDatabase`，不使用 Flyway。
+- Reef 和 Crab 已经投产。生产基线：Reef Flyway V1–V7（V1 含 `hermit_admin_login_failures` 的自增主键），Crab `schema_version` 1–16（16 是 `session_login`，不回填；冻结的升级起点仍是 `schema/crab-v15.sql`）。已发布的迁移和升级步骤一律不改，结构变化只新增更高版本，并写清它对存量数据的效果（新列默认值、旧行回填、约束在已有数据上能否成立）。Flyway 校验已执行迁移的校验和，就地改过的迁移会让生产 Reef 起不来；Crab 就地改旧步骤只影响新装，已有客户端拿不到。Reef 的 `MigrationHistoryTest` 钉住已合入迁移的哈希并从 V7 带数据升级，新迁移合入时追加哈希、补上数据效果断言；Crab 的 `CrabSchemaHistoryTest` 从冻结的已发布结构（`schema/crab-v15.sql`）升级，结果须与全新安装一致，发布新版本时另存一份快照。需要按库现状判断的变更用 Java 迁移，并在 H2 和 MySQL 8.4 上验证。Crab 建表与升级在 `CrabDatabase`，不使用 Flyway。
 - `health_check`、debug 状态尚未接通完整执行链，不能标成完整可用功能。`local-conches` 可导入、调用和导出：无签名、只在本机。`all: true` 与旧的空范围 Key 可以调用；有限范围仍要在 `conches` 里点名。
 - 对外行为变化同步更新文档、前端 API 类型和功能状态，报告验证结果及未验证边界。

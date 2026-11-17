@@ -129,6 +129,39 @@ class ConchRegistryTest {
     }
 
     @Test
+    void reservedLoginIsReportedOnce() {
+        ConchRegistry registry = new ConchRegistry();
+        assertThatThrownBy(() -> registry.put(ConchParser.parse("""
+                conch: sample_conch
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 能力
+                    description: 说明
+                    output:
+                      value: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { value: ok }
+                    notes: 注意
+                    steps:
+                      - set: { login: x }
+                """)))
+                .isInstanceOf(ConchRejectedException.class)
+                .satisfies(error -> {
+                    ConchRejectedException rejected = (ConchRejectedException) error;
+                    assertThat(rejected.issues())
+                            .filteredOn(issue -> "不能写入保留变量 login".equals(issue.message()))
+                            .hasSize(1);
+                });
+    }
+
+    @Test
     void defaultsMatchTheContract() {
         EngineSettings settings = EngineSettings.defaults();
         assertThat(settings.capabilityTimeout()).isEqualTo(Duration.ofSeconds(60));

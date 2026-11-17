@@ -52,7 +52,7 @@ public final class ConchParser {
             "upstream_annotations", "schema_sha256", "confirm");
     private static final Set<String> PARAM_KEYS = Set.of(
             "type", "description", "default", "enum", "minimum", "maximum", "items", "required");
-    private static final Set<String> AUTH_KEYS = Set.of("steps", "alive_check");
+    private static final Set<String> AUTH_KEYS = Set.of("steps", "alive_check", "cookies");
     private static final Set<String> ALIVE_KEYS = Set.of("request", "expect_not_redirect");
     private static final Set<String> MCP_KEYS = Set.of("expose", "read_only", "destructive");
     private static final Set<String> EXAMPLE_KEYS = Set.of("input", "output");
@@ -264,7 +264,26 @@ public final class ConchParser {
         rejectUnknown(obj, path, AUTH_KEYS);
         List<Step> steps = steps(obj.get("steps"), child(path, "steps"));
         AliveCheck alive = alive(obj.get("alive_check"), child(path, "alive_check"));
-        return new Auth(steps, alive);
+        Map<String, String> cookies = cookieAliases(obj.get("cookies"), child(path, "cookies"));
+        return new Auth(steps, alive, cookies);
+    }
+
+    private static Map<String, String> cookieAliases(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return Map.of();
+        }
+        if (!node.isObject()) {
+            throw new ConchParseException(path, "必须是映射");
+        }
+        LinkedHashMap<String, String> cookies = new LinkedHashMap<>();
+        node.properties().forEach(entry -> {
+            JsonNode value = entry.getValue();
+            if (value == null || !value.isTextual()) {
+                throw new ConchParseException(path + "." + entry.getKey(), "必须是字符串");
+            }
+            cookies.put(entry.getKey(), value.asText());
+        });
+        return cookies;
     }
 
     private static AliveCheck alive(JsonNode node, String path) {

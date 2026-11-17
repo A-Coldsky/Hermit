@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { CopyDocument, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ApiError } from '@shared/http'
 import { copyText, errorCodeLabels, errorText, formatTime, notifyError } from '@shared/format'
 import { useNarrow } from '@shared/narrow'
-import { api, type Account, type CredentialField } from '../api'
+import { api, type Account, type CredentialField, type LoginInput } from '../api'
 import CredentialDialog from './CredentialDialog.vue'
 
 const props = defineProps<{
@@ -32,11 +32,14 @@ const testResult = reactive({
   requestId: null as string | null,
   requestNote: null as string | null,
 })
-const loginFailureTitle = computed(() => errorCodeLabels[testResult.code] ?? '登录失败')
-const loginFailureDetail = computed(() => {
-  const prefix = `${loginFailureTitle.value}：`
-  return testResult.message.startsWith(prefix) ? testResult.message.slice(prefix.length) : testResult.message
-})
+function failureTitle(code: string): string {
+  return errorCodeLabels[code] ?? '登录失败'
+}
+
+function failureDetail(code: string, message: string): string {
+  const prefix = `${failureTitle(code)}：`
+  return message.startsWith(prefix) ? message.slice(prefix.length) : message
+}
 
 const namePattern = /^[A-Za-z0-9_-]{1,64}$/
 
@@ -101,6 +104,7 @@ async function remove(account: Account) {
 
 async function testLogin(account: Account) {
   busy.value = account.name
+  let openedCaptcha = false
   try {
     const data = await api.testLogin(props.conch, account.name)
     Object.assign(testResult, {
@@ -115,20 +119,26 @@ async function testLogin(account: Account) {
       requestNote: null,
     })
   } catch (error) {
-    Object.assign(testResult, {
-      open: true,
-      account: account.name,
-      success: false,
-      data: null,
-      message: errorText(error),
-      code: error instanceof ApiError ? error.code : '',
-      traceId: null,
-      requestId: error instanceof ApiError ? error.requestId : null,
-      requestNote: error instanceof ApiError ? error.requestNote : null,
-    })
+    if (error instanceof ApiError && error.code === 'LOGIN_INPUT_REQUIRED') {
+      openedCaptcha = true
+      delete suppressed[account.name]
+      await openLoginInput(account.name, true)
+    } else {
+      Object.assign(testResult, {
+        open: true,
+        account: account.name,
+        success: false,
+        data: null,
+        message: errorText(error),
+        code: error instanceof ApiError ? error.code : '',
+        traceId: null,
+        requestId: error instanceof ApiError ? error.requestId : null,
+        requestNote: error instanceof ApiError ? error.requestNote : null,
+      })
+    }
   } finally {
     busy.value = null
-    if (account.loginPaused) {
+    if (account.loginPaused || openedCaptcha) {
       emit('changed')
     }
   }
@@ -153,7 +163,327 @@ function refreshOnReturn() {
   }
 }
 window.addEventListener('focus', refreshOnReturn)
-onBeforeUnmount(() => window.removeEventListener('focus', refreshOnReturn))
+
+interface LoginInputResult {
+  success: boolean
+  message: string
+  code: string
+  requestId: string | null
+  requestNote: string | null
+}
+
+const suppressed = reactive<Record<string, boolean>>({})
+const codeInput = ref<{ focus: () => void } | null>(null)
+const loginInput = reactive({
+  open: false,
+  account: '',
+  loading: false,
+  prompt: null as LoginInput | null,
+  imageUrl: null as string | null,
+  imageFailed: false,
+  value: '',
+  submitting: false,
+  resending: false,
+  abandoning: false,
+  resendReadyAt: 0,
+  now: Date.now(),
+  ticket: 0,
+  result: null as LoginInputResult | null,
+})
+
+let clock: ReturnType<typeof setInterval> | undefined
+
+function ensureClock() {
+  if (clock !== undefined) return
+  clock = setInterval(() => {
+    loginInput.now = Date.now()
+  }, 1000)
+}
+
+function resendSeconds(): number {
+  return Math.max(0, Math.ceil((loginInput.resendReadyAt - loginInput.now) / 1000))
+}
+
+function expirySeconds(): number {
+  const at = loginInput.prompt ? Date.parse(loginInput.prompt.expiresAt) : Number.NaN
+  if (Number.isNaN(at)) return 0
+  return Math.max(0, Math.ceil((at - loginInput.now) / 1000))
+}
+
+function formatRemain(seconds: number): string {
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  if (minutes <= 0) return `${rest} 秒`
+  return `${minutes} 分 ${rest.toString().padStart(2, '0')} 秒`
+}
+
+const expiryText = computed(() => {
+  if (!loginInput.prompt) return ''
+  const seconds = expirySeconds()
+  if (seconds <= 0) return '已过期，请重新登录'
+  return `还剩 ${formatRemain(seconds)}`
+})
+
+const resendLabel = computed(() => {
+  const verb = loginInput.prompt?.kind === 'code' ? '重新发送' : '换一张'
+  const wait = resendSeconds()
+  return wait > 0 ? `${verb}（${wait} 秒）` : verb
+})
+
+const resendReady = computed(
+  () =>
+    !!loginInput.prompt &&
+    loginInput.prompt.canResend &&
+    resendSeconds() === 0 &&
+    expirySeconds() > 0 &&
+    !loginInput.loading &&
+    !loginInput.submitting &&
+    !loginInput.resending &&
+    !loginInput.abandoning,
+)
+
+const submitDisabled = computed(
+  () => loginInput.loading || !loginInput.prompt || expirySeconds() <= 0 || loginInput.submitting,
+)
+
+function revokeImage() {
+  if (loginInput.imageUrl) {
+    URL.revokeObjectURL(loginInput.imageUrl)
+    loginInput.imageUrl = null
+  }
+}
+
+function hasControl(value: string): boolean {
+  return /[\u0000-\u001F\u007F-\u009F]/.test(value)
+}
+
+function applyPrompt(prompt: LoginInput) {
+  const now = Date.now()
+  loginInput.now = now
+  loginInput.prompt = prompt
+  loginInput.resendReadyAt = now + Math.max(0, prompt.resendAfter) * 1000
+  loginInput.value = ''
+  loginInput.result = null
+  loginInput.imageFailed = false
+}
+
+async function loadImage(ticket: number) {
+  revokeImage()
+  try {
+    const blob = await api.loginInputImage(props.conch, loginInput.account)
+    if (loginInput.ticket !== ticket) return
+    loginInput.imageUrl = URL.createObjectURL(blob)
+    loginInput.imageFailed = false
+  } catch (error) {
+    if (loginInput.ticket !== ticket) return
+    loginInput.imageFailed = true
+    notifyError(error)
+  }
+}
+
+async function reloadPrompt(name: string) {
+  const ticket = ++loginInput.ticket
+  const prompt = await api.loginInput(props.conch, name)
+  if (loginInput.ticket !== ticket || loginInput.account !== name) return
+  applyPrompt(prompt)
+  if (prompt.kind === 'image' && prompt.hasImage) {
+    await loadImage(ticket)
+  } else {
+    revokeImage()
+  }
+}
+
+function focusInput() {
+  codeInput.value?.focus()
+}
+
+async function openLoginInput(name: string, focus: boolean) {
+  delete suppressed[name]
+  if (loginInput.open && loginInput.account === name && loginInput.prompt && !loginInput.result) {
+    if (focus) {
+      await nextTick()
+      focusInput()
+    }
+    return
+  }
+  ensureClock()
+  loginInput.open = true
+  loginInput.account = name
+  loginInput.loading = true
+  loginInput.prompt = null
+  loginInput.value = ''
+  loginInput.result = null
+  loginInput.imageFailed = false
+  revokeImage()
+  try {
+    await reloadPrompt(name)
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      suppressed[name] = true
+      loginInput.open = false
+      emit('changed')
+      notifyError(error)
+      return
+    }
+    notifyError(error)
+  } finally {
+    if (loginInput.account === name) loginInput.loading = false
+  }
+  if (focus && loginInput.open && loginInput.account === name && loginInput.prompt) {
+    await nextTick()
+    focusInput()
+  }
+}
+
+function openFromRow(account: Account) {
+  delete suppressed[account.name]
+  void openLoginInput(account.name, true)
+}
+
+function syncLoginInput() {
+  const pending = new Set(
+    props.accounts.filter((account) => account.loginInputRequired).map((account) => account.name),
+  )
+  for (const name of Object.keys(suppressed)) {
+    if (!pending.has(name)) delete suppressed[name]
+  }
+  if (loginInput.open) return
+  for (const name of pending) {
+    if (!suppressed[name]) {
+      void openLoginInput(name, false)
+      return
+    }
+  }
+}
+
+watch(
+  () => props.accounts.map((account) => `${account.name}:${account.loginInputRequired ? 1 : 0}`).join('\n'),
+  () => syncLoginInput(),
+  { immediate: true },
+)
+
+function onLoginInputClosed() {
+  if (loginInput.open) return
+  loginInput.ticket += 1
+  const name = loginInput.account
+  revokeImage()
+  loginInput.prompt = null
+  loginInput.result = null
+  loginInput.value = ''
+  loginInput.loading = false
+  if (name && props.accounts.some((account) => account.name === name && account.loginInputRequired)) {
+    suppressed[name] = true
+  }
+}
+
+async function submitLoginInput() {
+  if (loginInput.submitting || loginInput.loading || !loginInput.prompt) return
+  if (expirySeconds() <= 0) {
+    ElMessage.warning('验证码已过期，请重新登录')
+    return
+  }
+  const value = loginInput.value
+  if (value.length < 1) {
+    ElMessage.warning('请输入验证码')
+    return
+  }
+  if (hasControl(value)) {
+    ElMessage.warning('验证码不能包含控制字符')
+    return
+  }
+  if (value.length > 64) {
+    ElMessage.warning('验证码最长 64 个字符')
+    return
+  }
+  const name = loginInput.account
+  loginInput.submitting = true
+  try {
+    await api.submitLoginInput(props.conch, name, value)
+    loginInput.result = { success: true, message: '', code: '', requestId: null, requestNote: null }
+    loginInput.prompt = null
+    revokeImage()
+    emit('changed')
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'LOGIN_INPUT_REQUIRED') {
+      try {
+        await reloadPrompt(name)
+        ElMessage.info('请再输入一次验证码')
+        emit('changed')
+        await nextTick()
+        focusInput()
+      } catch (reloadError) {
+        if (reloadError instanceof ApiError && reloadError.status === 404) {
+          suppressed[name] = true
+          loginInput.open = false
+        }
+        notifyError(reloadError)
+      }
+      return
+    }
+    loginInput.result = {
+      success: false,
+      message: errorText(error),
+      code: error instanceof ApiError ? error.code : '',
+      requestId: error instanceof ApiError ? error.requestId : null,
+      requestNote: error instanceof ApiError ? error.requestNote : null,
+    }
+    loginInput.prompt = null
+    revokeImage()
+    emit('changed')
+  } finally {
+    loginInput.submitting = false
+  }
+}
+
+async function resendLoginInput() {
+  if (!resendReady.value || !loginInput.account) return
+  const name = loginInput.account
+  loginInput.resending = true
+  try {
+    await api.resendLoginInput(props.conch, name)
+    await reloadPrompt(name)
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      suppressed[name] = true
+      loginInput.open = false
+    }
+    notifyError(error)
+  } finally {
+    loginInput.resending = false
+  }
+}
+
+async function abandonLoginInput() {
+  if (!loginInput.account || loginInput.abandoning) return
+  try {
+    await ElMessageBox.confirm(
+      '放弃后，这次等待输入的登录会作废，需要重新登录。',
+      '放弃验证码',
+      { confirmButtonText: '放弃', cancelButtonText: '继续输入', type: 'warning', confirmButtonType: 'danger' },
+    )
+  } catch {
+    return
+  }
+  const name = loginInput.account
+  loginInput.abandoning = true
+  try {
+    await api.abandonLoginInput(props.conch, name)
+    ElMessage.success('已放弃这次登录')
+    suppressed[name] = true
+    loginInput.open = false
+    emit('changed')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    loginInput.abandoning = false
+  }
+}
+
+onBeforeUnmount(() => {
+  window.removeEventListener('focus', refreshOnReturn)
+  if (clock !== undefined) clearInterval(clock)
+  revokeImage()
+})
 
 async function connect(account: Account) {
   // 先同步开窗，等接口返回再跳转，避免被浏览器当成弹窗拦掉。
@@ -263,9 +593,17 @@ async function disconnect(account: Account) {
             <div v-if="row.loginPauseReason" class="note">{{ row.loginPauseReason }}</div>
             <div class="hm-muted note">重新填写凭证后点「测试登录」，登录成功即恢复。</div>
           </template>
-          <span v-else-if="row.credentialsUnreadable" class="hm-muted">无法登录：凭证无法解密</span>
-          <span v-else-if="row.needsConfiguration" class="hm-muted">无法登录：缺少凭证</span>
-          <span v-else class="hm-muted">正常</span>
+          <div v-if="row.loginInputRequired" data-test="login-input-required">
+            <el-tag type="warning" effect="plain" size="small">需要验证码</el-tag>
+            <div class="hm-muted note">
+              登录停在验证码，请在输入框里填写后提交。
+              <template v-if="row.loginInputExpiresAt">过期时间：{{ formatTime(row.loginInputExpiresAt) }}。</template>
+            </div>
+            <el-button link type="primary" data-test="login-input-open" @click="openFromRow(row)">输入验证码</el-button>
+          </div>
+          <span v-if="!row.loginPaused && !row.loginInputRequired && row.credentialsUnreadable" class="hm-muted">无法登录：凭证无法解密</span>
+          <span v-else-if="!row.loginPaused && !row.loginInputRequired && row.needsConfiguration" class="hm-muted">无法登录：缺少凭证</span>
+          <span v-else-if="!row.loginPaused && !row.loginInputRequired" class="hm-muted">正常</span>
         </template>
       </el-table-column>
       <el-table-column label="操作" :width="narrow ? 96 : usesOAuth ? 420 : 300" align="right" fixed="right">
@@ -333,13 +671,108 @@ async function disconnect(account: Account) {
     </template>
   </el-dialog>
 
+  <el-dialog
+    v-model="loginInput.open"
+    :title="`需要验证码 · ${loginInput.account}`"
+    width="480px"
+    @closed="onLoginInputClosed"
+  >
+    <div data-test="login-input">
+      <div v-if="loginInput.result" data-test="login-input-result">
+        <el-result v-if="loginInput.result.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存" />
+        <el-result
+          v-else
+          icon="error"
+          :title="failureTitle(loginInput.result.code)"
+          :sub-title="failureDetail(loginInput.result.code, loginInput.result.message)"
+        >
+          <template v-if="loginInput.result.requestId" #extra>
+            <span class="hm-muted">请求编号</span>
+            <span class="mono">{{ loginInput.result.requestId }}</span>
+            <el-button
+              link
+              :icon="CopyDocument"
+              aria-label="复制请求编号"
+              @click="copyText(loginInput.result.requestId ?? '', '请求编号已复制')"
+            />
+            <span class="hm-muted">{{ loginInput.result.requestNote }}</span>
+          </template>
+        </el-result>
+      </div>
+      <p v-else-if="loginInput.loading" class="hm-muted">正在读取验证码…</p>
+      <p v-else-if="!loginInput.prompt" class="hm-muted">没有读到验证码，可以稍后再试。</p>
+      <template v-else>
+        <p class="login-input-note hm-muted">输入只用于接着这次登录，不会写入凭证。</p>
+        <p class="strong">{{ loginInput.prompt.label }}</p>
+        <p v-if="loginInput.prompt.hint" class="hm-muted login-input-note">{{ loginInput.prompt.hint }}</p>
+        <img
+          v-if="loginInput.imageUrl"
+          :src="loginInput.imageUrl"
+          alt="验证码图片"
+          class="login-input-image"
+          data-test="login-input-image"
+        />
+        <p v-else-if="loginInput.prompt.kind === 'image' && loginInput.imageFailed" class="hm-muted login-input-note">
+          验证码图片没有加载出来，可以换一张。
+        </p>
+        <p v-else-if="loginInput.prompt.kind === 'image' && loginInput.prompt.hasImage" class="hm-muted login-input-note">
+          正在读取图片…
+        </p>
+        <p v-else-if="loginInput.prompt.kind === 'image'" class="hm-muted login-input-note">没有验证码图片。</p>
+        <p class="hm-muted login-input-note" data-test="login-input-expires">{{ expiryText }}</p>
+        <el-input
+          ref="codeInput"
+          v-model="loginInput.value"
+          autocomplete="off"
+          placeholder="请输入"
+          data-test="login-input-value"
+          @keyup.enter="submitLoginInput"
+        />
+      </template>
+    </div>
+    <template #footer>
+      <el-button v-if="loginInput.result" type="primary" data-test="login-input-dismiss" @click="loginInput.open = false">
+        知道了
+      </el-button>
+      <template v-else>
+        <el-button data-test="login-input-later" @click="loginInput.open = false">稍后再说</el-button>
+        <el-button
+          type="danger"
+          plain
+          data-test="login-input-abandon"
+          :loading="loginInput.abandoning"
+          @click="abandonLoginInput"
+        >
+          放弃
+        </el-button>
+        <el-button
+          data-test="login-input-resend"
+          :disabled="!resendReady"
+          :loading="loginInput.resending"
+          @click="resendLoginInput"
+        >
+          {{ resendLabel }}
+        </el-button>
+        <el-button
+          type="primary"
+          data-test="login-input-submit"
+          :disabled="submitDisabled"
+          :loading="loginInput.submitting"
+          @click="submitLoginInput"
+        >
+          提交
+        </el-button>
+      </template>
+    </template>
+  </el-dialog>
+
   <el-dialog v-model="testResult.open" :title="`测试登录 · ${testResult.account}`" width="560px">
     <el-result v-if="testResult.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存" />
     <el-result
       v-else
       icon="error"
-      :title="loginFailureTitle"
-      :sub-title="loginFailureDetail"
+      :title="failureTitle(testResult.code)"
+      :sub-title="failureDetail(testResult.code, testResult.message)"
     >
       <template v-if="testResult.requestId" #extra>
         <span class="hm-muted">请求编号</span>
@@ -390,5 +823,20 @@ div.note {
 
 .ops.stacked .el-button + .el-button {
   margin-left: 0;
+}
+
+.login-input-note {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.login-input-image {
+  display: block;
+  max-width: 100%;
+  max-height: 200px;
+  margin: 0 0 12px;
+  border: 1px solid var(--hm-border);
+  border-radius: 8px;
+  background: var(--hm-surface-2);
 }
 </style>

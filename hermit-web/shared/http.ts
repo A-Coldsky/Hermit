@@ -43,6 +43,18 @@ export function createClient(options: ClientOptions = {}) {
     return body
   }
 
+  /** 二进制响应。不走 JSON 信封；失败时仍按信封解析错误。`cache: no-store` 避免浏览器留下图片。 */
+  async function blob(path: string, query?: Query): Promise<Blob> {
+    const response = await fetch(withQuery(path, query), {
+      headers: options.headers?.() ?? {},
+      cache: 'no-store',
+    })
+    if (!response.ok) {
+      throw fail(response.status, parseEnvelope(await response.text()))
+    }
+    return response.blob()
+  }
+
   function fail(status: number, parsed: Envelope<unknown> | null): ApiError {
     const error = new ApiError(
       status,
@@ -85,6 +97,7 @@ export function createClient(options: ClientOptions = {}) {
     del: <T>(path: string) => request<T>('DELETE', path),
     upload: <T>(path: string, form: FormData) => request<T>('POST', path, form),
     text,
+    blob,
   }
 }
 

@@ -60,11 +60,15 @@ import dev.hermit.common.validate.ConchValidator;
  * Version 15 adds {@code dev_traces} (redacted JSON for local-package debugging). It runs
  * when its own row is missing and does not rewrite {@link #applyV14} or versions 1–13.
  * Later versions must not edit {@link #applyV15}.
+ * Version 16 adds {@code session_login} (one ciphertext per origin, conch and account).
+ * It runs when its own row is missing and does not rewrite {@link #applyV15} or versions 1–14.
+ * Existing rows are not copied into it. Later versions must not edit {@link #applyV16}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
- * or create later tables. Crab has been released with versions 1–15. Do not edit any released
+ * or create later tables. Crab has been released with versions 1–15. Version 16 is
+ * {@code session_login} and is not folded into those steps. Do not edit any released
  * step; add a new version instead. {@code CrabSchemaHistoryTest} upgrades the frozen released
- * schema and compares it with a fresh install.
+ * schema ({@code schema/crab-v15.sql}) and compares it with a fresh install.
  */
 public final class CrabDatabase implements AutoCloseable {
     /**
@@ -184,6 +188,12 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 15)) {
                 applyV15(connection);
                 insertVersion(connection, 15);
+            }
+            // Version 17 may already be recorded. Do not gate version 16 on MAX(version),
+            // and do not rewrite applyV15 or schema/crab-v15.sql. No backfill.
+            if (!applied(connection, 16)) {
+                applyV16(connection);
+                insertVersion(connection, 16);
             }
             return null;
         });
@@ -638,6 +648,19 @@ public final class CrabDatabase implements AutoCloseable {
                 )
                 """);
         execute(connection, "CREATE INDEX IF NOT EXISTS dev_traces_expires_idx ON dev_traces (expires_at)");
+    }
+
+    private static void applyV16(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS session_login (
+                    origin VARCHAR(16) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
+                    account VARCHAR(64) NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    PRIMARY KEY (origin, conch, account)
+                )
+                """);
     }
 
     private static boolean applied(Connection connection, int version) throws SQLException {

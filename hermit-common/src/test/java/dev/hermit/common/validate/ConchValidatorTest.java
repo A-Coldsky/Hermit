@@ -898,6 +898,149 @@ class ConchValidatorTest {
         return ConchValidator.validate(ConchParser.parse(yaml), ConchValidator.Context.of(null));
     }
 
+    @Test
+    void loginVariablesAreDeclaredBeforeUseAndStayOutOfOutput() {
+        assertThat(ConchValidator.validate(ConchParser.parse(loginYaml("""
+                auth:
+                  steps:
+                    - assert: { cookie_exists: sid }
+                  cookies: { xsrf: XSRF-TOKEN }
+                """, """
+                    path: "/{{login.sid}}/{{login.xsrf}}"
+                """)), ConchValidator.Context.of(SemVer.parse("1.3.0"))).errors()).isEmpty();
+
+        ValidationResult missing = ConchValidator.validate(ConchParser.parse(loginYaml("""
+                auth:
+                  steps:
+                    - assert: { cookie_exists: sid }
+                """, """
+                    path: "/{{login.nope}}"
+                """)), ConchValidator.Context.of(SemVer.parse("1.3.0")));
+        assertThat(missing.errors()).extracting(ValidationIssue::message)
+                .contains("引用了未声明的登录变量 nope");
+        assertThat(missing.errors()).extracting(ValidationIssue::message)
+                .noneMatch(message -> message.toString().contains("引用了未定义的变量"));
+
+        ValidationResult bare = ConchValidator.validate(ConchParser.parse(loginYaml("""
+                auth:
+                  steps:
+                    - extract:
+                        sid: { jsonpath: $.sid }
+                """, """
+                    path: "/{{sid}}"
+                """)), ConchValidator.Context.of(SemVer.parse("1.3.0")));
+        assertThat(bare.errors()).extracting(ValidationIssue::message)
+                .contains("能力不能引用登录步骤里的变量。");
+
+        ValidationResult output = ConchValidator.validate(ConchParser.parse(loginYaml("""
+                auth:
+                  steps:
+                    - extract:
+                        sid: { jsonpath: $.sid }
+                """, """
+                    path: /items
+                """, """
+                      sid: { type: string, description: 会话, value: "{{login.sid}}" }
+                """)), ConchValidator.Context.of(SemVer.parse("1.3.0")));
+        assertThat(output.errors()).extracting(ValidationIssue::code).contains(ValidationCodes.LOGIN_IN_OUTPUT);
+        assertThat(output.errors()).extracting(ValidationIssue::message).contains("返回值不得引用登录变量");
+
+        ValidationResult wrapped = ConchValidator.validate(ConchParser.parse(loginYaml("""
+                auth:
+                  steps:
+                    - extract:
+                        sid: { jsonpath: $.sid }
+                """, """
+                    path: "/{{login.sid | default('')}}"
+                """)), ConchValidator.Context.of(SemVer.parse("1.3.0")));
+        assertThat(wrapped.errors()).extracting(ValidationIssue::code).contains(ValidationCodes.LOGIN_DEFAULT);
+        assertThat(wrapped.errors()).extracting(ValidationIssue::message)
+                .contains("不能用 default 包裹登录变量 login.sid");
+
+        ValidationResult reserved = ConchValidator.validate(ConchParser.parse(loginYaml("""
+                auth:
+                  steps:
+                    - set: { login: "{{credential.password}}" }
+                """, """
+                    path: /items
+                """)), ConchValidator.Context.of(SemVer.parse("1.3.0")));
+        assertThat(reserved.errors()).extracting(ValidationIssue::code).contains(ValidationCodes.RESERVED_VARIABLE);
+        assertThat(reserved.errors()).extracting(ValidationIssue::message).contains("不能写入保留变量 login");
+
+        ValidationResult tooOld = ConchValidator.validate(ConchParser.parse(loginYaml("""
+                auth:
+                  steps:
+                    - extract:
+                        sid: { jsonpath: $.sid }
+                """, """
+                    path: "/{{login.sid}}"
+                """).replace("min_crab_version: 1.3.0", "min_crab_version: 1.0.0")),
+                ConchValidator.Context.of(SemVer.parse("1.3.0")));
+        assertThat(tooOld.errors()).extracting(ValidationIssue::message)
+                .contains("使用 login 或 auth.cookies 时 min_crab_version 必须不低于 1.3.0");
+
+        ValidationResult alive = ConchValidator.validate(ConchParser.parse(loginYaml("""
+                auth:
+                  steps:
+                    - extract:
+                        sid: { jsonpath: $.sid }
+                  alive_check:
+                    request: { method: GET, path: "/ping/{{login.sid}}" }
+                    expect_not_redirect: /login
+                """, """
+                    path: /items
+                """)), ConchValidator.Context.of(SemVer.parse("1.3.0")));
+        assertThat(alive.errors()).isEmpty();
+
+        ValidationResult emptyCookies = ConchValidator.validate(ConchParser.parse(loginYaml("""
+                auth:
+                  steps:
+                    - request: { method: POST, path: /login }
+                  cookies: {}
+                """, """
+                    path: /items
+                """).replace("min_crab_version: 1.3.0", "min_crab_version: 1.0.0")),
+                ConchValidator.Context.of(SemVer.parse("1.3.0")));
+        assertThat(emptyCookies.errors()).isEmpty();
+    }
+
+    private static String loginYaml(String auth, String request) {
+        return loginYaml(auth, request, "value: { type: string, description: 结果, value: ok }");
+    }
+
+    private static String loginYaml(String auth, String request, String output) {
+        return """
+                conch: legacy_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.3.0
+                title: 标题
+                description: 说明
+                credentials:
+                  password: { type: secret, required: true, label: 密码 }
+                %s
+                actions:
+                  list_todo:
+                    title: 查询
+                    description: 说明
+                    output:
+                      %s
+                    examples:
+                      - input: {}
+                        output: { value: ok }
+                    notes: 注意
+                    steps:
+                      - request:
+                          method: GET
+                          %s
+                """.formatted(margin(auth), margin(output), margin(request));
+    }
+
+    /** 文本块的结束引号更靠左时，编译器会留下多余缩进；先去掉行尾再 stripIndent 才能消掉。 */
+    private static String margin(String text) {
+        return text.stripTrailing().stripIndent();
+    }
+
     private static String explicitEmptyRelatedYaml() {
         try (InputStream in = ConchValidatorTest.class.getClassLoader()
                 .getResourceAsStream("related/explicit-empty.yaml")) {

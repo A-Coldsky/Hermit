@@ -97,7 +97,7 @@ Reef 与 Crab 的浏览器页面都是同一份静态 `index.html`，不用请�
 | --- | --- |
 | Reef 管理员、版本元数据、审计、报告、告警、Agent 令牌 | H2 或 MySQL。业务表、索引、唯一约束、检查约束和 Flyway 历史表 `hermit_flyway_schema_history` 都以 `hermit_` 开头。[Flyway SQL](../hermit-reef/src/main/resources/db/migration) 的 V1–V4 在发布前就地改写，没有数据迁移。已有 `reef-data` 里的 H2 和 Compose MySQL 库必须重建。V5 增加 `pull_count`，V6 增加角色、令牌哈希和 Crab 实例，V7 增加 `hermit_voided_config_tokens`，V8 增加管理员的 `token_version`（改口令或重置口令后作废已签出的 JWT）。这几次是新增迁移，升级不必重建库。生产执行过 V1–V7（V1 含登录失败表主键），之后只新增迁移，`MigrationHistoryTest` 钉住已合入迁移的哈希 |
 | Reef YAML/包/签名密钥/JWT 密钥 | `data-dir/conches/`、`data-dir/keys/` |
-| Crab 账号、配置、API Key、日志、队列、配置审计、控制台口令哈希 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 conch/account 分页读取，响应不含凭证和配置值。控制台口令只存 schema 14 的 PBKDF2 哈希，不进 `config.yml`。schema 15 的 `dev_traces` 是本地 HTTP 与本地 MCP 调试用的脱敏 JSON，同一条追踪可以累加多轮 JSON-RPC，不进 `config.yml`；关掉开发者模式或开关到期时整表删除。没有新增 schema 16 |
+| Crab 账号、配置、API Key、日志、队列、配置审计、控制台口令哈希 | `HERMIT_HOME/data/crab.mv.db`；`CrabDatabase` 内置建表/迁移。`config_audit` 可按 conch/account 分页读取，响应不含凭证和配置值。控制台口令只存 schema 14 的 PBKDF2 哈希，不进 `config.yml`。schema 15 的 `dev_traces` 是本地 HTTP 与本地 MCP 调试用的脱敏 JSON，同一条追踪可以累加多轮 JSON-RPC，不进 `config.yml`；关掉开发者模式或开关到期时整表删除。schema 16 的 `session_login` 按 `(origin, conch, account)` 存登录快照密文，AAD 字段是 `login`，升级不回填 |
 | Crab 凭证、Cookie 会话、幂等响应 | H2 中 AES-256-GCM 密文；主密钥在环境变量或本机文件 |
 | Crab 规则及当前版本 | `HERMIT_HOME/conches/<conch>/...` |
 | API Key | 创建时返回一次明文；后续前缀和哈希查验 |

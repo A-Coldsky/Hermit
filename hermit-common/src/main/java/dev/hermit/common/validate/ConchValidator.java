@@ -10,6 +10,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -41,6 +42,10 @@ public final class ConchValidator {
     private static final Set<String> DEFAULT_STEP_TYPES = Set.of(
             "request", "extract", "assert", "set", "script");
     private static final Set<String> BUILTIN_ROOTS = Set.of("input", "response", "now");
+    /** 与 {@code ConchRegistry.RESERVED} 一致；这里只拦 {@code login}，Reef 上传不经过注册表。 */
+    private static final String RESERVED_LOGIN = "login";
+    private static final SemVer LOGIN_MIN_CRAB = SemVer.parse("1.3.0");
+    private static final int COOKIE_NAME_LIMIT = 256;
     private static final Pattern HEADER_BEARER = Pattern.compile("(?i)bearer\\s+[A-Za-z0-9._~+/=-]{8,}");
     private static final List<String> SECRET_KEYS = List.of(
             "password", "passwd", "pwd", "secret", "token", "otp", "apikey", "api_key",
@@ -127,37 +132,72 @@ public final class ConchValidator {
         }
         rejectMcpOnly(doc, errors);
         LinkedHashSet<String> loginNames = new LinkedHashSet<>();
+        LinkedHashSet<String> loginVars = new LinkedHashSet<>();
+        AtomicBoolean usesLogin = new AtomicBoolean();
         Set<String> authInputs = sharedInputFields(doc);
         if (doc.auth() != null) {
+            checkAuthCookies(doc.auth(), errors, usesLogin);
             checkSteps(doc.auth().steps(), "auth.steps", ctx, errors);
             checkPlainSteps(doc.auth(), errors);
+            collectLoginVars(doc.auth(), loginNames, loginVars);
             checkOrderedSteps(
-                    doc.auth().steps(), "auth.steps", doc, new LinkedHashSet<>(), Set.of(), errors, null, authInputs);
-            if (doc.auth().steps() != null) {
-                for (Step step : doc.auth().steps()) {
-                    declare(step, loginNames);
-                }
-            }
+                    doc.auth().steps(),
+                    "auth.steps",
+                    doc,
+                    new LinkedHashSet<>(),
+                    Set.of(),
+                    loginVars,
+                    usesLogin,
+                    errors,
+                    null,
+                    authInputs);
             AliveCheck alive = doc.auth().aliveCheck();
             if (alive != null) {
                 checkPlainMap("auth.alive_check.request", alive.request(), false, false, errors);
                 checkScalar("auth.alive_check.expect_not_redirect", "expect_not_redirect",
                         alive.expectNotRedirect(), errors);
                 checkRefs(
-                        "auth.alive_check.request", alive.request(), doc, Set.of(), Set.of(), errors, null, authInputs);
+                        "auth.alive_check.request",
+                        alive.request(),
+                        doc,
+                        Set.of(),
+                        Set.of(),
+                        loginVars,
+                        usesLogin,
+                        errors,
+                        null,
+                        authInputs);
                 checkRefs(
                         "auth.alive_check.expect_not_redirect",
                         alive.expectNotRedirect(),
                         doc,
                         Set.of(),
                         Set.of(),
+                        loginVars,
+                        usesLogin,
                         errors,
                         null,
                         authInputs);
             }
         }
+        checkReservedLogin(doc, errors);
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
-            checkAction(entry.getKey(), entry.getValue(), ctx, doc, loginNames, errors, warnings);
+            checkAction(
+                    entry.getKey(),
+                    entry.getValue(),
+                    ctx,
+                    doc,
+                    loginNames,
+                    loginVars,
+                    usesLogin,
+                    errors,
+                    warnings);
+        }
+        if (usesLogin.get() && doc.minCrabVersion().compareTo(LOGIN_MIN_CRAB) < 0) {
+            errors.add(issue(
+                    ValidationCodes.MIN_CRAB_VERSION,
+                    "min_crab_version",
+                    "使用 login 或 auth.cookies 时 min_crab_version 必须不低于 1.3.0"));
         }
         return new ValidationResult(errors, warnings);
     }
@@ -168,6 +208,8 @@ public final class ConchValidator {
             Context ctx,
             ConchDoc doc,
             Set<String> loginNames,
+            Set<String> loginVars,
+            AtomicBoolean usesLogin,
             List<ValidationIssue> errors,
             List<ValidationIssue> warnings
     ) {
@@ -199,6 +241,8 @@ public final class ConchValidator {
                     doc,
                     Set.of(),
                     Set.of(),
+                    loginVars,
+                    usesLogin,
                     errors,
                     null,
                     inputFields);
@@ -209,8 +253,27 @@ public final class ConchValidator {
         checkPlainStepList(action.steps(), path + ".steps", errors);
         LinkedHashSet<String> declared = new LinkedHashSet<>();
         checkOrderedSteps(
-                action.steps(), path + ".steps", doc, declared, loginNames, errors, warnings, inputFields);
-        checkRefs(path + ".output", action.output(), doc, declared, loginNames, errors, warnings, inputFields);
+                action.steps(),
+                path + ".steps",
+                doc,
+                declared,
+                loginNames,
+                loginVars,
+                usesLogin,
+                errors,
+                warnings,
+                inputFields);
+        checkRefs(
+                path + ".output",
+                action.output(),
+                doc,
+                declared,
+                loginNames,
+                loginVars,
+                usesLogin,
+                errors,
+                warnings,
+                inputFields);
         if (action.examples().isEmpty()) {
             errors.add(issue(ValidationCodes.MISSING_EXAMPLES, path + ".examples", "缺少 examples"));
         }
@@ -405,6 +468,9 @@ public final class ConchValidator {
                     if (ref.startsWith("credential.")) {
                         errors.add(issue(ValidationCodes.CREDENTIAL_IN_OUTPUT, path, "返回值不得引用凭证"));
                     }
+                    if (isLoginPath(ref)) {
+                        errors.add(issue(ValidationCodes.LOGIN_IN_OUTPUT, path, "返回值不得引用登录变量"));
+                    }
                 }
             } catch (TemplateException ex) {
                 // 语法错误已由原始 output 的引用扫描记为 TEMPLATE_SYNTAX。
@@ -551,6 +617,8 @@ public final class ConchValidator {
             ConchDoc doc,
             Set<String> declared,
             Set<String> loginNames,
+            Set<String> loginVars,
+            AtomicBoolean usesLogin,
             List<ValidationIssue> errors,
             List<ValidationIssue> warnings,
             Set<String> inputFields
@@ -573,13 +641,25 @@ public final class ConchValidator {
                                 doc,
                                 declared,
                                 loginNames,
+                                loginVars,
+                                usesLogin,
                                 errors,
                                 warnings,
                                 inputFields);
                     }
                 }
             } else {
-                checkRefs(typed, step.def(), doc, declared, loginNames, errors, warnings, inputFields);
+                checkRefs(
+                        typed,
+                        step.def(),
+                        doc,
+                        declared,
+                        loginNames,
+                        loginVars,
+                        usesLogin,
+                        errors,
+                        warnings,
+                        inputFields);
             }
             declare(step, declared);
         }
@@ -617,6 +697,8 @@ public final class ConchValidator {
             ConchDoc doc,
             Set<String> declared,
             Set<String> loginNames,
+            Set<String> loginVars,
+            AtomicBoolean usesLogin,
             List<ValidationIssue> errors,
             List<ValidationIssue> warnings,
             Set<String> inputFields
@@ -634,6 +716,8 @@ public final class ConchValidator {
                             doc,
                             declared,
                             loginNames,
+                            loginVars,
+                            usesLogin,
                             errors,
                             warnings,
                             inputFields);
@@ -657,6 +741,8 @@ public final class ConchValidator {
                                 doc,
                                 declared,
                                 loginNames,
+                                loginVars,
+                                usesLogin,
                                 errors,
                                 warnings,
                                 inputFields);
@@ -664,7 +750,17 @@ public final class ConchValidator {
                 }
                 return;
             }
-            checkRefs(typed, step.def(), doc, declared, loginNames, errors, warnings, inputFields);
+            checkRefs(
+                    typed,
+                    step.def(),
+                    doc,
+                    declared,
+                    loginNames,
+                    loginVars,
+                    usesLogin,
+                    errors,
+                    warnings,
+                    inputFields);
             return;
         }
         if (node instanceof Map<?, ?> map) {
@@ -675,6 +771,8 @@ public final class ConchValidator {
                         doc,
                         declared,
                         loginNames,
+                        loginVars,
+                        usesLogin,
                         errors,
                         warnings,
                         inputFields);
@@ -689,6 +787,8 @@ public final class ConchValidator {
                         doc,
                         declared,
                         loginNames,
+                        loginVars,
+                        usesLogin,
                         errors,
                         warnings,
                         inputFields);
@@ -703,10 +803,34 @@ public final class ConchValidator {
             ConchDoc doc,
             Set<String> declared,
             Set<String> loginNames,
+            Set<String> loginVars,
+            AtomicBoolean usesLogin,
             List<ValidationIssue> errors,
             List<ValidationIssue> warnings,
             Set<String> inputFields
     ) {
+        if (isLoginPath(ref)) {
+            usesLogin.set(true);
+            if (handledByDefault) {
+                errors.add(issue(
+                        ValidationCodes.LOGIN_DEFAULT,
+                        path,
+                        "不能用 default 包裹登录变量 " + ref));
+                return;
+            }
+            String name = loginField(ref);
+            if (name == null) {
+                errors.add(issue(ValidationCodes.UNDECLARED_VARIABLE, path, "登录变量要写成 login.名字"));
+                return;
+            }
+            if (!loginVars.contains(name)) {
+                errors.add(issue(
+                        ValidationCodes.UNDECLARED_VARIABLE,
+                        path,
+                        "引用了未声明的登录变量 " + name));
+            }
+            return;
+        }
         String credential = head(ref, "credential");
         if (credential != null) {
             if (doc.credentials() == null || !doc.credentials().containsKey(credential)) {
@@ -791,6 +915,149 @@ public final class ConchValidator {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> cast(Map<?, ?> raw) {
         return (Map<String, Object>) raw;
+    }
+
+    private static void checkAuthCookies(
+            Auth auth,
+            List<ValidationIssue> errors,
+            AtomicBoolean usesLogin
+    ) {
+        if (auth.cookies().isEmpty()) {
+            return;
+        }
+        usesLogin.set(true);
+        for (Map.Entry<String, String> entry : auth.cookies().entrySet()) {
+            String path = "auth.cookies." + entry.getKey();
+            if (!templateIdentifier(entry.getKey())) {
+                errors.add(issue(ValidationCodes.AUTH_COOKIES, path, "auth.cookies 的名字必须是模板标识符"));
+            }
+            if (!validCookieName(entry.getValue())) {
+                errors.add(issue(ValidationCodes.AUTH_COOKIES, path, "auth.cookies 的 Cookie 名无效"));
+            }
+        }
+    }
+
+    private static boolean validCookieName(String value) {
+        if (value == null || value.isBlank() || value.length() > COOKIE_NAME_LIMIT || value.contains("{{")) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            if (Character.isISOControl(value.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 登录变量的声明来自登录步骤：extract、set、script.into 的模板标识符，
+     * assert.cookie_exists 的值本身是模板标识符，以及 auth.cookies 的键。
+     * loginNames 仍是登录步骤产出的全部名字，供裸 {@code {{sid}}} 继续报原来的错。
+     */
+    private static void collectLoginVars(Auth auth, Set<String> loginNames, Set<String> loginVars) {
+        for (Step step : auth.steps()) {
+            if ("extract".equals(step.type()) || "set".equals(step.type())) {
+                for (String name : step.def().keySet()) {
+                    loginNames.add(name);
+                    if (templateIdentifier(name)) {
+                        loginVars.add(name);
+                    }
+                }
+            } else if ("script".equals(step.type())
+                    && step.def().get("into") instanceof String name
+                    && !name.isBlank()) {
+                loginNames.add(name);
+                if (templateIdentifier(name)) {
+                    loginVars.add(name);
+                }
+            } else if ("assert".equals(step.type())
+                    && step.def().get("cookie_exists") instanceof String value
+                    && templateIdentifier(value)) {
+                loginVars.add(value);
+            }
+        }
+        loginVars.addAll(auth.cookies().keySet());
+    }
+
+    private static void checkReservedLogin(ConchDoc doc, List<ValidationIssue> errors) {
+        if (doc.auth() != null) {
+            reservedLoginSteps(doc.auth().steps(), "auth.steps", errors);
+        }
+        for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
+            reservedLoginSteps(entry.getValue().steps(), "actions." + entry.getKey() + ".steps", errors);
+        }
+    }
+
+    private static void reservedLoginSteps(List<Step> steps, String path, List<ValidationIssue> errors) {
+        if (steps == null) {
+            return;
+        }
+        for (int i = 0; i < steps.size(); i++) {
+            Step step = steps.get(i);
+            if ("script".equals(step.type())) {
+                if (RESERVED_LOGIN.equals(step.def().get("into"))) {
+                    errors.add(issue(
+                            ValidationCodes.RESERVED_VARIABLE,
+                            path + "[" + i + "].into",
+                            "不能写入保留变量 login"));
+                }
+                continue;
+            }
+            if (!"extract".equals(step.type()) && !"set".equals(step.type())) {
+                continue;
+            }
+            if (step.def().containsKey(RESERVED_LOGIN)) {
+                errors.add(issue(
+                        ValidationCodes.RESERVED_VARIABLE,
+                        path + "[" + i + "].login",
+                        "不能写入保留变量 login"));
+            }
+        }
+    }
+
+    private static boolean isLoginPath(String ref) {
+        return "login".equals(ref) || ref.startsWith("login.") || ref.startsWith("login[");
+    }
+
+    private static String loginField(String ref) {
+        if (!ref.startsWith("login.")) {
+            return null;
+        }
+        String rest = ref.substring("login.".length());
+        if (rest.isEmpty() || !isIdentifierStart(rest.charAt(0))) {
+            return null;
+        }
+        int end = 1;
+        while (end < rest.length() && isIdentifierPart(rest.charAt(end))) {
+            end++;
+        }
+        if (end < rest.length()) {
+            char next = rest.charAt(end);
+            if (next != '.' && next != '[') {
+                return null;
+            }
+        }
+        return rest.substring(0, end);
+    }
+
+    private static boolean templateIdentifier(String name) {
+        if (name == null || name.isEmpty() || !isIdentifierStart(name.charAt(0))) {
+            return false;
+        }
+        for (int i = 1; i < name.length(); i++) {
+            if (!isIdentifierPart(name.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isIdentifierStart(char c) {
+        return c == '_' || Character.isLetter(c);
+    }
+
+    private static boolean isIdentifierPart(char c) {
+        return isIdentifierStart(c) || Character.isDigit(c);
     }
 
     private static void rejectMcpOnly(ConchDoc doc, List<ValidationIssue> errors) {

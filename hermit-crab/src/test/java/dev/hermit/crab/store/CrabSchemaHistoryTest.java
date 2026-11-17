@@ -48,10 +48,15 @@ class CrabSchemaHistoryTest {
         try (CrabDatabase database = new CrabDatabase(released)) {
             upgraded = shape(database);
             try (Connection connection = database.dataSource().getConnection();
-                 Statement statement = connection.createStatement();
-                 ResultSet rows = statement.executeQuery("SELECT account FROM accounts WHERE conch = 'oa'")) {
-                assertThat(rows.next()).isTrue();
-                assertThat(rows.getString(1)).isEqualTo("alice");
+                 Statement statement = connection.createStatement()) {
+                try (ResultSet rows = statement.executeQuery("SELECT account FROM accounts WHERE conch = 'oa'")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getString(1)).isEqualTo("alice");
+                }
+                try (ResultSet rows = statement.executeQuery("SELECT COUNT(*) FROM session_login")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getInt(1)).isZero();
+                }
             }
         }
         List<String> fresh;
@@ -59,6 +64,7 @@ class CrabSchemaHistoryTest {
             fresh = shape(database);
         }
 
+        assertThat(upgraded).contains("version 16");
         assertThat(upgraded)
                 .as("已发布的库升级后和全新安装的结构不一致：已发布的升级步骤不能就地改，结构变化请新增版本")
                 .containsExactlyElementsOf(fresh);

@@ -2,7 +2,9 @@
 
 ## Crab 配置
 
-原生 Java 的 `HERMIT_HOME` 默认 `~/.hermit`；读取其中的 `config.yml`。缺文件使用默认值，未知键/错误类型/超过 1,000,000 字节的文件会拒绝。普通字符串会 trim；不支持环境变量插值或从 `.env` 自动导入。配置文件启动时加载。容器入口会先从环境变量生成配置；`.env` 由 Compose 读取，见下面的容器配置。
+原生 Java 的 `HERMIT_HOME` 默认是 `user.home` 下的 `.hermit`（文档里的 `~/.hermit` 是简称）。读取其中的 `config.yml`。缺文件使用默认值，未知键/错误类型/超过 1,000,000 字节的文件会拒绝。普通字符串会 trim；不支持环境变量插值或从 `.env` 自动导入。配置文件启动时加载。容器入口会先从环境变量生成配置；`.env` 由 Compose 读取，见下面的容器配置。
+
+把 `HERMIT_HOME` 设成字面量 `~/.hermit` 时 Java 不会展开 `~`。Windows 上目录是 `%USERPROFILE%\.hermit` 这种盘符路径。本地 H2 用正斜杠，盘符写成 `jdbc:h2:file:C:/...`，盘符前面不加 `/`。路径里不能有分号 `;`，否则启动直接拒绝，stderr 说明数据目录路径含有分号，不会去连 H2。库文件打不开时，stderr 先写 `database operation failed`，下一行是根因里的路径，不打印堆栈，也不打印凭证。
 
 | 键 | 默认值 | 行为 |
 | --- | --- | --- |
@@ -212,6 +214,7 @@ Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，F
 | `AUTH_FAILED` / 暂停登录 | 老系统凭证、验证码等变化；修正后测试登录成功才恢复 |
 | 新版本没有装上 | 同步只刷新目录。已安装的包要手动 `update`。同时看 `min_crab_version`、Reef 是否停用、默认账号是否缺新增必填凭证 |
 | CLI 报数据库占用 | serve 已持有 H2；使用本机控制台 API 或停止 serve 后操作 |
+| 启动打印 `database operation failed` 和下一行路径 | 看下一行根因。Windows 盘符路径应是 `C:/...`，不能是 `/C:/...`。数据目录路径含分号时，这一行是「数据目录路径含有分号，无法打开本地数据库。」，不会去连 H2 |
 | `RULE_MISMATCH` | 通过 traceId 查步骤信息，核对页面选择器/输出。已安装版本保持不动，用更高版本修复后再手动更新 |
 | 上游 HTTP 400，或会话 401/403 | 分别是 `INVALID_INPUT` 与 `SESSION_EXPIRED`。核对参数或凭证；页面结构变化才是 `RULE_MISMATCH` |
 

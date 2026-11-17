@@ -1,0 +1,80 @@
+conch: bos_mail
+version: 1.0.0
+driver: http
+min_crab_version: 1.3.0
+title: BOS 邮箱
+description: 模拟 BOS 登录。用户只填用户名和密码，口令用脚本库加密，会话 sid 由 Cookie 和查询串一起带上。
+credentials:
+  username:
+    type: text
+    label: 用户名
+    required: true
+    description: 登录账号
+  password:
+    type: secret
+    label: 密码
+    required: true
+    description: 填原始密码
+config:
+  base_url:
+    type: url
+    label: 服务地址
+    required: true
+    description: 模拟服务的源站
+scripts:
+  bos_rsa: |
+    __BOS_RSA__
+auth:
+  steps:
+    - script:
+        into: rnd
+        code: |
+          return String(hermit.now());
+    - request:
+        method: POST
+        path: /webmail/common/getloginrsapublickey.do
+        query:
+          rnd: "{{rnd}}"
+    - extract:
+        pubkey: {jsonpath: "$.var"}
+    - script:
+        use: [bos_rsa]
+        credential: true
+        into: enc_password
+        timeout_ms: 5000
+        code: |
+          return rsaEncrypt(vars.pubkey, vars.credential.password);
+    - request:
+        method: POST
+        path: /webmail/login/loginapi.do
+        form:
+          usernumber: "{{credential.username}}"
+          password: "{{enc_password}}"
+          loginType: WEB
+    - assert:
+        cookie_exists: sid
+actions:
+  list_messages:
+    title: 邮件列表
+    description: 按会话列出收件箱。
+    method: POST
+    idempotent: true
+    mcp: {expose: true, read_only: true}
+    steps:
+      - request:
+          method: POST
+          path: "/RmWeb/mail/{{login.sid}}"
+          query:
+            func: "mbox:listMessages"
+            sid: "{{login.sid}}"
+      - extract:
+          subject: {jsonpath: "$.subject"}
+    output:
+      subject:
+        type: string
+        description: 主题
+    examples:
+      - input: {}
+        output: {subject: inbox-a}
+    notes: 会话失效后会重新登录并重放一次。查询串和路径都带 sid，路径是为了让步骤日志能打码；服务端以查询串和 Cookie 是否同一会话为准。
+    related: []

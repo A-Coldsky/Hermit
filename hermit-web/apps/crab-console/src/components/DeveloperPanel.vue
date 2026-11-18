@@ -6,6 +6,7 @@ import JsonBlock from '@shared/components/JsonBlock.vue'
 import { ApiError, type Envelope } from '@shared/http'
 import { copyText, errorCodeLabels, errorText, notifyError } from '@shared/format'
 import { api, type Account, type CapabilityState, type McpRefreshResult } from '../api'
+import TrustJump from './TrustJump.vue'
 
 const props = defineProps<{
   conch: string
@@ -176,8 +177,9 @@ async function refreshTools() {
       </template>
     </el-result>
     <el-result v-else icon="error" :title="errorCodeLabels[trialResult.code] ?? '试跑失败'" :sub-title="trialResult.message">
-      <template v-if="trialResult.data" #extra>
-        <JsonBlock :value="trialResult.data" class="data" />
+      <template #extra>
+        <TrustJump :message="trialResult.message" />
+        <JsonBlock v-if="trialResult.data" :value="trialResult.data" class="data" />
       </template>
     </el-result>
     <p v-if="trialResult.traceId" class="hm-muted trace">

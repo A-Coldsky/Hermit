@@ -1,7 +1,7 @@
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import type { Component } from 'vue'
-import { createMemoryHistory, createRouter } from 'vue-router'
+import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 export interface Deferred<T> {
   promise: Promise<T>
@@ -30,9 +30,11 @@ export async function mountPage(component: Component, options: MountOptions = {}
   })
   await router.push(options.path ?? '/')
   await router.isReady()
-  return mount(component, {
+  const wrapper = mount(component, {
     props: options.props ?? {},
     attachTo: options.attach ? document.body : undefined,
     global: { plugins: [ElementPlus, router] },
-  })
+  }) as VueWrapper & { router: Router }
+  wrapper.router = router
+  return wrapper
 }

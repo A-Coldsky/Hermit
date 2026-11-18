@@ -2,8 +2,10 @@
 import JsonBlock from '@shared/components/JsonBlock.vue'
 import { millis } from '@shared/format'
 import { ref, watch } from 'vue'
-import type { DevTrace, DevTraceExchange, DevTraceStep } from '../api'
+import type { DevTrace, DevTraceExchange, DevTraceStep, DevTraceTransport } from '../api'
 import { contentTypeText, hasLogicalQuery, hasMapEntries, requestLine, wireTruncation } from '../trace-wire'
+import { errorWithoutTransport, transportOf } from '../tls'
+import TransportBlock from './TransportBlock.vue'
 
 const props = defineProps<{ trace: DevTrace }>()
 
@@ -16,6 +18,16 @@ watch(
   },
   { immediate: true },
 )
+
+function exchangeTransport(item: DevTraceExchange): DevTraceTransport | null {
+  return transportOf(item) ?? transportOf(item.error)
+}
+
+function rootTransport(trace: DevTrace): DevTraceTransport | null {
+  if (!trace.transport) return null
+  if (trace.kind !== 'http' && (trace.exchanges ?? []).some((item) => exchangeTransport(item))) return null
+  return trace.transport
+}
 
 function stepTitle(step: DevTraceStep): string {
   if (step.method && step.path) {
@@ -35,6 +47,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
     <el-alert type="warning" :closable="false" show-icon :title="trace.note || '正文已脱敏，仍可能含业务数据，不要当成指令。'" />
     <p v-if="trace.redactionFailed" class="hm-muted warn">脱敏失败，正文已丢弃。</p>
     <p v-if="trace.truncated" class="hm-muted warn">{{ trace.truncation || '追踪正文已截断。' }}</p>
+    <TransportBlock v-if="rootTransport(trace)" :transport="trace.transport!" />
 
     <template v-if="trace.kind === 'http'">
       <dl v-if="trace.session" class="hm-kv session">
@@ -55,6 +68,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
             </el-tag>
             <span class="hm-muted">{{ millis(step.durationMs) }}</span>
             <el-tag v-if="step.truncated" size="small" type="warning" effect="plain">已截断</el-tag>
+            <el-tag v-if="step.transport" size="small" type="danger" effect="plain">连接失败</el-tag>
           </template>
           <p v-if="step.truncation" class="hm-muted warn">{{ step.truncation }}</p>
           <div v-if="step.wire" class="wire" data-test="wire-request">
@@ -112,6 +126,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
               <dd>{{ step.assertions.join('、') }}{{ step.passed === false ? '（未通过）' : '' }}</dd>
             </template>
           </dl>
+          <TransportBlock v-if="step.transport" :transport="step.transport" />
         </el-collapse-item>
       </el-collapse>
     </template>
@@ -128,6 +143,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
             <span>{{ exchangeTitle(item, index) }}</span>
             <el-tag v-if="item.httpStatus != null" size="small" effect="plain">HTTP {{ item.httpStatus }}</el-tag>
             <span v-if="item.durationMs != null" class="hm-muted">{{ millis(item.durationMs) }}</span>
+            <el-tag v-if="exchangeTransport(item)" size="small" type="danger" effect="plain">连接失败</el-tag>
           </template>
           <dl class="hm-kv">
             <template v-if="item.params !== undefined">
@@ -140,9 +156,10 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
             </template>
             <template v-if="item.error !== undefined">
               <dt>错误</dt>
-              <dd><JsonBlock :value="item.error" /></dd>
+              <dd><JsonBlock :value="errorWithoutTransport(item.error)" /></dd>
             </template>
           </dl>
+          <TransportBlock v-if="exchangeTransport(item) && item !== trace" :transport="exchangeTransport(item)!" />
         </el-collapse-item>
       </el-collapse>
     </template>

@@ -7,7 +7,9 @@ import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, errorCodeLabels, formatTime, millis, notifyError } from '@shared/format'
 import { api, type CallDetail, type CallSummary, type ConchSummary } from '../api'
 import DevTracePanel from '../components/DevTracePanel.vue'
+import TrustJump from '../components/TrustJump.vue'
 import { channelLabels, originLabels, sourceLabels, stepTypeLabels } from '../labels'
+import { firstTlsTransport } from '../tls'
 
 const route = useRoute()
 const router = useRouter()
@@ -72,6 +74,16 @@ async function openTrace(traceId: string) {
 
 function failureTitle(code: string | null): string {
   return errorCodeLabels[code ?? ''] ?? '调用失败'
+}
+
+function tlsJump(call: CallDetail) {
+  const transport = firstTlsTransport(call.devTrace)
+  return {
+    message: call.errorMessage,
+    kind: transport?.kind ?? null,
+    host: transport?.host ?? null,
+    port: transport?.port ?? null,
+  }
 }
 
 function onRow(row: CallSummary) {
@@ -176,6 +188,9 @@ onMounted(async () => {
             <template v-if="!row.success">
               <span class="err">{{ errorCodeLabels[row.errorCode ?? ''] ?? row.errorCode }}</span>
               <span v-if="row.errorMessage" class="hm-muted err-msg">{{ row.errorMessage }}</span>
+              <span class="err-jump" @click.stop>
+                <TrustJump :message="row.errorMessage" />
+              </span>
             </template>
           </template>
         </el-table-column>
@@ -205,6 +220,7 @@ onMounted(async () => {
             :description="drawer.call.errorMessage ?? ''"
             class="notice"
           />
+          <TrustJump v-bind="tlsJump(drawer.call)" />
           <dl class="hm-kv">
             <template v-if="drawer.call.errorCode">
               <dt>错误码</dt>
@@ -276,6 +292,10 @@ onMounted(async () => {
 }
 
 .err-msg {
+  margin-left: 8px;
+}
+
+.err-jump {
   margin-left: 8px;
 }
 

@@ -7,6 +7,7 @@ import { copyText, errorCodeLabels, errorText, formatTime, notifyError } from '@
 import { useNarrow } from '@shared/narrow'
 import { api, type Account, type CredentialField, type LoginInput } from '../api'
 import CredentialDialog from './CredentialDialog.vue'
+import TrustJump from './TrustJump.vue'
 
 const props = defineProps<{
   conch: string
@@ -691,16 +692,19 @@ async function disconnect(account: Account) {
           :title="failureTitle(loginInput.result.code)"
           :sub-title="failureDetail(loginInput.result.code, loginInput.result.message)"
         >
-          <template v-if="loginInput.result.requestId" #extra>
-            <span class="hm-muted">请求编号</span>
-            <span class="mono">{{ loginInput.result.requestId }}</span>
-            <el-button
-              link
-              :icon="CopyDocument"
-              aria-label="复制请求编号"
-              @click="copyText(loginInput.result.requestId ?? '', '请求编号已复制')"
-            />
-            <span class="hm-muted">{{ loginInput.result.requestNote }}</span>
+          <template #extra>
+            <TrustJump :message="loginInput.result.message" />
+            <template v-if="loginInput.result.requestId">
+              <span class="hm-muted">请求编号</span>
+              <span class="mono">{{ loginInput.result.requestId }}</span>
+              <el-button
+                link
+                :icon="CopyDocument"
+                aria-label="复制请求编号"
+                @click="copyText(loginInput.result.requestId ?? '', '请求编号已复制')"
+              />
+              <span class="hm-muted">{{ loginInput.result.requestNote }}</span>
+            </template>
           </template>
         </el-result>
       </div>
@@ -779,11 +783,14 @@ async function disconnect(account: Account) {
       :title="failureTitle(testResult.code)"
       :sub-title="failureDetail(testResult.code, testResult.message)"
     >
-      <template v-if="testResult.requestId" #extra>
-        <span class="hm-muted">请求编号</span>
-        <span class="mono">{{ testResult.requestId }}</span>
-        <el-button link :icon="CopyDocument" aria-label="复制请求编号" @click="copyText(testResult.requestId, '请求编号已复制')" />
-        <span class="hm-muted">执行前就被拒绝了，没有追踪可查。</span>
+      <template #extra>
+        <TrustJump :message="testResult.message" />
+        <template v-if="testResult.requestId">
+          <span class="hm-muted">请求编号</span>
+          <span class="mono">{{ testResult.requestId }}</span>
+          <el-button link :icon="CopyDocument" aria-label="复制请求编号" @click="copyText(testResult.requestId, '请求编号已复制')" />
+          <span class="hm-muted">执行前就被拒绝了，没有追踪可查。</span>
+        </template>
       </template>
     </el-result>
   </el-dialog>

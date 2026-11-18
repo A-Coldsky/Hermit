@@ -298,10 +298,16 @@ export interface DevTraceVariable {
   summary: unknown
 }
 
-/** 实际发出的请求。入库前已脱敏。`target` 是请求行里的 path 加查询串，不含 fragment。 */
+/**
+ * 实际发出的请求。入库前已脱敏。
+ * `target` 是请求行里的 path 加查询串，不含 fragment。
+ * `headers` 含客户端的 `User-Agent`、`Accept-Encoding`，不含 `Cookie`、`Set-Cookie`、`Authorization`、`Proxy-Authorization`、`Mcp-Session-Id`。
+ * `body` 按发出时的字符集解码；先脱敏，再截到 64 KiB。超出时 `truncated` 为 true，`truncation` 为「实际发送的正文超过 64 KiB，已截断。」。
+ */
 export interface DevTraceWire {
   method: string | null
   target: string
+  /** 实际发出的值，包含 charset。没有请求体时为 null。 */
   contentType: string | null
   headers: Record<string, string>
   body: string | null
@@ -315,9 +321,10 @@ export interface DevTraceStep {
   type: string
   durationMs: number
   method?: string | null
-  /** 原始 path，百分号编码保持原样，不含 fragment。 */
+  /** 原始 path，百分号编码保持原样，不含 fragment。查询串在 `wire.target`。 */
   path?: string | null
   status?: number | null
+  /** 规则里的 query 映射。不是请求行上已经编码的查询串。 */
   query?: unknown
   requestHeaders?: Record<string, unknown>
   requestBody?: unknown
@@ -505,6 +512,12 @@ export interface LocalImportResult {
   conch: string
   version: string
   replaced: boolean
+  /**
+   * 不阻止保存。控制台给这些代码加短中文：`IGNORED_REQUEST_FIELD`（未知字段不会发送）、
+   * `DOUBLE_ENCODE`（`query` / `form` 用了 `urlencode`）、`PERCENT_ENCODED`（`query` 字面值里已有 `%xx`）、
+   * `FRAGMENT_DROPPED`（path 或 url 里的 `#`）。未知代码仍显示服务端 message。
+   * 不合法的 `query_style` 是错误 `QUERY_STYLE`，出现在失败响应的 `errors`，不在这份列表里。
+   */
   warnings: ValidationIssue[]
   /** 覆盖时的上一版。新建为 null。 */
   previousVersion: string | null

@@ -311,6 +311,99 @@ describe('本地规则包', () => {
     wrapper.unmount()
   })
 
+  it('导入成功时列出请求编码警告，并说明不阻止保存', async () => {
+    crab.importLocalConch.mockResolvedValue({
+      conch: 'local_mail',
+      version: '1.0.0',
+      replaced: false,
+      warnings: [
+        { code: 'IGNORED_REQUEST_FIELD', path: 'actions.list.steps[0].request.body', message: '这个字段不会被发送', line: 12 },
+        { code: 'DOUBLE_ENCODE', path: 'actions.list.steps[0].request.query.func', message: '这个值用了 urlencode，发出去时会被再编码一次' },
+        {
+          code: 'PERCENT_ENCODED',
+          path: 'actions.list.steps[0].request.query.func',
+          message: '字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。',
+        },
+        { code: 'FRAGMENT_DROPPED', path: 'actions.list.steps[0].request.path', message: '# 后面的内容不会发出去' },
+      ],
+    })
+    const wrapper = await mountPage(ConchesView, { attach: true })
+    await flushPromises()
+    await chooseFile(wrapper)
+
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('警告')
+    expect(text).toContain('警告不阻止保存。')
+    expect(text).toContain('字段不会发送')
+    expect(text).toContain('这个字段不会被发送')
+    expect(text).toContain('第 12 行')
+    expect(text).toContain('会被编码两次')
+    expect(text).toContain('这个值用了 urlencode，发出去时会被再编码一次')
+    expect(text).toContain('会被再编码')
+    expect(text).toContain('字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。')
+    expect(text).toContain('片段不会发出去')
+    expect(text).toContain('# 后面的内容不会发出去')
+    expect(document.querySelectorAll('[data-test="import-warning"]')).toHaveLength(4)
+    wrapper.unmount()
+  })
+
+  it('不合法的 query_style 出现在导入错误里', async () => {
+    crab.importLocalConch.mockRejectedValue(
+      new ApiError(400, 'INVALID_INPUT', '规则包校验失败', {
+        errors: [
+          {
+            code: 'QUERY_STYLE',
+            path: 'actions.list.steps[0].request.query_style',
+            message: 'query_style 只允许 url 或 form',
+            line: 8,
+          },
+        ],
+        warnings: [{ code: 'IGNORED_REQUEST_FIELD', path: 'actions.list.steps[0].request.multipart', message: '这个字段不会被发送' }],
+      }),
+    )
+    const wrapper = await mountPage(ConchesView, { attach: true })
+    await flushPromises()
+    await chooseFile(wrapper)
+
+    const error = document.body.querySelector('[data-test="import-error"]')
+    expect(error?.textContent).toContain('QUERY_STYLE')
+    expect(error?.textContent).toContain('query_style 无效')
+    expect(error?.textContent).toContain('query_style 只允许 url 或 form')
+    expect(error?.textContent).toContain('第 8 行')
+    const warning = document.body.querySelector('[data-test="import-warning"]')
+    expect(warning?.textContent).toContain('这个字段不会被发送')
+    expect(document.body.textContent).not.toContain('警告不阻止保存。')
+    wrapper.unmount()
+  })
+
+  it('重新加载时，已经载入的文件仍列出校验警告', async () => {
+    const success = vi.spyOn(ElMessage, 'success')
+    crab.reloadLocalConches.mockResolvedValue({
+      results: [
+        {
+          file: 'local_ping.yaml',
+          conch: 'local_ping',
+          version: '1.0.0',
+          ok: true,
+          issues: [{ code: 'FRAGMENT_DROPPED', path: 'actions.ping.steps[0].request.url', message: '# 后面的内容不会发出去' }],
+        },
+      ],
+    })
+    const wrapper = await mountPage(ConchesView, { attach: true })
+    await flushPromises()
+    await buttons(wrapper, '重新加载本地目录')[0].trigger('click')
+    await flushPromises()
+
+    expect(success).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('1 个文件，1 个有校验警告。')
+    const item = document.body.querySelector('[data-test="file-warning"]')
+    expect(item?.textContent).toContain('FRAGMENT_DROPPED')
+    expect(item?.textContent).toContain('片段不会发出去')
+    expect(item?.textContent).toContain('# 后面的内容不会发出去')
+    expect(item?.closest('.issues')?.classList.contains('warn')).toBe(true)
+    wrapper.unmount()
+  })
+
   function issueLines(item: Element): [string, string] {
     const head = ['.code', '.gloss', '.where']
       .map((selector) => item.querySelector(selector)?.textContent?.trim() ?? '')

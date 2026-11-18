@@ -166,8 +166,12 @@ async function reloadLocal() {
   try {
     const { results } = await api.reloadLocalConches()
     const failed = results.filter((r) => !r.ok).length
-    if (failed) {
-      showReport({ title: '重新加载本地规则包', summary: `${results.length} 个文件，${failed} 个没有加载。`, files: results })
+    const warned = results.filter((r) => r.ok && (r.issues?.length ?? 0) > 0).length
+    if (failed || warned) {
+      const bits = [`${results.length} 个文件`]
+      if (failed) bits.push(`${failed} 个没有加载`)
+      if (warned) bits.push(`${warned} 个有校验警告`)
+      showReport({ title: '重新加载本地规则包', summary: `${bits.join('，')}。`, files: results })
     } else {
       ElMessage.success(results.length ? `已重新加载 ${results.length} 个本地规则包` : '本地规则包目录是空的')
     }
@@ -592,6 +596,7 @@ onMounted(load)
 
     <el-dialog v-model="report.open" :title="report.title" width="600px">
       <p v-if="report.summary" class="summary">{{ report.summary }}</p>
+      <h4 v-if="report.errors.length" class="issue-title">错误</h4>
       <ul v-if="report.errors.length" class="issues bad">
         <li v-for="(view, i) in shown(report.errors)" :key="`e${i}`" data-test="import-error">
           <el-icon class="mark"><CircleCloseFilled /></el-icon>
@@ -601,6 +606,8 @@ onMounted(load)
           <span class="reason">{{ view.reason }}</span>
         </li>
       </ul>
+      <h4 v-if="report.warnings.length" class="issue-title">警告</h4>
+      <p v-if="report.warnings.length && !report.errors.length && !report.files.length" class="hm-muted warn-note">警告不阻止保存。</p>
       <ul v-if="report.warnings.length" class="issues warn">
         <li v-for="(view, i) in shown(report.warnings)" :key="`w${i}`" data-test="import-warning">
           <el-icon class="mark"><WarningFilled /></el-icon>
@@ -616,8 +623,19 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="结果" min-width="260">
           <template #default="{ row }">
-            <span v-if="row.ok" class="ok">已加载 {{ row.conch }} v{{ row.version }}</span>
-            <span v-else class="err">{{ row.issues.map((i: ValidationIssue) => i.message).join('；') || '没有加载' }}</span>
+            <template v-if="row.ok">
+              <span class="ok">已加载 {{ row.conch }} v{{ row.version }}</span>
+              <ul v-if="row.issues?.length" class="issues warn file-warnings">
+                <li v-for="(view, i) in shown(row.issues)" :key="`${row.file}-${i}`" data-test="file-warning">
+                  <el-icon class="mark"><WarningFilled /></el-icon>
+                  <span class="code">{{ view.code }}</span>
+                  <span v-if="view.label" class="gloss">{{ view.label }}</span>
+                  <span v-if="view.location" class="where">{{ view.location }}</span>
+                  <span class="reason">{{ view.reason }}</span>
+                </li>
+              </ul>
+            </template>
+            <span v-else class="err">{{ (row.issues ?? []).map((i: ValidationIssue) => i.message).join('；') || '没有加载' }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -849,6 +867,19 @@ onMounted(load)
 
 .summary {
   margin: 0 0 12px;
+}
+
+.issue-title {
+  margin: 4px 0 8px;
+  font-size: 14px;
+}
+
+.warn-note {
+  margin: -4px 0 8px;
+}
+
+.file-warnings {
+  margin-top: 8px;
 }
 
 .issues {

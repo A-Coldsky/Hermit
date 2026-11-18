@@ -47,6 +47,16 @@ export const importIssueLabels: Record<string, string> = {
   MCP_NO_ACTIONS: '没有能力',
   VERSION_INVALID: '版本号无效',
   RESERVED_VARIABLE: '保留变量',
+  /** 请求上的未知字段，例如 `body`、`multipart`。警告，不阻止保存。 */
+  IGNORED_REQUEST_FIELD: '字段不会发送',
+  /** `query` 或 `form` 的值用了 `| urlencode`。警告，不阻止保存。 */
+  DOUBLE_ENCODE: '会被编码两次',
+  /** `query` 的字面值里已经有 `%xx`。警告，不阻止保存。 */
+  PERCENT_ENCODED: '会被再编码',
+  /** path 或 url 的字面值里有 `#`。警告，不阻止保存。 */
+  FRAGMENT_DROPPED: '片段不会发出去',
+  /** `query_style` 不是 `url` 或 `form`。错误，阻止保存。 */
+  QUERY_STYLE: 'query_style 无效',
 }
 
 /**

@@ -14,6 +14,11 @@ const props = defineProps<{
   credentials: CredentialField[]
   /** 这版规则已停用：不在调用路径上，测试登录也跑不了，按钮不出现。 */
   ruleDisabled?: boolean
+  /**
+   * 为 false 时只藏账号卡片。验证码等弹窗仍挂在卡片外面，其它标签下也能弹。
+   * 缺省显示卡片。
+   */
+  shown?: boolean
 }>()
 const emit = defineEmits<{ changed: [] }>()
 
@@ -537,7 +542,7 @@ async function disconnect(account: Account) {
 </script>
 
 <template>
-  <div class="hm-card">
+  <div v-show="shown !== false" class="hm-card">
     <div class="hm-card-title">
       <span>账号</span>
       <el-button type="primary" plain :icon="Plus" @click="creating.open = true">新建账号</el-button>

@@ -2,7 +2,7 @@
 import { Delete, Download, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
 import TimeText from '@shared/components/TimeText.vue'
@@ -20,7 +20,14 @@ import { repairConch, updateConch } from '../update'
 import { disabledReasonOnly } from '../disabled'
 
 const props = defineProps<{ conch: string }>()
+const route = useRoute()
 const router = useRouter()
+
+type DetailTab = 'capabilities' | 'accounts' | 'config' | 'developer'
+
+const tab = ref<DetailTab>('capabilities')
+/** 详情和账号都到齐之后才把标签写进地址，避免先写上「能力」再被待处理账号改掉。 */
+const tabsReady = ref(false)
 
 const loading = ref(true)
 const missing = ref(false)
@@ -47,6 +54,67 @@ const ready = computed(
     !pausedAccounts.value.length &&
     !needsAccount.value,
 )
+
+const mcp = computed(() => detail.value?.driver === 'mcp')
+const capabilityCount = computed(() => detail.value?.capabilities.length ?? 0)
+const capabilityLabel = computed(() => `${mcp.value ? '工具' : '能力'}（${capabilityCount.value}）`)
+
+/**
+ * 账号标签上的红点，也是「没有指定标签时改开账号」的条件：
+ * 声明了必填凭证但还没填（一个账号都没有也算）、有账号在等验证码，或自动登录已暂停。
+ * 凭证解不开不算「尚未填写」。账号或配置没加载出来时不猜。
+ */
+const accountAttention = computed(() => {
+  const current = detail.value
+  if (!current || partsFailed.value || current.repairRequired) return false
+  if (accounts.value.some((account) => account.loginPaused || account.loginInputRequired)) return true
+  const required = new Set(current.credentials.filter((field) => field.required).map((field) => field.name))
+  if (required.size === 0) return false
+  if (accounts.value.length === 0) return true
+  return accounts.value.some((account) => {
+    if (account.credentialsUnreadable) return false
+    if (account.needsConfiguration) return true
+    return (account.missingFields ?? []).some((name) => required.has(name))
+  })
+})
+
+function tabChoices(): DetailTab[] {
+  const names: DetailTab[] = ['capabilities', 'accounts', 'config']
+  if (detail.value?.source === 'LOCAL') names.push('developer')
+  return names
+}
+
+function fallbackTab(): DetailTab {
+  return accountAttention.value ? 'accounts' : 'capabilities'
+}
+
+function resolvedTab(): DetailTab {
+  const raw = route.query.tab
+  const requested = typeof raw === 'string' ? raw : ''
+  return tabChoices().includes(requested as DetailTab) ? (requested as DetailTab) : fallbackTab()
+}
+
+watch(tab, (value) => {
+  if (!tabsReady.value || route.query.tab === value) return
+  void router.replace({ query: { ...route.query, tab: value } })
+})
+
+watch(
+  () => route.query.tab,
+  () => {
+    if (!tabsReady.value || !detail.value || detail.value.repairRequired) return
+    const next = resolvedTab()
+    if (tab.value !== next) tab.value = next
+  },
+)
+
+function settleTabs() {
+  if (!detail.value || detail.value.repairRequired) return
+  const next = resolvedTab()
+  tabsReady.value = true
+  if (tab.value !== next) tab.value = next
+  else if (route.query.tab !== next) void router.replace({ query: { ...route.query, tab: next } })
+}
 
 function blockReason(account: Account): string | null {
   if (account.credentialsUnreadable) return '凭证无法解密'
@@ -119,6 +187,7 @@ async function load() {
     notifyError(error)
   }
   detail.value = next
+  settleTabs()
   loading.value = false
 }
 
@@ -266,6 +335,8 @@ async function unsubscribe() {
 watch(
   () => props.conch,
   () => {
+    tabsReady.value = false
+    tab.value = 'capabilities'
     detail.value = null
     accounts.value = []
     config.value = {}
@@ -416,34 +487,53 @@ watch(
         </template>
       </el-alert>
 
-      <AccountsPanel
-        :conch="conch"
-        :accounts="accounts"
-        :credentials="detail.credentials"
-        :rule-disabled="detail.ruleDisabled === true"
-        @changed="reloadParts"
-      />
-      <ConfigPanel
-        :conch="conch"
-        :fields="config"
-        :empty-text="detail.ruleDisabled && detail.declarationsLoaded !== true && !detail.config.length ? '这版已停用，配置项先不展示' : '这个规则包没有配置项'"
-        @changed="reloadParts"
-      />
-      <DeveloperPanel
-        v-if="local"
-        :conch="conch"
-        :driver="detail.driver === 'mcp' ? 'mcp' : 'http'"
-        :debug-enabled="debug.enabled"
-        :capabilities="detail.capabilities"
-        :accounts="accounts"
-        @changed="load"
-      />
-      <CapabilityToggles
-        :conch="conch"
-        :capabilities="detail.capabilities"
-        :rule-disabled="detail.ruleDisabled === true"
-        :empty-text="detail.ruleDisabled && detail.declarationsLoaded !== true && !detail.capabilities.length ? '这版已停用，能力先不展示' : '没有能力'"
-      />
+      <div class="tab-block">
+        <el-tabs v-model="tab" class="tabs" :class="{ 'resident-open': tab === 'accounts' }" data-test="detail-tabs">
+          <el-tab-pane :label="capabilityLabel" name="capabilities">
+            <CapabilityToggles
+              :conch="conch"
+              :capabilities="detail.capabilities"
+              :rule-disabled="detail.ruleDisabled === true"
+              :empty-text="detail.ruleDisabled && detail.declarationsLoaded !== true && !detail.capabilities.length ? '这版已停用，能力先不展示' : '没有能力'"
+            />
+          </el-tab-pane>
+          <el-tab-pane name="accounts">
+            <template #label>
+              <span class="tab-label" data-test="tab-accounts">
+                账号
+                <span v-if="accountAttention" class="attention-dot" data-test="accounts-dot" role="img" aria-label="需要处理" />
+              </span>
+            </template>
+          </el-tab-pane>
+          <el-tab-pane label="配置" name="config">
+            <ConfigPanel
+              :conch="conch"
+              :fields="config"
+              :empty-text="detail.ruleDisabled && detail.declarationsLoaded !== true && !detail.config.length ? '这版已停用，配置项先不展示' : '这个规则包没有配置项'"
+              @changed="reloadParts"
+            />
+          </el-tab-pane>
+          <el-tab-pane v-if="local" label="开发者" name="developer">
+            <DeveloperPanel
+              :conch="conch"
+              :driver="detail.driver === 'mcp' ? 'mcp' : 'http'"
+              :debug-enabled="debug.enabled"
+              :capabilities="detail.capabilities"
+              :accounts="accounts"
+              @changed="load"
+            />
+          </el-tab-pane>
+        </el-tabs>
+        <!-- 账号面板不放进标签页：未选中的页是 display:none，会把验证码弹窗一起藏起来。卡片自己按标签显隐，弹窗一直挂着。 -->
+        <AccountsPanel
+          :conch="conch"
+          :accounts="accounts"
+          :credentials="detail.credentials"
+          :rule-disabled="detail.ruleDisabled === true"
+          :shown="tab === 'accounts'"
+          @changed="reloadParts"
+        />
+      </div>
     </template>
   </div>
 </template>
@@ -453,6 +543,55 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
+}
+
+/* 标签条跟着内容区变窄，放不下时由 Element Plus 在条内横向滚动，不把页面撑出去。 */
+.tabs {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.tabs :deep(.el-tabs__header),
+.tabs :deep(.el-tabs__nav-wrap) {
+  min-width: 0;
+}
+
+.tabs :deep(.el-tabs__header) {
+  margin-bottom: 16px;
+}
+
+/* 账号卡片在标签页外面。选中账号时收起空的页内容，间距和其它标签对齐。 */
+.tab-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tabs.resident-open :deep(.el-tabs__header) {
+  margin-bottom: 0;
+}
+
+.tabs.resident-open :deep(.el-tabs__content) {
+  display: none;
+}
+
+.tab-block > :deep(.hm-card) {
+  margin-top: 16px;
+}
+
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attention-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hm-danger);
+  flex: none;
 }
 
 .update-btn {

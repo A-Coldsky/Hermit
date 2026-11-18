@@ -5,11 +5,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.crab.runtime.ApiJson;
+import dev.hermit.crab.secure.Redactor;
 
 /**
  * 每个字符的期望是手写的。套接字上的请求行是依据，不从 {@code UrlComponents} 再算一遍。
@@ -176,6 +182,7 @@ class RequestWireTest {
         try (RawLoopback loop = RawLoopback.open()) {
             LinkedHashMap<String, Object> headers = new LinkedHashMap<>();
             headers.put("Authorization", "Bearer secret-value");
+            headers.put("Proxy-Authorization", "Basic secret-value");
             headers.put("Cookie", "sid=secret-value");
             headers.put("X-Note", "hello");
             LinkedHashMap<String, Object> spec = request("POST", "/p");
@@ -183,8 +190,10 @@ class RequestWireTest {
             spec.put("json", Map.of("n", "a".repeat(70_000)));
             RawLoopback.Hit hit = loop.exchange(spec);
             assertThat(hit.captured().requestLine).doesNotContain("Authorization");
-            assertThat(new String(hit.captured().head, StandardCharsets.ISO_8859_1))
+            String rawHead = new String(hit.captured().head, StandardCharsets.ISO_8859_1);
+            assertThat(rawHead)
                     .contains("Authorization: Bearer secret-value")
+                    .contains("Proxy-Authorization: Basic secret-value")
                     .doesNotContain("sid=");
             assertThat(hit.result().wire().toString()).doesNotContain("secret-value").doesNotContain("Bearer");
             assertClientHeaders(hit);
@@ -192,12 +201,16 @@ class RequestWireTest {
             Map<String, Object> wireHeaders = (Map<String, Object>) hit.result().wire().get("headers");
             assertThat(wireHeaders).containsKeys("User-Agent", "Accept-Encoding", "X-Note");
             assertThat(wireHeaders.keySet()).map(name -> name.toLowerCase())
-                    .doesNotContain("authorization", "cookie", "mcp-session-id");
-            assertThat(hit.result().wire().get("truncated")).isEqualTo(true);
-            assertThat(hit.result().wire().get("truncation")).isEqualTo(HttpCalls.WIRE_BODY_NOTE);
+                    .doesNotContain("authorization", "proxy-authorization", "cookie", "set-cookie", "mcp-session-id");
+            assertThat(hit.result().wire()).doesNotContainKey("truncated");
             assertThat(hit.result().wire().get("body").toString().getBytes(StandardCharsets.UTF_8).length)
-                    .isLessThanOrEqualTo(HttpCalls.WIRE_BODY_LIMIT);
+                    .isGreaterThan(HttpCalls.WIRE_BODY_LIMIT);
             assertThat(hit.captured().body.length).isGreaterThan(HttpCalls.WIRE_BODY_LIMIT);
+            JsonNode stored = storedWire(spec, hit, Set.of());
+            assertThat(stored.path("truncated").asBoolean()).isTrue();
+            assertThat(stored.path("truncation").asText()).isEqualTo(HttpCalls.WIRE_BODY_NOTE);
+            assertThat(stored.path("body").asText().getBytes(StandardCharsets.UTF_8).length)
+                    .isLessThanOrEqualTo(HttpCalls.WIRE_BODY_LIMIT);
 
             RawLoopback.Attempt failed = loop.send(request("GET", "/p"), "/", 500);
             assertThat(failed.problem()).isNotNull();
@@ -205,6 +218,54 @@ class RequestWireTest {
             assertThat(failed.problem().wire.get("target")).isEqualTo("/p");
             assertThat(failed.captured().requestLine).isEqualTo("GET /p HTTP/1.1");
         }
+    }
+
+    @Test
+    void secretStraddlingTheWireCutIsMaskedBeforeTruncation() throws Exception {
+        String secret = "StraddleSecret";
+        int limit = HttpCalls.WIRE_BODY_LIMIT;
+        String prefix = "{\"n\":\"";
+        int head = 6;
+        String content = "a".repeat(limit - head - prefix.length()) + secret + "z".repeat(40);
+        try (RawLoopback loop = RawLoopback.open()) {
+            LinkedHashMap<String, Object> spec = request("POST", "/p");
+            spec.put("json", Map.of("n", content));
+            RawLoopback.Hit hit = loop.exchange(spec);
+            String raw = hit.result().wire().get("body").toString();
+            int at = raw.indexOf(secret);
+            assertThat(at).isGreaterThanOrEqualTo(0);
+            assertThat(raw.getBytes(StandardCharsets.UTF_8).length).isGreaterThan(limit);
+            assertThat(at).isLessThan(limit);
+            assertThat(at + secret.length()).isGreaterThan(limit);
+
+            String rendered = render(spec, hit, Set.of(secret));
+            assertThat(rendered).doesNotContain(secret)
+                    .doesNotContain(secret.substring(0, head))
+                    .doesNotContain(secret.substring(head));
+            JsonNode stored = ApiJson.tree(rendered).path("steps").get(0).path("wire");
+            assertThat(stored.path("truncated").asBoolean()).isTrue();
+            assertThat(stored.path("truncation").asText()).isEqualTo(HttpCalls.WIRE_BODY_NOTE);
+            assertThat(stored.path("body").asText().getBytes(StandardCharsets.UTF_8).length)
+                    .isLessThanOrEqualTo(limit);
+            assertThat(stored.path("body").asText()).contains("***");
+        }
+    }
+
+    private static JsonNode storedWire(Map<String, Object> spec, RawLoopback.Hit hit, Set<String> secrets) {
+        return ApiJson.tree(render(spec, hit, secrets)).path("steps").get(0).path("wire");
+    }
+
+    private static String render(Map<String, Object> spec, RawLoopback.Hit hit, Set<String> secrets) {
+        DevTraceDraft draft = new DevTraceDraft(null);
+        draft.add("action", 0, 1, DevTraceDraft.requestPiece(
+                spec,
+                hit.result().method(),
+                hit.result().path(),
+                hit.result().status(),
+                hit.result().headers(),
+                hit.result().body(),
+                hit.result().wire()));
+        return draft.render(Redactor.of(secrets), List.of(), false);
     }
 
     private static void assertClientHeaders(RawLoopback.Hit hit) {

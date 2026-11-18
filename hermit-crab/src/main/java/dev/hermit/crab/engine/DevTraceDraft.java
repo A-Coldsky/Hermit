@@ -19,7 +19,8 @@ import dev.hermit.crab.secure.Redactor;
 /**
  * One HTTP call's body, collected before redaction and rendered once at the end.
  * Redaction uses {@link OutputMask}. Headers named Cookie, Set-Cookie, Authorization,
- * or Mcp-Session-Id are removed before that walk, so a redaction failure cannot persist them.
+ * Proxy-Authorization, or Mcp-Session-Id are removed before that walk, so a redaction
+ * failure cannot persist them. The same names are dropped from the outbound wire.
  */
 public final class DevTraceDraft {
     public static final int STEP_LIMIT = 256 * 1024;
@@ -36,7 +37,7 @@ public final class DevTraceDraft {
 
     private static final Logger LOG = Logger.getLogger(DevTraceDraft.class.getName());
     private static final Set<String> DROPPED_HEADERS = Set.of(
-            "cookie", "set-cookie", "authorization", "mcp-session-id");
+            "cookie", "set-cookie", "authorization", "proxy-authorization", "mcp-session-id");
     private static final Set<String> KEEP_TEXT = Set.of(
             "note", "truncation", "type", "phase", "kind", "sha256");
     private static final List<String> SELECTORS = List.of("css", "xpath", "jsonpath", "regex");
@@ -230,7 +231,8 @@ public final class DevTraceDraft {
     /**
      * {@code path} is the raw path, not the decoded one. {@code wire} is the request line,
      * content type, headers, and body that were actually sent. Both are redacted with the
-     * rest of the document before the trace is stored.
+     * rest of the document before the trace is stored. A wire body longer than 64 KiB is
+     * cut only after that replacement, so a secret sitting on the cut stays masked.
      */
     public static Map<String, Object> requestPiece(
             Map<String, Object> spec,
@@ -326,6 +328,7 @@ public final class DevTraceDraft {
             }
             Map<String, Object> copy = mutableMap(masked);
             maskCredentialBodies(copy, mask);
+            limitWireBodies(copy);
             limitSteps(copy);
             limitFields(copy);
             limitTrace(copy);
@@ -468,6 +471,35 @@ public final class DevTraceDraft {
         Matcher matcher = pattern.matcher(text);
         while (matcher.find()) {
             spans.add(new int[] {matcher.start(), matcher.end()});
+        }
+    }
+
+    /**
+     * The wire body is still complete here. {@link OutputMask} has already replaced secrets,
+     * including one that would have been split by a 64 KiB cut.
+     */
+    private static void limitWireBodies(Map<String, Object> document) {
+        Object raw = document.get("steps");
+        if (!(raw instanceof List<?> steps)) {
+            return;
+        }
+        for (Object step : steps) {
+            if (!(step instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Object wire = map.get("wire");
+            if (!(wire instanceof Map<?, ?> wireMap)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> mutable = (Map<String, Object>) wireMap;
+            Object body = mutable.get("body");
+            if (!(body instanceof String text) || utf8Length(text) <= HttpCalls.WIRE_BODY_LIMIT) {
+                continue;
+            }
+            mutable.put("body", truncateUtf8(text, HttpCalls.WIRE_BODY_LIMIT));
+            mutable.put("truncated", true);
+            mutable.put("truncation", HttpCalls.WIRE_BODY_NOTE);
         }
     }
 
@@ -723,8 +755,12 @@ public final class DevTraceDraft {
         return value;
     }
 
-    private static boolean droppedHeader(String name) {
+    static boolean droppedTraceHeader(String name) {
         return name != null && DROPPED_HEADERS.contains(name.toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean droppedHeader(String name) {
+        return droppedTraceHeader(name);
     }
 
     @SuppressWarnings("unchecked")

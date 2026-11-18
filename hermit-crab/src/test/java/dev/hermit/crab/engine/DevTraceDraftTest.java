@@ -27,11 +27,13 @@ class DevTraceDraftTest {
         String encodedSpace = encoded.replace("+", "%20");
         LinkedHashMap<String, Object> headers = new LinkedHashMap<>();
         headers.put("Authorization", "Bearer " + PASSWORD);
+        headers.put("Proxy-Authorization", "Basic " + PASSWORD);
         headers.put("Cookie", "n=" + PASSWORD);
         headers.put("X-Note", "hello");
         LinkedHashMap<String, Object> responseHeaders = new LinkedHashMap<>();
         responseHeaders.put("Set-Cookie", "SID=" + COOKIE);
         responseHeaders.put("Authorization", "Bearer " + PASSWORD);
+        responseHeaders.put("Proxy-Authorization", "Basic " + PASSWORD);
         responseHeaders.put("Mcp-Session-Id", "sess-secret-value-77");
         responseHeaders.put("X-Note", "kept");
         LinkedHashMap<String, Object> spec = new LinkedHashMap<>();
@@ -53,9 +55,11 @@ class DevTraceDraftTest {
         assertThat(json).contains(DevTraceDraft.UNTRUSTED_NOTE);
         JsonNode root = ApiJson.tree(json);
         assertThat(headerNames(root.path("steps").get(0).path("requestHeaders")))
-                .doesNotContain("authorization", "cookie", "Authorization", "Cookie");
+                .doesNotContain("authorization", "proxy-authorization", "cookie", "Authorization", "Proxy-Authorization", "Cookie");
         assertThat(headerNames(root.path("steps").get(0).path("responseHeaders")))
-                .doesNotContain("set-cookie", "authorization", "mcp-session-id", "Set-Cookie", "Authorization", "Mcp-Session-Id");
+                .doesNotContain(
+                        "set-cookie", "authorization", "proxy-authorization", "mcp-session-id",
+                        "Set-Cookie", "Authorization", "Proxy-Authorization", "Mcp-Session-Id");
         assertThat(root.path("session").path("cookieNames").get(0).asText()).isEqualTo("SID");
         assertThat(root.path("session").path("cookieCount").asInt()).isEqualTo(1);
         assertThat(root.path("session").path("stored").asBoolean()).isTrue();

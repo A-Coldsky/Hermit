@@ -528,29 +528,9 @@ final class HttpCalls {
             headers.putIfAbsent(header.getName(), header.getValue());
         }
         wire.put("headers", headers);
-        if (body == null) {
-            wire.put("body", null);
-        } else {
-            String text = new String(body, charset);
-            byte[] utf8 = text.getBytes(StandardCharsets.UTF_8);
-            if (utf8.length > WIRE_BODY_LIMIT) {
-                wire.put("body", truncateUtf8(text, WIRE_BODY_LIMIT));
-                wire.put("truncated", true);
-                wire.put("truncation", WIRE_BODY_NOTE);
-            } else {
-                wire.put("body", text);
-            }
-        }
+        // 全文留给追踪里的脱敏。64 KiB 在替换之后再截，否则正好压在截断点上的秘密会留下前半段。
+        wire.put("body", body == null ? null : new String(body, charset));
         return wire;
-    }
-
-    private static String truncateUtf8(String text, int limit) {
-        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
-        int end = limit;
-        while (end > 0 && (bytes[end] & 0xC0) == 0x80) {
-            end--;
-        }
-        return new String(bytes, 0, end, StandardCharsets.UTF_8);
     }
 
     /** 请求行里的 path 加查询串。fragment 不在请求行上。 */
@@ -578,8 +558,7 @@ final class HttpCalls {
     }
 
     private static boolean droppedWireHeader(String name) {
-        String lower = name.toLowerCase(Locale.ROOT);
-        return "cookie".equals(lower) || "authorization".equals(lower) || "mcp-session-id".equals(lower);
+        return DevTraceDraft.droppedTraceHeader(name);
     }
 
     private static URI withQuery(URI uri, String rawQuery) {

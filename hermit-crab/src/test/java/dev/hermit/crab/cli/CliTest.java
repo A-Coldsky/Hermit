@@ -619,6 +619,71 @@ class CliTest {
     }
 
     @Test
+    void localImportPrintsRequestEncodingWarningsAndRejectsQueryStyle() throws Exception {
+        Path home = temp.resolve("encode-warn");
+        Files.createDirectories(home);
+        Path file = home.resolve("in.yaml");
+        Files.writeString(file, encodingPackage("encode_warn", "body: nope"));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {"local", "import", file.toString()},
+                env(home),
+                InputStream.nullInputStream(),
+                stdout(out),
+                stderr(err));
+        assertThat(code).isZero();
+        assertThat(out.toString(StandardCharsets.UTF_8)).contains("encode_warn 1.0.0 已导入");
+        assertThat(err.toString(StandardCharsets.UTF_8))
+                .contains("IGNORED_REQUEST_FIELD actions.ping.steps[0].request.body 这个字段不会被发送");
+
+        Path bad = home.resolve("bad.yaml");
+        Files.writeString(bad, encodingPackage("encode_bad", "query_style: nope"));
+        ByteArrayOutputStream badOut = new ByteArrayOutputStream();
+        ByteArrayOutputStream badErr = new ByteArrayOutputStream();
+        int failed = new CrabCommand().run(
+                new String[] {"local", "import", bad.toString()},
+                env(home),
+                InputStream.nullInputStream(),
+                stdout(badOut),
+                stderr(badErr));
+        assertThat(failed).isEqualTo(1);
+        assertThat(badOut.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(badErr.toString(StandardCharsets.UTF_8))
+                .contains("规则包校验失败")
+                .contains("QUERY_STYLE actions.ping.steps[0].request.query_style query_style 只允许 url 或 form");
+        assertThat(home.resolve("local-conches").resolve("encode_bad.yaml")).doesNotExist();
+    }
+
+    private static String encodingPackage(String name, String extra) {
+        return """
+                conch: %s
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  ping:
+                    title: 查询
+                    description: 说明
+                    steps:
+                      - request:
+                          method: GET
+                          path: /p
+                          %s
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                    notes: 注意
+                    related: []
+                """.formatted(name, extra);
+    }
+
+    @Test
     void apiKeyCreateRejectsUnknownOptions() {
         Path root = temp.resolve("unknown-opt");
         Function<String, String> env = env(root);

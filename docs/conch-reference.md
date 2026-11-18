@@ -19,7 +19,7 @@ Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里�
 
 业务接口只选用户确认过的功能对应的那一次请求。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
 
-凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.4.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。
+凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.5.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。
 
 ### 令牌
 
@@ -176,7 +176,7 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.4.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0 |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.5.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它 |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -253,7 +253,7 @@ actions:
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
-`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.4.0，可以载入 1.1.0、1.2.0 和 1.3.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.4.0 时会报高于当前 Crab。
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.5.0，可以载入 1.1.0、1.2.0、1.3.0 和 1.4.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.5.0 时会报高于当前 Crab。
 
 `GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
@@ -272,7 +272,7 @@ actions:
 
 | 类型 | 示例/能力 |
 | --- | --- |
-| request | method、path/url、query、headers、form/json、encoding、follow_redirects、timeout_ms |
+| request | method、path/url、query、headers、form/json、encoding、follow_redirects、timeout_ms、query_style |
 | extract | CSS、XPath、JSONPath、regex；可 each 遍历及 filter 转换 |
 | assert | status、contains、not_contains、cookie_exists、header_exists、not_redirected_to |
 | set | 设置后续步骤/输出使用的变量 |
@@ -283,7 +283,17 @@ actions:
 
 执行到 `ask` 就放开账号锁，调用返回 409 `LOGIN_INPUT_REQUIRED`。这条响应不进幂等缓存。规则包没变时，同一账号再次调用不再重跑登录，仍是这个错误，message 末尾是控制台账号页 `/console/conches/{包名}`。规则包版本或内容已经变了时，这次调用丢掉等待并按新版本从头登录。控制台提交或重发遇到同一变化仍是 409 `CONFLICT`「规则包已经更新，请重新登录」。用户在控制台提交后，从下一步接着跑完剩余登录步骤；失败不记入连续登录失败，并丢掉这次等待。图片可以换，短信可以重发：图片至少间隔 2 秒、最多 10 次，验证码至少间隔 60 秒、最多 3 次。没到间隔或次数用完都是 409 `CONFLICT`。次数还没用完时 `canResend` 仍是 true，`resendAfter` 是剩余冷却秒数。进程内最多同时等 64 个账号，再多就丢掉最早的一条。重启、过期、删账号、改凭证、作废会话或 Reef 停用，都会丢掉对应的等待。待输入记录不保存 `input`、`credential`、`config`、`now`、`login`，接着登录用这次请求现取的凭证和配置。`response` 留下；`image` 前一步的 `response.body` 仍是空串，那次响应正文也不留在追踪里。用户提交的值，以及接着登录一开始从冻结变量收进打码名单的字符串，长度达到 4 才打码：后面的步骤失败时，步骤日志、错误和开发者追踪里的原文和 URL 编码都换成 `***`。
 
-request 的 path 与 url 必须二选一，form 与 json 互斥。默认 GET、UTF-8、不跟随重定向；响应最多 5 MiB。未写 `timeout_ms` 时，空闲读超时等于剩余的能力 deadline（`engine.capability_timeout_seconds`，默认 60 秒），不再固定 15 秒，到点是 `TIMEOUT`。写了 `timeout_ms` 时使用该毫秒数，且不超过剩余 deadline；更短的空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。解码优先 Content-Type charset，其次 HTML meta，再使用步骤 encoding。开启重定向最多 5 跳，只允许同源；Cookie 由账号客户端管理，规则不能自行覆盖 Cookie 头。最终响应仍是 3xx 时：非 GET 且不是登录重定向（表单常见 `follow_redirects: false` 的 302/303）不拒绝；GET 只在后面没有覆盖该状态码的 `assert.status` 时才是 `UPSTREAM_ERROR`。
+request 的 path 与 url 必须二选一，form 与 json 互斥。默认 GET、UTF-8、不跟随重定向；响应最多 5 MiB。`query` 默认按 URL 编码：空格是 `%20`，`+` 是 `%2B`，冒号、斜杠、问号和 `@` 原样保留，`&`、`=`、`#`、`%` 和非 ASCII 仍编码。非 ASCII 用步骤的 `encoding`，没写就是 UTF-8。`query_style` 省略或 `url` 用这套规则；`form` 退回 HTML 表单编码（空格是 `+`，冒号编成 `%3A`）。它只影响 `query`。form 正文始终用表单编码。`urlencode` 过滤器仍按 UTF-8 做表单编码并把 `+` 换成 `%20`；这个结果再放进 query 或 form，发出去时还会再编码一次。
+
+path 和 url 在拼接前只编码 URI 里非法的字符：空格、控制字符、非 ASCII、引号、尖括号、反斜杠、`^`、反引号、花括号、竖线和方括号，以及后面没有两位十六进制的 `%`。`/ ? # & =` 和已经写好的 `%xx` 保持原样，大小写也不改。非 ASCII 同样用步骤的 `encoding`，没写就是 UTF-8。相对路径里的 `//` 不再合并。`..` 和同源检查与原来相同，绝对路径里的 `..` 不删除。`#` 后面的内容不会出现在请求行里。
+
+请求头的值如果有 U+00FF 以上的字符，这一步失败，message 为「请求头 {名字} 含有无法发送的字符，请先用 urlencode 处理」。Latin-1 范围内的字符仍发送。
+
+写了 `encoding` 时，JSON 正文按该字符集编码，`Content-Type` 带上这个 charset。表示不了的字符失败，message 为「json 含有编码无法表示的字符」，不会换成问号。没写 `encoding` 时 JSON 仍是 UTF-8。
+
+这些不阻止保存：请求上引擎不认识的字段（例如 `body`、`multipart`）警告「这个字段不会被发送」；query 或 form 的值用了 `urlencode` 警告「这个值用了 urlencode，发出去时会被再编码一次」；query 字面值里已经有百分号编码警告「字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。」；path 或 url 字面值里有 `#` 警告「# 后面的内容不会发出去」。`query_style` 不是 `url` 或 `form` 是错误「query_style 只允许 url 或 form」，不能保存。只写了 `query_style` 不必把 `min_crab_version` 抬到 1.5.0：旧 Crab 忽略这个字段，查询串仍是表单编码。需要上面的 URL 编码时，再把下限写成 1.5.0。
+
+未写 `timeout_ms` 时，空闲读超时等于剩余的能力 deadline（`engine.capability_timeout_seconds`，默认 60 秒），不再固定 15 秒，到点是 `TIMEOUT`。写了 `timeout_ms` 时使用该毫秒数，且不超过剩余 deadline；更短的空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。解码优先 Content-Type charset，其次 HTML meta，再使用步骤 encoding。开启重定向最多 5 跳，只允许同源；Cookie 由账号客户端管理，规则不能自行覆盖 Cookie 头。最终响应仍是 3xx 时：非 GET 且不是登录重定向（表单常见 `follow_redirects: false` 的 302/303）不拒绝；GET 只在后面没有覆盖该状态码的 `assert.status` 时才是 `UPSTREAM_ERROR`。
 
 能力请求返回 HTTP 400 时，引擎以 `INVALID_INPUT` 结束，不把响应交给后续 extract/assert，也不切换已安装版本。HTTP 401 与 403 视为会话失效，处理方式与重定向到登录页相同，因此读操作不会在会话失效时返回成功的空列表。500 及以上同样在提取之前结束，错误码是 `UPSTREAM_ERROR`，message 为「上游状态码 N」，不看后面的 `status` 断言。其它非 2xx 按下面这条决定是否在提取前结束：从这次 `request` 到下一个 `request` 之间，若有 `assert` 的 `status` 期望包含实际状态码，就不拒绝，extract 和 assert 照常执行。期望写成数字或数字列表（例如 `302`、`304`、`[200, 201]`）。写了模板等非字面量时不预拒，由 assert 决定。期望是别的数字（例如期望 200、实际 404）仍是 `UPSTREAM_ERROR`，不会把错误页抽成空列表。没有这种 `status` 期望时，GET 的 302、304、404、409 同样是 `UPSTREAM_ERROR`。非 GET 的 3xx（301、302、303、304、307、308）不是登录重定向时不拒绝，所以 `follow_redirects: false` 的表单 POST 收到 303 可以成功；若跳到登录页，仍是会话失效。登录步骤不走上述映射，这些状态码仍交给 assert，失败是 `AUTH_FAILED`。`cookie_exists` 失败时，登录结果说明「登录未建立会话：上游没有发回会话 Cookie」，并提示核对用户名和密码；凭证正确时重新测试登录，或检查登录页是否已改版。`contains`、`not_contains`、`header_exists`、`not_redirected_to` 和 `status` 失败时同样是下一步说明，不以「assert 未通过」开头，文案不包含断言原文、凭证或 Cookie。`status` 写出期望和实际状态码。2xx 上期望与实际不一致（例如期望 201、实际 200）仍是 `RULE_MISMATCH`。失配不会把 Crab 切回旧版本。响应体不会写入错误文案。
 
@@ -308,7 +318,7 @@ steps:
 
 输出可采用映射模板，也可用说明式字段。说明式字段省略 value 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。校验器禁止在输出中直接引用 credential。
 
-实际输出会遍历字符串值，替换长度至少 4 个字符的已知凭证、当前 Cookie 值、登录快照里的字符串，以及这次调用已经读到或在替换快照前后见过的登录值，还有它们的 URL 编码形式。正式调用也打码，不只是开发追踪。会话失效清掉快照之后，这些已经见过的值仍打码。这些快照值不进 `config_audit`，也不进进程级已知秘密。短于 4 个字符的快照值不打码。用户在 `ask` 提交的验证码同样进入这次打码名单，长度达到 4 才换成 `***`，短于 4 的保留。开发追踪里的响应正文和变量摘要，还会把登录步骤里提取、set 或 script 得到的值打成掩码。写了 `credential: true` 的 script，返回的长度至少 4 的字符串还会进入这一次调用的打码名单：正式调用的结果、错误、步骤日志和开发追踪都会换成 `***`，包含 URL 编码。短于 4 的不打。这些字符串不写入配置审计，也不进入进程级已知秘密。能力步骤里，引用了 `credential` 的请求成功之后，紧跟着的 extract 和 script 得到的值同样打码；能力步骤里的 set 不打码。长度至少 4。拿这个掩码去调上游，上游会拒绝。登录请求、引用了凭证的能力请求，以及存活检查，响应正文还会再按字段名和令牌形状打一遍，提取失败也一样：键名包含 token、session、secret、password、authorization、jwt、ticket 的值换成 `***`，键名正好是 `sid` 时也换成 `***`（`side` 不会）。JWT 形态，以及 32 位以上的十六进制或 base64 长串，同样换成 `***`。不是 JSON 的这类正文整段换成「登录响应正文已隐藏，可能含凭证」。不带凭证的能力步骤响应体不按字段名打码。映射的键不替换。短于 4 个字符的秘密、尚未登记且不是这次从凭证换出来的上游秘密，以及哈希等其它派生值，在不带凭证的步骤里没有普遍保护。规则应只返回业务需要的数据。
+实际输出会遍历字符串值，替换长度至少 4 个字符的已知凭证、当前 Cookie 值、登录快照里的字符串，以及这次调用已经读到或在替换快照前后见过的登录值，还有它们的 URL 编码形式。编码形式包括表单编码（`+` 和 `%20`、大小写十六进制）、query 的 URL 编码、path 宽松规范化，以及 JSON 里对引号、反斜杠和控制字符的转义。字符集包括 UTF-8、GBK、GB18030 和 ISO-8859-1。开发追踪里的 `wire.target` 和 `wire.body` 在写入前走同一套替换。正式调用也打码，不只是开发追踪。会话失效清掉快照之后，这些已经见过的值仍打码。这些快照值不进 `config_audit`，也不进进程级已知秘密。短于 4 个字符的快照值不打码。用户在 `ask` 提交的验证码同样进入这次打码名单，长度达到 4 才换成 `***`，短于 4 的保留。开发追踪里的响应正文和变量摘要，还会把登录步骤里提取、set 或 script 得到的值打成掩码。写了 `credential: true` 的 script，返回的长度至少 4 的字符串还会进入这一次调用的打码名单：正式调用的结果、错误、步骤日志和开发追踪都会换成 `***`，包含 URL 编码。短于 4 的不打。这些字符串不写入配置审计，也不进入进程级已知秘密。能力步骤里，引用了 `credential` 的请求成功之后，紧跟着的 extract 和 script 得到的值同样打码；能力步骤里的 set 不打码。长度至少 4。拿这个掩码去调上游，上游会拒绝。登录请求、引用了凭证的能力请求，以及存活检查，响应正文还会再按字段名和令牌形状打一遍，提取失败也一样：键名包含 token、session、secret、password、authorization、jwt、ticket 的值换成 `***`，键名正好是 `sid` 时也换成 `***`（`side` 不会）。JWT 形态，以及 32 位以上的十六进制或 base64 长串，同样换成 `***`。不是 JSON 的这类正文整段换成「登录响应正文已隐藏，可能含凭证」。不带凭证的能力步骤响应体不按字段名打码。映射的键不替换。短于 4 个字符的秘密、尚未登记且不是这次从凭证换出来的上游秘密，以及哈希等其它派生值，在不带凭证的步骤里没有普遍保护。规则应只返回业务需要的数据。
 
 ```yaml
 - script:

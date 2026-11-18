@@ -4,6 +4,8 @@ import java.net.URLEncoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+
+import dev.hermit.common.http.UrlComponents;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -18,6 +20,8 @@ import java.util.Set;
  * Masks known secret values and sensitive field or header names. {@link #redact(String)}
  * also masks each secret's URL encoding in UTF-8, GBK, GB18030, and ISO-8859-1, with
  * spaces as {@code +} and as {@code %20}, and with uppercase or lowercase hex digits.
+ * The same charsets are applied to the URL query encoding and to lenient path
+ * normalization. A JSON escape of quotes, backslashes, and control characters is masked too.
  * Callers that need both behaviors apply {@link #redact(String)} and
  * {@link #redactFields(Map)} themselves.
  */
@@ -70,6 +74,12 @@ public final class Redactor {
             needles.add(secret);
             for (Charset charset : URL_CHARSETS) {
                 addUrlEncodings(needles, URLEncoder.encode(secret, charset));
+                addIfEncodable(needles, secret, charset, true);
+                addIfEncodable(needles, secret, charset, false);
+            }
+            String json = UrlComponents.jsonEscape(secret);
+            if (!json.equals(secret)) {
+                needles.add(json);
             }
         }
         List<String> ordered = needles.stream()
@@ -159,6 +169,15 @@ public final class Redactor {
             }
         }
         return false;
+    }
+
+    private static void addIfEncodable(Set<String> needles, String secret, Charset charset, boolean query) {
+        try {
+            String encoded = query ? UrlComponents.query(secret, charset) : UrlComponents.normalize(secret, charset);
+            addUrlEncodings(needles, encoded);
+        } catch (IllegalArgumentException ex) {
+            // This charset cannot represent the secret, so the wire never carries that form.
+        }
     }
 
     private static void addUrlEncodings(Set<String> needles, String encoded) {

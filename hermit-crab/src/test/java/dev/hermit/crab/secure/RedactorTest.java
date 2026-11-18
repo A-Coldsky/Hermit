@@ -100,6 +100,38 @@ class RedactorTest {
     }
 
     @Test
+    void redactsQueryPathAndJsonFormsThatUrlEncoderDoesNotProduce() {
+        Redactor spaced = Redactor.of(Set.of("a b:c"));
+        assertThat(spaced.redact("q=a%20b:c")).isEqualTo("q=***");
+        assertThat(spaced.redact("/p/a%20b:c")).isEqualTo("/p/***");
+        assertThat(spaced.redact("f=a+b%3Ac")).isEqualTo("f=***");
+        SecretChecks.absent(spaced.redact("a%20b:c a+b%3Ac a b:c"), "a%20b:c");
+
+        Redactor password = Redactor.of(Set.of("p@ss word-91"));
+        assertThat(password.redact("token=p@ss%20word-91")).isEqualTo("token=***");
+        SecretChecks.absent(password.redact("p@ss%20word-91"), "p@ss%20word-91");
+
+        Redactor quoted = Redactor.of(Set.of("ab\"cdEF"));
+        assertThat(quoted.redact("{\"q\":\"ab\\\"cdEF\"}")).isEqualTo("{\"q\":\"***\"}");
+        SecretChecks.absent(quoted.redact("ab\\\"cdEF"), "ab\\\"cdEF");
+
+        String gbk = "A密 码B";
+        Redactor gbkRedactor = Redactor.of(Set.of(gbk));
+        assertThat(gbkRedactor.redact("q=A%C3%DC%20%C2%EBB")).isEqualTo("q=***");
+        assertThat(gbkRedactor.redact("q=A%C3%DC+%C2%EBB")).isEqualTo("q=***");
+
+        String rare = "ab" + new String(Character.toChars(0x20000)) + " cd";
+        Redactor rareRedactor = Redactor.of(Set.of(rare));
+        assertThat(rareRedactor.redact("ab%95%32%82%36%20cd")).isEqualTo("***");
+        assertThat(rareRedactor.redact("ab%95%32%82%36+cd")).isEqualTo("***");
+
+        Redactor latin = Redactor.of(Set.of("caf\u00e9!"));
+        assertThat(latin.redact("caf%E9!")).isEqualTo("***");
+        assertThat(latin.redact("caf%E9%21")).isEqualTo("***");
+        SecretChecks.absent(latin.redact("caf%E9! caf%E9%21"), "caf%E9!");
+    }
+
+    @Test
     void replacementIsLiteralNotARegularExpression() {
         Redactor redactor = Redactor.of(Set.of("a.b+", "pa$$"));
         assertThat(redactor.redact("a.b+ axb pa$$")).isEqualTo("*** axb ***");

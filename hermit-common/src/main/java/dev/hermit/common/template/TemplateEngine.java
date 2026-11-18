@@ -167,6 +167,18 @@ public final class TemplateEngine {
         return List.copyOf(refs);
     }
 
+    /** True when any template under {@code node} applies a filter with this name. Invalid templates are false. */
+    public boolean usesFilter(Object node, String filter) {
+        if (filter == null || filter.isEmpty()) {
+            return false;
+        }
+        try {
+            return containsFilter(node, filter);
+        } catch (TemplateException ex) {
+            return false;
+        }
+    }
+
     /** True when any template under {@code node} reads {@code credential} or {@code credential.*}. */
     public boolean referencesCredential(Object node) {
         try {
@@ -181,6 +193,38 @@ public final class TemplateEngine {
         } catch (RuntimeException ex) {
             return false;
         }
+    }
+
+    private boolean containsFilter(Object node, String filter) {
+        if (node instanceof String text) {
+            Expressions.Parsed parsed = Expressions.parse(text);
+            for (Expressions.Segment segment : parsed.segments()) {
+                if (segment instanceof Expressions.Expr expr) {
+                    for (Expressions.FilterCall call : expr.filters()) {
+                        if (filter.equals(call.name())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        if (node instanceof Map<?, ?> map) {
+            for (Object value : map.values()) {
+                if (containsFilter(value, filter)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (node instanceof List<?> list) {
+            for (Object item : list) {
+                if (containsFilter(item, filter)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void collect(Object node, Set<String> paths) {

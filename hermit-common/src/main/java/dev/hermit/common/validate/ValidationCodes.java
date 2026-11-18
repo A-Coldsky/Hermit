@@ -35,6 +35,16 @@ public final class ValidationCodes {
     public static final String MCP_HEADER = "MCP_HEADER";
     public static final String MCP_DESCRIPTION = "MCP_DESCRIPTION";
     public static final String MCP_NO_ACTIONS = "MCP_NO_ACTIONS";
+    /** 请求上的字段引擎不会发出去。警告，不阻止保存。 */
+    public static final String IGNORED_REQUEST_FIELD = "IGNORED_REQUEST_FIELD";
+    /** query 或 form 的值用了 urlencode，发出去时还会再编码。警告。 */
+    public static final String DOUBLE_ENCODE = "DOUBLE_ENCODE";
+    /** query 字面值里已经有 %xx。警告。 */
+    public static final String PERCENT_ENCODED = "PERCENT_ENCODED";
+    /** path 或 url 字面值里有 #。警告。 */
+    public static final String FRAGMENT_DROPPED = "FRAGMENT_DROPPED";
+    /** query_style 不是 url 或 form。错误，阻止保存。 */
+    public static final String QUERY_STYLE = "QUERY_STYLE";
 
     private ValidationCodes() {
     }

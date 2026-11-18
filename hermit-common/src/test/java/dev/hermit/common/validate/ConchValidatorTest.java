@@ -1,6 +1,7 @@
 package dev.hermit.common.validate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,6 +17,110 @@ import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.version.SemVer;
 
 class ConchValidatorTest {
+
+    @Test
+    void requestEncodingWarningsDoNotBlockSave() {
+        ValidationResult result = validate("""
+                conch: encode_warn
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                auth:
+                  steps:
+                    - request:
+                        method: GET
+                        path: /login
+                        body: nope
+                  alive_check:
+                    request: {method: GET, path: "/home#gone"}
+                    expect_not_redirect: /login
+                actions:
+                  ping:
+                    title: 查询
+                    description: 说明
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                    notes: 注意
+                    related: []
+                    steps:
+                      - request:
+                          method: GET
+                          path: /p
+                          query:
+                            q: "{{now | urlencode}}"
+                            raw: pre%2Fpost
+                          form:
+                            f: "{{now | urlencode}}"
+                            already: pre%2Fpost
+                          multipart: nope
+                      - request:
+                          method: GET
+                          url: "/next#frag"
+                      - request:
+                          method: GET
+                          path: /form
+                          query_style: form
+                          query: {page: 1}
+                """);
+        assertThat(result.errors()).isEmpty();
+        assertThat(result.warnings())
+                .extracting(ValidationIssue::code, ValidationIssue::path, ValidationIssue::message)
+                .containsExactlyInAnyOrder(
+                        tuple(ValidationCodes.IGNORED_REQUEST_FIELD, "auth.steps[0].request.body", "这个字段不会被发送"),
+                        tuple(ValidationCodes.FRAGMENT_DROPPED, "auth.alive_check.request.path", "# 后面的内容不会发出去"),
+                        tuple(ValidationCodes.DOUBLE_ENCODE, "actions.ping.steps[0].request.query.q",
+                                "这个值用了 urlencode，发出去时会被再编码一次"),
+                        tuple(ValidationCodes.PERCENT_ENCODED, "actions.ping.steps[0].request.query.raw",
+                                "字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。"),
+                        tuple(ValidationCodes.DOUBLE_ENCODE, "actions.ping.steps[0].request.form.f",
+                                "这个值用了 urlencode，发出去时会被再编码一次"),
+                        tuple(ValidationCodes.IGNORED_REQUEST_FIELD, "actions.ping.steps[0].request.multipart",
+                                "这个字段不会被发送"),
+                        tuple(ValidationCodes.FRAGMENT_DROPPED, "actions.ping.steps[1].request.url",
+                                "# 后面的内容不会发出去"));
+    }
+
+    @Test
+    void invalidQueryStyleBlocksSave() {
+        ValidationResult result = validate("""
+                conch: encode_warn
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  ping:
+                    title: 查询
+                    description: 说明
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                    notes: 注意
+                    related: []
+                    steps:
+                      - request:
+                          method: GET
+                          path: /p
+                          query_style: nope
+                """);
+        assertThat(result.errors())
+                .extracting(ValidationIssue::code, ValidationIssue::path, ValidationIssue::message)
+                .containsExactly(tuple(
+                        ValidationCodes.QUERY_STYLE,
+                        "actions.ping.steps[0].request.query_style",
+                        "query_style 只允许 url 或 form"));
+        assertThat(result.warnings()).isEmpty();
+    }
 
     @Test
     void legacyOaHasNoErrorsAndWarnsWhenRelatedIsOmitted() {

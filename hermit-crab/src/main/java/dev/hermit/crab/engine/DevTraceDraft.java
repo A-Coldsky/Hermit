@@ -224,6 +224,23 @@ public final class DevTraceDraft {
             Map<String, ?> responseHeaders,
             String responseBody
     ) {
+        return requestPiece(spec, method, path, status, responseHeaders, responseBody, null);
+    }
+
+    /**
+     * {@code path} is the raw path, not the decoded one. {@code wire} is the request line,
+     * content type, headers, and body that were actually sent. Both are redacted with the
+     * rest of the document before the trace is stored.
+     */
+    public static Map<String, Object> requestPiece(
+            Map<String, Object> spec,
+            String method,
+            String path,
+            Integer status,
+            Map<String, ?> responseHeaders,
+            String responseBody,
+            Map<String, Object> wire
+    ) {
         LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
         piece.put("type", "request");
         piece.put("method", method != null ? method : text(spec, "method"));
@@ -234,6 +251,9 @@ public final class DevTraceDraft {
         piece.put("requestBody", requestBody(spec));
         piece.put("responseHeaders", headers(responseHeaders));
         piece.put("responseBody", responseBody);
+        if (wire != null) {
+            piece.put("wire", wire);
+        }
         return piece;
     }
 

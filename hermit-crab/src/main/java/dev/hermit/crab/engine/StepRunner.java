@@ -123,7 +123,7 @@ final class StepRunner {
         } catch (RuleProblem ex) {
             if (capture) {
                 Map<String, Object> piece = DevTraceDraft.requestPiece(
-                        spec, ex.method, ex.path, ex.status, null, null);
+                        spec, ex.method, ex.path, ex.status, null, null, ex.wire);
                 if (ex.transport != null) {
                     piece.put("transport", ex.transport);
                 }
@@ -143,7 +143,8 @@ final class StepRunner {
                 null,
                 result.sessionLost(),
                 DevTraceDraft.requestPiece(
-                        spec, result.method(), result.path(), result.status(), result.headers(), result.body()),
+                        spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
+                        result.wire()),
                 result.bodyBytes());
     }
 

@@ -298,12 +298,24 @@ export interface DevTraceVariable {
   summary: unknown
 }
 
+/** 实际发出的请求。入库前已脱敏。`target` 是请求行里的 path 加查询串，不含 fragment。 */
+export interface DevTraceWire {
+  method: string | null
+  target: string
+  contentType: string | null
+  headers: Record<string, string>
+  body: string | null
+  truncated?: boolean
+  truncation?: string
+}
+
 export interface DevTraceStep {
   index: number
   phase: string
   type: string
   durationMs: number
   method?: string | null
+  /** 原始 path，百分号编码保持原样，不含 fragment。 */
   path?: string | null
   status?: number | null
   query?: unknown
@@ -320,6 +332,7 @@ export interface DevTraceStep {
   truncation?: string
   /** 这一步连不上时的传输失败。没有则为空。 */
   transport?: DevTraceTransport | null
+  wire?: DevTraceWire | null
 }
 
 export interface DevTraceSession {
@@ -477,6 +490,10 @@ export interface SyncReport {
 }
 
 export interface ValidationIssue {
+  /**
+   * 校验代码。请求编码相关：`IGNORED_REQUEST_FIELD`、`DOUBLE_ENCODE`、
+   * `PERCENT_ENCODED`、`FRAGMENT_DROPPED` 是警告，不阻止保存；`QUERY_STYLE` 是错误。
+   */
   code: string
   path: string
   message: string

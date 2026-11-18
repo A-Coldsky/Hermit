@@ -16,15 +16,18 @@ import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
 import { ApiError } from '@shared/http'
-import { notifyError } from '@shared/format'
+import { formatTime, notifyError } from '@shared/format'
 import {
   api,
   type ConchSummary,
   type LocalConchEntry,
+  type LocalConchHistoryEntry,
   type LocalFileResult,
   type LocalImportConflict,
+  type PendingLocalOverwrite,
   type ValidationIssue,
 } from '../api'
+import LocalHistoryList from '../components/LocalHistoryList.vue'
 import { formatImportIssue } from '../import-issue'
 import { refreshPending } from '../status'
 import { canRollback, previousBlockedNote } from '../previous'
@@ -39,6 +42,13 @@ const deleting = ref<string | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const importing = ref(false)
 const reloading = ref(false)
+const acting = ref<string | null>(null)
+const pendingOverwrites = ref<PendingLocalOverwrite[]>([])
+const histories = ref<Record<string, LocalConchHistoryEntry[]>>({})
+const historyErrors = ref<Record<string, string>>({})
+const pendingConflicts = reactive<Record<string, string>>({})
+/** 磁盘已变的 409 会丢掉待确认。卡片随之消失，这句话留在列表上方。 */
+const pendingDropped = ref('')
 
 const report = reactive({
   open: false,
@@ -90,7 +100,7 @@ function overwriteConflict(error: unknown): LocalImportConflict | null {
 async function confirmOverwrite(conch: string): Promise<boolean> {
   try {
     await ElMessageBox.confirm(
-      `本机已有本地规则包 ${conch}。覆盖后以这次导入的文件为准，账号、凭证和配置保留。要覆盖吗？`,
+      `本机已有本地规则包 ${conch}。覆盖后以这次导入的文件为准，账号、凭证和配置保留。地址变化时会清空登录会话，并且可以回退。要覆盖吗？`,
       '已有同名本地规则包',
       { confirmButtonText: '覆盖', cancelButtonText: '取消', type: 'warning' },
     )
@@ -169,23 +179,175 @@ async function reloadLocal() {
   }
 }
 
+function versionLabel(version: string | null | undefined): string {
+  return version ? `v${version}` : '读不出来'
+}
+
+function addedAddresses(row: PendingLocalOverwrite): string[] {
+  return Array.isArray(row.addedDestinations) ? row.addedDestinations : []
+}
+
+function historyStamp(entry: LocalConchHistoryEntry): string {
+  const prefix = /^(\d{17})/.exec(entry.id)
+  if (prefix) return prefix[1]
+  return entry.savedAt ?? ''
+}
+
+function sortHistory(rows: LocalConchHistoryEntry[]): LocalConchHistoryEntry[] {
+  return [...rows].sort((a, b) => historyStamp(b).localeCompare(historyStamp(a)) || a.id.localeCompare(b.id))
+}
+
+function historyOf(conch: string): LocalConchHistoryEntry[] {
+  return histories.value[conch] ?? []
+}
+
+function localNames(installed: ConchSummary[], brokenRows: LocalConchEntry[]): string[] {
+  const names = new Set<string>()
+  for (const row of installed) {
+    if (row.source === 'LOCAL') names.add(row.conch)
+  }
+  for (const row of brokenRows) names.add(row.conch)
+  return [...names]
+}
+
+async function loadHistories(names: string[]) {
+  const entries: Record<string, LocalConchHistoryEntry[]> = {}
+  const errors: Record<string, string> = {}
+  await Promise.all(names.map(async (conch) => {
+    try {
+      const body = await api.localConchHistory(conch)
+      entries[conch] = sortHistory(Array.isArray(body?.history) ? body.history : [])
+    } catch (error) {
+      entries[conch] = []
+      errors[conch] = error instanceof Error ? error.message : '历史版本没有载入'
+    }
+  }))
+  histories.value = entries
+  historyErrors.value = errors
+}
+
+function rememberPending(rows: PendingLocalOverwrite[]) {
+  const previous = new Map(pendingOverwrites.value.map((row) => [row.conch, row.sha256]))
+  const still = new Set(rows.map((row) => row.conch))
+  for (const row of rows) {
+    if (previous.get(row.conch) !== row.sha256) delete pendingConflicts[row.conch]
+  }
+  for (const name of Object.keys(pendingConflicts)) {
+    if (!still.has(name)) delete pendingConflicts[name]
+  }
+  pendingOverwrites.value = rows
+}
+
 async function load() {
   loading.value = true
+  pendingDropped.value = ''
   try {
-    const [installed, local] = await Promise.all([
+    const [installed, local, pendingResult] = await Promise.all([
       api.conches(),
       api.localConches().catch((error: unknown) => {
         notifyError(error)
         return null
       }),
+      api.pendingLocalOverwrites().catch((error: unknown) => {
+        notifyError(error)
+        return null
+      }),
     ])
-    conches.value = installed.conches
-    broken.value = local ? local.conches.filter((row) => row.broken) : []
+    const nextConches = installed.conches
+    const nextBroken = local ? local.conches.filter((row) => row.broken) : []
+    const nextPending = Array.isArray(pendingResult?.pending) ? pendingResult.pending : []
+    await loadHistories(localNames(nextConches, nextBroken))
+    conches.value = nextConches
+    broken.value = nextBroken
+    rememberPending(nextPending)
     void refreshPending()
   } catch (error) {
     notifyError(error)
   } finally {
     loading.value = false
+  }
+}
+
+function confirmKey(conch: string) {
+  return `confirm:${conch}`
+}
+
+function rejectKey(conch: string) {
+  return `reject:${conch}`
+}
+
+function restoreKey(conch: string, id: string) {
+  return `restore:${conch}:${id}`
+}
+
+function restoreLoadingId(conch: string): string | null {
+  const prefix = `restore:${conch}:`
+  const current = acting.value
+  return current?.startsWith(prefix) ? current.slice(prefix.length) : null
+}
+
+async function confirmPending(row: PendingLocalOverwrite) {
+  if (!row.sha256) return
+  const key = confirmKey(row.conch)
+  const conch = row.conch
+  acting.value = key
+  pendingConflicts[conch] = ''
+  try {
+    await api.confirmPendingOverwrite(conch, row.sha256)
+    ElMessage.success(`已确认覆盖 ${conch} ${versionLabel(row.toVersion)}`)
+    await load()
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) {
+      const message = error.message || '确认没有完成。'
+      await load()
+      // 磁盘已变时服务端丢掉这条待确认；内容变了时较新的那条还在。
+      if (pendingOverwrites.value.some((item) => item.conch === conch)) {
+        pendingConflicts[conch] = message
+      } else {
+        pendingDropped.value = message
+      }
+      return
+    }
+    notifyError(error)
+  } finally {
+    if (acting.value === key) acting.value = null
+  }
+}
+
+async function rejectPending(row: PendingLocalOverwrite) {
+  const key = rejectKey(row.conch)
+  acting.value = key
+  try {
+    await api.rejectPendingOverwrite(row.conch)
+    ElMessage.success(`已拒绝覆盖 ${row.conch}`)
+    await load()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    if (acting.value === key) acting.value = null
+  }
+}
+
+async function restoreHistory(conch: string, entry: LocalConchHistoryEntry) {
+  try {
+    await ElMessageBox.confirm(
+      `回退 ${conch} 到 v${entry.version}。回退前会先备份当前版本。地址变化时会清空登录会话。要回退吗？`,
+      `回退 ${conch}`,
+      { confirmButtonText: '回退', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  const key = restoreKey(conch, entry.id)
+  acting.value = key
+  try {
+    await api.restoreLocalConch(conch, entry.id)
+    ElMessage.success(`已回退 ${conch} 到 v${entry.version}`)
+    await load()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    if (acting.value === key) acting.value = null
   }
 }
 
@@ -197,8 +359,6 @@ function openBroken(row: LocalConchEntry) {
   if (!row.ruleDisabled) return
   void router.push(`/conches/${encodeURIComponent(row.conch)}`)
 }
-
-const acting = ref<string | null>(null)
 
 async function rollbackListed(row: ConchSummary) {
   if (!canRollback(row)) return
@@ -251,6 +411,61 @@ onMounted(load)
       <input ref="fileInput" type="file" accept=".yaml,.yml" class="file" data-test="local-file" @change="importFile" />
     </PageHeader>
 
+    <p v-if="pendingDropped" class="pending-conflict pending-dropped" data-test="pending-dropped" role="alert">
+      {{ pendingDropped }}
+    </p>
+
+    <div v-if="pendingOverwrites.length" class="pending-list" data-test="pending-overwrites">
+      <article v-for="row in pendingOverwrites" :key="row.conch" class="hm-card pending" data-test="pending-overwrite">
+        <div class="hm-card-title">
+          <span>待确认覆盖</span>
+          <el-tag type="warning" effect="plain" size="small">需要确认</el-tag>
+        </div>
+        <div class="top">
+          <ConchAvatar :name="row.conch" />
+          <div class="name">
+            <strong>{{ row.conch }}</strong>
+            <span class="mono hm-muted">本地规则包</span>
+          </div>
+        </div>
+        <div class="versions" data-test="pending-versions">
+          <span>当前版本 <b class="mono">{{ versionLabel(row.fromVersion) }}</b></span>
+          <span>新版本 <b class="mono">{{ versionLabel(row.toVersion) }}</b></span>
+        </div>
+        <div>
+          <div class="address-label">新增地址</div>
+          <ul v-if="addedAddresses(row).length" class="addresses">
+            <li v-for="address in addedAddresses(row)" :key="address" class="mono" data-test="pending-address">{{ address }}</li>
+          </ul>
+          <p v-else class="hm-muted address-empty">没有新增地址</p>
+          <p v-if="row.undetermined" class="pending-note" data-test="pending-undetermined">还有无法事先确定的地址。</p>
+        </div>
+        <p class="pending-meta">
+          提交的 Key <b data-test="pending-key">{{ row.keyName || '—' }}</b>
+          <span class="dot">·</span>
+          <span data-test="pending-expiry">{{ formatTime(row.expiresAt) }} 到期</span>
+        </p>
+        <p class="pending-note">确认后才会写入。地址变化会清空这个包的登录会话，并且可以回退。</p>
+        <p v-if="pendingConflicts[row.conch]" class="pending-conflict" data-test="pending-conflict" role="alert">
+          {{ pendingConflicts[row.conch] }}
+        </p>
+        <div class="pending-actions">
+          <el-button
+            type="primary"
+            data-test="pending-confirm"
+            :disabled="!row.sha256"
+            :loading="acting === confirmKey(row.conch)"
+            @click="confirmPending(row)"
+          >确认覆盖</el-button>
+          <el-button
+            data-test="pending-reject"
+            :loading="acting === rejectKey(row.conch)"
+            @click="rejectPending(row)"
+          >拒绝</el-button>
+        </div>
+      </article>
+    </div>
+
     <div v-if="loading && !conches.length && !broken.length" class="cards">
       <div v-for="n in 2" :key="n" class="hm-card"><el-skeleton :rows="3" animated /></div>
     </div>
@@ -293,6 +508,13 @@ onMounted(load)
         <p v-else-if="row.updateAvailable" class="update-note">
           可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。进入详情更新
         </p>
+        <LocalHistoryList
+          v-if="row.source === 'LOCAL'"
+          :entries="historyOf(row.conch)"
+          :error="historyErrors[row.conch] ?? null"
+          :loading-id="restoreLoadingId(row.conch)"
+          @restore="restoreHistory(row.conch, $event)"
+        />
         <div class="foot hm-muted">
           <span v-if="!(row.ruleDisabled && row.capabilityCount === 0)"><b class="num">{{ row.capabilityCount }}</b> 个能力</span>
           <span><b class="num">{{ row.accountCount }}</b> 个账号</span>
@@ -345,6 +567,12 @@ onMounted(load)
           {{ row.ruleDisabled ? disabledReasonOnly(row.reason) : row.reason }}
         </p>
         <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
+        <LocalHistoryList
+          :entries="historyOf(row.conch)"
+          :error="historyErrors[row.conch] ?? null"
+          :loading-id="restoreLoadingId(row.conch)"
+          @restore="restoreHistory(row.conch, $event)"
+        />
         <div class="foot hm-muted">
           <span class="spacer" />
           <el-button
@@ -358,7 +586,7 @@ onMounted(load)
         </div>
       </div>
     </div>
-    <div v-else-if="!loading" class="hm-card empty">
+    <div v-else-if="!loading && !pendingOverwrites.length" class="hm-card empty">
       还没有规则包。到<router-link to="/catalog">可订阅规则包</router-link>订阅 Reef 上的规则包，或导入本地规则包
     </div>
 
@@ -511,6 +739,100 @@ onMounted(load)
 
 .file {
   display: none;
+}
+
+.pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.pending-list > .hm-card + .hm-card {
+  margin-top: 0;
+}
+
+.pending {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-color: var(--el-color-warning-light-5);
+}
+
+.versions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  font-size: 13px;
+}
+
+.versions b {
+  font-weight: 600;
+}
+
+.address-label {
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.address-empty {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.addresses {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.addresses li {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--hm-subtle);
+  word-break: break-all;
+}
+
+.pending-meta {
+  margin: 0;
+  font-size: 13px;
+}
+
+.pending-meta b {
+  color: var(--hm-text);
+  font-weight: 600;
+}
+
+.dot {
+  margin: 0 6px;
+  color: var(--hm-muted);
+}
+
+.pending-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--hm-muted);
+}
+
+.pending-conflict {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--hm-danger);
+}
+
+.pending-dropped {
+  margin-bottom: 16px;
+}
+
+.pending-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .local {

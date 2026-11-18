@@ -18,6 +18,8 @@ const crab = vi.hoisted(() => ({
   apiKeys: vi.fn(),
   importLocalConch: vi.fn(),
   localConches: vi.fn(),
+  pendingLocalOverwrites: vi.fn(async () => ({ pending: [] })),
+  localConchHistory: vi.fn(async () => ({ history: [] })),
   reloadLocalConches: vi.fn(),
   deleteLocalConch: vi.fn(),
   exportLocalConch: vi.fn(),
@@ -68,6 +70,8 @@ beforeEach(() => {
   document.body.innerHTML = ''
   crab.conches.mockResolvedValue({ conches: [] })
   crab.localConches.mockResolvedValue({ conches: [] })
+  crab.pendingLocalOverwrites.mockResolvedValue({ pending: [] })
+  crab.localConchHistory.mockResolvedValue({ history: [] })
   crab.syncStatus.mockResolvedValue({ report: null, latestCrab: null })
   crab.accounts.mockResolvedValue({ accounts: [] })
   crab.config.mockResolvedValue({ fields: {} })
@@ -339,6 +343,7 @@ describe('本地规则包', () => {
 
     expect(confirm).toHaveBeenCalledTimes(1)
     expect(confirm.mock.calls[0][0]).toContain('local_ping')
+    expect(confirm.mock.calls[0][0]).toContain('地址变化时会清空登录会话，并且可以回退')
     expect(confirm.mock.calls[0][1]).toBe('已有同名本地规则包')
     expect(crab.importLocalConch.mock.calls).toEqual([
       [file, false],

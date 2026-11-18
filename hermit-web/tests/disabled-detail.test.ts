@@ -6,6 +6,8 @@ const crab = vi.hoisted(() => ({
   conch: vi.fn(),
   conches: vi.fn(),
   localConches: vi.fn(),
+  pendingLocalOverwrites: vi.fn(async () => ({ pending: [] })),
+  localConchHistory: vi.fn(async () => ({ history: [] })),
   accounts: vi.fn(),
   config: vi.fn(),
   debug: vi.fn(),

@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.Set;
 
 /**
- * 按 {@code host:port} 登记的 leaf 指纹。这一轮没有库表；以后的登记表实现这个接口即可。
+ * 按 {@code host:port} 登记的 leaf 指纹。库表实现见 {@code TlsHostStore}。
  * {@link #find} 收到的 host 已转成小写，port 是握手会话里的端口。
  * 命中后跳过证书链和主机名校验，但证书本身过期或尚未生效仍然拒绝。
  */
@@ -20,8 +20,9 @@ public interface HostPins {
     Pin find(String host, int port);
 
     /**
-     * 当前登记的 {@code host:port}。用来判断这次更换有没有删掉指纹。
-     * 删掉指纹后要清掉 TLS 会话和空闲连接。默认空集，等于每次更换都视为删过。
+     * 当前登记的 {@code host:port}。快照会抄下这一刻的集合，用来判断这次更换有没有删掉指纹。
+     * 删掉指纹后要清掉 TLS 会话和空闲连接。默认空集，调用方不报告键，因此看不出删除。
+     * 会删行的实现必须覆盖这个方法。
      */
     default Set<String> keys() {
         return Set.of();

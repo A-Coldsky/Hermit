@@ -22,6 +22,7 @@ final class TrustSnapshot {
     private final Set<String> fingerprints;
     private final Set<String> anchorSubjects;
     private final HostPins pins;
+    private final Set<String> pinKeys;
     private final List<String> loadErrors;
     private final int jdkCount;
     private final String systemSource;
@@ -51,6 +52,7 @@ final class TrustSnapshot {
         this.fingerprints = fingerprints;
         this.anchorSubjects = anchorSubjects;
         this.pins = pins == null ? HostPins.NONE : pins;
+        this.pinKeys = Set.copyOf(this.pins.keys());
         this.loadErrors = loadErrors;
         this.jdkCount = jdkCount;
         this.systemSource = systemSource;
@@ -111,7 +113,7 @@ final class TrustSnapshot {
                 caFiles);
     }
 
-    /** JDK、操作系统、CA 目录各一条。控制台接口在后续的信任管理里暴露。 */
+    /** JDK、操作系统、CA 目录各一条。 */
     List<TrustSource> sources() {
         return List.of(
                 new TrustSource("JDK", "JDK", jdkCount, null, null),
@@ -144,7 +146,7 @@ final class TrustSnapshot {
     }
 
     Set<String> pinKeys() {
-        return pins.keys();
+        return pinKeys;
     }
 
     HostPins pins() {

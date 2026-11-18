@@ -6,6 +6,7 @@ import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -18,7 +19,8 @@ public record TrustCert(
         String sha256,
         String notBefore,
         String notAfter,
-        boolean ca
+        boolean ca,
+        String pem
 ) {
     private static final DateTimeFormatter INSTANT = DateTimeFormatter.ISO_INSTANT;
 
@@ -29,7 +31,18 @@ public record TrustCert(
                 sha256(certificate),
                 INSTANT.format(certificate.getNotBefore().toInstant().atOffset(ZoneOffset.UTC)),
                 INSTANT.format(certificate.getNotAfter().toInstant().atOffset(ZoneOffset.UTC)),
-                certificate.getBasicConstraints() >= 0);
+                certificate.getBasicConstraints() >= 0,
+                pem(certificate));
+    }
+
+    /** PEM of the encoded certificate. Null when the certificate cannot be encoded. */
+    public static String pem(X509Certificate certificate) {
+        try {
+            String body = Base64.getMimeEncoder(64, new byte[] {'\n'}).encodeToString(certificate.getEncoded());
+            return "-----BEGIN CERTIFICATE-----\n" + body + "\n-----END CERTIFICATE-----\n";
+        } catch (CertificateEncodingException ex) {
+            return null;
+        }
     }
 
     public static String dn(X500Principal principal) {
@@ -66,6 +79,15 @@ public record TrustCert(
         map.put("notBefore", notBefore);
         map.put("notAfter", notAfter);
         map.put("ca", ca);
+        return map;
+    }
+
+    /** 控制台证书链。多一个 {@code pem}，开发追踪不带它。 */
+    public Map<String, Object> consoleFields() {
+        LinkedHashMap<String, Object> map = new LinkedHashMap<>(fields());
+        if (pem != null && !pem.isBlank()) {
+            map.put("pem", pem);
+        }
         return map;
     }
 

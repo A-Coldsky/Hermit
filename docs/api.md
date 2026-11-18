@@ -271,6 +271,27 @@ Conch 列表和详情的包级 `needsConfiguration` 用同一套计算：账号�
 
 `RULE_MISMATCH` 不再切换版本，也不再写 `pinned_rollbacks`。schema 12 删掉这张表。成功的正式调用仍写入 `version_success`，版本保留用来保护最近一次成功的版本。`mismatch_streak` 表还在，不再写入。`rollback_queue` 只在手动更新把版本换成另一个版本、且上报开启时写入。重新载入同一份已验签的 zip 不写这条。
 
+## 控制台 HTTPS 信任
+
+这些接口都在 `/console/api` 下，认证与其它控制台接口相同。API Key、`/mcp` 和 agent 路径不能调用，也不能借此添加信任。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/console/api/tls/trust` | `sources`、`caFiles`、`trustedHosts`、`loadErrors`。`sources` 固定三条：`kind` 为 `JDK`、`OS`、`CA_DIR`，另有 `label`、`count`、`location`、`error`。JDK 的 `location` 为 null。加载失败时 `count` 为 0 |
+| POST | `/console/api/tls/ca` | 正文 `{name, pem}`。写入 CA 目录并重新加载，成功返回和 GET 相同的信任视图。`name` 只能是 `[A-Za-z0-9_.-]{1,64}`，且以 `.pem`、`.crt` 或 `.cer` 结尾。含私钥、超过 64 KiB、超过 64 个文件或 256 张证书时 400，不留下这份新文件 |
+| DELETE | `/console/api/tls/ca/{file}` | `{deleted: true}` 或 `{deleted: false}`。删掉文件后重新加载。删除会使 TLS 会话失效，并关掉 Apache 空闲连接 |
+| POST | `/console/api/tls/reload` | 重新读 CA 目录和操作系统信任库。不清 Cookie，不重建客户端。返回信任视图 |
+| GET | `/console/api/tls/failures` | `{failures:[{host, port, kind, message, at, chain}]}`。只在内存，按 `host:port` 保留最近的 TLS 失败，最多 32 条。`at` 为 ISO-8601 |
+| POST | `/console/api/tls/probe` | 正文 `{host, port}`。只握手，不发 HTTP 请求。地址必须是已加载规则的 `base_url`、MCP 上游或 OAuth 端点，或 Reef 地址，否则 400「这个地址不在已安装规则、MCP 上游或 Reef 地址里。」。返回 `{host, port, trusted, kind, message, chain}`。已经受信任时 `kind` 和 `message` 为 null |
+| POST | `/console/api/tls/trusted-hosts` | 正文 `{host, port, sha256}`。`sha256` 是 64 位十六进制，必须和该地址最近一小时内见过的 leaf 一致（探测或 TLS 失败）。同一 `host:port` 再次登记会替换。过期返回 400「这张证书已经过期，不能登记。」，尚未生效同样拒绝。成功返回这一行：`host`、`port`、`sha256`、`subject`、`issuer`、`notAfter`、`createdAt`、`createdBy` |
+| DELETE | `/console/api/tls/trusted-hosts/{host}/{port}` | `{deleted: true}` 或 `{deleted: false}`。删除后清掉 TLS 会话和 Apache 空闲连接 |
+
+证书链上每张证书有 `subject`、`issuer`、`sha256`、`notBefore`、`notAfter`、`ca`。控制台这条链另外带 `pem`，便于导入颁发者。开发追踪里的 `transport.chain` 不带 `pem`。`loadErrors` 的每一项是 `{file, message}`。文件级错误的 `file` 是文件名，`message` 不再重复文件名；来源级错误的 `file` 为 null。`caFiles` 的每一项是 `{name, certificates, error}`，成功载入的文件 `error` 为 null。
+
+审计种类：`TLS_CA_ADDED`、`TLS_CA_REMOVED`、`TLS_RELOADED`、`TLS_HOST_TRUSTED`、`TLS_HOST_REMOVED`。actor 为 `console`。detail 记下文件名，或 `host`、`port` 和 `sha256`。读取审计时不返回 detail 原文；`fields` 里是文件名或 `host:port`。这些行的 `origin`、`conch`、`account` 为 null。
+
+指纹表是 Crab schema 17 `tls_trusted_hosts`。已有库只加这张空表，不回填。最多 256 行。
+
 ## CLI
 
 命令前缀为 `java -cp "$CP" dev.hermit.crab.CrabMain`，CP 准备见[快速开始](getting-started.md)。

@@ -72,6 +72,10 @@ public final class ConchValidator {
     private static final int SCRIPT_SOURCE_LIMIT = 64 * 1024;
     private static final int SCRIPT_TIMEOUT_MAX = 5000;
     private static final Set<String> SCRIPT_KEYS = Set.of("code", "into", "timeout_ms", "use", "credential");
+    private static final Set<String> REQUEST_KEYS = Set.of(
+            "method", "path", "url", "query", "headers", "form", "json",
+            "encoding", "follow_redirects", "timeout_ms", "query_style");
+    private static final Pattern PERCENT_BYTE = Pattern.compile("%[0-9A-Fa-f]{2}");
 
     private ConchValidator() {
     }
@@ -155,7 +159,7 @@ public final class ConchValidator {
                     loginVars,
                     usesLogin,
                     errors,
-                    null,
+                    warnings,
                     authInputs);
             AliveCheck alive = doc.auth().aliveCheck();
             if (alive != null) {
@@ -184,6 +188,7 @@ public final class ConchValidator {
                         errors,
                         null,
                         authInputs);
+                checkRequestShape("auth.alive_check.request", alive.request(), errors, warnings);
             }
         }
         checkReservedLogin(doc, errors);
@@ -610,6 +615,93 @@ public final class ConchValidator {
         }
     }
 
+    private static void checkRequestShape(
+            String path,
+            Map<String, Object> request,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
+    ) {
+        if (request == null) {
+            return;
+        }
+        if (warnings != null) {
+            for (String key : request.keySet()) {
+                if (!REQUEST_KEYS.contains(key)) {
+                    warnings.add(issue(
+                            ValidationCodes.IGNORED_REQUEST_FIELD,
+                            path + "." + key,
+                            "这个字段不会被发送"));
+                }
+            }
+        }
+        Object style = request.get("query_style");
+        if (style != null && !(style instanceof String text && ("url".equals(text) || "form".equals(text)))) {
+            errors.add(issue(
+                    ValidationCodes.QUERY_STYLE,
+                    path + ".query_style",
+                    "query_style 只允许 url 或 form"));
+        }
+        if (warnings == null) {
+            return;
+        }
+        warnEncodedValues(path + ".query", request.get("query"), true, warnings);
+        warnEncodedValues(path + ".form", request.get("form"), false, warnings);
+        warnFragment(path + ".path", request.get("path"), warnings);
+        warnFragment(path + ".url", request.get("url"), warnings);
+    }
+
+    private static void warnEncodedValues(
+            String path,
+            Object node,
+            boolean percent,
+            List<ValidationIssue> warnings
+    ) {
+        if (node instanceof String text) {
+            warnEncodedValue(path, text, percent, warnings);
+            return;
+        }
+        if (node instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                warnEncodedValues(path + "." + entry.getKey(), entry.getValue(), percent, warnings);
+            }
+            return;
+        }
+        if (node instanceof List<?> list) {
+            for (int i = 0; i < list.size(); i++) {
+                warnEncodedValues(path + "[" + i + "]", list.get(i), percent, warnings);
+            }
+        }
+    }
+
+    private static void warnEncodedValue(
+            String path,
+            String text,
+            boolean percent,
+            List<ValidationIssue> warnings
+    ) {
+        if (TEMPLATES.usesFilter(text, "urlencode")) {
+            warnings.add(issue(
+                    ValidationCodes.DOUBLE_ENCODE,
+                    path,
+                    "这个值用了 urlencode，发出去时会被再编码一次"));
+        }
+        if (percent && PERCENT_BYTE.matcher(text).find()) {
+            warnings.add(issue(
+                    ValidationCodes.PERCENT_ENCODED,
+                    path,
+                    "字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。"));
+        }
+    }
+
+    private static void warnFragment(String path, Object value, List<ValidationIssue> warnings) {
+        if (value instanceof String text && text.indexOf('#') >= 0) {
+            warnings.add(issue(
+                    ValidationCodes.FRAGMENT_DROPPED,
+                    path,
+                    "# 后面的内容不会发出去"));
+        }
+    }
+
     private static boolean validTimeout(Object value) {
         if (!(value instanceof Number number)) {
             return false;
@@ -641,6 +733,9 @@ public final class ConchValidator {
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
             String typed = path + "[" + i + "]." + step.type();
+            if ("request".equals(step.type())) {
+                checkRequestShape(typed, step.def(), errors, warnings);
+            }
             boolean declareAsk = false;
             if ("ask".equals(step.type())) {
                 declareAsk = checkAsk(path, i, steps, step, declared, errors);

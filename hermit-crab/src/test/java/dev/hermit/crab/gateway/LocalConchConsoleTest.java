@@ -32,6 +32,54 @@ class LocalConchConsoleTest {
     Path temp;
 
     @Test
+    void consoleImportSurfacesRequestEncodingWarnings() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp, PASSWORD, config)) {
+            String yaml = """
+                    conch: encode_warn
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    title: 标题
+                    description: 说明
+                    credentials: {}
+                    actions:
+                      ping:
+                        title: 查询
+                        description: 说明
+                        steps:
+                          - request:
+                              method: GET
+                              path: /p
+                              body: nope
+                        output:
+                          ok: {type: string, description: 结果}
+                        examples:
+                          - input: {}
+                            output: {ok: yes}
+                        notes: 注意
+                        related: []
+                    """;
+            HttpResponse<String> imported = post(
+                    server, "/console/api/local-conches", "text/yaml; charset=utf-8",
+                    yaml.getBytes(StandardCharsets.UTF_8));
+            assertThat(imported.statusCode()).isEqualTo(200);
+            assertThat(imported.body())
+                    .contains("\"code\":\"IGNORED_REQUEST_FIELD\"")
+                    .contains("这个字段不会被发送");
+
+            String bad = yaml.replace("conch: encode_warn", "conch: encode_bad").replace("body: nope", "query_style: nope");
+            HttpResponse<String> rejected = post(
+                    server, "/console/api/local-conches", "text/yaml; charset=utf-8",
+                    bad.getBytes(StandardCharsets.UTF_8));
+            assertThat(rejected.statusCode()).isEqualTo(400);
+            assertThat(rejected.body())
+                    .contains("\"code\":\"QUERY_STYLE\"")
+                    .contains("query_style 只允许 url 或 form");
+        }
+    }
+
+    @Test
     void consoleImportExportAndExplicitKeyCall() throws Exception {
         CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
         try (TestServer server = TestServer.open(temp, PASSWORD, config)) {

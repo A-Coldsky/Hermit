@@ -193,7 +193,7 @@ schema 13 增加 `report_settings`（`id`、`enabled`、`interval_seconds`、`up
 
 schema 14 增加 `console_password`（一行：`id`、`salt`、`hash`、`iterations`、`updated_at`）和 `console_login_failures`（只有 `failed_at`）。判断依据是版本 14 这一行是否已经记下，不看 `MAX(version)`，也不改 1–13 的语句。口令不在 `config.yml`。没有 `id = 1` 的行表示尚未设置口令。
 
-schema 15 增加 `dev_traces`（`trace_id`、`origin`、`conch`、`account`、`action`、`created_at`、`expires_at`、`body`）。判断依据是版本 15 这一行是否已经记下，不改 schema 14 的语句。`body` 是已经脱敏的 JSON，不进 `config.yml`，也不上报 Tide。单步正文截断到 256 KiB，整条截断到 2 MiB。`Cookie`、`Set-Cookie`、`Authorization`、`Mcp-Session-Id` 整头不入库。
+schema 15 增加 `dev_traces`（`trace_id`、`origin`、`conch`、`account`、`action`、`created_at`、`expires_at`、`body`）。判断依据是版本 15 这一行是否已经记下，不改 schema 14 的语句。`body` 是已经脱敏的 JSON，不进 `config.yml`，也不上报 Tide。单步正文截断到 256 KiB，整条截断到 2 MiB。`Cookie`、`Set-Cookie`、`Authorization`、`Proxy-Authorization`、`Mcp-Session-Id` 整头不入库。
 
 schema 16 增加 `session_login`（`origin`、`conch`、`account`、`ciphertext`、`updated_at`，主键是前三列）。判断依据是版本 16 这一行是否已经记下，不改 schema 15，也不改 `schema/crab-v15.sql`。升级不回填。密文是一个账号的登录快照，AAD 字段是 `login`，和 Cookie 的 `session` 分开。空快照不插行。解密失败只删这一行。不进 `config.yml`，也不进 `config_audit`。
 

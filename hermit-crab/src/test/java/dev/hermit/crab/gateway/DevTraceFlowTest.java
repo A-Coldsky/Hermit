@@ -566,7 +566,8 @@ class DevTraceFlowTest {
         if (node.isObject()) {
             node.fieldNames().forEachRemaining(name -> {
                 String lower = name.toLowerCase(java.util.Locale.ROOT);
-                assertThat(lower).isNotIn("cookie", "set-cookie", "authorization", "mcp-session-id");
+                assertThat(lower).isNotIn(
+                        "cookie", "set-cookie", "authorization", "proxy-authorization", "mcp-session-id");
                 assertSensitiveHeadersAbsent(node.get(name));
             });
         } else if (node.isArray()) {

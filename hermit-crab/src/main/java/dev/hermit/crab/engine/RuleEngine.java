@@ -343,11 +343,12 @@ public final class RuleEngine implements ConchExecutor {
                     alive.expectNotRedirect(),
                     scope.deadline);
         } catch (RuleProblem ex) {
-            recordAlive(spec, ex.method, ex.path, ex.status, null, null, started, false, ex.transport);
+            recordAlive(spec, ex.method, ex.path, ex.status, null, null, ex.wire, started, false, ex.transport);
             throw ex;
         }
         boolean aliveOk = !(result.sessionLost() || result.status() == 401 || result.status() == 403);
-        recordAlive(spec, result.method(), result.path(), result.status(), result.headers(), result.body(), started, aliveOk, null);
+        recordAlive(spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
+                result.wire(), started, aliveOk, null);
         if (result.sessionLost() || result.status() == 401 || result.status() == 403) {
             sessions.markLoggedOut(scope.key);
             login(scope);
@@ -1130,6 +1131,7 @@ public final class RuleEngine implements ConchExecutor {
             Integer status,
             Map<String, String> responseHeaders,
             String responseBody,
+            Map<String, Object> wire,
             long started,
             boolean ok,
             Map<String, Object> transport
@@ -1139,7 +1141,8 @@ public final class RuleEngine implements ConchExecutor {
             return;
         }
         draft.aliveCheck(true, ok);
-        Map<String, Object> piece = DevTraceDraft.requestPiece(spec, method, path, status, responseHeaders, responseBody);
+        Map<String, Object> piece = DevTraceDraft.requestPiece(
+                spec, method, path, status, responseHeaders, responseBody, wire);
         if (transport != null) {
             piece.put("transport", transport);
         }
@@ -1186,7 +1189,8 @@ public final class RuleEngine implements ConchExecutor {
                         problem == null ? null : problem.path,
                         problem == null ? null : problem.status,
                         null,
-                        null);
+                        null,
+                        problem == null ? null : problem.wire);
                 if (problem != null && problem.transport != null) {
                     request.put("transport", problem.transport);
                 }

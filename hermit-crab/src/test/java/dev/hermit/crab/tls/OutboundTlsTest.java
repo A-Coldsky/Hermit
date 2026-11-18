@@ -4,16 +4,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.Socket;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.hc.client5.http.DnsResolver;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
@@ -152,6 +158,75 @@ class OutboundTlsTest {
     }
 
     @Test
+    void pinDoesNotCoverAnotherPortOrHost(@TempDir Path caDir) throws Exception {
+        OutboundTls tls = OutboundTls.open(caDir, false);
+        X509Certificate[] chain = new X509Certificate[] {certs.wrongName()};
+        https.use(chain, certs.wrongKey(), false);
+        try (LocalHttps otherPort = LocalHttps.start(chain, certs.wrongKey());
+                CloseableHttpClient client = apache(tls, new DnsResolver() {
+                    @Override
+                    public InetAddress[] resolve(String host) throws UnknownHostException {
+                        if ("other.hermit.test".equals(host) || "127.0.0.1".equals(host)) {
+                            return new InetAddress[] {InetAddress.getByName("127.0.0.1")};
+                        }
+                        throw new UnknownHostException(host);
+                    }
+
+                    @Override
+                    public String resolveCanonicalHostname(String host) {
+                        return host;
+                    }
+                })) {
+            tls.setPins(pins("127.0.0.1", https.port(), TrustCert.sha256(certs.wrongName())));
+            assertThat(apacheStatus(client, https.url())).isEqualTo(200);
+            tls.setPins(HostPins.NONE);
+            tls.setPins(pins("127.0.0.1", https.port(), TrustCert.sha256(certs.wrongName())));
+
+            TransportFailure.View other = apacheFailure(client, otherPort.url());
+            assertThat(other.kind()).isEqualTo(TransportFailure.Kind.TLS_UNTRUSTED);
+            assertThat(other.port()).isEqualTo(otherPort.port());
+
+            String otherHost = "https://other.hermit.test:" + https.port() + "/";
+            TransportFailure.View host = apacheFailure(client, otherHost);
+            assertThat(host.kind()).isEqualTo(TransportFailure.Kind.TLS_UNTRUSTED);
+            assertThat(host.host()).isEqualTo("other.hermit.test");
+        } finally {
+            https.use(new X509Certificate[] {certs.leaf()}, certs.leafKey(), false);
+        }
+    }
+
+    @Test
+    void missingEndpointRejectsEvenWhenTheCertificateIsTrustedAndPinned(@TempDir Path caDir) throws Exception {
+        LabCertificates.writePem(caDir.resolve("root.pem"), certs.root());
+        String fingerprint = TrustCert.sha256(certs.wrongName());
+        HostPins anyHost = new HostPins() {
+            @Override
+            public Pin find(String host, int port) {
+                return new Pin(fingerprint, null);
+            }
+
+            @Override
+            public Set<String> keys() {
+                return Set.of("127.0.0.1:1");
+            }
+        };
+        AtomicReference<TrustSnapshot> snapshot = new AtomicReference<>(TrustSnapshot.load(caDir, false, anyHost));
+        DelegatingTrustManager manager = new DelegatingTrustManager(snapshot);
+        X509Certificate[] chain = new X509Certificate[] {certs.wrongName()};
+        assertThatThrownBy(() -> manager.checkServerTrusted(chain, "RSA"))
+                .isInstanceOf(CertificateException.class)
+                .hasMessageContaining("无法核对主机名");
+        try (Socket socket = new Socket()) {
+            assertThatThrownBy(() -> manager.checkServerTrusted(chain, "RSA", socket))
+                    .isInstanceOf(CertificateException.class)
+                    .hasMessageContaining("无法核对主机名");
+        }
+        assertThatThrownBy(() -> manager.checkServerTrusted(chain, "RSA", (javax.net.ssl.SSLEngine) null))
+                .isInstanceOf(CertificateException.class)
+                .hasMessageContaining("无法核对主机名");
+    }
+
+    @Test
     void removingACaClosesTheIdleApacheConnection(@TempDir Path caDir) throws Exception {
         LabCertificates.writePem(caDir.resolve("root.pem"), certs.root());
         OutboundTls tls = OutboundTls.open(caDir, false);
@@ -192,12 +267,16 @@ class OutboundTlsTest {
     }
 
     private static HostPins pins(String sha256) {
-        String key = "127.0.0.1:" + https.port();
+        return pins("127.0.0.1", https.port(), sha256);
+    }
+
+    private static HostPins pins(String host, int port, String sha256) {
+        String key = host + ":" + port;
         HostPins.Pin pin = new HostPins.Pin(sha256, null);
         return new HostPins() {
             @Override
-            public Pin find(String host, int port) {
-                return (host + ":" + port).equals(key) ? pin : null;
+            public Pin find(String candidate, int candidatePort) {
+                return (candidate + ":" + candidatePort).equals(key) ? pin : null;
             }
 
             @Override
@@ -208,13 +287,20 @@ class OutboundTlsTest {
     }
 
     private static CloseableHttpClient apache(OutboundTls tls) {
-        PoolingHttpClientConnectionManager pool = tls.track(PoolingHttpClientConnectionManagerBuilder.create()
+        return apache(tls, null);
+    }
+
+    private static CloseableHttpClient apache(OutboundTls tls, DnsResolver resolver) {
+        PoolingHttpClientConnectionManagerBuilder builder = PoolingHttpClientConnectionManagerBuilder.create()
                 .setTlsSocketStrategy(tls.tlsStrategy())
                 .setDefaultConnectionConfig(ConnectionConfig.custom()
                         .setConnectTimeout(Timeout.ofSeconds(5))
                         .setSocketTimeout(Timeout.ofSeconds(5))
-                        .build())
-                .build());
+                        .build());
+        if (resolver != null) {
+            builder.setDnsResolver(resolver);
+        }
+        PoolingHttpClientConnectionManager pool = tls.track(builder.build());
         return HttpClients.custom()
                 .setConnectionManager(pool)
                 .disableRedirectHandling()
@@ -230,7 +316,11 @@ class OutboundTlsTest {
     }
 
     private static int apacheStatus(CloseableHttpClient client) throws IOException {
-        return client.execute(new HttpGet(https.url()), response -> {
+        return apacheStatus(client, https.url());
+    }
+
+    private static int apacheStatus(CloseableHttpClient client, String url) throws IOException {
+        return client.execute(new HttpGet(url), response -> {
             if (response.getEntity() != null) {
                 response.getEntity().getContent().readAllBytes();
             }
@@ -239,12 +329,16 @@ class OutboundTlsTest {
     }
 
     private static TransportFailure.View apacheFailure(CloseableHttpClient client) {
-        assertThatThrownBy(() -> apacheStatus(client)).isInstanceOf(IOException.class);
+        return apacheFailure(client, https.url());
+    }
+
+    private static TransportFailure.View apacheFailure(CloseableHttpClient client, String url) {
         try {
-            apacheStatus(client);
-            throw new AssertionError("expected a TLS failure");
+            apacheStatus(client, url);
+            throw new AssertionError("expected a TLS failure for " + url);
         } catch (IOException ex) {
-            return TransportFailure.classify(ex, "127.0.0.1", https.port());
+            URI uri = URI.create(url);
+            return TransportFailure.classify(ex, uri.getHost(), uri.getPort());
         }
     }
 

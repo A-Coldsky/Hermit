@@ -14,8 +14,10 @@ import javax.net.ssl.X509ExtendedTrustManager;
 /**
  * 把标准 PKIX 交给当前快照里的信任库。失败后再看指纹表。
  * 指纹命中且证书仍在有效期内就直接返回，不再做链校验和主机名校验。
- * Apache 保持 {@code HostnameVerificationPolicy.BUILTIN}，主机名比对发生在这里委托的信任库里；
- * 因此指纹命中时不能再委托，否则主机名还会被查一次。
+ * 主机名比对发生在委托的信任库里，而且只在套接字或引擎的
+ * {@code endpointIdentificationAlgorithm} 为 {@code HTTPS} 时才会做。
+ * 没有套接字也没有引擎时直接拒绝，不查指纹，避免两参重载静默跳过主机名。
+ * Apache 保持 {@code HostnameVerificationPolicy.BUILTIN}。指纹命中时不能再委托，否则主机名还会被查一次。
  */
 final class DelegatingTrustManager extends X509ExtendedTrustManager {
 
@@ -42,16 +44,23 @@ final class DelegatingTrustManager extends X509ExtendedTrustManager {
 
     @Override
     public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
-        checkServer(chain, authType, null, null);
+        // 两参重载没有套接字，委托方不会做主机名校验。这里直接拒绝，也不查指纹。
+        throw missingEndpoint();
     }
 
     @Override
     public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket) throws CertificateException {
-        checkServer(chain, authType, socket instanceof SSLSocket ssl ? ssl : null, null);
+        if (!(socket instanceof SSLSocket ssl)) {
+            throw missingEndpoint();
+        }
+        checkServer(chain, authType, ssl, null);
     }
 
     @Override
     public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine) throws CertificateException {
+        if (engine == null) {
+            throw missingEndpoint();
+        }
         checkServer(chain, authType, null, engine);
     }
 
@@ -60,18 +69,23 @@ final class DelegatingTrustManager extends X509ExtendedTrustManager {
         return snapshot.get().manager().getAcceptedIssuers();
     }
 
+    private static CertificateException missingEndpoint() {
+        return new CertificateException("没有套接字或引擎，无法核对主机名");
+    }
+
     private void checkServer(X509Certificate[] chain, String authType, SSLSocket socket, SSLEngine engine)
             throws CertificateException {
+        if (socket == null && engine == null) {
+            throw missingEndpoint();
+        }
         TrustSnapshot current = snapshot.get();
         HandshakeRecord record = HandshakeRecord.capture(chain, socket, engine, current.anchorSubjects());
         try {
             X509ExtendedTrustManager delegate = current.manager();
             if (engine != null) {
                 delegate.checkServerTrusted(chain, authType, engine);
-            } else if (socket != null) {
-                delegate.checkServerTrusted(chain, authType, socket);
             } else {
-                delegate.checkServerTrusted(chain, authType);
+                delegate.checkServerTrusted(chain, authType, socket);
             }
         } catch (CertificateException ex) {
             HandshakeRecord.attach(ex, record);

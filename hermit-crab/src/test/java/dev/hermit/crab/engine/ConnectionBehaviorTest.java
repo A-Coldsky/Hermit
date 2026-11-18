@@ -111,7 +111,7 @@ class ConnectionBehaviorTest {
         })) {
             try (ClientFixture client = ClientFixture.open(EngineSettings.defaults())) {
                 RuleProblem problem = failure(client.client, script.base(), "POST", 5_000, Duration.ofSeconds(5));
-                assertThat(problem.summary).contains("上游连接失败");
+                assertThat(problem.summary).isEqualTo("上游没有返回 HTTP 响应。");
             }
             script.join();
             assertThat(script.requests).containsExactly("POST /t HTTP/1.1");
@@ -132,7 +132,7 @@ class ConnectionBehaviorTest {
         })) {
             try (ClientFixture client = ClientFixture.open(EngineSettings.defaults())) {
                 RuleProblem problem = failure(client.client, script.base(), "GET", 5_000, Duration.ofSeconds(5));
-                assertThat(problem.summary).contains("上游连接失败");
+                assertThat(problem.summary).isEqualTo("上游没有返回 HTTP 响应。");
             }
             script.join();
             assertThat(script.requests).hasSize(2);
@@ -256,7 +256,7 @@ class ConnectionBehaviorTest {
                 assertThat(closed.await(3, TimeUnit.SECONDS)).isTrue();
                 Thread.sleep(200);
                 RuleProblem problem = failure(client.client, script.base(), "POST", 5_000, Duration.ofSeconds(5));
-                assertThat(problem.summary).contains("上游连接失败");
+                assertThat(problem.summary).isEqualTo("上游没有返回 HTTP 响应。");
             }
             script.join();
             assertThat(script.requests).containsExactly("POST /t HTTP/1.1");
@@ -285,15 +285,15 @@ class ConnectionBehaviorTest {
         try (ClientFixture client = ClientFixture.open(tight)) {
             try (Script script = new Script(server -> reply(server, fat(2_000, 1, "hello")))) {
                 RuleProblem problem = failure(client.client, script.base(), "GET", 5_000, Duration.ofSeconds(5));
-                assertThat(problem.summary).contains("上游连接失败");
-                assertThat(problem.transport.get("kind")).isEqualTo("OTHER");
+                assertThat(problem.summary).isEqualTo("上游响应头超过长度或个数上限。");
+                assertThat(problem.transport.get("kind")).isEqualTo("HEADER_LIMIT");
                 assertThat(problem.summary).doesNotContain("aaaa");
                 script.join();
             }
             try (Script script = new Script(server -> reply(server, fat(8, 12, "hello")))) {
                 RuleProblem problem = failure(client.client, script.base(), "GET", 5_000, Duration.ofSeconds(5));
-                assertThat(problem.summary).contains("上游连接失败");
-                assertThat(problem.transport.get("kind")).isEqualTo("OTHER");
+                assertThat(problem.summary).isEqualTo("上游响应头超过长度或个数上限。");
+                assertThat(problem.transport.get("kind")).isEqualTo("HEADER_LIMIT");
                 script.join();
             }
         }

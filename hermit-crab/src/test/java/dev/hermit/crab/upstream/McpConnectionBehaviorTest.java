@@ -53,7 +53,7 @@ class McpConnectionBehaviorTest {
             try (McpUpstreamClient client = new McpUpstreamClient()) {
                 RpcResult result = client.exchange(post("POST", server.base() + "/t", "{}".getBytes(StandardCharsets.UTF_8)));
                 assertThat(result.kind()).isEqualTo(RpcKind.CONNECT);
-                assertThat(result.detail()).contains("上游连接失败");
+                assertThat(result.detail()).isEqualTo("上游没有返回 HTTP 响应。");
             }
             server.join();
             assertThat(server.requests).hasSize(1);
@@ -77,7 +77,7 @@ class McpConnectionBehaviorTest {
             try (McpUpstreamClient client = new McpUpstreamClient(new HttpMessageLimits(1024, 500))) {
                 RpcResult result = client.exchange(post("GET", server.base() + "/t", null));
                 assertThat(result.kind()).isEqualTo(RpcKind.CONNECT);
-                assertThat(result.detail()).contains("上游连接失败");
+                assertThat(result.detail()).isEqualTo("上游响应头超过长度或个数上限。");
             }
         }
 
@@ -94,7 +94,7 @@ class McpConnectionBehaviorTest {
                 Resolved resolved = client.resolve(target(server.base()), auth(), deadline());
                 assertThat(resolved.ok()).isFalse();
                 assertThat(resolved.code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
-                assertThat(resolved.message()).contains("上游连接失败");
+                assertThat(resolved.message()).isEqualTo("上游响应头超过长度或个数上限。");
                 assertThat(resolved.message()).isNotEqualTo(McpOAuth.DISCOVERY_FAILED);
             }
         }
@@ -109,7 +109,7 @@ class McpConnectionBehaviorTest {
             try (McpOAuthClient client = new McpOAuthClient()) {
                 Resolved resolved = client.resolve(new Target(upstream, List.of("127.0.0.1")), auth(), deadline());
                 assertThat(resolved.ok()).isFalse();
-                assertThat(resolved.message()).contains("上游连接失败");
+                assertThat(resolved.message()).isEqualTo("上游没有返回 HTTP 响应。");
             }
             server.join();
             assertThat(server.requests).hasSize(expected);

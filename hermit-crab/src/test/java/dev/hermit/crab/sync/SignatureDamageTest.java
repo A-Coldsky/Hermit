@@ -316,6 +316,10 @@ class SignatureDamageTest {
                 List.of(),
                 4,
                 null,
-                true);
+                true,
+                15_000,
+                5_000,
+                65_536,
+                500);
     }
 }

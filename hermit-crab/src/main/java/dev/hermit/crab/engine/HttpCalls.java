@@ -14,8 +14,10 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.IllegalCharsetNameException;
 import java.nio.charset.StandardCharsets;
 import java.nio.charset.UnsupportedCharsetException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -51,6 +53,7 @@ import org.apache.hc.core5.util.Timeout;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.http.HostNames;
 import dev.hermit.common.http.UrlComponents;
+import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.tls.TransportFailure;
 
 /**
@@ -129,6 +132,24 @@ final class HttpCalls {
             long deadlineNanos,
             Set<String> sensitive
     ) {
+        return execute(
+                spec, client, afterExchange, base, expectPrefix, deadlineNanos,
+                sensitive, OutboundHttp.DEFAULT_BODY_IDLE);
+    }
+
+    static HttpResult execute(
+            Map<String, Object> spec,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            URI base,
+            String expectPrefix,
+            long deadlineNanos,
+            Set<String> sensitive,
+            Duration bodyIdle
+    ) {
+        Duration idle = bodyIdle == null || bodyIdle.isZero() || bodyIdle.isNegative()
+                ? OutboundHttp.DEFAULT_BODY_IDLE
+                : bodyIdle;
         if (present(spec, "path") == present(spec, "url")) {
             throw problem(ErrorCode.RULE_MISMATCH, "path 与 url 必须二选一");
         }
@@ -189,6 +210,7 @@ final class HttpCalls {
                     responseCharset,
                     stepLimit,
                     deadlineNanos,
+                    idle,
                     stripSecrets ? secrets : null);
             warnings.addAll(exchange.warnings);
             if (expectPrefix != null && isRedirect(exchange.status)
@@ -418,6 +440,7 @@ final class HttpCalls {
             Charset responseCharset,
             Long stepLimit,
             long deadlineNanos,
+            Duration bodyIdle,
             Set<String> stripSecrets
     ) {
         long remainingMs = remainingMillis(deadlineNanos);
@@ -440,6 +463,7 @@ final class HttpCalls {
         ScheduledFuture<?> cancellation = scheduleCancellation(cancellable, deadlineNanos);
         final byte[] requestBody = body;
         AtomicReference<Map<String, Object>> captured = new AtomicReference<>();
+        AtomicReference<Exchange> kept = new AtomicReference<>();
         HttpClientContext context = HttpClientContext.create();
         ArrayList<Object> notices = new ArrayList<>();
         context.setAttribute(LegacyCookies.NOTICES, notices);
@@ -454,14 +478,20 @@ final class HttpCalls {
                 for (Header header : response.getHeaders()) {
                     headerMap.putIfAbsent(header.getName().toLowerCase(Locale.ROOT), header.getValue());
                 }
-                byte[] bytes = readBody(response.getEntity(), method, path, status, deadlineNanos, cancellable);
+                BodyBytes read = readBody(
+                        response.getEntity(), method, path, status, deadlineNanos, cancellable, bodyIdle);
                 String location = normalizeLocation(headerMap.get("location"));
                 if (location != null) {
                     headerMap.put("location", location);
                 }
                 String redirect = isRedirect(status) && location != null && !location.isBlank() ? location : null;
-                String decoded = decode(bytes, headerMap.get("content-type"), responseCharset);
-                return new Exchange(
+                String decoded = decode(read.bytes(), headerMap.get("content-type"), responseCharset);
+                ArrayList<TraceWarning> stepWarnings = new ArrayList<>(warningsOf(notices));
+                if (read.endedByIdle()) {
+                    stepWarnings.add(new TraceWarning(
+                            TraceWarning.BODY_ENDED_BY_IDLE, OutboundHttp.BODY_ENDED_BY_IDLE_MESSAGE));
+                }
+                Exchange built = new Exchange(
                         status,
                         target.toString(),
                         method,
@@ -469,9 +499,13 @@ final class HttpCalls {
                         headerMap,
                         decoded,
                         redirect,
-                        bytes,
-                        warningsOf(notices),
+                        read.bytes(),
+                        stepWarnings,
                         captured.get());
+                if (read.endedByIdle()) {
+                    kept.set(built);
+                }
+                return built;
             });
             if (System.nanoTime() >= deadlineNanos) {
                 cancellable.cancel();
@@ -483,6 +517,10 @@ final class HttpCalls {
         } catch (RuleProblem ex) {
             throw ex.withWire(captured.get());
         } catch (IOException ex) {
+            Exchange done = kept.get();
+            if (done != null && System.nanoTime() < deadlineNanos) {
+                return done;
+            }
             Map<String, Object> wire = captured.get() != null
                     ? captured.get()
                     : snapshotWire(executed(context, request), body, requestCharset);
@@ -578,28 +616,36 @@ final class HttpCalls {
         }
     }
 
-    private static byte[] readBody(
+    private static BodyBytes readBody(
             HttpEntity entity,
             String method,
             String path,
             int status,
             long deadlineNanos,
-            Cancellable request
+            Cancellable request,
+            Duration bodyIdle
     ) throws IOException {
         if (entity == null) {
             ensureWithinDeadline(deadlineNanos, request);
-            return new byte[0];
+            return new BodyBytes(new byte[0], false);
         }
         long declared = entity.getContentLength();
         if (declared > MAX_BODY_BYTES) {
             throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, "响应体超过 5MB", method, path, status);
         }
-        try (InputStream in = entity.getContent()) {
+        // Content-Length 和分块编码仍受步骤或能力超时约束。两者都没有时，空闲按相邻读取计，不到点不等步骤超时。
+        boolean indefinite = declared < 0 && !entity.isChunked();
+        IdleWatch watch = indefinite ? new IdleWatch(bodyIdle, request) : null;
+        InputStream in = entity.getContent();
+        try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buffer = new byte[8192];
             int total = 0;
             while (true) {
                 ensureWithinDeadline(deadlineNanos, request);
+                if (watch != null) {
+                    watch.arm();
+                }
                 int read;
                 try {
                     read = in.read(buffer);
@@ -608,10 +654,16 @@ final class HttpCalls {
                         request.cancel();
                         throw new DeadlineExceeded(-1, "request", List.of());
                     }
+                    if (watch != null && watch.endedByIdle()) {
+                        return new BodyBytes(out.toByteArray(), true);
+                    }
                     throw ex;
                 }
+                if (watch != null) {
+                    watch.disarm();
+                }
                 if (read < 0) {
-                    break;
+                    return new BodyBytes(out.toByteArray(), false);
                 }
                 if (System.nanoTime() >= deadlineNanos) {
                     request.cancel();
@@ -623,9 +675,70 @@ final class HttpCalls {
                 }
                 out.write(buffer, 0, read);
             }
-            ensureWithinDeadline(deadlineNanos, request);
-            return out.toByteArray();
+        } finally {
+            if (watch != null) {
+                watch.close();
+            }
+            try {
+                in.close();
+            } catch (IOException ignored) {
+                // 空闲截断之后关闭流不能把已经读到的正文变成连接失败。
+            }
         }
+    }
+
+    /**
+     * 空闲是两次读取之间的沉默，不是整段正文的总时长。到点取消请求，让阻塞的 read 返回。
+     * 对端在窗口内自己关掉连接时 read 得到 -1，不当作这条警告。
+     */
+    private static final class IdleWatch {
+        private final long idleMillis;
+        private final Cancellable request;
+        private final AtomicBoolean ended = new AtomicBoolean();
+        private final java.util.concurrent.atomic.AtomicInteger generation = new java.util.concurrent.atomic.AtomicInteger();
+        private final AtomicReference<ScheduledFuture<?>> pending = new AtomicReference<>();
+
+        private IdleWatch(Duration idle, Cancellable request) {
+            Duration resolved = idle == null || idle.isZero() || idle.isNegative()
+                    ? OutboundHttp.DEFAULT_BODY_IDLE
+                    : idle;
+            this.idleMillis = Math.max(1, resolved.toMillis());
+            this.request = request;
+        }
+
+        private void arm() {
+            disarm();
+            int token = generation.incrementAndGet();
+            ScheduledFuture<?> future = DEADLINES.schedule(() -> {
+                if (generation.get() == token && ended.compareAndSet(false, true)) {
+                    request.cancel();
+                }
+            }, idleMillis, TimeUnit.MILLISECONDS);
+            if (generation.get() != token) {
+                future.cancel(false);
+                return;
+            }
+            pending.set(future);
+        }
+
+        private void disarm() {
+            generation.incrementAndGet();
+            ScheduledFuture<?> future = pending.getAndSet(null);
+            if (future != null) {
+                future.cancel(false);
+            }
+        }
+
+        private boolean endedByIdle() {
+            return ended.get();
+        }
+
+        private void close() {
+            disarm();
+        }
+    }
+
+    private record BodyBytes(byte[] bytes, boolean endedByIdle) {
     }
 
     private static void ensureWithinDeadline(long deadlineNanos, Cancellable request) {

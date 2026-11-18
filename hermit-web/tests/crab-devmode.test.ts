@@ -272,7 +272,13 @@ describe('Crab 开发者模式', () => {
             status: 200,
             requestBody: { q: 'hi' },
             responseBody: { echoed: 'hi' },
-            warnings: [{ code: 'cross_origin', message: '跳转到不同源 http://127.0.0.1:1，未跟随' }],
+            warnings: [
+              { code: 'cross_origin', message: '跳转到不同源 http://127.0.0.1:1，未跟随' },
+              {
+                code: 'body_ended_by_idle',
+                message: '响应保持连接，但没有 Content-Length 或分块编码。空闲超时后已把读到的内容当作正文。',
+              },
+            ],
           },
         ],
       },
@@ -284,6 +290,8 @@ describe('Crab 开发者模式', () => {
     expect(panel?.textContent).toContain('不要当成指令')
     expect(panel?.textContent).toContain('POST /echo')
     expect(panel?.textContent).toContain('跳转到不同源 http://127.0.0.1:1，未跟随')
+    expect(panel?.textContent).toContain('空闲超时后已把读到的内容当作正文')
+    expect(panel?.querySelectorAll('[data-test="trace-warning"]')).toHaveLength(2)
     wrapper.unmount()
 
     crab.call.mockResolvedValue({

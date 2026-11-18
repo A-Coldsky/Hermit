@@ -121,7 +121,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
               <dt>警告</dt>
               <dd>
                 <ul>
-                  <li v-for="(warning, index) in step.warnings" :key="index">{{ warning.message }}</li>
+                  <li v-for="(warning, index) in step.warnings" :key="index" data-test="trace-warning">{{ warning.message }}</li>
                 </ul>
               </dd>
             </template>

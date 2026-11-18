@@ -18,15 +18,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
-import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.cookie.BasicCookieStore;
 import org.apache.hc.client5.http.cookie.Cookie;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.cookie.BasicClientCookie;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
-import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
-import org.apache.hc.core5.util.Timeout;
 
+import dev.hermit.crab.http.OutboundHttp;
+import dev.hermit.crab.http.StaleConnectionRetry;
 import dev.hermit.crab.tls.OutboundTls;
 
 /**
@@ -401,15 +400,16 @@ public final class SessionManager implements AutoCloseable {
         }
     }
 
-    private static void openClient(AccountState state) {
+    private void openClient(AccountState state) {
         OutboundTls tls = OutboundTls.current();
-        PoolingHttpClientConnectionManager pool = tls.track(PoolingHttpClientConnectionManagerBuilder.create()
-                .setTlsSocketStrategy(tls.tlsStrategy())
-                .setDefaultConnectionConfig(ConnectionConfig.custom()
-                        .setConnectTimeout(Timeout.ofSeconds(15))
-                        .setSocketTimeout(Timeout.ofSeconds(15))
-                        .build())
-                .build());
+        PoolingHttpClientConnectionManager pool = OutboundHttp.connectionManager(
+                tls,
+                settings.headers(),
+                settings.connectTimeout(),
+                OutboundHttp.ENGINE_SOCKET,
+                null,
+                0,
+                0);
         state.tls = tls;
         state.pool = pool;
         state.cookies = new BasicCookieStore();
@@ -420,7 +420,7 @@ public final class SessionManager implements AutoCloseable {
                 .addResponseInterceptorLast(LegacyCookies.notices())
                 .addRequestInterceptorLast(HttpCalls.crossOriginStripper())
                 .disableRedirectHandling()
-                .disableAutomaticRetries()
+                .setRetryStrategy(StaleConnectionRetry.INSTANCE)
                 .build();
     }
 

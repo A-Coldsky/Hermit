@@ -19,10 +19,14 @@
 | `capabilities.disabled` | `[]` | `conch.action` 列表，与数据库禁用状态取并集 |
 | `aliases` | `{}` | URL 路径 → `conch.action`；不可占用 api/console/mcp/openapi 路径 |
 | `mcp.allowed_origins` | `[]` | 额外允许访问 `/mcp` 的浏览器 Origin。没有 `Origin` 的客户端仍允许。本机源站见下方 |
-| `engine.capability_timeout_seconds` | `60` | 正整数。能力执行的总 deadline，到点返回 `TIMEOUT`。未写步骤 `timeout_ms` 时，上游空闲读也停在这个 deadline，不再先用 15 秒。规则写了更短的 `timeout_ms` 时，空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。持续慢速输出会在 deadline 被取消。TCP 连接一直挂起没有单独回归 |
+| `engine.capability_timeout_seconds` | `60` | 正整数。能力执行的总 deadline，到点返回 `TIMEOUT`。未写步骤 `timeout_ms` 时，有长度或分块的上游空闲读也停在这个 deadline，不再先用 15 秒。规则写了更短的 `timeout_ms` 时，空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。持续慢速输出会在 deadline 被取消。TCP 连接超时见 `engine.connect_timeout_ms` |
 | `engine.session_idle_minutes` | `10` | 空闲超过此阈值且配置 alive_check 时检测会话 |
 | `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；只有测试登录成功才解除，失败不会清掉暂停 |
 | `engine.mcp_max_concurrency_per_account` | `4` | 整数 1–32。每个 `(origin, conch, account)` 同时进行的上游 `tools/call` 上限。启动时读取，不热更新。排队也算进能力 deadline |
+| `engine.connect_timeout_ms` | `15000` | 整数 1–600000。只作用于规则引擎建立 TCP 连接。MCP 转发、MCP OAuth、同步、上报和引导仍是 10 秒，不读这个键 |
+| `engine.body_idle_timeout_ms` | `5000` | 整数 1–600000。规则引擎遇到没有 Content-Length、也不是分块编码的响应时，相邻两次读取允许的空闲。到点把已经读到的内容当作正文，开发追踪记 `body_ended_by_idle`。比步骤 `timeout_ms` 更短时按这里截断；步骤超时更短时仍是「步骤超时」。有长度或分块的正文不走这个计时 |
+| `engine.max_header_line_bytes` | `65536` | 整数 256–1048576。响应头单行字节上限。规则 HTTP、MCP 转发和 MCP OAuth 共用 |
+| `engine.max_header_count` | `500` | 整数 1–10000。响应头个数上限。同样三个客户端共用 |
 | `tls.system_trust` | `true` | 为 true 时，出站 HTTPS 在 JDK 默认信任库之外再合并操作系统信任库。false 只停用操作系统来源，JDK 信任库仍在。没有跳过证书校验的开关 |
 | `tls.ca_dir` | `$HERMIT_HOME/trust/ca` | 附加 CA 目录。省略或空白用默认目录，启动时创建。相对路径相对 HERMIT_HOME。只读 `.pem`、`.crt`、`.cer`，坏文件跳过，不阻止启动 |
 
@@ -47,6 +51,10 @@ engine:
   session_idle_minutes: 10
   max_login_failures: 3
   mcp_max_concurrency_per_account: 4
+  connect_timeout_ms: 15000
+  body_idle_timeout_ms: 5000
+  max_header_line_bytes: 65536
+  max_header_count: 500
 mcp:
   allowed_origins: []
 tls:
@@ -55,6 +63,8 @@ tls:
 ```
 
 此例的 disabled 项是路径格式示意，示例 Conch 中不包含 submit_leave。别名仍使用相同的 API Key、账号和能力权限；重启后读取新别名。
+
+规则 HTTP、MCP 转发和 MCP OAuth 的连接池在借出闲置超过 2 秒的连接前，会先确认它还活着。这个间隔是固定的，不写在 `config.yml` 里。
 
 `mcp.allowed_origins` 是 `/mcp` 的额外 Origin 允许列表，默认空。每一项必须是绝对的 `http` 或 `https` 源站，不能带路径、查询、用户信息或片段；写错会拒绝启动。没有 `Origin` 头的客户端仍然允许。本机始终允许 `http://127.0.0.1:<实际监听端口>`、`http://localhost:<实际监听端口>` 和 `http://[::1]:<实际监听端口>`，以及 `http://<server.host>:<实际监听端口>`。`server.host` 为 `0.0.0.0` 或 `::` 时不把通配地址当成源站；从局域网浏览器打开时，把浏览器地址栏对应的源站写进这个列表。反向代理的 `https://` 源站同样写在这里。比较时忽略 scheme 和主机的大小写，80 和 443 可以省略。请求如何被拒绝见[接口参考](api.md)的 MCP 一节。缺 `Origin` 是否拒绝、以及 `initialize` 遇到不认识的 `protocolVersion` 是协商还是拒绝，由 `McpTransportPolicy` 里的两个常量决定，当前分别是允许和协商。
 

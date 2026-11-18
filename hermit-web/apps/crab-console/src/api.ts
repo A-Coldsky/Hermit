@@ -315,9 +315,9 @@ export interface DevTraceWire {
   truncation?: string
 }
 
-/** 请求步骤上的跟踪警告。已知 code：`cross_origin`、`secure_cookie`、`cookie_rejected`。 */
+/** 请求步骤上的跟踪警告。已知 code：`cross_origin`、`secure_cookie`、`cookie_rejected`、`body_ended_by_idle`。 */
 export interface DevTraceWarning {
-  code: 'cross_origin' | 'secure_cookie' | 'cookie_rejected'
+  code: 'cross_origin' | 'secure_cookie' | 'cookie_rejected' | 'body_ended_by_idle'
   message: string
 }
 
@@ -346,7 +346,7 @@ export interface DevTraceStep {
   /** 这一步连不上时的传输失败。没有则为空。 */
   transport?: DevTraceTransport | null
   wire?: DevTraceWire | null
-  /** 重定向、Secure cookie 和被丢掉的 Set-Cookie。没有则为空。 */
+  /** 重定向、Cookie 和空闲结束正文（`body_ended_by_idle`）的说明。没有则为空。公开调用结果不含这项。 */
   warnings?: DevTraceWarning[]
 }
 

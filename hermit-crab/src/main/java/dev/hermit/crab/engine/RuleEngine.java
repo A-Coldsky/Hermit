@@ -77,7 +77,7 @@ public final class RuleEngine implements ConchExecutor {
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
         this.filters = FilterRegistry.defaults();
         this.templates = new TemplateEngine(filters);
-        this.steps = new StepRunner(templates, filters, sessions.clock());
+        this.steps = new StepRunner(templates, filters, sessions.clock(), settings.bodyIdleTimeout());
     }
 
     /**
@@ -343,7 +343,8 @@ public final class RuleEngine implements ConchExecutor {
                     scope.base,
                     alive.expectNotRedirect(),
                     scope.deadline,
-                    HttpCalls.sensitiveValues(vars, sessions.cookies(scope.key)));
+                    HttpCalls.sensitiveValues(vars, sessions.cookies(scope.key)),
+                    settings.bodyIdleTimeout());
         } catch (RuleProblem ex) {
             recordAlive(spec, ex.method, ex.path, ex.status, ex.responseHeaders, ex.responseBody, ex.wire, started,
                     false, ex.transport, ex.warnings);

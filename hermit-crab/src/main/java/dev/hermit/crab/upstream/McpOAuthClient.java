@@ -22,12 +22,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.apache.hc.client5.http.DnsResolver;
 import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
-import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
-import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
@@ -36,6 +34,8 @@ import org.apache.hc.core5.util.Timeout;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.model.McpAuth;
+import dev.hermit.crab.http.HttpMessageLimits;
+import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.tls.OutboundTls;
 import dev.hermit.crab.tls.TransportFailure;
 
@@ -56,16 +56,17 @@ final class McpOAuthClient implements AutoCloseable {
     private final OutboundTls tls;
 
     McpOAuthClient() {
+        this(HttpMessageLimits.defaults());
+    }
+
+    /**
+     * 发现和令牌请求都不重试。POST 换令牌不能重放，发现用的 GET 也不跟着规则引擎的陈旧连接重试走。
+     * 响应头上限和 2 秒的连接复查与另外两个 Apache 客户端相同。连接超时仍是 10 秒。
+     */
+    McpOAuthClient(HttpMessageLimits headers) {
         this.tls = OutboundTls.current();
-        this.pool = tls.track(PoolingHttpClientConnectionManagerBuilder.create()
-                .setDnsResolver(checkedDns())
-                .setTlsSocketStrategy(tls.tlsStrategy())
-                .setMaxConnPerRoute(8)
-                .setMaxConnTotal(32)
-                .setDefaultConnectionConfig(ConnectionConfig.custom()
-                        .setConnectTimeout(Timeout.ofSeconds(10))
-                        .build())
-                .build());
+        this.pool = OutboundHttp.connectionManager(
+                tls, headers, OutboundHttp.OTHER_CONNECT, null, checkedDns(), 8, 32);
         this.http = HttpClients.custom()
                 .setConnectionManager(pool)
                 .disableRedirectHandling()

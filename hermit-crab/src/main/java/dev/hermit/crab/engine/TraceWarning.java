@@ -7,4 +7,5 @@ record TraceWarning(String code, String message) {
     static final String CROSS_ORIGIN = "cross_origin";
     static final String SECURE_COOKIE = "secure_cookie";
     static final String COOKIE_REJECTED = "cookie_rejected";
+    static final String BODY_ENDED_BY_IDLE = "body_ended_by_idle";
 }

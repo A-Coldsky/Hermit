@@ -1,9 +1,21 @@
 <script setup lang="ts">
 import JsonBlock from '@shared/components/JsonBlock.vue'
 import { millis } from '@shared/format'
+import { ref, watch } from 'vue'
 import type { DevTrace, DevTraceExchange, DevTraceStep } from '../api'
+import { contentTypeText, hasLogicalQuery, hasMapEntries, requestLine, wireTruncation } from '../trace-wire'
 
-defineProps<{ trace: DevTrace }>()
+const props = defineProps<{ trace: DevTrace }>()
+
+/** 带实际发送的请求步骤默认展开，逻辑查询和请求行不用再点一次。 */
+const open = ref<number[]>([])
+watch(
+  () => props.trace.steps,
+  (steps) => {
+    open.value = (steps ?? []).filter((step) => step.wire).map((step) => step.index)
+  },
+  { immediate: true },
+)
 
 function stepTitle(step: DevTraceStep): string {
   if (step.method && step.path) {
@@ -34,7 +46,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
         <dd>{{ trace.session.cookieNames.length ? trace.session.cookieNames.join('、') : '无' }}（{{ trace.session.cookieCount }} 个，只记名字）</dd>
       </dl>
       <el-empty v-if="!trace.steps?.length" :image-size="48" description="没有步骤正文" />
-      <el-collapse v-else>
+      <el-collapse v-else v-model="open">
         <el-collapse-item v-for="step in trace.steps" :key="step.index" :name="step.index">
           <template #title>
             <span>#{{ step.index }} {{ stepTitle(step) }}</span>
@@ -45,13 +57,42 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
             <el-tag v-if="step.truncated" size="small" type="warning" effect="plain">已截断</el-tag>
           </template>
           <p v-if="step.truncation" class="hm-muted warn">{{ step.truncation }}</p>
+          <div v-if="step.wire" class="wire" data-test="wire-request">
+            <div class="block-title">
+              <strong>实际发送</strong>
+              <el-tag v-if="wireTruncation(step.wire)" size="small" type="warning" effect="plain">已截断</el-tag>
+            </div>
+            <dl class="hm-kv">
+              <dt>请求行</dt>
+              <dd class="mono request-line" data-test="wire-request-line">{{ requestLine(step.wire) }}</dd>
+              <dt>Content-Type</dt>
+              <dd class="mono" data-test="wire-content-type">{{ contentTypeText(step.wire.contentType) }}</dd>
+              <dt>请求头</dt>
+              <dd data-test="wire-headers">
+                <JsonBlock v-if="hasMapEntries(step.wire.headers)" :value="step.wire.headers" />
+                <span v-else class="hm-muted">（无）</span>
+              </dd>
+              <dt>请求体</dt>
+              <dd data-test="wire-body">
+                <pre v-if="typeof step.wire.body === 'string' && step.wire.body !== ''" class="hm-pre mono">{{ step.wire.body }}</pre>
+                <JsonBlock v-else-if="step.wire.body != null && step.wire.body !== ''" :value="step.wire.body" />
+                <span v-else class="hm-muted">（无）</span>
+              </dd>
+            </dl>
+            <p v-if="wireTruncation(step.wire)" class="hm-muted warn" data-test="wire-truncation">{{ wireTruncation(step.wire) }}</p>
+          </div>
+          <div v-if="hasLogicalQuery(step)" class="logical" data-test="logical-query">
+            <div class="block-title"><strong>逻辑查询</strong></div>
+            <p class="hm-muted caption">规则里写下的 query 映射。</p>
+            <JsonBlock :value="step.query" />
+          </div>
           <dl class="hm-kv">
             <template v-if="step.requestHeaders">
-              <dt>请求头</dt>
+              <dt>{{ step.wire ? '规则请求头' : '请求头' }}</dt>
               <dd><JsonBlock :value="step.requestHeaders" /></dd>
             </template>
             <template v-if="step.requestBody !== undefined">
-              <dt>请求体</dt>
+              <dt>{{ step.wire ? '规则请求体' : '请求体' }}</dt>
               <dd><JsonBlock :value="step.requestBody" /></dd>
             </template>
             <template v-if="step.responseHeaders">
@@ -123,6 +164,33 @@ h4 {
 
 .session {
   margin: 12px 0;
+}
+
+.wire,
+.logical {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--hm-border);
+  border-radius: 8px;
+  background: var(--hm-surface-2);
+}
+
+.block-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.caption {
+  margin: -4px 0 8px;
+  font-size: 12px;
+}
+
+.request-line {
+  font-weight: 600;
+  word-break: break-all;
 }
 
 :deep(.el-collapse-item__header) {

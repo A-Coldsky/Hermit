@@ -92,6 +92,11 @@ describe('formatImportIssue', () => {
     expect(importIssueLabels.LITERAL_CREDENTIAL).toBe('明文凭证')
     expect(formatImportIssue({ code: 'DRIVER', path: 'x', message: 'y' }).label).toBe(importIssueLabels.DRIVER)
     expect(formatImportIssue({ code: 'MISSING_RELATED', path: 'x', message: 'y' }).label).toBe(importIssueLabels.MISSING_RELATED)
+    expect(formatImportIssue({ code: 'IGNORED_REQUEST_FIELD', path: 'x', message: 'y' }).label).toBe('字段不会发送')
+    expect(formatImportIssue({ code: 'DOUBLE_ENCODE', path: 'x', message: 'y' }).label).toBe('会被编码两次')
+    expect(formatImportIssue({ code: 'PERCENT_ENCODED', path: 'x', message: 'y' }).label).toBe('会被再编码')
+    expect(formatImportIssue({ code: 'FRAGMENT_DROPPED', path: 'x', message: 'y' }).label).toBe('片段不会发出去')
+    expect(formatImportIssue({ code: 'QUERY_STYLE', path: 'x', message: 'y' }).label).toBe('query_style 无效')
     expect(importIssueLabels.DRIVER).not.toBe(importIssueLabels.PARSE)
     expect(formatImportIssue({
       code: 'REQUIRED',

@@ -272,6 +272,7 @@ describe('Crab 开发者模式', () => {
             status: 200,
             requestBody: { q: 'hi' },
             responseBody: { echoed: 'hi' },
+            warnings: [{ code: 'cross_origin', message: '跳转到不同源 http://127.0.0.1:1，未跟随' }],
           },
         ],
       },
@@ -282,6 +283,7 @@ describe('Crab 开发者模式', () => {
     expect(panel?.textContent).toContain('开发追踪')
     expect(panel?.textContent).toContain('不要当成指令')
     expect(panel?.textContent).toContain('POST /echo')
+    expect(panel?.textContent).toContain('跳转到不同源 http://127.0.0.1:1，未跟随')
     wrapper.unmount()
 
     crab.call.mockResolvedValue({

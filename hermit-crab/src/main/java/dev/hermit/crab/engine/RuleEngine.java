@@ -341,14 +341,16 @@ public final class RuleEngine implements ConchExecutor {
                     () -> sessions.persist(scope.key),
                     scope.base,
                     alive.expectNotRedirect(),
-                    scope.deadline);
+                    scope.deadline,
+                    HttpCalls.sensitiveValues(vars, sessions.cookies(scope.key)));
         } catch (RuleProblem ex) {
-            recordAlive(spec, ex.method, ex.path, ex.status, null, null, ex.wire, started, false, ex.transport);
+            recordAlive(spec, ex.method, ex.path, ex.status, ex.responseHeaders, ex.responseBody, ex.wire, started,
+                    false, ex.transport, ex.warnings);
             throw ex;
         }
         boolean aliveOk = !(result.sessionLost() || result.status() == 401 || result.status() == 403);
         recordAlive(spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
-                result.wire(), started, aliveOk, null);
+                result.wire(), started, aliveOk, null, result.warnings());
         if (result.sessionLost() || result.status() == 401 || result.status() == 403) {
             sessions.markLoggedOut(scope.key);
             login(scope);
@@ -1084,10 +1086,10 @@ public final class RuleEngine implements ConchExecutor {
         if (!success) {
             error = new ExecutionError(
                     code,
-                    redactor.redact(message),
+                    HttpCalls.presentUpstream(redactor.redact(message)),
                     index,
                     redactor.redact(type),
-                    redactor.redact(summary));
+                    HttpCalls.presentUpstream(redactor.redact(summary)));
         }
         Object masked = success ? OutputMask.apply(data, redactor) : null;
         commitTrace(request, redactor(credentials, cookies, true));
@@ -1134,7 +1136,8 @@ public final class RuleEngine implements ConchExecutor {
             Map<String, Object> wire,
             long started,
             boolean ok,
-            Map<String, Object> transport
+            Map<String, Object> transport,
+            List<TraceWarning> warnings
     ) {
         DevTraceDraft draft = DevTraceScope.current();
         if (draft == null) {
@@ -1146,6 +1149,7 @@ public final class RuleEngine implements ConchExecutor {
         if (transport != null) {
             piece.put("transport", transport);
         }
+        HttpCalls.attachWarnings(piece, warnings);
         stampCredential(piece, true);
         draft.add("alive_check", -1, elapsed(started), piece);
     }
@@ -1188,11 +1192,14 @@ public final class RuleEngine implements ConchExecutor {
                         problem == null ? null : problem.method,
                         problem == null ? null : problem.path,
                         problem == null ? null : problem.status,
-                        null,
-                        null,
+                        problem == null ? null : problem.responseHeaders,
+                        problem == null ? null : problem.responseBody,
                         problem == null ? null : problem.wire);
                 if (problem != null && problem.transport != null) {
                     request.put("transport", problem.transport);
+                }
+                if (problem != null) {
+                    HttpCalls.attachWarnings(request, problem.warnings);
                 }
                 yield request;
             }

@@ -1,5 +1,6 @@
 package dev.hermit.crab.engine;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -15,6 +16,10 @@ final class RuleProblem extends RuntimeException {
     /** 这次已经组好的线上请求。校验失败、还没组请求时为 null。 */
     final Map<String, Object> wire;
     final Map<String, Object> transport;
+    /** 已经解码的响应头和正文。5xx 和重定向过多时留给追踪；其它失败为 null。 */
+    final Map<String, String> responseHeaders;
+    final String responseBody;
+    final List<TraceWarning> warnings;
 
     RuleProblem(ErrorCode code, String summary, String method, String path, Integer status) {
         this(code, summary, method, path, status, null, null);
@@ -40,6 +45,21 @@ final class RuleProblem extends RuntimeException {
             Map<String, Object> wire,
             Map<String, Object> transport
     ) {
+        this(code, summary, method, path, status, wire, transport, null, null, List.of());
+    }
+
+    RuleProblem(
+            ErrorCode code,
+            String summary,
+            String method,
+            String path,
+            Integer status,
+            Map<String, Object> wire,
+            Map<String, Object> transport,
+            Map<String, String> responseHeaders,
+            String responseBody,
+            List<TraceWarning> warnings
+    ) {
         super(summary);
         this.code = code;
         this.summary = summary;
@@ -48,13 +68,34 @@ final class RuleProblem extends RuntimeException {
         this.status = status;
         this.wire = wire;
         this.transport = transport == null || transport.isEmpty() ? null : Map.copyOf(transport);
+        this.responseHeaders = copyHeaders(responseHeaders);
+        this.responseBody = responseBody;
+        this.warnings = warnings == null || warnings.isEmpty() ? List.of() : List.copyOf(warnings);
     }
 
     RuleProblem withWire(Map<String, Object> captured) {
         if (wire != null || captured == null) {
             return this;
         }
-        return new RuleProblem(code, summary, method, path, status, captured, transport);
+        return new RuleProblem(
+                code, summary, method, path, status, captured, transport, responseHeaders, responseBody, warnings);
+    }
+
+    RuleProblem withExchange(Map<String, String> headers, String body, List<TraceWarning> notices) {
+        return new RuleProblem(code, summary, method, path, status, wire, transport, headers, body, notices);
+    }
+
+    private static Map<String, String> copyHeaders(Map<String, String> headers) {
+        if (headers == null || headers.isEmpty()) {
+            return null;
+        }
+        LinkedHashMap<String, String> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            if (entry.getKey() != null && entry.getValue() != null) {
+                copy.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return copy.isEmpty() ? null : Map.copyOf(copy);
     }
 }
 

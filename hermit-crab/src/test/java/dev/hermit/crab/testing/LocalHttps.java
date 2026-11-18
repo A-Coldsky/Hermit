@@ -10,6 +10,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
@@ -26,6 +29,7 @@ public final class LocalHttps implements AutoCloseable {
     private final ExecutorService workers;
     private final AtomicReference<X509Certificate[]> chain;
     private final AtomicReference<PrivateKey> key;
+    private final List<String> requests = Collections.synchronizedList(new ArrayList<>());
     private volatile boolean keepAlive;
 
     private LocalHttps(
@@ -71,6 +75,11 @@ public final class LocalHttps implements AutoCloseable {
         return "https://127.0.0.1:" + port() + "/";
     }
 
+    /** 收到的请求头，按 ISO-8859-1 记下。默认响应仍是 200 ok。 */
+    public List<String> requests() {
+        return List.copyOf(requests);
+    }
+
     @Override
     public void close() {
         try {
@@ -99,13 +108,18 @@ public final class LocalHttps implements AutoCloseable {
             client.setSoTimeout(5_000);
             InputStream in = client.getInputStream();
             OutputStream out = client.getOutputStream();
-            while (readHeaders(in)) {
+            while (true) {
+                byte[] header = readHeaders(in);
+                if (header == null) {
+                    return;
+                }
+                requests.add(new String(header, StandardCharsets.ISO_8859_1));
                 byte[] body = "ok".getBytes(StandardCharsets.US_ASCII);
                 String connection = keepAlive ? "keep-alive" : "close";
-                byte[] header = ("HTTP/1.1 200 OK\r\nContent-Length: " + body.length
+                byte[] response = ("HTTP/1.1 200 OK\r\nContent-Length: " + body.length
                         + "\r\nContent-Type: text/plain\r\nConnection: " + connection + "\r\n\r\n")
                         .getBytes(StandardCharsets.US_ASCII);
-                out.write(header);
+                out.write(response);
                 out.write(body);
                 out.flush();
                 if (!keepAlive) {
@@ -117,27 +131,27 @@ public final class LocalHttps implements AutoCloseable {
         }
     }
 
-    private static boolean readHeaders(InputStream in) throws IOException {
+    private static byte[] readHeaders(InputStream in) throws IOException {
         ByteArrayOutputStream header = new ByteArrayOutputStream();
         int previous = 0;
         int breaks = 0;
         while (header.size() < 8192) {
             int value = in.read();
             if (value < 0) {
-                return false;
+                return header.size() == 0 ? null : header.toByteArray();
             }
             header.write(value);
             if (previous == '\r' && value == '\n') {
                 breaks++;
                 if (breaks == 2) {
-                    return true;
+                    return header.toByteArray();
                 }
             } else if (value != '\r') {
                 breaks = 0;
             }
             previous = value;
         }
-        return true;
+        return header.toByteArray();
     }
 
     private static final class SelectingKeyManager extends X509ExtendedKeyManager {

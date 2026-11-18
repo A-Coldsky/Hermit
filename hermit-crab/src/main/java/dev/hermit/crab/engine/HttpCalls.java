@@ -6,15 +6,22 @@ import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.IllegalCharsetNameException;
 import java.nio.charset.StandardCharsets;
 import java.nio.charset.UnsupportedCharsetException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -27,6 +34,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
 import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.cookie.Cookie;
+import org.apache.hc.client5.http.cookie.CookieStore;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.protocol.HttpClientContext;
 import org.apache.hc.core5.concurrent.Cancellable;
@@ -35,6 +44,7 @@ import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.HttpEntity;
 import org.apache.hc.core5.http.HttpRequest;
+import org.apache.hc.core5.http.HttpRequestInterceptor;
 import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
 import org.apache.hc.core5.util.Timeout;
 
@@ -43,8 +53,9 @@ import dev.hermit.common.http.UrlComponents;
 import dev.hermit.crab.tls.TransportFailure;
 
 /**
- * 不自动跟随重定向。绝对地址和重定向目标的 scheme、host、port 必须与 base_url 一致，
- * 避免把会话 Cookie 发到别的主机。跨源时停在当前响应。
+ * 不自动跟随重定向。初始地址必须与 base_url 同源。
+ * {@code follow_redirects: true} 时，同源跳转保留规则请求头；默认端口的 http 升到 https 也可以跟随，
+ * 但这一跳去掉认证头和带凭证的头。其它跨源停在当前 3xx。
  */
 final class HttpCalls {
 
@@ -52,6 +63,27 @@ final class HttpCalls {
     static final int WIRE_BODY_LIMIT = 64 * 1024;
     static final String WIRE_BODY_NOTE = "实际发送的正文超过 64 KiB，已截断。";
     private static final int MAX_REDIRECTS = 5;
+    /** 5xx 错误文案里，状态行之后的正文上限。先整段脱敏，再按 UTF-8 字节截。 */
+    static final int UPSTREAM_BODY_LIMIT = 4096;
+    static final String TOO_MANY_REDIRECTS = "重定向过多";
+    /** 这一跳是跟随的跨源升级。请求拦截器据此去掉 Cookie 和带凭证的头。 */
+    static final String STRIP_SECRETS = "hermit.strip.secrets";
+    private static final HttpRequestInterceptor STRIPPER = (request, entity, context) -> {
+        Object raw = context.getAttribute(STRIP_SECRETS);
+        if (!(raw instanceof Set<?> sensitive)) {
+            return;
+        }
+        Header[] headers = request.getHeaders();
+        ArrayList<String> drop = new ArrayList<>();
+        for (Header header : headers) {
+            if (header.getName() != null && dropOnCrossOrigin(header.getName(), header.getValue(), sensitive)) {
+                drop.add(header.getName());
+            }
+        }
+        for (String name : drop) {
+            request.removeHeaders(name);
+        }
+    };
     /**
      * 一条共享的定时线程。任务在 {@code once} 的 finally 里取消，并开启 remove-on-cancel，
      * 避免每个请求留下线程或在队列里堆积已完成的超时任务。
@@ -84,6 +116,18 @@ final class HttpCalls {
             String expectPrefix,
             long deadlineNanos
     ) {
+        return execute(spec, client, afterExchange, base, expectPrefix, deadlineNanos, Set.of());
+    }
+
+    static HttpResult execute(
+            Map<String, Object> spec,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            URI base,
+            String expectPrefix,
+            long deadlineNanos,
+            Set<String> sensitive
+    ) {
         if (present(spec, "path") == present(spec, "url")) {
             throw problem(ErrorCode.RULE_MISMATCH, "path 与 url 必须二选一");
         }
@@ -95,6 +139,7 @@ final class HttpCalls {
             throw problem(ErrorCode.RULE_MISMATCH, "方法无效");
         }
         Charset charset = charset(spec.get("encoding"));
+        Charset responseCharset = explicitEncoding(spec.get("encoding"), charset);
         boolean follow = Values.bool(spec.get("follow_redirects"), false);
         boolean formQuery = formQuery(spec);
         Long stepLimit = timeoutLimit(spec.get("timeout_ms"));
@@ -125,8 +170,11 @@ final class HttpCalls {
                     : ContentType.create("application/json", charset);
         }
         Map<String, Object> headers = optionalMap(spec.get("headers"), "headers");
+        Set<String> secrets = sensitive == null ? Set.of() : sensitive;
+        ArrayList<TraceWarning> warnings = new ArrayList<>();
         boolean lost = false;
         int hops = 0;
+        boolean stripSecrets = false;
         while (true) {
             Exchange exchange = once(
                     client,
@@ -137,47 +185,57 @@ final class HttpCalls {
                     contentType,
                     headers,
                     charset,
+                    responseCharset,
                     stepLimit,
-                    deadlineNanos);
+                    deadlineNanos,
+                    stripSecrets ? secrets : null);
+            warnings.addAll(exchange.warnings);
             if (expectPrefix != null && isRedirect(exchange.status)
                     && pathHasPrefix(exchange.redirect, target, expectPrefix)) {
                 lost = true;
             }
             if (!follow || !isRedirect(exchange.status) || exchange.redirect == null) {
                 if (exchange.status >= 500) {
-                    throw new RuleProblem(
-                            ErrorCode.UPSTREAM_ERROR,
-                            upstreamStatus(exchange.status),
-                            method,
-                            exchange.path,
-                            exchange.status,
-                            exchange.wire);
+                    throw upstreamFailure(exchange, warnings);
                 }
-                return exchange.toResult(lost);
+                return exchange.toResult(lost, warnings);
             }
             URI next;
             try {
                 next = target.resolve(exchange.redirect);
             } catch (IllegalArgumentException ex) {
-                return exchange.toResult(lost);
+                return exchange.toResult(lost, warnings);
             }
-            if (!sameOrigin(base, next)) {
-                return exchange.toResult(lost);
+            boolean same = sameOrigin(target, next);
+            boolean upgrade = httpUpgrade(target, next);
+            if (!same && !upgrade) {
+                warnings.add(new TraceWarning(
+                        TraceWarning.CROSS_ORIGIN,
+                        "跳转到不同源 " + originText(next) + "，未跟随"));
+                return exchange.toResult(lost, warnings);
             }
             if (expectPrefix != null && pathStarts(next, expectPrefix)) {
                 lost = true;
             }
             if (hops >= MAX_REDIRECTS) {
-                return exchange.toResult(lost);
+                throw new RuleProblem(
+                        ErrorCode.UPSTREAM_ERROR,
+                        TOO_MANY_REDIRECTS,
+                        method,
+                        exchange.path,
+                        exchange.status,
+                        exchange.wire).withExchange(exchange.headers, exchange.body, warnings);
             }
             hops++;
-            if (exchange.status == 301 || exchange.status == 302 || exchange.status == 303) {
+            boolean toGet = exchange.status == 301 || exchange.status == 302 || exchange.status == 303;
+            if (toGet) {
                 method = "GET";
                 body = null;
                 contentType = null;
             }
+            headers = headersForHop(headers, toGet, upgrade, secrets);
+            stripSecrets = upgrade;
             target = next;
-            headers = null;
         }
     }
 
@@ -206,18 +264,143 @@ final class HttpCalls {
         return -1;
     }
 
+    /**
+     * 写了步骤 encoding 时用它，盖过 Content-Type 和 meta。没写则 Content-Type、meta、UTF-8。
+     * 解码后去掉全部前导 U+FEFF，避免 BOM 挡住 JSON 提取。
+     */
     static String decode(byte[] body, String contentType, Charset stepEncoding) {
-        Charset charset = charsetFromContentType(contentType);
+        Charset charset = stepEncoding;
+        if (charset == null) {
+            charset = charsetFromContentType(contentType);
+        }
         if (charset == null) {
             charset = charsetFromMeta(body);
         }
         if (charset == null) {
-            charset = stepEncoding;
-        }
-        if (charset == null) {
             charset = StandardCharsets.UTF_8;
         }
-        return new String(body, charset);
+        String text = new String(body == null ? new byte[0] : body, charset);
+        int start = 0;
+        while (start < text.length() && text.charAt(start) == '\uFEFF') {
+            start++;
+        }
+        return start == 0 ? text : text.substring(start);
+    }
+
+    /** 同一主机、http 默认端口到 https 默认端口。省略的端口按默认端口算。 */
+    static boolean httpUpgrade(URI from, URI to) {
+        if (from == null || to == null || from.getHost() == null || to.getHost() == null) {
+            return false;
+        }
+        if (!"http".equalsIgnoreCase(from.getScheme()) || !"https".equalsIgnoreCase(to.getScheme())) {
+            return false;
+        }
+        return from.getHost().equalsIgnoreCase(to.getHost()) && port(from) == 80 && port(to) == 443;
+    }
+
+    /** scheme://host[:port]。默认端口省略。IPv6 加方括号。不含路径和查询。 */
+    static String originText(URI uri) {
+        if (uri == null) {
+            return "";
+        }
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        String host = uri.getHost();
+        if (host == null) {
+            return scheme;
+        }
+        String shown = host;
+        if (shown.indexOf(':') >= 0 && !(shown.startsWith("[") && shown.endsWith("]"))) {
+            shown = "[" + shown + "]";
+        }
+        int explicit = uri.getPort();
+        boolean omit = explicit < 0
+                || ("http".equals(scheme) && explicit == 80)
+                || ("https".equals(scheme) && explicit == 443);
+        if (scheme.isEmpty()) {
+            return omit ? shown : shown + ":" + explicit;
+        }
+        return omit ? scheme + "://" + shown : scheme + "://" + shown + ":" + explicit;
+    }
+
+    /**
+     * Apache 把响应头按 ISO-8859-1 读。裸 UTF-8 的 Location 先按字节收回来，再把空格等非法字符百分号编码。
+     * 已经写好的 {@code %HH} 和 URI 结构字符不动。
+     */
+    static String normalizeLocation(String location) {
+        if (location == null) {
+            return null;
+        }
+        String recovered = recoverUtf8(location);
+        return encodeIllegal(recovered);
+    }
+
+    static String presentUpstream(String text) {
+        if (text == null || !text.startsWith("上游状态码 ")) {
+            return text;
+        }
+        int newline = text.indexOf('\n');
+        if (newline < 0) {
+            return text;
+        }
+        return text.substring(0, newline + 1) + clipUtf8(text.substring(newline + 1), UPSTREAM_BODY_LIMIT);
+    }
+
+    static Set<String> sensitiveValues(Map<String, Object> vars, CookieStore cookies) {
+        LinkedHashSet<String> raw = new LinkedHashSet<>();
+        if (vars != null) {
+            collectSecrets(raw, vars.get("credential"), 0);
+            collectSecrets(raw, vars.get("login"), 0);
+        }
+        raw.addAll(CallSecrets.current());
+        DevTraceDraft draft = DevTraceScope.current();
+        if (draft != null) {
+            raw.addAll(draft.derivedSecrets());
+            raw.addAll(draft.traceSecrets());
+        }
+        if (cookies != null) {
+            for (Cookie cookie : cookies.getCookies()) {
+                collectSecrets(raw, cookie.getValue(), 0);
+            }
+        }
+        LinkedHashSet<String> expanded = new LinkedHashSet<>();
+        for (String secret : raw) {
+            if (secret == null || secret.length() < 4) {
+                continue;
+            }
+            expanded.add(secret);
+            String encoded = URLEncoder.encode(secret, StandardCharsets.UTF_8);
+            if (encoded.length() >= 4) {
+                expanded.add(encoded);
+            }
+            String spaces = encoded.replace("+", "%20");
+            if (spaces.length() >= 4) {
+                expanded.add(spaces);
+            }
+        }
+        return Set.copyOf(expanded);
+    }
+
+    static void attachWarnings(Map<String, Object> piece, List<TraceWarning> warnings) {
+        if (piece == null || warnings == null || warnings.isEmpty()) {
+            return;
+        }
+        ArrayList<Object> rows = new ArrayList<>();
+        for (TraceWarning warning : warnings) {
+            if (warning == null) {
+                continue;
+            }
+            LinkedHashMap<String, String> row = new LinkedHashMap<>();
+            row.put("code", warning.code());
+            row.put("message", warning.message());
+            rows.add(row);
+        }
+        if (!rows.isEmpty()) {
+            piece.put("warnings", rows);
+        }
+    }
+
+    static HttpRequestInterceptor crossOriginStripper() {
+        return STRIPPER;
     }
 
     private static Exchange once(
@@ -228,9 +411,11 @@ final class HttpCalls {
             byte[] body,
             ContentType contentType,
             Map<String, Object> headers,
-            Charset stepEncoding,
+            Charset requestCharset,
+            Charset responseCharset,
             Long stepLimit,
-            long deadlineNanos
+            long deadlineNanos,
+            Set<String> stripSecrets
     ) {
         long remainingMs = remainingMillis(deadlineNanos);
         // 没写 timeout_ms 时，空闲读等到能力 deadline。写了则用该值，并且不超过剩余 deadline。
@@ -253,20 +438,37 @@ final class HttpCalls {
         final byte[] requestBody = body;
         AtomicReference<Map<String, Object>> captured = new AtomicReference<>();
         HttpClientContext context = HttpClientContext.create();
+        ArrayList<Object> notices = new ArrayList<>();
+        context.setAttribute(LegacyCookies.NOTICES, notices);
+        if (stripSecrets != null) {
+            context.setAttribute(STRIP_SECRETS, stripSecrets);
+        }
         try {
             Exchange exchange = client.execute(request, context, response -> {
-                captured.set(snapshotWire(executed(context, request), requestBody, stepEncoding));
+                captured.set(snapshotWire(executed(context, request), requestBody, requestCharset));
                 int status = response.getCode();
                 LinkedHashMap<String, String> headerMap = new LinkedHashMap<>();
                 for (Header header : response.getHeaders()) {
                     headerMap.putIfAbsent(header.getName().toLowerCase(Locale.ROOT), header.getValue());
                 }
                 byte[] bytes = readBody(response.getEntity(), method, path, status, deadlineNanos, cancellable);
-                String location = headerMap.get("location");
-                String redirect = isRedirect(status) ? location : null;
-                String decoded = decode(bytes, headerMap.get("content-type"), stepEncoding);
+                String location = normalizeLocation(headerMap.get("location"));
+                if (location != null) {
+                    headerMap.put("location", location);
+                }
+                String redirect = isRedirect(status) && location != null && !location.isBlank() ? location : null;
+                String decoded = decode(bytes, headerMap.get("content-type"), responseCharset);
                 return new Exchange(
-                        status, target.toString(), method, path, headerMap, decoded, redirect, bytes, captured.get());
+                        status,
+                        target.toString(),
+                        method,
+                        path,
+                        headerMap,
+                        decoded,
+                        redirect,
+                        bytes,
+                        warningsOf(notices),
+                        captured.get());
             });
             if (System.nanoTime() >= deadlineNanos) {
                 cancellable.cancel();
@@ -280,7 +482,7 @@ final class HttpCalls {
         } catch (IOException ex) {
             Map<String, Object> wire = captured.get() != null
                     ? captured.get()
-                    : snapshotWire(executed(context, request), body, stepEncoding);
+                    : snapshotWire(executed(context, request), body, requestCharset);
             if (System.nanoTime() >= deadlineNanos) {
                 cancellable.cancel();
                 throw new DeadlineExceeded(-1, "request", List.of());
@@ -577,6 +779,186 @@ final class HttpCalls {
         return URI.create(raw.toString());
     }
 
+    /** 请求的 query、form、JSON 仍默认 UTF-8。空白不算写成了 encoding。 */
+    private static Charset explicitEncoding(Object encoding, Charset parsed) {
+        if (encoding == null) {
+            return null;
+        }
+        String name = Values.text(encoding);
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        return parsed;
+    }
+
+    private static RuleProblem upstreamFailure(Exchange exchange, List<TraceWarning> warnings) {
+        return new RuleProblem(
+                ErrorCode.UPSTREAM_ERROR,
+                withUpstreamBody(exchange.status, exchange.body),
+                exchange.method,
+                exchange.path,
+                exchange.status,
+                exchange.wire).withExchange(exchange.headers, exchange.body, warnings);
+    }
+
+    private static String withUpstreamBody(int status, String body) {
+        if (body == null || body.isEmpty()) {
+            return upstreamStatus(status);
+        }
+        return upstreamStatus(status) + "\n" + body;
+    }
+
+    private static Map<String, Object> headersForHop(
+            Map<String, Object> headers,
+            boolean toGet,
+            boolean crossOrigin,
+            Set<String> sensitive
+    ) {
+        if (headers == null || headers.isEmpty()) {
+            return headers;
+        }
+        LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : headers.entrySet()) {
+            String name = entry.getKey();
+            if (toGet && (name.equalsIgnoreCase("Content-Type") || name.equalsIgnoreCase("Content-Length"))) {
+                continue;
+            }
+            if (crossOrigin && dropOnCrossOrigin(name, Values.text(entry.getValue()), sensitive)) {
+                continue;
+            }
+            copy.put(name, entry.getValue());
+        }
+        return copy;
+    }
+
+    private static boolean dropOnCrossOrigin(String name, String value, Set<?> sensitive) {
+        if (name.equalsIgnoreCase("Authorization")
+                || name.equalsIgnoreCase("Proxy-Authorization")
+                || name.equalsIgnoreCase("Cookie")) {
+            return true;
+        }
+        if (value == null || value.isEmpty() || sensitive == null) {
+            return false;
+        }
+        for (Object secret : sensitive) {
+            if (secret instanceof String text && text.length() >= 4 && value.contains(text)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String recoverUtf8(String raw) {
+        byte[] bytes = new byte[raw.length()];
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c > 0xFF) {
+                return raw;
+            }
+            bytes[i] = (byte) c;
+        }
+        CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        try {
+            String utf8 = decoder.decode(ByteBuffer.wrap(bytes)).toString();
+            return utf8.equals(raw) ? raw : utf8;
+        } catch (CharacterCodingException ex) {
+            return raw;
+        }
+    }
+
+    private static String encodeIllegal(String value) {
+        StringBuilder out = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); ) {
+            char c = value.charAt(i);
+            if (c == '%' && i + 2 < value.length() && isHex(value.charAt(i + 1)) && isHex(value.charAt(i + 2))) {
+                out.append('%').append(value.charAt(i + 1)).append(value.charAt(i + 2));
+                i += 3;
+                continue;
+            }
+            if (isUriChar(c)) {
+                out.append(c);
+                i++;
+                continue;
+            }
+            int cp = value.codePointAt(i);
+            byte[] bytes = new String(Character.toChars(cp)).getBytes(StandardCharsets.UTF_8);
+            for (byte b : bytes) {
+                int unsigned = b & 0xFF;
+                out.append('%');
+                out.append(Character.toUpperCase(Character.forDigit(unsigned >>> 4, 16)));
+                out.append(Character.toUpperCase(Character.forDigit(unsigned & 0xF, 16)));
+            }
+            i += Character.charCount(cp);
+        }
+        return out.toString();
+    }
+
+    private static boolean isHex(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+
+    /** RFC 3986 unreserved、gen-delims 和 sub-delims。空格和控制字符不在这里。 */
+    private static boolean isUriChar(char c) {
+        if (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+            return true;
+        }
+        return switch (c) {
+            case '-', '.', '_', '~', ':', '/', '?', '#', '[', ']', '@',
+                    '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' -> true;
+            default -> false;
+        };
+    }
+
+    private static String clipUtf8(String text, int maxBytes) {
+        if (text == null || text.isEmpty() || maxBytes <= 0) {
+            return "";
+        }
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length <= maxBytes) {
+            return text;
+        }
+        int end = maxBytes;
+        while (end > 0 && (bytes[end] & 0xC0) == 0x80) {
+            end--;
+        }
+        return new String(bytes, 0, end, StandardCharsets.UTF_8);
+    }
+
+    private static void collectSecrets(Set<String> into, Object value, int depth) {
+        if (value == null || depth > 8) {
+            return;
+        }
+        if (value instanceof String text) {
+            if (text.length() >= 4) {
+                into.add(text);
+            }
+            return;
+        }
+        if (value instanceof Map<?, ?> map) {
+            for (Object item : map.values()) {
+                collectSecrets(into, item, depth + 1);
+            }
+            return;
+        }
+        if (value instanceof List<?> list) {
+            for (Object item : list) {
+                collectSecrets(into, item, depth + 1);
+            }
+        }
+    }
+
+    private static List<TraceWarning> warningsOf(List<?> notices) {
+        ArrayList<TraceWarning> warnings = new ArrayList<>();
+        for (Object item : notices) {
+            if (item instanceof TraceWarning warning) {
+                warnings.add(warning);
+            }
+        }
+        return warnings;
+    }
+
     private static Charset charset(Object encoding) {
         String name = encoding == null ? "UTF-8" : Values.text(encoding);
         if (name.isBlank()) {
@@ -709,9 +1091,10 @@ final class HttpCalls {
             String body,
             String redirect,
             byte[] bodyBytes,
+            List<TraceWarning> warnings,
             Map<String, Object> wire
     ) {
-        private HttpResult toResult(boolean sessionLost) {
+        private HttpResult toResult(boolean sessionLost, List<TraceWarning> all) {
             return new HttpResult(
                     status,
                     url,
@@ -722,6 +1105,7 @@ final class HttpCalls {
                     redirect,
                     sessionLost,
                     bodyBytes,
+                    List.copyOf(all),
                     wire);
         }
     }
@@ -737,6 +1121,7 @@ record HttpResult(
         String redirect,
         boolean sessionLost,
         byte[] bodyBytes,
+        List<TraceWarning> warnings,
         Map<String, Object> wire
 ) {
     Map<String, Object> view() {

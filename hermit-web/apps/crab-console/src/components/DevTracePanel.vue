@@ -117,6 +117,14 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
               <dt>响应体</dt>
               <dd><JsonBlock :value="step.responseBody" /></dd>
             </template>
+            <template v-if="step.warnings?.length">
+              <dt>警告</dt>
+              <dd>
+                <ul>
+                  <li v-for="(warning, index) in step.warnings" :key="index">{{ warning.message }}</li>
+                </ul>
+              </dd>
+            </template>
             <template v-if="step.extractors?.length">
               <dt>提取</dt>
               <dd>{{ step.extractors.join('、') }}</dd>

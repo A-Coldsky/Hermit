@@ -9,9 +9,19 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.cert.X509Certificate;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -30,6 +40,7 @@ import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.sync.LocalConchBehaviorTest;
 import dev.hermit.crab.testing.LabCertificates;
 import dev.hermit.crab.testing.LocalHttps;
+import dev.hermit.crab.tls.HostPins;
 import dev.hermit.crab.tls.OutboundTls;
 import dev.hermit.crab.tls.TransportFailure;
 import dev.hermit.crab.tls.TrustCert;
@@ -158,6 +169,169 @@ class TlsConsoleTest {
                     "TLS_HOST_TRUSTED", "TLS_HOST_REMOVED", "TLS_CA_ADDED", "TLS_RELOADED", "TLS_CA_REMOVED");
             assertThat(server.console("GET", "/console/api/tls/trust", null, false).status()).isEqualTo(403);
         }
+    }
+
+    @Test
+    void caAuditRecordsEachCertificateSubjectAndFingerprint() throws Exception {
+        LabCertificates.Material certs = LabCertificates.generate(temp.resolve("certs"));
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("home"), "HermitTlsAudit-91ab", config)) {
+            String pem = TrustCert.pem(certs.root()) + TrustCert.pem(certs.intermediate());
+            TestServer.Reply imported = server.console(
+                    "POST", "/console/api/tls/ca", body("name", "bundle.pem", "pem", pem), true);
+            assertThat(imported.status()).as(imported.body()).isEqualTo(200);
+
+            JsonNode added = ApiJson.tree(auditDetail(server, "TLS_CA_ADDED", "bundle.pem"));
+            assertThat(added.get("file").asText()).isEqualTo("bundle.pem");
+            assertThat(added.get("fields").get(0).asText()).isEqualTo("bundle.pem");
+            assertThat(fingerprints(added.get("certificates"))).containsExactly(
+                    TrustCert.sha256(certs.root()), TrustCert.sha256(certs.intermediate()));
+            assertThat(subjects(added.get("certificates"))).containsExactly(
+                    TrustCert.of(certs.root()).subject(), TrustCert.of(certs.intermediate()).subject());
+
+            TestServer.Reply deleted = server.console("DELETE", "/console/api/tls/ca/bundle.pem", null, true);
+            assertThat(deleted.json().get("data").get("deleted").asBoolean()).isTrue();
+            JsonNode removed = ApiJson.tree(auditDetail(server, "TLS_CA_REMOVED", "bundle.pem"));
+            assertThat(fingerprints(removed.get("certificates"))).containsExactly(
+                    TrustCert.sha256(certs.root()), TrustCert.sha256(certs.intermediate()));
+            assertThat(subjects(removed.get("certificates"))).containsExactly(
+                    TrustCert.of(certs.root()).subject(), TrustCert.of(certs.intermediate()).subject());
+
+            Files.writeString(server.paths.trustCa().resolve("broken.pem"), "not a certificate");
+            TestServer.Reply broken = server.console("DELETE", "/console/api/tls/ca/broken.pem", null, true);
+            assertThat(broken.json().get("data").get("deleted").asBoolean()).isTrue();
+            JsonNode skipped = ApiJson.tree(auditDetail(server, "TLS_CA_REMOVED", "broken.pem"));
+            assertThat(skipped.get("certificates")).isEmpty();
+        }
+    }
+
+    @Test
+    void notYetValidLeafIsRefusedAndAPinStillFailsTheHandshake() throws Exception {
+        LabCertificates.Material certs = LabCertificates.generate(temp.resolve("certs"));
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("home"), "HermitTlsEarly-91ab", config);
+             LocalHttps https = LocalHttps.start(
+                     new X509Certificate[] {certs.notYetValid()}, certs.leafKey())) {
+            register(server, "tls_early", https.url());
+            TestServer.Reply probed = server.console(
+                    "POST", "/console/api/tls/probe", body("host", "127.0.0.1", "port", https.port()), true);
+            assertThat(probed.status()).as(probed.body()).isEqualTo(200);
+            String sha = probed.json().get("data").get("chain").get(0).get("sha256").asText();
+            assertThat(sha).isEqualTo(TrustCert.sha256(certs.notYetValid()));
+
+            TestServer.Reply refused = server.console(
+                    "POST", "/console/api/tls/trusted-hosts",
+                    body("host", "127.0.0.1", "port", https.port(), "sha256", sha),
+                    true);
+            assertThat(refused.status()).isEqualTo(400);
+            assertThat(refused.json().get("error").get("message").asText()).contains("尚未生效");
+
+            OutboundTls.current().setPins(pin("127.0.0.1", https.port(), sha));
+            try (CloseableHttpClient apache = apache()) {
+                TransportFailure.View handshake = failure(apache, https.url(), https.port());
+                assertThat(handshake.kind()).isEqualTo(TransportFailure.Kind.TLS_EXPIRED);
+                assertThat(handshake.message()).contains("尚未生效");
+            }
+        }
+    }
+
+    @Test
+    void concurrentTrustAndRemoveStillDropsSessions() throws Exception {
+        LabCertificates.Material certs = LabCertificates.generate(temp.resolve("certs"));
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("home"), "HermitTlsRace-91ab", config);
+             LocalHttps primary = LocalHttps.start(
+                     new X509Certificate[] {certs.leaf(), certs.root()}, certs.leafKey());
+             LocalHttps other = LocalHttps.start(
+                     new X509Certificate[] {certs.leaf(), certs.root()}, certs.leafKey())) {
+            primary.use(new X509Certificate[] {certs.leaf(), certs.root()}, certs.leafKey(), true);
+            register(server, "tls_primary", primary.url());
+            register(server, "tls_other", other.url());
+            String primarySha = probeSha(server, primary.port());
+            String otherSha = probeSha(server, other.port());
+
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try (CloseableHttpClient apache = apache()) {
+                for (int attempt = 0; attempt < 8; attempt++) {
+                    server.runtime.tlsTrust().trustHost("127.0.0.1", primary.port(), primarySha);
+                    assertThat(status(apache, primary.url())).isEqualTo(200);
+                    CyclicBarrier barrier = new CyclicBarrier(2);
+                    Future<Map<String, Object>> removed = pool.submit(() -> {
+                        await(barrier);
+                        return server.runtime.tlsTrust().removeHost("127.0.0.1", primary.port());
+                    });
+                    Future<Map<String, Object>> trusted = pool.submit(() -> {
+                        await(barrier);
+                        return server.runtime.tlsTrust().trustHost("127.0.0.1", other.port(), otherSha);
+                    });
+                    assertThat(removed.get(10, TimeUnit.SECONDS).get("deleted")).isEqualTo(true);
+                    assertThat(trusted.get(10, TimeUnit.SECONDS).get("port")).isEqualTo(other.port());
+                    TransportFailure.View again = failure(apache, primary.url(), primary.port());
+                    assertThat(again.kind()).isEqualTo(TransportFailure.Kind.TLS_UNTRUSTED);
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+    }
+
+    private static String probeSha(TestServer server, int port) throws Exception {
+        TestServer.Reply probed = server.console(
+                "POST", "/console/api/tls/probe", body("host", "127.0.0.1", "port", port), true);
+        assertThat(probed.status()).as(probed.body()).isEqualTo(200);
+        return probed.json().get("data").get("chain").get(0).get("sha256").asText();
+    }
+
+    private static void register(TestServer server, String name, String url) {
+        String yaml = LocalConchBehaviorTest.ping(name, "1.0.0")
+                .replace("base_url: http://127.0.0.1:9/", "base_url: " + url);
+        server.runtime.registry().put(ConchParser.parse(yaml));
+    }
+
+    private static void await(CyclicBarrier barrier) {
+        try {
+            barrier.await(10, TimeUnit.SECONDS);
+        } catch (Exception ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private static HostPins pin(String host, int port, String sha256) {
+        String key = host + ":" + port;
+        HostPins.Pin pinned = new HostPins.Pin(sha256, null);
+        return new HostPins() {
+            @Override
+            public HostPins.Pin find(String candidate, int candidatePort) {
+                return (candidate + ":" + candidatePort).equals(key) ? pinned : null;
+            }
+
+            @Override
+            public Set<String> keys() {
+                return Set.of(key);
+            }
+        };
+    }
+
+    private static String auditDetail(TestServer server, String kind, String target) throws Exception {
+        try (Connection connection = server.runtime.dataSource().getConnection();
+             PreparedStatement statement = connection.prepareStatement("""
+                     SELECT detail FROM config_audit WHERE kind = ? AND target = ? ORDER BY id DESC
+                     """)) {
+            statement.setString(1, kind);
+            statement.setString(2, target);
+            try (ResultSet rows = statement.executeQuery()) {
+                assertThat(rows.next()).isTrue();
+                return rows.getString(1);
+            }
+        }
+    }
+
+    private static List<String> fingerprints(JsonNode certificates) {
+        return names(certificates, "sha256");
+    }
+
+    private static List<String> subjects(JsonNode certificates) {
+        return names(certificates, "subject");
     }
 
     private static CloseableHttpClient apache() {

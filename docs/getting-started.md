@@ -85,7 +85,11 @@ CP="hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT.jar:$(cat hermit-crab/target/c
 java -cp "$CP" dev.hermit.crab.CrabMain serve
 ```
 
-浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。Crab 启动时后台同步目录。新装默认不订阅，未订阅的规则包不会下载安装。可在本机控制台「可订阅规则包」页点「订阅」，或用下面的订阅接口安装；同步失败不一定导致进程退出，应检查返回的各 Conch 结果。Reef 连不上时，手动同步返回 502 `UPSTREAM_ERROR`，并在同步状态里留下失败原因，而不是继续显示上次成功。
+浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。
+
+内网 HTTPS 的信任在 Crab 本机控制台管理。打开 `http://127.0.0.1:7777/console/`，进入「连接 Reef」旁边的「HTTPS 信任」。那里可以看到 JDK、操作系统和附加 CA 目录各有多少张证书，也可以粘贴或选择 PEM 导入颁发者，或者先检测规则、MCP 上游和 Reef 用到的地址，再确认只信任这张证书。API Key 和 MCP 不能添加信任。
+
+Crab 启动时后台同步目录。新装默认不订阅，未订阅的规则包不会下载安装。可在本机控制台「可订阅规则包」页点「订阅」，或用下面的订阅接口安装；同步失败不一定导致进程退出，应检查返回的各 Conch 结果。Reef 连不上时，手动同步返回 502 `UPSTREAM_ERROR`，并在同步状态里留下失败原因，而不是继续显示上次成功。
 
 ## 5. 同步、创建账号/API Key、配置老系统
 

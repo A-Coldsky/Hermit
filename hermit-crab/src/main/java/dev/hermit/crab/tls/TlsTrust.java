@@ -62,6 +62,8 @@ public final class TlsTrust {
     private final Path caDir;
     private final boolean systemTrust;
     private final BiPredicate<String, Integer> allowed;
+    /** 导入、删除、重新加载、登记和取消共用，避免两次 setPins 把「少了一条信任」比较丢了。 */
+    private final Object mutation = new Object();
 
     public TlsTrust(
             OutboundTls tls,
@@ -110,6 +112,12 @@ public final class TlsTrust {
     }
 
     public Map<String, Object> importCa(String name, String pem) {
+        synchronized (mutation) {
+            return importCaLocked(name, pem);
+        }
+    }
+
+    private Map<String, Object> importCaLocked(String name, String pem) {
         String file = fileName(name);
         byte[] bytes = pem == null ? new byte[0] : pem.getBytes(StandardCharsets.UTF_8);
         if (CaDirectory.containsPrivateKey(bytes)) {
@@ -130,30 +138,41 @@ public final class TlsTrust {
             reloadSnapshot();
             throw new IllegalArgumentException(errorFor(file));
         }
-        audit(AuditKind.TLS_CA_ADDED, file, detail("file", file, "fields", List.of(file)));
+        audit(AuditKind.TLS_CA_ADDED, file, detail(
+                "file", file,
+                "fields", List.of(file),
+                "certificates", certificateDetails(parsed)));
         return view();
     }
 
     public Map<String, Object> deleteCa(String name) {
-        String file = fileName(name);
-        Path target = directory().resolve(file);
-        boolean deleted;
-        try {
-            deleted = Files.deleteIfExists(target);
-        } catch (java.io.IOException ex) {
-            throw new IllegalArgumentException("读不到目录");
+        synchronized (mutation) {
+            String file = fileName(name);
+            Path target = directory().resolve(file);
+            List<Map<String, Object>> certificates = certificatesIn(target);
+            boolean deleted;
+            try {
+                deleted = Files.deleteIfExists(target);
+            } catch (java.io.IOException ex) {
+                throw new IllegalArgumentException("读不到目录");
+            }
+            if (deleted) {
+                reloadSnapshot();
+                audit(AuditKind.TLS_CA_REMOVED, file, detail(
+                        "file", file,
+                        "fields", List.of(file),
+                        "certificates", certificates));
+            }
+            return Map.of("deleted", deleted);
         }
-        if (deleted) {
-            reloadSnapshot();
-            audit(AuditKind.TLS_CA_REMOVED, file, detail("file", file, "fields", List.of(file)));
-        }
-        return Map.of("deleted", deleted);
     }
 
     public Map<String, Object> reload() {
-        reloadSnapshot();
-        audit(AuditKind.TLS_RELOADED, "tls", detail("fields", List.of()));
-        return view();
+        synchronized (mutation) {
+            reloadSnapshot();
+            audit(AuditKind.TLS_RELOADED, "tls", detail("fields", List.of()));
+            return view();
+        }
     }
 
     public Map<String, Object> probe(String host, int port) {
@@ -193,6 +212,12 @@ public final class TlsTrust {
     }
 
     public Map<String, Object> trustHost(String host, int port, String sha256) {
+        synchronized (mutation) {
+            return trustHostLocked(host, port, sha256);
+        }
+    }
+
+    private Map<String, Object> trustHostLocked(String host, int port, String sha256) {
         Endpoint endpoint = endpoint(host, port);
         requireAllowed(endpoint);
         String fingerprint = fingerprint(sha256);
@@ -229,17 +254,19 @@ public final class TlsTrust {
     }
 
     public Map<String, Object> removeHost(String host, int port) {
-        Endpoint endpoint = endpoint(host, port);
-        boolean deleted = hosts.delete(endpoint.host(), endpoint.port());
-        if (deleted) {
-            tls.setPins(hosts);
-            String address = endpoint.host() + ":" + endpoint.port();
-            audit(AuditKind.TLS_HOST_REMOVED, address, detail(
-                    "host", endpoint.host(),
-                    "port", endpoint.port(),
-                    "fields", List.of(address)));
+        synchronized (mutation) {
+            Endpoint endpoint = endpoint(host, port);
+            boolean deleted = hosts.delete(endpoint.host(), endpoint.port());
+            if (deleted) {
+                tls.setPins(hosts);
+                String address = endpoint.host() + ":" + endpoint.port();
+                audit(AuditKind.TLS_HOST_REMOVED, address, detail(
+                        "host", endpoint.host(),
+                        "port", endpoint.port(),
+                        "fields", List.of(address)));
+            }
+            return Map.of("deleted", deleted);
         }
-        return Map.of("deleted", deleted);
     }
 
     public Map<String, Object> failures() {
@@ -477,6 +504,41 @@ public final class TlsTrust {
 
     private void audit(AuditKind kind, String target, Map<String, Object> detail) {
         AuditLog.record(dataSource, Actors.CONSOLE, kind, target, ApiJson.write(detail));
+    }
+
+    private static List<Map<String, Object>> certificatesIn(Path target) {
+        try {
+            if (!Files.isRegularFile(target) || Files.size(target) > CaDirectory.MAX_FILE_BYTES) {
+                return List.of();
+            }
+            byte[] bytes = Files.readAllBytes(target);
+            if (CaDirectory.containsPrivateKey(bytes)) {
+                return List.of();
+            }
+            return certificateDetails(parseQuiet(bytes));
+        } catch (java.io.IOException ex) {
+            return List.of();
+        }
+    }
+
+    private static List<X509Certificate> parseQuiet(byte[] bytes) {
+        try {
+            return parse("", bytes);
+        } catch (IllegalArgumentException ex) {
+            return List.of();
+        }
+    }
+
+    private static List<Map<String, Object>> certificateDetails(List<X509Certificate> certificates) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (X509Certificate certificate : certificates) {
+            TrustCert view = TrustCert.of(certificate);
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("subject", view.subject());
+            row.put("sha256", view.sha256());
+            rows.add(row);
+        }
+        return List.copyOf(rows);
     }
 
     private static Map<String, Object> detail(Object... pairs) {

@@ -288,7 +288,7 @@ Conch 列表和详情的包级 `needsConfiguration` 用同一套计算：账号�
 
 证书链上每张证书有 `subject`、`issuer`、`sha256`、`notBefore`、`notAfter`、`ca`。控制台这条链另外带 `pem`，便于导入颁发者。开发追踪里的 `transport.chain` 不带 `pem`。`loadErrors` 的每一项是 `{file, message}`。文件级错误的 `file` 是文件名，`message` 不再重复文件名；来源级错误的 `file` 为 null。`caFiles` 的每一项是 `{name, certificates, error}`，成功载入的文件 `error` 为 null。
 
-审计种类：`TLS_CA_ADDED`、`TLS_CA_REMOVED`、`TLS_RELOADED`、`TLS_HOST_TRUSTED`、`TLS_HOST_REMOVED`。actor 为 `console`。detail 记下文件名，或 `host`、`port` 和 `sha256`。读取审计时不返回 detail 原文；`fields` 里是文件名或 `host:port`。这些行的 `origin`、`conch`、`account` 为 null。
+审计种类：`TLS_CA_ADDED`、`TLS_CA_REMOVED`、`TLS_RELOADED`、`TLS_HOST_TRUSTED`、`TLS_HOST_REMOVED`。actor 为 `console`。导入、删除、重新加载、登记和取消串行执行。CA 的 detail 记下文件名，以及 `certificates`：文件里每张证书的 `subject` 和 `sha256`。删除前先读出证书。主机登记的 detail 记下 `host`、`port` 和 `sha256`。读取审计时不返回 detail 原文；`fields` 里是文件名或 `host:port`。这些行的 `origin`、`conch`、`account` 为 null。
 
 指纹表是 Crab schema 17 `tls_trusted_hosts`。已有库只加这张空表，不回填。最多 256 行。
 

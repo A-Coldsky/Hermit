@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -566,7 +567,7 @@ class ConnectionBehaviorTest {
     ) {
         return HttpCalls.execute(
                 spec(method, timeoutMs), client, () -> { }, java.net.URI.create(base), null,
-                System.nanoTime() + TimeUnit.SECONDS.toNanos(20), idle);
+                System.nanoTime() + TimeUnit.SECONDS.toNanos(20), Set.of(), idle);
     }
 
     private static RuleProblem failure(

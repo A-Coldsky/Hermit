@@ -95,6 +95,76 @@ secure_key_url() {
     return 1
 }
 
+# --cacert 会替换 curl 的默认信任库，所以有附加证书时把系统 CA 包和 trust/ca 拼在一起。
+# 没有附加证书就不传 --cacert。首次取公钥时通常还没有 config.yml，这时只用默认目录。
+prepare_ca_bundle() {
+    ca_bundle=""
+    ca_curl=""
+    dir="$home/trust/ca"
+    if [ -f "$home/config.yml" ]; then
+        configured=$(awk '
+            /^[[:space:]]*#/ { next }
+            /^tls:[[:space:]]*$/ { tls=1; next }
+            tls && /^[^[:space:]#]/ { tls=0 }
+            tls && /^[[:space:]]+ca_dir:[[:space:]]*/ {
+                line=$0
+                sub(/^[[:space:]]+ca_dir:[[:space:]]*/, "", line)
+                gsub(/^["'\'']|["'\'']$/, "", line)
+                gsub(/[[:space:]]+$/, "", line)
+                print line
+                exit
+            }
+        ' "$home/config.yml")
+        if [ -n "$configured" ]; then
+            case "$configured" in
+                /*) dir="$configured" ;;
+                *) dir="$home/$configured" ;;
+            esac
+        fi
+    fi
+    [ -d "$dir" ] || return 0
+    found=0
+    for file in "$dir"/*; do
+        [ -f "$file" ] || continue
+        base=$(basename "$file" | tr 'A-Z' 'a-z')
+        case "$base" in
+            *.pem|*.crt|*.cer) found=1 ;;
+        esac
+    done
+    [ "$found" -eq 1 ] || return 0
+    ca_bundle=$(mktemp)
+    system=""
+    for candidate in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+        if [ -f "$candidate" ]; then
+            system="$candidate"
+            break
+        fi
+    done
+    if [ -n "$system" ]; then
+        cat "$system" > "$ca_bundle"
+    else
+        : > "$ca_bundle"
+    fi
+    for file in "$dir"/*; do
+        [ -f "$file" ] || continue
+        base=$(basename "$file" | tr 'A-Z' 'a-z')
+        case "$base" in
+            *.pem|*.crt|*.cer)
+                printf '\n' >> "$ca_bundle"
+                cat "$file" >> "$ca_bundle"
+                ;;
+        esac
+    done
+    ca_curl="--cacert $ca_bundle"
+}
+
+cleanup_ca_bundle() {
+    if [ -n "${ca_bundle:-}" ]; then
+        rm -f "$ca_bundle"
+        ca_bundle=""
+    fi
+}
+
 fetch_pub() {
     if [ -z "${HERMIT_REEF_ADMIN_USER:-}" ] || [ -z "${HERMIT_REEF_ADMIN_PASSWORD:-}" ]; then
         echo "还没有 reef.pub。设置 HERMIT_REEF_PUBLIC_KEY_FILE，或提供 HERMIT_REEF_ADMIN_USER 和 HERMIT_REEF_ADMIN_PASSWORD 以便登录 Reef 获取签名公钥。" >&2
@@ -107,6 +177,7 @@ fetch_pub() {
         fi
         echo "警告：经明文 HTTP 从 ${reef_url} 取签名公钥（HERMIT_REEF_ALLOW_INSECURE_KEY_FETCH=1）。" >&2
     fi
+    prepare_ca_bundle
     echo "waiting for reef login at ${reef_url}"
     login_token=""
     attempt=0
@@ -115,7 +186,7 @@ fetch_pub() {
             --arg username "$HERMIT_REEF_ADMIN_USER" \
             --arg password "$HERMIT_REEF_ADMIN_PASSWORD" \
             '{username:$username,password:$password}')
-        if response=$(curl -fsS --max-time 10 -X POST "${reef_url}/api/admin/login" \
+        if response=$(curl -fsS --max-time 10 $ca_curl -X POST "${reef_url}/api/admin/login" \
             -H 'Content-Type: application/json' \
             -d "$body"); then
             login_token=$(printf '%s' "$response" | jq -r '.data.token // empty')
@@ -128,25 +199,29 @@ fetch_pub() {
         sleep 2
     done
     if [ -z "$login_token" ]; then
+        cleanup_ca_bundle
         echo "reef login did not succeed" >&2
         exit 1
     fi
 
     tmp_key=$(mktemp)
-    if ! curl -fsS --max-time 10 "${reef_url}/api/admin/signing-key" \
+    if ! curl -fsS --max-time 10 $ca_curl "${reef_url}/api/admin/signing-key" \
         -H "Authorization: Bearer ${login_token}" \
         | jq -er '.data.publicKey' > "$tmp_key"; then
         rm -f "$tmp_key"
+        cleanup_ca_bundle
         echo "could not read reef signing key" >&2
         exit 1
     fi
     if ! is_pem "$tmp_key"; then
         rm -f "$tmp_key"
+        cleanup_ca_bundle
         echo "reef signing key was not a PEM" >&2
         exit 1
     fi
     mv "$tmp_key" "$home/reef.pub"
     chmod 644 "$home/reef.pub"
+    cleanup_ca_bundle
 }
 
 if [ -n "${HERMIT_CRAB_INSTANCE_ID:-}" ]; then

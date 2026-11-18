@@ -491,7 +491,17 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             case DEADLINE -> logged(request, doc, tool, started, 0, false, null, ErrorCode.TIMEOUT, DEADLINE, null);
             case UPSTREAM_TIMEOUT -> logged(request, doc, tool, started, 0, false, null, ErrorCode.UPSTREAM_ERROR, UPSTREAM_TIMEOUT, null);
             case TOO_LARGE -> logged(request, doc, tool, started, 0, false, null, ErrorCode.UPSTREAM_ERROR, TOO_LARGE, null);
-            case CONNECT -> logged(request, doc, tool, started, 0, false, null, ErrorCode.UPSTREAM_ERROR, CONNECT_FAILED, null);
+            case CONNECT -> logged(
+                    request,
+                    doc,
+                    tool,
+                    started,
+                    0,
+                    false,
+                    null,
+                    ErrorCode.UPSTREAM_ERROR,
+                    result.detail() == null || result.detail().isBlank() ? CONNECT_FAILED : result.detail(),
+                    null);
             case ADDRESS -> logged(request, doc, tool, started, 0, false, null, ErrorCode.UPSTREAM_ERROR, ADDRESS_DENIED, null);
             case PROTOCOL -> logged(request, doc, tool, started, result.status(), false, null, ErrorCode.UPSTREAM_ERROR, BAD_PROTOCOL, null);
             case LOST, NOT_FOUND -> logged(request, doc, tool, started, 404, false, null, ErrorCode.UPSTREAM_ERROR, SESSION_LOST, null);

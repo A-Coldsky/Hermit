@@ -1,10 +1,9 @@
 package dev.hermit.crab.sync;
 
-import java.net.UnknownHostException;
-import java.net.http.HttpTimeoutException;
 import java.util.Optional;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.crab.tls.TransportFailure;
 
 /**
  * Maps Reef transport failures, and a manifest 401 or 403, to a stable console error. Any other
@@ -31,11 +30,15 @@ final class SyncErrors {
             return Optional.empty();
         }
         Throwable cause = ex.getCause();
-        if (cause instanceof HttpTimeoutException) {
+        if (TransportFailure.isTimeout(cause)) {
             return Optional.of(upstream("连接 Reef 超时。请确认本机到 Reef 的网络，以及 Reef 正在运行，然后再次同步。"));
         }
-        if (cause instanceof UnknownHostException) {
+        if (TransportFailure.isDns(cause)) {
             return Optional.of(upstream("无法解析 Reef 地址。请检查 config.yml 的 reef.url，然后再次同步。"));
+        }
+        TransportFailure.View view = TransportFailure.classify(cause, null, -1);
+        if (view.kind().name().startsWith("TLS_")) {
+            return Optional.of(upstream(view.message()));
         }
         return Optional.of(upstream("无法连接 Reef。请确认 Reef 已启动、reef.url 可从本机访问，然后再次同步。"));
     }

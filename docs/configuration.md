@@ -23,6 +23,8 @@
 | `engine.session_idle_minutes` | `10` | 空闲超过此阈值且配置 alive_check 时检测会话 |
 | `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；只有测试登录成功才解除，失败不会清掉暂停 |
 | `engine.mcp_max_concurrency_per_account` | `4` | 整数 1–32。每个 `(origin, conch, account)` 同时进行的上游 `tools/call` 上限。启动时读取，不热更新。排队也算进能力 deadline |
+| `tls.system_trust` | `true` | 为 true 时，出站 HTTPS 在 JDK 默认信任库之外再合并操作系统信任库。false 只停用操作系统来源，JDK 信任库仍在。没有跳过证书校验的开关 |
+| `tls.ca_dir` | `$HERMIT_HOME/trust/ca` | 附加 CA 目录。省略或空白用默认目录，启动时创建。相对路径相对 HERMIT_HOME。只读 `.pem`、`.crt`、`.cer`，坏文件跳过，不阻止启动 |
 
 上游 OAuth 的访问令牌和刷新令牌不写在这份文件里。它们在凭证库的 `oauth_token` 字段，按 `(origin, conch, account)` 分开保存，由控制台登录写入。源站若还要客户端机密，在规则包里声明 `credentials.client_secret`，值仍进凭证库，不进 YAML。
 
@@ -47,11 +49,28 @@ engine:
   mcp_max_concurrency_per_account: 4
 mcp:
   allowed_origins: []
+tls:
+  system_trust: true
+  ca_dir: trust/ca
 ```
 
 此例的 disabled 项是路径格式示意，示例 Conch 中不包含 submit_leave。别名仍使用相同的 API Key、账号和能力权限；重启后读取新别名。
 
 `mcp.allowed_origins` 是 `/mcp` 的额外 Origin 允许列表，默认空。每一项必须是绝对的 `http` 或 `https` 源站，不能带路径、查询、用户信息或片段；写错会拒绝启动。没有 `Origin` 头的客户端仍然允许。本机始终允许 `http://127.0.0.1:<实际监听端口>`、`http://localhost:<实际监听端口>` 和 `http://[::1]:<实际监听端口>`，以及 `http://<server.host>:<实际监听端口>`。`server.host` 为 `0.0.0.0` 或 `::` 时不把通配地址当成源站；从局域网浏览器打开时，把浏览器地址栏对应的源站写进这个列表。反向代理的 `https://` 源站同样写在这里。比较时忽略 scheme 和主机的大小写，80 和 443 可以省略。请求如何被拒绝见[接口参考](api.md)的 MCP 一节。缺 `Origin` 是否拒绝、以及 `initialize` 遇到不认识的 `protocolVersion` 是协商还是拒绝，由 `McpTransportPolicy` 里的两个常量决定，当前分别是允许和协商。
+
+## 内网 HTTPS
+
+规则 HTTP、MCP 转发、MCP OAuth、Reef 同步、上报和引导探测共用一个 TLS 上下文。信任材料是 JDK 默认信任库、操作系统信任库，再加上 `tls.ca_dir` 里的证书。重新加载只替换这份快照，不重建客户端，也不清 Cookie。删掉信任锚时清掉 TLS 会话，并关掉 Apache 的空闲连接。`java.net.http` 没有公开的空闲连接池，会话失效是它能用的手段。
+
+操作系统来源：Windows 读 `Windows-ROOT` 和 `Windows-MY` 里的 CA，macOS 读钥匙串里的 CA，Linux 读系统 CA 包（`/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` 中第一个存在的文件）。加载失败只打一条警告，Crab 仍启动。`tls.system_trust: false` 不再读操作系统来源。
+
+附加目录只接受 `.pem`、`.crt`、`.cer`（大小写不限）。一个文件可以有多张证书。单文件最大 64 KiB，最多 64 个文件、256 张证书。含私钥的文件整份跳过。不是 CA 的证书也可以当信任锚，加载结果会标成非 CA。坏文件单独跳过。启动时加载一次，不监视目录，也不按 AIA 下载中间证书。
+
+没有 `insecure_skip_verify`，规则包里也不能关校验。连不上时错误码仍是 `UPSTREAM_ERROR`（超时仍走原来的超时分支），message 会说明是 DNS、拒绝连接、证书不受信任、缺中间证书、主机名不符、过期或其它握手失败。
+
+容器入口用 curl 取 Reef 签名公钥。CA 目录里有证书时，把系统 CA 包和这些证书拼成临时 bundle，再传 `--cacert`（这个参数会替换 curl 的默认信任库，所以必须带上系统包）。没有附加证书时不传 `--cacert`。首次取公钥时通常还没有 `config.yml`，这时用 `$HERMIT_HOME/trust/ca`。已经有配置且写了 `tls.ca_dir` 时，用那个目录。
+
+控制台「HTTPS 信任」页、按主机登记指纹、探测和 `crab trust` 命令不在这一轮。快照里已经按 JDK、操作系统、CA 目录分开计数，供后续接口使用。
 
 `HERMIT_MASTER_KEY` 优先于 `data/master.key`。值必须是 Base64，解码后恰好 32 字节。非法值在启动时报可读原因（不是合法 Base64，或长度不是 32 字节），不会改用文件里的密钥，也不会只打印异常类名。未设置环境变量、也没有 key-file 时：数据目录还没有凭证密文，才会创建 `data/master.key`（POSIX 0600）；已经有凭证但主密钥文件缺失，则拒绝启动并且不生成新密钥，避免旧密文变成无法打开的 500。恢复原来的 `data/master.key` 后重启即可。确认放弃旧凭证时，删除 `data` 目录中的数据库后再启动，这时才按全新安装生成主密钥，然后重新填写账号凭证。已有合法主密钥但解不开已存凭证时，进程仍会启动并在日志里提示；账号 `needsConfiguration` 为 true，`credentialsUnreadable` 为 true，调用返回 `NOT_CONFIGURED` 和「凭证无法解密，需重新配置」。把该账号的凭证字段重新写一遍后恢复。库内部支持 key-file 参数，但当前 CLI 没有暴露该选项；`HERMIT_MASTER_KEY_FILE` 是容器入口脚本的复制功能，不是 Java 配置项。不要更换密钥后期待旧凭证仍能解密。
 
@@ -160,6 +179,7 @@ Crab HERMIT_HOME/
   conches/<conch>/current   # 已安装版本指针；订阅记录在 H2，不在此目录
   conches/<conch>/<version>/
   local-conches/          # 本机未签名规则，文件名 {conch}.yaml；启动加载，reload 与目录对齐
+  trust/ca/               # 附加 CA，默认目录；tls.ca_dir 可以改到别处
   logs/                 # 预留目录；调用日志实际存 H2
 ```
 

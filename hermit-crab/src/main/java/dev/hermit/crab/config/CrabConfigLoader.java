@@ -24,7 +24,7 @@ import dev.hermit.crab.store.CrabPaths;
 public final class CrabConfigLoader {
     private static final long MAX_BYTES = 1_000_000L;
     private static final Set<String> ROOT = Set.of(
-            "reef", "server", "sync", "report", "capabilities", "aliases", "engine", "mcp");
+            "reef", "server", "sync", "report", "capabilities", "aliases", "engine", "mcp", "tls");
     private static final Set<String> REEF = Set.of("url", "token", "public_key");
     private static final Set<String> SERVER = Set.of("host", "port");
     private static final Set<String> SYNC = Set.of("interval_seconds");
@@ -34,6 +34,7 @@ public final class CrabConfigLoader {
             "capability_timeout_seconds", "session_idle_minutes", "max_login_failures",
             "mcp_max_concurrency_per_account");
     private static final Set<String> MCP = Set.of("allowed_origins");
+    private static final Set<String> TLS = Set.of("ca_dir", "system_trust");
 
     private static final YAMLMapper YAML = yaml();
 
@@ -86,6 +87,7 @@ public final class CrabConfigLoader {
         JsonNode capabilities = object(file, root, "capabilities", CAPABILITIES);
         JsonNode engine = object(file, root, "engine", ENGINE);
         JsonNode mcp = object(file, root, "mcp", MCP);
+        JsonNode tls = object(file, root, "tls", TLS);
         CrabConfig defaults = CrabConfig.defaults();
         try {
             return new CrabConfig(
@@ -108,7 +110,9 @@ public final class CrabConfigLoader {
                             defaults.maxLoginFailures(), 1, Integer.MAX_VALUE),
                     origins(file, mcp),
                     integer(file, engine, "mcp_max_concurrency_per_account", "engine.mcp_max_concurrency_per_account",
-                            defaults.mcpMaxConcurrencyPerAccount(), 1, 32));
+                            defaults.mcpMaxConcurrencyPerAccount(), 1, 32),
+                    text(file, tls, "ca_dir", "tls.ca_dir"),
+                    bool(file, tls, "system_trust", "tls.system_trust", defaults.tlsSystemTrust()));
         } catch (IllegalArgumentException ex) {
             throw new ConfigFileException(file + ": " + ex.getMessage());
         }

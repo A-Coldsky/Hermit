@@ -47,6 +47,7 @@ import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ConchRejectedException;
 import dev.hermit.crab.store.AccountNotFoundException;
+import dev.hermit.crab.tls.OutboundTls;
 import dev.hermit.crab.store.AccountStore;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.AuditKind;
@@ -136,7 +137,7 @@ public final class ConchSync {
             this.disabledConches.load();
         }
         this.clock = clock;
-        this.client = HttpClient.newBuilder()
+        this.client = OutboundTls.current().httpClientBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();

@@ -2,11 +2,20 @@ package dev.hermit.crab.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
 import java.net.ConnectException;
+import java.net.URI;
 import java.net.UnknownHostException;
+import java.net.http.HttpClient;
 import java.net.http.HttpConnectTimeoutException;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.nio.channels.UnresolvedAddressException;
+import java.time.Duration;
 import java.util.List;
+
+import javax.net.ssl.SSLHandshakeException;
 
 import org.junit.jupiter.api.Test;
 
@@ -42,6 +51,37 @@ class SyncExceptionTest {
         assertThat(new SyncException("reef request interrupted").clientError().orElseThrow().message())
                 .contains("中断")
                 .contains("再次同步");
+
+        ConnectException nestedDns = new ConnectException();
+        nestedDns.initCause(new UnresolvedAddressException());
+        SyncError unresolved = new SyncException("reef request failed", nestedDns).clientError().orElseThrow();
+        assertThat(unresolved.message()).contains("无法解析").contains("reef.url");
+        assertThat(unresolved.message()).doesNotContain("UnresolvedAddress");
+
+        IOException nestedTimeout = new IOException("timed out");
+        nestedTimeout.initCause(new HttpTimeoutException("request timed out"));
+        assertThat(new SyncException("reef request failed", nestedTimeout).clientError().orElseThrow().message())
+                .contains("超时");
+
+        SyncError handshake = new SyncException(
+                "reef request failed", new SSLHandshakeException("Missing Authority Key Identifier"))
+                .clientError()
+                .orElseThrow();
+        assertThat(handshake.message()).contains("TLS 握手失败").doesNotContain("无法连接 Reef");
+    }
+
+    @Test
+    void jdkHttpClientDnsFailureIsStillUnresolvable() throws Exception {
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://no-such-host.invalid/")).build();
+        try {
+            client.send(request, HttpResponse.BodyHandlers.discarding());
+            throw new AssertionError("expected a DNS failure");
+        } catch (java.io.IOException ex) {
+            assertThat(new SyncException("reef request failed", ex).clientError().orElseThrow().message())
+                    .contains("无法解析")
+                    .contains("reef.url");
+        }
     }
 
     @Test

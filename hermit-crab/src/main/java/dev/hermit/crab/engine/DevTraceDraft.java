@@ -37,7 +37,8 @@ public final class DevTraceDraft {
     private static final Logger LOG = Logger.getLogger(DevTraceDraft.class.getName());
     private static final Set<String> DROPPED_HEADERS = Set.of(
             "cookie", "set-cookie", "authorization", "mcp-session-id");
-    private static final Set<String> KEEP_TEXT = Set.of("note", "truncation", "type", "phase", "kind");
+    private static final Set<String> KEEP_TEXT = Set.of(
+            "note", "truncation", "type", "phase", "kind", "sha256");
     private static final List<String> SELECTORS = List.of("css", "xpath", "jsonpath", "regex");
     private static final Pattern JWT = Pattern.compile(
             "eyJ[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]{16,}\\.[A-Za-z0-9_-]{16,}\\.[A-Za-z0-9_-]{16,}");
@@ -534,7 +535,7 @@ public final class DevTraceDraft {
 
     private static Map<String, Object> exchangeOf(Map<String, Object> source) {
         LinkedHashMap<String, Object> exchange = new LinkedHashMap<>();
-        for (String field : List.of("method", "id", "httpStatus", "durationMs", "params", "result", "error")) {
+        for (String field : List.of("method", "id", "httpStatus", "durationMs", "params", "result", "error", "transport")) {
             if (source.containsKey(field)) {
                 exchange.put(field, source.get(field));
             }
@@ -558,7 +559,7 @@ public final class DevTraceDraft {
         if (!(raw instanceof List<?> list) || list.isEmpty() || !(list.get(list.size() - 1) instanceof Map<?, ?> last)) {
             return;
         }
-        for (String field : List.of("method", "id", "httpStatus", "durationMs", "params", "result", "error")) {
+        for (String field : List.of("method", "id", "httpStatus", "durationMs", "params", "result", "error", "transport")) {
             if (last.containsKey(field)) {
                 document.put(field, last.get(field));
             } else {

@@ -60,6 +60,11 @@ public final class CrabPaths {
         return directory("logs");
     }
 
+    /** 附加 CA 目录，默认 {@code $HERMIT_HOME/trust/ca}。不存在时创建。 */
+    public Path trustCa() {
+        return directory("trust/ca");
+    }
+
     /** H2 file database path without the {@code .mv.db} suffix. */
     public Path databaseFile() {
         return data().resolve("crab");

@@ -376,7 +376,7 @@ class CrabWiringTest {
     }
 
     private static CrabConfig config(String url, String pem, boolean reports) {
-        return new CrabConfig(url, null, pem, "127.0.0.1", 0, 30, reports, 60, List.of(), Map.of(), 60, 10, 3, List.of(), 4);
+        return new CrabConfig(url, null, pem, "127.0.0.1", 0, 30, reports, 60, List.of(), Map.of(), 60, 10, 3, List.of(), 4, null, true);
     }
 
     private static DataSource runtimeDataSource(CrabRuntime runtime) {

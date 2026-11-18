@@ -1,5 +1,6 @@
 package dev.hermit.crab.config;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -23,7 +24,9 @@ public record CrabConfig(
         int sessionIdleMinutes,
         int maxLoginFailures,
         List<String> mcpAllowedOrigins,
-        int mcpMaxConcurrencyPerAccount
+        int mcpMaxConcurrencyPerAccount,
+        String tlsCaDir,
+        boolean tlsSystemTrust
 ) {
     public CrabConfig {
         if (serverHost == null || serverHost.isBlank()) {
@@ -59,10 +62,18 @@ public record CrabConfig(
             requireAlias(alias.getKey(), alias.getValue());
         }
         mcpAllowedOrigins = normalizeOrigins(mcpAllowedOrigins);
+        if (tlsCaDir != null) {
+            tlsCaDir = tlsCaDir.strip();
+            if (tlsCaDir.isEmpty()) {
+                tlsCaDir = null;
+            }
+        }
     }
 
     public static CrabConfig defaults() {
-        return new CrabConfig(null, null, null, "127.0.0.1", 7777, 300, true, 1800, List.of(), Map.of(), 60, 10, 3, List.of(), 4);
+        return new CrabConfig(
+                null, null, null, "127.0.0.1", 7777, 300, true, 1800, List.of(), Map.of(), 60, 10, 3, List.of(), 4,
+                null, true);
     }
 
     public EngineSettings engineSettings() {
@@ -76,42 +87,53 @@ public record CrabConfig(
         return new CrabConfig(
                 url, token, publicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust);
     }
 
     public CrabConfig withListen(String host, int port) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, host, port, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust);
     }
 
     public CrabConfig withAliases(Map<String, String> aliasMap) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliasMap, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust);
     }
 
     public CrabConfig withDisabled(List<String> disabled) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabled, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust);
     }
 
     public CrabConfig withLimits(int capabilityTimeoutSeconds, int concurrencyPerAccount) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, concurrencyPerAccount);
+                maxLoginFailures, mcpAllowedOrigins, concurrencyPerAccount, tlsCaDir, tlsSystemTrust);
     }
 
     public CrabConfig withMcpAllowedOrigins(List<String> origins) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, origins, mcpMaxConcurrencyPerAccount);
+                maxLoginFailures, origins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust);
+    }
+
+    /** 空白或省略时用 {@code $HERMIT_HOME/trust/ca}。相对路径相对 HERMIT_HOME。 */
+    public Path tlsCaDirectory(Path home) {
+        Path base = home.toAbsolutePath().normalize();
+        if (tlsCaDir == null) {
+            return base.resolve("trust").resolve("ca");
+        }
+        Path configured = Path.of(tlsCaDir);
+        Path resolved = configured.isAbsolute() ? configured : base.resolve(configured);
+        return resolved.toAbsolutePath().normalize();
     }
 
     public static void requireAlias(String path, String target) {

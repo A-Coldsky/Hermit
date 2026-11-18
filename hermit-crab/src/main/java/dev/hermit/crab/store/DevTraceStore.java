@@ -90,6 +90,9 @@ public final class DevTraceStore {
             fields.put("params", trace.params());
             fields.put("result", trace.result());
             fields.put("error", trace.error());
+            if (trace.error() instanceof Map<?, ?> error && error.get("transport") instanceof Map<?, ?> transport) {
+                fields.put("transport", transport);
+            }
             String rendered = DevTraceDraft.renderJsonRpc(fields, Redactor.of(secrets));
             Db.transaction(dataSource, connection -> {
                 String prior = compatibleBody(connection, trace.traceId(), conch, account, action);

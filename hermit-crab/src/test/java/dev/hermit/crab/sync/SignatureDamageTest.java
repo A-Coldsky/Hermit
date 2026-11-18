@@ -314,6 +314,8 @@ class SignatureDamageTest {
                 10,
                 3,
                 List.of(),
-                4);
+                4,
+                null,
+                true);
     }
 }

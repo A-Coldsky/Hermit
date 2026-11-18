@@ -5,7 +5,9 @@ import java.util.Locale;
 import java.util.Set;
 
 import org.apache.hc.client5.http.HttpRequestRetryStrategy;
+import org.apache.hc.client5.http.protocol.HttpClientContext;
 import org.apache.hc.core5.concurrent.CancellableDependency;
+import org.apache.hc.core5.http.EndpointDetails;
 import org.apache.hc.core5.http.HttpRequest;
 import org.apache.hc.core5.http.HttpResponse;
 import org.apache.hc.core5.http.NoHttpResponseException;
@@ -15,9 +17,10 @@ import org.apache.hc.core5.util.TimeValue;
 import dev.hermit.crab.tls.TransportFailure;
 
 /**
- * 只在 GET、HEAD、OPTIONS 第一次撞上「对端没回响应」或连接被重置时再试一次。
- * 不重试 POST 和其他方法，也不看状态码，所以 503 和 429 不会重放。超时和已取消的请求也不重试。
- * {@code execCount} 从 1 开始，等于 1 才允许这一次重试。
+ * 只在 GET、HEAD、OPTIONS 复用一条已经发送过请求的连接，并且第一次撞上「对端没回响应」或连接被重置时再试一次。
+ * 新建立的连接上的失败不重试。不重试 POST 和其他方法，也不看状态码，所以 503 和 429 不会重放。
+ * 超时和已取消的请求也不重试。{@code execCount} 从 1 开始，等于 1 才允许这一次重试。
+ * 请求头写出后连接上的请求计数才加一，所以复用连接时 {@code requestCount > 1}。
  */
 public final class StaleConnectionRetry implements HttpRequestRetryStrategy {
 
@@ -38,6 +41,9 @@ public final class StaleConnectionRetry implements HttpRequestRetryStrategy {
         }
         String method = request.getMethod();
         if (method == null || !ONCE.contains(method.toUpperCase(Locale.ROOT))) {
+            return false;
+        }
+        if (!reused(context)) {
             return false;
         }
         return stale(exception);
@@ -63,6 +69,19 @@ public final class StaleConnectionRetry implements HttpRequestRetryStrategy {
             }
         }
         return false;
+    }
+
+    /**
+     * 这条连接在本次请求之前已经完成过至少一次请求。计数在请求头写出之后增加，
+     * 新连接失败时是 0 或 1，复用后再失败才大于 1。
+     */
+    private static boolean reused(HttpContext context) {
+        if (context == null) {
+            return false;
+        }
+        HttpClientContext client = HttpClientContext.adapt(context);
+        EndpointDetails details = client.getEndpointDetails();
+        return details != null && details.getRequestCount() > 1;
     }
 
     private static boolean stale(Throwable failure) {

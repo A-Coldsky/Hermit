@@ -24,7 +24,7 @@
 | `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；只有测试登录成功才解除，失败不会清掉暂停 |
 | `engine.mcp_max_concurrency_per_account` | `4` | 整数 1–32。每个 `(origin, conch, account)` 同时进行的上游 `tools/call` 上限。启动时读取，不热更新。排队也算进能力 deadline |
 | `engine.connect_timeout_ms` | `15000` | 整数 1–600000。只作用于规则引擎建立 TCP 连接。MCP 转发、MCP OAuth、同步、上报和引导仍是 10 秒，不读这个键 |
-| `engine.body_idle_timeout_ms` | `5000` | 整数 1–600000。规则引擎遇到没有 Content-Length、也不是分块编码的响应时，相邻两次读取允许的空闲。到点把已经读到的内容当作正文，开发追踪记 `body_ended_by_idle`。比步骤 `timeout_ms` 更短时按这里截断；步骤超时更短时仍是「步骤超时」。有长度或分块的正文不走这个计时 |
+| `engine.body_idle_timeout_ms` | `5000` | 整数 1–600000。只作用于规则引擎里看起来会保持连接的响应：HTTP/1.1 且没有 `Connection: close`，或 HTTP/1.0 且有 `Connection: keep-alive`，并且没有 Content-Length、也不是分块编码。相邻两次读取的空闲到点就把已经读到的内容当作正文，开发追踪记 `body_ended_by_idle`，并打一行警告日志（方法、scheme、主机和端口；能拿到时再加规则包和能力。不含路径、查询、正文和请求头）。`Connection: close` 和没有 keep-alive 的 HTTP/1.0 一直读到对端关闭，仍受步骤 `timeout_ms` 或能力 deadline 约束。比步骤 `timeout_ms` 更短时按这里截断；步骤超时更短时仍是「步骤超时」。有长度或分块的正文不走这个计时 |
 | `engine.max_header_line_bytes` | `65536` | 整数 256–1048576。响应头单行字节上限。规则 HTTP、MCP 转发和 MCP OAuth 共用 |
 | `engine.max_header_count` | `500` | 整数 1–10000。响应头个数上限。同样三个客户端共用 |
 | `tls.system_trust` | `true` | 为 true 时，出站 HTTPS 在 JDK 默认信任库之外再合并操作系统信任库。false 只停用操作系统来源，JDK 信任库仍在。没有跳过证书校验的开关 |
@@ -64,7 +64,7 @@ tls:
 
 此例的 disabled 项是路径格式示意，示例 Conch 中不包含 submit_leave。别名仍使用相同的 API Key、账号和能力权限；重启后读取新别名。
 
-规则 HTTP、MCP 转发和 MCP OAuth 的连接池在借出闲置超过 2 秒的连接前，会先确认它还活着。这个间隔是固定的，不写在 `config.yml` 里。
+规则 HTTP、MCP 转发和 MCP OAuth 的连接池在借出闲置超过 2 秒的连接前，会先确认它还活着。这个间隔是固定的，不写在 `config.yml` 里。GET、HEAD、OPTIONS 只有在这条连接已经完成过请求、又遇到对端没有响应或连接重置时，才换一条连接再试一次。新建立的连接上的重置不重试。POST 和其他方法、503 和超时都不重试。OAuth 仍关闭自动重试。
 
 `mcp.allowed_origins` 是 `/mcp` 的额外 Origin 允许列表，默认空。每一项必须是绝对的 `http` 或 `https` 源站，不能带路径、查询、用户信息或片段；写错会拒绝启动。没有 `Origin` 头的客户端仍然允许。本机始终允许 `http://127.0.0.1:<实际监听端口>`、`http://localhost:<实际监听端口>` 和 `http://[::1]:<实际监听端口>`，以及 `http://<server.host>:<实际监听端口>`。`server.host` 为 `0.0.0.0` 或 `::` 时不把通配地址当成源站；从局域网浏览器打开时，把浏览器地址栏对应的源站写进这个列表。反向代理的 `https://` 源站同样写在这里。比较时忽略 scheme 和主机的大小写，80 和 443 可以省略。请求如何被拒绝见[接口参考](api.md)的 MCP 一节。缺 `Origin` 是否拒绝、以及 `initialize` 遇到不认识的 `protocolVersion` 是协商还是拒绝，由 `McpTransportPolicy` 里的两个常量决定，当前分别是允许和协商。
 

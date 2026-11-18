@@ -20,9 +20,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -43,36 +48,32 @@ class ConnectionBehaviorTest {
 
     @Test
     @Timeout(15)
-    void idempotentMethodsRetryOnceWhenThePeerDropsTheResponse() throws Exception {
+    void freshConnectionDropIsNotRetried() throws Exception {
         for (String method : List.of("GET", "HEAD", "OPTIONS")) {
             try (Script script = new Script(server -> {
                 try (Socket dropped = server.accept(3_000)) {
                     server.readRequest(dropped);
                 }
-                try (Socket retried = server.accept(3_000)) {
-                    server.readRequest(retried);
-                    Script.write(retried, fixed("ok"));
+                try {
+                    server.accept(800).close();
+                    server.requests.add("UNEXPECTED");
+                } catch (SocketTimeoutException expected) {
+                    // 新连接上的失败不重试。
                 }
             })) {
                 try (ClientFixture client = ClientFixture.open(EngineSettings.defaults())) {
-                    HttpResult result = execute(client.client, script.base(), method, 5_000, Duration.ofSeconds(5));
-                    assertThat(result.status()).isEqualTo(200);
-                    if (!"HEAD".equals(method)) {
-                        assertThat(result.body()).isEqualTo("ok");
-                    }
-                    assertThat(result.warnings()).isEmpty();
+                    RuleProblem problem = failure(client.client, script.base(), method, 5_000, Duration.ofSeconds(5));
+                    assertThat(problem.summary).isEqualTo("上游没有返回 HTTP 响应。");
                 }
                 script.join();
-                assertThat(script.requests).hasSize(2);
-                assertThat(script.requests.get(0)).startsWith(method + " ");
-                assertThat(script.requests.get(1)).startsWith(method + " ");
+                assertThat(script.requests).containsExactly(method + " /t HTTP/1.1");
             }
         }
     }
 
     @Test
     @Timeout(15)
-    void connectionResetIsRetriedOnceForGet() throws Exception {
+    void freshConnectionResetIsNotRetried() throws Exception {
         try (Script script = new Script(server -> {
             Socket dropped = server.accept(3_000);
             try {
@@ -81,23 +82,58 @@ class ConnectionBehaviorTest {
             } finally {
                 dropped.close();
             }
-            try (Socket retried = server.accept(3_000)) {
-                server.readRequest(retried);
-                Script.write(retried, fixed("again"));
+            try {
+                server.accept(800).close();
+                server.requests.add("UNEXPECTED");
+            } catch (SocketTimeoutException expected) {
+                // 新连接被重置时不换一条再试。
             }
         })) {
             try (ClientFixture client = ClientFixture.open(EngineSettings.defaults())) {
-                HttpResult result = execute(client.client, script.base(), "GET", 5_000, Duration.ofSeconds(5));
-                assertThat(result.body()).isEqualTo("again");
+                failure(client.client, script.base(), "GET", 5_000, Duration.ofSeconds(5));
             }
             script.join();
-            assertThat(script.requests).hasSize(2);
+            assertThat(script.requests).containsExactly("GET /t HTTP/1.1");
         }
     }
 
     @Test
     @Timeout(15)
-    void postIsNotRetriedAndAGetStopsAfterOneRetry() throws Exception {
+    void reusedConnectionSilentCloseIsRetriedOnce() throws Exception {
+        try (Script script = new Script(server -> {
+            Socket first = server.accept(3_000);
+            try {
+                server.readRequest(first);
+                Script.write(first, kept("one"));
+            } finally {
+                first.close();
+            }
+            try (Socket retried = server.accept(3_000)) {
+                server.readRequest(retried);
+                Script.write(retried, fixed("again"));
+            }
+            try {
+                server.accept(800).close();
+                server.requests.add("UNEXPECTED");
+            } catch (SocketTimeoutException expected) {
+                // 只重试一次。
+            }
+        })) {
+            try (ClientFixture client = ClientFixture.open(EngineSettings.defaults())) {
+                HttpResult first = execute(client.client, script.base(), "GET", 5_000, Duration.ofSeconds(5));
+                assertThat(first.body()).isEqualTo("one");
+                Thread.sleep(200);
+                HttpResult retried = execute(client.client, script.base(), "GET", 5_000, Duration.ofSeconds(5));
+                assertThat(retried.body()).isEqualTo("again");
+            }
+            script.join();
+            assertThat(script.requests).containsExactly("GET /t HTTP/1.1", "GET /t HTTP/1.1");
+        }
+    }
+
+    @Test
+    @Timeout(15)
+    void postIsNotRetried() throws Exception {
         try (Script script = new Script(server -> {
             try (Socket dropped = server.accept(3_000)) {
                 server.readRequest(dropped);
@@ -115,27 +151,6 @@ class ConnectionBehaviorTest {
             }
             script.join();
             assertThat(script.requests).containsExactly("POST /t HTTP/1.1");
-        }
-
-        try (Script script = new Script(server -> {
-            for (int i = 0; i < 2; i++) {
-                try (Socket dropped = server.accept(3_000)) {
-                    server.readRequest(dropped);
-                }
-            }
-            try {
-                server.accept(800).close();
-                server.requests.add("UNEXPECTED");
-            } catch (SocketTimeoutException expected) {
-                // 第三次不会来。
-            }
-        })) {
-            try (ClientFixture client = ClientFixture.open(EngineSettings.defaults())) {
-                RuleProblem problem = failure(client.client, script.base(), "GET", 5_000, Duration.ofSeconds(5));
-                assertThat(problem.summary).isEqualTo("上游没有返回 HTTP 响应。");
-            }
-            script.join();
-            assertThat(script.requests).hasSize(2);
         }
     }
 
@@ -301,6 +316,32 @@ class ConnectionBehaviorTest {
 
     @Test
     @Timeout(20)
+    void closeDelimitedBodySurvivesAPauseLongerThanIdle() throws Exception {
+        try (ClientFixture client = ClientFixture.open(EngineSettings.defaults())) {
+            try (Script script = new Script(server -> {
+                try (Socket socket = server.accept(3_000)) {
+                    server.readRequest(socket);
+                    Script.write(socket, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello");
+                    Thread.sleep(6_000);
+                    Script.write(socket, "world");
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            })) {
+                long started = System.nanoTime();
+                HttpResult result = execute(
+                        client.client, script.base(), "GET", 20_000, OutboundHttp.DEFAULT_BODY_IDLE);
+                long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                assertThat(result.body()).isEqualTo("helloworld");
+                assertThat(result.warnings()).isEmpty();
+                assertThat(elapsed).isBetween(5_500L, 12_000L);
+                script.join();
+            }
+        }
+    }
+
+    @Test
+    @Timeout(20)
     void indefiniteBodyEndsOnIdleAndDefiniteBodiesDoNot() throws Exception {
         try (ClientFixture client = ClientFixture.open(EngineSettings.defaults())) {
             try (Script script = new Script(server -> {
@@ -378,6 +419,20 @@ class ConnectionBehaviorTest {
             try (Script script = new Script(server -> {
                 try (Socket socket = server.accept(3_000)) {
                     server.readRequest(socket);
+                    Script.write(socket, "HTTP/1.0 200 OK\r\nConnection: keep-alive\r\n\r\nhello");
+                    hold(socket);
+                }
+            })) {
+                HttpResult result = execute(client.client, script.base(), "GET", 5_000, Duration.ofMillis(400));
+                assertThat(result.body()).isEqualTo("hello");
+                assertThat(result.warnings()).extracting(TraceWarning::code)
+                        .containsExactly(OutboundHttp.BODY_ENDED_BY_IDLE);
+                script.join();
+            }
+
+            try (Script script = new Script(server -> {
+                try (Socket socket = server.accept(3_000)) {
+                    server.readRequest(socket);
                     Script.write(socket, "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nhello");
                 }
             })) {
@@ -446,14 +501,42 @@ class ConnectionBehaviorTest {
                         """, true)));
                 RuleEngine engine = new RuleEngine(registry, sessions, settings);
                 engine.bindDevTraceSink(traces);
+                Logger httpLog = Logger.getLogger(HttpCalls.class.getName());
+                CopyOnWriteArrayList<String> warnings = new CopyOnWriteArrayList<>();
+                Handler handler = new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (record.getLevel().intValue() >= Level.WARNING.intValue() && record.getMessage() != null) {
+                            warnings.add(record.getMessage());
+                        }
+                    }
+
+                    @Override
+                    public void flush() {
+                    }
+
+                    @Override
+                    public void close() {
+                    }
+                };
+                handler.setLevel(Level.ALL);
+                Level previous = httpLog.getLevel();
+                httpLog.setLevel(Level.ALL);
+                httpLog.addHandler(handler);
                 long started = System.nanoTime();
-                ExecutionResult result = engine.execute(EngineTestSupport.request(
-                        Origin.LOCAL,
-                        "idle_conch",
-                        "read",
-                        "alice",
-                        Map.of(),
-                        EngineTestSupport.account("alice", secret, script.base())));
+                ExecutionResult result;
+                try {
+                    result = engine.execute(EngineTestSupport.request(
+                            Origin.LOCAL,
+                            "idle_conch",
+                            "read",
+                            "alice",
+                            Map.of(),
+                            EngineTestSupport.account("alice", secret, script.base())));
+                } finally {
+                    httpLog.removeHandler(handler);
+                    httpLog.setLevel(previous);
+                }
                 long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
                 assertThat(result.success()).as(result.error() == null ? "" : result.error().message()).isTrue();
                 assertThat(elapsed).isBetween(250L, 2_000L);
@@ -463,6 +546,11 @@ class ConnectionBehaviorTest {
                 assertThat(warning.path("code").asText()).isEqualTo(OutboundHttp.BODY_ENDED_BY_IDLE);
                 assertThat(warning.path("message").asText()).isEqualTo(OutboundHttp.BODY_ENDED_BY_IDLE_MESSAGE);
                 assertThat(ApiJson.tree(traces.body).path("steps").get(0).path("responseBody").asText()).isEqualTo("***");
+                assertThat(warnings).hasSize(1);
+                String logged = warnings.get(0);
+                assertThat(logged).contains("method=GET").contains("conch=idle_conch").contains("capability=read");
+                assertThat(logged).contains("target=http://127.0.0.1:");
+                assertThat(logged).doesNotContain(secret).doesNotContain("/t").doesNotContain("?");
             }
             script.join();
         }

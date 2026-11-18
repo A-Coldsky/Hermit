@@ -28,6 +28,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,10 +43,12 @@ import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.protocol.HttpClientContext;
 import org.apache.hc.core5.concurrent.Cancellable;
 import org.apache.hc.core5.http.ClassicHttpRequest;
+import org.apache.hc.core5.http.ClassicHttpResponse;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.HttpEntity;
 import org.apache.hc.core5.http.HttpRequest;
+import org.apache.hc.core5.http.ProtocolVersion;
 import org.apache.hc.core5.http.HttpRequestInterceptor;
 import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
 import org.apache.hc.core5.util.Timeout;
@@ -63,6 +66,7 @@ import dev.hermit.crab.tls.TransportFailure;
  */
 final class HttpCalls {
 
+    private static final Logger LOG = Logger.getLogger(HttpCalls.class.getName());
     static final int MAX_BODY_BYTES = 5 * 1024 * 1024;
     static final int WIRE_BODY_LIMIT = 64 * 1024;
     static final String WIRE_BODY_NOTE = "实际发送的正文超过 64 KiB，已截断。";
@@ -479,7 +483,14 @@ final class HttpCalls {
                     headerMap.putIfAbsent(header.getName().toLowerCase(Locale.ROOT), header.getValue());
                 }
                 BodyBytes read = readBody(
-                        response.getEntity(), method, path, status, deadlineNanos, cancellable, bodyIdle);
+                        response.getEntity(),
+                        method,
+                        path,
+                        status,
+                        deadlineNanos,
+                        cancellable,
+                        bodyIdle,
+                        persistent(response));
                 String location = normalizeLocation(headerMap.get("location"));
                 if (location != null) {
                     headerMap.put("location", location);
@@ -488,6 +499,7 @@ final class HttpCalls {
                 String decoded = decode(read.bytes(), headerMap.get("content-type"), responseCharset);
                 ArrayList<TraceWarning> stepWarnings = new ArrayList<>(warningsOf(notices));
                 if (read.endedByIdle()) {
+                    logIdleCutoff(method, target);
                     stepWarnings.add(new TraceWarning(
                             TraceWarning.BODY_ENDED_BY_IDLE, OutboundHttp.BODY_ENDED_BY_IDLE_MESSAGE));
                 }
@@ -616,6 +628,79 @@ final class HttpCalls {
         }
     }
 
+    /**
+     * 只有看起来会保持连接的响应才按空闲截断：HTTP/1.1 且没有 {@code Connection: close}，
+     * 或 HTTP/1.0 且有 {@code Connection: keep-alive}。{@code Connection: close} 和没有
+     * keep-alive 的 HTTP/1.0 读到对端关闭，仍受步骤或能力 deadline 约束。
+     */
+    private static boolean persistent(ClassicHttpResponse response) {
+        ProtocolVersion version = response.getVersion();
+        boolean close = headerToken(response, "close");
+        if (version != null && version.getMajor() == 1 && version.getMinor() <= 0) {
+            return headerToken(response, "keep-alive") && !close;
+        }
+        if (version != null && version.getMajor() == 1 && version.getMinor() >= 1) {
+            return !close;
+        }
+        return false;
+    }
+
+    private static boolean headerToken(ClassicHttpResponse response, String token) {
+        Header[] headers = response.getHeaders("Connection");
+        if (headers == null) {
+            return false;
+        }
+        for (Header header : headers) {
+            String value = header.getValue();
+            if (value == null) {
+                continue;
+            }
+            for (String part : value.split(",")) {
+                if (part.trim().equalsIgnoreCase(token)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 一行警告：方法、scheme、主机和端口，以及能拿到的规则包和能力。不含路径、查询、正文和请求头。 */
+    private static void logIdleCutoff(String method, URI target) {
+        StringBuilder line = new StringBuilder("idle body cutoff");
+        line.append(" method=").append(logToken(method));
+        line.append(" target=").append(originOf(target));
+        CallSite site = CallSite.current();
+        if (site != null && site.conch() != null) {
+            line.append(" conch=").append(logToken(site.conch()));
+        }
+        if (site != null && site.capability() != null) {
+            line.append(" capability=").append(logToken(site.capability()));
+        }
+        LOG.warning(line.toString());
+    }
+
+    private static String originOf(URI target) {
+        if (target == null || target.getScheme() == null || target.getHost() == null) {
+            return "";
+        }
+        String host = target.getHost();
+        if (host.indexOf(':') >= 0) {
+            host = "[" + host + "]";
+        }
+        int port = target.getPort();
+        if (port < 0) {
+            port = "https".equalsIgnoreCase(target.getScheme()) ? 443 : 80;
+        }
+        return target.getScheme() + "://" + host + ":" + port;
+    }
+
+    private static String logToken(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace('\r', ' ').replace('\n', ' ');
+    }
+
     private static BodyBytes readBody(
             HttpEntity entity,
             String method,
@@ -623,7 +708,8 @@ final class HttpCalls {
             int status,
             long deadlineNanos,
             Cancellable request,
-            Duration bodyIdle
+            Duration bodyIdle,
+            boolean persistent
     ) throws IOException {
         if (entity == null) {
             ensureWithinDeadline(deadlineNanos, request);
@@ -633,8 +719,9 @@ final class HttpCalls {
         if (declared > MAX_BODY_BYTES) {
             throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, "响应体超过 5MB", method, path, status);
         }
-        // Content-Length 和分块编码仍受步骤或能力超时约束。两者都没有时，空闲按相邻读取计，不到点不等步骤超时。
-        boolean indefinite = declared < 0 && !entity.isChunked();
+        // Content-Length、分块编码，以及会由对端关闭来结束的正文，仍受步骤或能力超时约束。
+        // 只有保持连接又没有长度时，才按相邻读取的空闲截断。
+        boolean indefinite = persistent && declared < 0 && !entity.isChunked();
         IdleWatch watch = indefinite ? new IdleWatch(bodyIdle, request) : null;
         InputStream in = entity.getContent();
         try {

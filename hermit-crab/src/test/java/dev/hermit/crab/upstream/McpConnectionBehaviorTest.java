@@ -37,15 +37,15 @@ class McpConnectionBehaviorTest {
 
     @Test
     @Timeout(15)
-    void getRetriesOnceAndPostDoesNot() throws Exception {
-        try (DropServer server = new DropServer()) {
+    void freshGetIsNotRetriedAndPostIsNotRetried() throws Exception {
+        try (DropServer server = DropServer.alwaysDrop()) {
             try (McpUpstreamClient client = new McpUpstreamClient()) {
                 RpcResult result = client.exchange(post("GET", server.base() + "/t", null));
-                assertThat(result.kind()).isEqualTo(RpcKind.EMPTY);
-                assertThat(result.status()).isEqualTo(200);
+                assertThat(result.kind()).isEqualTo(RpcKind.CONNECT);
+                assertThat(result.detail()).isEqualTo("上游没有返回 HTTP 响应。");
             }
             server.join();
-            assertThat(server.requests).hasSize(2);
+            assertThat(server.requests).hasSize(1);
             assertThat(server.requests.get(0)).startsWith("GET ");
         }
 
@@ -182,8 +182,7 @@ class McpConnectionBehaviorTest {
     }
 
     /**
-     * 第一条连接读完请求后直接关掉。GET 的重试会再来一条，并得到 200。
-     * {@link #alwaysDrop()} 则每条连接都关掉。
+     * 每条连接读完请求后直接关掉，直到没有新连接。新连接上的 GET 不会重试。
      */
     private static final class DropServer implements AutoCloseable {
         final List<String> requests = java.util.Collections.synchronizedList(new java.util.ArrayList<>());

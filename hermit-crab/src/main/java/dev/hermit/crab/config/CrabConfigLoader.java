@@ -32,7 +32,8 @@ public final class CrabConfigLoader {
     private static final Set<String> CAPABILITIES = Set.of("disabled");
     private static final Set<String> ENGINE = Set.of(
             "capability_timeout_seconds", "session_idle_minutes", "max_login_failures",
-            "mcp_max_concurrency_per_account");
+            "mcp_max_concurrency_per_account", "connect_timeout_ms", "body_idle_timeout_ms",
+            "max_header_line_bytes", "max_header_count");
     private static final Set<String> MCP = Set.of("allowed_origins");
     private static final Set<String> TLS = Set.of("ca_dir", "system_trust");
 
@@ -112,7 +113,15 @@ public final class CrabConfigLoader {
                     integer(file, engine, "mcp_max_concurrency_per_account", "engine.mcp_max_concurrency_per_account",
                             defaults.mcpMaxConcurrencyPerAccount(), 1, 32),
                     text(file, tls, "ca_dir", "tls.ca_dir"),
-                    bool(file, tls, "system_trust", "tls.system_trust", defaults.tlsSystemTrust()));
+                    bool(file, tls, "system_trust", "tls.system_trust", defaults.tlsSystemTrust()),
+                    integer(file, engine, "connect_timeout_ms", "engine.connect_timeout_ms",
+                            defaults.connectTimeoutMs(), 1, 600_000),
+                    integer(file, engine, "body_idle_timeout_ms", "engine.body_idle_timeout_ms",
+                            defaults.bodyIdleTimeoutMs(), 1, 600_000),
+                    integer(file, engine, "max_header_line_bytes", "engine.max_header_line_bytes",
+                            defaults.maxHeaderLineBytes(), 256, 1_048_576),
+                    integer(file, engine, "max_header_count", "engine.max_header_count",
+                            defaults.maxHeaderCount(), 1, 10_000));
         } catch (IllegalArgumentException ex) {
             throw new ConfigFileException(file + ": " + ex.getMessage());
         }

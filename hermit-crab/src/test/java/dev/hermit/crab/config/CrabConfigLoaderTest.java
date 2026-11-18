@@ -2,6 +2,7 @@ package dev.hermit.crab.config;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 
 import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.testing.SecretChecks;
@@ -160,6 +161,79 @@ class CrabConfigLoaderTest {
         assertThatThrownBy(() -> CrabConfigLoader.load(file))
                 .isInstanceOf(ConfigFileException.class)
                 .hasMessageContaining("tls.insecure_skip_verify")
+                .hasMessageContaining("unknown key");
+    }
+
+    @Test
+    void engineConnectionSettingsUseDefaultsAndRejectOutOfRange() throws Exception {
+        Path file = new CrabPaths(temp).configFile();
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, """
+                engine: {}
+                """);
+        CrabConfig defaults = CrabConfigLoader.load(file);
+        assertThat(defaults.connectTimeoutMs()).isEqualTo(15_000);
+        assertThat(defaults.bodyIdleTimeoutMs()).isEqualTo(5_000);
+        assertThat(defaults.maxHeaderLineBytes()).isEqualTo(65_536);
+        assertThat(defaults.maxHeaderCount()).isEqualTo(500);
+        assertThat(defaults.engineSettings().connectTimeout()).isEqualTo(Duration.ofMillis(15_000));
+        assertThat(defaults.engineSettings().bodyIdleTimeout()).isEqualTo(Duration.ofMillis(5_000));
+        assertThat(defaults.engineSettings().headers().maxLineBytes()).isEqualTo(65_536);
+        assertThat(defaults.engineSettings().headers().maxHeaderCount()).isEqualTo(500);
+
+        Files.writeString(file, """
+                engine:
+                  connect_timeout_ms: 400
+                  body_idle_timeout_ms: 250
+                  max_header_line_bytes: 2048
+                  max_header_count: 12
+                """);
+        CrabConfig custom = CrabConfigLoader.load(file);
+        assertThat(custom.connectTimeoutMs()).isEqualTo(400);
+        assertThat(custom.bodyIdleTimeoutMs()).isEqualTo(250);
+        assertThat(custom.maxHeaderLineBytes()).isEqualTo(2048);
+        assertThat(custom.maxHeaderCount()).isEqualTo(12);
+
+        Files.writeString(file, """
+                engine:
+                  connect_timeout_ms: 0
+                """);
+        assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                .isInstanceOf(ConfigFileException.class)
+                .hasMessageContaining("engine.connect_timeout_ms")
+                .hasMessageContaining("out of range");
+
+        Files.writeString(file, """
+                engine:
+                  body_idle_timeout_ms: 600001
+                """);
+        assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                .isInstanceOf(ConfigFileException.class)
+                .hasMessageContaining("engine.body_idle_timeout_ms");
+
+        Files.writeString(file, """
+                engine:
+                  max_header_line_bytes: 255
+                """);
+        assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                .isInstanceOf(ConfigFileException.class)
+                .hasMessageContaining("engine.max_header_line_bytes");
+
+        Files.writeString(file, """
+                engine:
+                  max_header_count: 10001
+                """);
+        assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                .isInstanceOf(ConfigFileException.class)
+                .hasMessageContaining("engine.max_header_count");
+
+        Files.writeString(file, """
+                engine:
+                  validate_after_inactivity_ms: 1000
+                """);
+        assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                .isInstanceOf(ConfigFileException.class)
+                .hasMessageContaining("engine.validate_after_inactivity_ms")
                 .hasMessageContaining("unknown key");
     }
 }

@@ -85,7 +85,7 @@ sequenceDiagram
   I-->>C: API envelope / MCP result
 ```
 
-HTTP 包的同一 `(origin, conch, account)` 由公平锁串行执行；不同账号可并行。mcp 包只在创建或替换上游会话时拿这把锁，`tools/call` 的并发由 `engine.mcp_max_concurrency_per_account` 限制。执行 HTTP 能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。500 及以上是 `UPSTREAM_ERROR`。其它非 2xx 在后续 `assert.status` 覆盖实际状态码时放行；非 GET 的 3xx 且不是登录重定向也放行。没有这种期望的 GET 404 等在提取前是 `UPSTREAM_ERROR`，message 带状态码。未写 `timeout_ms` 的空闲读停在能力 deadline，到点是 `TIMEOUT`；步骤自己的 `timeout_ms` 更短时是 `UPSTREAM_ERROR`「步骤超时」。HTTP 客户端禁用自动重试，同源检查防止请求/重定向把会话发到其他源。mcp 转发不跟随重定向，不把客户端的 API Key 或 `Mcp-Session-Id` 交给上游。开发者模式打开时，本地 MCP 的 JSON-RPC 与 HTTP 步骤共用 `dev_traces`；刷新把过滤后的工具写回 `local-conches/{conch}.yaml`，不改版本，也不写调用记录。
+HTTP 包的同一 `(origin, conch, account)` 由公平锁串行执行；不同账号可并行。mcp 包只在创建或替换上游会话时拿这把锁，`tools/call` 的并发由 `engine.mcp_max_concurrency_per_account` 限制。执行 HTTP 能力前，没有会话或 alive_check 判定失效时会登录，不要求能力幂等。能力步骤执行中，重定向到登录页或上游返回 401/403 都视为会话失效：只有 `idempotent: true` 会重新登录并重放一次，其他返回 `SESSION_EXPIRED`；后续新请求仍可重新登录。上游 HTTP 400 是 `INVALID_INPUT`，不是 `RULE_MISMATCH`。500 及以上是 `UPSTREAM_ERROR`。其它非 2xx 在后续 `assert.status` 覆盖实际状态码时放行；非 GET 的 3xx 且不是登录重定向也放行。没有这种期望的 GET 404 等在提取前是 `UPSTREAM_ERROR`，message 带状态码。未写 `timeout_ms` 的空闲读停在能力 deadline，到点是 `TIMEOUT`；步骤自己的 `timeout_ms` 更短时是 `UPSTREAM_ERROR`「步骤超时」。规则引擎和 MCP 转发只在 GET、HEAD、OPTIONS 复用已经完成过请求的连接，并且第一次遇到对端没有响应或连接被重置时，换一条连接再试一次；新连接上的失败不重试。POST 和其他方法不重试，503 和超时也不重试。OAuth 的发现和令牌请求不重试。同源检查防止请求/重定向把会话发到其他源。mcp 转发不跟随重定向，不把客户端的 API Key 或 `Mcp-Session-Id` 交给上游。开发者模式打开时，本地 MCP 的 JSON-RPC 与 HTTP 步骤共用 `dev_traces`；刷新把过滤后的工具写回 `local-conches/{conch}.yaml`，不改版本，也不写调用记录。
 
 ## 页面路由
 

@@ -61,7 +61,7 @@ class LegacyTransportTest {
 
         try (Loopback huge = Loopback.start(socket -> {
             readHeaders(socket.getInputStream());
-            byte[] line = ("X-Long: " + "a".repeat(9000) + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
+            byte[] line = ("X-Long: " + "a".repeat(70_000) + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
             socket.getOutputStream().write("HTTP/1.1 200 OK\r\n".getBytes(StandardCharsets.US_ASCII));
             socket.getOutputStream().write(line);
             socket.getOutputStream().flush();

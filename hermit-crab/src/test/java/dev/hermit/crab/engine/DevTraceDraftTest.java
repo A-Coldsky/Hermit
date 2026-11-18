@@ -10,6 +10,7 @@ import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.testing.SecretChecks;
@@ -65,6 +66,26 @@ class DevTraceDraftTest {
         assertThat(root.path("session").path("stored").asBoolean()).isTrue();
         assertThat(root.path("session").path("loginRan").asBoolean()).isTrue();
         assertThat(root.path("session").path("loginOk").asBoolean()).isTrue();
+    }
+
+    @Test
+    void masksSecretsInsideTraceWarnings() {
+        DevTraceDraft draft = new DevTraceDraft(null);
+        LinkedHashMap<String, Object> spec = new LinkedHashMap<>();
+        spec.put("method", "GET");
+        spec.put("path", "/hold");
+        Map<String, Object> piece = DevTraceDraft.requestPiece(
+                spec, "GET", "/hold", 200, Map.of(), PASSWORD);
+        HttpCalls.attachWarnings(piece, List.of(new TraceWarning(
+                OutboundHttp.BODY_ENDED_BY_IDLE, "leak " + PASSWORD)));
+        draft.add("action", 0, 4, piece);
+        String json = draft.render(Redactor.of(Set.of(PASSWORD)), List.of(), false);
+
+        assertThat(json).doesNotContain(PASSWORD);
+        JsonNode message = ApiJson.tree(json).path("steps").get(0).path("warnings").get(0);
+        assertThat(message.path("code").asText()).isEqualTo(OutboundHttp.BODY_ENDED_BY_IDLE);
+        assertThat(message.path("message").asText()).isEqualTo("leak ***");
+        assertThat(OutboundHttp.BODY_ENDED_BY_IDLE_MESSAGE).doesNotContain(PASSWORD);
     }
 
     @Test

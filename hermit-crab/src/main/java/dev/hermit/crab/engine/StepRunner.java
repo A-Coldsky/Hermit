@@ -2,6 +2,7 @@ package dev.hermit.crab.engine;
 
 import java.net.URI;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -15,6 +16,7 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Step;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
+import dev.hermit.crab.http.OutboundHttp;
 
 final class StepRunner {
 
@@ -37,15 +39,23 @@ final class StepRunner {
     private final TemplateEngine templates;
     private final FilterRegistry filters;
     private final ScriptStep scripts;
+    private final Duration bodyIdle;
 
     StepRunner(TemplateEngine templates, FilterRegistry filters) {
         this(templates, filters, Clock.systemUTC());
     }
 
     StepRunner(TemplateEngine templates, FilterRegistry filters, Clock clock) {
+        this(templates, filters, clock, OutboundHttp.DEFAULT_BODY_IDLE);
+    }
+
+    StepRunner(TemplateEngine templates, FilterRegistry filters, Clock clock, Duration bodyIdle) {
         this.templates = templates;
         this.filters = filters;
         this.scripts = new ScriptStep(clock);
+        this.bodyIdle = bodyIdle == null || bodyIdle.isZero() || bodyIdle.isNegative()
+                ? OutboundHttp.DEFAULT_BODY_IDLE
+                : bodyIdle;
     }
 
     /**
@@ -128,7 +138,8 @@ final class StepRunner {
                     base,
                     expectPrefix,
                     deadlineNanos,
-                    HttpCalls.sensitiveValues(vars, cookies));
+                    HttpCalls.sensitiveValues(vars, cookies),
+                    bodyIdle);
         } catch (RuleProblem ex) {
             if (capture) {
                 Map<String, Object> piece = DevTraceDraft.requestPiece(

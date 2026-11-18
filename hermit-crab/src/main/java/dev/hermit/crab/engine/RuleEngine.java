@@ -77,7 +77,7 @@ public final class RuleEngine implements ConchExecutor {
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
         this.filters = FilterRegistry.defaults();
         this.templates = new TemplateEngine(filters);
-        this.steps = new StepRunner(templates, filters, sessions.clock());
+        this.steps = new StepRunner(templates, filters, sessions.clock(), settings.bodyIdleTimeout());
     }
 
     /**
@@ -101,11 +101,13 @@ public final class RuleEngine implements ConchExecutor {
      */
     public ExecutionResult execute(ExecutionRequest request, ConchDoc authorized) {
         CallSecrets.begin();
+        CallSite.begin(request);
         DevTraceScope.begin(openDraft(request, authorized));
         try {
             return executeCaptured(request, authorized);
         } finally {
             DevTraceScope.end();
+            CallSite.end();
             CallSecrets.end();
         }
     }
@@ -175,9 +177,11 @@ public final class RuleEngine implements ConchExecutor {
      */
     public ExecutionResult testLogin(ExecutionRequest request) {
         CallSecrets.begin();
+        CallSite.begin(request);
         try {
             return testLoginCaptured(request);
         } finally {
+            CallSite.end();
             CallSecrets.end();
         }
     }
@@ -343,7 +347,8 @@ public final class RuleEngine implements ConchExecutor {
                     scope.base,
                     alive.expectNotRedirect(),
                     scope.deadline,
-                    HttpCalls.sensitiveValues(vars, sessions.cookies(scope.key)));
+                    HttpCalls.sensitiveValues(vars, sessions.cookies(scope.key)),
+                    settings.bodyIdleTimeout());
         } catch (RuleProblem ex) {
             recordAlive(spec, ex.method, ex.path, ex.status, ex.responseHeaders, ex.responseBody, ex.wire, started,
                     false, ex.transport, ex.warnings);
@@ -366,11 +371,13 @@ public final class RuleEngine implements ConchExecutor {
      */
     public ExecutionResult continueLogin(ExecutionRequest request, String value) {
         CallSecrets.begin();
+        CallSite.begin(request);
         DevTraceScope.begin(openDraft(request, null));
         try {
             return continueCaptured(request, value);
         } finally {
             DevTraceScope.end();
+            CallSite.end();
             CallSecrets.end();
         }
     }
@@ -378,11 +385,13 @@ public final class RuleEngine implements ConchExecutor {
     /** 重跑 {@code ask} 前一个 request。图片验证码换图，短信或口令则重新发送。 */
     public ExecutionResult resendLogin(ExecutionRequest request) {
         CallSecrets.begin();
+        CallSite.begin(request);
         DevTraceScope.begin(openDraft(request, null));
         try {
             return resendCaptured(request);
         } finally {
             DevTraceScope.end();
+            CallSite.end();
             CallSecrets.end();
         }
     }

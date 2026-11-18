@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.crab.http.HttpMessageLimits;
 import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.mcp.McpLimits;
 import dev.hermit.common.model.Action;
@@ -86,13 +87,27 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             CredentialVault vault,
             Clock clock
     ) {
+        this(accounts, knownSecrets, capabilityTimeout, concurrency, vault, clock, HttpMessageLimits.defaults());
+    }
+
+    public McpForwarder(
+            SessionManager accounts,
+            KnownSecrets knownSecrets,
+            Duration capabilityTimeout,
+            int concurrency,
+            CredentialVault vault,
+            Clock clock,
+            HttpMessageLimits headers
+    ) {
         if (concurrency < 1 || concurrency > 32) {
             throw new IllegalArgumentException("mcp concurrency must be 1..32");
         }
+        HttpMessageLimits limits = headers == null ? HttpMessageLimits.defaults() : headers;
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
         this.capabilityTimeout = capabilityTimeout;
-        this.sessions = new McpUpstreamSessions(new McpUpstreamClient(), accounts, concurrency);
-        this.oauth = new McpOAuth(vault, accounts, sessions::discard, this.knownSecrets, clock);
+        this.sessions = new McpUpstreamSessions(new McpUpstreamClient(limits), accounts, concurrency);
+        this.oauth = new McpOAuth(
+                vault, accounts, sessions::discard, this.knownSecrets, clock, new McpOAuthClient(limits));
     }
 
     /** 账号已删除：丢掉上游会话、并发通道和 OAuth 刷新锁。 */

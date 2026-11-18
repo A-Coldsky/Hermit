@@ -216,7 +216,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 settings.capabilityTimeout(),
                 config.mcpMaxConcurrencyPerAccount(),
                 vault,
-                clock);
+                clock,
+                settings.headers());
         this.callLogs = new CallLogStore(database.dataSource(), clock);
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());

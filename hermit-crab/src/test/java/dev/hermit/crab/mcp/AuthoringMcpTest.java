@@ -227,49 +227,61 @@ class AuthoringMcpTest {
             assertThat(Files.readString(file)).isEqualTo(yaml);
 
             String next = yaml.replace("version: 1.0.0", "version: 1.0.1");
-            JsonNode refused = server.call(session, "conch_save_local", Map.of("yaml", next));
-            assertThat(toolMessage(refused)).isEqualTo(AuthoringCalls.NO_OVERWRITE);
-            assertThat(Files.readString(file)).isEqualTo(yaml);
+            JsonNode silent = server.call(session, "conch_save_local", Map.of("yaml", next));
+            assertThat(structured(silent).path("ok").asBoolean()).as(silent.toString()).isTrue();
+            assertThat(structured(silent).path("replaced").asBoolean()).isTrue();
+            assertThat(structured(silent).path("previousVersion").asText()).isEqualTo("1.0.0");
+            assertThat(structured(silent).path("backupId").asText()).isNotBlank();
+            assertThat(Files.readString(file)).isEqualTo(next);
+            assertThat(server.runtime.localConches().pending()).isEmpty();
 
-            JsonNode param = server.call(session, "conch_save_local", Map.of("yaml", next, "confirm", true));
+            String widened = next.replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
+            JsonNode refused = server.call(session, "conch_save_local", Map.of("yaml", widened));
+            assertThat(toolError(refused).path("code").asText()).isEqualTo("CONFIRM_REQUIRED");
+            assertThat(toolMessage(refused)).isEqualTo(AuthoringCalls.confirmRequiredMessage(
+                    dev.hermit.common.validate.ConchDestinations.between(
+                            dev.hermit.common.parse.ConchParser.parse(next),
+                            dev.hermit.common.parse.ConchParser.parse(widened))));
+            assertThat(toolError(refused).path("hint").asText()).isEqualTo(AuthoringCalls.SAME_NAME);
+            assertThat(Files.readString(file)).isEqualTo(next);
+            assertThat(server.runtime.localConches().pending()).hasSize(1);
+
+            JsonNode param = server.call(session, "conch_save_local", Map.of("yaml", widened, "confirm", true));
             assertThat(toolMessage(param)).isEqualTo(AuthoringCalls.CONFIRM_PARAM);
-            assertThat(Files.readString(file)).isEqualTo(yaml);
+            assertThat(Files.readString(file)).isEqualTo(next);
 
             String confirming = server.initialize(true);
             try (Sse sse = Sse.open(server, confirming)) {
                 sse.awaitPrefix(": open");
                 AtomicReference<JsonNode> declined = new AtomicReference<>();
                 Thread decline = new Thread(() -> declined.set(
-                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", next))));
+                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", widened))));
                 decline.start();
                 JsonNode question = sse.awaitMethod("elicitation/create");
-                assertThat(question.path("params").path("message").asText()).contains("saved_ping").doesNotContain("1.0.1");
+                assertThat(question.path("params").path("message").asText())
+                        .contains("saved_ping")
+                        .contains("http://127.0.0.1:10")
+                        .doesNotContain("version: 1.0.1");
                 server.answer(confirming, question, "decline", null);
                 decline.join(15_000);
                 assertThat(toolMessage(declined.get())).isEqualTo(AuthoringCalls.OVERWRITE_DECLINED);
-                assertThat(Files.readString(file)).isEqualTo(yaml);
+                assertThat(Files.readString(file)).isEqualTo(next);
 
                 AtomicReference<JsonNode> accepted = new AtomicReference<>();
                 Thread accept = new Thread(() -> accepted.set(
-                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", next))));
+                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", widened))));
                 accept.start();
                 JsonNode again = sse.awaitMethod("elicitation/create");
                 server.answer(confirming, again, "accept", true);
                 accept.join(15_000);
                 assertThat(structured(accepted.get()).path("ok").asBoolean()).as(String.valueOf(accepted.get())).isTrue();
                 assertThat(structured(accepted.get()).path("replaced").asBoolean()).isTrue();
-                assertThat(Files.readString(file)).contains("version: 1.0.1");
+                assertThat(Files.readString(file)).contains("127.0.0.1:10");
 
                 server.runtime.admin().createAccount("saved_ping", "main", Actors.CONSOLE);
-                String later = next.replace("version: 1.0.1", "version: 1.0.2");
-                AtomicReference<JsonNode> checked = new AtomicReference<>();
-                Thread check = new Thread(() -> checked.set(
-                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", later))));
-                check.start();
-                JsonNode third = sse.awaitMethod("elicitation/create");
-                server.answer(confirming, third, "accept", true);
-                check.join(15_000);
-                assertThat(structured(checked.get()).path("next").asText())
+                String later = widened.replace("version: 1.0.1", "version: 1.0.2");
+                JsonNode checked = server.call(confirming, "conch_save_local", Map.of("yaml", later));
+                assertThat(structured(checked).path("next").asText())
                         .doesNotContain("新建账号")
                         .contains("可以直接试跑")
                         .doesNotContain("测试登录");
@@ -278,14 +290,8 @@ class AuthoringMcpTest {
                         .replace("credentials: {}", """
                                 credentials:
                                   password: { type: secret, required: true, label: 密码 }""");
-                AtomicReference<JsonNode> relogin = new AtomicReference<>();
-                Thread login = new Thread(() -> relogin.set(
-                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", changed))));
-                login.start();
-                JsonNode fourth = sse.awaitMethod("elicitation/create");
-                server.answer(confirming, fourth, "accept", true);
-                login.join(15_000);
-                assertThat(structured(relogin.get()).path("next").asText())
+                JsonNode relogin = server.call(confirming, "conch_save_local", Map.of("yaml", changed));
+                assertThat(structured(relogin).path("next").asText())
                         .contains("测试登录")
                         .contains("凭证字段有变化")
                         .doesNotContain("可以直接试跑")
@@ -315,28 +321,22 @@ class AuthoringMcpTest {
 
             String same = hostYaml("1.0.1", "https://old.example:443/mcp/v2");
             String moved = hostYaml("1.0.2", "https://new.example/mcp");
+            JsonNode kept = server.call(session, "conch_save_local", Map.of("yaml", same));
+            assertThat(structured(kept).path("ok").asBoolean()).as(kept.toString()).isTrue();
+            assertThat(structured(kept).path("replaced").asBoolean()).isTrue();
+            assertThat(server.runtime.admin().credentialNames("host_mcp", "ada")).contains(McpOAuthToken.FIELD);
+
             String confirming = server.initialize(true);
             try (Sse sse = Sse.open(server, confirming)) {
                 sse.awaitPrefix(": open");
-                AtomicReference<JsonNode> kept = new AtomicReference<>();
-                Thread first = new Thread(() -> kept.set(
-                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", same))));
-                first.start();
-                JsonNode question = sse.awaitMethod("elicitation/create");
-                assertThat(question.path("params").path("message").asText())
-                        .isEqualTo("将覆盖已有的本地规则包 host_mcp。确认后才会写入。");
-                server.answer(confirming, question, "accept", true);
-                first.join(15_000);
-                assertThat(structured(kept.get()).path("ok").asBoolean()).as(String.valueOf(kept.get())).isTrue();
-                assertThat(server.runtime.admin().credentialNames("host_mcp", "ada")).contains(McpOAuthToken.FIELD);
-
                 AtomicReference<JsonNode> replaced = new AtomicReference<>();
                 Thread second = new Thread(() -> replaced.set(
                         server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", moved))));
                 second.start();
                 JsonNode again = sse.awaitMethod("elicitation/create");
                 assertThat(again.path("params").path("message").asText())
-                        .isEqualTo("将覆盖已有的本地规则包 host_mcp。上游主机将从 old.example 改为 new.example，"
+                        .isEqualTo("将覆盖已有的本地规则包 host_mcp。新增地址：https://new.example:443。"
+                                + "上游主机将从 old.example 改为 new.example，"
                                 + "确认后会清掉已保存的上游令牌。确认后才会写入。");
                 server.answer(confirming, again, "accept", true);
                 second.join(15_000);
@@ -718,7 +718,8 @@ class AuthoringMcpTest {
             String yaml = LocalConchBehaviorTest.ping("timeout_ping", "1.0.0");
             assertThat(structured(server.call(server.initialize(false), "conch_save_local", Map.of("yaml", yaml)))
                     .path("ok").asBoolean()).isTrue();
-            String next = yaml.replace("version: 1.0.0", "version: 1.0.1");
+            String next = yaml.replace("version: 1.0.0", "version: 1.0.1")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
             String confirming = server.initialize(true);
             try (Sse sse = Sse.open(server, confirming)) {
                 sse.awaitPrefix(": open");
@@ -729,6 +730,35 @@ class AuthoringMcpTest {
             }
         } finally {
             McpSession.elicitWaitMillis = previous;
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void widenedConfirmRejectsWhenTheFileChanged() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("stale-confirm"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String yaml = LocalConchBehaviorTest.ping("stale_ping", "1.0.0");
+            assertThat(structured(server.call(server.initialize(false), "conch_save_local", Map.of("yaml", yaml)))
+                    .path("ok").asBoolean()).isTrue();
+            String widened = yaml.replace("version: 1.0.0", "version: 1.0.1")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
+            String confirming = server.initialize(true);
+            try (Sse sse = Sse.open(server, confirming)) {
+                sse.awaitPrefix(": open");
+                AtomicReference<JsonNode> accepted = new AtomicReference<>();
+                Thread accept = new Thread(() -> accepted.set(
+                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", widened))));
+                accept.start();
+                JsonNode question = sse.awaitMethod("elicitation/create");
+                String moved = yaml.replace("version: 1.0.0", "version: 1.0.2");
+                server.runtime.localConches().importBytes(moved.getBytes(java.nio.charset.StandardCharsets.UTF_8), Actors.CLI, true);
+                server.answer(confirming, question, "accept", true);
+                accept.join(15_000);
+                assertThat(toolError(accepted.get()).path("code").asText()).isEqualTo("CONFLICT");
+                assertThat(toolMessage(accepted.get())).isEqualTo(dev.hermit.crab.sync.LocalConchException.STALE);
+                Path file = server.runtime.paths().localConches().resolve("stale_ping.yaml");
+                assertThat(Files.readString(file)).contains("version: 1.0.2").doesNotContain("127.0.0.1:10");
+            }
         }
     }
 
@@ -1107,6 +1137,16 @@ class AuthoringMcpTest {
             assertThat(toolError(overwrite).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(overwrite)).startsWith(AuthoringCalls.NOT_IN_SCOPE_PREFIX + "other_pkg");
             assertThat(Files.readString(stored)).isEqualTo(before);
+            assertThat(server.runtime.localConches().pending()).isEmpty();
+
+            String widened = writable("other_pkg", "1.0.2")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
+            JsonNode widenedOverwrite = server.rpc(named.plaintext(), session, 6, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", widened)));
+            assertThat(toolError(widenedOverwrite).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(widenedOverwrite)).startsWith(AuthoringCalls.NOT_IN_SCOPE_PREFIX + "other_pkg");
+            assertThat(Files.readString(stored)).isEqualTo(before);
+            assertThat(server.runtime.localConches().pending()).isEmpty();
 
             JsonNode fresh = server.rpc(named.plaintext(), session, 5, "tools/call", Map.of(
                     "name", "conch_save_local", "arguments", Map.of("yaml", writable("new_pkg", "1.0.0"))));

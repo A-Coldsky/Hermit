@@ -28,7 +28,8 @@ import org.apache.hc.core5.util.Timeout;
 
 /**
  * 每个 (origin, conch, account) 一把公平锁、一个客户端和一个 Cookie 存储。
- * 替换 Conch 版本不会清掉这里的会话。
+ * 同地址范围的版本替换不会清掉这里的会话。
+ * 地址范围扩大的本地覆盖会在写入前对这个包的每个账号调用 {@link #invalidate}。
  */
 public final class SessionManager implements AutoCloseable {
 
@@ -88,15 +89,19 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public void invalidate(SessionKey key) {
-        persistence.delete(key);
-        loginSnapshots.delete(key);
         AccountState state = states.get(key);
         if (state == null) {
+            persistence.delete(key);
+            loginSnapshots.delete(key);
             pending.discard(key);
             return;
         }
+        // 进行中的调用持有这把锁，并且会在返回前把 Cookie 再写回库。
+        // 清空必须发生在它放开锁之后，下一次调用和重启才不会带回旧会话。
         state.lock.lock();
         try {
+            persistence.delete(key);
+            loginSnapshots.delete(key);
             pending.discard(key);
             state.loggedIn = false;
             state.lastActive = null;

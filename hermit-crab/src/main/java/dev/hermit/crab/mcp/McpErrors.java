@@ -243,8 +243,8 @@ final class McpErrors {
         if (CrabRuntime.TRIAL_ACCOUNT_INVALID.equals(message)) {
             return "账号名只能是字母、数字、下划线或连字符，最长 64 个字符。不要把口令放在 account 里。";
         }
-        if (AuthoringCalls.NO_OVERWRITE.equals(message)) {
-            return "换一个新的包名再保存，或到控制台导入并确认覆盖。";
+        if (message != null && message.contains("不要换包名重新保存")) {
+            return AuthoringCalls.SAME_NAME;
         }
         if (AuthoringCalls.OVERWRITE_DECLINED.equals(message)) {
             return "本地规则包没有改动。要覆盖时，在客户端确认。";

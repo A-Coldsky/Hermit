@@ -132,8 +132,13 @@ final class ConsoleApi {
         get(app, "/console/api/local-conches", ctx -> listLocal(runtime, ctx));
         post(app, "/console/api/local-conches", ctx -> importLocal(runtime, ctx));
         post(app, "/console/api/local-conches/reload", ctx -> reloadLocal(runtime, ctx));
+        get(app, "/console/api/local-conches/pending", ctx -> listPending(runtime, ctx));
         delete(app, "/console/api/local-conches/{conch}", ctx -> deleteLocal(runtime, ctx));
         get(app, "/console/api/local-conches/{conch}/export", ctx -> exportLocal(runtime, ctx));
+        post(app, "/console/api/local-conches/{conch}/pending/confirm", ctx -> confirmPending(runtime, ctx));
+        delete(app, "/console/api/local-conches/{conch}/pending", ctx -> rejectPending(runtime, ctx));
+        get(app, "/console/api/local-conches/{conch}/history", ctx -> listHistory(runtime, ctx));
+        post(app, "/console/api/local-conches/{conch}/history/{id}/restore", ctx -> restoreHistory(runtime, ctx));
         post(app, "/console/api/local-conches/{conch}/actions/{action}/run", ctx -> runLocal(runtime, ctx));
         post(app, "/console/api/local-conches/{conch}/mcp/refresh", ctx -> refreshLocalMcp(runtime, ctx));
     }
@@ -1315,11 +1320,74 @@ final class ConsoleApi {
         LocalConches.ImportResult result = runtime.localConches().importBytes(
                 localBody(ctx), Actors.CONSOLE, confirm(ctx));
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        writeImport(ctx, result);
+    }
+
+    private static void writeImport(Context ctx, LocalConches.ImportResult result) {
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", result.conch());
         body.put("version", result.version());
         body.put("replaced", result.replaced());
+        body.put("previousVersion", result.previousVersion());
+        body.put("backupId", result.backupId());
         body.put("warnings", issues(result.warnings()));
         GatewayResponses.writeData(ctx, body);
+    }
+
+    private static void listPending(CrabRuntime runtime, Context ctx) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (LocalConches.PendingOverwrite row : runtime.localConches().pending()) {
+            LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+            item.put("conch", row.conch());
+            item.put("sha256", row.sha256());
+            item.put("baseSha", row.baseSha());
+            item.put("addedDestinations", row.addedDestinations());
+            item.put("fromVersion", row.previousVersion());
+            item.put("toVersion", row.version());
+            item.put("keyName", row.submittedBy());
+            item.put("submittedAt", row.submittedAt().toString());
+            item.put("expiresAt", row.submittedAt().plus(LocalConches.PENDING_TTL).toString());
+            item.put("undetermined", row.undetermined());
+            item.put("yaml", new String(row.yaml(), java.nio.charset.StandardCharsets.UTF_8));
+            rows.add(item);
+        }
+        GatewayResponses.writeData(ctx, Map.of("pending", rows));
+    }
+
+    private static void confirmPending(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = ApiJson.tree(RequestBodies.read(ctx.req()));
+        if (body == null || !body.isObject()) {
+            throw new IllegalArgumentException("需要 sha256。");
+        }
+        rejectUnknownFields(body, Set.of("sha256"));
+        JsonNode sha = body.get("sha256");
+        if (sha == null || !sha.isTextual() || !sha.asText().matches("[0-9a-f]{64}")) {
+            throw new IllegalArgumentException("sha256 无效。");
+        }
+        writeImport(ctx, runtime.localConches().confirmPending(ctx.pathParam("conch"), sha.asText(), Actors.CONSOLE));
+    }
+
+    private static void rejectPending(CrabRuntime runtime, Context ctx) {
+        String conch = ctx.pathParam("conch");
+        runtime.localConches().rejectPending(conch);
+        GatewayResponses.writeData(ctx, Map.of("conch", conch, "rejected", true));
+    }
+
+    private static void listHistory(CrabRuntime runtime, Context ctx) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (LocalConches.HistoryEntry entry : runtime.localConches().history(ctx.pathParam("conch"))) {
+            LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+            item.put("id", entry.id());
+            item.put("version", entry.version());
+            item.put("savedAt", entry.savedAt() == null ? null : entry.savedAt().toString());
+            rows.add(item);
+        }
+        GatewayResponses.writeData(ctx, Map.of("history", rows));
+    }
+
+    private static void restoreHistory(CrabRuntime runtime, Context ctx) {
+        writeImport(ctx, runtime.localConches().restore(
+                ctx.pathParam("conch"), ctx.pathParam("id"), Actors.CONSOLE));
     }
 
     private static void listLocal(CrabRuntime runtime, Context ctx) {

@@ -12,7 +12,16 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +30,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -31,6 +41,7 @@ import dev.hermit.common.model.McpAuth;
 import dev.hermit.common.model.McpUpstream;
 import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.validate.ConchDestinations;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.DuplicateActions;
 import dev.hermit.common.validate.DuplicateScripts;
@@ -39,6 +50,7 @@ import dev.hermit.common.validate.ValidationResult;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ConchRejectedException;
 import dev.hermit.crab.engine.CrabVersion;
+import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.secure.CredentialCipher;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.AuditKind;
@@ -60,9 +72,14 @@ import dev.hermit.crab.upstream.McpOAuthToken;
 public final class LocalConches {
     /** Same ceiling as Reef {@code ConchPaths.MAX_UPLOAD_BYTES}. */
     public static final int MAX_BYTES = 1024 * 1024;
+    /** 待确认覆盖的内存寿命。重启即丢，拒绝和到期不写审计。 */
+    public static final Duration PENDING_TTL = Duration.ofMinutes(30);
+    static final int HISTORY_KEEP = 10;
 
     private static final Logger LOG = Logger.getLogger(LocalConches.class.getName());
     private static final String SUFFIX = ".yaml";
+    private static final DateTimeFormatter HISTORY_STAMP =
+            DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS").withZone(ZoneOffset.UTC);
 
     private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script");
 
@@ -70,12 +87,17 @@ public final class LocalConches {
     private final ConchRegistry registry;
     private final DataSource dataSource;
     private final BooleanSupplier debugEnabled;
+    private final Clock clock;
     private final Object lock = new Object();
     /** Legal stems whose yaml failed to load. Rebuilt on startup and reload. Not callable. */
     private final LinkedHashMap<String, BrokenLocal> broken = new LinkedHashMap<>();
+    /** 每个包最多一条。新的替换旧的。不落库。 */
+    private final LinkedHashMap<String, PendingOverwrite> pending = new LinkedHashMap<>();
+    private volatile Consumer<String> onWidened = name -> {
+    };
 
     public LocalConches(CrabPaths paths, ConchRegistry registry, DataSource dataSource) {
-        this(paths, registry, dataSource, () -> false);
+        this(paths, registry, dataSource, () -> false, Clock.systemUTC());
     }
 
     /**
@@ -88,10 +110,30 @@ public final class LocalConches {
             DataSource dataSource,
             BooleanSupplier debugEnabled
     ) {
+        this(paths, registry, dataSource, debugEnabled, Clock.systemUTC());
+    }
+
+    public LocalConches(
+            CrabPaths paths,
+            ConchRegistry registry,
+            DataSource dataSource,
+            BooleanSupplier debugEnabled,
+            Clock clock
+    ) {
         this.paths = paths;
         this.registry = registry;
         this.dataSource = dataSource;
         this.debugEnabled = debugEnabled == null ? () -> false : debugEnabled;
+        this.clock = clock == null ? Clock.systemUTC() : clock;
+    }
+
+    /**
+     * 地址范围扩大的覆盖，在 {@code registry.put} 之前调用。
+     * 用来清掉这个包全部账号的 HTTP 会话和登录快照。
+     */
+    public void onWidened(Consumer<String> listener) {
+        this.onWidened = listener == null ? name -> {
+        } : listener;
     }
 
     public ImportResult importBytes(byte[] raw, String actor) {
@@ -104,28 +146,197 @@ public final class LocalConches {
      *     left untouched.
      */
     public ImportResult importBytes(byte[] raw, String actor, boolean replace) {
+        return importBytes(raw, actor, replace, ReplaceOptions.none());
+    }
+
+    /**
+     * {@code options.expectedBaseSha()} 非空时，磁盘文件的 SHA-256 必须还是这个值，否则 409 且不写。
+     * 空字符串表示当时没有文件。
+     */
+    public ImportResult importBytes(byte[] raw, String actor, boolean replace, ReplaceOptions options) {
         String checked = actor(actor);
-        if (raw == null) {
-            throw LocalConchException.invalid("yaml is required");
-        }
-        if (raw.length > MAX_BYTES) {
-            throw LocalConchException.invalid("yaml exceeds 1 MiB");
-        }
-        Parsed parsed = parse(raw);
+        requireRaw(raw);
+        ReplaceOptions opts = options == null ? ReplaceOptions.none() : options;
         synchronized (lock) {
-            rejectClash(parsed.doc().conch());
-            boolean exists = localPackageExists(parsed.doc().conch());
-            if (exists && !replace) {
-                throw LocalConchException.replaceRequired(parsed.doc().conch());
+            return writeUnlocked(raw, checked, replace, opts);
+        }
+    }
+
+    /**
+     * 已有本地包且目的地没有扩大时直接覆盖。扩大了则抛 {@link LocalConchException#replaceRequired(String)}，
+     * 不写文件。判断和写入在同一把锁里。
+     */
+    public ImportResult replaceIfSameBoundary(byte[] raw, String actor, String keyName) {
+        String checked = actor(actor);
+        requireRaw(raw);
+        synchronized (lock) {
+            Parsed parsed = parse(raw);
+            String conch = parsed.doc().conch();
+            rejectClash(conch);
+            if (!localPackageExists(conch)) {
+                return writeUnlocked(raw, checked, false, ReplaceOptions.none());
             }
-            store(parsed.doc(), raw);
-            broken.remove(parsed.doc().conch());
-            audit(checked, AuditKind.LOCAL_CONCH_IMPORTED, parsed.doc());
-            return new ImportResult(
-                    parsed.doc().conch(),
+            ConchDoc before = readableDoc(conch).orElse(null);
+            if (!ConchDestinations.between(before, parsed.doc()).sameBoundary()) {
+                throw LocalConchException.replaceRequired(conch);
+            }
+            return writeUnlocked(raw, checked, true, new ReplaceOptions(null, keyName, null));
+        }
+    }
+
+    /**
+     * 地址扩大、客户端不能当场确认时记下一条待确认覆盖。已经是同一边界，或包已经不在了，返回 empty，不写文件。
+     */
+    public Optional<PendingOverwrite> stagePending(byte[] raw, String actor, String submittedBy) {
+        String checked = actor(actor);
+        requireRaw(raw);
+        synchronized (lock) {
+            Parsed parsed = parse(raw);
+            String conch = parsed.doc().conch();
+            rejectClash(conch);
+            if (!localPackageExists(conch)) {
+                return Optional.empty();
+            }
+            ConchDoc before = readableDoc(conch).orElse(null);
+            ConchDestinations.Boundary boundary = ConchDestinations.between(before, parsed.doc());
+            if (boundary.sameBoundary()) {
+                return Optional.empty();
+            }
+            byte[] disk = readIfRegular(conch);
+            String baseSha = disk == null ? "" : sha256(disk);
+            PendingOverwrite row = new PendingOverwrite(
+                    conch,
+                    raw,
+                    sha256(raw),
+                    baseSha,
                     parsed.doc().version().toString(),
-                    exists,
-                    parsed.warnings());
+                    before == null ? null : before.version().toString(),
+                    boundary.addedDestinations(),
+                    boundary.undetermined(),
+                    blankToNull(submittedBy),
+                    clock.instant());
+            pending.put(conch, row);
+            auditDetail(checked, AuditKind.LOCAL_CONCH_REPLACE_PENDING, detail(
+                    conch,
+                    row.version(),
+                    row.previousVersion(),
+                    row.sha256(),
+                    baseSha,
+                    boundary,
+                    null,
+                    row.submittedBy()));
+            return Optional.of(row);
+        }
+    }
+
+    /** 未过期的待确认覆盖，按包名排序。过期的顺手丢掉，不写审计。 */
+    public List<PendingOverwrite> pending() {
+        synchronized (lock) {
+            ArrayList<PendingOverwrite> rows = new ArrayList<>();
+            for (String conch : List.copyOf(pending.keySet())) {
+                PendingOverwrite row = fresh(conch);
+                if (row != null) {
+                    rows.add(row);
+                }
+            }
+            rows.sort(Comparator.comparing(PendingOverwrite::conch));
+            return List.copyOf(rows);
+        }
+    }
+
+    /**
+     * 控制台确认一条待确认覆盖。{@code sha256} 必须是这条 YAML 的摘要。
+     * 磁盘已不是提交时的 {@code baseSha} 时 409，并丢掉这条待确认。
+     */
+    public ImportResult confirmPending(String conch, String sha256, String actor) {
+        String checked = actor(actor);
+        synchronized (lock) {
+            PendingOverwrite row = fresh(conch);
+            if (row == null) {
+                throw LocalConchException.pendingMissing();
+            }
+            if (sha256 == null || !sha256.equals(row.sha256())) {
+                throw LocalConchException.pendingChanged();
+            }
+            try {
+                return writeUnlocked(
+                        row.yaml(),
+                        checked,
+                        true,
+                        new ReplaceOptions(row.baseSha(), row.submittedBy(), AuditKind.LOCAL_CONCH_REPLACED));
+            } catch (LocalConchException ex) {
+                if (LocalConchException.STALE.equals(ex.getMessage())) {
+                    pending.remove(conch);
+                }
+                throw ex;
+            }
+        }
+    }
+
+    /** 拒绝不写审计。没有这条待确认时 404。 */
+    public void rejectPending(String conch) {
+        synchronized (lock) {
+            if (fresh(conch) == null) {
+                throw LocalConchException.pendingMissing();
+            }
+            pending.remove(conch);
+        }
+    }
+
+    /** 磁盘上这份本地包的 SHA-256。没有普通文件时是空字符串。 */
+    public String diskSha(String conch) {
+        synchronized (lock) {
+            byte[] raw = readIfRegular(conch);
+            return raw == null ? "" : sha256(raw);
+        }
+    }
+
+    /** 最近的在前。包已经删掉时，只要历史还在就能列出来。 */
+    public List<HistoryEntry> history(String conch) {
+        synchronized (lock) {
+            Path dir = historyDir(conch);
+            if (Files.isSymbolicLink(dir) || !Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
+                return List.of();
+            }
+            ArrayList<Path> files = new ArrayList<>();
+            try (var children = Files.list(dir)) {
+                for (Path child : children.toList()) {
+                    if (Files.isSymbolicLink(child)) {
+                        continue;
+                    }
+                    String name = child.getFileName().toString();
+                    if (name.endsWith(SUFFIX) && Files.isRegularFile(child, LinkOption.NOFOLLOW_LINKS)) {
+                        files.add(child);
+                    }
+                }
+            } catch (IOException ex) {
+                throw new IllegalStateException("local conch history was not listed");
+            }
+            files.sort(Comparator.comparing((Path path) -> path.getFileName().toString()).reversed());
+            ArrayList<HistoryEntry> rows = new ArrayList<>();
+            for (Path file : files) {
+                String name = file.getFileName().toString();
+                String id = name.substring(0, name.length() - SUFFIX.length());
+                rows.add(new HistoryEntry(id, historyVersion(file), historySavedAt(id)));
+            }
+            return List.copyOf(rows);
+        }
+    }
+
+    /**
+     * 用一份历史替换当前文件。当前文件会先备份。包已经不在时，这是一次带回退审计的导入。
+     */
+    public ImportResult restore(String conch, String id, String actor) {
+        String checked = actor(actor);
+        synchronized (lock) {
+            byte[] raw = readHistory(conch, id);
+            Parsed parsed = parse(raw);
+            if (!conch.equals(parsed.doc().conch())) {
+                throw LocalConchException.invalid("历史文件里的包名不一致。");
+            }
+            boolean exists = localPackageExists(conch);
+            return writeUnlocked(
+                    raw, checked, exists, new ReplaceOptions(null, null, AuditKind.LOCAL_CONCH_RESTORED));
         }
     }
 
@@ -250,19 +461,31 @@ public final class LocalConches {
     }
 
     /**
-     * 覆盖确认文案。上游地址的主机和已声明的令牌端点主机都没变时，沿用短句。
-     * 主机会变时写明旧主机、新主机，并说明确认后会清掉已保存的上游令牌。
+     * 覆盖确认文案。目的地没变时沿用短句。扩大时先列出新增地址。
+     * 上游主机或已声明的令牌端点主机会变时，写明旧主机、新主机，并说明确认后会清掉已保存的上游令牌。
      */
     public static String overwriteConfirm(String conch, ConchDoc before, ConchDoc after) {
-        String unchanged = "将覆盖已有的本地规则包 " + conch + "。确认后才会写入。";
+        String lead = "将覆盖已有的本地规则包 " + conch + "。";
+        ConchDestinations.Boundary boundary = ConchDestinations.between(before, after);
+        StringBuilder text = new StringBuilder(lead);
+        if (!boundary.sameBoundary()) {
+            if (!boundary.addedDestinations().isEmpty() || boundary.undetermined()) {
+                text.append("新增地址：").append(ConchDestinations.describe(boundary)).append('。');
+            } else if (boundary.authChanged()) {
+                text.append("认证方式有变化。");
+            }
+        }
         UpstreamIdentity left = identity(before);
         UpstreamIdentity right = identity(after);
         boolean urlHostChanged = !Objects.equals(left.host, right.host);
         boolean tokenHostChanged = !Objects.equals(left.tokenHost, right.tokenHost);
         if (!urlHostChanged && !tokenHostChanged) {
-            return unchanged;
+            if (boundary.sameBoundary()) {
+                return lead + "确认后才会写入。";
+            }
+            text.append("确认后才会写入。");
+            return text.toString();
         }
-        StringBuilder text = new StringBuilder("将覆盖已有的本地规则包 ").append(conch).append('。');
         boolean tokenFollowsUrl = urlHostChanged
                 && Objects.equals(left.tokenHost, left.host)
                 && Objects.equals(right.tokenHost, right.host);
@@ -351,7 +574,10 @@ public final class LocalConches {
         LinkedHashMap<String, ConchDoc> loaded = new LinkedHashMap<>();
         LinkedHashMap<String, BrokenLocal> nextBroken = new LinkedHashMap<>();
         try (var children = Files.list(root)) {
-            for (Path child : children.filter(path -> path.getFileName().toString().endsWith(SUFFIX)).sorted().toList()) {
+            for (Path child : children.filter(path -> {
+                String name = path.getFileName().toString();
+                return !name.startsWith(".") && name.endsWith(SUFFIX);
+            }).sorted().toList()) {
                 results.add(loadFile(root, child, loaded, nextBroken));
             }
         } catch (IOException ex) {
@@ -565,23 +791,79 @@ public final class LocalConches {
         }
     }
 
-    private void store(ConchDoc doc, byte[] raw) {
+    private ImportResult writeUnlocked(byte[] raw, String actor, boolean replace, ReplaceOptions options) {
+        Parsed parsed = parse(raw);
+        rejectClash(parsed.doc().conch());
+        boolean exists = localPackageExists(parsed.doc().conch());
+        if (exists && !replace) {
+            throw LocalConchException.replaceRequired(parsed.doc().conch());
+        }
+        WriteOutcome outcome = store(parsed.doc(), raw, options);
+        broken.remove(parsed.doc().conch());
+        AuditKind kind = options.auditKind();
+        if (kind == null) {
+            kind = outcome.replaced() ? AuditKind.LOCAL_CONCH_REPLACED : AuditKind.LOCAL_CONCH_IMPORTED;
+        }
+        if (kind == AuditKind.LOCAL_CONCH_IMPORTED) {
+            audit(actor, kind, parsed.doc());
+        } else {
+            auditDetail(actor, kind, detail(
+                    parsed.doc().conch(),
+                    parsed.doc().version().toString(),
+                    outcome.previousVersion(),
+                    outcome.sha256(),
+                    outcome.previousSha256(),
+                    outcome.boundary(),
+                    outcome.backupId(),
+                    options.keyName()));
+        }
+        return new ImportResult(
+                parsed.doc().conch(),
+                parsed.doc().version().toString(),
+                outcome.replaced(),
+                parsed.warnings(),
+                outcome.replaced() ? outcome.previousVersion() : null,
+                outcome.replaced() ? outcome.backupId() : null);
+    }
+
+    private WriteOutcome store(ConchDoc doc, byte[] raw, ReplaceOptions options) {
         synchronized (ConchFileLocks.of(doc.conch())) {
             rejectClash(doc.conch());
             Path file = yamlPath(doc.conch());
             if (Files.isSymbolicLink(file)) {
                 throw LocalConchException.invalid("local conch path is a symlink");
             }
+            boolean replaced = localPackageExists(doc.conch());
             byte[] previous = null;
             boolean existed = Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS);
             if (existed) {
                 try {
+                    if (Files.size(file) > MAX_BYTES) {
+                        throw LocalConchException.invalid("上一版超过 1 MiB，没有覆盖。");
+                    }
                     previous = Files.readAllBytes(file);
+                } catch (LocalConchException ex) {
+                    throw ex;
                 } catch (IOException ex) {
                     throw new IllegalStateException("local conch file was not read");
                 }
             }
+            String currentSha = previous == null ? "" : sha256(previous);
+            if (options.expectedBaseSha() != null && !options.expectedBaseSha().equals(currentSha)) {
+                throw LocalConchException.stale();
+            }
             ConchDoc before = baseline(doc.conch(), previous);
+            ConchDestinations.Boundary boundary = ConchDestinations.between(before, doc);
+            String backupId = null;
+            if (previous != null) {
+                String version = before != null && ConchFiles.safeSegment(before.version().toString())
+                        ? before.version().toString()
+                        : "unknown";
+                backupId = backup(doc.conch(), version, previous);
+            }
+            if (replaced && !boundary.sameBoundary()) {
+                onWidened.accept(doc.conch());
+            }
             try {
                 atomicWrite(file, raw);
                 registry.put(doc, Origin.LOCAL, allowEmptyMcpActions());
@@ -595,6 +877,14 @@ public final class LocalConches {
             if (dropUpstreamSecrets(before, doc, existed)) {
                 deleteUpstreamSecrets(doc.conch());
             }
+            pending.remove(doc.conch());
+            return new WriteOutcome(
+                    replaced,
+                    before == null ? null : before.version().toString(),
+                    currentSha,
+                    sha256(raw),
+                    backupId,
+                    boundary);
         }
     }
 
@@ -764,6 +1054,209 @@ public final class LocalConches {
             throw LocalConchException.invalid("conch path escapes local-conches");
         }
         return file;
+    }
+
+    private static void requireRaw(byte[] raw) {
+        if (raw == null) {
+            throw LocalConchException.invalid("yaml is required");
+        }
+        if (raw.length > MAX_BYTES) {
+            throw LocalConchException.invalid("yaml exceeds 1 MiB");
+        }
+    }
+
+    private PendingOverwrite fresh(String conch) {
+        PendingOverwrite row = pending.get(conch);
+        if (row == null) {
+            return null;
+        }
+        if (!row.submittedAt().plus(PENDING_TTL).isAfter(clock.instant())) {
+            pending.remove(conch);
+            return null;
+        }
+        return row;
+    }
+
+    private byte[] readIfRegular(String conch) {
+        Path file = yamlPath(conch);
+        try {
+            if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+                return null;
+            }
+            if (Files.size(file) > MAX_BYTES) {
+                return null;
+            }
+            return Files.readAllBytes(file);
+        } catch (IOException ex) {
+            throw new IllegalStateException("local conch file was not read");
+        }
+    }
+
+    private String backup(String conch, String version, byte[] previous) {
+        if (!ConchFiles.safeSegment(version)) {
+            version = "unknown";
+        }
+        Path dir = historyDir(conch);
+        Path historyRoot = dir.getParent();
+        if (historyRoot != null && Files.isSymbolicLink(historyRoot) || Files.isSymbolicLink(dir)) {
+            throw LocalConchException.invalid("local conch history path is a symlink");
+        }
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException ex) {
+            throw new IllegalStateException("local conch history was not written");
+        }
+        String stamp = HISTORY_STAMP.format(clock.instant());
+        String stem = stamp + "-" + version;
+        Path target = dir.resolve(stem + SUFFIX).normalize();
+        int suffix = 2;
+        while (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            target = dir.resolve(stem + "-" + suffix + SUFFIX).normalize();
+            suffix++;
+            if (suffix > 100) {
+                throw new IllegalStateException("local conch history was not written");
+            }
+        }
+        if (!target.startsWith(dir)) {
+            throw LocalConchException.invalid("history path escapes local-conches");
+        }
+        atomicWrite(target, previous);
+        pruneHistory(dir);
+        String name = target.getFileName().toString();
+        return name.substring(0, name.length() - SUFFIX.length());
+    }
+
+    private static void pruneHistory(Path dir) {
+        try (var children = Files.list(dir)) {
+            ArrayList<Path> files = new ArrayList<>();
+            for (Path child : children.toList()) {
+                if (Files.isSymbolicLink(child)) {
+                    Files.deleteIfExists(child);
+                    continue;
+                }
+                String name = child.getFileName().toString();
+                if (name.endsWith(SUFFIX) && Files.isRegularFile(child, LinkOption.NOFOLLOW_LINKS)) {
+                    files.add(child);
+                }
+            }
+            files.sort(Comparator.comparing((Path path) -> path.getFileName().toString()).reversed());
+            for (int i = HISTORY_KEEP; i < files.size(); i++) {
+                Files.deleteIfExists(files.get(i));
+            }
+        } catch (IOException ex) {
+            throw new IllegalStateException("local conch history was not pruned");
+        }
+    }
+
+    private Path historyDir(String conch) {
+        if (!ConchValidator.isConchName(conch) || !ConchFiles.safeSegment(conch)) {
+            throw LocalConchException.invalid("conch name is not safe");
+        }
+        Path root = paths.localConches().toAbsolutePath().normalize();
+        Path history = root.resolve(".history").normalize();
+        Path dir = history.resolve(conch).normalize();
+        if (!dir.startsWith(history) || !history.equals(dir.getParent())) {
+            throw LocalConchException.invalid("conch path escapes local-conches");
+        }
+        return dir;
+    }
+
+    private byte[] readHistory(String conch, String id) {
+        if (id == null || id.length() > 180 || id.contains("..") || id.indexOf('/') >= 0 || id.indexOf('\\') >= 0
+                || !id.matches("[0-9A-Za-z._-]+") || !ConchFiles.safeSegment(id)) {
+            throw LocalConchException.invalid("历史编号无效。");
+        }
+        Path dir = historyDir(conch);
+        Path file = dir.resolve(id + SUFFIX).normalize();
+        if (!file.startsWith(dir) || !dir.equals(file.getParent())) {
+            throw LocalConchException.invalid("历史编号无效。");
+        }
+        if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+            throw LocalConchException.historyMissing();
+        }
+        try {
+            if (Files.size(file) > MAX_BYTES) {
+                throw LocalConchException.invalid("yaml exceeds 1 MiB");
+            }
+            return Files.readAllBytes(file);
+        } catch (LocalConchException ex) {
+            throw ex;
+        } catch (IOException ex) {
+            throw LocalConchException.historyMissing();
+        }
+    }
+
+    private static String historyVersion(Path file) {
+        try {
+            if (Files.size(file) > MAX_BYTES) {
+                return "unknown";
+            }
+            ConchDoc doc = ConchParser.parse(Files.readString(file));
+            return doc.version() == null ? "unknown" : doc.version().toString();
+        } catch (IOException | RuntimeException ex) {
+            return "unknown";
+        }
+    }
+
+    private static Instant historySavedAt(String id) {
+        if (id.length() < 17) {
+            return null;
+        }
+        String stamp = id.substring(0, 17);
+        for (int i = 0; i < stamp.length(); i++) {
+            if (!Character.isDigit(stamp.charAt(i))) {
+                return null;
+            }
+        }
+        try {
+            return HISTORY_STAMP.parse(stamp, Instant::from);
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private static Map<String, Object> detail(
+            String conch,
+            String version,
+            String previousVersion,
+            String sha256,
+            String previousSha256,
+            ConchDestinations.Boundary boundary,
+            String backupId,
+            String keyName
+    ) {
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conch", conch);
+        body.put("version", version);
+        body.put("previousVersion", previousVersion);
+        body.put("sha256", sha256);
+        body.put("previousSha256", previousSha256 == null ? "" : previousSha256);
+        body.put("boundary", boundary != null && boundary.sameBoundary() ? "same" : "widened");
+        body.put("addedDestinations", boundary == null ? List.of() : boundary.addedDestinations());
+        body.put("backupId", backupId);
+        if (keyName != null && !keyName.isBlank()) {
+            body.put("key", keyName);
+        }
+        return body;
+    }
+
+    private void auditDetail(String actor, AuditKind kind, Map<String, Object> body) {
+        if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor) && !Actors.MCP.equals(actor)) {
+            return;
+        }
+        AuditLog.record(dataSource, actor, kind, Origin.LOCAL.name() + "/" + body.get("conch"), ApiJson.write(body));
     }
 
     private void audit(String actor, AuditKind kind, ConchDoc doc) {
@@ -967,10 +1460,60 @@ public final class LocalConches {
         }
     }
 
-    public record ImportResult(String conch, String version, boolean replaced, List<ValidationIssue> warnings) {
+    public record ImportResult(
+            String conch,
+            String version,
+            boolean replaced,
+            List<ValidationIssue> warnings,
+            String previousVersion,
+            String backupId
+    ) {
+        public ImportResult(String conch, String version, boolean replaced, List<ValidationIssue> warnings) {
+            this(conch, version, replaced, warnings, null, null);
+        }
+
         public ImportResult {
             warnings = warnings == null ? List.of() : List.copyOf(warnings);
         }
+    }
+
+    /**
+     * 一次覆盖相对提交时磁盘的约束。{@code expectedBaseSha} 为 null 时不核对。
+     * {@code auditKind} 为 null 时，新建记 IMPORTED，覆盖记 REPLACED。
+     */
+    public record ReplaceOptions(String expectedBaseSha, String keyName, AuditKind auditKind) {
+        public static ReplaceOptions none() {
+            return new ReplaceOptions(null, null, null);
+        }
+    }
+
+    /** 内存里的待确认覆盖。{@code yaml} 每次返回都是副本。 */
+    public record PendingOverwrite(
+            String conch,
+            byte[] yaml,
+            String sha256,
+            String baseSha,
+            String version,
+            String previousVersion,
+            List<String> addedDestinations,
+            boolean undetermined,
+            String submittedBy,
+            Instant submittedAt
+    ) {
+        public PendingOverwrite {
+            yaml = yaml == null ? new byte[0] : yaml.clone();
+            addedDestinations = addedDestinations == null ? List.of() : List.copyOf(addedDestinations);
+            Objects.requireNonNull(submittedAt, "submittedAt");
+        }
+
+        @Override
+        public byte[] yaml() {
+            return yaml.clone();
+        }
+    }
+
+    /** {@code id} 是 {@code .history} 里的文件名去掉 {@code .yaml}。 */
+    public record HistoryEntry(String id, String version, Instant savedAt) {
     }
 
     public record FileResult(String file, String conch, String version, boolean ok, List<ValidationIssue> issues) {
@@ -995,6 +1538,16 @@ public final class LocalConches {
     }
 
     private record BrokenLocal(String conch, String file, String reason, boolean ruleDisabled) {
+    }
+
+    private record WriteOutcome(
+            boolean replaced,
+            String previousVersion,
+            String previousSha256,
+            String sha256,
+            String backupId,
+            ConchDestinations.Boundary boundary
+    ) {
     }
 
     /** 上游身份。端口 -1 表示没有可比较的 URL。令牌端点只比主机。 */

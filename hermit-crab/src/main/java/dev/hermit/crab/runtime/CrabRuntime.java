@@ -40,6 +40,7 @@ import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.InvalidInput;
 import dev.hermit.crab.engine.InputPreparer;
 import dev.hermit.crab.engine.RuleEngine;
+import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.upstream.McpCallPayload;
 import dev.hermit.crab.upstream.McpForwarder;
@@ -224,7 +225,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(
-                paths, registry, database.dataSource(), () -> debug.get().enabled());
+                paths, registry, database.dataSource(), () -> debug.get().enabled(), clock);
+        this.localConches.onWidened(this::clearWidenedSessions);
         this.admin.bindOriginFallback(name -> localConches.occupies(name) ? Origin.LOCAL : null);
         this.admin.bindAccountRemoved(mcpForwarder::forgetAccount);
         this.instanceId = InstanceIds.loadOrCreate(paths);
@@ -235,6 +237,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             this.mcpForwarder.close();
             this.database.close();
             throw ex;
+        }
+    }
+
+    /** 地址范围扩大的本地覆盖：先丢掉待输入登录，再清每个账号的会话和登录快照。 */
+    private void clearWidenedSessions(String conch) {
+        sessions.pending().discardConch(conch);
+        for (Account account : accounts.list(Origin.LOCAL, conch)) {
+            sessions.invalidate(new SessionKey(Origin.LOCAL, conch, account.account()));
         }
     }
 

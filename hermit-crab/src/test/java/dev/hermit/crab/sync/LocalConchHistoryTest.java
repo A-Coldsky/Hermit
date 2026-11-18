@@ -1,0 +1,168 @@
+package dev.hermit.crab.sync;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import dev.hermit.common.error.ErrorCode;
+import dev.hermit.crab.engine.ConchRegistry;
+import dev.hermit.crab.store.Actors;
+import dev.hermit.crab.store.AuditKind;
+import dev.hermit.crab.testing.MutableClock;
+
+class LocalConchHistoryTest {
+
+    @TempDir
+    java.nio.file.Path temp;
+
+    @Test
+    void historyKeepsTenBackupsAndSurvivesDelete() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-18T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("keep"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            local.importBytes(LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            for (int i = 1; i <= 11; i++) {
+                clock.advance(Duration.ofMillis(1));
+                local.importBytes(
+                        LocalConchBehaviorTest.ping("hist_ping", "1.0." + i).getBytes(StandardCharsets.UTF_8),
+                        Actors.CLI,
+                        true);
+            }
+            List<LocalConches.HistoryEntry> history = local.history("hist_ping");
+            assertThat(history).hasSize(LocalConches.HISTORY_KEEP);
+            assertThat(history.get(0).version()).isEqualTo("1.0.10");
+            assertThat(history).extracting(LocalConches.HistoryEntry::version).doesNotContain("1.0.0");
+            assertThat(history.get(0).id()).startsWith("20261118").doesNotContain(".yaml");
+            assertThat(history.get(0).savedAt()).isNotNull();
+
+            local.delete("hist_ping", Actors.CLI);
+            assertThat(local.history("hist_ping")).hasSize(LocalConches.HISTORY_KEEP);
+            LocalConches.HistoryEntry oldest = history.get(history.size() - 1);
+            LocalConches.ImportResult restored = local.restore("hist_ping", oldest.id(), Actors.CLI);
+            assertThat(restored.replaced()).isFalse();
+            assertThat(restored.version()).isEqualTo(oldest.version());
+            assertThat(local.packages()).extracting(pkg -> pkg.version()).containsExactly(oldest.version());
+            assertThat(auditDetail(crab, AuditKind.LOCAL_CONCH_RESTORED.name())).contains("\"boundary\":\"widened\"");
+        }
+    }
+
+    @Test
+    void sameMillisecondBackupGetsASuffix() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-18T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("collide"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            String first = LocalConchBehaviorTest.ping("hist_ping", "1.0.0");
+            local.importBytes(first.getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            local.importBytes(first.replace("本地探测", "第二份").getBytes(StandardCharsets.UTF_8), Actors.CLI, true);
+            local.importBytes(first.replace("本地探测", "第三份").getBytes(StandardCharsets.UTF_8), Actors.CLI, true);
+            assertThat(local.history("hist_ping")).extracting(LocalConches.HistoryEntry::id)
+                    .anySatisfy(id -> assertThat(id).endsWith("-2"));
+        }
+    }
+
+    @Test
+    void pendingExpiresAndAChangedDiskDropsIt() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-18T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("pending"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            byte[] original = LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8);
+            local.importBytes(original, Actors.CLI);
+            byte[] widened = LocalConchBehaviorTest.ping("hist_ping", "1.1.0")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/")
+                    .getBytes(StandardCharsets.UTF_8);
+            LocalConches.PendingOverwrite staged = local.stagePending(widened, Actors.MCP, "agent-key").orElseThrow();
+            assertThat(staged.addedDestinations()).containsExactly("http://127.0.0.1:10");
+            assertThat(auditCount(crab, AuditKind.LOCAL_CONCH_REPLACE_PENDING.name())).isEqualTo(1);
+
+            clock.advance(Duration.ofMinutes(30));
+            assertThat(local.pending()).isEmpty();
+            assertThatThrownBy(() -> local.confirmPending("hist_ping", staged.sha256(), Actors.CONSOLE))
+                    .isInstanceOf(LocalConchException.class)
+                    .hasMessage(LocalConchException.NO_PENDING);
+            assertThat(auditCount(crab, AuditKind.LOCAL_CONCH_REPLACE_PENDING.name())).isEqualTo(1);
+
+            LocalConches.PendingOverwrite again = local.stagePending(widened, Actors.MCP, "agent-key").orElseThrow();
+            byte[] newer = LocalConchBehaviorTest.ping("hist_ping", "1.2.0")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:11/")
+                    .getBytes(StandardCharsets.UTF_8);
+            local.stagePending(newer, Actors.MCP, "later-key");
+            assertThatThrownBy(() -> local.confirmPending("hist_ping", again.sha256(), Actors.CONSOLE))
+                    .isInstanceOf(LocalConchException.class)
+                    .hasMessage(LocalConchException.PENDING_CHANGED)
+                    .satisfies(ex -> assertThat(((LocalConchException) ex).code()).isEqualTo(ErrorCode.CONFLICT));
+            assertThat(local.pending()).extracting(LocalConches.PendingOverwrite::submittedBy).containsExactly("later-key");
+
+            Files.write(crab.paths.localConches().resolve("hist_ping.yaml"), widened);
+            assertThatThrownBy(() -> local.confirmPending("hist_ping", local.pending().get(0).sha256(), Actors.CONSOLE))
+                    .isInstanceOf(LocalConchException.class)
+                    .hasMessage(LocalConchException.STALE);
+            assertThat(local.pending()).isEmpty();
+            assertThat(Files.readAllBytes(crab.paths.localConches().resolve("hist_ping.yaml"))).isEqualTo(widened);
+        }
+    }
+
+    @Test
+    void dotfilesAreNotLoaded() throws Exception {
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("dot"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource);
+            Files.createDirectories(crab.paths.localConches());
+            Files.writeString(crab.paths.localConches().resolve(".hidden.yaml"), LocalConchBehaviorTest.ping("hidden_ping", "1.0.0"));
+            local.loadStartup();
+            assertThat(local.packages()).isEmpty();
+            assertThat(local.history("hidden_ping")).isEmpty();
+        }
+    }
+
+    @Test
+    void replaceAuditsTheBoundaryAndBackup() throws Exception {
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("audit"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource);
+            local.importBytes(LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            LocalConches.ImportResult replaced = local.importBytes(
+                    LocalConchBehaviorTest.ping("hist_ping", "1.0.1").getBytes(StandardCharsets.UTF_8), Actors.CLI, true);
+            assertThat(replaced.previousVersion()).isEqualTo("1.0.0");
+            assertThat(replaced.backupId()).isNotBlank();
+            String detail = auditDetail(crab, AuditKind.LOCAL_CONCH_REPLACED.name());
+            assertThat(detail).contains("\"boundary\":\"same\"")
+                    .contains("\"previousVersion\":\"1.0.0\"")
+                    .contains("\"backupId\":\"" + replaced.backupId() + "\"");
+            assertThat(auditDetail(crab, AuditKind.LOCAL_CONCH_IMPORTED.name()))
+                    .isEqualTo("{\"conch\":\"hist_ping\",\"version\":\"1.0.0\"}");
+        }
+    }
+
+    private static int auditCount(OpenCrab crab, String kind) throws Exception {
+        try (Connection connection = crab.dataSource.getConnection();
+             PreparedStatement query = connection.prepareStatement(
+                     "SELECT COUNT(*) FROM config_audit WHERE kind = ?")) {
+            query.setString(1, kind);
+            try (ResultSet rows = query.executeQuery()) {
+                assertThat(rows.next()).isTrue();
+                return rows.getInt(1);
+            }
+        }
+    }
+
+    private static String auditDetail(OpenCrab crab, String kind) throws Exception {
+        try (Connection connection = crab.dataSource.getConnection();
+             PreparedStatement query = connection.prepareStatement(
+                     "SELECT detail FROM config_audit WHERE kind = ? ORDER BY id DESC")) {
+            query.setString(1, kind);
+            try (ResultSet rows = query.executeQuery()) {
+                assertThat(rows.next()).isTrue();
+                return rows.getString(1);
+            }
+        }
+    }
+}

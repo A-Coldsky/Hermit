@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.validate.ConchDestinations;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.runtime.ApiEnvelope;
@@ -37,7 +38,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 final class AuthoringCalls {
     static final String DEV_MODE_CLOSED = "开发者模式没有打开。请到 Crab 控制台概览打开开发者模式。";
     static final String OFFICIAL = "先在本地规则包上开发，再导出上传。";
-    static final String NO_OVERWRITE = "客户端不支持确认，不能覆盖已有的本地规则包。请换一个新的包名，或到控制台导入。";
+    static final String SAME_NAME = "改已有的包就用同一个名字保存；如果需要确认，请让用户确认，不要换名字。";
     static final String OVERWRITE_DECLINED = "未确认覆盖，本地规则包没有改动。";
     static final String CONFIRM_PARAM = "不能用参数确认覆盖。覆盖已有本地规则包时，要在客户端里确认。";
     static final String LOCAL_ONLY = "写规则包和这份指南只允许本机调用。请从本机连接 Crab。";
@@ -115,17 +116,59 @@ final class AuthoringCalls {
             if (!inScope(principal, ex.replaceConch())) {
                 return McpCalls.failAsRequest(attempt, "FORBIDDEN", notInScope(ex.replaceConch()));
             }
-            McpSchema.CallToolResult confirmed = confirmOverwrite(session, ex.replaceConch(), raw, attempt);
-            if (confirmed != null) {
-                return confirmed;
-            }
+            String keyName = principal == null ? null : principal.name();
             try {
-                LocalConches.ImportResult saved = runtime.localConches().importBytes(raw, Actors.MCP, true);
-                return saved(saved, beforeKeys);
-            } catch (LocalConchException again) {
-                return importFailure(again, attempt);
+                return saved(runtime.localConches().replaceIfSameBoundary(raw, Actors.MCP, keyName), beforeKeys);
+            } catch (LocalConchException same) {
+                if (same.replaceConch() == null) {
+                    return importFailure(same, attempt);
+                }
             }
+            ConchDoc after = ConchParser.parse(yaml.text());
+            ConchDoc before = runtime.localConches().readableDoc(ex.replaceConch()).orElse(null);
+            ConchDestinations.Boundary boundary = ConchDestinations.between(before, after);
+            boolean canElicit = session != null && session.supportsElicitation() && session.streaming();
+            if (canElicit) {
+                String baseSha = runtime.localConches().diskSha(ex.replaceConch());
+                McpSchema.CallToolResult confirmed = confirmOverwrite(session, ex.replaceConch(), before, after, attempt);
+                if (confirmed != null) {
+                    return confirmed;
+                }
+                try {
+                    return saved(runtime.localConches().importBytes(
+                            raw, Actors.MCP, true, new LocalConches.ReplaceOptions(baseSha, keyName, null)), beforeKeys);
+                } catch (LocalConchException again) {
+                    return importFailure(again, attempt);
+                }
+            }
+            Optional<LocalConches.PendingOverwrite> staged =
+                    runtime.localConches().stagePending(raw, Actors.MCP, keyName);
+            if (staged.isEmpty()) {
+                try {
+                    return saved(runtime.localConches().replaceIfSameBoundary(raw, Actors.MCP, keyName), beforeKeys);
+                } catch (LocalConchException again) {
+                    if (again.replaceConch() == null) {
+                        return importFailure(again, attempt);
+                    }
+                    staged = runtime.localConches().stagePending(raw, Actors.MCP, keyName);
+                    if (staged.isEmpty()) {
+                        return importFailure(again, attempt);
+                    }
+                }
+            }
+            return McpCalls.failAsRequest(attempt, "CONFIRM_REQUIRED", confirmRequiredMessage(boundary));
         }
+    }
+
+    static String confirmRequiredMessage(ConchDestinations.Boundary boundary) {
+        String list;
+        if (boundary.addedDestinations().isEmpty() && !boundary.undetermined() && boundary.authChanged()) {
+            list = "认证方式有变化";
+        } else {
+            list = ConchDestinations.describe(boundary);
+        }
+        return "这次修改让规则包访问新的地址 " + list
+                + "，需要用户到 Crab 控制台确认。请把这句话转告用户，不要换包名重新保存。";
     }
 
     McpSchema.CallToolResult trial(
@@ -264,7 +307,7 @@ final class AuthoringCalls {
             }
         }
         return issues(true, result.conch(), result.version(), List.of(), result.warnings(), null, result.replaced(), next,
-                null);
+                null, result.previousVersion(), result.backupId());
     }
 
     private static Set<String> credentialNames(ConchDoc doc) {
@@ -289,14 +332,14 @@ final class AuthoringCalls {
     private McpSchema.CallToolResult confirmOverwrite(
             McpSession session,
             String conch,
-            byte[] raw,
+            ConchDoc before,
+            ConchDoc after,
             McpCalls.Attempt attempt
     ) {
         if (session == null || !session.supportsElicitation() || !session.streaming()) {
-            return McpCalls.failAsRequest(attempt, "FORBIDDEN", NO_OVERWRITE);
+            return McpCalls.failAsRequest(
+                    attempt, "CONFIRM_REQUIRED", confirmRequiredMessage(ConchDestinations.between(before, after)));
         }
-        ConchDoc after = ConchParser.parse(new String(raw, StandardCharsets.UTF_8));
-        ConchDoc before = runtime.localConches().readableDoc(conch).orElse(null);
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", Map.of(
@@ -361,6 +404,22 @@ final class AuthoringCalls {
             String next,
             String requestId
     ) {
+        return issues(ok, conch, version, errors, warnings, message, replaced, next, requestId, null, null);
+    }
+
+    private static McpSchema.CallToolResult issues(
+            boolean ok,
+            String conch,
+            String version,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings,
+            String message,
+            Boolean replaced,
+            String next,
+            String requestId,
+            String previousVersion,
+            String backupId
+    ) {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("ok", ok);
         if (conch != null) {
@@ -371,6 +430,10 @@ final class AuthoringCalls {
         }
         if (replaced != null) {
             body.put("replaced", replaced);
+        }
+        if (Boolean.TRUE.equals(replaced)) {
+            body.put("previousVersion", previousVersion);
+            body.put("backupId", backupId);
         }
         body.put("errors", issueMaps(errors));
         body.put("warnings", issueMaps(warnings));

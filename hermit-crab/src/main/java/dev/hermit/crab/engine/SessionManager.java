@@ -416,6 +416,9 @@ public final class SessionManager implements AutoCloseable {
         state.client = HttpClients.custom()
                 .setConnectionManager(pool)
                 .setDefaultCookieStore(state.cookies)
+                .setDefaultCookieSpecRegistry(LegacyCookies.registry())
+                .addResponseInterceptorLast(LegacyCookies.notices())
+                .addRequestInterceptorLast(HttpCalls.crossOriginStripper())
                 .disableRedirectHandling()
                 .disableAutomaticRetries()
                 .build();

@@ -167,14 +167,29 @@ class EngineUnitTest {
     }
 
     @Test
-    void decodesByContentTypeThenMetaThenStepEncoding() {
+    void decodesStepEncodingThenContentTypeThenMeta() {
         Charset gbk = Charset.forName("GBK");
         byte[] meta = "<html><head><meta charset=\"gbk\"></head><body>张三</body></html>".getBytes(gbk);
-        assertThat(HttpCalls.decode(meta, "text/html", StandardCharsets.UTF_8)).contains("张三");
-        assertThat(HttpCalls.decode("张三".getBytes(StandardCharsets.UTF_8), "text/html; charset=utf-8", gbk))
+        assertThat(HttpCalls.decode(meta, "text/html", null)).contains("张三");
+        assertThat(HttpCalls.decode(meta, "text/html", StandardCharsets.UTF_8)).doesNotContain("张三");
+        assertThat(HttpCalls.decode("张三".getBytes(gbk), "text/html; charset=utf-8", gbk)).isEqualTo("张三");
+        assertThat(HttpCalls.decode("张三".getBytes(StandardCharsets.UTF_8), "text/html; charset=utf-8", null))
                 .isEqualTo("张三");
-        assertThat(HttpCalls.decode("张三".getBytes(gbk), "text/html", gbk)).isEqualTo("张三");
-        assertThat(HttpCalls.decode("张三".getBytes(StandardCharsets.UTF_8), null, null)).isEqualTo("张三");
+        assertThat(HttpCalls.decode("张三".getBytes(gbk), "text/html", null)).isNotEqualTo("张三");
+        byte[] bom = new byte[] {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+        byte[] json = "{\"name\":\"ok\"}".getBytes(StandardCharsets.UTF_8);
+        byte[] withBom = new byte[bom.length + json.length];
+        System.arraycopy(bom, 0, withBom, 0, bom.length);
+        System.arraycopy(json, 0, withBom, bom.length, json.length);
+        assertThat(HttpCalls.decode(withBom, "application/json", null)).isEqualTo("{\"name\":\"ok\"}");
+        String wide = "上游状态码 500\n" + "a".repeat(4095) + "张";
+        String shown = HttpCalls.presentUpstream(wide);
+        String rest = shown.substring(shown.indexOf('\n') + 1);
+        assertThat(rest.getBytes(StandardCharsets.UTF_8).length).isLessThanOrEqualTo(HttpCalls.UPSTREAM_BODY_LIMIT);
+        assertThat(rest).doesNotContain("张");
+        assertThat(HttpCalls.originText(URI.create("http://[::1]:8080/secret"))).isEqualTo("http://[::1]:8080");
+        assertThat(HttpCalls.originText(URI.create("https://[::1]/secret"))).isEqualTo("https://[::1]");
+        assertThat(HttpCalls.normalizeLocation("/a%2Fb c")).isEqualTo("/a%2Fb%20c");
     }
 
     @Test

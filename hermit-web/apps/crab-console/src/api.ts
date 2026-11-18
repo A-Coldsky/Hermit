@@ -315,6 +315,12 @@ export interface DevTraceWire {
   truncation?: string
 }
 
+/** 请求步骤上的跟踪警告。已知 code：`cross_origin`、`secure_cookie`、`cookie_rejected`。 */
+export interface DevTraceWarning {
+  code: 'cross_origin' | 'secure_cookie' | 'cookie_rejected'
+  message: string
+}
+
 export interface DevTraceStep {
   index: number
   phase: string
@@ -340,6 +346,8 @@ export interface DevTraceStep {
   /** 这一步连不上时的传输失败。没有则为空。 */
   transport?: DevTraceTransport | null
   wire?: DevTraceWire | null
+  /** 重定向、Secure cookie 和被丢掉的 Set-Cookie。没有则为空。 */
+  warnings?: DevTraceWarning[]
 }
 
 export interface DevTraceSession {

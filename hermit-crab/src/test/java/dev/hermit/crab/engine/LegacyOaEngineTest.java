@@ -636,7 +636,11 @@ class LegacyOaEngineTest {
                     - request: { method: GET, path: /loop, follow_redirects: true }
                     """, true)));
             ExecutionResult result = running.execute("loop_conch", "loop", "alice");
-            assertUpstreamStatus(result, 302);
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
+            assertThat(result.error().message()).isEqualTo(HttpCalls.TOO_MANY_REDIRECTS);
+            assertThat(result.error().failedStepType()).isEqualTo("request");
+            assertThat(result.stepLogs().get(0).status()).isEqualTo(302);
             assertThat(running.fixture.count("GET", "/loop")).isEqualTo(6);
 
             running.registry.put(ConchParser.parse(EngineTestSupport.actionConch("once_conch", "once", """

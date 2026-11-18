@@ -84,7 +84,8 @@ final class StepRunner {
             throw new RuleProblem(ErrorCode.RULE_MISMATCH, "步骤定义无效", null, null, null);
         }
         return switch (step.type()) {
-            case "request" -> request(spec, vars, expectPrefix, client, afterExchange, base, deadlineNanos, capture);
+            case "request" -> request(
+                    spec, vars, cookies, expectPrefix, client, afterExchange, base, deadlineNanos, capture);
             case "extract" -> extract(spec, vars, deadlineNanos, capture);
             case "assert" -> check(spec, vars, cookies, capture);
             case "set" -> set(spec, vars, capture);
@@ -110,6 +111,7 @@ final class StepRunner {
     private Outcome request(
             Map<String, Object> spec,
             Map<String, Object> vars,
+            BasicCookieStore cookies,
             String expectPrefix,
             CloseableHttpClient client,
             Runnable afterExchange,
@@ -119,14 +121,22 @@ final class StepRunner {
     ) {
         HttpResult result;
         try {
-            result = HttpCalls.execute(spec, client, afterExchange, base, expectPrefix, deadlineNanos);
+            result = HttpCalls.execute(
+                    spec,
+                    client,
+                    afterExchange,
+                    base,
+                    expectPrefix,
+                    deadlineNanos,
+                    HttpCalls.sensitiveValues(vars, cookies));
         } catch (RuleProblem ex) {
             if (capture) {
                 Map<String, Object> piece = DevTraceDraft.requestPiece(
-                        spec, ex.method, ex.path, ex.status, null, null, ex.wire);
+                        spec, ex.method, ex.path, ex.status, ex.responseHeaders, ex.responseBody, ex.wire);
                 if (ex.transport != null) {
                     piece.put("transport", ex.transport);
                 }
+                HttpCalls.attachWarnings(piece, ex.warnings);
                 DevTraceScope.stash(piece);
             }
             throw ex;
@@ -136,15 +146,17 @@ final class StepRunner {
             return new Outcome(
                     result.method(), result.path(), result.status(), null, result.sessionLost(), result.bodyBytes());
         }
+        Map<String, Object> piece = DevTraceDraft.requestPiece(
+                spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
+                result.wire());
+        HttpCalls.attachWarnings(piece, result.warnings());
         return new Outcome(
                 result.method(),
                 result.path(),
                 result.status(),
                 null,
                 result.sessionLost(),
-                DevTraceDraft.requestPiece(
-                        spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
-                        result.wire()),
+                piece,
                 result.bodyBytes());
     }
 

@@ -3,6 +3,7 @@ package dev.hermit.crab.runtime;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
+import java.util.Locale;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.PublicKey;
@@ -32,6 +33,8 @@ import java.util.stream.Stream;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.McpAuth;
+import dev.hermit.common.model.McpUpstream;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.EngineSettings;
@@ -70,6 +73,8 @@ import dev.hermit.crab.store.CapabilitySwitchStore;
 import dev.hermit.crab.store.CrabDatabase;
 import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.tls.OutboundTls;
+import dev.hermit.crab.tls.TlsHostStore;
+import dev.hermit.crab.tls.TlsTrust;
 import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.CallChannel;
 import dev.hermit.crab.store.DebugStateStore;
@@ -137,6 +142,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final String instanceId;
     private final OutboundTls outboundTls;
     private final OutboundTls previousTls;
+    private final TlsTrust tlsTrust;
     private final KnownSecrets knownSecrets = KnownSecrets.empty();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean prepared = new AtomicBoolean();
@@ -242,14 +248,128 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.admin.bindOriginFallback(name -> localConches.occupies(name) ? Origin.LOCAL : null);
         this.admin.bindAccountRemoved(mcpForwarder::forgetAccount);
         this.instanceId = InstanceIds.loadOrCreate(paths);
+        Path caDir = this.config.tlsCaDir() == null
+                ? paths.trustCa()
+                : this.config.tlsCaDirectory(paths.root());
+        TlsHostStore tlsHosts = new TlsHostStore(database.dataSource());
+        this.tlsTrust = new TlsTrust(
+                outboundTls,
+                tlsHosts,
+                database.dataSource(),
+                clock,
+                caDir,
+                this.config.tlsSystemTrust(),
+                this::probeAllowed);
         try {
             String initialPassword = environment == null ? null : environment.apply(ConsolePassword.ENV);
             this.consolePassword.applyInitial(initialPassword);
+            this.outboundTls.setPins(tlsHosts);
         } catch (RuntimeException ex) {
+            tlsTrust.close();
             this.mcpForwarder.close();
             this.database.close();
             throw ex;
         }
+    }
+
+    public TlsTrust tlsTrust() {
+        return tlsTrust;
+    }
+
+    /** 检测只允许已加载规则的 base_url、MCP 上游和 OAuth 端点，以及 Reef 地址。 */
+    private boolean probeAllowed(String host, int port) {
+        return probeTargets().contains(host + ":" + port);
+    }
+
+    private Set<String> probeTargets() {
+        LinkedHashSet<String> targets = new LinkedHashSet<>();
+        for (ConchDoc doc : registry.snapshot().values()) {
+            addProbeTarget(targets, doc.baseUrl());
+            McpUpstream upstream = doc.upstream();
+            if (upstream == null) {
+                continue;
+            }
+            addProbeTarget(targets, upstream.url());
+            int upstreamPort = portOf(upstream.url());
+            for (String allowed : upstream.allowedHosts()) {
+                addAllowedHost(targets, allowed, upstreamPort);
+            }
+            McpAuth auth = upstream.auth();
+            if (auth != null) {
+                addProbeTarget(targets, auth.authorizationEndpoint());
+                addProbeTarget(targets, auth.tokenEndpoint());
+            }
+        }
+        addProbeTarget(targets, config.reefUrl());
+        ConchSync sync = conchSync;
+        if (sync != null && sync.currentSettings() != null && sync.currentSettings().reefUrl() != null) {
+            addProbeTarget(targets, sync.currentSettings().reefUrl().toString());
+        }
+        return targets;
+    }
+
+    private static void addProbeTarget(Set<String> targets, String raw) {
+        if (raw == null || raw.isBlank()) {
+            return;
+        }
+        URI uri;
+        try {
+            uri = URI.create(raw.trim());
+        } catch (IllegalArgumentException ex) {
+            return;
+        }
+        if (uri.getHost() == null) {
+            return;
+        }
+        int port = uri.getPort();
+        if (port < 0) {
+            port = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : "http".equalsIgnoreCase(uri.getScheme()) ? 80 : -1;
+        }
+        if (port < 1) {
+            return;
+        }
+        targets.add(uri.getHost().toLowerCase(Locale.ROOT) + ":" + port);
+    }
+
+    private static int portOf(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return -1;
+        }
+        try {
+            URI uri = URI.create(raw.trim());
+            if (uri.getPort() > 0) {
+                return uri.getPort();
+            }
+            if ("https".equalsIgnoreCase(uri.getScheme())) {
+                return 443;
+            }
+            if ("http".equalsIgnoreCase(uri.getScheme())) {
+                return 80;
+            }
+        } catch (IllegalArgumentException ex) {
+            return -1;
+        }
+        return -1;
+    }
+
+    private static void addAllowedHost(Set<String> targets, String raw, int upstreamPort) {
+        if (raw == null || raw.isBlank() || upstreamPort < 1) {
+            return;
+        }
+        String value = raw.trim();
+        int split = value.lastIndexOf(':');
+        if (split > 0 && value.indexOf(':') == split && value.substring(split + 1).chars().allMatch(Character::isDigit)) {
+            try {
+                int port = Integer.parseInt(value.substring(split + 1));
+                if (port >= 1 && port <= 65535) {
+                    targets.add(value.substring(0, split).toLowerCase(Locale.ROOT) + ":" + port);
+                }
+            } catch (NumberFormatException ex) {
+                targets.add(value.toLowerCase(Locale.ROOT) + ":" + upstreamPort);
+            }
+            return;
+        }
+        targets.add(value.toLowerCase(Locale.ROOT) + ":" + upstreamPort);
     }
 
     /** 地址范围扩大的本地覆盖：先丢掉待输入登录，再清每个账号的会话和登录快照。 */
@@ -1084,6 +1204,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             sessions.close();
             database.close();
         } finally {
+            tlsTrust.close();
             OutboundTls.restore(previousTls);
         }
     }

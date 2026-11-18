@@ -63,6 +63,9 @@ import dev.hermit.common.validate.ConchValidator;
  * Version 16 adds {@code session_login} (one ciphertext per origin, conch and account).
  * It runs when its own row is missing and does not rewrite {@link #applyV15} or versions 1–14.
  * Existing rows are not copied into it. Later versions must not edit {@link #applyV16}.
+ * Version 17 adds {@code tls_trusted_hosts} (one leaf fingerprint per host and port).
+ * It runs when its own row is missing and does not rewrite {@link #applyV16} or versions 1–15.
+ * Existing rows are not copied into it. Later versions must not edit {@link #applyV17}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Crab has been released with versions 1–15. Version 16 is
@@ -205,6 +208,12 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 16)) {
                 applyV16(connection);
                 insertVersion(connection, 16);
+            }
+            // A database that already recorded a later version still needs this table.
+            // Do not gate version 17 on MAX(version), and do not rewrite applyV16. No backfill.
+            if (!applied(connection, 17)) {
+                applyV17(connection);
+                insertVersion(connection, 17);
             }
             return null;
         });
@@ -670,6 +679,22 @@ public final class CrabDatabase implements AutoCloseable {
                     ciphertext BLOB NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
                     PRIMARY KEY (origin, conch, account)
+                )
+                """);
+    }
+
+    private static void applyV17(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS tls_trusted_hosts (
+                    host VARCHAR(253) NOT NULL,
+                    port INT NOT NULL,
+                    sha256 VARCHAR(64) NOT NULL,
+                    subject CLOB NOT NULL,
+                    issuer CLOB NOT NULL,
+                    not_after TIMESTAMP WITH TIME ZONE NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    created_by VARCHAR(32) NOT NULL,
+                    PRIMARY KEY (host, port)
                 )
                 """);
     }

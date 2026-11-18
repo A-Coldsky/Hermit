@@ -37,6 +37,7 @@ import dev.hermit.crab.runtime.ReefBootstrapException;
 import dev.hermit.crab.runtime.RequestOnlyException;
 import dev.hermit.crab.runtime.StatusCodes;
 import dev.hermit.crab.runtime.TrialRejected;
+import dev.hermit.crab.tls.TlsTrust;
 import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.report.FlushResult;
 import dev.hermit.crab.sync.ConchSync;
@@ -141,6 +142,14 @@ final class ConsoleApi {
         post(app, "/console/api/local-conches/{conch}/history/{id}/restore", ctx -> restoreHistory(runtime, ctx));
         post(app, "/console/api/local-conches/{conch}/actions/{action}/run", ctx -> runLocal(runtime, ctx));
         post(app, "/console/api/local-conches/{conch}/mcp/refresh", ctx -> refreshLocalMcp(runtime, ctx));
+        get(app, "/console/api/tls/trust", ctx -> GatewayResponses.writeData(ctx, runtime.tlsTrust().view()));
+        get(app, "/console/api/tls/failures", ctx -> GatewayResponses.writeData(ctx, runtime.tlsTrust().failures()));
+        post(app, "/console/api/tls/ca", ctx -> importTlsCa(runtime, ctx));
+        delete(app, "/console/api/tls/ca/{file}", ctx -> deleteTlsCa(runtime, ctx));
+        post(app, "/console/api/tls/reload", ctx -> GatewayResponses.writeData(ctx, runtime.tlsTrust().reload()));
+        post(app, "/console/api/tls/probe", ctx -> probeTls(runtime, ctx));
+        post(app, "/console/api/tls/trusted-hosts", ctx -> trustTlsHost(runtime, ctx));
+        delete(app, "/console/api/tls/trusted-hosts/{host}/{port}", ctx -> removeTlsHost(runtime, ctx));
     }
 
     private static void conches(CrabRuntime runtime, Context ctx) {
@@ -1246,6 +1255,47 @@ final class ConsoleApi {
         body.put("latestVersion", release.latestVersion());
         body.put("downloadUrl", release.downloadUrl());
         return body;
+    }
+
+    private static void importTlsCa(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = object(ctx);
+        GatewayResponses.writeData(ctx, runtime.tlsTrust().importCa(requiredText(body, "name"), requiredText(body, "pem")));
+    }
+
+    private static void deleteTlsCa(CrabRuntime runtime, Context ctx) {
+        GatewayResponses.writeData(ctx, runtime.tlsTrust().deleteCa(ctx.pathParam("file")));
+    }
+
+    private static void probeTls(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = object(ctx);
+        GatewayResponses.writeData(ctx, runtime.tlsTrust().probe(requiredText(body, "host"), jsonPort(body)));
+    }
+
+    private static void trustTlsHost(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = object(ctx);
+        GatewayResponses.writeData(
+                ctx, runtime.tlsTrust().trustHost(requiredText(body, "host"), jsonPort(body), requiredText(body, "sha256")));
+    }
+
+    private static void removeTlsHost(CrabRuntime runtime, Context ctx) {
+        GatewayResponses.writeData(
+                ctx, runtime.tlsTrust().removeHost(ctx.pathParam("host"), pathPort(ctx.pathParam("port"))));
+    }
+
+    private static int jsonPort(JsonNode body) {
+        JsonNode value = body.get("port");
+        if (value == null || !value.canConvertToInt() || !value.isIntegralNumber()) {
+            throw new IllegalArgumentException(TlsTrust.BAD_PORT);
+        }
+        return value.intValue();
+    }
+
+    private static int pathPort(String raw) {
+        try {
+            return Integer.parseInt(raw);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException(TlsTrust.BAD_PORT);
+        }
     }
 
     private static void get(io.javalin.Javalin app, String path, io.javalin.http.Handler handler) {

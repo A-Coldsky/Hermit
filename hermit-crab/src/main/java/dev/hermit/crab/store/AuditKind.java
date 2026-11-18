@@ -42,5 +42,15 @@ public enum AuditKind {
     /** A console or CLI import wrote {@code reef-bootstrap.json} and applied it. Detail has no token. */
     REEF_BOOTSTRAPPED,
     /** Console changed report enabled/interval. Detail is the new settings, with no secrets. */
-    REPORT_SETTINGS_CHANGED
+    REPORT_SETTINGS_CHANGED,
+    /** A PEM file was written into the CA directory. Detail names the file. */
+    TLS_CA_ADDED,
+    /** A file was removed from the CA directory. Detail names the file. */
+    TLS_CA_REMOVED,
+    /** The console reloaded the CA directory and the OS trust store. */
+    TLS_RELOADED,
+    /** A host:port leaf fingerprint was saved. Detail has the host, port and sha256. */
+    TLS_HOST_TRUSTED,
+    /** A host:port fingerprint was removed. Detail has the host and port. */
+    TLS_HOST_REMOVED
 }

@@ -111,6 +111,7 @@ public final class TransportFailure {
         if (view.kind() != Kind.TIMEOUT) {
             TransportLog.warn(view, failure);
         }
+        TlsMemory.note(failure, view);
         return view;
     }
 

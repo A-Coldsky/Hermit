@@ -119,9 +119,13 @@ public final class OutboundTls {
         return snapshot.get().systemCount();
     }
 
-    /** 三个来源的证书张数。不包含控制台接口；那部分属于后续的信任管理。 */
+    /** JDK、操作系统、CA 目录各一条，给 {@code GET /console/api/tls/trust} 的 {@code sources}。 */
     public List<TrustSource> sources() {
         return snapshot.get().sources();
+    }
+
+    public List<CaDirectory.FileEntry> caFiles() {
+        return snapshot.get().caFiles();
     }
 
     public void setPins(HostPins next) {

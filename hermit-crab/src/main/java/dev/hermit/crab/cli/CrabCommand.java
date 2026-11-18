@@ -95,6 +95,8 @@ public final class CrabCommand {
               crab local reload
               crab local delete <conch>
               crab local export <conch> [--out file]
+              crab local history <conch>
+              crab local restore <conch> <id>
               crab console password [--from-env VAR]
               crab debug status|on|off [--from-env VAR]
               crab debug run <conch> <action> --account NAME [--from-env VAR]
@@ -613,6 +615,8 @@ public final class CrabCommand {
             case "reload" -> reloadLocal(args, env, out, err);
             case "delete" -> deleteLocal(args, env, out, err);
             case "export" -> exportLocal(args, env, out, err);
+            case "history" -> historyLocal(args, env, out, err);
+            case "restore" -> restoreLocal(args, env, out, err);
             default -> {
                 err.print(USAGE);
                 yield 1;
@@ -769,6 +773,36 @@ public final class CrabCommand {
                 return 1;
             }
             out.println(Path.of(outFile));
+            return 0;
+        });
+    }
+
+    private int historyLocal(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 3) {
+            err.print(USAGE);
+            return 1;
+        }
+        String conch = args[2];
+        return withRuntime(env, runtime -> {
+            runtime.loadInstalledConches();
+            for (LocalConches.HistoryEntry entry : runtime.localConches().history(conch)) {
+                out.println(entry.id() + " " + entry.version());
+            }
+            return 0;
+        });
+    }
+
+    private int restoreLocal(String[] args, Function<String, String> env, PrintStream out, PrintStream err) {
+        if (args.length != 4) {
+            err.print(USAGE);
+            return 1;
+        }
+        String conch = args[2];
+        String id = args[3];
+        return withRuntime(env, runtime -> {
+            runtime.loadInstalledConches();
+            LocalConches.ImportResult result = runtime.localConches().restore(conch, id, Actors.CLI);
+            out.println(result.conch() + " " + result.version() + " 已回退");
             return 0;
         });
     }

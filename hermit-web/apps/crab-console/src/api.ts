@@ -440,6 +440,51 @@ export interface LocalImportResult {
   version: string
   replaced: boolean
   warnings: ValidationIssue[]
+  /** 覆盖时的上一版。新建为 null。 */
+  previousVersion: string | null
+  /** `.history` 里上一份的编号。新建为 null。 */
+  backupId: string | null
+}
+
+/**
+ * `GET /console/api/local-conches/pending` 的一条。
+ * 开发者模式下，agent 扩大了目的地、等控制台确认的覆盖。只在内存里，每个包最多一条，30 分钟过期，重启清空。
+ * 确认时把 `sha256` 原样提交。磁盘文件已经不是 `baseSha` 时，确认返回 409，
+ * message 为「规则包在等待确认期间被改过，请让 agent 重新保存。」
+ */
+export interface PendingLocalOverwrite {
+  conch: string
+  /** 待写入 YAML 的 SHA-256，十六进制。 */
+  sha256: string
+  /** 提交时磁盘文件的 SHA-256。页面不展示，确认由服务端比对。 */
+  baseSha?: string | null
+  /** 相对当前文件新增的目的地，`scheme://host:port`。认证方式变化时可以是空数组。 */
+  addedDestinations: string[]
+  /** 磁盘上的当前版本。旧文件读不出来时为 null。 */
+  fromVersion: string | null
+  /** 待写入的版本。 */
+  toVersion: string
+  /** 提交这次覆盖的 API Key 名称。没有时为 null。 */
+  keyName: string | null
+  /** 提交时间，ISO-8601。 */
+  submittedAt: string
+  /** 到期时间，ISO-8601。提交时间加 30 分钟。 */
+  expiresAt: string
+  /** 有无法静态确定的地址时为 true。 */
+  undetermined: boolean
+  /** 待写入的 YAML 原文。 */
+  yaml: string
+}
+
+/**
+ * `GET /console/api/local-conches/{conch}/history` 的一条。
+ * `id` 是 `.history/{conch}/` 下的文件名去掉 `.yaml`，作为回退 URL 的单个路径段。
+ */
+export interface LocalConchHistoryEntry {
+  id: string
+  version: string
+  /** 备份时间，ISO-8601。 */
+  savedAt: string | null
 }
 
 /**
@@ -715,6 +760,33 @@ export const api = {
     form.append('file', file)
     return http.upload<LocalImportResult>(`${base}/local-conches${confirm ? '?confirm=true' : ''}`, form)
   },
+  /**
+   * 等待控制台确认的覆盖。固定路径，不是包名。
+   * `data` 为 `{pending}`。没有待确认时 `pending` 为空数组。
+   */
+  pendingLocalOverwrites: () =>
+    http.get<{ pending: PendingLocalOverwrite[] }>(`${base}/local-conches/pending`),
+  /**
+   * 确认一条待覆盖。正文只有 `{sha256}`，必须是该条记录的 SHA-256。
+   * 等待期间磁盘文件变了：409，message 为「规则包在等待确认期间被改过，请让 agent 重新保存。」
+   */
+  confirmPendingOverwrite: (conch: string, sha256: string) =>
+    http.post<LocalImportResult>(`${base}/local-conches/${seg(conch)}/pending/confirm`, { sha256 }),
+  /** 拒绝这条待确认覆盖，不写文件。 */
+  rejectPendingOverwrite: (conch: string) =>
+    http.del<{ conch: string; rejected: boolean }>(`${base}/local-conches/${seg(conch)}/pending`),
+  /**
+   * 这个包保留的最近备份，最多 10 份。`data` 为 `{history}`。
+   * 删除包后历史仍在，再次导入同名包可以继续回退。
+   */
+  localConchHistory: (conch: string) =>
+    http.get<{ history: LocalConchHistoryEntry[] }>(`${base}/local-conches/${seg(conch)}/history`),
+  /**
+   * 回退到一份备份。回退前服务端先备份当前版本；地址扩大时清空这个包的登录会话。
+   * `id` 是历史接口返回的编号。
+   */
+  restoreLocalConch: (conch: string, id: string) =>
+    http.post<LocalImportResult>(`${base}/local-conches/${seg(conch)}/history/${seg(id)}/restore`),
   reloadLocalConches: () => http.post<{ results: LocalFileResult[] }>(`${base}/local-conches/reload`),
   deleteLocalConch: (conch: string) =>
     http.del<{ conch: string; deleted: boolean }>(`${base}/local-conches/${seg(conch)}`),

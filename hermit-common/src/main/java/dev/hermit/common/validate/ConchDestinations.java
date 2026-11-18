@@ -1,0 +1,273 @@
+package dev.hermit.common.validate;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+
+import dev.hermit.common.mcp.McpAddresses;
+import dev.hermit.common.model.Action;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.ConfigField;
+import dev.hermit.common.model.McpAuth;
+import dev.hermit.common.model.Step;
+
+/**
+ * 一份规则包静态能发往的地址。每项是规范化后的 {@code scheme://host:port}。
+ * 新集合是旧集合的子集，且两边都能静态确定、MCP 认证类型没变，才是同一边界。
+ *
+ * <p>OAuth 的 issuer 和 registration 目前不是包字段，发现到的端点仍由上游允许主机在运行时拦住。
+ * {@code allowed_hosts} 本身不计入这个集合。{@code health_check} 没有执行链，不计入。
+ */
+public final class ConchDestinations {
+
+    private static final Set<String> URL_KEYS = Set.of("url", "path", "base", "base_url");
+    private static final String UNDETERMINED = "无法静态确定的地址";
+
+    private ConchDestinations() {
+    }
+
+    /**
+     * {@code before == null}（旧文档读不出来）按扩大处理，并标成无法静态确定。
+     * {@code addedDestinations} 已按展示文本排序。
+     */
+    public static Boundary between(ConchDoc before, ConchDoc after) {
+        if (after == null) {
+            throw new IllegalArgumentException("after");
+        }
+        Analysis next = analyze(after);
+        if (before == null) {
+            return new Boundary(false, texts(next.destinations), true, false);
+        }
+        Analysis previous = analyze(before);
+        boolean authChanged = !java.util.Objects.equals(previous.authType, next.authType);
+        boolean same = !authChanged
+                && !previous.undetermined
+                && !next.undetermined
+                && previous.destinations.containsAll(next.destinations);
+        TreeSet<Destination> added = new TreeSet<>(next.destinations);
+        added.removeAll(previous.destinations);
+        return new Boundary(same, texts(added), previous.undetermined || next.undetermined, authChanged);
+    }
+
+    /** 用顿号连接新增地址。有无法静态确定的部分时另加一句；两边都空时也用那句。 */
+    public static String describe(Boundary boundary) {
+        if (boundary == null) {
+            return UNDETERMINED;
+        }
+        String joined = String.join("、", boundary.addedDestinations());
+        if (boundary.undetermined()) {
+            return joined.isEmpty() ? UNDETERMINED : joined + "、" + UNDETERMINED;
+        }
+        return joined.isEmpty() ? UNDETERMINED : joined;
+    }
+
+    private static Analysis analyze(ConchDoc doc) {
+        Analysis analysis = new Analysis();
+        analysis.take(doc.baseUrl(), true);
+        ConfigField configured = doc.config().get("base_url");
+        if (configured != null && configured.defaultValue() instanceof String text) {
+            analysis.take(text, true);
+        }
+        if (doc.auth() != null) {
+            for (Step step : doc.auth().steps()) {
+                analysis.walk(step.def());
+            }
+            if (doc.auth().aliveCheck() != null) {
+                analysis.walk(doc.auth().aliveCheck().request());
+            }
+        }
+        for (Action action : doc.actions().values()) {
+            for (Step step : action.steps()) {
+                analysis.walk(step.def());
+            }
+        }
+        for (String source : doc.scripts().values()) {
+            analysis.take(source, false);
+        }
+        if (doc.upstream() != null) {
+            analysis.take(doc.upstream().url(), true);
+            McpAuth auth = doc.upstream().auth();
+            if (auth != null) {
+                analysis.take(auth.authorizationEndpoint(), true);
+                analysis.take(auth.tokenEndpoint(), true);
+                analysis.authType = auth.type() == null || auth.type().isBlank() ? null : auth.type();
+            }
+        }
+        return analysis;
+    }
+
+    private static List<String> texts(Set<Destination> destinations) {
+        ArrayList<String> texts = new ArrayList<>();
+        for (Destination destination : destinations) {
+            texts.add(destination.text());
+        }
+        return List.copyOf(texts);
+    }
+
+    /**
+     * @param sameBoundary 新目的地是旧目的地的子集（含相等），且没有无法静态确定的地址，认证类型也没变
+     * @param addedDestinations 新出现的 {@code scheme://host:port}，已排序
+     * @param undetermined 任一侧有 scheme 或主机里的模板，或旧文档读不出来
+     * @param authChanged MCP {@code auth.type} 发生变化。HTTP 包两侧都是 null
+     */
+    public record Boundary(
+            boolean sameBoundary,
+            List<String> addedDestinations,
+            boolean undetermined,
+            boolean authChanged
+    ) {
+        public Boundary {
+            addedDestinations = addedDestinations == null ? List.of() : List.copyOf(addedDestinations);
+        }
+    }
+
+    private record Destination(String scheme, String host, int port) implements Comparable<Destination> {
+        String text() {
+            String shown = host.indexOf(':') >= 0 ? "[" + host + "]" : host;
+            return scheme + "://" + shown + ":" + port;
+        }
+
+        @Override
+        public int compareTo(Destination other) {
+            return text().compareTo(other.text());
+        }
+    }
+
+    private static final class Analysis {
+        private final TreeSet<Destination> destinations = new TreeSet<>();
+        private boolean undetermined;
+        private String authType;
+
+        private void walk(Object node) {
+            if (node instanceof Map<?, ?> map) {
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    Object value = entry.getValue();
+                    if (URL_KEYS.contains(String.valueOf(entry.getKey())) && value instanceof String text) {
+                        take(text, true);
+                    } else {
+                        walk(value);
+                    }
+                }
+                return;
+            }
+            if (node instanceof List<?> list) {
+                for (Object item : list) {
+                    walk(item);
+                }
+                return;
+            }
+            if (node instanceof String text) {
+                take(text, false);
+            }
+        }
+
+        private void take(String value, boolean urlField) {
+            if (value == null || value.isBlank()) {
+                return;
+            }
+            if (urlField) {
+                considerWhole(value.trim());
+            }
+            scanEmbedded(value);
+        }
+
+        private void considerWhole(String value) {
+            if (templatedOrigin(value)) {
+                undetermined = true;
+                return;
+            }
+            if (!startsWithHttp(value)) {
+                return;
+            }
+            addLiteral(value);
+        }
+
+        private void scanEmbedded(String text) {
+            String lower = text.toLowerCase(Locale.ROOT);
+            int from = 0;
+            while (from < text.length()) {
+                int https = lower.indexOf("https://", from);
+                int http = lower.indexOf("http://", from);
+                int at = earliest(https, http);
+                if (at < 0) {
+                    return;
+                }
+                int end = at;
+                while (end < text.length()) {
+                    char c = text.charAt(end);
+                    if (Character.isWhitespace(c) || c == '"' || c == '\'' || c == '<' || c == '>'
+                            || c == ')' || c == ']' || c == ',') {
+                        break;
+                    }
+                    end++;
+                }
+                considerWhole(text.substring(at, end));
+                from = Math.max(at + 1, end);
+            }
+        }
+
+        private void addLiteral(String value) {
+            McpAddresses.ParseResult parsed = McpAddresses.parse(value);
+            if (parsed.ok()) {
+                McpAddresses.Parsed url = parsed.url();
+                destinations.add(new Destination(url.scheme(), url.host(), url.port()));
+                return;
+            }
+            undetermined = true;
+        }
+
+        private static boolean startsWithHttp(String value) {
+            return value.regionMatches(true, 0, "https://", 0, "https://".length())
+                    || value.regionMatches(true, 0, "http://", 0, "http://".length());
+        }
+
+        /** scheme 或主机里有模板，或整个 URL 字段是模板。相对路径里的 {@code {{id}}} 不算。 */
+        private static boolean templatedOrigin(String value) {
+            int schemeEnd = value.indexOf("://");
+            if (schemeEnd < 0) {
+                return value.contains("{{") && !value.startsWith("/");
+            }
+            if (value.substring(0, schemeEnd).contains("{{")) {
+                return true;
+            }
+            String rest = value.substring(schemeEnd + 3);
+            int cut = rest.length();
+            for (int i = 0; i < rest.length(); i++) {
+                char c = rest.charAt(i);
+                if (c == '/' || c == '?' || c == '#') {
+                    cut = i;
+                    break;
+                }
+            }
+            String hostPort = rest.substring(0, cut);
+            int at = hostPort.lastIndexOf('@');
+            if (at >= 0) {
+                hostPort = hostPort.substring(at + 1);
+            }
+            String host = hostPort;
+            if (host.startsWith("[")) {
+                int end = host.indexOf(']');
+                host = end < 0 ? host : host.substring(0, end + 1);
+            } else {
+                int colon = host.indexOf(':');
+                if (colon >= 0) {
+                    host = host.substring(0, colon);
+                }
+            }
+            return host.contains("{{");
+        }
+
+        private static int earliest(int left, int right) {
+            if (left < 0) {
+                return right;
+            }
+            if (right < 0) {
+                return left;
+            }
+            return Math.min(left, right);
+        }
+    }
+}

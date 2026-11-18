@@ -86,6 +86,8 @@ describe('Crab 开发者模式', () => {
     expect(prompt).toContain('hermit://authoring/guide')
     expect(prompt).toContain('conch_validate')
     expect(prompt).toContain('conch_save_local')
+    expect(prompt).toContain('改已有的包就用同一个名字保存；如果需要确认，请让用户确认，不要换名字')
+    expect(prompt).not.toContain('换一个新包名')
     expect(prompt).toContain('conch_trial_run')
     expect(prompt).toContain('/mcp')
     expect(prompt).toContain('Bearer <API Key>')

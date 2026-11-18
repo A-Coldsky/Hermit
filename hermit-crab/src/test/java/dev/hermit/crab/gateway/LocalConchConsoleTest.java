@@ -480,6 +480,85 @@ class LocalConchConsoleTest {
         assertThat(body.path("needsConfiguration").asBoolean()).isEqualTo(summary.path("needsConfiguration").asBoolean());
     }
 
+    @Test
+    void pendingConfirmRejectAndHistoryRestore() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("pending"), PASSWORD, config)) {
+            byte[] original = LocalConchBehaviorTest.ping("local_ping", "1.0.0").getBytes(StandardCharsets.UTF_8);
+            assertThat(post(server, "/console/api/local-conches", "text/yaml", original).statusCode()).isEqualTo(200);
+            Path installed = server.paths.localConches().resolve("local_ping.yaml");
+            byte[] widened = LocalConchBehaviorTest.ping("local_ping", "1.1.0")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/")
+                    .getBytes(StandardCharsets.UTF_8);
+            server.runtime.localConches().stagePending(widened, Actors.MCP, "agent-key").orElseThrow();
+
+            TestServer.Reply listed = server.console("GET", "/console/api/local-conches/pending", null, true);
+            assertThat(listed.status()).isEqualTo(200);
+            assertThat(listed.body()).contains("\"conch\":\"local_ping\"")
+                    .contains("\"fromVersion\":\"1.0.0\"")
+                    .contains("\"toVersion\":\"1.1.0\"")
+                    .contains("\"keyName\":\"agent-key\"")
+                    .contains("\"addedDestinations\":[\"http://127.0.0.1:10\"]")
+                    .contains("\"expiresAt\"");
+            String sha = listed.json().path("data").path("pending").get(0).path("sha256").asText();
+
+            TestServer.Reply badSha = server.console(
+                    "POST", "/console/api/local-conches/local_ping/pending/confirm", "{\"sha256\":\"nope\"}", true);
+            assertThat(badSha.status()).isEqualTo(400);
+            assertThat(badSha.body()).contains("sha256 无效。");
+            assertThat(Files.readAllBytes(installed)).isEqualTo(original);
+
+            TestServer.Reply confirmed = server.console(
+                    "POST", "/console/api/local-conches/local_ping/pending/confirm",
+                    "{\"sha256\":\"" + sha + "\"}", true);
+            assertThat(confirmed.status()).as(confirmed.body()).isEqualTo(200);
+            assertThat(confirmed.body()).contains("\"version\":\"1.1.0\"").contains("\"replaced\":true");
+            assertThat(Files.readString(installed)).contains("127.0.0.1:10");
+            assertThat(server.console("GET", "/console/api/local-conches/pending", null, true).body())
+                    .contains("\"pending\":[]");
+
+            TestServer.Reply history = server.console("GET", "/console/api/local-conches/local_ping/history", null, true);
+            assertThat(history.status()).isEqualTo(200);
+            String id = history.json().path("data").path("history").get(0).path("id").asText();
+            assertThat(history.json().path("data").path("history").get(0).path("version").asText()).isEqualTo("1.0.0");
+            assertThat(id).contains(".").doesNotContain(".yaml");
+
+            byte[] again = LocalConchBehaviorTest.ping("local_ping", "1.2.0")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:12/")
+                    .getBytes(StandardCharsets.UTF_8);
+            server.runtime.localConches().stagePending(again, Actors.MCP, "agent-key").orElseThrow();
+            Files.write(installed, original);
+            TestServer.Reply stale = server.console(
+                    "POST", "/console/api/local-conches/local_ping/pending/confirm",
+                    "{\"sha256\":\"" + server.runtime.localConches().pending().get(0).sha256() + "\"}", true);
+            assertThat(stale.status()).isEqualTo(409);
+            assertThat(stale.body()).contains("规则包在等待确认期间被改过，请让 agent 重新保存。");
+            assertThat(server.runtime.localConches().pending()).isEmpty();
+            assertThat(Files.readAllBytes(installed)).isEqualTo(original);
+
+            server.runtime.localConches().stagePending(again, Actors.MCP, "agent-key");
+            TestServer.Reply rejected = server.console(
+                    "DELETE", "/console/api/local-conches/local_ping/pending", null, true);
+            assertThat(rejected.status()).isEqualTo(200);
+            assertThat(rejected.body()).contains("\"rejected\":true");
+            TestServer.Reply gone = server.console(
+                    "DELETE", "/console/api/local-conches/local_ping/pending", null, true);
+            assertThat(gone.status()).isEqualTo(404);
+            assertThat(gone.body()).contains("没有待确认的覆盖。");
+
+            TestServer.Reply restored = server.console(
+                    "POST", "/console/api/local-conches/local_ping/history/" + id + "/restore", "{}", true);
+            assertThat(restored.status()).as(restored.body()).isEqualTo(200);
+            assertThat(restored.body()).contains("\"version\":\"1.0.0\"");
+            assertThat(Files.readString(installed)).contains("version: 1.0.0").doesNotContain("127.0.0.1:12");
+
+            TestServer.Reply missing = server.console(
+                    "POST", "/console/api/local-conches/local_ping/history/missing/restore", "{}", true);
+            assertThat(missing.status()).isEqualTo(404);
+            assertThat(missing.body()).contains("没有这份历史。");
+        }
+    }
+
     private static HttpResponse<String> post(TestServer server, String path, String type, byte[] body) throws Exception {
         return server.http.send(
                 HttpRequest.newBuilder(URI.create(server.base() + path))

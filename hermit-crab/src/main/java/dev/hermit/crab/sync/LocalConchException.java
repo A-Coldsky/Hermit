@@ -10,6 +10,10 @@ import dev.hermit.common.validate.ValidationIssue;
  * parsing or validation failed. Messages do not include the YAML body.
  */
 public final class LocalConchException extends RuntimeException {
+    public static final String STALE = "规则包在等待确认期间被改过，请让 agent 重新保存。";
+    public static final String PENDING_CHANGED = "待确认的内容已经变了，请刷新后再确认。";
+    public static final String NO_PENDING = "没有待确认的覆盖。";
+    public static final String NO_HISTORY = "没有这份历史。";
     private final int status;
     private final ErrorCode code;
     private final List<ValidationIssue> errors;
@@ -79,6 +83,24 @@ public final class LocalConchException extends RuntimeException {
 
     public static LocalConchException notFound() {
         return new LocalConchException(404, ErrorCode.NOT_FOUND, "没有这个本地规则包。", List.of(), List.of(), null, null);
+    }
+
+    /** 确认时磁盘文件已经不是提交那一版。 */
+    public static LocalConchException stale() {
+        return new LocalConchException(409, ErrorCode.CONFLICT, STALE, List.of(), List.of(), null, null);
+    }
+
+    /** 控制台拿着的摘要对不上当前这条待确认覆盖。不丢掉那条新的。 */
+    public static LocalConchException pendingChanged() {
+        return new LocalConchException(409, ErrorCode.CONFLICT, PENDING_CHANGED, List.of(), List.of(), null, null);
+    }
+
+    public static LocalConchException pendingMissing() {
+        return new LocalConchException(404, ErrorCode.NOT_FOUND, NO_PENDING, List.of(), List.of(), null, null);
+    }
+
+    public static LocalConchException historyMissing() {
+        return new LocalConchException(404, ErrorCode.NOT_FOUND, NO_HISTORY, List.of(), List.of(), null, null);
     }
 
     public int status() {

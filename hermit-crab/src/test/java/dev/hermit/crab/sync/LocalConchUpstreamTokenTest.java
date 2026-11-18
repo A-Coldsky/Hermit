@@ -69,7 +69,8 @@ class LocalConchUpstreamTokenTest {
             String moved = oauth("vendor_mcp", "1.1.0", "https://NEW.Example/mcp",
                     "https://NEW.Example/oauth/token", null);
             assertThat(LocalConches.overwriteConfirm("vendor_mcp", before, ConchParser.parse(moved)))
-                    .isEqualTo("将覆盖已有的本地规则包 vendor_mcp。上游主机将从 old.example 改为 new.example，"
+                    .isEqualTo("将覆盖已有的本地规则包 vendor_mcp。新增地址：https://new.example:443。"
+                            + "上游主机将从 old.example 改为 new.example，"
                             + "确认后会清掉已保存的上游令牌。确认后才会写入。");
             replace(runtime, moved);
 
@@ -94,7 +95,7 @@ class LocalConchUpstreamTokenTest {
             String port = oauth("port_mcp", "1.0.1", "https://old.example:8443/mcp",
                     "https://old.example/oauth/token", null);
             assertThat(LocalConches.overwriteConfirm("port_mcp", portBefore, ConchParser.parse(port)))
-                    .isEqualTo(SHORT.formatted("port_mcp"));
+                    .isEqualTo("将覆盖已有的本地规则包 port_mcp。新增地址：https://old.example:8443。确认后才会写入。");
             replace(runtime, port);
             assertThat(runtime.admin().credentialNames("port_mcp", "alice")).containsExactly("password");
 
@@ -107,7 +108,8 @@ class LocalConchUpstreamTokenTest {
             String tokenHost = oauth("token_mcp", "1.0.1", "https://old.example/mcp",
                     "https://auth.example/oauth/token", allowed);
             assertThat(LocalConches.overwriteConfirm("token_mcp", tokenBefore, ConchParser.parse(tokenHost)))
-                    .isEqualTo("将覆盖已有的本地规则包 token_mcp。令牌端点主机将从 old.example 改为 auth.example，"
+                    .isEqualTo("将覆盖已有的本地规则包 token_mcp。新增地址：https://auth.example:443。"
+                            + "令牌端点主机将从 old.example 改为 auth.example，"
                             + "确认后会清掉已保存的上游令牌。确认后才会写入。");
             replace(runtime, tokenHost);
             assertThat(runtime.admin().credentialNames("token_mcp", "alice")).containsExactly("password");
@@ -118,7 +120,7 @@ class LocalConchUpstreamTokenTest {
             ConchDoc authBefore = runtime.registry().find("auth_mcp").orElseThrow();
             String headers = headers("auth_mcp", "1.0.1", "https://old.example/mcp");
             assertThat(LocalConches.overwriteConfirm("auth_mcp", authBefore, ConchParser.parse(headers)))
-                    .isEqualTo(SHORT.formatted("auth_mcp"));
+                    .isEqualTo("将覆盖已有的本地规则包 auth_mcp。认证方式有变化。确认后才会写入。");
             replace(runtime, headers);
             assertThat(runtime.admin().credentialNames("auth_mcp", "alice")).containsExactly("password");
         }

@@ -481,6 +481,45 @@ class CliTest {
     }
 
     @Test
+    void localHistoryAndRestore() throws Exception {
+        Path home = temp.resolve("local-history");
+        Files.createDirectories(home);
+        Path file = home.resolve("in.yaml");
+        Files.writeString(file, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_ping", "1.0.0"));
+        Function<String, String> env = env(home);
+        assertThat(run(env, InputStream.nullInputStream(), "local", "import", file.toString())).isZero();
+
+        ByteArrayOutputStream empty = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), empty, "local", "history", "local_ping")).isZero();
+        assertThat(empty.toString(StandardCharsets.UTF_8)).isEmpty();
+
+        Files.writeString(file, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_ping", "1.2.0"));
+        assertThat(run(env, InputStream.nullInputStream(), "local", "import", "--replace", file.toString())).isZero();
+
+        ByteArrayOutputStream listed = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), listed, "local", "history", "local_ping")).isZero();
+        String line = listed.toString(StandardCharsets.UTF_8).trim();
+        assertThat(line).endsWith(" 1.0.0");
+        String id = line.substring(0, line.lastIndexOf(' '));
+        assertThat(id).doesNotContain(".yaml");
+
+        ByteArrayOutputStream restored = new ByteArrayOutputStream();
+        assertThat(run(env, InputStream.nullInputStream(), restored, "local", "restore", "local_ping", id)).isZero();
+        assertThat(restored.toString(StandardCharsets.UTF_8)).isEqualTo("local_ping 1.0.0 已回退\n");
+        assertThat(Files.readString(home.resolve("local-conches").resolve("local_ping.yaml"))).contains("version: 1.0.0");
+
+        ByteArrayOutputStream missingErr = new ByteArrayOutputStream();
+        int missing = new CrabCommand().run(
+                new String[] {"local", "restore", "local_ping", "missing"},
+                env,
+                InputStream.nullInputStream(),
+                stdout(new ByteArrayOutputStream()),
+                stderr(missingErr));
+        assertThat(missing).isEqualTo(1);
+        assertThat(missingErr.toString(StandardCharsets.UTF_8)).isEqualTo("没有这份历史。\n");
+    }
+
+    @Test
     void localImportPrintsChineseReasonsAndRejectsBadFiles() throws Exception {
         Path home = temp.resolve("local-bad");
         Files.createDirectories(home);

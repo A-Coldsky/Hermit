@@ -29,6 +29,12 @@ public enum AuditKind {
     CONCH_REPAIR_REQUIRED,
     LOCAL_CONCH_IMPORTED,
     LOCAL_CONCH_DELETED,
+    /** 覆盖已有本地规则包。详情含新旧版本、摘要、边界、新增地址和备份编号。 */
+    LOCAL_CONCH_REPLACED,
+    /** 地址扩大、客户端不能当场确认，记一条待确认覆盖。拒绝和到期不记。 */
+    LOCAL_CONCH_REPLACE_PENDING,
+    /** 用人保存的历史把本地规则包换回去。 */
+    LOCAL_CONCH_RESTORED,
     /** Reef first dropped a subscribed official conch from the manifest. */
     REEF_CONCH_DISABLED,
     /** Reef listed that conch again and the disable tombstone was cleared. */

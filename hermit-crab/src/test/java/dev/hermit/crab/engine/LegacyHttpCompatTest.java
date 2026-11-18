@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.cert.X509Certificate;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.TextStyle;
 import java.util.ArrayList;
@@ -290,14 +291,14 @@ class LegacyHttpCompatTest {
             loop.reply(ScriptedLoopback.response(200, "text/plain", "ok".getBytes(StandardCharsets.UTF_8)));
             call(alice, Map.of("method", "GET", "path", "/app/other"), loop.base());
             String underApp = loop.hits().get(1).header("cookie");
-            assertThat(underApp).contains("NS99=legacy-year-value").contains("NS30=future-cookie-value");
+            assertThat(underApp).doesNotContain("NS99=").contains("NS30=future-cookie-value");
             assertThat(underApp).contains("P=path-cookie-value").contains("SLASH=slash-cookie-value");
             assertThat(underApp).doesNotContain("SEC=").doesNotContain("BAD=").doesNotContain("HACK=");
 
             loop.reply(ScriptedLoopback.response(200, "text/plain", "ok".getBytes(StandardCharsets.UTF_8)));
             call(alice, Map.of("method", "GET", "path", "/nope"), loop.base());
             String elsewhere = loop.hits().get(2).header("cookie");
-            assertThat(elsewhere).contains("NS99=").contains("NS30=");
+            assertThat(elsewhere).doesNotContain("NS99=").contains("NS30=");
             assertThat(elsewhere).doesNotContain("P=").doesNotContain("SLASH=");
 
             loop.reply(ScriptedLoopback.response(200, "text/plain", "ok".getBytes(StandardCharsets.UTF_8)));
@@ -308,6 +309,41 @@ class LegacyHttpCompatTest {
             call(other, Map.of("method", "GET", "path", "/app/other"), loop.base());
             assertThat(loop.hits().get(4).header("cookie")).isNull();
         }
+    }
+
+    @Test
+    void twoDigitYear1999RemovesAnExistingCookie() throws Exception {
+        byte[] ok = "ok".getBytes(StandardCharsets.UTF_8);
+        try (ScriptedLoopback loop = ScriptedLoopback.start(); Accounts accounts = Accounts.open()) {
+            CloseableHttpClient client = accounts.client(Origin.LOCAL, "legacy", "alice");
+            loop.reply(ScriptedLoopback.response(200, "text/plain", ok, "Set-Cookie: SID=keep-session; Path=/"));
+            call(client, Map.of("method", "GET", "path", "/session"), loop.base());
+
+            loop.reply(ScriptedLoopback.response(200, "text/plain", ok,
+                    "Set-Cookie: SID=keep-session; Expires=Wednesday, 09-Nov-99 23:12:40 GMT; Path=/"));
+            HttpResult logout = call(client, Map.of("method", "GET", "path", "/session"), loop.base());
+            assertThat(loop.hits().get(1).header("cookie")).contains("SID=keep-session");
+            assertThat(logout.warnings()).noneMatch(warning -> TraceWarning.COOKIE_REJECTED.equals(warning.code()));
+
+            loop.reply(ScriptedLoopback.response(200, "text/plain", ok));
+            call(client, Map.of("method", "GET", "path", "/session"), loop.base());
+            String after = loop.hits().get(2).header("cookie");
+            if (after != null) {
+                assertThat(after).doesNotContain("SID=");
+            }
+        }
+    }
+
+    @Test
+    void twoDigitYearTwentySixParsesAs2026() {
+        assertThat(LegacyCookies.parseExpiry("Mon, 28-Dec-26 23:12:40 GMT"))
+                .isEqualTo(Instant.parse("2026-12-28T23:12:40Z"));
+        assertThat(LegacyCookies.parseExpiry("Mon, 09-Nov-99 23:12:40 GMT"))
+                .isEqualTo(Instant.parse("1999-11-09T23:12:40Z"));
+        assertThat(LegacyCookies.parseExpiry("Wednesday, 09-Nov-99 23:12:40 GMT"))
+                .isEqualTo(Instant.parse("1999-11-09T23:12:40Z"));
+        assertThat(LegacyCookies.parseExpiry("Mon, 09 Nov 2099 23:12:40 GMT"))
+                .isEqualTo(Instant.parse("2099-11-09T23:12:40Z"));
     }
 
     private static List<String> messages(HttpResult result) {

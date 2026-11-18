@@ -3,6 +3,7 @@ package dev.hermit.crab.engine;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
+import java.time.temporal.ChronoField;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -52,10 +53,20 @@ final class LegacyCookies {
             "saturday", "Sat");
 
     /**
-     * 星期和日期对不上时，标准格式会失败。去掉星期再解析，两位年仍用 {@code yy} 的 2000 起点。
+     * 带星期的三种 HTTP 日期。RFC 1036 的两位年不用 {@code yy} 的 2000 起点，
+     * 按 RFC 6265 §5.1.1：70–99 是 19xx，00–69 是 20xx。
+     */
+    private static final DateTimeFormatter[] WITH_WEEKDAY = {
+            DateUtils.FORMATTER_RFC1123,
+            twoDigitYear("EEE, dd-MMM-", " HH:mm:ss zzz"),
+            DateUtils.FORMATTER_ASCTIME
+    };
+
+    /**
+     * 星期和日期对不上时，标准格式会失败。去掉星期再解析。两位年同样按 RFC 6265 折算。
      */
     private static final DateTimeFormatter[] WITHOUT_WEEKDAY = {
-            datePattern("dd-MMM-yy HH:mm:ss zzz"),
+            twoDigitYear("dd-MMM-", " HH:mm:ss zzz"),
             datePattern("dd MMM yyyy HH:mm:ss zzz"),
             datePattern("MMM d HH:mm:ss yyyy"),
             datePattern("MMM dd HH:mm:ss yyyy")
@@ -85,6 +96,21 @@ final class LegacyCookies {
                 .parseCaseInsensitive()
                 .appendPattern(pattern)
                 .toFormatter(Locale.ENGLISH);
+    }
+
+    /** 基准年 1970，宽度 2：解析结果落在 1970–2069，正是 70–99 → 19xx、00–69 → 20xx。 */
+    private static DateTimeFormatter twoDigitYear(String before, String after) {
+        return new DateTimeFormatterBuilder()
+                .parseLenient()
+                .parseCaseInsensitive()
+                .appendPattern(before)
+                .appendValueReduced(ChronoField.YEAR_OF_ERA, 2, 2, 1970)
+                .appendPattern(after)
+                .toFormatter(Locale.ENGLISH);
+    }
+
+    static Instant parseExpiry(String value) {
+        return LegacyExpiresHandler.parseExpiry(value);
     }
 
     static String abbreviateWeekday(String value) {
@@ -168,13 +194,13 @@ final class LegacyCookies {
         }
 
         private static Instant parseExpiry(String value) {
-            Instant expiry = DateUtils.parseDate(value, DateUtils.STANDARD_PATTERNS);
+            Instant expiry = DateUtils.parseDate(value, WITH_WEEKDAY);
             if (expiry != null) {
                 return expiry;
             }
             String shortened = abbreviateWeekday(value);
             if (!shortened.equals(value)) {
-                expiry = DateUtils.parseDate(shortened, DateUtils.STANDARD_PATTERNS);
+                expiry = DateUtils.parseDate(shortened, WITH_WEEKDAY);
                 if (expiry != null) {
                     return expiry;
                 }

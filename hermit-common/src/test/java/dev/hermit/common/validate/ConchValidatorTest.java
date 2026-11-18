@@ -995,6 +995,146 @@ class ConchValidatorTest {
         return base + "      " + indented + "\n";
     }
 
+    @Test
+    void literalHostnamesAreRejectedAndSingleLabelHttpsIsOnlyAWarning() {
+        ValidationResult underscore = validate("""
+                conch: host_lab
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                base_url: http://my_host.corp/a
+                credentials: {}
+                actions:
+                  ping:
+                    title: 查询
+                    description: 说明
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                    notes: 注意
+                    related: []
+                    steps:
+                      - request: {method: GET, path: /p}
+                """);
+        assertThat(underscore.errors())
+                .extracting(ValidationIssue::code, ValidationIssue::path, ValidationIssue::message)
+                .contains(tuple(
+                        ValidationCodes.HOSTNAME,
+                        "base_url",
+                        "主机名 my_host.corp 含下划线，Java 客户端无法连接；请改用 IP 或 DNS 别名"));
+
+        ValidationResult idn = validate("""
+                conch: host_lab
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                base_url: https://例子.测试/
+                credentials: {}
+                actions:
+                  ping:
+                    title: 查询
+                    description: 说明
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                    notes: 注意
+                    related: []
+                    steps:
+                      - request: {method: GET, path: /p}
+                """);
+        assertThat(idn.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.HOSTNAME)
+                        && issue.path().equals("base_url")
+                        && issue.message().contains("xn--fsqu00a.xn--0zwm56d"));
+
+        ValidationResult single = validate("""
+                conch: host_lab
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                base_url: https://hr/
+                credentials: {}
+                config:
+                  host: {type: text, default: hr}
+                  base_url: {type: url, default: "http://oa.intranet.local"}
+                auth:
+                  steps:
+                    - request: {method: GET, url: "http://{{config.host}}/login"}
+                  alive_check:
+                    request: {method: GET, path: "https://hr./health"}
+                actions:
+                  ping:
+                    title: 查询
+                    description: 说明
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                    notes: 注意
+                    related: []
+                    steps:
+                      - request: {method: GET, url: "http://%E4%BE%8B%E5%AD%90.%E6%B5%8B%E8%AF%95/p"}
+                """);
+        assertThat(single.errors())
+                .extracting(ValidationIssue::code, ValidationIssue::path)
+                .contains(tuple(ValidationCodes.HOSTNAME, "actions.ping.steps[0].request.url"));
+        assertThat(single.warnings())
+                .extracting(ValidationIssue::code, ValidationIssue::path, ValidationIssue::message)
+                .contains(
+                        tuple(ValidationCodes.SINGLE_LABEL_HOST, "base_url",
+                                "单标签主机名 hr 不会发送 SNI，虚拟主机可能返回别的证书"),
+                        tuple(ValidationCodes.SINGLE_LABEL_HOST, "auth.alive_check.request.path",
+                                "单标签主机名 hr 不会发送 SNI，虚拟主机可能返回别的证书"));
+        assertThat(single.errors()).noneMatch(issue -> issue.path().equals("base_url"));
+        assertThat(single.errors()).noneMatch(issue -> issue.path().equals("auth.alive_check.request.path"));
+        assertThat(single.errors()).noneMatch(issue -> issue.path().equals("auth.steps[0].request.url"));
+        assertThat(single.errors()).noneMatch(issue -> issue.path().equals("config.base_url.default"));
+
+        ValidationResult dotted = validate("""
+                conch: host_lab
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                base_url: https://hr.corp./
+                credentials: {}
+                config:
+                  base_url: {type: url, default: "http://my_host.corp"}
+                actions:
+                  ping:
+                    title: 查询
+                    description: 说明
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                    notes: 注意
+                    related: []
+                    steps:
+                      - request: {method: GET, url: "http://hr/p"}
+                """);
+        assertThat(dotted.errors())
+                .extracting(ValidationIssue::code, ValidationIssue::path, ValidationIssue::message)
+                .containsExactly(tuple(
+                        ValidationCodes.HOSTNAME,
+                        "config.base_url.default",
+                        "主机名 my_host.corp 含下划线，Java 客户端无法连接；请改用 IP 或 DNS 别名"));
+        assertThat(dotted.warnings()).extracting(ValidationIssue::code).doesNotContain(ValidationCodes.SINGLE_LABEL_HOST);
+    }
+
     private static java.util.List<String> codes(ValidationResult result) {
         return result.errors().stream().map(ValidationIssue::code).toList();
     }

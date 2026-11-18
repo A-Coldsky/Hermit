@@ -71,6 +71,14 @@ export const issueHints: Record<string, IssueHint> = {
     hint: 'related 让调用方发现前后衔接的能力，例如查待办后再审批。不写也能发布。',
   },
   UNKNOWN_RELATED: { title: 'related 指向不存在的能力', hint: '检查能力名是否拼错，或把它从 related 里去掉。不改也能发布。' },
+  HOSTNAME: {
+    title: '主机名无法连接',
+    hint: '下划线或非 ASCII 主机名 Java 客户端连不上。改成 IP、DNS 别名，或 message 里的 punycode。',
+  },
+  SINGLE_LABEL_HOST: {
+    title: '单标签主机名不会发送 SNI',
+    hint: 'https 的单标签名可能拿到别的证书。不改也能保存。',
+  },
 }
 
 export function isoDaysAgo(days: number): string {

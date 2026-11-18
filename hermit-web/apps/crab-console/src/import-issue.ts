@@ -45,6 +45,8 @@ export const importIssueLabels: Record<string, string> = {
   MCP_HEADER: '请求头无效',
   MCP_DESCRIPTION: '描述异常',
   MCP_NO_ACTIONS: '没有能力',
+  HOSTNAME: '主机名不可用',
+  SINGLE_LABEL_HOST: '单标签主机名',
   VERSION_INVALID: '版本号无效',
   RESERVED_VARIABLE: '保留变量',
   /** 请求上的未知字段，例如 `body`、`multipart`。警告，不阻止保存。 */

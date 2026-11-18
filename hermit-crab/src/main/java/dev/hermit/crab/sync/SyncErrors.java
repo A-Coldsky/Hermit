@@ -36,11 +36,19 @@ final class SyncErrors {
         if (TransportFailure.isDns(cause)) {
             return Optional.of(upstream("无法解析 Reef 地址。请检查 config.yml 的 reef.url，然后再次同步。"));
         }
-        TransportFailure.View view = TransportFailure.classify(cause, null, -1);
-        if (view.kind().name().startsWith("TLS_")) {
+        TransportFailure.View view = TransportFailure.classify(cause, ex.targetHost(), ex.targetPort());
+        if (explained(view.kind())) {
             return Optional.of(upstream(view.message()));
         }
         return Optional.of(upstream("无法连接 Reef。请确认 Reef 已启动、reef.url 可从本机访问，然后再次同步。"));
+    }
+
+    private static boolean explained(TransportFailure.Kind kind) {
+        return switch (kind) {
+            case REFUSED, NO_RESPONSE, HEADER_LIMIT, TLS_UNTRUSTED, TLS_INTERMEDIATE, TLS_HOSTNAME,
+                    TLS_EXPIRED, TLS_PROTOCOL, TLS_CIPHER, TLS_CERT_ALGORITHM, TLS_SNI, TLS_OTHER -> true;
+            case DNS, TIMEOUT, OTHER -> false;
+        };
     }
 
     private static SyncError upstream(String message) {

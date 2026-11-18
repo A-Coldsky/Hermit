@@ -45,6 +45,10 @@ public final class ValidationCodes {
     public static final String FRAGMENT_DROPPED = "FRAGMENT_DROPPED";
     /** query_style 不是 url 或 form。错误，阻止保存。 */
     public static final String QUERY_STYLE = "QUERY_STYLE";
+    /** 主机名含下划线，或含未转成 punycode 的非 ASCII。错误，阻止保存。 */
+    public static final String HOSTNAME = "HOSTNAME";
+    /** https 的单标签主机不会发送 SNI。警告，不阻止保存。 */
+    public static final String SINGLE_LABEL_HOST = "SINGLE_LABEL_HOST";
 
     private ValidationCodes() {
     }

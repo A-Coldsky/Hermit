@@ -18,6 +18,7 @@ import java.util.logging.Logger;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.http.HostNames;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
@@ -1295,7 +1296,7 @@ public final class RuleEngine implements ConchExecutor {
             throw new RuleProblem(ErrorCode.INTERNAL, "缺少 base_url", null, null, null);
         }
         try {
-            URI uri = URI.create(raw);
+            URI uri = HostNames.withoutTrailingDot(URI.create(raw));
             if (!uri.isAbsolute() || uri.getHost() == null) {
                 throw new RuleProblem(ErrorCode.INTERNAL, "base_url 无效", null, null, null);
             }

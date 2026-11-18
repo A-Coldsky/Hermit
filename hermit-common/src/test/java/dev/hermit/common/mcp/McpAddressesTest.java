@@ -34,4 +34,16 @@ class McpAddressesTest {
                 .isEqualTo(McpAddresses.Problem.TEMPLATE);
         assertThat(McpAddresses.parse("stdio://local").problem()).isEqualTo(McpAddresses.Problem.SCHEME);
     }
+
+    @Test
+    void trailingDotsAreTheSameHostAndKeepAnExplicitPort() {
+        McpAddresses.Parsed dotted = McpAddresses.parse("http://127.0.0.1.:8080/mcp").url();
+        McpAddresses.Parsed plain = McpAddresses.parse("http://127.0.0.1:8080/mcp").url();
+        assertThat(dotted.host()).isEqualTo("127.0.0.1");
+        assertThat(dotted.port()).isEqualTo(8080);
+        assertThat(McpAddresses.sameOrigin(dotted, plain)).isTrue();
+        assertThat(McpAddresses.parse("https://hr.corp./mcp").url().host()).isEqualTo("hr.corp");
+        assertThat(McpAddresses.normalizeHost("LocalHost...")).isEqualTo("localhost");
+        assertThat(McpAddresses.parse("https://my_host.corp/mcp").problem()).isEqualTo(McpAddresses.Problem.HOST);
+    }
 }

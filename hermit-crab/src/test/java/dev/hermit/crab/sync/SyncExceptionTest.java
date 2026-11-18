@@ -25,12 +25,19 @@ class SyncExceptionTest {
 
     @Test
     void unreachableReefBecomesUpstreamErrorWithANextStep() {
-        SyncError refused = new SyncException("reef request failed", new ConnectException("Connection refused"))
+        SyncError refused = new SyncException(
+                "reef request failed", new ConnectException("Connection refused"), "10.1.2.3", 8443)
                 .clientError()
                 .orElseThrow();
         assertThat(refused.code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
-        assertThat(refused.message()).contains("无法连接 Reef").contains("再次同步");
-        assertThat(refused.message()).doesNotContain("Connection refused").doesNotContain("reef request failed");
+        assertThat(refused.message()).isEqualTo("上游拒绝连接（10.1.2.3:8443）");
+        assertThat(refused.message()).doesNotContain("无法连接 Reef").doesNotContain("再次同步").doesNotContain("Connection refused");
+
+        SyncError protocol = new SyncException(
+                "reef request failed", new SSLHandshakeException("Received fatal alert: protocol_version"))
+                .clientError()
+                .orElseThrow();
+        assertThat(protocol.message()).isEqualTo("对方只支持 TLS 1.0/1.1 等旧协议，Crab 默认不连。");
 
         SyncError unknown = new SyncException("reef request failed", new UnknownHostException("reef.internal"))
                 .clientError()

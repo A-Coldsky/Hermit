@@ -119,7 +119,7 @@ final class ReefClient {
         } catch (IOException ex) {
             URI uri = request.uri();
             TransportFailure.observe(ex, uri.getHost(), TransportFailure.portOf(uri));
-            throw new SyncException("reef request failed", ex);
+            throw new SyncException("reef request failed", ex, uri.getHost(), TransportFailure.portOf(uri));
         }
     }
 

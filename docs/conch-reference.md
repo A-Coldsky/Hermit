@@ -192,6 +192,8 @@ actions:
 
 `credentials`/`config` 字段接受 `type`、`label`、`required`、`description`、`options`；config 额外支持 `default`。类型有 text/secret/select/url。校验会拒绝 `config` 的 `type: secret`，秘密必须放在 `credentials`。mcp 包还拒绝 `config` 的 `type: url`。配置值优先级为用户值 → 声明 default → 顶层 base_url（仅 base_url 字段）；引擎也可直接回退顶层 base_url。
 
+`base_url`、`config.base_url` 的默认值、步骤里的绝对 `url` 或 `path`（含登录步骤和 `alive_check`），以及 MCP 的 `upstream.url`、`authorization_endpoint`、`token_endpoint`，按 Java 客户端能连上的主机名检查。含下划线是错误 `HOSTNAME`，message 为「主机名 X 含下划线，Java 客户端无法连接；请改用 IP 或 DNS 别名」。含非 ASCII 字符也是这个错误，message 给出 punycode（`IDN.toASCII`）；转不出来时写「无法转成 punycode」。下划线优先于非 ASCII。主机里有 `{{` 或 `}}` 时跳过。https 的单标签主机名（如 `https://hr/`）是警告 `SINGLE_LABEL_HOST`，message 为「单标签主机名 hr 不会发送 SNI，虚拟主机可能返回别的证书」，不阻止保存；http 的单标签主机名不警告。末尾的点会去掉：`hr.corp.` 与 `hr.corp` 相同，`127.0.0.1.` 也按 `127.0.0.1` 保存和请求。相对路径、脚本和 `health_check` 不查这项。
+
 `description` 会原样显示在 Crab 控制台的账号凭证对话框里，是写给填表的人看的。只写要填什么，例如上面 `sample_oa` 的密码写「填原始密码」；md5、加密、明文提交这类处理细节由步骤模板的过滤器负责，不写进说明。
 
 凭证、配置、账号和能力开关会在 Crab 的 `config_audit` 追加一条记录。记录里是字段名和动作，不是凭证明文、密文或配置值。本机 `GET /console/api/audit` 和 CLI `audit list` 按时间倒序读取，结果同样只有操作者、动作、origin、Conch、账号、时间和字段名。detail 里其它键不会被读出来。
@@ -239,7 +241,7 @@ actions:
 
 禁止的请求头不区分大小写：`Host`、`Content-Length`、`Cookie`、`Mcp-Session-Id`、`MCP-Protocol-Version`、`Accept`、`Content-Type`。头的值若是字面凭证，仍走原来的明文凭证检查。`timeout_ms` 若写了必须是正整数。
 
-`allowed_hosts` 省略时，解析器填入 `upstream.url` 主机的小写形式。显式列表按原文保存，比对时忽略大小写；写成空列表不会再从 URL 补。每一项是主机名、IPv6 字面量，或 `*.后缀`。`*.后缀` 只匹配多出来的下级，不匹配后缀自己。`::1` 与 `[::1]` 是同一主机。带点分十进制的地址（如 `::ffff:127.0.0.1`）含有 `.`，不当作 IPv6 字面量。校验不做 DNS。
+`allowed_hosts` 省略时，解析器填入 `upstream.url` 主机的小写形式。显式列表按原文保存，比对时忽略大小写，并去掉末尾的点；写成空列表不会再从 URL 补。每一项是主机名、IPv6 字面量，或 `*.后缀`。`*.后缀` 只匹配多出来的下级，不匹配后缀自己。`::1` 与 `[::1]` 是同一主机。带点分十进制的地址（如 `::ffff:127.0.0.1`）含有 `.`，不当作 IPv6 字面量。校验不做 DNS。
 
 `credentials` 必须出现，可以是 `{}`。`config` 的 `type: secret` 仍是 `CONFIG_SECRET`。mcp 的 `config` 若 `type: url`，错误码是 `MCP_UPSTREAM`，不是新的错误码。
 

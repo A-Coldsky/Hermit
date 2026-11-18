@@ -49,6 +49,7 @@ import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
 import org.apache.hc.core5.util.Timeout;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.http.HostNames;
 import dev.hermit.common.http.UrlComponents;
 import dev.hermit.crab.tls.TransportFailure;
 
@@ -240,6 +241,8 @@ final class HttpCalls {
     }
 
     static boolean sameOrigin(URI base, URI other) {
+        base = HostNames.withoutTrailingDot(base);
+        other = HostNames.withoutTrailingDot(other);
         if (base == null || other == null || base.getScheme() == null || other.getScheme() == null) {
             return false;
         }
@@ -637,7 +640,8 @@ final class HttpCalls {
             String reference = present(spec, "url")
                     ? Values.text(spec.get("url"))
                     : Values.text(spec.get("path"));
-            URI resolved = UrlComponents.resolve(base, reference, charset);
+            URI resolved = HostNames.withoutTrailingDot(
+                    UrlComponents.resolve(HostNames.withoutTrailingDot(base), reference, charset));
             if (!sameOrigin(base, resolved)) {
                 throw new RuleProblem(ErrorCode.INTERNAL, "目标地址与 base_url 不同源", null, null, null);
             }

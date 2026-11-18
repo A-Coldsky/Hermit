@@ -16,6 +16,7 @@ import java.util.regex.Pattern;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import dev.hermit.common.http.HostNames;
 import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.mcp.McpLimits;
 import dev.hermit.common.mcp.ToolSnapshots;
@@ -215,6 +216,11 @@ public final class ConchValidator {
                     ValidationCodes.MIN_CRAB_VERSION,
                     "min_crab_version",
                     "使用 ask 时 min_crab_version 必须不低于 1.4.0"));
+        }
+        checkLiteralHost("base_url", doc.baseUrl(), errors, warnings);
+        ConfigField configuredBase = doc.config().get("base_url");
+        if (configuredBase != null) {
+            checkLiteralHost("config.base_url.default", configuredBase.defaultValue(), errors, warnings);
         }
         return new ValidationResult(errors, warnings);
     }
@@ -641,6 +647,8 @@ public final class ConchValidator {
                     path + ".query_style",
                     "query_style 只允许 url 或 form"));
         }
+        checkLiteralHost(path + ".path", request.get("path"), errors, warnings);
+        checkLiteralHost(path + ".url", request.get("url"), errors, warnings);
         if (warnings == null) {
             return;
         }
@@ -648,6 +656,28 @@ public final class ConchValidator {
         warnEncodedValues(path + ".form", request.get("form"), false, warnings);
         warnFragment(path + ".path", request.get("path"), warnings);
         warnFragment(path + ".url", request.get("url"), warnings);
+    }
+
+    private static void checkLiteralHost(
+            String path,
+            Object value,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
+    ) {
+        if (!(value instanceof String text)) {
+            return;
+        }
+        HostNames.Finding finding = HostNames.inspect(text);
+        if (finding == null) {
+            return;
+        }
+        if (finding.problem() == HostNames.Problem.SINGLE_LABEL_HTTPS) {
+            if (warnings != null) {
+                warnings.add(issue(ValidationCodes.SINGLE_LABEL_HOST, path, finding.message()));
+            }
+            return;
+        }
+        errors.add(issue(ValidationCodes.HOSTNAME, path, finding.message()));
     }
 
     private static void warnEncodedValues(
@@ -1316,7 +1346,7 @@ public final class ConchValidator {
         if (doc.upstream() == null) {
             errors.add(issue(ValidationCodes.MCP_UPSTREAM, "upstream", "缺少 upstream"));
         } else {
-            checkUpstream(doc, doc.upstream(), errors);
+            checkUpstream(doc, doc.upstream(), errors, warnings);
         }
         if (doc.tools() != null) {
             checkPatterns("tools.include", doc.tools().include(), errors);
@@ -1348,8 +1378,13 @@ public final class ConchValidator {
         }
     }
 
-    private static void checkUpstream(ConchDoc doc, McpUpstream upstream, List<ValidationIssue> errors) {
-        McpAddresses.ParseResult url = checkAddress("upstream.url", "上游地址", upstream.url(), errors);
+    private static void checkUpstream(
+            ConchDoc doc,
+            McpUpstream upstream,
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
+    ) {
+        McpAddresses.ParseResult url = checkAddress("upstream.url", "上游地址", upstream.url(), errors, warnings);
         if (!McpLimits.TRANSPORT.equals(upstream.transport())) {
             errors.add(issue(
                     ValidationCodes.MCP_UPSTREAM, "upstream.transport", "transport 只接受 streamable_http"));
@@ -1397,14 +1432,16 @@ public final class ConchValidator {
                     auth.authorizationEndpoint(),
                     upstream.allowedHosts(),
                     url,
-                    errors);
+                    errors,
+                    warnings);
             checkEndpoint(
                     "upstream.auth.token_endpoint",
                     "令牌端点",
                     auth.tokenEndpoint(),
                     upstream.allowedHosts(),
                     url,
-                    errors);
+                    errors,
+                    warnings);
         }
         checkHeaders(doc, upstream, errors);
     }
@@ -1415,12 +1452,13 @@ public final class ConchValidator {
             String text,
             List<String> allowedHosts,
             McpAddresses.ParseResult upstream,
-            List<ValidationIssue> errors
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
     ) {
         if (text == null || text.isBlank()) {
             return;
         }
-        McpAddresses.ParseResult parsed = checkAddress(path, label, text, errors);
+        McpAddresses.ParseResult parsed = checkAddress(path, label, text, errors, warnings);
         if (!parsed.ok()) {
             return;
         }
@@ -1440,14 +1478,23 @@ public final class ConchValidator {
             String path,
             String label,
             String text,
-            List<ValidationIssue> errors
+            List<ValidationIssue> errors,
+            List<ValidationIssue> warnings
     ) {
         if (text == null || text.isBlank()) {
             errors.add(issue(ValidationCodes.MCP_UPSTREAM, path, "缺少" + label));
             return new McpAddresses.ParseResult(null, McpAddresses.Problem.HOST);
         }
+        HostNames.Finding finding = HostNames.inspect(text);
+        boolean hostnameError = finding != null && finding.problem() != HostNames.Problem.SINGLE_LABEL_HTTPS;
+        if (hostnameError) {
+            errors.add(issue(ValidationCodes.HOSTNAME, path, finding.message()));
+        }
+        if (finding != null && finding.problem() == HostNames.Problem.SINGLE_LABEL_HTTPS && warnings != null) {
+            warnings.add(issue(ValidationCodes.SINGLE_LABEL_HOST, path, finding.message()));
+        }
         McpAddresses.ParseResult parsed = McpAddresses.parse(text);
-        if (!parsed.ok()) {
+        if (!parsed.ok() && !(hostnameError && parsed.problem() == McpAddresses.Problem.HOST)) {
             errors.add(issue(ValidationCodes.MCP_UPSTREAM, path, label + addressMessage(parsed.problem())));
         }
         return parsed;

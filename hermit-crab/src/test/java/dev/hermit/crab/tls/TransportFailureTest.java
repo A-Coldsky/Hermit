@@ -144,6 +144,72 @@ class TransportFailureTest {
         String longCause = "😀".repeat(301);
         TransportFailure.View clipped = TransportFailure.classify(new SSLHandshakeException(longCause), "h", 1);
         assertThat(clipped.cause().codePointCount(0, clipped.cause().length())).isEqualTo(300);
+        assertThat(clipped.cause()).startsWith("SSLHandshakeException: ");
+    }
+
+    @Test
+    void legacyTlsAndHttpFailuresKeepTheUserSentenceFreeOfTheCause() {
+        String secret = "token-secret-value";
+        TransportFailure.View protocol = TransportFailure.classify(
+                new SSLHandshakeException("Received fatal alert: protocol_version " + secret), "hr", 443);
+        assertThat(protocol.kind()).isEqualTo(TransportFailure.Kind.TLS_PROTOCOL);
+        assertThat(protocol.message()).isEqualTo("对方只支持 TLS 1.0/1.1 等旧协议，Crab 默认不连。");
+        assertThat(protocol.message()).doesNotContain(secret);
+        assertThat(protocol.cause()).startsWith("SSLHandshakeException: ").contains(secret);
+
+        TransportFailure.View protocolFirst = TransportFailure.classify(
+                new SSLHandshakeException("No appropriate protocol (protocol is disabled or cipher suites are inappropriate)"),
+                "hr", 443);
+        assertThat(protocolFirst.kind()).isEqualTo(TransportFailure.Kind.TLS_PROTOCOL);
+
+        assertThat(TransportFailure.classify(
+                new SSLHandshakeException("Received fatal alert: handshake_failure"), "hr", 443).kind())
+                .isEqualTo(TransportFailure.Kind.TLS_CIPHER);
+        TransportFailure.View dh = TransportFailure.classify(
+                new SSLHandshakeException("DH ServerKeyExchange does not comply to algorithm constraints"), "hr", 443);
+        assertThat(dh.kind()).isEqualTo(TransportFailure.Kind.TLS_CIPHER);
+        assertThat(dh.message()).isEqualTo("对方只提供已禁用的加密套件（如 3DES、RC4、静态 RSA、弱 DH）。");
+
+        TransportFailure.View shortKey = TransportFailure.classify(new SSLHandshakeException(
+                "PKIX path validation failed: Algorithm constraints check failed on keysize limits: RSA 512 bit key"),
+                "hr", 443);
+        assertThat(shortKey.kind()).isEqualTo(TransportFailure.Kind.TLS_CERT_ALGORITHM);
+        assertThat(shortKey.message()).isEqualTo("对方证书使用被禁的算法或密钥过短（如 RSA 512），需要换证书。");
+
+        TransportFailure.View sni = TransportFailure.classify(
+                new SSLHandshakeException("Received fatal alert: unrecognized_name"), "hr", 443);
+        assertThat(sni.kind()).isEqualTo(TransportFailure.Kind.TLS_SNI);
+        assertThat(sni.message()).isEqualTo("对方拒绝了 SNI 主机名，可改用 IP 或单标签名。");
+
+        TransportFailure.View silent = TransportFailure.classify(
+                new NoHttpResponseException("localhost:9 failed to respond"), "localhost", 9);
+        assertThat(silent.kind()).isEqualTo(TransportFailure.Kind.NO_RESPONSE);
+        assertThat(silent.message()).isEqualTo("上游没有返回 HTTP 响应。");
+
+        TransportFailure.View header = TransportFailure.classify(
+                new MessageConstraintException("Maximum line length limit exceeded"), "localhost", 9);
+        assertThat(header.kind()).isEqualTo(TransportFailure.Kind.HEADER_LIMIT);
+        assertThat(header.message()).isEqualTo("上游响应头超过长度或个数上限。");
+
+        ConnectException embedded = new ConnectException(
+                "Connect to http://localhost:9 [localhost/0:0:0:0:0:0:0:1] failed: Connection refused");
+        TransportFailure.View refused = TransportFailure.classify(embedded, "localhost", 9);
+        assertThat(refused.kind()).isEqualTo(TransportFailure.Kind.REFUSED);
+        assertThat(refused.message()).contains("localhost:9").contains("::1");
+        assertThat(TransportFailure.compactAddress("0:0:0:0:0:0:0:1")).isEqualTo("::1");
+        assertThat(TransportFailure.compactAddress("2001:0:0:0:0:0:0:1")).isEqualTo("2001::1");
+    }
+
+    private static final class NoHttpResponseException extends java.io.IOException {
+        private NoHttpResponseException(String message) {
+            super(message);
+        }
+    }
+
+    private static final class MessageConstraintException extends java.io.IOException {
+        private MessageConstraintException(String message) {
+            super(message);
+        }
     }
 
     @Test

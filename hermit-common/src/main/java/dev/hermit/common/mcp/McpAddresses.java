@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
+import dev.hermit.common.http.HostNames;
+
 /**
  * 包内 URL 和 {@code allowed_hosts}。只解析字面量，不查 DNS。
  * {@code *.suffix} 匹配多出来的下级主机，不匹配 suffix 自己。
@@ -71,10 +73,19 @@ public final class McpAddresses {
             return ParseResult.bad(Problem.FRAGMENT);
         }
         String host = uri.getHost();
+        int port = uri.getPort();
+        if (host == null || host.isBlank() || host.endsWith(".")) {
+            URI stripped = HostNames.withoutTrailingDot(uri);
+            if (stripped.getHost() != null && !stripped.getHost().isBlank()) {
+                host = stripped.getHost();
+                if (port < 0 && stripped.getPort() >= 0) {
+                    port = stripped.getPort();
+                }
+            }
+        }
         if (host == null || host.isBlank()) {
             return ParseResult.bad(Problem.HOST);
         }
-        int port = uri.getPort();
         if (port < 0) {
             port = "https".equals(scheme) ? 443 : 80;
         }
@@ -117,10 +128,7 @@ public final class McpAddresses {
         if (value.startsWith("[") && value.endsWith("]") && value.length() >= 2) {
             value = value.substring(1, value.length() - 1);
         }
-        if (value.endsWith(".")) {
-            value = value.substring(0, value.length() - 1);
-        }
-        return value;
+        return HostNames.stripTrailingDots(value);
     }
 
     private static boolean hostMatches(String normalizedHost, String pattern) {

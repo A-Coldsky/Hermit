@@ -68,6 +68,8 @@ tls:
 
 没有 `insecure_skip_verify`，规则包里也不能关校验。连不上时错误码仍是 `UPSTREAM_ERROR`（超时仍走原来的超时分支），message 会说明是 DNS、拒绝连接、证书不受信任、缺中间证书、主机名不符、过期或其它握手失败。
 
+旧协议（TLS 1.0/1.1）、已禁用的套件（如 3DES、RC4、静态 RSA、弱 DH）和过短的证书密钥（如 RSA 512）现在不连。改 `java.security` 不能让规则引擎连上这些站点：规则 HTTP、MCP 转发和 OAuth 走 Apache HttpClient，不用 JDK `java.net.http` 那一份协议开关。这类失败的 message 分别是「对方只支持 TLS 1.0/1.1 等旧协议，Crab 默认不连。」、「对方只提供已禁用的加密套件（如 3DES、RC4、静态 RSA、弱 DH）。」和「对方证书使用被禁的算法或密钥过短（如 RSA 512），需要换证书。」对方拒绝 SNI 时是「对方拒绝了 SNI 主机名，可改用 IP 或单标签名。」上游接受了连接但没有 HTTP 响应、或响应头超过长度或个数上限，也各有一句，不再并进「上游连接失败」。拒绝连接会写上对端地址；`localhost` 解析到 `127.0.0.1` 和 `::1` 时两处都会出现。开发追踪里的 `cause` 是根因类名加原文，并按凭证打码。同步 Reef 时，拒绝连接和这些原因用同一句说明；无法解析和超时仍是原来的「再次同步」句子。
+
 容器入口用 curl 取 Reef 签名公钥。CA 目录里有证书时，把系统 CA 包和这些证书拼成临时 bundle，再传 `--cacert`（这个参数会替换 curl 的默认信任库，所以必须带上系统包）。没有附加证书时不传 `--cacert`。首次取公钥时通常还没有 `config.yml`，这时用 `$HERMIT_HOME/trust/ca`。已经有配置且写了 `tls.ca_dir` 时，用那个目录。
 
 控制台「HTTPS 信任」使用 `/console/api/tls/*`，只接受控制台登录，API Key 和 MCP 不能加信任。`GET /console/api/tls/trust` 返回 `sources`（JDK、操作系统、CA 目录各一条，含张数）、`caFiles`、`trustedHosts` 和 `loadErrors`。导入是 `POST /console/api/tls/ca`，正文 `{name, pem}`：页面上的「选择文件」先在浏览器里读成 PEM，再走这一个接口。`name` 匹配 `[A-Za-z0-9_.-]{1,64}`，并且必须以 `.pem`、`.crt` 或 `.cer` 结尾，否则目录加载会忽略它。私钥、超过 64 KiB、超过 64 个文件或 256 张证书都会拒绝，不留下新文件。删除和 `POST /console/api/tls/reload` 之后重新加载。删掉一张 CA 或一条主机指纹时，清掉 TLS 会话并关掉 Apache 的空闲连接；正在用的连接会把当前请求做完。`java.net.http` 仍然没有公开的空闲连接池。

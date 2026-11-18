@@ -429,6 +429,106 @@ class McpConchValidatorTest {
         assertThat(codes(http)).doesNotContain(ValidationCodes.MCP_NO_ACTIONS);
     }
 
+    @Test
+    void upstreamHostnamesMatchTheHttpRules() {
+        ValidationResult underscore = validate(ConchParser.parse("""
+                conch: vendor_crm
+                version: 1.0.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                upstream:
+                  url: https://my_host.corp/mcp
+                  transport: streamable_http
+                  auth:
+                    type: oauth
+                    client_id: app
+                    authorization_endpoint: https://login.example/authorize
+                    token_endpoint: https://例子.测试/token
+                actions:
+                  search_customer:
+                    tool: searchCustomer
+                    title: 搜索
+                    description: 搜索
+                    input_schema: {type: object}
+                    examples:
+                      - input: {}
+                        output: {}
+                    notes: 只读
+                    related: []
+                """), null);
+        assertThat(underscore.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.HOSTNAME)
+                        && issue.path().equals("upstream.url")
+                        && issue.message().contains("下划线"));
+        assertThat(underscore.errors()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.HOSTNAME)
+                        && issue.path().equals("upstream.auth.token_endpoint")
+                        && issue.message().contains("xn--fsqu00a.xn--0zwm56d"));
+        assertThat(underscore.errors()).noneMatch(issue -> issue.message().contains("缺少主机"));
+
+        ValidationResult single = validate(ConchParser.parse("""
+                conch: vendor_crm
+                version: 1.0.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                upstream:
+                  url: https://hr/mcp
+                  transport: streamable_http
+                  auth:
+                    type: headers
+                actions:
+                  search_customer:
+                    tool: searchCustomer
+                    title: 搜索
+                    description: 搜索
+                    input_schema: {type: object}
+                    examples:
+                      - input: {}
+                        output: {}
+                    notes: 只读
+                    related: []
+                """), null);
+        assertThat(single.errors()).isEmpty();
+        assertThat(codes(single)).doesNotContain(ValidationCodes.HOSTNAME);
+        assertThat(single.warnings()).anyMatch(issue ->
+                issue.code().equals(ValidationCodes.SINGLE_LABEL_HOST)
+                        && issue.path().equals("upstream.url")
+                        && issue.message().contains("单标签主机名 hr"));
+
+        ValidationResult dotted = validate(ConchParser.parse("""
+                conch: vendor_crm
+                version: 1.0.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                upstream:
+                  url: https://hr.corp./mcp
+                  transport: streamable_http
+                  auth: {type: headers}
+                actions:
+                  search_customer:
+                    tool: searchCustomer
+                    title: 搜索
+                    description: 搜索
+                    input_schema: {type: object}
+                    examples:
+                      - input: {}
+                        output: {}
+                    notes: 只读
+                    related: []
+                """), null);
+        assertThat(dotted.errors()).isEmpty();
+        assertThat(codes(dotted)).doesNotContain(ValidationCodes.HOSTNAME, ValidationCodes.MCP_UPSTREAM);
+    }
+
     private static ValidationResult validate(ConchDoc doc, SemVer current) {
         return ConchValidator.validate(doc, ConchValidator.Context.of(current));
     }

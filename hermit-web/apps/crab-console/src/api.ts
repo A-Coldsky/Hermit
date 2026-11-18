@@ -415,7 +415,13 @@ export type TransportFailureKind =
   | 'TLS_INTERMEDIATE'
   | 'TLS_HOSTNAME'
   | 'TLS_EXPIRED'
+  | 'TLS_PROTOCOL'
+  | 'TLS_CIPHER'
+  | 'TLS_CERT_ALGORITHM'
+  | 'TLS_SNI'
   | 'TLS_OTHER'
+  | 'NO_RESPONSE'
+  | 'HEADER_LIMIT'
   | 'OTHER'
 
 /** 握手记录里的一张证书。主题和指纹不是秘密。 */
@@ -438,7 +444,7 @@ export interface TlsCertificate {
 
 /**
  * 开发追踪里失败步骤的 `transport`。
- * `cause` 是根因原文，最长 300 字，已经过凭证打码。
+ * `cause` 是根因类名加原文，最长 300 字，已经过凭证打码。
  */
 export interface DevTraceTransport {
   kind: TransportFailureKind
@@ -596,6 +602,7 @@ export interface ValidationIssue {
   /**
    * 校验代码。请求编码相关：`IGNORED_REQUEST_FIELD`、`DOUBLE_ENCODE`、
    * `PERCENT_ENCODED`、`FRAGMENT_DROPPED` 是警告，不阻止保存；`QUERY_STYLE` 是错误。
+   * `HOSTNAME` 是错误（下划线或非 ASCII 主机名）；`SINGLE_LABEL_HOST` 是警告。
    */
   code: string
   path: string

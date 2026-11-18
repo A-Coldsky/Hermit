@@ -1,6 +1,7 @@
 package dev.hermit.crab.tls;
 
 import java.net.ConnectException;
+import java.net.InetAddress;
 import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.UnknownHostException;
@@ -11,10 +12,15 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import dev.hermit.common.http.HostNames;
 
 import javax.net.ssl.SSLException;
 
@@ -27,6 +33,13 @@ public final class TransportFailure {
     private static final String PKIX_CLASS = "sun.security.provider.certpath.SunCertPathBuilderException";
     private static final String UNRESOLVED = "java.nio.channels.UnresolvedAddressException";
     private static final String HOST_CONNECT = "org.apache.hc.client5.http.HttpHostConnectException";
+    /**
+     * Apache 把解析到的地址写成 {@code 主机/地址}，放在方括号里。
+     * 不把 URL 里的 {@code //} 当成这种写法，IPv6 先于单独的一段数字。
+     */
+    private static final Pattern EMBEDDED_PEER = Pattern.compile(
+            "(?<![/:])(?:[A-Za-z0-9._-]+|\\[[^\\]]+\\])/((?:[0-9a-fA-F]{1,4}:){2,}[0-9a-fA-F]{0,4}|(?:\\d{1,3}\\.){3}\\d{1,3})");
+    private static final Pattern IPV4 = Pattern.compile("^(?:\\d{1,3}\\.){3}\\d{1,3}$");
 
     private TransportFailure() {
     }
@@ -39,7 +52,13 @@ public final class TransportFailure {
         TLS_INTERMEDIATE,
         TLS_HOSTNAME,
         TLS_EXPIRED,
+        TLS_PROTOCOL,
+        TLS_CIPHER,
+        TLS_CERT_ALGORITHM,
+        TLS_SNI,
         TLS_OTHER,
+        NO_RESPONSE,
+        HEADER_LIMIT,
         OTHER
     }
 
@@ -119,10 +138,11 @@ public final class TransportFailure {
         HandshakeRecord record = HandshakeRecord.find(failure);
         String resolvedHost = firstText(host, record == null ? null : record.peerHost());
         int resolvedPort = port >= 0 ? port : (record == null ? -1 : record.peerPort());
-        String cause = clip(rootMessage(failure));
+        String detail = clip(rootMessage(failure));
+        String cause = causeField(failure);
         List<Map<String, Object>> chain = chainFields(record);
         Kind kind = kindOf(failure, record);
-        String message = message(kind, resolvedHost, resolvedPort, cause, record, failure);
+        String message = message(kind, resolvedHost, resolvedPort, detail, record, failure);
         return new View(kind, message, resolvedHost, resolvedPort, cause, chain);
     }
 
@@ -142,16 +162,63 @@ public final class TransportFailure {
         if (expired(failure)) {
             return Kind.TLS_EXPIRED;
         }
+        if (certAlgorithm(failure)) {
+            return Kind.TLS_CERT_ALGORITHM;
+        }
         if (pkix(failure)) {
             return missingIntermediate(record) ? Kind.TLS_INTERMEDIATE : Kind.TLS_UNTRUSTED;
         }
+        if (mentions(failure, "unrecognized_name")) {
+            return Kind.TLS_SNI;
+        }
+        if (mentions(failure, "protocol_version") || mentions(failure, "no appropriate protocol")) {
+            return Kind.TLS_PROTOCOL;
+        }
+        if (cipher(failure)) {
+            return Kind.TLS_CIPHER;
+        }
         if (ssl(failure)) {
             return Kind.TLS_OTHER;
+        }
+        if (named(failure, "NoHttpResponseException") || mentions(failure, "the target server failed to respond")) {
+            return Kind.NO_RESPONSE;
+        }
+        if (named(failure, "MessageConstraintException")
+                || mentions(failure, "maximum line length")
+                || mentions(failure, "maximum header count")) {
+            return Kind.HEADER_LIMIT;
         }
         if (refused(failure)) {
             return Kind.REFUSED;
         }
         return Kind.OTHER;
+    }
+
+    /** 证书算法或密钥长度。DH 约束算套件，不算这一种。 */
+    private static boolean certAlgorithm(Throwable failure) {
+        if (dhConstraint(failure)) {
+            return false;
+        }
+        return mentions(failure, "keysize") || mentions(failure, "algorithm constraints");
+    }
+
+    /** {@code handshake_failure}，或 DH 不满足算法约束。 */
+    private static boolean cipher(Throwable failure) {
+        return dhConstraint(failure) || mentions(failure, "handshake_failure");
+    }
+
+    private static boolean dhConstraint(Throwable failure) {
+        for (Throwable current : chain(failure)) {
+            String message = current.getMessage();
+            if (message == null) {
+                continue;
+            }
+            String lower = message.toLowerCase(Locale.ROOT);
+            if (lower.contains("diffie") || lower.contains("dh serverkeyexchange") || lower.contains("dh key")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -251,26 +318,206 @@ public final class TransportFailure {
         String name = host == null || host.isBlank() ? "" : host;
         return switch (kind) {
             case DNS -> name.isEmpty() ? "无法解析上游地址" : "无法解析上游地址 " + name;
-            case REFUSED -> refusedMessage(name, port);
+            case REFUSED -> refusedMessage(name, port, failure);
             case TIMEOUT -> "上游超时";
             case TLS_UNTRUSTED -> "上游证书不受信任：颁发者 " + issuer(record)
                     + "。可在控制台「HTTPS 信任」导入这个颁发者的根证书，或信任这张证书";
             case TLS_INTERMEDIATE -> "上游没有发送中间证书：请把颁发者 " + issuer(record) + " 的证书导入「HTTPS 信任」";
             case TLS_HOSTNAME -> name.isEmpty() ? "上游证书与主机名不符" : "上游证书与主机名 " + name + " 不符";
             case TLS_EXPIRED -> expiryMessage(record, failure);
+            case TLS_PROTOCOL -> "对方只支持 TLS 1.0/1.1 等旧协议，Crab 默认不连。";
+            case TLS_CIPHER -> "对方只提供已禁用的加密套件（如 3DES、RC4、静态 RSA、弱 DH）。";
+            case TLS_CERT_ALGORITHM -> "对方证书使用被禁的算法或密钥过短（如 RSA 512），需要换证书。";
+            case TLS_SNI -> "对方拒绝了 SNI 主机名，可改用 IP 或单标签名。";
             case TLS_OTHER -> "与上游的 TLS 握手失败：" + (cause.isEmpty() ? root(failure).getClass().getSimpleName() : cause);
+            case NO_RESPONSE -> "上游没有返回 HTTP 响应。";
+            case HEADER_LIMIT -> "上游响应头超过长度或个数上限。";
             case OTHER -> "上游连接失败：" + simpleName(failure);
         };
     }
 
-    private static String refusedMessage(String host, int port) {
-        if (host.isEmpty()) {
+    private static String refusedMessage(String host, int port, Throwable failure) {
+        String target = endpoint(host, port);
+        String peers = peersOf(failure, host);
+        if (peers != null && !peers.isBlank()) {
+            if (target.isEmpty()) {
+                return "上游拒绝连接（对端 " + peers + "）";
+            }
+            return "上游拒绝连接（" + target + "，对端 " + peers + "）";
+        }
+        return refusedTarget(target);
+    }
+
+    private static String refusedTarget(String target) {
+        if (target.isEmpty()) {
             return "上游拒绝连接";
         }
-        if (port < 0) {
-            return "上游拒绝连接（" + host + "）";
+        return "上游拒绝连接（" + target + "）";
+    }
+
+    private static String endpoint(String host, int port) {
+        if (host == null || host.isBlank()) {
+            return "";
         }
-        return "上游拒绝连接（" + host + ":" + port + "）";
+        if (port < 0) {
+            return host;
+        }
+        return host + ":" + port;
+    }
+
+    /**
+     * 异常原文里的对端地址优先。没有时再解析主机名，这样 {@code localhost} 先落到
+     * {@code ::1} 时用户能看见实际地址。字面 IP 不再解析。
+     */
+    private static String peersOf(Throwable failure, String host) {
+        String embedded = embeddedPeers(failure, host);
+        if (embedded != null) {
+            return embedded;
+        }
+        return resolvedPeers(host);
+    }
+
+    private static String embeddedPeers(Throwable failure, String host) {
+        LinkedHashSet<String> peers = new LinkedHashSet<>();
+        for (Throwable current : chain(failure)) {
+            String message = current.getMessage();
+            if (message == null) {
+                continue;
+            }
+            Matcher matcher = EMBEDDED_PEER.matcher(message);
+            while (matcher.find()) {
+                String peer = compactAddress(matcher.group(1));
+                if (!peer.isBlank() && !sameEndpoint(peer, host)) {
+                    peers.add(peer);
+                }
+            }
+        }
+        return peers.isEmpty() ? null : String.join("、", peers);
+    }
+
+    private static boolean sameEndpoint(String peer, String host) {
+        if (host == null || host.isBlank()) {
+            return false;
+        }
+        String name = HostNames.stripTrailingDots(host.trim());
+        if (name.startsWith("[") && name.endsWith("]") && name.length() >= 2) {
+            name = name.substring(1, name.length() - 1);
+        }
+        return peer.equalsIgnoreCase(name);
+    }
+
+    private static String resolvedPeers(String host) {
+        if (host == null || host.isBlank()) {
+            return null;
+        }
+        String name = HostNames.stripTrailingDots(host.trim());
+        if (name.isEmpty() || name.indexOf(':') >= 0 || IPV4.matcher(name).matches()) {
+            return null;
+        }
+        try {
+            InetAddress[] all = InetAddress.getAllByName(name);
+            LinkedHashSet<String> peers = new LinkedHashSet<>();
+            for (InetAddress address : all) {
+                peers.add(compactAddress(address.getHostAddress()));
+            }
+            if (peers.isEmpty() || (peers.size() == 1 && peers.iterator().next().equalsIgnoreCase(name))) {
+                return null;
+            }
+            return String.join("、", peers);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    static String compactAddress(String hostAddress) {
+        if (hostAddress == null || hostAddress.isBlank()) {
+            return "";
+        }
+        int zone = hostAddress.indexOf('%');
+        String text = zone < 0 ? hostAddress : hostAddress.substring(0, zone);
+        if (text.indexOf(':') < 0) {
+            return text;
+        }
+        String[] parts = text.split(":", -1);
+        if (parts.length != 8) {
+            return text;
+        }
+        int bestStart = -1;
+        int bestLength = 0;
+        int index = 0;
+        while (index < parts.length) {
+            if (!zero(parts[index])) {
+                index++;
+                continue;
+            }
+            int end = index;
+            while (end < parts.length && zero(parts[end])) {
+                end++;
+            }
+            if (end - index > bestLength) {
+                bestStart = index;
+                bestLength = end - index;
+            }
+            index = end;
+        }
+        if (bestLength < 2) {
+            return text;
+        }
+        StringBuilder out = new StringBuilder();
+        int cursor = 0;
+        while (cursor < parts.length) {
+            if (cursor == bestStart) {
+                out.append("::");
+                cursor += bestLength;
+                continue;
+            }
+            if (out.length() > 0 && out.charAt(out.length() - 1) != ':') {
+                out.append(':');
+            }
+            out.append(parts[cursor].isEmpty() ? "0" : parts[cursor]);
+            cursor++;
+        }
+        return out.toString();
+    }
+
+    private static boolean zero(String part) {
+        return part == null || part.isEmpty() || "0".equals(part);
+    }
+
+    private static boolean mentions(Throwable failure, String needle) {
+        String expected = needle.toLowerCase(Locale.ROOT);
+        for (Throwable current : chain(failure)) {
+            String message = current.getMessage();
+            if (message != null && message.toLowerCase(Locale.ROOT).contains(expected)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean named(Throwable failure, String simpleName) {
+        for (Throwable current : chain(failure)) {
+            if (simpleName.equals(current.getClass().getSimpleName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String causeField(Throwable failure) {
+        if (failure == null) {
+            return "";
+        }
+        Throwable root = root(failure);
+        String name = root.getClass().getSimpleName();
+        if (name == null || name.isBlank()) {
+            name = root.getClass().getName();
+        }
+        String message = root.getMessage();
+        if (message == null || message.isBlank()) {
+            return clip(name);
+        }
+        return clip(name + ": " + message.strip());
     }
 
     private static String expiryMessage(HandshakeRecord record, Throwable failure) {

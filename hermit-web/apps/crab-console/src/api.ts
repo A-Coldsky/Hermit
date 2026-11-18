@@ -372,8 +372,10 @@ export interface DevTrace {
   /** 同一次调用或刷新里的多次 JSON-RPC。顶层的 method/params 是最后一轮。 */
   exchanges?: DevTraceExchange[]
   /**
-   * 失败没有落在某一步上时的传输失败。
-   * 落在步骤或某一轮 JSON-RPC 上时，看那一项自己的 `transport`。
+   * 没有落在步骤上时的传输失败。
+   * HTTP 步骤看自己的 `transport`。
+   * MCP 连接失败写在该轮 `error.transport`，入库时再抄到这一轮的 `transport`。
+   * 形状都是 `{kind, host, port, cause, chain}`，链上没有 PEM。
    */
   transport?: DevTraceTransport | null
 }
@@ -386,7 +388,10 @@ export interface DevTraceExchange {
   params?: unknown
   result?: unknown
   error?: unknown
-  /** 这一轮连不上时的传输失败。没有则为空。 */
+  /**
+   * 这一轮连不上时的传输失败。
+   * 服务端也会把它放在 `error.transport` 里，页面两处都认。
+   */
   transport?: DevTraceTransport | null
 }
 
@@ -416,6 +421,11 @@ export interface TlsCertificate {
   /** ISO-8601。 */
   notAfter: string
   ca: boolean
+  /**
+   * 信任管理接口在对端发来证书、可以写入 CA 目录时才带。
+   * 开发追踪的 chain 没有这一项。
+   */
+  pem?: string | null
 }
 
 /**
@@ -425,8 +435,86 @@ export interface TlsCertificate {
 export interface DevTraceTransport {
   kind: TransportFailureKind
   host: string
+  /** 未知时为 -1，页面不显示这个端口。 */
   port: number
+  /** 根因原文，最长 300 字，已经过凭证打码。没有时为空串。 */
   cause: string | null
+  /** 握手链。没有 PEM。 */
+  chain: TlsCertificate[]
+}
+
+/** `GET /console/api/tls/trust` 的一个信任来源。JDK、操作系统、CA 目录各一条。 */
+export interface TlsTrustSource {
+  kind: 'JDK' | 'OS' | 'CA_DIR'
+  /** 给人看的名字。空着时页面按 kind 显示「JDK」「操作系统」「CA 目录」。 */
+  label: string
+  /** 这一来源载入的证书张数。加载失败时为 0。 */
+  count: number
+  /** 操作系统证书包路径或 CA 目录。JDK 为 null。 */
+  location: string | null
+  /** 这一来源加载失败时的警告。成功为 null。 */
+  error: string | null
+}
+
+export interface TlsCaFile {
+  name: string
+  certificates: TlsCertificate[]
+  /** 成功载入的文件为 null。跳过的文件不在这里，而在 `loadErrors`。 */
+  error: string | null
+}
+
+/** schema 17 `tls_trusted_hosts` 的一行。每个 host:port 一张证书。 */
+export interface TlsTrustedHost {
+  host: string
+  port: number
+  sha256: string
+  subject: string
+  issuer: string
+  /** ISO-8601。 */
+  notAfter: string
+  createdAt: string
+  createdBy: string
+}
+
+export interface TlsLoadError {
+  /** 文件名。来源级错误为 null。 */
+  file: string | null
+  /** 不再重复文件名。文件级错误拼起来是 `文件名：message`。 */
+  message: string
+}
+
+/**
+ * `GET /console/api/tls/trust`。
+ * `sources` 是页面上的 JDK / 操作系统 / CA 目录和证书数量；
+ * 另外三部分是 `caFiles`、`trustedHosts`、`loadErrors`。
+ */
+export interface TlsTrustView {
+  sources: TlsTrustSource[]
+  caFiles: TlsCaFile[]
+  trustedHosts: TlsTrustedHost[]
+  loadErrors: TlsLoadError[]
+}
+
+/** `GET /console/api/tls/failures` 的一条。只在内存里，按 host:port 保留最近的失败。 */
+export interface TlsFailure {
+  host: string
+  port: number
+  kind: TransportFailureKind
+  message: string
+  /** ISO-8601。 */
+  at: string
+  chain: TlsCertificate[]
+}
+
+/** `POST /console/api/tls/probe` 的结果。只握手，不发请求。 */
+export interface TlsProbeResult {
+  host: string
+  port: number
+  /** 标准校验或已登记的指纹是否放行。 */
+  trusted: boolean
+  /** 失败种类。已经受信任时为 null。 */
+  kind: TransportFailureKind | null
+  message: string | null
   chain: TlsCertificate[]
 }
 
@@ -886,4 +974,43 @@ export const api = {
     const query = account ? `?account=${encodeURIComponent(account)}` : ''
     return http.post<McpRefreshResult>(`${base}/local-conches/${seg(conch)}/mcp/refresh${query}`)
   },
+
+  /**
+   * 控制台登录才能调用，API Key 不行。
+   * 信任来源、CA 文件、已信任的站点和加载错误。
+   */
+  tlsTrust: () => http.get<TlsTrustView>(`${base}/tls/trust`),
+  /** 最近的传输失败，含种类、消息、证书链和时间。 */
+  tlsFailures: () => http.get<{ failures: TlsFailure[] }>(`${base}/tls/failures`),
+  /**
+   * 把 PEM 写入 CA 目录并重新加载，成功返回信任视图。
+   * `name` 是 `[A-Za-z0-9_.-]{1,64}`，且以 `.pem`、`.crt` 或 `.cer` 结尾。
+   * 否则 400「名字只能包含字母、数字、点、下划线和连字符，长度 1 到 64，并且以 .pem、.crt 或 .cer 结尾。」。
+   * 私钥是「文件名：含有私钥，已跳过整个文件」，超过 64 KiB 是「文件名：超过 64 KiB，已跳过」，
+   * 解析不成证书是「文件名：不是证书」。这些情况不留下新文件。
+   */
+  importTlsCa: (name: string, pem: string) => http.post<TlsTrustView>(`${base}/tls/ca`, { name, pem }),
+  /** `{deleted: true}` 或 `{deleted: false}`。删掉后重新加载，并使 TLS 会话失效。 */
+  deleteTlsCa: (file: string) => http.del<{ deleted: boolean }>(`${base}/tls/ca/${seg(file)}`),
+  /** 重新读 CA 目录和操作系统信任库。不清 Cookie，不重建客户端。返回信任视图。 */
+  reloadTls: () => http.post<TlsTrustView>(`${base}/tls/reload`),
+  /**
+   * 只握手，不发 HTTP 请求。
+   * 地址必须是已加载规则的 `base_url`、MCP 上游或 OAuth 端点，或 Reef 地址。
+   * 否则 400「这个地址不在已安装规则、MCP 上游或 Reef 地址里。」。
+   * 已经受信任时 `kind` 和 `message` 为 null。链上带 `pem`。
+   */
+  probeTls: (host: string, port: number) => http.post<TlsProbeResult>(`${base}/tls/probe`, { host, port }),
+  /**
+   * 登记指纹。`sha256` 是 64 位十六进制，必须和该地址最近一小时内见过的 leaf 一致。
+   * 见过的不是这张时 400「没有在最近一小时内见过这张证书。请先检测这个站点。」。
+   * 过期是「这张证书已经过期，不能登记。」，尚未生效是「这张证书尚未生效，不能登记。」。
+   * 指纹格式不对是「指纹需要是 64 位十六进制。」。同一 `host:port` 再次登记会替换。
+   * 成功返回这一行，不是整份信任视图。
+   */
+  trustTlsHost: (host: string, port: number, sha256: string) =>
+    http.post<TlsTrustedHost>(`${base}/tls/trusted-hosts`, { host, port, sha256 }),
+  /** `{deleted: true}` 或 `{deleted: false}`。删除后清掉 TLS 会话。 */
+  removeTlsHost: (host: string, port: number) =>
+    http.del<{ deleted: boolean }>(`${base}/tls/trusted-hosts/${seg(host)}/${port}`),
 }

@@ -61,6 +61,11 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   REEF_BOOTSTRAPPED: { text: '连接 Reef', tone: 'success' },
   REPORT_SETTINGS_CHANGED: { text: '修改上报设置', tone: 'info' },
   CONCH_REPAIR_REQUIRED: { text: '同步发现需要修复', tone: 'warning' },
+  TLS_CA_ADDED: { text: '导入信任证书', tone: 'success' },
+  TLS_CA_REMOVED: { text: '移除信任证书', tone: 'warning' },
+  TLS_RELOADED: { text: '重新加载信任', tone: 'info' },
+  TLS_HOST_TRUSTED: { text: '信任站点', tone: 'success' },
+  TLS_HOST_REMOVED: { text: '取消信任站点', tone: 'warning' },
 }
 
 export const syncReasonLabels: Record<string, string> = {

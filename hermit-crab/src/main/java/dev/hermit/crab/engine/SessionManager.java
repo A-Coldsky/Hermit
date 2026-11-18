@@ -23,8 +23,11 @@ import org.apache.hc.client5.http.cookie.BasicCookieStore;
 import org.apache.hc.client5.http.cookie.Cookie;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.cookie.BasicClientCookie;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.core5.util.Timeout;
+
+import dev.hermit.crab.tls.OutboundTls;
 
 /**
  * 每个 (origin, conch, account) 一把公平锁、一个客户端和一个 Cookie 存储。
@@ -399,14 +402,19 @@ public final class SessionManager implements AutoCloseable {
     }
 
     private static void openClient(AccountState state) {
+        OutboundTls tls = OutboundTls.current();
+        PoolingHttpClientConnectionManager pool = tls.track(PoolingHttpClientConnectionManagerBuilder.create()
+                .setTlsSocketStrategy(tls.tlsStrategy())
+                .setDefaultConnectionConfig(ConnectionConfig.custom()
+                        .setConnectTimeout(Timeout.ofSeconds(15))
+                        .setSocketTimeout(Timeout.ofSeconds(15))
+                        .build())
+                .build());
+        state.tls = tls;
+        state.pool = pool;
         state.cookies = new BasicCookieStore();
         state.client = HttpClients.custom()
-                .setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
-                        .setDefaultConnectionConfig(ConnectionConfig.custom()
-                                .setConnectTimeout(Timeout.ofSeconds(15))
-                                .setSocketTimeout(Timeout.ofSeconds(15))
-                                .build())
-                        .build())
+                .setConnectionManager(pool)
                 .setDefaultCookieStore(state.cookies)
                 .disableRedirectHandling()
                 .disableAutomaticRetries()
@@ -414,6 +422,11 @@ public final class SessionManager implements AutoCloseable {
     }
 
     private static void closeClient(AccountState state) {
+        if (state.tls != null) {
+            state.tls.untrack(state.pool);
+        }
+        state.tls = null;
+        state.pool = null;
         if (state.client == null) {
             return;
         }
@@ -484,6 +497,8 @@ public final class SessionManager implements AutoCloseable {
         final Map<String, String> loginSnapshot = new LinkedHashMap<>();
         CloseableHttpClient client;
         BasicCookieStore cookies;
+        OutboundTls tls;
+        PoolingHttpClientConnectionManager pool;
         boolean loggedIn;
         Instant lastActive;
         int authFailures;

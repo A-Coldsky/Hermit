@@ -26,6 +26,7 @@ import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.Header;
@@ -35,6 +36,8 @@ import org.apache.hc.core5.util.Timeout;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.model.McpAuth;
+import dev.hermit.crab.tls.OutboundTls;
+import dev.hermit.crab.tls.TransportFailure;
 
 /**
  * OAuth 2.1 授权码 + PKCE，以及端点省略时的发现。
@@ -49,17 +52,22 @@ final class McpOAuthClient implements AutoCloseable {
     private static final ThreadLocal<Boolean> ALLOW_LOOPBACK = new ThreadLocal<>();
 
     private final CloseableHttpClient http;
+    private final PoolingHttpClientConnectionManager pool;
+    private final OutboundTls tls;
 
     McpOAuthClient() {
-        this.http = HttpClients.custom()
-                .setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
-                        .setDnsResolver(checkedDns())
-                        .setMaxConnPerRoute(8)
-                        .setMaxConnTotal(32)
-                        .setDefaultConnectionConfig(ConnectionConfig.custom()
-                                .setConnectTimeout(Timeout.ofSeconds(10))
-                                .build())
+        this.tls = OutboundTls.current();
+        this.pool = tls.track(PoolingHttpClientConnectionManagerBuilder.create()
+                .setDnsResolver(checkedDns())
+                .setTlsSocketStrategy(tls.tlsStrategy())
+                .setMaxConnPerRoute(8)
+                .setMaxConnTotal(32)
+                .setDefaultConnectionConfig(ConnectionConfig.custom()
+                        .setConnectTimeout(Timeout.ofSeconds(10))
                         .build())
+                .build());
+        this.http = HttpClients.custom()
+                .setConnectionManager(pool)
                 .disableRedirectHandling()
                 .disableAutomaticRetries()
                 .disableCookieManagement()
@@ -128,6 +136,7 @@ final class McpOAuthClient implements AutoCloseable {
 
     @Override
     public void close() {
+        tls.untrack(pool);
         try {
             http.close();
         } catch (IOException ignored) {
@@ -147,20 +156,29 @@ final class McpOAuthClient implements AutoCloseable {
         }
         ExchangeKind authorizeDns = nameCheck(authorize, target, deadlineNanos);
         if (authorizeDns != null) {
-            return Resolved.failure(code(authorizeDns), message(authorizeDns));
+            return namedFailure(authorize, authorizeDns);
         }
         ExchangeKind tokenDns = nameCheck(token, target, deadlineNanos);
         if (tokenDns != null) {
-            return Resolved.failure(code(tokenDns), message(tokenDns));
+            return namedFailure(token, tokenDns);
         }
         return Resolved.ok(authorize, token);
     }
 
     private Discovered discover(Target target, long deadlineNanos) {
+        DiscoveryNotes notes = new DiscoveryNotes();
         JsonNode document = null;
-        String hinted = probeResourceMetadata(target, deadlineNanos);
+        String hinted = probeResourceMetadata(target, deadlineNanos, notes);
+        Discovered blocked = notes.blocked();
+        if (blocked != null) {
+            return blocked;
+        }
         if (hinted != null && screen(hinted, target) == null) {
-            document = metadataDocument(get(hinted, target, deadlineNanos));
+            document = metadataDocument(fetchMetadata(hinted, target, deadlineNanos, notes));
+            blocked = notes.blocked();
+            if (blocked != null) {
+                return blocked;
+            }
         }
         if (document == null) {
             for (String url : protectedResourceUrls(target.upstreamUrl)) {
@@ -170,7 +188,11 @@ final class McpOAuthClient implements AutoCloseable {
                 if (screen(url, target) != null) {
                     continue;
                 }
-                document = metadataDocument(get(url, target, deadlineNanos));
+                document = metadataDocument(fetchMetadata(url, target, deadlineNanos, notes));
+                blocked = notes.blocked();
+                if (blocked != null) {
+                    return blocked;
+                }
                 if (document != null && document.has("authorization_servers")) {
                     break;
                 }
@@ -178,11 +200,11 @@ final class McpOAuthClient implements AutoCloseable {
             }
         }
         if (document == null) {
-            return Discovered.failure(ErrorCode.NOT_CONFIGURED, McpOAuth.DISCOVERY_FAILED);
+            return notes.fallback();
         }
         JsonNode servers = document.get("authorization_servers");
         if (servers == null || !servers.isArray() || servers.isEmpty()) {
-            return Discovered.failure(ErrorCode.NOT_CONFIGURED, McpOAuth.DISCOVERY_FAILED);
+            return notes.fallback();
         }
         boolean sawDisallowed = false;
         for (JsonNode issuerNode : servers) {
@@ -201,7 +223,11 @@ final class McpOAuthClient implements AutoCloseable {
             if (kind != null) {
                 continue;
             }
-            JsonNode metadata = authorizationServerMetadata(issuer, target, deadlineNanos);
+            JsonNode metadata = authorizationServerMetadata(issuer, target, deadlineNanos, notes);
+            blocked = notes.blocked();
+            if (blocked != null) {
+                return blocked;
+            }
             if (metadata == null) {
                 continue;
             }
@@ -219,21 +245,28 @@ final class McpOAuthClient implements AutoCloseable {
         if (sawDisallowed) {
             return Discovered.failure(ErrorCode.NOT_CONFIGURED, McpForwarder.HOST_DENIED);
         }
-        return Discovered.failure(ErrorCode.NOT_CONFIGURED, McpOAuth.DISCOVERY_FAILED);
+        return notes.fallback();
     }
 
-    private String probeResourceMetadata(Target target, long deadlineNanos) {
+    private String probeResourceMetadata(Target target, long deadlineNanos, DiscoveryNotes notes) {
         if (screen(target.upstreamUrl, target) != null) {
             return null;
         }
         HttpResult response = get(target.upstreamUrl, target, deadlineNanos);
-        if (response.kind != ExchangeKind.TOKEN || response.status != 401) {
+        notes.noteProbe(response);
+        if (notes.immediate() != null || response.kind != ExchangeKind.TOKEN || response.status != 401) {
             return null;
         }
         return resourceMetadata(response.wwwAuthenticate);
     }
 
-    private JsonNode authorizationServerMetadata(String issuer, Target target, long deadlineNanos) {
+    private HttpResult fetchMetadata(String url, Target target, long deadlineNanos, DiscoveryNotes notes) {
+        HttpResult response = get(url, target, deadlineNanos);
+        notes.noteMetadata(response);
+        return response;
+    }
+
+    private JsonNode authorizationServerMetadata(String issuer, Target target, long deadlineNanos, DiscoveryNotes notes) {
         URI uri;
         try {
             uri = URI.create(issuer);
@@ -246,7 +279,10 @@ final class McpOAuthClient implements AutoCloseable {
             if (screen(url, target) != null) {
                 continue;
             }
-            JsonNode document = metadataDocument(get(url, target, deadlineNanos));
+            JsonNode document = metadataDocument(fetchMetadata(url, target, deadlineNanos, notes));
+            if (notes.immediate() != null) {
+                return null;
+            }
             if (document != null && document.hasNonNull("authorization_endpoint")) {
                 return document;
             }
@@ -269,7 +305,7 @@ final class McpOAuthClient implements AutoCloseable {
                 target,
                 deadlineNanos);
         if (response.kind != ExchangeKind.TOKEN) {
-            return new Exchange(response.kind, null);
+            return new Exchange(response.kind, null, response.detail());
         }
         if (response.status >= 300 && response.status < 400) {
             return new Exchange(ExchangeKind.REJECTED, null);
@@ -337,10 +373,11 @@ final class McpOAuthClient implements AutoCloseable {
             if (rejected(ex)) {
                 return HttpResult.stop(ExchangeKind.ADDRESS);
             }
-            if (System.nanoTime() >= deadlineNanos) {
+            if (System.nanoTime() >= deadlineNanos || TransportFailure.isTimeout(ex)) {
                 return HttpResult.stop(ExchangeKind.TIMEOUT);
             }
-            return HttpResult.stop(ExchangeKind.CONNECT);
+            TransportFailure.View view = TransportFailure.observe(ex, uri.getHost(), TransportFailure.portOf(uri));
+            return HttpResult.stop(ExchangeKind.CONNECT, view.message());
         } finally {
             ALLOW_LOOPBACK.remove();
         }
@@ -364,6 +401,30 @@ final class McpOAuthClient implements AutoCloseable {
             return ExchangeKind.ADDRESS;
         }
         return null;
+    }
+
+    private static Resolved namedFailure(String url, ExchangeKind kind) {
+        if (kind == ExchangeKind.CONNECT) {
+            String host = hostOf(url);
+            int port = -1;
+            try {
+                port = TransportFailure.portOf(URI.create(url));
+            } catch (IllegalArgumentException ignored) {
+                port = -1;
+            }
+            TransportFailure.View view = TransportFailure.observe(
+                    new UnknownHostException(host == null ? "" : host), host, port);
+            return Resolved.failure(ErrorCode.UPSTREAM_ERROR, view.message());
+        }
+        return Resolved.failure(code(kind), message(kind));
+    }
+
+    private static String hostOf(String url) {
+        try {
+            return URI.create(url).getHost();
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     private static ExchangeKind nameCheck(String url, Target target, long deadlineNanos) {
@@ -636,7 +697,11 @@ final class McpOAuthClient implements AutoCloseable {
         }
     }
 
-    record Exchange(ExchangeKind kind, McpOAuthToken token) {
+    record Exchange(ExchangeKind kind, McpOAuthToken token, String detail) {
+        Exchange(ExchangeKind kind, McpOAuthToken token) {
+            this(kind, token, null);
+        }
+
         boolean ok() {
             return kind == ExchangeKind.TOKEN && token != null;
         }
@@ -648,13 +713,77 @@ final class McpOAuthClient implements AutoCloseable {
         }
     }
 
-    private record HttpResult(ExchangeKind kind, int status, byte[] body, String wwwAuthenticate) {
+    private record HttpResult(ExchangeKind kind, int status, byte[] body, String wwwAuthenticate, String detail) {
         static HttpResult done(int status, byte[] body, String wwwAuthenticate) {
-            return new HttpResult(ExchangeKind.TOKEN, status, body, wwwAuthenticate);
+            return new HttpResult(ExchangeKind.TOKEN, status, body, wwwAuthenticate, null);
         }
 
         static HttpResult stop(ExchangeKind kind) {
-            return new HttpResult(kind, 0, null, null);
+            return new HttpResult(kind, 0, null, null, null);
+        }
+
+        static HttpResult stop(ExchangeKind kind, String detail) {
+            return new HttpResult(kind, 0, null, null, detail);
+        }
+    }
+
+    private static final class DiscoveryNotes {
+        private boolean metadataHttp;
+        private HttpResult transport;
+        private Resolved immediate;
+
+        void noteProbe(HttpResult response) {
+            if (response.kind == ExchangeKind.TIMEOUT) {
+                immediate = Resolved.failure(ErrorCode.TIMEOUT, McpForwarder.DEADLINE);
+                return;
+            }
+            rememberTransport(response);
+        }
+
+        void noteMetadata(HttpResult response) {
+            if (response.kind == ExchangeKind.TIMEOUT) {
+                immediate = Resolved.failure(ErrorCode.TIMEOUT, McpForwarder.DEADLINE);
+                return;
+            }
+            if (response.kind == ExchangeKind.TOKEN) {
+                metadataHttp = true;
+                return;
+            }
+            rememberTransport(response);
+        }
+
+        private void rememberTransport(HttpResult response) {
+            if (transport != null) {
+                return;
+            }
+            if (response.kind == ExchangeKind.CONNECT || response.kind == ExchangeKind.ADDRESS) {
+                transport = response;
+            }
+        }
+
+        Resolved immediate() {
+            return immediate;
+        }
+
+        Discovered blocked() {
+            if (immediate == null) {
+                return null;
+            }
+            return Discovered.failure(immediate.code(), immediate.message());
+        }
+
+        Discovered fallback() {
+            Discovered blocked = blocked();
+            if (blocked != null) {
+                return blocked;
+            }
+            if (!metadataHttp && transport != null) {
+                String text = transport.detail == null || transport.detail.isBlank()
+                        ? message(transport.kind)
+                        : transport.detail;
+                return Discovered.failure(code(transport.kind), text);
+            }
+            return Discovered.failure(ErrorCode.NOT_CONFIGURED, McpOAuth.DISCOVERY_FAILED);
         }
     }
 

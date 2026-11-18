@@ -28,12 +28,15 @@ import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
 import org.apache.hc.core5.util.Timeout;
 
 import dev.hermit.crab.gateway.RequestBodies;
+import dev.hermit.crab.tls.OutboundTls;
+import dev.hermit.crab.tls.TransportFailure;
 
 /**
  * Streamable HTTP。不跟随重定向，不发 {@code Origin}。
@@ -51,20 +54,25 @@ public final class McpUpstreamClient implements AutoCloseable {
     private static final ThreadLocal<Boolean> ALLOW_LOOPBACK = new ThreadLocal<>();
 
     private final CloseableHttpClient http;
+    private final PoolingHttpClientConnectionManager pool;
+    private final OutboundTls tls;
     private final ScheduledThreadPoolExecutor deadlines;
     private final ExecutorService replies;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public McpUpstreamClient() {
-        this.http = HttpClients.custom()
-                .setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
-                        .setDnsResolver(checkedDns())
-                        .setMaxConnPerRoute(8)
-                        .setMaxConnTotal(32)
-                        .setDefaultConnectionConfig(ConnectionConfig.custom()
-                                .setConnectTimeout(Timeout.ofSeconds(10))
-                                .build())
+        this.tls = OutboundTls.current();
+        this.pool = tls.track(PoolingHttpClientConnectionManagerBuilder.create()
+                .setDnsResolver(checkedDns())
+                .setTlsSocketStrategy(tls.tlsStrategy())
+                .setMaxConnPerRoute(8)
+                .setMaxConnTotal(32)
+                .setDefaultConnectionConfig(ConnectionConfig.custom()
+                        .setConnectTimeout(Timeout.ofSeconds(10))
                         .build())
+                .build());
+        this.http = HttpClients.custom()
+                .setConnectionManager(pool)
                 .disableRedirectHandling()
                 .disableAutomaticRetries()
                 .disableContentCompression()
@@ -168,7 +176,9 @@ public final class McpUpstreamClient implements AutoCloseable {
             if ("deadline".equals(stop.get()) || System.nanoTime() >= post.deadlineNanos()) {
                 return RpcResult.deadline();
             }
-            return RpcResult.connect();
+            TransportFailure.View view = TransportFailure.observe(
+                    ex, post.uri().getHost(), TransportFailure.portOf(post.uri()));
+            return RpcResult.connect(view.message(), view.fields());
         } catch (RuntimeException ex) {
             if (causedBy(ex, TooLarge.class)) {
                 return RpcResult.tooLarge();
@@ -194,6 +204,7 @@ public final class McpUpstreamClient implements AutoCloseable {
         }
         replies.shutdownNow();
         deadlines.shutdownNow();
+        tls.untrack(pool);
         try {
             http.close();
         } catch (IOException ignored) {
@@ -522,7 +533,18 @@ public final class McpUpstreamClient implements AutoCloseable {
         ADDRESS
     }
 
-    public record RpcResult(RpcKind kind, int status, String sessionId, JsonNode message, String detail) {
+    public record RpcResult(
+            RpcKind kind,
+            int status,
+            String sessionId,
+            JsonNode message,
+            String detail,
+            Map<String, Object> transport
+    ) {
+        public RpcResult(RpcKind kind, int status, String sessionId, JsonNode message, String detail) {
+            this(kind, status, sessionId, message, detail, null);
+        }
+
         static RpcResult deadline() {
             return new RpcResult(RpcKind.DEADLINE, 0, null, null, null);
         }
@@ -537,6 +559,10 @@ public final class McpUpstreamClient implements AutoCloseable {
 
         static RpcResult connect() {
             return new RpcResult(RpcKind.CONNECT, 0, null, null, null);
+        }
+
+        static RpcResult connect(String detail, Map<String, Object> transport) {
+            return new RpcResult(RpcKind.CONNECT, 0, null, null, detail, transport);
         }
 
         static RpcResult address() {

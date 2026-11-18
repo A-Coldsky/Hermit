@@ -295,18 +295,21 @@ public final class McpOAuth implements AutoCloseable {
                 clock.instant(),
                 deadlineNanos);
         if (!exchange.ok()) {
-            return failedExchange(origin, conch, account, exchange.kind());
+            return failedExchange(origin, conch, account, exchange);
         }
         save(origin, conch, account, exchange.token());
         return Attempt.ok(exchange.token());
     }
 
-    private Attempt failedExchange(Origin origin, String conch, String account, McpOAuthClient.ExchangeKind kind) {
-        return switch (kind) {
+    private Attempt failedExchange(Origin origin, String conch, String account, McpOAuthClient.Exchange exchange) {
+        return switch (exchange.kind()) {
             case HOST -> Attempt.fail(ErrorCode.NOT_CONFIGURED, McpForwarder.HOST_DENIED);
             case ADDRESS -> Attempt.fail(ErrorCode.UPSTREAM_ERROR, McpForwarder.ADDRESS_DENIED);
             case TIMEOUT -> Attempt.fail(ErrorCode.TIMEOUT, McpForwarder.DEADLINE);
-            case CONNECT -> Attempt.fail(ErrorCode.UPSTREAM_ERROR, McpForwarder.CONNECT_FAILED);
+            case CONNECT -> Attempt.fail(ErrorCode.UPSTREAM_ERROR,
+                    exchange.detail() == null || exchange.detail().isBlank()
+                            ? McpForwarder.CONNECT_FAILED
+                            : exchange.detail());
             case REJECTED, TOKEN -> {
                 clearLocked(origin, conch, account);
                 yield Attempt.fail(ErrorCode.AUTH_FAILED, REJECTED);

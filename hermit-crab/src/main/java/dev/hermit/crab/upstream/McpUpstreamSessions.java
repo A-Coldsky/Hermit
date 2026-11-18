@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -462,7 +463,14 @@ final class McpUpstreamSessions implements AutoCloseable {
             Object error = message == null ? null : jsonValue(message.get("error"));
             if (error == null && response.kind() != McpUpstreamClient.RpcKind.MESSAGE
                     && response.kind() != McpUpstreamClient.RpcKind.EMPTY) {
-                error = Map.of("kind", response.kind().name());
+                if (response.transport() != null && !response.transport().isEmpty()) {
+                    LinkedHashMap<String, Object> mapped = new LinkedHashMap<>();
+                    mapped.put("kind", response.kind().name());
+                    mapped.put("transport", response.transport());
+                    error = mapped;
+                } else {
+                    error = Map.of("kind", response.kind().name());
+                }
             } else if (error == null && response.status() != 200 && response.status() != 202) {
                 error = Map.of("httpStatus", response.status());
             }
@@ -497,7 +505,7 @@ final class McpUpstreamSessions implements AutoCloseable {
             case DEADLINE -> CallResult.fail(SessionError.DEADLINE, 0, null);
             case UPSTREAM_TIMEOUT -> CallResult.fail(SessionError.UPSTREAM_TIMEOUT, 0, null);
             case TOO_LARGE -> CallResult.fail(SessionError.TOO_LARGE, 0, null);
-            case CONNECT -> CallResult.fail(SessionError.CONNECT, 0, null);
+            case CONNECT -> CallResult.fail(SessionError.CONNECT, 0, null, response.detail());
             case ADDRESS -> CallResult.fail(SessionError.ADDRESS, 0, null);
             case EMPTY, MESSAGE -> null;
         };
@@ -597,7 +605,11 @@ final class McpUpstreamSessions implements AutoCloseable {
         RPC
     }
 
-    record CallResult(Handle handle, JsonNode message, SessionError error, int status) {
+    record CallResult(Handle handle, JsonNode message, SessionError error, int status, String detail) {
+        CallResult(Handle handle, JsonNode message, SessionError error, int status) {
+            this(handle, message, error, status, null);
+        }
+
         static CallResult ready(Handle handle) {
             return new CallResult(handle, null, null, 200);
         }
@@ -607,7 +619,11 @@ final class McpUpstreamSessions implements AutoCloseable {
         }
 
         static CallResult fail(SessionError error, int status, JsonNode message) {
-            return new CallResult(null, message, error, status);
+            return new CallResult(null, message, error, status, null);
+        }
+
+        static CallResult fail(SessionError error, int status, JsonNode message, String detail) {
+            return new CallResult(null, message, error, status, detail);
         }
     }
 

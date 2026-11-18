@@ -74,7 +74,9 @@ class ReefBootstrapTest {
             reef.disconnect();
             Reply down = post(server, bootstrap(reef, TOKEN, reef.keys().getPublic()).toString(), 502);
             assertThat(down.path("error").path("code").asText()).isEqualTo("UPSTREAM_ERROR");
-            assertThat(down.path("error").path("message").asText()).isEqualTo("cannot reach reef");
+            String message = down.path("error").path("message").asText();
+            assertThat(message).isNotEqualTo("cannot reach reef");
+            assertThat(message.startsWith("上游拒绝连接") || message.startsWith("上游连接失败")).isTrue();
             assertThat(Files.exists(temp.resolve("reef-bootstrap.json"))).isFalse();
         }
     }

@@ -31,6 +31,8 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.pkg.Ed25519Keys;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.store.CrabPaths;
+import dev.hermit.crab.tls.OutboundTls;
+import dev.hermit.crab.tls.TransportFailure;
 
 /**
  * Reef connection file at {@code $HERMIT_HOME/reef-bootstrap.json}. When the file exists it
@@ -117,11 +119,12 @@ public final class ReefBootstrap {
      * Redirects are not followed.
      */
     public static void probe(Document document, UUID instanceId) {
-        HttpClient client = HttpClient.newBuilder()
+        URI uri = endpoint(URI.create(document.url()), "agent/conches/manifest");
+        HttpClient client = OutboundTls.current().httpClientBuilder()
                 .connectTimeout(CONNECT_TIMEOUT)
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
-        HttpRequest request = HttpRequest.newBuilder(endpoint(URI.create(document.url()), "agent/conches/manifest"))
+        HttpRequest request = HttpRequest.newBuilder(uri)
                 .timeout(REQUEST_TIMEOUT)
                 .header("X-Hermit-Instance", instanceId.toString())
                 .header("X-Hermit-Token", document.token())
@@ -143,7 +146,8 @@ public final class ReefBootstrap {
             Thread.currentThread().interrupt();
             throw new ReefBootstrapException(502, ErrorCode.UPSTREAM_ERROR, UNREACHABLE);
         } catch (IOException ex) {
-            throw new ReefBootstrapException(502, ErrorCode.UPSTREAM_ERROR, UNREACHABLE);
+            TransportFailure.View view = TransportFailure.observe(ex, uri.getHost(), TransportFailure.portOf(uri));
+            throw new ReefBootstrapException(502, ErrorCode.UPSTREAM_ERROR, view.message());
         }
     }
 

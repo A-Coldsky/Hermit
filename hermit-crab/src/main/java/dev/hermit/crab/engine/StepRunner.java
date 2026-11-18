@@ -122,8 +122,12 @@ final class StepRunner {
             result = HttpCalls.execute(spec, client, afterExchange, base, expectPrefix, deadlineNanos);
         } catch (RuleProblem ex) {
             if (capture) {
-                DevTraceScope.stash(DevTraceDraft.requestPiece(
-                        spec, ex.method, ex.path, ex.status, null, null));
+                Map<String, Object> piece = DevTraceDraft.requestPiece(
+                        spec, ex.method, ex.path, ex.status, null, null);
+                if (ex.transport != null) {
+                    piece.put("transport", ex.transport);
+                }
+                DevTraceScope.stash(piece);
             }
             throw ex;
         }

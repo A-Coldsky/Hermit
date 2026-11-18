@@ -31,6 +31,8 @@ class CrabConfigLoaderTest {
         assertThat(config.mcpMaxConcurrencyPerAccount()).isEqualTo(4);
         assertThat(config.reefUrl()).isNull();
         assertThat(config.mcpAllowedOrigins()).isEmpty();
+        assertThat(config.tlsCaDir()).isNull();
+        assertThat(config.tlsSystemTrust()).isTrue();
     }
 
     @Test
@@ -126,5 +128,38 @@ class CrabConfigLoaderTest {
                     .isInstanceOf(ConfigFileException.class)
                     .hasMessageContaining("engine.mcp_max_concurrency_per_account");
         }
+    }
+
+    @Test
+    void tlsDirectoryAndSystemTrustAreOptionalAndHaveNoInsecureSwitch() throws Exception {
+        Path file = new CrabPaths(temp).configFile();
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, """
+                tls:
+                  ca_dir: trust/extra
+                  system_trust: false
+                """);
+        CrabConfig config = CrabConfigLoader.load(file);
+        assertThat(config.tlsCaDir()).isEqualTo("trust/extra");
+        assertThat(config.tlsSystemTrust()).isFalse();
+        assertThat(config.tlsCaDirectory(temp)).isEqualTo(temp.resolve("trust/extra").toAbsolutePath().normalize());
+
+        Files.writeString(file, """
+                tls:
+                  system_trust: "yes"
+                """);
+        assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                .isInstanceOf(ConfigFileException.class)
+                .hasMessageContaining("tls.system_trust")
+                .hasMessageContaining("boolean");
+
+        Files.writeString(file, """
+                tls:
+                  insecure_skip_verify: true
+                """);
+        assertThatThrownBy(() -> CrabConfigLoader.load(file))
+                .isInstanceOf(ConfigFileException.class)
+                .hasMessageContaining("tls.insecure_skip_verify")
+                .hasMessageContaining("unknown key");
     }
 }

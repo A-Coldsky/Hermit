@@ -15,6 +15,8 @@ import java.util.logging.Logger;
 
 import dev.hermit.common.report.ReportBatch;
 import dev.hermit.common.report.ReportJson;
+import dev.hermit.crab.tls.OutboundTls;
+import dev.hermit.crab.tls.TransportFailure;
 
 public final class ReportSender {
 
@@ -40,7 +42,7 @@ public final class ReportSender {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.queue = Objects.requireNonNull(queue, "queue");
         this.clock = Objects.requireNonNull(clock, "clock");
-        this.client = HttpClient.newBuilder()
+        this.client = OutboundTls.current().httpClientBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
@@ -79,11 +81,12 @@ public final class ReportSender {
                 return FlushResult.skipped();
             }
             int status;
+            URI uri = endpoint("agent/reports");
             try {
-                status = post(ReportJson.write(pending.batch()));
+                status = post(uri, ReportJson.write(pending.batch()));
             } catch (IOException ex) {
                 scheduleBackoff();
-                LOG.log(Level.WARNING, "report flush failed");
+                TransportFailure.observe(ex, uri.getHost(), TransportFailure.portOf(uri));
                 return FlushResult.rejected(0);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
@@ -103,8 +106,8 @@ public final class ReportSender {
         }
     }
 
-    private int post(String json) throws IOException, InterruptedException {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(endpoint("agent/reports"))
+    private int post(URI uri, String json) throws IOException, InterruptedException {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                 .timeout(REQUEST_TIMEOUT)
                 .header("Content-Type", "application/json")
                 .header("X-Hermit-Instance", settings().instanceId().toString())

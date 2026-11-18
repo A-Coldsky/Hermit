@@ -318,6 +318,8 @@ export interface DevTraceStep {
   passed?: boolean
   truncated?: boolean
   truncation?: string
+  /** 这一步连不上时的传输失败。没有则为空。 */
+  transport?: DevTraceTransport | null
 }
 
 export interface DevTraceSession {
@@ -349,6 +351,11 @@ export interface DevTrace {
   error?: unknown
   /** 同一次调用或刷新里的多次 JSON-RPC。顶层的 method/params 是最后一轮。 */
   exchanges?: DevTraceExchange[]
+  /**
+   * 失败没有落在某一步上时的传输失败。
+   * 落在步骤或某一轮 JSON-RPC 上时，看那一项自己的 `transport`。
+   */
+  transport?: DevTraceTransport | null
 }
 
 export interface DevTraceExchange {
@@ -359,6 +366,48 @@ export interface DevTraceExchange {
   params?: unknown
   result?: unknown
   error?: unknown
+  /** 这一轮连不上时的传输失败。没有则为空。 */
+  transport?: DevTraceTransport | null
+}
+
+/**
+ * `TransportFailure` 的种类。判定沿异常 cause 链，不看最外层是否以 `PKIX` 开头。
+ * `TLS_*` 仍然对外是 `UPSTREAM_ERROR`，只是消息更具体。
+ */
+export type TransportFailureKind =
+  | 'DNS'
+  | 'REFUSED'
+  | 'TIMEOUT'
+  | 'TLS_UNTRUSTED'
+  | 'TLS_INTERMEDIATE'
+  | 'TLS_HOSTNAME'
+  | 'TLS_EXPIRED'
+  | 'TLS_OTHER'
+  | 'OTHER'
+
+/** 握手记录里的一张证书。主题和指纹不是秘密。 */
+export interface TlsCertificate {
+  subject: string
+  issuer: string
+  /** SHA-256，十六进制。 */
+  sha256: string
+  /** ISO-8601。 */
+  notBefore: string
+  /** ISO-8601。 */
+  notAfter: string
+  ca: boolean
+}
+
+/**
+ * 开发追踪里失败步骤的 `transport`。
+ * `cause` 是根因原文，最长 300 字，已经过凭证打码。
+ */
+export interface DevTraceTransport {
+  kind: TransportFailureKind
+  host: string
+  port: number
+  cause: string | null
+  chain: TlsCertificate[]
 }
 
 export interface McpRefreshResult {

@@ -74,7 +74,8 @@ class CrabEntrypointTest {
         assertThat(fetched.status).as(fetched.err).isZero();
         assertThat(fetched.err).contains("警告").contains("http://reef.example");
         assertThat(Files.readString(temp.resolve("home/reef.pub"))).contains("-----BEGIN PUBLIC KEY-----");
-        assertThat(Files.readString(temp.resolve("home/curl-calls"))).contains("http://reef.example/api/admin/login");
+        assertThat(Files.readString(temp.resolve("home/curl-calls"))).contains("http://reef.example/api/admin/login")
+                .doesNotContain("--cacert");
     }
 
     /** 127.0.0.1:80@其它主机这种明文 URL 不是本机。没有放行时不能经明文 HTTP 取公钥。 */
@@ -120,12 +121,66 @@ class CrabEntrypointTest {
         assertThat(Files.readString(temp.resolve("home/reef.pub"))).contains("-----BEGIN PUBLIC KEY-----");
     }
 
+    @Test
+    void extraCaFilesArePassedToCurlAsABundle() throws Exception {
+        Path ca = temp.resolve("home/trust/ca");
+        Files.createDirectories(ca);
+        Files.writeString(ca.resolve("lab.pem"), """
+                -----BEGIN CERTIFICATE-----
+                HERMIT-TEST-CA
+                -----END CERTIFICATE-----
+                """);
+        Result fetched = runWithCurl(Map.of(
+                "HERMIT_REEF_URL", "http://127.0.0.1:9",
+                "HERMIT_REEF_AGENT_TOKEN", "token-value",
+                "HERMIT_REEF_ADMIN_USER", "admin",
+                "HERMIT_REEF_ADMIN_PASSWORD", "admin-entry-secret"));
+        assertThat(fetched.status).as(fetched.err).isZero();
+        assertThat(Files.readString(temp.resolve("home/curl-calls"))).contains("--cacert");
+        assertThat(Files.readString(temp.resolve("home/captured-ca"))).contains("HERMIT-TEST-CA");
+    }
+
+    @Test
+    void configuredCaDirIsIncludedInTheBundle() throws Exception {
+        Path custom = temp.resolve("custom-ca");
+        Files.createDirectories(custom);
+        Files.writeString(custom.resolve("lab.crt"), "HERMIT-CUSTOM-CA\n");
+        Path home = temp.resolve("home");
+        Files.createDirectories(home);
+        Files.writeString(home.resolve("config.yml"), "tls:\n  ca_dir: \"" + custom.toAbsolutePath() + "\"\n");
+        Path script = Path.of("../deploy/crab-entrypoint.sh");
+        if (!Files.exists(script)) {
+            script = Path.of("deploy/crab-entrypoint.sh");
+        }
+        String source = Files.readString(script);
+        int start = source.indexOf("prepare_ca_bundle()");
+        int end = source.indexOf("\ncleanup_ca_bundle()");
+        Path functions = temp.resolve("ca-functions.sh");
+        Files.writeString(functions, source.substring(start, end) + "\n");
+        ProcessBuilder builder = new ProcessBuilder(
+                "sh", "-c", ". \"" + functions.toAbsolutePath() + "\"; prepare_ca_bundle; printf '%s' \"$ca_bundle\"");
+        builder.environment().put("home", home.toAbsolutePath().toString());
+        builder.redirectErrorStream(true);
+        Process process = builder.start();
+        String bundlePath = new String(process.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).trim();
+        assertThat(process.waitFor()).as(bundlePath).isZero();
+        assertThat(Files.readString(Path.of(bundlePath))).contains("HERMIT-CUSTOM-CA");
+        Files.deleteIfExists(Path.of(bundlePath));
+    }
+
     private Result runWithCurl(Map<String, String> extra) throws Exception {
         Path bin = temp.resolve("bin");
         Files.createDirectories(bin);
         Files.writeString(bin.resolve("curl"), """
                 #!/bin/sh
                 printf '%s\\n' "$*" >> "$HERMIT_HOME/curl-calls"
+                prev=""
+                for arg in "$@"; do
+                  if [ "$prev" = "--cacert" ]; then
+                    cp "$arg" "$HERMIT_HOME/captured-ca"
+                  fi
+                  prev="$arg"
+                done
                 case "$*" in
                     */api/admin/login*) printf '{"data":{"token":"jwt-for-test"}}' ;;
                     */api/admin/signing-key*) printf '%s' '{"data":{"publicKey":"-----BEGIN PUBLIC KEY-----\\nMCowBQYDK2VwAyEA\\n-----END PUBLIC KEY-----\\n"}}' ;;

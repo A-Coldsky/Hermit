@@ -3,7 +3,6 @@ package dev.hermit.crab.engine;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.Charset;
@@ -35,6 +34,7 @@ import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
 import org.apache.hc.core5.util.Timeout;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.crab.tls.TransportFailure;
 
 /**
  * 不自动跟随重定向。绝对地址和重定向目标的 scheme、host、port 必须与 base_url 一致，
@@ -267,7 +267,8 @@ final class HttpCalls {
             if (isTimeout(ex)) {
                 throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, STEP_TIMEOUT, method, path, null);
             }
-            throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, "上游连接失败", method, path, null);
+            TransportFailure.View view = TransportFailure.observe(ex, target.getHost(), port(target));
+            throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, view.message(), method, path, null, view.fields());
         } finally {
             cancellation.cancel(false);
             afterExchange.run();
@@ -518,18 +519,7 @@ final class HttpCalls {
     }
 
     private static boolean isTimeout(Throwable failure) {
-        Throwable current = failure;
-        while (current != null) {
-            if (current instanceof SocketTimeoutException) {
-                return true;
-            }
-            String name = current.getClass().getName();
-            if (name.endsWith("TimeoutException") || name.contains("Timeout")) {
-                return true;
-            }
-            current = current.getCause();
-        }
-        return false;
+        return TransportFailure.isTimeout(failure);
     }
 
     private static boolean isRedirect(int status) {

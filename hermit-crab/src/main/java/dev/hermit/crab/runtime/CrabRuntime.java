@@ -69,6 +69,7 @@ import dev.hermit.crab.store.CallLogStore;
 import dev.hermit.crab.store.CapabilitySwitchStore;
 import dev.hermit.crab.store.CrabDatabase;
 import dev.hermit.crab.store.CrabPaths;
+import dev.hermit.crab.tls.OutboundTls;
 import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.CallChannel;
 import dev.hermit.crab.store.DebugStateStore;
@@ -134,6 +135,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final ConchAdmin admin;
     private final LocalConches localConches;
     private final String instanceId;
+    private final OutboundTls outboundTls;
+    private final OutboundTls previousTls;
     private final KnownSecrets knownSecrets = KnownSecrets.empty();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean prepared = new AtomicBoolean();
@@ -158,7 +161,16 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         void onResult(Invocation invocation, ExecutionResult result);
     }
 
-    private CrabRuntime(CrabPaths paths, CrabConfig config, Function<String, String> environment, Clock clock) {
+    private CrabRuntime(
+            CrabPaths paths,
+            CrabConfig config,
+            Function<String, String> environment,
+            Clock clock,
+            OutboundTls outboundTls,
+            OutboundTls previousTls
+    ) {
+        this.outboundTls = outboundTls;
+        this.previousTls = previousTls;
         config = ReefBootstrap.overlay(paths, config);
         this.paths = paths;
         this.config = config;
@@ -257,7 +269,15 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     public static CrabRuntime open(CrabPaths paths, CrabConfig config, Function<String, String> environment, Clock clock) {
-        return new CrabRuntime(paths, config, environment, clock);
+        Path caDir = config.tlsCaDir() == null ? paths.trustCa() : config.tlsCaDirectory(paths.root());
+        OutboundTls tls = OutboundTls.open(caDir, config.tlsSystemTrust());
+        OutboundTls previous = OutboundTls.install(tls);
+        try {
+            return new CrabRuntime(paths, config, environment, clock, tls, previous);
+        } catch (RuntimeException ex) {
+            OutboundTls.restore(previous);
+            throw ex;
+        }
     }
 
     /**
@@ -1050,18 +1070,22 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        abandonServing();
-        ReportQueue queue = reportQueue;
-        if (queue != null) {
-            try {
-                queue.flushMemory();
-            } catch (RuntimeException ex) {
-                LOG.warning("report memory flush failed: " + ex.getClass().getName());
+        try {
+            abandonServing();
+            ReportQueue queue = reportQueue;
+            if (queue != null) {
+                try {
+                    queue.flushMemory();
+                } catch (RuntimeException ex) {
+                    LOG.warning("report memory flush failed: " + ex.getClass().getName());
+                }
             }
+            mcpForwarder.close();
+            sessions.close();
+            database.close();
+        } finally {
+            OutboundTls.restore(previousTls);
         }
-        mcpForwarder.close();
-        sessions.close();
-        database.close();
     }
 
     private void safePurge() {

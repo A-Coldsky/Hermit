@@ -343,11 +343,11 @@ public final class RuleEngine implements ConchExecutor {
                     alive.expectNotRedirect(),
                     scope.deadline);
         } catch (RuleProblem ex) {
-            recordAlive(spec, ex.method, ex.path, ex.status, null, null, started, false);
+            recordAlive(spec, ex.method, ex.path, ex.status, null, null, started, false, ex.transport);
             throw ex;
         }
         boolean aliveOk = !(result.sessionLost() || result.status() == 401 || result.status() == 403);
-        recordAlive(spec, result.method(), result.path(), result.status(), result.headers(), result.body(), started, aliveOk);
+        recordAlive(spec, result.method(), result.path(), result.status(), result.headers(), result.body(), started, aliveOk, null);
         if (result.sessionLost() || result.status() == 401 || result.status() == 403) {
             sessions.markLoggedOut(scope.key);
             login(scope);
@@ -1131,7 +1131,8 @@ public final class RuleEngine implements ConchExecutor {
             Map<String, String> responseHeaders,
             String responseBody,
             long started,
-            boolean ok
+            boolean ok,
+            Map<String, Object> transport
     ) {
         DevTraceDraft draft = DevTraceScope.current();
         if (draft == null) {
@@ -1139,6 +1140,9 @@ public final class RuleEngine implements ConchExecutor {
         }
         draft.aliveCheck(true, ok);
         Map<String, Object> piece = DevTraceDraft.requestPiece(spec, method, path, status, responseHeaders, responseBody);
+        if (transport != null) {
+            piece.put("transport", transport);
+        }
         stampCredential(piece, true);
         draft.add("alive_check", -1, elapsed(started), piece);
     }
@@ -1175,13 +1179,19 @@ public final class RuleEngine implements ConchExecutor {
             case "assert" -> DevTraceDraft.assertPiece(step.def(), false);
             case "extract" -> DevTraceDraft.extractPiece(step.def(), 0, Map.of());
             case "set", "script" -> DevTraceDraft.variablePiece(step.type(), namesOnly(step.def()));
-            case "request" -> DevTraceDraft.requestPiece(
-                    null,
-                    problem == null ? null : problem.method,
-                    problem == null ? null : problem.path,
-                    problem == null ? null : problem.status,
-                    null,
-                    null);
+            case "request" -> {
+                Map<String, Object> request = DevTraceDraft.requestPiece(
+                        null,
+                        problem == null ? null : problem.method,
+                        problem == null ? null : problem.path,
+                        problem == null ? null : problem.status,
+                        null,
+                        null);
+                if (problem != null && problem.transport != null) {
+                    request.put("transport", problem.transport);
+                }
+                yield request;
+            }
             default -> Map.of("type", step.type());
         };
         stampCredential(piece, credentialBearing);

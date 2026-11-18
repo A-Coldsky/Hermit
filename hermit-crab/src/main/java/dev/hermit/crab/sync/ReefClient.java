@@ -16,6 +16,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import dev.hermit.crab.tls.TransportFailure;
+
 final class ReefClient {
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -108,12 +110,15 @@ final class ReefClient {
     }
 
     private HttpResponse<InputStream> send(HttpRequest.Builder builder) {
+        HttpRequest request = builder.build();
         try {
-            return client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+            return client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new SyncException("reef request interrupted");
         } catch (IOException ex) {
+            URI uri = request.uri();
+            TransportFailure.observe(ex, uri.getHost(), TransportFailure.portOf(uri));
             throw new SyncException("reef request failed", ex);
         }
     }

@@ -207,6 +207,16 @@ public final class TransportFailure {
         return dhConstraint(failure) || mentions(failure, "handshake_failure");
     }
 
+    /**
+     * DH 约束可以确定是套件。{@code handshake_failure} 还可能是要客户端证书或曲线不匹配。
+     */
+    private static String cipherMessage(Throwable failure) {
+        if (dhConstraint(failure)) {
+            return "对方只提供已禁用的加密套件（如 3DES、RC4、静态 RSA、弱 DH）。";
+        }
+        return "TLS 握手失败，常见原因是对方只提供已禁用的加密套件（如 3DES、RC4、静态 RSA、弱 DH）。";
+    }
+
     private static boolean dhConstraint(Throwable failure) {
         for (Throwable current : chain(failure)) {
             String message = current.getMessage();
@@ -326,7 +336,7 @@ public final class TransportFailure {
             case TLS_HOSTNAME -> name.isEmpty() ? "上游证书与主机名不符" : "上游证书与主机名 " + name + " 不符";
             case TLS_EXPIRED -> expiryMessage(record, failure);
             case TLS_PROTOCOL -> "对方只支持 TLS 1.0/1.1 等旧协议，Crab 默认不连。";
-            case TLS_CIPHER -> "对方只提供已禁用的加密套件（如 3DES、RC4、静态 RSA、弱 DH）。";
+            case TLS_CIPHER -> cipherMessage(failure);
             case TLS_CERT_ALGORITHM -> "对方证书使用被禁的算法或密钥过短（如 RSA 512），需要换证书。";
             case TLS_SNI -> "对方拒绝了 SNI 主机名，可改用 IP 或单标签名。";
             case TLS_OTHER -> "与上游的 TLS 握手失败：" + (cause.isEmpty() ? root(failure).getClass().getSimpleName() : cause);

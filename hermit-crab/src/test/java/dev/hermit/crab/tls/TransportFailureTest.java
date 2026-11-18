@@ -162,13 +162,18 @@ class TransportFailureTest {
                 "hr", 443);
         assertThat(protocolFirst.kind()).isEqualTo(TransportFailure.Kind.TLS_PROTOCOL);
 
-        assertThat(TransportFailure.classify(
-                new SSLHandshakeException("Received fatal alert: handshake_failure"), "hr", 443).kind())
-                .isEqualTo(TransportFailure.Kind.TLS_CIPHER);
+        TransportFailure.View handshake = TransportFailure.classify(
+                new SSLHandshakeException("Received fatal alert: handshake_failure"), "hr", 443);
+        assertThat(handshake.kind()).isEqualTo(TransportFailure.Kind.TLS_CIPHER);
+        assertThat(handshake.message()).isEqualTo(
+                "TLS 握手失败，常见原因是对方只提供已禁用的加密套件（如 3DES、RC4、静态 RSA、弱 DH）。");
         TransportFailure.View dh = TransportFailure.classify(
                 new SSLHandshakeException("DH ServerKeyExchange does not comply to algorithm constraints"), "hr", 443);
         assertThat(dh.kind()).isEqualTo(TransportFailure.Kind.TLS_CIPHER);
         assertThat(dh.message()).isEqualTo("对方只提供已禁用的加密套件（如 3DES、RC4、静态 RSA、弱 DH）。");
+        TransportFailure.View both = TransportFailure.classify(
+                new SSLHandshakeException("handshake_failure: DH key does not comply to algorithm constraints"), "hr", 443);
+        assertThat(both.message()).isEqualTo(dh.message());
 
         TransportFailure.View shortKey = TransportFailure.classify(new SSLHandshakeException(
                 "PKIX path validation failed: Algorithm constraints check failed on keysize limits: RSA 512 bit key"),

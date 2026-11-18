@@ -89,7 +89,7 @@ class LegacyTransportTest {
     @Test
     void tlsAlertsClassifyProtocolCipherAndSni() throws Exception {
         assertAlert(70, "TLS_PROTOCOL", "旧协议");
-        assertAlert(40, "TLS_CIPHER", "加密套件");
+        assertAlert(40, "TLS_CIPHER", "常见原因是对方只提供已禁用的加密套件");
         assertAlert(112, "TLS_SNI", "SNI");
     }
 

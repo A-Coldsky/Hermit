@@ -29,7 +29,7 @@ import org.apache.hc.core5.util.Timeout;
 /**
  * 每个 (origin, conch, account) 一把公平锁、一个客户端和一个 Cookie 存储。
  * 同地址范围的版本替换不会清掉这里的会话。
- * 地址范围扩大的本地覆盖会在写入前对这个包的每个账号调用 {@link #invalidate}。
+ * 地址范围扩大的本地覆盖会在写入前、以及 {@code registry.put} 成功后再对这个包的每个账号调用 {@link #invalidate}。
  */
 public final class SessionManager implements AutoCloseable {
 

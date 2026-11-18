@@ -95,6 +95,9 @@ public final class LocalConches {
     private final LinkedHashMap<String, PendingOverwrite> pending = new LinkedHashMap<>();
     private volatile Consumer<String> onWidened = name -> {
     };
+    /** 第一次清会话返回之后、写文件之前。测试在这个窗口里插入登录。生产路径是空操作。 */
+    private volatile Runnable widenedGap = () -> {
+    };
 
     public LocalConches(CrabPaths paths, ConchRegistry registry, DataSource dataSource) {
         this(paths, registry, dataSource, () -> false, Clock.systemUTC());
@@ -128,12 +131,20 @@ public final class LocalConches {
     }
 
     /**
-     * 地址范围扩大的覆盖，在 {@code registry.put} 之前调用。
+     * 地址范围扩大的覆盖调用两次，都在这把写入锁里：
+     * {@code registry.put} 之前一次，成功之后再一次。
      * 用来清掉这个包全部账号的 HTTP 会话和登录快照。
+     * 两次之间新建立的会话由第二次清掉。
      */
     public void onWidened(Consumer<String> listener) {
         this.onWidened = listener == null ? name -> {
         } : listener;
+    }
+
+    /** 测试用：第一次清会话返回之后、写文件之前。 */
+    void widenedGap(Runnable hook) {
+        this.widenedGap = hook == null ? () -> {
+        } : hook;
     }
 
     public ImportResult importBytes(byte[] raw, String actor) {
@@ -861,8 +872,10 @@ public final class LocalConches {
                         : "unknown";
                 backupId = backup(doc.conch(), version, previous);
             }
-            if (replaced && !boundary.sameBoundary()) {
+            boolean widened = replaced && !boundary.sameBoundary();
+            if (widened) {
                 onWidened.accept(doc.conch());
+                widenedGap.run();
             }
             try {
                 atomicWrite(file, raw);
@@ -873,6 +886,9 @@ public final class LocalConches {
             } catch (RuntimeException ex) {
                 restore(file, previous, existed);
                 throw ex;
+            }
+            if (widened) {
+                onWidened.accept(doc.conch());
             }
             if (dropUpstreamSecrets(before, doc, existed)) {
                 deleteUpstreamSecrets(doc.conch());

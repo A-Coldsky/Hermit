@@ -178,7 +178,7 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | POST | `/local-conches/{conch}/pending/confirm` | 正文 `{sha256}`，必须是这条待确认 YAML 的小写 SHA-256。成功形状与导入相同。摘要对不上是 409 `CONFLICT`，message 为「待确认的内容已经变了，请刷新后再确认。」，不丢掉较新的那条。磁盘文件已经不是 `baseSha` 时同样 409，message 为「规则包在等待确认期间被改过，请让 agent 重新保存。」，并丢掉这条待确认。没有或已过期是 404「没有待确认的覆盖。」 |
 | DELETE | `/local-conches/{conch}/pending` | 拒绝这条待确认覆盖，不写文件，不写审计。成功 `{conch, rejected: true}`。没有这条时 404 |
 | GET | `/local-conches/{conch}/history` | 这个包的备份，最近的在前，最多 10 条。每项 `{id, version, savedAt}`。`id` 是文件名去掉 `.yaml`。包已经删除时，历史还在就能列出。没有历史时 `history` 为空 |
-| POST | `/local-conches/{conch}/history/{id}/restore` | 用这份历史覆盖当前文件。覆盖前先备份当前版本；地址范围扩大时先清掉该包全部账号的会话和登录快照。成功形状与导入相同。没有这份历史是 404「没有这份历史。」。编号含空白、`..` 或其它非法字符是 400「历史编号无效。」 |
+| POST | `/local-conches/{conch}/history/{id}/restore` | 用这份历史覆盖当前文件。覆盖前先备份当前版本；地址范围扩大时先清掉该包全部账号的会话和登录快照，写入成功后再清一次。成功形状与导入相同。没有这份历史是 404「没有这份历史。」。编号含空白、`..` 或其它非法字符是 400「历史编号无效。」 |
 | POST | `/local-conches/{conch}/mcp/refresh` | 开发者模式打开时，用上游 `tools/list` 重写本地 MCP 包。查询参数 `account` 可省略，表示默认账号。不需要 JSON 正文。成功 `data` 为 `{version, added, removed, changed, traceId}`，名字是本地 action。`version` 不变。`traceId` 指向 `action` 为 `mcp_refresh` 的 JSON-RPC 追踪，没有对应调用记录。门禁与失败见下方「刷新」 |
 
 `GET /console/api/local-conches` 的 `data.conches` 按包名排序。每一项：

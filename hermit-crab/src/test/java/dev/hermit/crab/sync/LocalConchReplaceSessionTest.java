@@ -29,8 +29,10 @@ import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.CreatedApiKey;
 
 /**
- * 地址扩大的覆盖在 {@code registry.put} 之前清会话。进行中的调用仍打旧主机、带旧 Cookie；
- * 下一次调用读到新文档，并且不再带出旧 Cookie。同边界的版本替换保留登录快照。
+ * 地址扩大的覆盖在 {@code registry.put} 之前清会话，成功后再清一次。
+ * 进行中的调用仍打旧主机、带旧 Cookie；下一次调用读到新文档，并且不再带出旧 Cookie。
+ * 两次清空之间新建的登录，在覆盖返回时会话和登录快照都不在。
+ * 同边界的版本替换保留登录快照。
  */
 class LocalConchReplaceSessionTest {
 
@@ -183,6 +185,91 @@ class LocalConchReplaceSessionTest {
     }
 
     @Test
+    void loginInTheWidenGapDoesNotSurviveTheReplace() throws Exception {
+        HttpServer oldHost = server();
+        HttpServer newHost = server();
+        AtomicInteger oldLogins = new AtomicInteger();
+        AtomicInteger oldPings = new AtomicInteger();
+        AtomicInteger newLogins = new AtomicInteger();
+        AtomicInteger newPings = new AtomicInteger();
+        oldHost.createContext("/", exchange -> {
+            if ("/login".equals(exchange.getRequestURI().getPath())) {
+                oldLogins.incrementAndGet();
+                exchange.getResponseHeaders().add("Set-Cookie", "sid=old-cookie-value; Path=/");
+            } else if ("/ping".equals(exchange.getRequestURI().getPath())) {
+                oldPings.incrementAndGet();
+            }
+            byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        newHost.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            if ("/login".equals(path)) {
+                newLogins.incrementAndGet();
+                exchange.getResponseHeaders().add("Set-Cookie", "sid=new-cookie-value; Path=/");
+            } else if ("/ping".equals(path)) {
+                newPings.incrementAndGet();
+                String cookie = exchange.getRequestHeaders().getFirst("Cookie");
+                if (cookie != null && cookie.contains("old-cookie-value")) {
+                    exchange.sendResponseHeaders(500, -1);
+                    exchange.close();
+                    return;
+                }
+            }
+            byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        oldHost.start();
+        newHost.start();
+        int oldPort = oldHost.getAddress().getPort();
+        int newPort = newHost.getAddress().getPort();
+        try (CrabRuntime runtime = CrabRuntime.open(
+                new CrabPaths(temp.resolve("gap")), CrabConfig.defaults(), name -> null)) {
+            runtime.localConches().importBytes(flight("1.0.0", oldPort).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            runtime.admin().createAccount("flight", "ada", Actors.CLI);
+            ApiKeyPrincipal principal = principal(runtime);
+            assertThat(invoke(runtime, principal, "trace-first").status()).isEqualTo(200);
+            assertThat(oldLogins).hasValue(1);
+            assertThat(loginRows(runtime)).isEqualTo(1);
+            assertThat(sessionRows(runtime)).isEqualTo(1);
+
+            runtime.localConches().widenedGap(() -> {
+                assertThat(runtime.registry().find("flight").orElseThrow().baseUrl()).contains(":" + oldPort);
+                InvokeOutcome gap = invoke(runtime, principal, "trace-gap");
+                assertThat(gap.status()).as(body(gap)).isEqualTo(200);
+                assertThat(oldLogins).hasValue(2);
+                assertThat(oldPings).hasValue(2);
+                assertThat(newLogins).hasValue(0);
+                try {
+                    assertThat(loginRows(runtime)).isEqualTo(1);
+                    assertThat(sessionRows(runtime)).isEqualTo(1);
+                } catch (Exception ex) {
+                    throw new AssertionError(ex);
+                }
+            });
+            runtime.localConches().importBytes(
+                    flight("1.0.1", newPort).getBytes(StandardCharsets.UTF_8), Actors.CLI, true);
+
+            assertThat(runtime.registry().find("flight").orElseThrow().baseUrl()).contains(":" + newPort);
+            assertThat(loginRows(runtime)).isZero();
+            assertThat(sessionRows(runtime)).isZero();
+            InvokeOutcome next = invoke(runtime, principal, "trace-next");
+            assertThat(next.status()).as(body(next)).isEqualTo(200);
+            assertThat(newLogins).hasValue(1);
+            assertThat(newPings).hasValue(1);
+            assertThat(oldLogins).hasValue(2);
+            assertThat(oldPings).hasValue(2);
+        } finally {
+            oldHost.stop(0);
+            newHost.stop(0);
+        }
+    }
+
+    @Test
     void sameBoundaryReplaceKeepsTheLoginSnapshot() throws Exception {
         HttpServer host = server();
         AtomicInteger logins = new AtomicInteger();
@@ -232,9 +319,17 @@ class LocalConchReplaceSessionTest {
     }
 
     private static int loginRows(CrabRuntime runtime) throws Exception {
+        return countRows(runtime, "session_login");
+    }
+
+    private static int sessionRows(CrabRuntime runtime) throws Exception {
+        return countRows(runtime, "sessions");
+    }
+
+    private static int countRows(CrabRuntime runtime, String table) throws Exception {
         try (Connection connection = runtime.dataSource().getConnection();
              PreparedStatement query = connection.prepareStatement(
-                     "SELECT COUNT(*) FROM session_login WHERE origin = 'LOCAL' AND conch = 'flight'")) {
+                     "SELECT COUNT(*) FROM " + table + " WHERE origin = 'LOCAL' AND conch = 'flight'")) {
             try (ResultSet rows = query.executeQuery()) {
                 assertThat(rows.next()).isTrue();
                 return rows.getInt(1);

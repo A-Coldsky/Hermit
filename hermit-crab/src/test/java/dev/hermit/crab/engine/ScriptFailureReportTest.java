@@ -441,10 +441,10 @@ class ScriptFailureReportTest {
                     into: page
                 """), "http://127.0.0.1", timeoutTrace);
         long elapsed = java.time.Duration.ofNanos(System.nanoTime() - started).toMillis();
-        assertThat(timed.error().message()).isEqualTo("script timeout");
+        assertThat(timed.error().message()).isEqualTo(ScriptStep.SCRIPT_TIMEOUT);
         assertThat(elapsed).isLessThan(2_000);
         JsonNode timeout = only(ApiJson.tree(timeoutTrace.body), "script");
-        assertScriptFault(timeout, "script timeout");
+        assertScriptFault(timeout, ScriptStep.SCRIPT_TIMEOUT);
         assertThat(names(timeout)).doesNotContain("into", "page");
 
         assertReturn("return 'hello';", null, ScriptStep.RETURN_OBJECT, "hello");

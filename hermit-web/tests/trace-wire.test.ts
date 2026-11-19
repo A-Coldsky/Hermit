@@ -270,7 +270,7 @@ describe('脚本失败', () => {
               type: 'script',
               durationMs: 80,
               passed: false,
-              scriptError: { source: 'code', line: 0, column: null, message: 'script timeout' },
+              scriptError: { source: 'code', line: 0, column: null, message: '脚本超时' },
             },
           ],
         },
@@ -298,7 +298,7 @@ describe('脚本失败', () => {
 
     const timeout = itemNamed('script')
     expect(timeout?.querySelector('.el-collapse-item__header')?.textContent).toContain('脚本失败')
-    expect(timeout?.querySelector('[data-test="script-error"]')?.textContent).toBe('脚本 code：script timeout')
+    expect(timeout?.querySelector('[data-test="script-error"]')?.textContent).toBe('脚本 code：脚本超时')
     expect(timeout?.textContent).not.toContain('第 0 列')
     expect(timeout?.textContent).not.toContain('第 0 行')
 

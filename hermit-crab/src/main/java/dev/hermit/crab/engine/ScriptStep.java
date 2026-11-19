@@ -51,6 +51,8 @@ final class ScriptStep {
     static final int MAX_SOURCE_BYTES = 64 * 1024;
     static final int MAX_RESULT_BYTES = 1024 * 1024;
     static final String MEMORY_EXCEEDED = "脚本内存超限";
+    /** 脚本自己的时限到了。能力 deadline 仍是 {@code 执行超时}，不走这句。 */
+    static final String SCRIPT_TIMEOUT = "脚本超时";
     /** 省略 {@code into} 时合并进变量表，必须是对象。句子不带返回值。 */
     static final String RETURN_OBJECT = "省略 into 时要返回对象";
     /** Uint8Array 不能当结果交出去。句子不带字节。 */
@@ -480,7 +482,7 @@ final class ScriptStep {
             return new DeadlineExceeded(-1, "script", List.of());
         }
         // 脚本已经在跑，但指令计数拿不到抛出的行。记在 code 上，不编造列号。
-        return faulted("script timeout");
+        return faulted(SCRIPT_TIMEOUT);
     }
 
     /**

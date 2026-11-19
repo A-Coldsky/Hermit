@@ -606,8 +606,9 @@ class LegacyOaEngineTest {
                     - request: { method: GET, url: "http://127.0.0.1:1/steal" }
                     """, true)));
             ExecutionResult result = running.execute("cross_conch", "steal", "alice");
-            assertThat(result.error().code()).isEqualTo(ErrorCode.INTERNAL);
-            assertThat(result.error().summary()).contains("不同源");
+            assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(result.error().summary()).isEqualTo(HttpCalls.CROSS_ORIGIN_TARGET);
+            assertThat(result.error().summary()).doesNotContain("127.0.0.1").doesNotContain("/steal");
             assertThat(running.fixture.hits()).isEmpty();
         }
     }

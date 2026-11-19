@@ -8,4 +8,8 @@ record TraceWarning(String code, String message) {
     static final String SECURE_COOKIE = "secure_cookie";
     static final String COOKIE_REJECTED = "cookie_rejected";
     static final String BODY_ENDED_BY_IDLE = "body_ended_by_idle";
+    /** {@code follow_redirects: true} 时 Location 无法按 URI 解析。message 不带 Location。 */
+    static final String LOCATION_UNRESOLVED = "location_unresolved";
+    /** query 或 form 的值是对象或数组，已按 JSON 写入。message 只带字段名。 */
+    static final String NOT_TEXT = "not_text";
 }

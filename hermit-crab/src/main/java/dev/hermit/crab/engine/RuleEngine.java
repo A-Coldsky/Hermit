@@ -1321,6 +1321,7 @@ public final class RuleEngine implements ConchExecutor {
      * 能力请求在提取之前处理最终状态。400、401/403、登录重定向，以及 HttpCalls 已经拦住的 5xx，保持原映射。
      * 其它非 2xx：后续 status 断言覆盖了实际状态码时放行；非 GET 的 3xx 且不是登录重定向时放行。
      * 其余（例如没有 status 断言的 GET 404）不再进入 extract，避免抽成空列表。
+     * 无法解析的 Location 停在 3xx 上时，GET 的调用错误说明未跟随，不单报状态码。
      */
     private static void rejectCapabilityStatus(
             boolean auth,
@@ -1349,7 +1350,20 @@ public final class RuleEngine implements ConchExecutor {
         if (statusExpectationCovers(definitions, index, status)) {
             return;
         }
+        if (unresolvedLocation(outcome)) {
+            throw new StepFailure(ErrorCode.UPSTREAM_ERROR, HttpCalls.UNRESOLVED_LOCATION, index, type, logs);
+        }
         throw new StepFailure(ErrorCode.UPSTREAM_ERROR, HttpCalls.upstreamStatus(status), index, type, logs);
+    }
+
+    /** 这次停住是因为 Location 无法解析，而不是普通的未跟随 3xx。 */
+    private static boolean unresolvedLocation(Outcome outcome) {
+        for (TraceWarning warning : outcome.warnings()) {
+            if (TraceWarning.LOCATION_UNRESOLVED.equals(warning.code())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isGet(String method) {

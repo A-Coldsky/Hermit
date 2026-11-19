@@ -49,6 +49,19 @@ public final class ValidationCodes {
     public static final String HOSTNAME = "HOSTNAME";
     /** https 的单标签主机不会发送 SNI。警告，不阻止保存。 */
     public static final String SINGLE_LABEL_HOST = "SINGLE_LABEL_HOST";
+    /**
+     * 提取规格不是映射、没有选择器、选择器不止一种，或 {@code each} 不是映射。
+     * 警告，不阻止保存。已发布的包里可能已经有这种形状，加载时不能因此失败。
+     */
+    public static final String EXTRACT_SPEC = "EXTRACT_SPEC";
+    /** 提取规格里不认识的字段。警告，不阻止保存。 */
+    public static final String EXTRACT_FIELD = "EXTRACT_FIELD";
+    /** {@code optional} 不是布尔字面量。含模板时不报。警告，不阻止保存。 */
+    public static final String EXTRACT_OPTIONAL = "EXTRACT_OPTIONAL";
+    /** assert 里不认识的键。警告，不阻止保存。 */
+    public static final String ASSERT_KEY = "ASSERT_KEY";
+    /** {@code status} 的字面量不是数字。含模板时不报。警告，不阻止保存。 */
+    public static final String ASSERT_STATUS = "ASSERT_STATUS";
 
     private ValidationCodes() {
     }

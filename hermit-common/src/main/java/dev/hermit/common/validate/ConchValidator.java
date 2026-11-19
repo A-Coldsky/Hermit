@@ -76,6 +76,12 @@ public final class ConchValidator {
     private static final Set<String> REQUEST_KEYS = Set.of(
             "method", "path", "url", "query", "headers", "form", "json",
             "encoding", "follow_redirects", "timeout_ms", "query_style");
+    private static final Set<String> EXTRACT_SELECTORS = Set.of("css", "xpath", "jsonpath", "regex");
+    private static final Set<String> EXTRACT_KEYS = Set.of(
+            "css", "xpath", "jsonpath", "regex", "attr", "html", "each", "min",
+            "optional", "filter", "from", "group");
+    private static final Set<String> ASSERT_KEYS = Set.of(
+            "status", "contains", "not_contains", "cookie_exists", "header_exists", "not_redirected_to");
     private static final Pattern PERCENT_BYTE = Pattern.compile("%[0-9A-Fa-f]{2}");
 
     private ConchValidator() {
@@ -732,6 +738,110 @@ public final class ConchValidator {
         }
     }
 
+    /**
+     * 提取形状只警告。这些包今天能发布、能加载，运行到那一步才失败；
+     * 做成错误会让已经发布的包在 Reef 上传和 Crab 加载时一起被拒。
+     */
+    private static void checkExtractShape(String path, Map<String, Object> variables, List<ValidationIssue> warnings) {
+        if (warnings == null || variables == null) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : variables.entrySet()) {
+            String child = path + "." + entry.getKey();
+            if (!(entry.getValue() instanceof Map<?, ?> raw)) {
+                warnings.add(issue(ValidationCodes.EXTRACT_SPEC, child, "提取规格必须是映射"));
+                continue;
+            }
+            checkExtractSpec(child, cast(raw), warnings);
+        }
+    }
+
+    private static void checkExtractSpec(String path, Map<String, Object> spec, List<ValidationIssue> warnings) {
+        int selectors = 0;
+        for (Map.Entry<String, Object> entry : spec.entrySet()) {
+            String key = entry.getKey();
+            if (!EXTRACT_KEYS.contains(key)) {
+                warnings.add(issue(ValidationCodes.EXTRACT_FIELD, path + "." + key, "未知的提取字段 " + key));
+            }
+            if (EXTRACT_SELECTORS.contains(key) && entry.getValue() != null) {
+                selectors++;
+            }
+        }
+        if (selectors != 1) {
+            warnings.add(issue(ValidationCodes.EXTRACT_SPEC, path, "提取规格必须且只能有一种选择器"));
+        }
+        if (spec.containsKey("optional") && !optionalLiteral(spec.get("optional"))) {
+            warnings.add(issue(
+                    ValidationCodes.EXTRACT_OPTIONAL,
+                    path + ".optional",
+                    "optional 必须是 true 或 false"));
+        }
+        Object each = spec.get("each");
+        if (each == null) {
+            return;
+        }
+        if (!(each instanceof Map<?, ?> raw)) {
+            warnings.add(issue(ValidationCodes.EXTRACT_SPEC, path + ".each", "each 必须是映射"));
+            return;
+        }
+        for (Map.Entry<String, Object> entry : cast(raw).entrySet()) {
+            String child = path + ".each." + entry.getKey();
+            if (!(entry.getValue() instanceof Map<?, ?> nested)) {
+                warnings.add(issue(ValidationCodes.EXTRACT_SPEC, child, "提取规格必须是映射"));
+                continue;
+            }
+            checkExtractSpec(child, cast(nested), warnings);
+        }
+    }
+
+    /** 布尔字面量通过。含 {@code {{}} 的字符串留到运行时，那时才知道渲染结果。 */
+    private static boolean optionalLiteral(Object value) {
+        if (value instanceof Boolean) {
+            return true;
+        }
+        return value instanceof String text && text.contains("{{");
+    }
+
+    private static void checkAssertShape(String path, Map<String, Object> spec, List<ValidationIssue> warnings) {
+        if (warnings == null || spec == null) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : spec.entrySet()) {
+            String key = entry.getKey();
+            if (!ASSERT_KEYS.contains(key)) {
+                warnings.add(issue(ValidationCodes.ASSERT_KEY, path + "." + key, "未知的 assert 键 " + key));
+                continue;
+            }
+            if ("status".equals(key)) {
+                checkStatusLiteral(path + ".status", entry.getValue(), warnings);
+            }
+        }
+    }
+
+    private static void checkStatusLiteral(String path, Object value, List<ValidationIssue> warnings) {
+        if (value instanceof Number) {
+            return;
+        }
+        if (value instanceof List<?> list) {
+            if (list.isEmpty()) {
+                warnings.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 要写数字"));
+                return;
+            }
+            for (int i = 0; i < list.size(); i++) {
+                checkStatusLiteral(path + "[" + i + "]", list.get(i), warnings);
+            }
+            return;
+        }
+        if (value instanceof String text && text.contains("{{")) {
+            return;
+        }
+        if (value instanceof String) {
+            warnings.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 要写数字，不要加引号"));
+            return;
+        }
+        warnings.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 要写数字"));
+    }
+
     private static boolean validTimeout(Object value) {
         if (!(value instanceof Number number)) {
             return false;
@@ -765,6 +875,12 @@ public final class ConchValidator {
             String typed = path + "[" + i + "]." + step.type();
             if ("request".equals(step.type())) {
                 checkRequestShape(typed, step.def(), errors, warnings);
+            }
+            if ("extract".equals(step.type())) {
+                checkExtractShape(typed, step.def(), warnings);
+            }
+            if ("assert".equals(step.type())) {
+                checkAssertShape(typed, step.def(), warnings);
             }
             boolean declareAsk = false;
             if ("ask".equals(step.type())) {

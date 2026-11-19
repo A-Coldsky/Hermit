@@ -87,6 +87,144 @@ class ConchValidatorTest {
     }
 
     @Test
+    void extractAndAssertShapeWarningsDoNotBlockSave() {
+        ValidationResult result = validate("""
+                conch: shape_warn
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                auth:
+                  steps:
+                    - extract:
+                        token: { optional: true }
+                    - assert: { statu: "s3cret-value" }
+                actions:
+                  ping:
+                    title: 查询
+                    description: 说明
+                    input:
+                      expected: { type: string, description: 期望状态 }
+                      flag: { type: boolean, description: 是否可选 }
+                    output:
+                      ok: { type: string, description: 结果 }
+                    examples:
+                      - input: {}
+                        output: { ok: yes }
+                    notes: 注意
+                    related: []
+                    steps:
+                      - extract:
+                          name:
+                            css: h1
+                            jsonpath: $.name
+                            typo: "s3cret-value"
+                            optional: "s3cret-value"
+                          bare: true
+                          row:
+                            css: tr
+                            each:
+                              id: { optional: 1 }
+                              title: { css: td, extra: 1 }
+                          bad_each:
+                            css: h1
+                            each: "s3cret-value"
+                          word:
+                            css: h1
+                            optional: "true"
+                      - assert:
+                          status: "200"
+                          header_exists: Content-Type
+                      - assert:
+                          status: "{{input.expected}}"
+                      - assert:
+                          status: [200, "201"]
+                      - assert:
+                          status: true
+                      - assert:
+                          status: []
+                      - extract:
+                          kept:
+                            css: h1
+                            attr: href
+                            html: false
+                            min: 1
+                            optional: true
+                            filter: trim
+                            from: response
+                            group: 1
+                            each:
+                              id: { css: td }
+                      - assert: { status: 200 }
+                      - assert: { status: [200, 201] }
+                      - extract:
+                          flag: { css: h1, optional: "{{input.flag}}" }
+                """);
+        assertThat(result.errors()).isEmpty();
+        assertThat(result.warnings())
+                .extracting(ValidationIssue::code, ValidationIssue::path, ValidationIssue::message)
+                .containsExactlyInAnyOrder(
+                        tuple(ValidationCodes.EXTRACT_SPEC, "auth.steps[0].extract.token",
+                                "提取规格必须且只能有一种选择器"),
+                        tuple(ValidationCodes.ASSERT_KEY, "auth.steps[1].assert.statu", "未知的 assert 键 statu"),
+                        tuple(ValidationCodes.EXTRACT_SPEC, "actions.ping.steps[0].extract.name",
+                                "提取规格必须且只能有一种选择器"),
+                        tuple(ValidationCodes.EXTRACT_FIELD, "actions.ping.steps[0].extract.name.typo",
+                                "未知的提取字段 typo"),
+                        tuple(ValidationCodes.EXTRACT_OPTIONAL, "actions.ping.steps[0].extract.name.optional",
+                                "optional 必须是 true 或 false"),
+                        tuple(ValidationCodes.EXTRACT_SPEC, "actions.ping.steps[0].extract.bare", "提取规格必须是映射"),
+                        tuple(ValidationCodes.EXTRACT_SPEC, "actions.ping.steps[0].extract.row.each.id",
+                                "提取规格必须且只能有一种选择器"),
+                        tuple(ValidationCodes.EXTRACT_OPTIONAL, "actions.ping.steps[0].extract.row.each.id.optional",
+                                "optional 必须是 true 或 false"),
+                        tuple(ValidationCodes.EXTRACT_FIELD, "actions.ping.steps[0].extract.row.each.title.extra",
+                                "未知的提取字段 extra"),
+                        tuple(ValidationCodes.EXTRACT_SPEC, "actions.ping.steps[0].extract.bad_each.each",
+                                "each 必须是映射"),
+                        tuple(ValidationCodes.EXTRACT_OPTIONAL, "actions.ping.steps[0].extract.word.optional",
+                                "optional 必须是 true 或 false"),
+                        tuple(ValidationCodes.ASSERT_STATUS, "actions.ping.steps[1].assert.status",
+                                "status 要写数字，不要加引号"),
+                        tuple(ValidationCodes.ASSERT_STATUS, "actions.ping.steps[3].assert.status[1]",
+                                "status 要写数字，不要加引号"),
+                        tuple(ValidationCodes.ASSERT_STATUS, "actions.ping.steps[4].assert.status", "status 要写数字"),
+                        tuple(ValidationCodes.ASSERT_STATUS, "actions.ping.steps[5].assert.status", "status 要写数字"));
+        assertThat(result.warnings())
+                .extracting(ValidationIssue::message)
+                .noneMatch(message -> message.contains("s3cret-value") || message.contains("201"));
+
+        ValidationResult blocked = validate("""
+                conch: shape_block
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  ping:
+                    title: 查询
+                    description: 说明
+                    output:
+                      ok: { type: string, description: 结果 }
+                    examples:
+                      - input: {}
+                        output: { ok: yes }
+                    notes: 注意
+                    related: []
+                    steps:
+                      - assert: { statu: 200, status: "{{" }
+                """);
+        assertThat(blocked.errors()).extracting(ValidationIssue::code)
+                .containsExactly(ValidationCodes.TEMPLATE_SYNTAX);
+        assertThat(blocked.warnings()).extracting(ValidationIssue::code, ValidationIssue::message)
+                .containsExactly(tuple(ValidationCodes.ASSERT_KEY, "未知的 assert 键 statu"));
+    }
+
+    @Test
     void invalidQueryStyleBlocksSave() {
         ValidationResult result = validate("""
                 conch: encode_warn

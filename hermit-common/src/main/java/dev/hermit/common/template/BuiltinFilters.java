@@ -195,6 +195,16 @@ final class BuiltinFilters {
         return sb.toString();
     }
 
+    static Filter xmlEscape() {
+        return (value, args) -> {
+            if (value == null) {
+                return null;
+            }
+            rejectArgs(args, "xml_escape");
+            return XmlEscape.escape(requireText(value, "xml_escape"));
+        };
+    }
+
     private static void rejectArgs(List<Object> args, String name) {
         if (!args.isEmpty()) {
             throw new TemplateException(null, name + " 不接受参数");

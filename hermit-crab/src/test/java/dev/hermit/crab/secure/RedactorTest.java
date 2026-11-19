@@ -1,5 +1,6 @@
 package dev.hermit.crab.secure;
 
+import dev.hermit.common.template.XmlEscape;
 import dev.hermit.crab.testing.SecretChecks;
 import org.junit.jupiter.api.Test;
 
@@ -129,6 +130,26 @@ class RedactorTest {
         assertThat(latin.redact("caf%E9!")).isEqualTo("***");
         assertThat(latin.redact("caf%E9%21")).isEqualTo("***");
         SecretChecks.absent(latin.redact("caf%E9! caf%E9%21"), "caf%E9!");
+    }
+
+    @Test
+    void xmlEscapesAndTheirUrlEncodingsAreMasked() {
+        String secret = "ab&<>\"'";
+        Redactor redactor = Redactor.of(Set.of(secret));
+        String once = XmlEscape.escape(secret);
+        String twice = XmlEscape.escape(once);
+        String thrice = XmlEscape.escape(twice);
+        assertThat(once).isNotEqualTo(secret);
+        assertThat(twice).isNotEqualTo(once);
+        SecretChecks.absent(redactor.redact(once), once);
+        SecretChecks.absent(redactor.redact(twice), twice);
+        SecretChecks.absent(redactor.redact(thrice), thrice);
+        assertThat(redactor.redact("pre " + once + " post")).isEqualTo("pre *** post");
+        String encoded = URLEncoder.encode(once, StandardCharsets.UTF_8);
+        SecretChecks.absent(redactor.redact("q=" + encoded), encoded);
+        String plain = "S3cret!pwd";
+        assertThat(XmlEscape.escape(plain)).isEqualTo(plain);
+        assertThat(Redactor.of(Set.of(plain)).redact(plain)).isEqualTo("***");
     }
 
     @Test

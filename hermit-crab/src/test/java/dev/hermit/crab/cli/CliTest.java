@@ -623,7 +623,7 @@ class CliTest {
         Path home = temp.resolve("encode-warn");
         Files.createDirectories(home);
         Path file = home.resolve("in.yaml");
-        Files.writeString(file, encodingPackage("encode_warn", "body: nope"));
+        Files.writeString(file, encodingPackage("encode_warn", "payload: nope"));
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = new CrabCommand().run(
@@ -635,7 +635,7 @@ class CliTest {
         assertThat(code).isZero();
         assertThat(out.toString(StandardCharsets.UTF_8)).contains("encode_warn 1.0.0 已导入");
         assertThat(err.toString(StandardCharsets.UTF_8))
-                .contains("IGNORED_REQUEST_FIELD actions.ping.steps[0].request.body 这个字段不会被发送");
+                .contains("IGNORED_REQUEST_FIELD actions.ping.steps[0].request.payload 这个字段不会被发送");
 
         Path bad = home.resolve("bad.yaml");
         Files.writeString(bad, encodingPackage("encode_bad", "query_style: nope"));

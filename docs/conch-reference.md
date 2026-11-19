@@ -19,7 +19,7 @@ Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里�
 
 业务接口只选用户确认过的功能对应的那一次请求。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
 
-凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.6.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。
+凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.7.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。用了 request 的 `body` 或 `xml_escape` 时，还要不低于 1.7.0，否则 message 为「使用 body 时 min_crab_version 必须不低于 1.7.0」或「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。
 
 ### 令牌
 
@@ -176,7 +176,7 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.6.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0 |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.7.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高 |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -257,7 +257,7 @@ actions:
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
-`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.6.0，可以载入 1.1.0、1.2.0、1.3.0、1.4.0 和 1.5.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.6.0 时会报高于当前 Crab。
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.7.0，可以载入 1.1.0、1.2.0、1.3.0、1.4.0、1.5.0 和 1.6.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.7.0 时会报高于当前 Crab。请求头模板用了 `xml_escape` 时还要不低于 1.7.0。
 
 `GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
@@ -276,7 +276,7 @@ actions:
 
 | 类型 | 示例/能力 |
 | --- | --- |
-| request | method、path/url、query、headers、form/json、encoding、follow_redirects、timeout_ms、query_style |
+| request | method、path/url、query、headers、body/form/json、encoding、follow_redirects、timeout_ms、query_style |
 | extract | CSS、XPath、JSONPath、regex；可 each 遍历及 filter 转换 |
 | assert | status、contains、not_contains、cookie_exists、header_exists、not_redirected_to |
 | set | 设置后续步骤/输出使用的变量 |
@@ -287,7 +287,7 @@ actions:
 
 执行到 `ask` 就放开账号锁，调用返回 409 `LOGIN_INPUT_REQUIRED`。这条响应不进幂等缓存。规则包没变时，同一账号再次调用不再重跑登录，仍是这个错误，message 末尾是控制台账号页 `/console/conches/{包名}`。规则包版本或内容已经变了时，这次调用丢掉等待并按新版本从头登录。控制台提交或重发遇到同一变化仍是 409 `CONFLICT`「规则包已经更新，请重新登录」。用户在控制台提交后，从下一步接着跑完剩余登录步骤；失败不记入连续登录失败，并丢掉这次等待。图片可以换，短信可以重发：图片至少间隔 2 秒、最多 10 次，验证码至少间隔 60 秒、最多 3 次。没到间隔或次数用完都是 409 `CONFLICT`。次数还没用完时 `canResend` 仍是 true，`resendAfter` 是剩余冷却秒数。进程内最多同时等 64 个账号，再多就丢掉最早的一条。重启、过期、删账号、改凭证、作废会话或 Reef 停用，都会丢掉对应的等待。待输入记录不保存 `input`、`credential`、`config`、`now`、`login`，接着登录用这次请求现取的凭证和配置。`response` 留下；`image` 前一步的 `response.body` 仍是空串，那次响应正文也不留在追踪里。用户提交的值，以及接着登录一开始从冻结变量收进打码名单的字符串，长度达到 4 才打码：后面的步骤失败时，步骤日志、错误和开发者追踪里的原文和 URL 编码都换成 `***`。
 
-request 的 path 与 url 必须二选一，form 与 json 互斥。默认 GET、UTF-8、不跟随重定向；响应最多 5 MiB。`query` 默认按 URL 编码：空格是 `%20`，`+` 是 `%2B`，冒号、斜杠、问号和 `@` 原样保留，`&`、`=`、`#`、`%` 和非 ASCII 仍编码。非 ASCII 用步骤的 `encoding`，没写就是 UTF-8。`query_style` 省略或 `url` 用这套规则；`form` 退回 HTML 表单编码（空格是 `+`，冒号编成 `%3A`）。它只影响 `query`。form 正文始终用表单编码。`urlencode` 过滤器仍按 UTF-8 做表单编码并把 `+` 换成 `%20`；这个结果再放进 query 或 form，发出去时还会再编码一次。
+request 的 path 与 url 必须二选一。`body`、`form` 与 `json` 互斥，三个都不写就没有正文。`body` 是字符串模板，登录步骤和能力步骤都能写，`alive_check.request` 也一样。渲染之后按步骤的 `encoding`（没写就是 UTF-8）转成字节原样发送，不再做表单编码，也不做 JSON 序列化。整段只有一个表达式、结果又不是文本时，这一步失败，message 为「body 的渲染结果不是文本」，不写出结果。数字和布尔要写进周围的文本里，例如 `<int name="fid">{{input.fid}}</int>`。往 XML 文本里插值时，对会变的值使用 `xml_escape`，它转义 `& < > " '`。已经转义过的文本会再转一次。`body` 本身不会自动转义。`Content-Type` 取 headers 里声明的值，名字大小写不敏感，原样发送，不自动追加 charset。空白值不算声明，继续看后面的同名键。没声明时按 `text/plain; charset=<encoding>` 发送，发布时警告「body 没有在 headers 里声明 Content-Type，将按 text/plain 发送。需要 XML 时请声明 Content-Type。」，不阻止保存。headers 里的 Content-Type 同样盖过 form 和 json 的默认值，原样使用，不追加 charset。这是运行时行为，不抬高 `min_crab_version`。用了 `body` 或 `xml_escape` 时，`min_crab_version` 必须不低于 1.7.0，否则 `MIN_CRAB_VERSION`，message 分别为「使用 body 时 min_crab_version 必须不低于 1.7.0」和「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。`xml_escape` 出现在模板里，或出现在提取步骤的 `filter` 链里，都算用了。script 的 `code`、`use` 和脚本库源码不是模板，写了这几个字也不抬高版本。表示不了的字符失败，message 为「body 含有编码无法表示的字符」，不会换成问号。同时写了 `body`、`form`、`json` 里的两个或三个是错误「body、form 与 json 互斥」。`body` 不是字符串是错误「body 必须是字符串」。默认 GET、UTF-8、不跟随重定向；响应最多 5 MiB。`query` 默认按 URL 编码：空格是 `%20`，`+` 是 `%2B`，冒号、斜杠、问号和 `@` 原样保留，`&`、`=`、`#`、`%` 和非 ASCII 仍编码。非 ASCII 用步骤的 `encoding`，没写就是 UTF-8。`query_style` 省略或 `url` 用这套规则；`form` 退回 HTML 表单编码（空格是 `+`，冒号编成 `%3A`）。它只影响 `query`。form 正文始终用表单编码。`urlencode` 过滤器仍按 UTF-8 做表单编码并把 `+` 换成 `%20`；这个结果再放进 query 或 form，发出去时还会再编码一次。
 
 对象和数组不是文本：先写成 JSON，再按上面的 query 或 form 编码发出，不会因此拒绝请求。数字和布尔仍是十进制与 `true`/`false`，不走 JSON。开发追踪对每个对象或数组记一条 `not_text`，message 为「query.字段 不是文本，已按 JSON 写入」或「form.字段 不是文本，已按 JSON 写入」，只写字段名，不写值。字符串、数字和布尔不记这条警告。
 
@@ -295,13 +295,56 @@ path 和 url 在拼接前只编码 URI 里非法的字符：空格、控制字�
 
 请求头的值如果有 U+00FF 以上的字符，这一步失败，message 为「请求头 {名字} 含有无法发送的字符，请先用 urlencode 处理」。Latin-1 范围内的字符仍发送。
 
-写了 `encoding` 时，JSON 正文按该字符集编码，`Content-Type` 带上这个 charset。表示不了的字符失败，message 为「json 含有编码无法表示的字符」，不会换成问号。没写 `encoding` 时 JSON 仍是 UTF-8。
+写了 `encoding` 时，JSON 正文按该字符集编码。没有在 headers 里声明 Content-Type 时，`Content-Type` 带上这个 charset。表示不了的字符失败，message 为「json 含有编码无法表示的字符」，不会换成问号。没写 `encoding` 时 JSON 仍是 UTF-8。form 正文在没有声明 Content-Type 时仍是 `application/x-www-form-urlencoded` 加 charset。声明了就用声明的值，字节仍然是原来的 form 或 JSON。
 
-这些不阻止保存：请求上引擎不认识的字段（例如 `body`、`multipart`）警告「这个字段不会被发送」；query 或 form 的值用了 `urlencode` 警告「这个值用了 urlencode，发出去时会被再编码一次」；query 字面值里已经有百分号编码警告「字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。」；path 或 url 字面值里有 `#` 警告「# 后面的内容不会发出去」。`query_style` 不是 `url` 或 `form` 是错误「query_style 只允许 url 或 form」，不能保存。只写了 `query_style` 不必把 `min_crab_version` 抬到 1.5.0：旧 Crab 忽略这个字段，查询串仍是表单编码。需要上面的 URL 编码时，再把下限写成 1.5.0。
+这些不阻止保存：请求上引擎不认识的字段（例如 `multipart`）警告「这个字段不会被发送」；query 或 form 的值用了 `urlencode` 警告「这个值用了 urlencode，发出去时会被再编码一次」；query 字面值里已经有百分号编码警告「字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。」；path 或 url 字面值里有 `#` 警告「# 后面的内容不会发出去」。`query_style` 不是 `url` 或 `form` 是错误「query_style 只允许 url 或 form」，不能保存。只写了 `query_style` 不必把 `min_crab_version` 抬到 1.5.0：旧 Crab 忽略这个字段，查询串仍是表单编码。需要上面的 URL 编码时，再把下限写成 1.5.0。
 
 未写 `timeout_ms` 时，有 Content-Length 或分块编码的空闲读超时等于剩余的能力 deadline（`engine.capability_timeout_seconds`，默认 60 秒），不再固定 15 秒，到点是 `TIMEOUT`。写了 `timeout_ms` 时使用该毫秒数，且不超过剩余 deadline；更短的空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。没有 Content-Length、也不是分块编码、并且响应会保持连接（HTTP/1.1 且没有 `Connection: close`，或 HTTP/1.0 且有 `Connection: keep-alive`）时，正文改按相邻读取的空闲计时（`engine.body_idle_timeout_ms`，默认 5 秒）。到点就把已经读到的内容当作正文，开发追踪记一条 `body_ended_by_idle`，并打一行不含路径和正文的警告日志，不把这次当成步骤超时。这段空闲比 `timeout_ms` 更长时，仍以步骤超时为准。`Connection: close` 和没有 keep-alive 的 HTTP/1.0 一直读到对端关闭，是完整正文，不记这条警告。连接池里闲置超过 2 秒的连接，下次借出前会先确认还活着。GET、HEAD 和 OPTIONS 只有在复用已经完成过请求的连接、又撞上对端已经关掉或连接被重置时，才换一条连接再试一次；新连接上的失败不重试。POST 和其他方法不重试，503 和超时也不重试。响应头单行默认 64 KiB、最多 500 个，由 `engine.max_header_line_bytes` 和 `engine.max_header_count` 配置。规则引擎的 TCP 连接超时是 `engine.connect_timeout_ms`，默认 15 秒。写了步骤 `encoding` 时，响应用它解码，盖过 Content-Type charset 和 HTML meta；没写或空白则仍是 Content-Type、meta、UTF-8。请求的 query、form 和 JSON 没写 `encoding` 时仍是 UTF-8。解码后去掉开头的 U+FEFF。`follow_redirects` 默认 false。写成 true 时最多跟随 5 次；第 6 个响应仍是 3xx 则 `UPSTREAM_ERROR`，message 为「重定向过多」。同源跳转保留规则请求头。301、302、303 改成 GET，并去掉 `Content-Type`、`Content-Length` 和正文；307、308 保留方法、正文和这些头。同一主机、默认端口的 http 到 https（80 到 443，没写端口也算默认端口）可以跟随。这一跳不发送 `Authorization`、`Proxy-Authorization`、`Cookie`，以及值里含有凭证、登录变量或 Cookie 值的头。其它跨源不跟随，把 3xx 交回规则。开发追踪记 `cross_origin`，message 为「跳转到不同源 scheme://host[:port]，未跟随」，不含路径和查询。`Location` 无法按 URI 解析时也不跟随。开发追踪记 `location_unresolved`，message 为「Location 无法解析，未跟随」，不写 Location 的值。这种 GET 若后面没有覆盖该状态码的 `assert.status`，调用错误仍是 `UPSTREAM_ERROR`，message 为「重定向地址无法解析，未跟随」，不再只报「上游状态码 302」。能解析的跨源跳转仍是上面那句「跳转到不同源」，调用错误仍按状态码。没有打开 `follow_redirects` 时，解析不了的 Location 仍只按状态码处理。`Location` 里的裸 UTF-8 会按 UTF-8 收回来，空格等非法字符再百分号编码，已经写好的 `%HH` 不动。Cookie 仍由账号客户端管理，按 `(origin, conch, account)` 隔离，规则不能自行覆盖 Cookie 头。全名星期加两位年的 `Expires`（例如 `Wednesday, 09-Nov-99 23:12:40 GMT`）可以解析。两位年按 RFC 6265：70–99 是 19xx，00–69 是 20xx，所以这条日期是 1999 年，会删掉同名 Cookie。星期和日期对不上也不拒绝。`Path` 没有前导斜杠时不覆盖默认路径。明文连接上的 Secure cookie 会记下但不会发回去，追踪警告 `secure_cookie`，message 为「收到 Secure cookie 名字，明文连接不会发送」。解析不了的 `Set-Cookie` 记 `cookie_rejected`，不写 Cookie 的值。最终响应仍是 3xx 时：非 GET 且不是登录重定向（表单常见 `follow_redirects: false` 的 302/303）不拒绝；GET 只在后面没有覆盖该状态码的 `assert.status` 时才是 `UPSTREAM_ERROR`。其中 Location 无法解析、又开了 `follow_redirects` 的，message 为「重定向地址无法解析，未跟随」，不写 Location；其余仍是「上游状态码 N」。非 GET 的无法解析 Location 不拒绝，只在开发追踪里警告。
 
 能力请求返回 HTTP 400 时，引擎以 `INVALID_INPUT` 结束，不把响应交给后续 extract/assert，也不切换已安装版本。HTTP 401 与 403 视为会话失效，处理方式与重定向到登录页相同，因此读操作不会在会话失效时返回成功的空列表。500 及以上同样在提取之前结束，错误码是 `UPSTREAM_ERROR`，message 以「上游状态码 N」开头。有响应体时换行后附上正文：先整段脱敏，再截到 4 KiB UTF-8，压在截断点上的秘密不会留下前半段。没有正文时 message 仍只有「上游状态码 N」。不看后面的 `status` 断言。登录步骤的 5xx 也是 `UPSTREAM_ERROR`，不是 `AUTH_FAILED`，同样带上这段正文。其它非 2xx 按下面这条决定是否在提取前结束：从这次 `request` 到下一个 `request` 之间，若有 `assert` 的 `status` 期望包含实际状态码，就不拒绝，extract 和 assert 照常执行。期望写成数字或数字列表（例如 `302`、`304`、`[200, 201]`）。写了模板等非字面量时不预拒，由 assert 决定。期望是别的数字（例如期望 200、实际 404）仍是 `UPSTREAM_ERROR`，不会把错误页抽成空列表。没有这种 `status` 期望时，GET 的 302、304、404、409 同样是 `UPSTREAM_ERROR`。非 GET 的 3xx（301、302、303、304、307、308）不是登录重定向时不拒绝，所以 `follow_redirects: false` 的表单 POST 收到 303 可以成功；若跳到登录页，仍是会话失效。登录步骤不走上述映射，这些状态码仍交给 assert，失败是 `AUTH_FAILED`。`cookie_exists` 失败时，登录结果说明「登录未建立会话：上游没有发回会话 Cookie」，并提示核对用户名和密码；凭证正确时重新测试登录，或检查登录页是否已改版。能力步骤的 `cookie_exists` 失败说明「没有找到规则要求的 Cookie。请核对前面的请求是否还在设置会话。」，不写 Cookie 的名字和值，也不提密码。`contains`、`not_contains`、`header_exists`、`not_redirected_to` 和 `status` 失败时同样是下一步说明，不以「assert 未通过」开头，文案不包含断言原文、凭证或 Cookie。`status` 的期望是数字，或全是数字的列表，且没有一个等于实际状态码时，写出这些数字和实际状态码，并提示核对上游是否改版。期望不是数字（带引号的 `"200"`，或模板渲染成字符串）时，说明是「status 的期望值不是数字」，不写渲染结果，也不提示改版。带引号的数字在提取前仍按那个数字决定要不要预拒：GET 收到 404、写成 `status: "200"` 时仍是「上游状态码 404」，进不了这句。断言执行到的时候（2xx，或预拒放行）才用「status 的期望值不是数字」。列表里夹着非数字时，只要有一个数字等于实际状态码，断言仍通过。2xx 上期望与实际不一致（例如期望 201、实际 200）仍是 `RULE_MISMATCH`。失配不会把 Crab 切回旧版本。除了上面的 5xx 正文，响应体不会写入错误文案。
+
+业务网关只收 XML 方言时，把方言写在 `body` 里，并声明 `Content-Type`。会变的文本用 `xml_escape`。能力的入参仍是 `input`。OpenAPI 和 MCP 工具定义看这份入参，不看上游正文。
+
+```yaml
+conch: rich_mail
+version: 1.0.0
+driver: http
+min_crab_version: 1.7.0
+base_url: http://127.0.0.1:9
+title: 邮件列表示例
+description: 业务网关只接受 XML 方言正文。凭证只声明字段。
+credentials:
+  sid:
+    type: secret
+    label: 会话
+    required: true
+    description: 在控制台填写，不写进规则
+actions:
+  list_mail:
+    title: 邮件列表
+    description: 按文件夹和排序取列表。
+    method: POST
+    idempotent: true
+    mcp: {expose: true, read_only: true}
+    input:
+      fid: {type: integer, default: 1, minimum: 1, description: 文件夹编号}
+      order: {type: string, default: receiveDate, description: 排序字段}
+    steps:
+      - request:
+          method: POST
+          path: /s
+          headers:
+            Content-Type: application/xml
+          body: |
+            <object><int name="fid">{{input.fid}}</int><string name="order">{{input.order | xml_escape}}</string><string name="sid">{{credential.sid | xml_escape}}</string></object>
+    output:
+      sent: {type: string, description: 是否已发送, value: ok}
+    examples:
+      - input: {fid: 1, order: receiveDate}
+        output: {sent: ok}
+    notes: 排序和会话会进 XML 文本，要用 xml_escape。
+    related: []
+```
 
 ```yaml
 steps:
@@ -320,13 +363,13 @@ steps:
 
 ## 模板、输出与脚本
 
-模板如 `{{input.page}}`、`{{credential.password | md5}}`、`{{config.base_url}}`、`{{items}}`、`{{response.headers['content-type']}}`。路径是标识符，用 `.` 取字段，用 `[0]` 这类数字下标取列表元素。键名里有连字符等标识符不能写的字符时，用引号下标，写在点号后面，单引号或双引号都可以。`{{response.headers.content-type}}` 会在连字符处断开，不是合法写法。`response.headers` 里的头名是小写；查找忽略大小写，所以 `{{response.headers.ETag}}` 读到的是 `etag`。带连字符时写成 `{{response.headers['content-type']}}`。没有这个头是「路径不存在」，句子里只有路径，不带头的值，也不带正文。保存时变量名取到第一个 `.` 为止，所以这种写法的根是 `response`，可以保存。根上直接写 `row['a-b']` 或 `items[0]` 时，保存仍按整段路径找变量，认不出 `row`、`items`。`credential`、`login`、`config`、`input`、`now` 后面直接写方括号不能保存，例如 `credential['password']` 或 `login[0]`，message 为「这里请用点号」。点号后面的引号下标可以，例如 `response.headers['content-type']`。支持的过滤器：`md5` 和 `sha256` 对 UTF-8 文本做摘要并输出小写十六进制，不接受参数；`base64`、`urlencode`、`trim` 也不接受参数。这五个过滤器接受字符串，也接受数字和布尔：数字用十进制文本（例如 `1`、`1.5`），布尔是 `true` 或 `false`。Map、List 和其他非文本会失败，句子是「md5 需要文本，得到的是对象」（过滤器名换成实际的那个），不写出对象内容，也不改成按 JSON 做摘要。`default` 需要一个后备值，只在原值是 null 或空串时替换。只含空白的字符串、`0`、`false` 和空列表都保持原值；空白要先 `trim`。`date` 需要一个输出格式；值可以是 `now`，或文本 `yyyy-MM-dd`、`yyyy/MM/dd`、`yyyy-MM-dd HH:mm:ss`、`yyyy/MM/dd HH:mm:ss`、`yyyy年M月d日`、`yyyyMMdd`。数字、布尔和对象是「日期需要文本」；文本解析不了是「日期无法解析」。两句都不带原值。`rsa` 需要一个公钥参数，用 RSA/ECB/PKCS1Padding 加密后再做 Base64；公钥是 X.509，可以是 PEM，也可以是去掉空白的 Base64。明文超过这把公钥能加密的长度时，句子是「明文超过这把公钥能加密的长度」。公钥规格不对是「RSA 公钥无效」。两句都不带明文、公钥或 Java 原文。完整表达式保留原值类型，拼接字符串则转成文本：Map 和 List 在拼接时变成 JSON。过滤器不会悄悄做这件事。用了引号下标时，`min_crab_version` 必须不低于 1.6.0，否则 `MIN_CRAB_VERSION`，message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。Reef 上传和 Crab 载入用同一条校验。没写引号下标的包仍可以低于 1.6.0。旧 Crab 的兼容版本低于 1.6.0，会在安装时拒绝这个包。头名忽略大小写不另设门槛。`md5`、`sha256`、`base64`、`urlencode`、`trim` 拒绝对象也是运行时行为，不另设门槛：以前对 Map 或 List 会静默算出 `{k=v}` 的摘要，升级后的 Crab 对所有规则改成报错。这条适用于全部已安装的规则，没有单独的兼容版本。
+模板如 `{{input.page}}`、`{{credential.password | md5}}`、`{{config.base_url}}`、`{{items}}`、`{{response.headers['content-type']}}`。路径是标识符，用 `.` 取字段，用 `[0]` 这类数字下标取列表元素。键名里有连字符等标识符不能写的字符时，用引号下标，写在点号后面，单引号或双引号都可以。`{{response.headers.content-type}}` 会在连字符处断开，不是合法写法。`response.headers` 里的头名是小写；查找忽略大小写，所以 `{{response.headers.ETag}}` 读到的是 `etag`。带连字符时写成 `{{response.headers['content-type']}}`。没有这个头是「路径不存在」，句子里只有路径，不带头的值，也不带正文。保存时变量名取到第一个 `.` 为止，所以这种写法的根是 `response`，可以保存。根上直接写 `row['a-b']` 或 `items[0]` 时，保存仍按整段路径找变量，认不出 `row`、`items`。`credential`、`login`、`config`、`input`、`now` 后面直接写方括号不能保存，例如 `credential['password']` 或 `login[0]`，message 为「这里请用点号」。点号后面的引号下标可以，例如 `response.headers['content-type']`。支持的过滤器：`md5` 和 `sha256` 对 UTF-8 文本做摘要并输出小写十六进制，不接受参数；`base64`、`urlencode`、`trim` 也不接受参数。这五个过滤器接受字符串，也接受数字和布尔：数字用十进制文本（例如 `1`、`1.5`），布尔是 `true` 或 `false`。Map、List 和其他非文本会失败，句子是「md5 需要文本，得到的是对象」（过滤器名换成实际的那个），不写出对象内容，也不改成按 JSON 做摘要。`default` 需要一个后备值，只在原值是 null 或空串时替换。只含空白的字符串、`0`、`false` 和空列表都保持原值；空白要先 `trim`。`date` 需要一个输出格式；值可以是 `now`，或文本 `yyyy-MM-dd`、`yyyy/MM/dd`、`yyyy-MM-dd HH:mm:ss`、`yyyy/MM/dd HH:mm:ss`、`yyyy年M月d日`、`yyyyMMdd`。数字、布尔和对象是「日期需要文本」；文本解析不了是「日期无法解析」。两句都不带原值。`rsa` 需要一个公钥参数，用 RSA/ECB/PKCS1Padding 加密后再做 Base64；公钥是 X.509，可以是 PEM，也可以是去掉空白的 Base64。明文超过这把公钥能加密的长度时，句子是「明文超过这把公钥能加密的长度」。公钥规格不对是「RSA 公钥无效」。两句都不带明文、公钥或 Java 原文。`xml_escape` 不接受参数，把文本里的 `& < > " '` 转成 `&amp; &lt; &gt; &quot; &apos;`。它和 `md5` 一样接受字符串、数字和布尔；对象失败，句子是「xml_escape 需要文本，得到的是对象」，不写出对象内容。null 仍是 null。用了 `xml_escape` 时 `min_crab_version` 必须不低于 1.7.0。完整表达式保留原值类型，拼接字符串则转成文本：Map 和 List 在拼接时变成 JSON。过滤器不会悄悄做这件事。用了引号下标时，`min_crab_version` 必须不低于 1.6.0，否则 `MIN_CRAB_VERSION`，message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。Reef 上传和 Crab 载入用同一条校验。没写引号下标的包仍可以低于 1.6.0。旧 Crab 的兼容版本低于 1.6.0，会在安装时拒绝这个包。头名忽略大小写不另设门槛。`md5`、`sha256`、`base64`、`urlencode`、`trim` 拒绝对象也是运行时行为，不另设门槛：以前对 Map 或 List 会静默算出 `{k=v}` 的摘要，升级后的 Crab 对所有规则改成报错。这条适用于全部已安装的规则，没有单独的兼容版本。
 
 `input`、`credential`、`config`、`response`、`now`、`login` 是保留变量，不能通过 set/extract/script.into 覆盖。写入 `login` 的 message 是「不能写入保留变量 login」。request 更新 response，extract/set 产生后续步骤可用的变量。同一步骤列表里，后面的步骤可以引用前面 extract、set 或 script.into 声明的名字，例如登录里先提取再写 `{{viewstate}}`，能力里先提取再写 `{{items}}`。`{{input.page}}` 和 `{{credential.password}}` 用的是保留变量。`{{input.page}}` 还要这个能力的 `input` 声明了 `page`；没声明的字段报 `UNDECLARED_INPUT`，message 写出字段名，能定位时带行号。登录步骤里的 `{{input.字段}}` 要每个能力都声明了该字段，因为登录用的是这次调用的入参。`{{name | default(...)}}` 里的 `name` 若已由本列表更早的 extract、set 或 script.into 声明，不算未声明。`default` 过滤器算作这个名字已经处理：`{{token | default('')}}` 可以写，不算 `UNDECLARED_VARIABLE`。没加 `default` 的未声明名字，`conch_validate` 仍会报错并给出行号。`{{vars.token}}`、`{{token}}`、`{{auth.token}}` 就是这种。能力步骤引用只在登录步骤里声明、又没有 `default` 的名字，错误是「能力不能引用登录步骤里的变量。」，不是「引用了未定义的变量」。`credential.*` 和 `config.*` 不会因为加了 `default` 就放过未声明的凭证或配置。试跑遇到未定义变量时会点名这个变量，不会说成上游故障或版本不一致。
 
 输出可采用映射模板，也可用说明式字段。说明式字段省略 value 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。校验器禁止在输出中直接引用 credential。
 
-实际输出会遍历字符串值，替换长度至少 4 个字符的已知凭证、当前 Cookie 值、登录快照里的字符串，以及这次调用已经读到或在替换快照前后见过的登录值，还有它们的 URL 编码形式。编码形式包括表单编码（`+` 和 `%20`、大小写十六进制）、query 的 URL 编码、path 宽松规范化，以及 JSON 里对引号、反斜杠和控制字符的转义。字符集包括 UTF-8、GBK、GB18030 和 ISO-8859-1。开发追踪里的 `wire.target` 和 `wire.body` 在写入前走同一套替换。正文超过 64 KiB 时先替换再截断，截断点上的秘密不会留下前半段。`Proxy-Authorization` 与 `Authorization` 一样整头不入库。正式调用也打码，不只是开发追踪。会话失效清掉快照之后，这些已经见过的值仍打码。这些快照值不进 `config_audit`，也不进进程级已知秘密。短于 4 个字符的快照值不打码。用户在 `ask` 提交的验证码同样进入这次打码名单，长度达到 4 才换成 `***`，短于 4 的保留。开发追踪里的响应正文和变量摘要，还会把登录步骤里提取、set 或 script 得到的值打成掩码。写了 `credential: true` 的 script，返回的长度至少 4 的字符串还会进入这一次调用的打码名单：正式调用的结果、错误、步骤日志和开发追踪都会换成 `***`，包含 URL 编码。短于 4 的不打。这些字符串不写入配置审计，也不进入进程级已知秘密。能力步骤里，引用了 `credential` 的请求成功之后，紧跟着的 extract 和 script 得到的值同样打码；能力步骤里的 set 不打码。长度至少 4。拿这个掩码去调上游，上游会拒绝。登录请求、引用了凭证的能力请求，以及存活检查，响应正文还会再按字段名和令牌形状打一遍，提取失败也一样：键名包含 token、session、secret、password、authorization、jwt、ticket 的值换成 `***`，键名正好是 `sid` 时也换成 `***`（`side` 不会）。JWT 形态，以及 32 位以上的十六进制或 base64 长串，同样换成 `***`。不是 JSON 的这类正文整段换成「登录响应正文已隐藏，可能含凭证」。不带凭证的能力步骤响应体不按字段名打码。映射的键不替换。短于 4 个字符的秘密、尚未登记且不是这次从凭证换出来的上游秘密，以及哈希等其它派生值，在不带凭证的步骤里没有普遍保护。规则应只返回业务需要的数据。
+实际输出会遍历字符串值，替换长度至少 4 个字符的已知凭证、当前 Cookie 值、登录快照里的字符串，以及这次调用已经读到或在替换快照前后见过的登录值，还有它们的 URL 编码形式。编码形式包括表单编码（`+` 和 `%20`、大小写十六进制）、query 的 URL 编码、path 宽松规范化，以及 JSON 里对引号、反斜杠和控制字符的转义。字符集包括 UTF-8、GBK、GB18030 和 ISO-8859-1。开发追踪里的 `wire.target` 和 `wire.body` 在写入前走同一套替换。秘密里的 `& < > " '` 再经 `xml_escape` 得到的文本，以及连续再转两次的结果，连同这些形式的 URL 编码，也在这套替换里。正文超过 64 KiB 时先替换再截断，截断点上的秘密不会留下前半段。`Proxy-Authorization` 与 `Authorization` 一样整头不入库。正式调用也打码，不只是开发追踪。会话失效清掉快照之后，这些已经见过的值仍打码。这些快照值不进 `config_audit`，也不进进程级已知秘密。短于 4 个字符的快照值不打码。用户在 `ask` 提交的验证码同样进入这次打码名单，长度达到 4 才换成 `***`，短于 4 的保留。开发追踪里的响应正文和变量摘要，还会把登录步骤里提取、set 或 script 得到的值打成掩码。写了 `credential: true` 的 script，返回的长度至少 4 的字符串还会进入这一次调用的打码名单：正式调用的结果、错误、步骤日志和开发追踪都会换成 `***`，包含 URL 编码。短于 4 的不打。这些字符串不写入配置审计，也不进入进程级已知秘密。能力步骤里，引用了 `credential` 的请求成功之后，紧跟着的 extract 和 script 得到的值同样打码；能力步骤里的 set 不打码。长度至少 4。拿这个掩码去调上游，上游会拒绝。登录请求、引用了凭证的能力请求，以及存活检查，响应正文还会再按字段名和令牌形状打一遍，提取失败也一样：键名包含 token、session、secret、password、authorization、jwt、ticket 的值换成 `***`，键名正好是 `sid` 时也换成 `***`（`side` 不会）。JWT 形态，以及 32 位以上的十六进制或 base64 长串，同样换成 `***`。不是 JSON 的这类正文整段换成「登录响应正文已隐藏，可能含凭证」。不带凭证的能力步骤响应体不按字段名打码。映射的键不替换。短于 4 个字符的秘密、尚未登记且不是这次从凭证换出来的上游秘密，以及哈希等其它派生值，在不带凭证的步骤里没有普遍保护。规则应只返回业务需要的数据。
 
 ```yaml
 - script:
@@ -354,7 +397,7 @@ steps:
 
 script 步骤的 `use` 按顺序把这些库接在 `code` 前面，同一个函数作用域。`code` 仍最多 64 KiB，也不是模板。`use` 里的名字必须存在，不能重复。写了 `scripts`（非空）或 `use` 时，`min_crab_version` 必须不低于 1.2.0。Reef 上传和 Crab 载入用同一条校验。没写这两项的包仍可以低于 1.2.0。只写 `credential: true`、没有脚本库也没有 `use`，不因此抬高版本。
 
-脚本里的 `vars.response` 是上一次 `request` 留下的响应对象，不是正文。字段与模板看到的相同：`status` 是数字，`url` 是最终地址，`headers` 是小写头名到字符串，脚本按存进去的小写名字读，例如 `vars.response.headers['content-type']`。这是脚本取值，不是模板引号下标，不因此要求 1.6.0。`body` 是按响应字符集解码后的正文，`redirect` 是最终响应仍为重定向时的 Location，否则为 null。正文用 `vars.response.body`。`String(vars.response)` 得到 `[object Object]`，不会变成正文。`input`、`config` 同样是对象。没有 `credential: true` 时没有 `vars.credential`，也没有 `vars.login`。
+脚本里的 `vars.response` 是上一次 `request` 留下的响应对象，不是正文。字段与模板看到的相同：`status` 是数字，`url` 是最终地址，`headers` 是小写头名到字符串，脚本按存进去的小写名字读，例如 `vars.response.headers['content-type']`。这是脚本取值，不是模板引号下标，不因此要求 1.6.0。`body` 是按响应字符集解码后的响应正文，不是 request 步骤的 `body` 字段。`redirect` 是最终响应仍为重定向时的 Location，否则为 null。正文用 `vars.response.body`。`String(vars.response)` 得到 `[object Object]`，不会变成正文。`input`、`config` 同样是对象。没有 `credential: true` 时没有 `vars.credential`，也没有 `vars.login`。
 
 引擎是 Rhino 1.9.1，语言级别 ES6（`Context.VERSION_ES6`），解释模式（`setOptimizationLevel(-1)`）。`use` 按写出的顺序把库源码接在一起；库末尾没有换行时补一个换行，然后接 `code`，再包进 `(function(){` 和 `})()`。库和 `code` 在同一个函数作用域，都不是模板，`{{ }}` 不会替换。行号按这次拼接往回算：包装用的第一行和排在前面的库不占 `code` 的行号。错误落在哪个库，就用那个库自己的行号，并写出库的名字。
 
@@ -368,7 +411,7 @@ script 步骤的 `use` 按顺序把这些库接在 `code` 前面，同一个函�
 
 脚本在 Rhino 1.9.1 的 ES6 解释模式与受限全局对象中执行，不提供 Java 类、文件或网络访问入口。全局对象 `hermit` 已冻结，不能改写，里面的函数也不能改。`utf8` / `fromUtf8` 在字符串和 Uint8Array 之间转换。`hex` / `unhex` 使用小写十六进制。`base64` / `unbase64` 是标准 Base64。`base64url` / `unbase64url` 使用 URL 安全字母表，填充的 `=` 可以不写。`randomBytes(n)` 取 1 到 1024 个随机字节。`now()` 是引擎时钟的毫秒数。没有 BigInt，也没有加密原语。返回值只能是字符串、数字、布尔或普通数组和对象。超出安全整数的数会丢精度。Uint8Array 不能直接返回，运行时是「不能直接返回字节数组，请先 hermit.hex 或 base64」，先转成十六进制或 Base64。Date 不能返回，运行时是「不能返回 Date」。这两句都不带返回值。不能写 `class` 或 `async`。需要浏览器加密接口的算法，用纯 JavaScript 放进脚本库。SM2、SM3、SM4 也可以这样贴进去，但必须落在下面的预算里。脚本仍然不能访问网络。
 
-默认 1000ms、最大 5000ms，`code` 最多 64 KiB，结果最多 1 MiB，调用栈 1000，一次脚本在执行线程上累计分配超过 256 MiB（含已回收的临时对象）时停下。单次过大的分配导致内存不足时也停下，都是 `RULE_MISMATCH`「脚本内存超限」。脚本执行仍在同一 JVM，这不是进程级内存隔离。`into` 可保存结果；省略时要返回对象，否则是「省略 into 时要返回对象」，不把返回值写进错误。这一版不新增过滤器，仍只有 `md5`、`sha256`、`base64`、`urlencode`、`trim`、`default`、`date`、`rsa`。
+默认 1000ms、最大 5000ms，`code` 最多 64 KiB，结果最多 1 MiB，调用栈 1000，一次脚本在执行线程上累计分配超过 256 MiB（含已回收的临时对象）时停下。单次过大的分配导致内存不足时也停下，都是 `RULE_MISMATCH`「脚本内存超限」。脚本执行仍在同一 JVM，这不是进程级内存隔离。`into` 可保存结果；省略时要返回对象，否则是「省略 into 时要返回对象」，不把返回值写进错误。模板过滤器增加了 `xml_escape`，见上面。脚本沙箱不新增函数，预算不变。
 
 版本对比会列出新增、删除和源码有改动的脚本库名字，不带出源码。能力步骤的 `use` 用到被改过或被删掉的库时，这个能力算作步骤有变化。哈希和签名仍覆盖整份 YAML。
 

@@ -33,7 +33,7 @@ class ConchValidatorTest {
                     - request:
                         method: GET
                         path: /login
-                        body: nope
+                        payload: nope
                   alive_check:
                     request: {method: GET, path: "/home#gone"}
                     expect_not_redirect: /login
@@ -72,7 +72,7 @@ class ConchValidatorTest {
         assertThat(result.warnings())
                 .extracting(ValidationIssue::code, ValidationIssue::path, ValidationIssue::message)
                 .containsExactlyInAnyOrder(
-                        tuple(ValidationCodes.IGNORED_REQUEST_FIELD, "auth.steps[0].request.body", "这个字段不会被发送"),
+                        tuple(ValidationCodes.IGNORED_REQUEST_FIELD, "auth.steps[0].request.payload", "这个字段不会被发送"),
                         tuple(ValidationCodes.FRAGMENT_DROPPED, "auth.alive_check.request.path", "# 后面的内容不会发出去"),
                         tuple(ValidationCodes.DOUBLE_ENCODE, "actions.ping.steps[0].request.query.q",
                                 "这个值用了 urlencode，发出去时会被再编码一次"),

@@ -56,6 +56,7 @@ import org.apache.hc.core5.util.Timeout;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.http.HostNames;
 import dev.hermit.common.http.UrlComponents;
+import dev.hermit.common.validate.RequestBodies;
 import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.tls.TransportFailure;
 
@@ -157,8 +158,9 @@ final class HttpCalls {
         if (present(spec, "path") == present(spec, "url")) {
             throw problem(ErrorCode.RULE_MISMATCH, "path 与 url 必须二选一");
         }
-        if (spec.get("json") != null && spec.get("form") != null) {
-            throw problem(ErrorCode.RULE_MISMATCH, "json 与 form 互斥");
+        if ((spec.get("json") != null && spec.get("form") != null)
+                || (spec.get("body") != null && (spec.get("json") != null || spec.get("form") != null))) {
+            throw problem(ErrorCode.RULE_MISMATCH, RequestBodies.EXCLUSIVE);
         }
         String method = Values.upper(spec.get("method"), "GET");
         if (!method.matches("[A-Z]+")) {
@@ -176,12 +178,12 @@ final class HttpCalls {
             target = withQuery(target, appendQuery(target.getRawQuery(), query, charset, formQuery, "query", warnings));
         }
         byte[] body = null;
-        ContentType contentType = null;
+        ContentType generated = null;
         if (spec.get("form") != null) {
             Map<String, Object> form = optionalMap(spec.get("form"), "form");
             String encoded = appendQuery(null, form, charset, true, "form", warnings);
             body = encoded.getBytes(charset);
-            contentType = ContentType.create("application/x-www-form-urlencoded", charset);
+            generated = ContentType.create("application/x-www-form-urlencoded", charset);
         } else if (spec.get("json") != null) {
             try {
                 // 字符写出保留辅助平面字符，再按步骤编码。字节写出把它们换成代理项转义，字符集就用不上。
@@ -192,11 +194,31 @@ final class HttpCalls {
             } catch (UrlComponents.Unencodable ex) {
                 throw problem(ErrorCode.RULE_MISMATCH, "json 含有编码无法表示的字符");
             }
-            contentType = StandardCharsets.UTF_8.equals(charset)
+            generated = StandardCharsets.UTF_8.equals(charset)
                     ? ContentType.APPLICATION_JSON
                     : ContentType.create("application/json", charset);
+        } else if (spec.get("body") != null) {
+            if (!(spec.get("body") instanceof String text)) {
+                throw problem(ErrorCode.RULE_MISMATCH, RequestBodies.NOT_TEXT);
+            }
+            try {
+                body = UrlComponents.encode(text, charset);
+            } catch (UrlComponents.Unencodable ex) {
+                throw problem(ErrorCode.RULE_MISMATCH, "body 含有编码无法表示的字符");
+            }
         }
         Map<String, Object> headers = optionalMap(spec.get("headers"), "headers");
+        String declared = declaredContentType(headers);
+        String contentType = null;
+        if (body != null) {
+            if (declared != null) {
+                contentType = declared;
+            } else if (generated != null) {
+                contentType = generated.toString();
+            } else {
+                contentType = "text/plain; charset=" + charset.name();
+            }
+        }
         Set<String> secrets = sensitive == null ? Set.of() : sensitive;
         boolean lost = false;
         int hops = 0;
@@ -453,7 +475,7 @@ final class HttpCalls {
             String method,
             URI target,
             byte[] body,
-            ContentType contentType,
+            String contentType,
             Map<String, Object> headers,
             Charset requestCharset,
             Charset responseCharset,
@@ -472,9 +494,21 @@ final class HttpCalls {
                 .setConnectionRequestTimeout(Timeout.ofMilliseconds(Math.min(timeoutMs, 15_000)))
                 .build());
         if (body != null) {
-            request.setEntity(new ByteArrayEntity(body, contentType));
+            // 实体不带 ContentType，避免客户端按字符集再序列化或补 charset。
+            request.setEntity(new ByteArrayEntity(body, (ContentType) null));
+            if (contentType != null && !contentType.isEmpty()) {
+                if (unsendableHeader(contentType)) {
+                    throw new RuleProblem(
+                            ErrorCode.RULE_MISMATCH,
+                            "请求头 Content-Type 含有无法发送的字符，请先用 urlencode 处理",
+                            method,
+                            pathOf(target),
+                            null);
+                }
+                request.setHeader("Content-Type", contentType);
+            }
         }
-        applyHeaders(request, headers, target, method);
+        applyHeaders(request, headers, target, method, body != null);
         String path = pathOf(target);
         // responseTimeout 只限制相邻读取的空闲。持续慢速输出不会触发它，到能力 deadline 时取消请求，
         // 才能打断已经阻塞在 InputStream.read 上的线程。没写 timeout_ms 时，这段空闲上限就是剩余 deadline。
@@ -578,13 +612,22 @@ final class HttpCalls {
         return DEADLINES.schedule(() -> cancellable.cancel(), delayNanos, TimeUnit.NANOSECONDS);
     }
 
-    private static void applyHeaders(HttpUriRequestBase request, Map<String, Object> headers, URI target, String method) {
+    private static void applyHeaders(
+            HttpUriRequestBase request,
+            Map<String, Object> headers,
+            URI target,
+            String method,
+            boolean skipContentType
+    ) {
         if (headers == null) {
             return;
         }
         for (Map.Entry<String, Object> entry : headers.entrySet()) {
             String name = entry.getKey();
             if (name.equalsIgnoreCase("Cookie")) {
+                continue;
+            }
+            if (skipContentType && name.equalsIgnoreCase("Content-Type")) {
                 continue;
             }
             String value = Values.text(entry.getValue());
@@ -924,6 +967,22 @@ final class HttpCalls {
             return true;
         }
         throw problem(ErrorCode.RULE_MISMATCH, "query_style 只允许 url 或 form");
+    }
+
+    /** 第一个非空白 Content-Type。原样返回，不解析、不补 charset。 */
+    private static String declaredContentType(Map<String, Object> headers) {
+        if (headers == null) {
+            return null;
+        }
+        for (Map.Entry<String, Object> entry : headers.entrySet()) {
+            if (entry.getKey() != null && entry.getKey().equalsIgnoreCase("Content-Type")) {
+                String value = Values.text(entry.getValue());
+                if (value != null && !value.isBlank()) {
+                    return value;
+                }
+            }
+        }
+        return null;
     }
 
     private static boolean unsendableHeader(String value) {

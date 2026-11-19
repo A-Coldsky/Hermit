@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 
 import dev.hermit.common.http.UrlComponents;
+import dev.hermit.common.template.XmlEscape;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -22,6 +23,8 @@ import java.util.Set;
  * spaces as {@code +} and as {@code %20}, and with uppercase or lowercase hex digits.
  * The same charsets are applied to the URL query encoding and to lenient path
  * normalization. A JSON escape of quotes, backslashes, and control characters is masked too.
+ * XML text escapes ({@code &amp;} and the other four) of a secret, and those forms' URL encodings,
+ * are masked as well, up to three successive escapes.
  * Callers that need both behaviors apply {@link #redact(String)} and
  * {@link #redactFields(Map)} themselves.
  */
@@ -80,6 +83,15 @@ public final class Redactor {
             String json = UrlComponents.jsonEscape(secret);
             if (!json.equals(secret)) {
                 needles.add(json);
+            }
+            String xml = secret;
+            for (int pass = 0; pass < 3; pass++) {
+                String escaped = XmlEscape.escape(xml);
+                if (escaped.equals(xml)) {
+                    break;
+                }
+                addEncodedForms(needles, escaped);
+                xml = escaped;
             }
         }
         List<String> ordered = needles.stream()
@@ -169,6 +181,19 @@ public final class Redactor {
             }
         }
         return false;
+    }
+
+    private static void addEncodedForms(Set<String> needles, String secret) {
+        needles.add(secret);
+        for (Charset charset : URL_CHARSETS) {
+            addUrlEncodings(needles, URLEncoder.encode(secret, charset));
+            addIfEncodable(needles, secret, charset, true);
+            addIfEncodable(needles, secret, charset, false);
+        }
+        String json = UrlComponents.jsonEscape(secret);
+        if (!json.equals(secret)) {
+            needles.add(json);
+        }
     }
 
     private static void addIfEncodable(Set<String> needles, String secret, Charset charset, boolean query) {

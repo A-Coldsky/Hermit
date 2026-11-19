@@ -270,7 +270,7 @@ class TemplateEngineTest {
                 return "LEAKED-TOSTRING";
             }
         };
-        for (String filter : List.of("md5", "sha256", "base64", "urlencode", "trim")) {
+        for (String filter : List.of("md5", "sha256", "base64", "urlencode", "trim", "xml_escape")) {
             assertThatThrownBy(() -> engine.render("{{row | " + filter + "}}", Map.of("row", leak)))
                     .isInstanceOf(TemplateException.class)
                     .hasMessage("row: " + filter + " 需要文本，得到的是对象")
@@ -284,6 +284,23 @@ class TemplateEngineTest {
                 .isInstanceOf(TemplateException.class)
                 .hasMessage("items: md5 需要文本，得到的是对象")
                 .satisfies(error -> assertHidden(error, "s3cret", "s3cret%20value", "s3cret+value", "%20"));
+    }
+
+    @Test
+    void xmlEscapeEscapesFiveCharactersAndLeavesTheSurroundingText() {
+        assertThat(engine.render("{{t | xml_escape}}", Map.of("t", "a&b<c>d\"e'f")))
+                .isEqualTo("a&amp;b&lt;c&gt;d&quot;e&apos;f");
+        assertThat(engine.render("{{t | xml_escape}}", Map.of("t", "a&amp;b"))).isEqualTo("a&amp;amp;b");
+        assertThat(engine.render("{{n | xml_escape}}", Map.of("n", 1))).isEqualTo("1");
+        assertThat(engine.render("{{n | xml_escape}}", Map.of("n", true))).isEqualTo("true");
+        assertThat(engine.render("{{t | xml_escape}}", Map.of("t", ""))).isEqualTo("");
+        assertThat(engine.render("<object>{{t}}</object>", Map.of("t", "a&b"))).isEqualTo("<object>a&b</object>");
+        LinkedHashMap<String, Object> missing = new LinkedHashMap<>();
+        missing.put("t", null);
+        assertThat(engine.render("{{t | xml_escape}}", missing)).isNull();
+        assertThatThrownBy(() -> engine.render("{{t | xml_escape('x')}}", Map.of("t", "a")))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("t: xml_escape 不接受参数");
     }
 
     @Test

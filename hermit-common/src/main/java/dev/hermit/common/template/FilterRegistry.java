@@ -21,6 +21,7 @@ public final class FilterRegistry {
         registry.register("base64", BuiltinFilters.base64());
         registry.register("urlencode", BuiltinFilters.urlencode());
         registry.register("trim", BuiltinFilters.trim());
+        registry.register("xml_escape", BuiltinFilters.xmlEscape());
         registry.register("default", BuiltinFilters.defaultValue());
         registry.register("date", BuiltinFilters.date(clock));
         registry.register("rsa", BuiltinFilters.rsa());

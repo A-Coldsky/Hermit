@@ -265,6 +265,52 @@ class ScriptFailureReportTest {
     }
 
     @Test
+    void nativeTypeErrorOnTheResponseObjectKeepsTheLineAndDropsValues() throws Exception {
+        HttpServer server = server();
+        MemoryTrace trace = new MemoryTrace();
+        try {
+            ExecutionResult result = run(conch("", """
+                    - request:
+                        method: POST
+                        path: /s
+                        query:
+                          func: mbox:getAllFolders
+                    - script:
+                        code: |
+                          var ready = 1;
+                          vars.response.split(',');
+                        into: value
+                    """), base(server), trace);
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(result.error().failedStepIndex()).isEqualTo(1);
+            assertThat(result.error().failedStepType()).isEqualTo("script");
+            assertThat(result.error().message()).startsWith("本步脚本 第 2 行：").contains("TypeError");
+            assertThat(result.error().message())
+                    .doesNotContain("收件箱")
+                    .doesNotContain("S_OK")
+                    .doesNotContain("[object Object]")
+                    .doesNotContain("org.mozilla")
+                    .doesNotContain("at script")
+                    .doesNotContain("java.lang");
+            JsonNode script = step(ApiJson.tree(trace.body), "script");
+            assertThat(script.path("passed").asBoolean()).isFalse();
+            JsonNode reported = script.get("scriptError");
+            assertThat(reported.path("source").asText()).isEqualTo("code");
+            assertThat(reported.path("line").asInt()).isEqualTo(2);
+            assertThat(reported.get("column").isNull()).isTrue();
+            assertThat(reported.path("message").asText()).contains("TypeError");
+            assertThat(reported.path("message").asText())
+                    .doesNotContain("收件箱")
+                    .doesNotContain("S_OK")
+                    .doesNotContain("[object Object]");
+            assertThat(script.has("error")).isFalse();
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void throwAfterParsingTheBodyIsTheCodeLine() throws Exception {
         HttpServer server = server();
         try {

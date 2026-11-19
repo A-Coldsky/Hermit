@@ -97,6 +97,8 @@ describe('formatImportIssue', () => {
     expect(formatImportIssue({ code: 'PERCENT_ENCODED', path: 'x', message: 'y' }).label).toBe('会被再编码')
     expect(formatImportIssue({ code: 'FRAGMENT_DROPPED', path: 'x', message: 'y' }).label).toBe('片段不会发出去')
     expect(formatImportIssue({ code: 'QUERY_STYLE', path: 'x', message: 'y' }).label).toBe('query_style 无效')
+    expect(formatImportIssue({ code: 'REQUEST_BODY', path: 'x', message: 'y' }).label).toBe('请求正文无效')
+    expect(formatImportIssue({ code: 'BODY_CONTENT_TYPE', path: 'x', message: 'y' }).label).toBe('未声明 Content-Type')
     expect(importIssueLabels.DRIVER).not.toBe(importIssueLabels.PARSE)
     expect(formatImportIssue({
       code: 'REQUIRED',

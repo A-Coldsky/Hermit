@@ -668,7 +668,7 @@ describe('手动更新', () => {
 
     await buttons(wrapper, '更新到 v1.1.0')[0].trigger('click')
     await flushPromises()
-    expect(confirm.mock.calls[0][0]).toContain('可以退回刚换下的那一版')
+    expect(confirm.mock.calls[0][0]).toContain('本机会留着 v1.0.0，更新后不合适可以退回')
     expect(crab.update).toHaveBeenCalledWith('legacy_oa')
     expect(crab.conch).toHaveBeenCalledTimes(2)
     confirm.mockRestore()

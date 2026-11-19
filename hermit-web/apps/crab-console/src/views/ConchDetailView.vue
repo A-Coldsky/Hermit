@@ -444,7 +444,7 @@ watch(
       >
         <template #default>
           <div v-if="detail.ruleDisabled">当前版本已经停用，不能继续调用。更新到能通过校验的版本后才能再用。</div>
-          <div v-else>不更新也可以一直使用当前版本。更新后可以退回刚换下的那一版；再更新一次，可退回的就换成新换下的那一版。</div>
+          <div v-else>可以暂不更新，当前版本照常使用。更新后本机会留着现在这一版，不合适可以退回；只保留最近换下的一版。</div>
           <div v-if="detail.newRequiredCredentials.length">
             新版本需要这些凭证：<span class="mono">{{ detail.newRequiredCredentials.join('、') }}</span>。先在下方默认账号里填好，再点更新。
           </div>

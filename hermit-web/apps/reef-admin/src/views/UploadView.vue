@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Promotion, UploadFilled } from '@element-plus/icons-vue'
+import { Loading, Promotion, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -7,7 +7,6 @@ import PageHeader from '@shared/components/PageHeader.vue'
 import { ApiError } from '@shared/http'
 import { errorText, notifyError } from '@shared/format'
 import { api, type UploadResult, type ValidationIssue } from '../api'
-import CoralSprout from '../components/CoralSprout.vue'
 import DiffSummary from '../components/DiffSummary.vue'
 import IssueList from '../components/IssueList.vue'
 
@@ -18,9 +17,8 @@ const discarding = ref(false)
 const fileName = ref('')
 const pending = ref<File | null>(null)
 const result = ref<UploadResult | null>(null)
-const published = ref<{ conch: string; version: string } | null>(null)
 const failure = ref<{ message: string; errors: ValidationIssue[]; warnings: ValidationIssue[] } | null>(null)
-const step = computed(() => (published.value ? 4 : result.value ? 2 : pending.value || uploading.value || failure.value ? 1 : 0))
+const step = computed(() => (result.value ? 2 : pending.value || uploading.value || failure.value ? 1 : 0))
 
 function issuesOf(data: unknown, key: 'errors' | 'warnings'): ValidationIssue[] {
   if (data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>)[key])) {
@@ -45,7 +43,6 @@ function onChange(file: UploadFile) {
   pending.value = file.raw
   result.value = null
   failure.value = null
-  published.value = null
 }
 
 function cancelPending() {
@@ -102,9 +99,8 @@ async function publish() {
   publishing.value = true
   try {
     await api.publish(conch, version)
-    published.value = { conch, version }
-    result.value = null
-    fileName.value = ''
+    ElMessage.success(`${conch} v${version} 已发布`)
+    await router.push(`/conches/${encodeURIComponent(conch)}`)
   } catch (error) {
     notifyError(error)
   } finally {
@@ -182,7 +178,10 @@ async function discard() {
           <el-button type="primary" data-test="confirm-upload" @click="upload">上传并校验</el-button>
         </span>
       </div>
-      <CoralSprout v-if="uploading" state="working" class="status">正在校验 {{ fileName }}…</CoralSprout>
+      <div v-if="uploading" class="status">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span class="hm-muted">正在校验 {{ fileName }}…</span>
+      </div>
     </div>
 
     <div v-if="failure" class="hm-card">
@@ -196,18 +195,6 @@ async function discard() {
         <h4>警告（{{ failure.warnings.length }}）</h4>
         <IssueList :issues="failure.warnings" tone="warning" />
       </template>
-    </div>
-
-    <div v-if="published" class="hm-card published" data-test="published">
-      <CoralSprout state="done">
-        <div class="published-title">
-          <span class="mono">{{ published.conch }}</span>
-          <el-tag effect="plain" class="mono">v{{ published.version }}</el-tag>
-          已发布
-        </div>
-        <div class="hm-muted">新订阅的 Crab 直接安装这个版本，已订阅的 Crab 需要手动更新。</div>
-      </CoralSprout>
-      <el-button type="primary" @click="router.push(`/conches/${encodeURIComponent(published.conch)}`)">查看规则包</el-button>
     </div>
 
     <div v-if="result" class="hm-card">
@@ -235,25 +222,11 @@ async function discard() {
 
 <style scoped>
 .status {
-  margin-top: 12px;
-}
-
-.published {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.published-title {
+  margin-top: 10px;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 4px;
-  color: var(--hm-text);
-  font-size: 15px;
-  font-weight: 600;
+  color: var(--el-color-primary);
 }
 
 .pending {

@@ -24,9 +24,9 @@ export interface UpdateTarget {
 
 /**
  * 修复同步标为 REPAIR_REQUIRED 的包。本机文件仍能验签就重新载入，不下载；验签失败才安装 Reef 当前版本。
- * 返回是否已恢复可调用。onStart 在用户确认之后、请求发出之前调用。
+ * 返回是否已恢复可调用。
  */
-export async function repairConch(conch: string, reason: string | null, onStart?: () => void): Promise<boolean> {
+export async function repairConch(conch: string, reason: string | null): Promise<boolean> {
   const why = reason ? `原因：${syncReasonLabels[reason] ?? reason}。` : ''
   try {
     await ElMessageBox.confirm(
@@ -37,7 +37,6 @@ export async function repairConch(conch: string, reason: string | null, onStart?
   } catch {
     return false
   }
-  onStart?.()
   try {
     const result = await api.update(conch)
     const kind = result.outcome?.kind

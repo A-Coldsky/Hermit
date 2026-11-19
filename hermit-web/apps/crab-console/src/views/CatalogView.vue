@@ -18,7 +18,7 @@ const router = useRouter()
 const loading = ref(true)
 const syncing = ref(false)
 const busy = ref<string | null>(null)
-/** 正在往本机装新版本的那一行（订阅、更新、修复），用来显示换壳动画。 */
+/** 正在订阅安装的那一行，用来显示换壳动画。 */
 const installing = ref<string | null>(null)
 const catalog = ref<Catalog | null>(null)
 /** 同步标为需要修复、但目录还没有 repairRequired 的包（例如指针丢失）。 */
@@ -118,22 +118,20 @@ async function unsubscribe(row: CatalogConch) {
 async function update(row: CatalogConch) {
   busy.value = row.conch
   try {
-    if (await updateConch(row, () => (installing.value = row.conch))) void refreshPending()
+    if (await updateConch(row)) void refreshPending()
     await load()
   } finally {
     busy.value = null
-    installing.value = null
   }
 }
 
 async function repair(row: CatalogConch) {
   busy.value = row.conch
   try {
-    if (await repairConch(row.conch, repairReason(row), () => (installing.value = row.conch))) void refreshPending()
+    if (await repairConch(row.conch, repairReason(row))) void refreshPending()
     await load()
   } finally {
     busy.value = null
-    installing.value = null
   }
 }
 

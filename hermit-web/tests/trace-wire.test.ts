@@ -298,7 +298,7 @@ describe('脚本失败', () => {
 
     const timeout = itemNamed('script')
     expect(timeout?.querySelector('.el-collapse-item__header')?.textContent).toContain('脚本失败')
-    expect(timeout?.querySelector('[data-test="script-error"]')?.textContent).toBe('脚本 code：脚本超时')
+    expect(timeout?.querySelector('[data-test="script-error"]')?.textContent).toBe('本步脚本：脚本超时')
     expect(timeout?.textContent).not.toContain('第 0 列')
     expect(timeout?.textContent).not.toContain('第 0 行')
 

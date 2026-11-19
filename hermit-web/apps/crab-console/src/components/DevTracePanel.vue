@@ -2,22 +2,29 @@
 import JsonBlock from '@shared/components/JsonBlock.vue'
 import { millis } from '@shared/format'
 import { ref, watch } from 'vue'
-import type { DevTrace, DevTraceExchange, DevTraceStep, DevTraceTransport } from '../api'
+import type { DevTrace, DevTraceExchange, DevTraceStep, DevTraceTransport, ScriptError } from '../api'
 import { contentTypeText, hasLogicalQuery, hasMapEntries, requestLine, wireTruncation } from '../trace-wire'
 import { errorWithoutTransport, transportOf } from '../tls'
 import TransportBlock from './TransportBlock.vue'
 
 const props = defineProps<{ trace: DevTrace }>()
 
-/** 带实际发送的请求步骤默认展开，逻辑查询和请求行不用再点一次。 */
+/** 带实际发送的请求，以及脚本失败，默认展开。 */
 const open = ref<number[]>([])
 watch(
   () => props.trace.steps,
   (steps) => {
-    open.value = (steps ?? []).filter((step) => step.wire).map((step) => step.index)
+    open.value = (steps ?? []).filter((step) => step.wire || step.scriptError).map((step) => step.index)
   },
   { immediate: true },
 )
+
+function scriptWhere(error: ScriptError): string {
+  const where = error.source === 'code' ? '脚本 code' : `脚本库 ${error.source}`
+  if (!error.line) return where
+  const column = error.column != null && error.column > 0 ? `第 ${error.column} 列` : ''
+  return `${where} 第 ${error.line} 行${column}`
+}
 
 function exchangeTransport(item: DevTraceExchange): DevTraceTransport | null {
   return transportOf(item) ?? transportOf(item.error)
@@ -66,6 +73,8 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
             <el-tag v-if="step.status != null" size="small" :type="step.status >= 400 ? 'danger' : 'success'" effect="plain">
               HTTP {{ step.status }}
             </el-tag>
+            <el-tag v-if="step.scriptError" size="small" type="danger" effect="plain">脚本失败</el-tag>
+            <el-tag v-else-if="step.passed === false" size="small" type="danger" effect="plain">未通过</el-tag>
             <span class="hm-muted">{{ millis(step.durationMs) }}</span>
             <el-tag v-if="step.truncated" size="small" type="warning" effect="plain">已截断</el-tag>
             <el-tag v-if="step.transport" size="small" type="danger" effect="plain">连接失败</el-tag>
@@ -124,6 +133,10 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
                   <li v-for="(warning, index) in step.warnings" :key="index" data-test="trace-warning">{{ warning.message }}</li>
                 </ul>
               </dd>
+            </template>
+            <template v-if="step.scriptError">
+              <dt>脚本错误</dt>
+              <dd data-test="script-error">{{ scriptWhere(step.scriptError) }}：{{ step.scriptError.message }}</dd>
             </template>
             <template v-if="step.extractors?.length">
               <dt>提取</dt>

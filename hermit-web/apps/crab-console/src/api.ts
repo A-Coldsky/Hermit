@@ -321,6 +321,14 @@ export interface DevTraceWarning {
   message: string
 }
 
+/** 脚本抛出的错误。已脱敏。`source` 是脚本库名字，或步骤自己的 `code`。列号未知时为 null。 */
+export interface ScriptError {
+  source: string
+  line: number
+  column: number | null
+  message: string
+}
+
 export interface DevTraceStep {
   index: number
   phase: string
@@ -341,6 +349,8 @@ export interface DevTraceStep {
   variables?: DevTraceVariable[]
   assertions?: string[]
   passed?: boolean
+  /** 脚本失败时的抛出说明和位置。没有则为空。 */
+  scriptError?: ScriptError | null
   truncated?: boolean
   truncation?: string
   /** 这一步连不上时的传输失败。没有则为空。 */

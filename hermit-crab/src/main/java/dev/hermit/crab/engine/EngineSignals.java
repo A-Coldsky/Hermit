@@ -20,6 +20,8 @@ final class RuleProblem extends RuntimeException {
     final Map<String, String> responseHeaders;
     final String responseBody;
     final List<TraceWarning> warnings;
+    /** 脚本抛出时的位置和说明。其它失败为 null。 */
+    final ScriptFault script;
 
     RuleProblem(ErrorCode code, String summary, String method, String path, Integer status) {
         this(code, summary, method, path, status, null, null);
@@ -60,6 +62,22 @@ final class RuleProblem extends RuntimeException {
             String responseBody,
             List<TraceWarning> warnings
     ) {
+        this(code, summary, method, path, status, wire, transport, responseHeaders, responseBody, warnings, null);
+    }
+
+    RuleProblem(
+            ErrorCode code,
+            String summary,
+            String method,
+            String path,
+            Integer status,
+            Map<String, Object> wire,
+            Map<String, Object> transport,
+            Map<String, String> responseHeaders,
+            String responseBody,
+            List<TraceWarning> warnings,
+            ScriptFault script
+    ) {
         super(summary);
         this.code = code;
         this.summary = summary;
@@ -71,6 +89,7 @@ final class RuleProblem extends RuntimeException {
         this.responseHeaders = copyHeaders(responseHeaders);
         this.responseBody = responseBody;
         this.warnings = warnings == null || warnings.isEmpty() ? List.of() : List.copyOf(warnings);
+        this.script = script;
     }
 
     RuleProblem withWire(Map<String, Object> captured) {
@@ -78,11 +97,18 @@ final class RuleProblem extends RuntimeException {
             return this;
         }
         return new RuleProblem(
-                code, summary, method, path, status, captured, transport, responseHeaders, responseBody, warnings);
+                code, summary, method, path, status, captured, transport, responseHeaders, responseBody, warnings,
+                script);
     }
 
     RuleProblem withExchange(Map<String, String> headers, String body, List<TraceWarning> notices) {
-        return new RuleProblem(code, summary, method, path, status, wire, transport, headers, body, notices);
+        return new RuleProblem(
+                code, summary, method, path, status, wire, transport, headers, body, notices, script);
+    }
+
+    RuleProblem withScript(ScriptFault fault) {
+        return new RuleProblem(
+                code, summary, method, path, status, wire, transport, responseHeaders, responseBody, warnings, fault);
     }
 
     private static Map<String, String> copyHeaders(Map<String, String> headers) {

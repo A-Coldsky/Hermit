@@ -1096,10 +1096,10 @@ public final class RuleEngine implements ConchExecutor {
         if (!success) {
             error = new ExecutionError(
                     code,
-                    HttpCalls.presentUpstream(redactor.redact(message)),
+                    HttpCalls.clipPublic(HttpCalls.presentUpstream(redactor.redact(message))),
                     index,
                     redactor.redact(type),
-                    HttpCalls.presentUpstream(redactor.redact(summary)));
+                    HttpCalls.clipPublic(HttpCalls.presentUpstream(redactor.redact(summary))));
         }
         Object masked = success ? OutputMask.apply(data, redactor) : null;
         commitTrace(request, redactor(credentials, cookies, true));
@@ -1195,7 +1195,9 @@ public final class RuleEngine implements ConchExecutor {
         Map<String, Object> piece = switch (step.type()) {
             case "assert" -> DevTraceDraft.assertPiece(step.def(), false);
             case "extract" -> DevTraceDraft.extractPiece(step.def(), 0, Map.of());
-            case "set", "script" -> DevTraceDraft.variablePiece(step.type(), namesOnly(step.def()));
+            case "set" -> DevTraceDraft.variablePiece(step.type(), namesOnly(step.def()));
+            case "script" -> DevTraceDraft.scriptFailurePiece(
+                    namesOnly(step.def()), problem == null ? null : problem.script);
             case "request" -> {
                 Map<String, Object> request = DevTraceDraft.requestPiece(
                         null,

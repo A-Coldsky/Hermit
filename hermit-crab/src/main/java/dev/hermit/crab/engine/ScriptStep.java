@@ -40,8 +40,9 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.validate.ScriptLibraries;
 
 /**
- * Rhino 只在解释模式下计数。setOptimizationLevel(-1) 在 1.9 里等价于 setInterpretedMode(true)。
- * Rhino 异常的 details 会带上源码行，对外消息只保留错误类型和行号。
+ * Rhino 1.9.1，语言级别 ES6，只在解释模式下计数。
+ * setOptimizationLevel(-1) 在 1.9 里等价于 setInterpretedMode(true)。
+ * 抛出的说明和行、列会映射回脚本库或 code，不附带 Java 堆栈。
  */
 final class ScriptStep {
 
@@ -58,10 +59,10 @@ final class ScriptStep {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> FIELDS = Set.of("code", "into", "timeout_ms", "use", "credential");
-    private static final Set<String> SAFE_NAMES = Set.of(
-            "Error", "EvalError", "InternalError", "RangeError", "ReferenceError",
-            "SyntaxError", "TypeError", "URIError", "EvaluatorException",
-            "JavaScriptException", "EcmaError", "WrappedException");
+    /** 进入打码前保留的抛出说明上限。更长的部分不进入错误，避免把整段响应正文带出去。 */
+    private static final int DETAIL_CHARS = 1_000_000;
+    private static final String PREFIX = "(function(){\n";
+    private static final String SUFFIX = "\n})()";
     private static final String[] DENIED = {
             "eval", "Function", "Script", "load", "print", "printErr", "quit",
             "readFile", "readUrl", "read", "write", "writeln", "uneval", "Continuation",
@@ -71,12 +72,9 @@ final class ScriptStep {
     private static final ClassShutter SHUTTER = name -> false;
     private static final ThreadMXBean THREADS = threadBean();
     private static final WrapFactory WRAP = new SandboxWrap();
-    private static final String PREFIX = "(function(){\n";
-    private static final String SUFFIX = "\n})()";
 
     private final SandboxFactory factory = new SandboxFactory();
     private final ThreadLocal<Window> windows = new ThreadLocal<>();
-    private static final ThreadLocal<Integer> lineBias = ThreadLocal.withInitial(() -> 1);
     private final Clock clock;
 
     ScriptStep(Clock clock) {
@@ -101,7 +99,7 @@ final class ScriptStep {
         } catch (StackOverflowError ex) {
             throw mismatch("脚本调用栈过深");
         } catch (RuntimeException ex) {
-            throw described(ex);
+            throw described(ex, List.of(), "");
         }
     }
 
@@ -113,8 +111,8 @@ final class ScriptStep {
     ) {
         rejectUnknown(spec);
         boolean withCredential = credential(spec.get("credential"));
-        String prelude = libraries(spec.get("use"), libraries);
-        String code = prelude + code(spec.get("code"));
+        Prelude prelude = libraries(spec.get("use"), libraries);
+        String code = code(spec.get("code"));
         String into = into(spec.get("into"));
         int timeoutMs = timeoutMs(spec.get("timeout_ms"));
         long now = System.nanoTime();
@@ -123,9 +121,8 @@ final class ScriptStep {
         }
         long scriptDeadline = deadline(now, timeoutMs);
         windows.set(new Window(scriptDeadline, capabilityDeadlineNanos, allocated()));
-        lineBias.set(1);
         try {
-            Object raw = factory.call(cx -> evaluate(cx, code, vars, withCredential, newlines(prelude)));
+            Object raw = factory.call(cx -> evaluate(cx, prelude.source + code, vars, withCredential));
             Object converted = fromJs(raw, new IdentityHashMap<>());
             enforceSize(converted);
             apply(into, converted, vars);
@@ -135,31 +132,30 @@ final class ScriptStep {
         } catch (ScriptTimeExceeded ex) {
             throw timeout(ex);
         } catch (RuntimeException ex) {
-            throw described(ex);
+            throw described(ex, prelude.spans, code);
         } finally {
-            lineBias.remove();
             windows.remove();
         }
     }
 
-    private Object evaluate(Context cx, String code, Map<String, Object> vars, boolean withCredential, int libraryNewlines) {
+    private Object evaluate(Context cx, String code, Map<String, Object> vars, boolean withCredential) {
         Scriptable scope = newScope(cx);
         HermitPrelude.install(cx, scope, clock);
         Map<String, Object> exposed = withCredential ? copyWithCredential(vars) : copyWithoutCredential(vars);
         ScriptableObject.putProperty(scope, "vars", toJs(cx, scope, exposed, new IdentityHashMap<>()));
-        lineBias.set(1 + libraryNewlines);
         return cx.evaluateString(scope, PREFIX + code + SUFFIX, "script", 1, null);
     }
 
-    private static String libraries(Object use, Map<String, String> libraries) {
+    private static Prelude libraries(Object use, Map<String, String> libraries) {
         if (use == null) {
-            return "";
+            return new Prelude("", List.of());
         }
         if (!(use instanceof List<?> list)) {
             throw mismatch(ScriptLibraries.USE_TYPE);
         }
         Map<String, String> known = libraries == null ? Map.of() : libraries;
         StringBuilder body = new StringBuilder();
+        ArrayList<SourceSpan> spans = new ArrayList<>();
         LinkedHashSet<String> seen = new LinkedHashSet<>();
         for (Object item : list) {
             if (!(item instanceof String name) || !ScriptLibraries.name(name)) {
@@ -179,23 +175,26 @@ final class ScriptStep {
                 throw mismatch(ScriptLibraries.TOO_LARGE);
             }
             if (!source.isEmpty()) {
-                body.append(source);
-                if (!source.endsWith("\n")) {
-                    body.append('\n');
-                }
+                String appended = source.endsWith("\n") ? source : source + "\n";
+                body.append(appended);
+                spans.add(new SourceSpan(name, lineCount(appended)));
             }
         }
-        return body.toString();
+        return new Prelude(body.toString(), spans);
     }
 
-    private static int newlines(String text) {
-        int count = 0;
+    /** 以换行结尾的文本，行数等于换行个数；最后一行没有换行时再加一行。 */
+    private static int lineCount(String text) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        int newlines = 0;
         for (int i = 0; i < text.length(); i++) {
             if (text.charAt(i) == '\n') {
-                count++;
+                newlines++;
             }
         }
-        return count;
+        return text.charAt(text.length() - 1) == '\n' ? newlines : newlines + 1;
     }
 
     private static boolean credential(Object value) {
@@ -474,36 +473,97 @@ final class ScriptStep {
         return mismatch("script timeout");
     }
 
-    private static RuleProblem described(Throwable ex) {
-        String name = "Error";
+    private static RuleProblem described(Throwable ex, List<SourceSpan> libraries, String code) {
         int line = 0;
+        int column = 0;
+        String detail;
         if (ex instanceof EcmaError ecma) {
-            name = safeName(ecma.getName());
             line = ecma.lineNumber();
+            column = ecma.columnNumber();
+            detail = safeDetail(ecma.details());
         } else if (ex instanceof WrappedException wrapped) {
-            name = "WrappedException";
             line = wrapped.lineNumber();
+            column = wrapped.columnNumber();
+            detail = "脚本执行失败";
         } else if (ex instanceof JavaScriptException javascript) {
-            name = "JavaScriptException";
             line = javascript.lineNumber();
+            column = javascript.columnNumber();
+            detail = safeDetail(javascript.details());
         } else if (ex instanceof EvaluatorException evaluator) {
-            name = "SyntaxError";
             line = evaluator.lineNumber();
+            column = evaluator.columnNumber();
+            detail = safeDetail(evaluator.details());
         } else if (ex instanceof RhinoException rhino) {
-            name = safeName(rhino.getClass().getSimpleName());
             line = rhino.lineNumber();
+            column = rhino.columnNumber();
+            detail = safeDetail(rhino.details());
+        } else {
+            detail = "脚本执行失败";
         }
-        if (line > 0) {
-            line = Math.max(0, line - lineBias.get());
-        }
-        return mismatch("Rhino " + name + " line " + line);
+        ScriptFault fault = locate(line, column, libraries, code, detail);
+        return mismatch(fault.summary()).withScript(fault);
     }
 
-    private static String safeName(String name) {
-        if (name != null && SAFE_NAMES.contains(name)) {
-            return name;
+    /**
+     * Rhino 行号从包装函数的第一行算起。这里把它映射回 {@code use} 里的库，或步骤自己的 {@code code}。
+     * 列号沿用 Rhino 的值；运行时 {@code throw} 经常是 0，这时列为 null。
+     */
+    private static ScriptFault locate(
+            int rhinoLine,
+            int rhinoColumn,
+            List<SourceSpan> libraries,
+            String code,
+            String detail
+    ) {
+        Integer column = rhinoColumn > 0 ? rhinoColumn : null;
+        int remaining = rhinoLine - 1;
+        if (remaining > 0 && libraries != null) {
+            for (SourceSpan span : libraries) {
+                if (span.lines <= 0) {
+                    continue;
+                }
+                if (remaining <= span.lines) {
+                    return new ScriptFault(span.name, remaining, column, detail);
+                }
+                remaining -= span.lines;
+            }
         }
-        return "Error";
+        int codeLines = lineCount(code);
+        if (remaining > 0 && remaining <= codeLines) {
+            return new ScriptFault(ScriptFault.CODE, remaining, column, detail);
+        }
+        return new ScriptFault(ScriptFault.CODE, 0, column, detail);
+    }
+
+    /** 丢掉堆栈行。说明本身可以换行，但不把 Java 或 Rhino 的栈带出去。 */
+    private static String safeDetail(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder();
+        for (String line : raw.split("\\R", -1)) {
+            if (stackLine(line)) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append('\n');
+            }
+            out.append(line);
+            if (out.length() >= DETAIL_CHARS) {
+                break;
+            }
+        }
+        if (out.length() > DETAIL_CHARS) {
+            out.setLength(DETAIL_CHARS);
+        }
+        return out.toString().strip();
+    }
+
+    private static boolean stackLine(String line) {
+        String trimmed = line.trim();
+        return trimmed.startsWith("at ")
+                || trimmed.contains("org.mozilla.javascript.")
+                || (trimmed.startsWith("java.lang.") && trimmed.contains("Exception"));
     }
 
     private static RuleProblem mismatch(String summary) {
@@ -612,5 +672,12 @@ final class ScriptStep {
             super(capability ? "capability" : "script", null, false, false);
             this.capability = capability;
         }
+    }
+
+    /** 一个脚本库接进包装函数之后占的行。 */
+    private record SourceSpan(String name, int lines) {
+    }
+
+    private record Prelude(String source, List<SourceSpan> spans) {
     }
 }

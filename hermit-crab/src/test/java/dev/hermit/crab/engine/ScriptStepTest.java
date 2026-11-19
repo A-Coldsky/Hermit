@@ -308,7 +308,7 @@ class ScriptStepTest {
     }
 
     @Test
-    void keepsSourceAndValuesOutOfErrors() {
+    void reportsThrownTextWithoutSourceOrSecrets() {
         ExecutionResult result = run("""
                 - set:
                     marker: "%s"
@@ -322,13 +322,18 @@ class ScriptStepTest {
                 """);
         assertThat(result.success()).isFalse();
         assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
-        assertThat(result.error().message()).matches("Rhino \\w+ line \\d+");
-        assertThat(result.error().summary()).matches("Rhino \\w+ line \\d+");
+        assertThat(result.error().failedStepType()).isEqualTo("script");
+        String message = "脚本 code 第 2 行：TypeError: " + SAMPLE + "***" + SOURCE_TOKEN;
+        assertThat(result.error().message()).isEqualTo(message);
+        assertThat(result.error().summary()).isEqualTo(message);
         String flat = EngineTestSupport.flatten(result);
         EngineTestSupport.secretsAbsent(flat, EngineTestSupport.PASSWORD);
-        EngineTestSupport.secretsAbsent(flat, SAMPLE);
-        EngineTestSupport.secretsAbsent(flat, SOURCE_TOKEN);
-        assertThat(result.stepLogs()).anyMatch(log -> "script".equals(log.type()));
+        assertThat(flat).contains(SAMPLE).contains(SOURCE_TOKEN);
+        assertThat(flat).doesNotContain("var sample").doesNotContain("org.mozilla").doesNotContain("java.lang");
+        assertThat(result.stepLogs()).anySatisfy(log -> {
+            assertThat(log.type()).isEqualTo("script");
+            assertThat(log.status()).isNull();
+        });
     }
 
     @Test

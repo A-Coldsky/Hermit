@@ -278,7 +278,7 @@ actions:
 | extract | CSS、XPath、JSONPath、regex；可 each 遍历及 filter 转换 |
 | assert | status、contains、not_contains、cookie_exists、header_exists、not_redirected_to |
 | set | 设置后续步骤/输出使用的变量 |
-| script | JavaScript，对 vars 运算并 return 结果；可指定 into、use 和 credential |
+| script | JavaScript，对 vars 运算并 return 结果；可指定 into、use 和 credential。失败时写出抛出说明，并标出脚本库或 code 的行、列 |
 | ask | 只写在 `auth.steps`。停下来等用户在 Crab 控制台输入验证码 |
 
 `ask` 只用于登录。一个登录最多两个。字段只有 `into`、`kind`、`label`，以及可选的 `hint`、`timeout_s`。`into` 是模板标识符，不能是保留名，也不能和前面已经声明的名字重复；后面的登录步骤写 `{{into}}`，能力步骤不能写这个名字，它也不进登录快照。`kind` 是 `image` 或 `code`。`image` 的前一步必须是 `request`，那次响应就是验证码图片：只认 PNG、JPEG、GIF、WebP 的魔数，最大 512 KiB，SVG 和超限都是 `AUTH_FAILED`，不进入等待。`label` 必填。`hint` 可选，UTF-8 不超过 256 字节。`timeout_s` 可选，60 到 900 的整数，缺省 300。未知字段拒绝。用了 `ask` 时 `min_crab_version` 不低于 1.4.0。
@@ -348,9 +348,15 @@ steps:
 
 script 步骤的 `use` 按顺序把这些库接在 `code` 前面，同一个函数作用域。`code` 仍最多 64 KiB，也不是模板。`use` 里的名字必须存在，不能重复。写了 `scripts`（非空）或 `use` 时，`min_crab_version` 必须不低于 1.2.0。Reef 上传和 Crab 载入用同一条校验。没写这两项的包仍可以低于 1.2.0。只写 `credential: true`、没有脚本库也没有 `use`，不因此抬高版本。
 
+脚本里的 `vars.response` 是上一次 `request` 留下的响应对象，不是正文。字段与模板看到的相同：`status` 是数字，`url` 是最终地址，`headers` 是头名字到字符串，`body` 是按响应字符集解码后的正文，`redirect` 是最终响应仍为重定向时的 Location，否则为 null。正文用 `vars.response.body`。`String(vars.response)` 得到 `[object Object]`，不会变成正文。`input`、`config` 同样是对象。没有 `credential: true` 时没有 `vars.credential`，也没有 `vars.login`。
+
+引擎是 Rhino 1.9.1，语言级别 ES6（`Context.VERSION_ES6`），解释模式（`setOptimizationLevel(-1)`）。`use` 按写出的顺序把库源码接在一起；库末尾没有换行时补一个换行，然后接 `code`，再包进 `(function(){` 和 `})()`。库和 `code` 在同一个函数作用域，都不是模板，`{{ }}` 不会替换。行号按这次拼接往回算：包装用的第一行和排在前面的库不占 `code` 的行号。错误落在哪个库，就用那个库自己的行号，并写出库的名字。
+
+脚本抛出时，试跑错误的 message 带上抛出值的文本和位置。`Error` 的文本是「名字: 说明」，例如 `Error: bad object at 0`。位置写成 `脚本 code 第 N 行` 或 `脚本库 名字 第 N 行`。Rhino 给出列号时再写 `第 C 列`。语法错误有列号。`throw` 以及运行时的 `ReferenceError`、`TypeError` 在 Rhino 1.9.1 的解释模式里只有行号，列号是 null，句子里不写「第 0 列」。开发追踪里这一步 `passed` 为 false，并有 `scriptError`：`source`（库名，或步骤自己的 `code`）、`line`、`column`、`message`。说明走现有打码：长度至少 4 的已知凭证、Cookie、登录值，以及这次调用里从凭证得出的字符串，还有它们的 URL 编码。引擎不把响应正文或变量表额外放进错误。不写 Java 堆栈，也不写脚本源码行。抛出的说明在打码前最多保留 100 万个字符。打码之后，试跑错误超过 8 KiB 时截到 4 KiB UTF-8；开发追踪仍是先打码，再按单步 256 KiB 截断。脚本步骤没有 HTTP 状态码。
+
 `credential: true` 时，脚本里的 `vars.credential` 是当前账号凭证字段的副本。脚本改这份副本，不影响后面的 `{{credential.password}}`。不写或写 false 时，脚本看不到顶层 credential。登录步骤和能力步骤都可以写。要在脚本里使用凭证，写 `credential: true`。先用 set 把 `{{credential.password}}` 抄进普通变量，再被没有这个标记的脚本读到，仍不会因为这次读取而自动打码。
 
-脚本在解释模式与受限全局对象中执行，不提供 Java 类、文件或网络访问入口。全局对象 `hermit` 已冻结，不能改写，里面的函数也不能改。`utf8` / `fromUtf8` 在字符串和 Uint8Array 之间转换。`hex` / `unhex` 使用小写十六进制。`base64` / `unbase64` 是标准 Base64。`base64url` / `unbase64url` 使用 URL 安全字母表，填充的 `=` 可以不写。`randomBytes(n)` 取 1 到 1024 个随机字节。`now()` 是引擎时钟的毫秒数。没有 BigInt，也没有加密原语。返回值只能是字符串、数字、布尔或普通数组和对象。超出安全整数的数会丢精度。Uint8Array 不能直接返回，先转成十六进制或 Base64。不能写 `class` 或 `async`。需要浏览器加密接口的算法，用纯 JavaScript 放进脚本库。SM2、SM3、SM4 也可以这样贴进去，但必须落在下面的预算里。脚本仍然不能访问网络。
+脚本在 Rhino 1.9.1 的 ES6 解释模式与受限全局对象中执行，不提供 Java 类、文件或网络访问入口。全局对象 `hermit` 已冻结，不能改写，里面的函数也不能改。`utf8` / `fromUtf8` 在字符串和 Uint8Array 之间转换。`hex` / `unhex` 使用小写十六进制。`base64` / `unbase64` 是标准 Base64。`base64url` / `unbase64url` 使用 URL 安全字母表，填充的 `=` 可以不写。`randomBytes(n)` 取 1 到 1024 个随机字节。`now()` 是引擎时钟的毫秒数。没有 BigInt，也没有加密原语。返回值只能是字符串、数字、布尔或普通数组和对象。超出安全整数的数会丢精度。Uint8Array 不能直接返回，先转成十六进制或 Base64。不能写 `class` 或 `async`。需要浏览器加密接口的算法，用纯 JavaScript 放进脚本库。SM2、SM3、SM4 也可以这样贴进去，但必须落在下面的预算里。脚本仍然不能访问网络。
 
 默认 1000ms、最大 5000ms，`code` 最多 64 KiB，结果最多 1 MiB，调用栈 1000，一次脚本在执行线程上累计分配超过 256 MiB（含已回收的临时对象）时停下。单次过大的分配导致内存不足时也停下，都是 `RULE_MISMATCH`「脚本内存超限」。脚本执行仍在同一 JVM，这不是进程级内存隔离。`into` 可保存结果；省略时要求适合合并的对象结果。这一版不新增过滤器，仍只有 `md5`、`sha256`、`base64`、`urlencode`、`trim`、`default`、`date`、`rsa`。
 

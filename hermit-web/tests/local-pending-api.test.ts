@@ -41,6 +41,20 @@ describe('本地包待确认与历史的路径', () => {
       ['POST', '/console/api/local-conches/local_ping/history/20261118080000000-1.1.0/restore'],
     ])
     expect(calls[1].init?.body).toBe(JSON.stringify({ sha256: 'abc123' }))
+    await api.confirmPendingOverwrite('local_ping', 'abc123', true)
+    await api.localOverrideGrants()
+    await api.revokeLocalOverrideGrant('local_ping')
+    expect(calls[5].init?.body).toBe(JSON.stringify({ sha256: 'abc123', remember: true }))
+    expect(calls.map((call) => [call.init?.method ?? 'GET', call.url])).toEqual([
+      ['GET', '/console/api/local-conches/pending'],
+      ['POST', '/console/api/local-conches/local_ping/pending/confirm'],
+      ['DELETE', '/console/api/local-conches/local_ping/pending'],
+      ['GET', '/console/api/local-conches/local_ping/history'],
+      ['POST', '/console/api/local-conches/local_ping/history/20261118080000000-1.1.0/restore'],
+      ['POST', '/console/api/local-conches/local_ping/pending/confirm'],
+      ['GET', '/console/api/local-conches/grants'],
+      ['DELETE', '/console/api/local-conches/grants/local_ping'],
+    ])
     const headers = calls[1].init?.headers as Record<string, string>
     expect(headers['Content-Type']).toBe('application/json')
     expect(headers['X-Hermit-Console']).toBe('1')

@@ -53,6 +53,7 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   LOCAL_CONCH_IMPORTED: { text: '导入本地规则包', tone: 'success' },
   LOCAL_CONCH_DELETED: { text: '删除本地规则包', tone: 'danger' },
   LOCAL_CONCH_REPLACED: { text: '覆盖本地规则包', tone: 'warning' },
+  LOCAL_CONCH_AUTO_APPROVED: { text: '自动确认覆盖', tone: 'warning' },
   LOCAL_CONCH_REPLACE_PENDING: { text: '等待确认覆盖', tone: 'warning' },
   LOCAL_CONCH_RESTORED: { text: '回退本地规则包', tone: 'info' },
   REEF_CONCH_DISABLED: { text: 'Reef 已停用', tone: 'warning' },

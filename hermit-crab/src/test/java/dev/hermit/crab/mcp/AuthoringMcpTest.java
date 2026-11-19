@@ -115,6 +115,54 @@ class AuthoringMcpTest {
     }
 
     @org.junit.jupiter.api.Test
+    void saveAutoAppliesOnlyTheGrantedConchAndRejectsGrantArguments() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("grant"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String session = server.initialize(false);
+            String yaml = LocalConchBehaviorTest.ping("saved_ping", "1.0.0");
+            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            String widened = yaml.replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
+            JsonNode refused = server.call(session, "conch_save_local", Map.of("yaml", widened));
+            assertThat(toolError(refused).path("code").asText()).isEqualTo("CONFIRM_REQUIRED");
+
+            dev.hermit.crab.sync.LocalConches.PendingOverwrite pending =
+                    server.runtime.localConches().pending().get(0);
+            server.runtime.localConches().confirmPending("saved_ping", pending.sha256(), Actors.CONSOLE, true);
+            assertThat(server.runtime.localConches().grants())
+                    .extracting(dev.hermit.crab.sync.LocalConches.OverrideGrant::conch)
+                    .containsExactly("saved_ping");
+
+            String again = widened.replace("version: 1.0.0", "version: 1.1.0")
+                    .replace("base_url: http://127.0.0.1:10/", "base_url: http://127.0.0.1:11/");
+            JsonNode saved = server.call(session, "conch_save_local", Map.of("yaml", again));
+            assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();
+            assertThat(structured(saved).path("replaced").asBoolean()).isTrue();
+            assertThat(server.runtime.localConches().pending()).isEmpty();
+            Path file = server.runtime.paths().localConches().resolve("saved_ping.yaml");
+            assertThat(Files.readString(file)).contains("127.0.0.1:11");
+
+            String other = LocalConchBehaviorTest.ping("other_ping", "1.0.0");
+            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", other))).path("ok").asBoolean()).isTrue();
+            String otherWide = other.replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:12/");
+            JsonNode still = server.call(session, "conch_save_local", Map.of("yaml", otherWide));
+            assertThat(toolError(still).path("code").asText()).isEqualTo("CONFIRM_REQUIRED");
+            assertThat(Files.readString(server.runtime.paths().localConches().resolve("other_ping.yaml"))).isEqualTo(other);
+
+            String blocked = again.replace("version: 1.1.0", "version: 1.2.0")
+                    .replace("base_url: http://127.0.0.1:11/", "base_url: http://127.0.0.1:13/");
+            for (String field : java.util.List.of("remember", "autoApprove", "auto_approve", "skipConfirm", "grant")) {
+                JsonNode denied = server.call(session, "conch_save_local", Map.of("yaml", blocked, field, true));
+                assertThat(toolError(denied).path("code").asText()).as(field).isEqualTo("FORBIDDEN");
+                assertThat(toolMessage(denied)).isEqualTo(AuthoringCalls.GRANT_PARAM);
+            }
+            assertThat(Files.readString(file)).contains("127.0.0.1:11").doesNotContain("127.0.0.1:13");
+            assertThat(server.runtime.localConches().grants())
+                    .extracting(dev.hermit.crab.sync.LocalConches.OverrideGrant::conch)
+                    .containsExactly("saved_ping");
+        }
+    }
+
+    @org.junit.jupiter.api.Test
     void literalCookiePasswordAndBearerWarnLikeTheConsoleAndDoNotEchoTheValue() throws Exception {
         String secret = "supersecretcookievalue";
         String token = "abcdefghijklmnop";

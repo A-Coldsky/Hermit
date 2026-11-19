@@ -1071,6 +1071,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     private void onDebugChanged(boolean enabled, java.util.List<String> deleted) {
         traceMemory.rememberDeleted(deleted);
+        if (!enabled && localConches != null) {
+            localConches.clearGrants();
+        }
         notifyCatalogListeners();
     }
 

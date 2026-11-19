@@ -134,6 +134,8 @@ final class ConsoleApi {
         post(app, "/console/api/local-conches", ctx -> importLocal(runtime, ctx));
         post(app, "/console/api/local-conches/reload", ctx -> reloadLocal(runtime, ctx));
         get(app, "/console/api/local-conches/pending", ctx -> listPending(runtime, ctx));
+        get(app, "/console/api/local-conches/grants", ctx -> listGrants(runtime, ctx));
+        delete(app, "/console/api/local-conches/grants/{conch}", ctx -> revokeGrant(runtime, ctx));
         delete(app, "/console/api/local-conches/{conch}", ctx -> deleteLocal(runtime, ctx));
         get(app, "/console/api/local-conches/{conch}/export", ctx -> exportLocal(runtime, ctx));
         post(app, "/console/api/local-conches/{conch}/pending/confirm", ctx -> confirmPending(runtime, ctx));
@@ -1409,12 +1411,61 @@ final class ConsoleApi {
         if (body == null || !body.isObject()) {
             throw new IllegalArgumentException("需要 sha256。");
         }
-        rejectUnknownFields(body, Set.of("sha256"));
+        rejectUnknownFields(body, Set.of("sha256", "remember"));
         JsonNode sha = body.get("sha256");
         if (sha == null || !sha.isTextual() || !sha.asText().matches("[0-9a-f]{64}")) {
             throw new IllegalArgumentException("sha256 无效。");
         }
-        writeImport(ctx, runtime.localConches().confirmPending(ctx.pathParam("conch"), sha.asText(), Actors.CONSOLE));
+        boolean remember = remember(body);
+        if (remember && apiKeyPresented(ctx)) {
+            throw LocalConchException.forbidden(LocalConches.GRANT_API_KEY);
+        }
+        writeImport(ctx, runtime.localConches().confirmPending(
+                ctx.pathParam("conch"), sha.asText(), Actors.CONSOLE, remember));
+    }
+
+    private static boolean remember(JsonNode body) {
+        JsonNode flag = body.get("remember");
+        if (flag == null || flag.isNull()) {
+            return false;
+        }
+        if (!flag.isBoolean()) {
+            throw new IllegalArgumentException("remember 只能是 true 或 false。");
+        }
+        return flag.booleanValue();
+    }
+
+    private static void listGrants(CrabRuntime runtime, Context ctx) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (LocalConches.OverrideGrant grant : runtime.localConches().grants()) {
+            LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+            item.put("conch", grant.conch());
+            item.put("since", grant.since().toString());
+            rows.add(item);
+        }
+        GatewayResponses.writeData(ctx, Map.of("grants", rows));
+    }
+
+    private static void revokeGrant(CrabRuntime runtime, Context ctx) {
+        if (apiKeyPresented(ctx)) {
+            throw LocalConchException.forbidden(LocalConches.GRANT_API_KEY);
+        }
+        String conch = ctx.pathParam("conch");
+        if (!runtime.localConches().revokeGrant(conch)) {
+            throw LocalConchException.grantMissing();
+        }
+        GatewayResponses.writeData(ctx, Map.of("conch", conch, "revoked", true));
+    }
+
+    /** Bearer 或非空 {@code X-Hermit-Key}。控制台会话带着它们也不能创建或撤销自动确认。 */
+    private static boolean apiKeyPresented(Context ctx) {
+        String authorization = ctx.header("Authorization");
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)
+                && !authorization.substring(7).trim().isEmpty()) {
+            return true;
+        }
+        String header = ctx.header("X-Hermit-Key");
+        return header != null && !header.trim().isEmpty();
     }
 
     private static void rejectPending(CrabRuntime runtime, Context ctx) {

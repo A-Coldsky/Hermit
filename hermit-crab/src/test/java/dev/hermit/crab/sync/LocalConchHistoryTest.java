@@ -27,7 +27,7 @@ class LocalConchHistoryTest {
     java.nio.file.Path temp;
 
     @Test
-    void historyKeepsTenBackupsAndSurvivesDelete() throws Exception {
+    void historyKeepsThreePreviousVersionsAndSurvivesDelete() throws Exception {
         MutableClock clock = new MutableClock(Instant.parse("2026-11-18T00:00:00Z"));
         try (OpenCrab crab = OpenCrab.open(temp.resolve("keep"))) {
             LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
@@ -41,7 +41,9 @@ class LocalConchHistoryTest {
             }
             List<LocalConches.HistoryEntry> history = local.history("hist_ping");
             assertThat(history).hasSize(LocalConches.HISTORY_KEEP);
+            assertThat(LocalConches.HISTORY_KEEP).isEqualTo(3);
             assertThat(history.get(0).version()).isEqualTo("1.0.10");
+            assertThat(history.get(history.size() - 1).version()).isEqualTo("1.0.8");
             assertThat(history).extracting(LocalConches.HistoryEntry::version).doesNotContain("1.0.0");
             assertThat(history.get(0).id()).startsWith("20261118").doesNotContain(".yaml");
             assertThat(history.get(0).savedAt()).isNotNull();
@@ -54,6 +56,38 @@ class LocalConchHistoryTest {
             assertThat(restored.version()).isEqualTo(oldest.version());
             assertThat(local.packages()).extracting(pkg -> pkg.version()).containsExactly(oldest.version());
             assertThat(auditDetail(crab, AuditKind.LOCAL_CONCH_RESTORED.name())).contains("\"boundary\":\"widened\"");
+        }
+    }
+
+    @Test
+    void startupLeavesExtraHistoryUntilTheNextWrite() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-19T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("seeded"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            local.importBytes(LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            java.nio.file.Path dir = crab.paths.localConches().resolve(".history").resolve("hist_ping");
+            Files.createDirectories(dir);
+            for (int i = 1; i <= 5; i++) {
+                Files.writeString(
+                        dir.resolve("2026111800000000" + i + "-0." + i + ".0.yaml"),
+                        LocalConchBehaviorTest.ping("hist_ping", "0." + i + ".0"));
+            }
+            local.loadStartup();
+            assertThat(local.history("hist_ping")).hasSize(5);
+
+            local.importBytes(
+                    LocalConchBehaviorTest.ping("hist_ping", "1.0.1").getBytes(StandardCharsets.UTF_8),
+                    Actors.CLI,
+                    true);
+            List<LocalConches.HistoryEntry> history = local.history("hist_ping");
+            assertThat(history).hasSize(3);
+            assertThat(history).extracting(LocalConches.HistoryEntry::version)
+                    .containsExactly("1.0.0", "0.5.0", "0.4.0");
+            LocalConches.HistoryEntry oldest = history.get(history.size() - 1);
+            LocalConches.ImportResult restored = local.restore("hist_ping", oldest.id(), Actors.CONSOLE);
+            assertThat(restored.version()).isEqualTo("0.4.0");
+            assertThat(local.packages()).extracting(pkg -> pkg.version()).containsExactly("0.4.0");
+            assertThat(local.history("hist_ping")).hasSize(LocalConches.HISTORY_KEEP);
         }
     }
 

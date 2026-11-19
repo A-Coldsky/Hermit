@@ -24,6 +24,7 @@ import {
   type LocalConchHistoryEntry,
   type LocalFileResult,
   type LocalImportConflict,
+  type LocalOverrideGrant,
   type PendingLocalOverwrite,
   type ValidationIssue,
 } from '../api'
@@ -44,6 +45,8 @@ const importing = ref(false)
 const reloading = ref(false)
 const acting = ref<string | null>(null)
 const pendingOverwrites = ref<PendingLocalOverwrite[]>([])
+const grants = ref<LocalOverrideGrant[]>([])
+const rememberChoice = reactive<Record<string, boolean>>({})
 const histories = ref<Record<string, LocalConchHistoryEntry[]>>({})
 const historyErrors = ref<Record<string, string>>({})
 const pendingConflicts = reactive<Record<string, string>>({})
@@ -234,10 +237,18 @@ function rememberPending(rows: PendingLocalOverwrite[]) {
   const previous = new Map(pendingOverwrites.value.map((row) => [row.conch, row.sha256]))
   const still = new Set(rows.map((row) => row.conch))
   for (const row of rows) {
-    if (previous.get(row.conch) !== row.sha256) delete pendingConflicts[row.conch]
+    if (previous.get(row.conch) !== row.sha256) {
+      delete pendingConflicts[row.conch]
+      rememberChoice[row.conch] = false
+    } else if (rememberChoice[row.conch] === undefined) {
+      rememberChoice[row.conch] = false
+    }
   }
   for (const name of Object.keys(pendingConflicts)) {
     if (!still.has(name)) delete pendingConflicts[name]
+  }
+  for (const name of Object.keys(rememberChoice)) {
+    if (!still.has(name)) delete rememberChoice[name]
   }
   pendingOverwrites.value = rows
 }
@@ -246,7 +257,7 @@ async function load() {
   loading.value = true
   pendingDropped.value = ''
   try {
-    const [installed, local, pendingResult] = await Promise.all([
+    const [installed, local, pendingResult, grantResult] = await Promise.all([
       api.conches(),
       api.localConches().catch((error: unknown) => {
         notifyError(error)
@@ -256,10 +267,15 @@ async function load() {
         notifyError(error)
         return null
       }),
+      api.localOverrideGrants().catch((error: unknown) => {
+        notifyError(error)
+        return null
+      }),
     ])
     const nextConches = installed.conches
     const nextBroken = local ? local.conches.filter((row) => row.broken) : []
     const nextPending = Array.isArray(pendingResult?.pending) ? pendingResult.pending : []
+    grants.value = Array.isArray(grantResult?.grants) ? grantResult.grants : []
     await loadHistories(localNames(nextConches, nextBroken))
     conches.value = nextConches
     broken.value = nextBroken
@@ -297,7 +313,7 @@ async function confirmPending(row: PendingLocalOverwrite) {
   acting.value = key
   pendingConflicts[conch] = ''
   try {
-    await api.confirmPendingOverwrite(conch, row.sha256)
+    await api.confirmPendingOverwrite(conch, row.sha256, rememberChoice[conch] === true)
     ElMessage.success(`已确认覆盖 ${conch} ${versionLabel(row.toVersion)}`)
     await load()
   } catch (error) {
@@ -312,6 +328,24 @@ async function confirmPending(row: PendingLocalOverwrite) {
       }
       return
     }
+    notifyError(error)
+  } finally {
+    if (acting.value === key) acting.value = null
+  }
+}
+
+function grantKey(conch: string) {
+  return `grant:${conch}`
+}
+
+async function revokeGrant(grant: LocalOverrideGrant) {
+  const key = grantKey(grant.conch)
+  acting.value = key
+  try {
+    await api.revokeLocalOverrideGrant(grant.conch)
+    ElMessage.success(`已取消 ${grant.conch} 的自动确认`)
+    await load()
+  } catch (error) {
     notifyError(error)
   } finally {
     if (acting.value === key) acting.value = null
@@ -419,6 +453,20 @@ onMounted(load)
       {{ pendingDropped }}
     </p>
 
+    <div v-if="grants.length" class="grant-list" data-test="override-grants">
+      <article v-for="grant in grants" :key="grant.conch" class="hm-card grant" data-test="override-grant">
+        <div class="grant-meta">
+          <strong data-test="override-grant-conch">{{ grant.conch }}</strong>
+          <span class="hm-muted" data-test="override-grant-since">{{ formatTime(grant.since) }} 起不再询问</span>
+        </div>
+        <el-button
+          data-test="override-grant-revoke"
+          :loading="acting === grantKey(grant.conch)"
+          @click="revokeGrant(grant)"
+        >撤销</el-button>
+      </article>
+    </div>
+
     <div v-if="pendingOverwrites.length" class="pending-list" data-test="pending-overwrites">
       <article v-for="row in pendingOverwrites" :key="row.conch" class="hm-card pending" data-test="pending-overwrite">
         <div class="hm-card-title">
@@ -453,6 +501,11 @@ onMounted(load)
         <p v-if="pendingConflicts[row.conch]" class="pending-conflict" data-test="pending-conflict" role="alert">
           {{ pendingConflicts[row.conch] }}
         </p>
+        <el-checkbox
+          v-model="rememberChoice[row.conch]"
+          class="remember"
+          data-test="pending-remember"
+        >本次开发者模式内不再询问</el-checkbox>
         <div class="pending-actions">
           <el-button
             type="primary"
@@ -759,11 +812,30 @@ onMounted(load)
   display: none;
 }
 
+.grant-list,
 .pending-list {
   display: flex;
   flex-direction: column;
   gap: 16px;
   margin-bottom: 16px;
+}
+
+.grant {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.grant-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.remember {
+  align-self: flex-start;
+  margin: 0;
 }
 
 .pending-list > .hm-card + .hm-card {

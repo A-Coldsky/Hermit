@@ -14,6 +14,9 @@ public final class LocalConchException extends RuntimeException {
     public static final String PENDING_CHANGED = "待确认的内容已经变了，请刷新后再确认。";
     public static final String NO_PENDING = "没有待确认的覆盖。";
     public static final String NO_HISTORY = "没有这份历史。";
+    public static final String NO_GRANT = "没有这项自动确认。";
+    /** 非控制台 actor 不能勾选「本次开发者模式内不再询问」。 */
+    public static final String GRANT_CONSOLE_ONLY = "只有控制台会话可以记住覆盖确认。";
     private final int status;
     private final ErrorCode code;
     private final List<ValidationIssue> errors;
@@ -101,6 +104,15 @@ public final class LocalConchException extends RuntimeException {
 
     public static LocalConchException historyMissing() {
         return new LocalConchException(404, ErrorCode.NOT_FOUND, NO_HISTORY, List.of(), List.of(), null, null);
+    }
+
+    public static LocalConchException grantMissing() {
+        return new LocalConchException(404, ErrorCode.NOT_FOUND, NO_GRANT, List.of(), List.of(), null, null);
+    }
+
+    /** API Key、MCP 和 CLI 不能创建或撤销自动确认。 */
+    public static LocalConchException forbidden(String message) {
+        return new LocalConchException(403, ErrorCode.FORBIDDEN, message, List.of(), List.of(), null, null);
     }
 
     public int status() {

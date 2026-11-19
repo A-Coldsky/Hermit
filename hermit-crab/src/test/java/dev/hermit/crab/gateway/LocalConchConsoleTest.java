@@ -607,6 +607,149 @@ class LocalConchConsoleTest {
         }
     }
 
+    @Test
+    void consoleRememberIsPerConchAndApiKeysCannotGrantOrRevoke() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("grant"), PASSWORD, config)) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            byte[] original = LocalConchBehaviorTest.ping("local_ping", "1.0.0").getBytes(StandardCharsets.UTF_8);
+            assertThat(post(server, "/console/api/local-conches", "text/yaml", original).statusCode()).isEqualTo(200);
+            assertThat(post(
+                    server,
+                    "/console/api/local-conches",
+                    "text/yaml",
+                    LocalConchBehaviorTest.ping("local_two", "1.0.0").getBytes(StandardCharsets.UTF_8)).statusCode())
+                    .isEqualTo(200);
+            Path installed = server.paths.localConches().resolve("local_ping.yaml");
+            byte[] widened = LocalConchBehaviorTest.ping("local_ping", "1.1.0")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/")
+                    .getBytes(StandardCharsets.UTF_8);
+            server.runtime.localConches().stagePending(widened, Actors.MCP, "agent-key").orElseThrow();
+            String sha = server.runtime.localConches().pending().get(0).sha256();
+            String confirm = "/console/api/local-conches/local_ping/pending/confirm";
+
+            TestServer.Reply badType = send(server, "POST", confirm, "{\"sha256\":\"" + sha + "\",\"remember\":\"yes\"}", true);
+            assertThat(badType.status()).isEqualTo(400);
+            assertThat(badType.body()).contains("remember 只能是 true 或 false。");
+            assertThat(server.runtime.localConches().grants()).isEmpty();
+
+            String remember = "{\"sha256\":\"" + sha + "\",\"remember\":true}";
+            TestServer.Reply bearer = send(server, "POST", confirm, remember, true, "Authorization", "Bearer " + server.apiKey.plaintext());
+            assertThat(bearer.status()).isEqualTo(403);
+            assertThat(bearer.body()).contains(dev.hermit.crab.sync.LocalConches.GRANT_API_KEY);
+            TestServer.Reply headerKey = send(server, "POST", confirm, remember, true, "X-Hermit-Key", server.apiKey.plaintext());
+            assertThat(headerKey.status()).isEqualTo(403);
+            assertThat(headerKey.body()).contains(dev.hermit.crab.sync.LocalConches.GRANT_API_KEY);
+            TestServer.Reply keyOnly = server.call("POST", confirm, server.apiKey.plaintext(), null, null, remember);
+            assertThat(keyOnly.status()).isEqualTo(403);
+            assertThat(keyOnly.body()).contains("控制台只接受本机访问。");
+            assertThat(Files.readAllBytes(installed)).isEqualTo(original);
+            assertThat(server.runtime.localConches().pending()).hasSize(1);
+            assertThat(server.runtime.localConches().grants()).isEmpty();
+
+            TestServer.Reply confirmed = send(server, "POST", confirm, remember, true);
+            assertThat(confirmed.status()).as(confirmed.body()).isEqualTo(200);
+            TestServer.Reply listed = send(server, "GET", "/console/api/local-conches/grants", null, true);
+            assertThat(listed.status()).isEqualTo(200);
+            assertThat(listed.json().path("data").path("grants")).hasSize(1);
+            assertThat(listed.json().path("data").path("grants").get(0).path("conch").asText()).isEqualTo("local_ping");
+            assertThat(listed.json().path("data").path("grants").get(0).path("since").asText()).isNotBlank();
+            assertThat(Files.readAllBytes(installed)).isEqualTo(widened);
+
+            byte[] other = LocalConchBehaviorTest.ping("local_two", "1.2.0")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:12/")
+                    .getBytes(StandardCharsets.UTF_8);
+            server.runtime.localConches().stagePending(other, Actors.MCP, "agent-key").orElseThrow();
+            String otherSha = server.runtime.localConches().pending().get(0).sha256();
+            TestServer.Reply plain = send(
+                    server,
+                    "POST",
+                    "/console/api/local-conches/local_two/pending/confirm",
+                    "{\"sha256\":\"" + otherSha + "\"}",
+                    true);
+            assertThat(plain.status()).as(plain.body()).isEqualTo(200);
+            assertThat(listedGrants(server)).containsExactly("local_ping");
+
+            byte[] next = LocalConchBehaviorTest.ping("local_ping", "1.3.0")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:13/")
+                    .getBytes(StandardCharsets.UTF_8);
+            assertThat(server.runtime.localConches().applyIfGranted(next, Actors.MCP, "agent-key")).isPresent();
+            assertThat(Files.readAllBytes(installed)).isEqualTo(next);
+            byte[] otherNext = LocalConchBehaviorTest.ping("local_two", "1.4.0")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:14/")
+                    .getBytes(StandardCharsets.UTF_8);
+            assertThat(server.runtime.localConches().applyIfGranted(otherNext, Actors.MCP, "agent-key")).isEmpty();
+            assertThat(Files.readAllBytes(server.paths.localConches().resolve("local_two.yaml"))).isEqualTo(other);
+
+            String revoke = "/console/api/local-conches/grants/local_ping";
+            TestServer.Reply revokeBearer = send(server, "DELETE", revoke, null, true, "Authorization", "Bearer " + server.apiKey.plaintext());
+            assertThat(revokeBearer.status()).isEqualTo(403);
+            assertThat(revokeBearer.body()).contains(dev.hermit.crab.sync.LocalConches.GRANT_API_KEY);
+            TestServer.Reply revokeHeader = send(server, "DELETE", revoke, null, true, "X-Hermit-Key", "not-a-real-key");
+            assertThat(revokeHeader.status()).isEqualTo(403);
+            assertThat(revokeHeader.body()).contains(dev.hermit.crab.sync.LocalConches.GRANT_API_KEY);
+            TestServer.Reply revokeKeyOnly = server.call("DELETE", revoke, server.apiKey.plaintext(), null, null, null);
+            assertThat(revokeKeyOnly.status()).isEqualTo(403);
+            assertThat(revokeKeyOnly.body()).contains("控制台只接受本机访问。");
+            assertThat(listedGrants(server)).containsExactly("local_ping");
+
+            TestServer.Reply revoked = send(server, "DELETE", revoke, null, true);
+            assertThat(revoked.status()).isEqualTo(200);
+            assertThat(revoked.body()).contains("\"revoked\":true");
+            TestServer.Reply missing = send(server, "DELETE", revoke, null, true);
+            assertThat(missing.status()).isEqualTo(404);
+            assertThat(missing.body()).contains("没有这项自动确认。");
+            assertThat(listedGrants(server)).isEmpty();
+
+            server.runtime.localConches().stagePending(widened, Actors.MCP, "agent-key");
+            String again = server.runtime.localConches().pending().get(0).sha256();
+            assertThat(send(server, "POST", confirm, "{\"sha256\":\"" + again + "\",\"remember\":true}", true).status()).isEqualTo(200);
+            assertThat(listedGrants(server)).containsExactly("local_ping");
+            server.runtime.debug().setEnabled(false, Actors.CONSOLE);
+            assertThat(listedGrants(server)).isEmpty();
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            assertThat(listedGrants(server)).isEmpty();
+        }
+    }
+
+    private static java.util.List<String> listedGrants(TestServer server) throws Exception {
+        TestServer.Reply listed = send(server, "GET", "/console/api/local-conches/grants", null, true);
+        assertThat(listed.status()).isEqualTo(200);
+        java.util.ArrayList<String> names = new java.util.ArrayList<>();
+        for (JsonNode row : listed.json().path("data").path("grants")) {
+            names.add(row.path("conch").asText());
+        }
+        return names;
+    }
+
+    private static TestServer.Reply send(
+            TestServer server,
+            String method,
+            String path,
+            String body,
+            boolean console,
+            String... headers
+    ) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(server.base() + path))
+                .timeout(java.time.Duration.ofSeconds(20));
+        if (console) {
+            builder.header("X-Hermit-Console", "1");
+        }
+        for (int i = 0; i + 1 < headers.length; i += 2) {
+            builder.header(headers[i], headers[i + 1]);
+        }
+        if ("GET".equals(method)) {
+            builder.GET();
+        } else if ("DELETE".equals(method)) {
+            builder.DELETE();
+        } else {
+            builder.method(method, HttpRequest.BodyPublishers.ofString(body == null ? "" : body));
+        }
+        HttpResponse<String> response = server.http.send(
+                builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        return new TestServer.Reply(response.statusCode(), response.body(), response.headers().map());
+    }
+
     private static HttpResponse<String> post(TestServer server, String path, String type, byte[] body) throws Exception {
         return server.http.send(
                 HttpRequest.newBuilder(URI.create(server.base() + path))

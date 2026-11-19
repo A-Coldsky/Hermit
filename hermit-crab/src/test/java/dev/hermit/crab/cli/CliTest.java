@@ -684,6 +684,26 @@ class CliTest {
     }
 
     @Test
+    void localImportRejectsRemember() throws Exception {
+        Path home = temp.resolve("remember-cli");
+        Files.createDirectories(home);
+        Path file = home.resolve("in.yaml");
+        Files.writeString(file, dev.hermit.crab.sync.LocalConchBehaviorTest.ping("local_ping", "1.0.0"));
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        int code = new CrabCommand().run(
+                new String[] {"local", "import", file.toString(), "--remember"},
+                env(home),
+                InputStream.nullInputStream(),
+                stdout(out),
+                stderr(err));
+        assertThat(code).isEqualTo(1);
+        assertThat(err.toString(StandardCharsets.UTF_8)).isEqualTo("不认识的选项 --remember。\n");
+        assertThat(out.toString(StandardCharsets.UTF_8)).isEmpty();
+        assertThat(new CrabPaths(home).localConches().resolve("local_ping.yaml")).doesNotExist();
+    }
+
+    @Test
     void apiKeyCreateRejectsUnknownOptions() {
         Path root = temp.resolve("unknown-opt");
         Function<String, String> env = env(root);

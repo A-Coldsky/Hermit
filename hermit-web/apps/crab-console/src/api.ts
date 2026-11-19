@@ -679,6 +679,16 @@ export interface PendingLocalOverwrite {
 }
 
 /**
+ * `GET /console/api/local-conches/grants` 的一条。
+ * 只在这次开发者模式的内存里。`since` 是勾选「本次开发者模式内不再询问」并成功确认的时间。
+ */
+export interface LocalOverrideGrant {
+  conch: string
+  /** ISO-8601。 */
+  since: string
+}
+
+/**
  * `GET /console/api/local-conches/{conch}/history` 的一条。
  * `id` 是 `.history/{conch}/` 下的文件名去掉 `.yaml`，作为回退 URL 的单个路径段。
  */
@@ -969,16 +979,26 @@ export const api = {
   pendingLocalOverwrites: () =>
     http.get<{ pending: PendingLocalOverwrite[] }>(`${base}/local-conches/pending`),
   /**
-   * 确认一条待覆盖。正文只有 `{sha256}`，必须是该条记录的 SHA-256。
+   * 确认一条待覆盖。正文有 `{sha256}`，必须是该条记录的 SHA-256。
+   * `remember` 为 true 时再带 `remember: true`，只记住这一个包；false 时不传这个字段。
    * 等待期间磁盘文件变了：409，message 为「规则包在等待确认期间被改过，请让 agent 重新保存。」
    */
-  confirmPendingOverwrite: (conch: string, sha256: string) =>
-    http.post<LocalImportResult>(`${base}/local-conches/${seg(conch)}/pending/confirm`, { sha256 }),
+  confirmPendingOverwrite: (conch: string, sha256: string, remember = false) =>
+    http.post<LocalImportResult>(
+      `${base}/local-conches/${seg(conch)}/pending/confirm`,
+      remember ? { sha256, remember: true } : { sha256 },
+    ),
   /** 拒绝这条待确认覆盖，不写文件。 */
   rejectPendingOverwrite: (conch: string) =>
     http.del<{ conch: string; rejected: boolean }>(`${base}/local-conches/${seg(conch)}/pending`),
+  /** 这次开发者模式里已勾选不再询问的包。`data` 为 `{grants}`。没有时为空数组。 */
+  localOverrideGrants: () =>
+    http.get<{ grants: LocalOverrideGrant[] }>(`${base}/local-conches/grants`),
+  /** 撤销这一个包的自动确认。没有这项授权时 404。 */
+  revokeLocalOverrideGrant: (conch: string) =>
+    http.del<{ conch: string; revoked: boolean }>(`${base}/local-conches/grants/${seg(conch)}`),
   /**
-   * 这个包保留的最近备份，最多 10 份。`data` 为 `{history}`。
+   * 当前 yaml 之外保留的最近备份，最多 3 份。`data` 为 `{history}`。
    * 删除包后历史仍在，再次导入同名包可以继续回退。
    */
   localConchHistory: (conch: string) =>

@@ -674,6 +674,27 @@ describe('手动更新', () => {
     confirm.mockRestore()
   })
 
+  it('更新进行中换壳动画排在更新按钮旁，不单独占一行，结束后撤掉', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    crab.conch.mockResolvedValue(updatable)
+    const pending = deferred<unknown>()
+    crab.update.mockReturnValue(pending.promise)
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    expect(wrapper.find('[data-test="version-swap"]').exists()).toBe(false)
+
+    const button = buttons(wrapper, '更新到 v1.1.0')[0]
+    await button.trigger('click')
+    await flushPromises()
+    const swap = wrapper.get('[data-test="update-available"] [data-test="version-swap"]')
+    expect(swap.element.parentElement).toBe(button.element.parentElement)
+
+    pending.resolve({ conch: 'legacy_oa', outcome: { conch: 'legacy_oa', version: '1.1.0', kind: 'INSTALLED', reason: null } })
+    await flushPromises()
+    expect(wrapper.find('[data-test="version-swap"]').exists()).toBe(false)
+    confirm.mockRestore()
+  })
+
   it('缺新凭证时说明要补哪些，不当成普通错误', async () => {
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const warning = vi.spyOn(ElMessage, 'warning')

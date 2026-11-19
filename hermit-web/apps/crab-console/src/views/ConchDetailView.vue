@@ -300,7 +300,6 @@ async function update() {
   if (!detail.value) return
   working.value = true
   try {
-    const to = detail.value.latestVersion ? ` v${detail.value.latestVersion}` : '新版本'
     const switched = await updateConch(
       {
         conch: props.conch,
@@ -308,7 +307,7 @@ async function update() {
         latestVersion: detail.value.latestVersion,
         newRequiredCredentials: detail.value.newRequiredCredentials,
       },
-      () => (swap.value = `正在更新到${to}，换上新壳…`),
+      () => (swap.value = '正在换上新壳…'),
     )
     if (switched) {
       void refreshPending()
@@ -380,8 +379,6 @@ watch(
       <el-button v-else-if="detail" type="danger" plain :disabled="working" @click="unsubscribe">取消订阅</el-button>
     </PageHeader>
 
-    <ShellSwapLoader v-if="swap" :label="swap" data-test="version-swap" />
-
     <el-result v-if="missing" icon="warning" title="规则包未安装" :sub-title="`本机没有名为 ${conch} 的规则包`">
       <template #extra>
         <el-button type="primary" @click="router.push('/conches')">返回列表</el-button>
@@ -451,7 +448,10 @@ watch(
           <div v-if="detail.newRequiredCredentials.length">
             新版本需要这些凭证：<span class="mono">{{ detail.newRequiredCredentials.join('、') }}</span>。先在下方默认账号里填好，再点更新。
           </div>
-          <el-button type="primary" class="update-btn" :loading="working" @click="update">更新到 v{{ detail.latestVersion }}</el-button>
+          <div class="update-row">
+            <el-button type="primary" class="update-btn" :loading="working" @click="update">更新到 v{{ detail.latestVersion }}</el-button>
+            <ShellSwapLoader v-if="swap" compact :label="swap" class="update-swap" data-test="version-swap" />
+          </div>
         </template>
       </el-alert>
       <el-alert
@@ -606,6 +606,32 @@ watch(
 
 .update-btn {
   margin-top: 8px;
+}
+
+/* 换壳动画排在按钮右边、不高过按钮，出现和消失都不推动下方内容。 */
+.update-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 32px;
+  margin-top: 8px;
+}
+
+.update-row .update-btn {
+  margin-top: 0;
+}
+
+/* 宽度记为 0 再撑开，窄屏时动画不会把提示条撑宽、改变文字换行。 */
+.update-swap {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.update-swap :deep(.label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 红条里的「退回」不用灰字灰框：跟随正文色和边框色，在红底上也看得清。 */

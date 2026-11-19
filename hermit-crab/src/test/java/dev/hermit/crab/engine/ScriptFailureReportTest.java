@@ -9,6 +9,8 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -252,6 +254,8 @@ class ScriptFailureReportTest {
             assertThat(reported.path("line").asInt()).isEqualTo(BAD_OBJECT_LINE);
             assertThat(reported.get("column").isNull()).isTrue();
             assertThat(reported.path("message").asText()).isEqualTo("Error: bad object at 0");
+            assertThat(script.has("error")).isFalse();
+            assertThat(names(script)).doesNotContain("into").contains("use");
             assertThat(script.toString()).doesNotContain("收件箱").doesNotContain("[object Object]");
             assertThat(step(root, "assert").path("passed").asBoolean()).isTrue();
             assertThat(step(root, "request").path("status").asInt()).isEqualTo(200);
@@ -363,6 +367,236 @@ class ScriptFailureReportTest {
         assertThat(result.error().message()).contains("nope").doesNotContain("列").doesNotContain("org.mozilla");
     }
 
+    @Test
+    void failedExtractMasksTheSelectorAndDoesNotCopyTheBody() throws Exception {
+        HttpServer server = server();
+        MemoryTrace trace = new MemoryTrace();
+        try {
+            String secret = EngineTestSupport.PASSWORD;
+            ExecutionResult result = run(conch("", """
+                    - request:
+                        method: POST
+                        path: /s
+                    - extract:
+                        name: { regex: "%s" }
+                    """.formatted(secret)), base(server), trace);
+            String masked = "提取 name 失败：regex *** 匹配 0 条";
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().message()).isEqualTo(masked);
+            assertThat(result.error().message()).doesNotContain("收件箱");
+            EngineTestSupport.secretsAbsent(result.error().message(), secret);
+            JsonNode extract = only(ApiJson.tree(trace.body), "extract");
+            assertThat(extract.path("passed").asBoolean()).isFalse();
+            assertThat(extract.path("extractCount").asInt()).isZero();
+            assertThat(extract.path("extractors").get(0).asText()).isEqualTo("regex");
+            assertThat(extract.path("error").asText()).isEqualTo(masked);
+            assertThat(extract.path("variables")).isEmpty();
+            assertThat(extract.has("responseBody")).isFalse();
+            assertThat(extract.toString()).doesNotContain("收件箱");
+            EngineTestSupport.secretsAbsent(extract.toString(), secret);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void failedSetAndAssertAreMarkedWithoutValues() {
+        MemoryTrace setTrace = new MemoryTrace();
+        ExecutionResult set = run(conch("", """
+                - set:
+                    page: "{{response.missing}}"
+                """), "http://127.0.0.1", setTrace);
+        assertThat(set.success()).isFalse();
+        assertThat(set.error().message()).isEqualTo("引用了未定义的变量 response.missing。");
+        assertThat(set.error().message()).doesNotContain(EngineTestSupport.PASSWORD);
+        JsonNode setStep = only(ApiJson.tree(setTrace.body), "set");
+        assertThat(setStep.path("passed").asBoolean()).isFalse();
+        assertThat(setStep.path("error").asText()).isEqualTo(set.error().message());
+        assertThat(names(setStep)).containsExactly("page");
+        assertThat(setStep.path("variables").get(0).get("summary").isNull()).isTrue();
+        assertThat(setStep.toString()).doesNotContain("{{response.missing}}");
+
+        MemoryTrace assertTrace = new MemoryTrace();
+        ExecutionResult missed = run(conch("", """
+                - assert:
+                    status: 200
+                """), "http://127.0.0.1", assertTrace);
+        assertThat(missed.error().message()).isEqualTo("没有响应");
+        JsonNode assertion = only(ApiJson.tree(assertTrace.body), "assert");
+        assertThat(assertion.path("passed").asBoolean()).isFalse();
+        assertThat(assertion.path("assertions").get(0).asText()).isEqualTo("status");
+        assertThat(assertion.has("error")).isFalse();
+        assertThat(assertion.toString()).doesNotContain("没有响应");
+    }
+
+    @Test
+    void scriptTimeoutAndReturnTypesKeepTheSentenceAndSkipInto() {
+        MemoryTrace timeoutTrace = new MemoryTrace();
+        long started = System.nanoTime();
+        ExecutionResult timed = run(conch("", """
+                - script:
+                    code: |
+                      while (true) {}
+                    timeout_ms: 80
+                    into: page
+                """), "http://127.0.0.1", timeoutTrace);
+        long elapsed = java.time.Duration.ofNanos(System.nanoTime() - started).toMillis();
+        assertThat(timed.error().message()).isEqualTo("script timeout");
+        assertThat(elapsed).isLessThan(2_000);
+        JsonNode timeout = only(ApiJson.tree(timeoutTrace.body), "script");
+        assertScriptFault(timeout, "script timeout");
+        assertThat(names(timeout)).doesNotContain("into", "page");
+
+        assertReturn("return 'hello';", null, ScriptStep.RETURN_OBJECT, "hello");
+        assertReturn("return hermit.utf8('ab');", "value", ScriptStep.RETURN_BYTES, null);
+        assertReturn("return { raw: hermit.utf8('ab') };", "value", ScriptStep.RETURN_BYTES, null);
+        assertReturn("return new Date();", "value", ScriptStep.RETURN_DATE, "GMT");
+        assertReturn("return { when: new Date() };", "value", ScriptStep.RETURN_DATE, "GMT");
+
+        MemoryTrace functionTrace = new MemoryTrace();
+        ExecutionResult function = run(conch("", """
+                - script:
+                    code: |
+                      return function () { return 1; };
+                    into: value
+                """), "http://127.0.0.1", functionTrace);
+        assertThat(function.error().message()).isEqualTo("脚本返回值类型无效");
+        JsonNode plain = only(ApiJson.tree(functionTrace.body), "script");
+        assertThat(plain.path("passed").asBoolean()).isFalse();
+        assertThat(plain.has("scriptError")).isFalse();
+        assertThat(plain.path("error").asText()).isEqualTo("脚本返回值类型无效");
+        assertThat(names(plain)).doesNotContain("into");
+        assertThat(plain.toString()).doesNotContain("function");
+    }
+
+    @Test
+    void memoryLimitIsAScriptFailureOnCodeWithoutAColumn() {
+        long previous = ScriptStep.maxAllocatedBytes;
+        ScriptStep.maxAllocatedBytes = 8L * 1024 * 1024;
+        MemoryTrace trace = new MemoryTrace();
+        try {
+            ExecutionResult result = run(conch("", """
+                    - script:
+                        code: |
+                          var kept = [];
+                          while (true) { kept.push(new Array(4096).join('x')); }
+                        timeout_ms: 5000
+                        into: bucket
+                    """), "http://127.0.0.1", trace);
+            assertThat(result.error().message()).isEqualTo(ScriptStep.MEMORY_EXCEEDED);
+            JsonNode script = only(ApiJson.tree(trace.body), "script");
+            assertScriptFault(script, ScriptStep.MEMORY_EXCEEDED);
+            assertThat(names(script)).doesNotContain("into", "bucket");
+            assertThat(script.toString()).doesNotContain("xxxx");
+        } finally {
+            ScriptStep.maxAllocatedBytes = previous;
+        }
+    }
+
+    @Test
+    void badCaptchaImageIsFailedAskWithoutBytes() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        byte[] marker = "not-an-image-zz".getBytes(StandardCharsets.UTF_8);
+        byte[] png = new byte[] {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1};
+        server.createContext("/bad", exchange -> respond(exchange, marker, "text/html"));
+        server.createContext("/ok", exchange -> respond(exchange, png, "image/png"));
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            MemoryTrace failedTrace = new MemoryTrace();
+            ExecutionResult failed = run(imageConch("/bad"), base, failedTrace);
+            assertThat(failed.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            assertThat(failed.error().message()).isEqualTo(CaptchaImages.UNSUPPORTED);
+            JsonNode ask = only(ApiJson.tree(failedTrace.body), "ask");
+            assertThat(ask.path("passed").asBoolean()).isFalse();
+            assertThat(ask.path("error").asText()).isEqualTo(CaptchaImages.UNSUPPORTED);
+            assertThat(ask.path("kind").asText()).isEqualTo("image");
+            assertThat(ask.path("label").asText()).isEqualTo("验证码");
+            assertThat(failedTrace.body).doesNotContain("not-an-image-zz").doesNotContain("PNG");
+            EngineTestSupport.secretsAbsent(failedTrace.body, EngineTestSupport.PASSWORD);
+
+            MemoryTrace waitingTrace = new MemoryTrace();
+            ExecutionResult waiting = run(imageConch("/ok"), base, waitingTrace);
+            assertThat(waiting.error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+            JsonNode paused = only(ApiJson.tree(waitingTrace.body), "ask");
+            assertThat(paused.has("passed")).isFalse();
+            assertThat(paused.has("error")).isFalse();
+            assertThat(waitingTrace.body).doesNotContain("PNG").doesNotContain("not-an-image-zz");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    private static void assertReturn(String code, String into, String sentence, String absent) {
+        MemoryTrace trace = new MemoryTrace();
+        String destination = into == null ? "" : "\n    into: " + into;
+        ExecutionResult result = run(conch("", """
+                - script:
+                    code: "%s"%s
+                """.formatted(code, destination)), "http://127.0.0.1", trace);
+        assertThat(result.error().message()).as(code).isEqualTo(sentence);
+        JsonNode script = only(ApiJson.tree(trace.body), "script");
+        assertScriptFault(script, sentence);
+        assertThat(names(script)).doesNotContain("into");
+        if (absent != null) {
+            assertThat(result.error().message()).doesNotContain(absent);
+            assertThat(script.toString()).doesNotContain(absent);
+        }
+    }
+
+    private static void assertScriptFault(JsonNode script, String sentence) {
+        assertThat(script.path("passed").asBoolean()).isFalse();
+        assertThat(script.has("error")).isFalse();
+        JsonNode reported = script.get("scriptError");
+        assertThat(reported.path("source").asText()).isEqualTo("code");
+        assertThat(reported.path("line").asInt()).isZero();
+        assertThat(reported.get("column").isNull()).isTrue();
+        assertThat(reported.path("message").asText()).isEqualTo(sentence);
+    }
+
+    private static void respond(com.sun.net.httpserver.HttpExchange exchange, byte[] body, String type) throws IOException {
+        exchange.getResponseHeaders().set("Content-Type", type);
+        exchange.getResponseHeaders().set("Connection", "close");
+        exchange.sendResponseHeaders(200, body.length);
+        try (OutputStream out = exchange.getResponseBody()) {
+            out.write(body);
+        }
+    }
+
+    private static String imageConch(String path) {
+        return """
+                conch: sample_conch
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.4.0
+                title: 标题
+                description: 说明
+                credentials:
+                  username: { type: text, required: true }
+                  password: { type: secret, required: true }
+                auth:
+                  steps:
+                    - request: { method: GET, path: %s }
+                    - ask:
+                        into: captcha
+                        kind: image
+                        label: 验证码
+                actions:
+                  run:
+                    title: 能力
+                    description: 说明
+                    output:
+                      value: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { value: ok }
+                    notes: 注意
+                    related: [run]
+                    steps:
+                      - set: { marker: ok }
+                """.formatted(path);
+    }
+
     private static HttpServer server() throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         byte[] body = BODY.stripIndent().strip().getBytes(StandardCharsets.UTF_8);
@@ -451,6 +685,31 @@ class ScriptFailureReportTest {
             }
         }
         return line;
+    }
+
+    private static JsonNode only(JsonNode root, String type) {
+        JsonNode found = null;
+        for (JsonNode step : root.path("steps")) {
+            if (!type.equals(step.path("type").asText())) {
+                continue;
+            }
+            if (found != null) {
+                throw new AssertionError("多了步骤 " + type);
+            }
+            found = step;
+        }
+        if (found == null) {
+            throw new AssertionError("没有步骤 " + type + " " + root);
+        }
+        return found;
+    }
+
+    private static List<String> names(JsonNode step) {
+        ArrayList<String> names = new ArrayList<>();
+        for (JsonNode row : step.path("variables")) {
+            names.add(row.path("name").asText());
+        }
+        return names;
     }
 
     private static JsonNode step(JsonNode root, String type) {

@@ -357,7 +357,7 @@ class ScriptStepTest {
                 """, """
                 value: { type: string, description: 结果 }
                 """);
-        assertThat(date.error().message()).isEqualTo("脚本返回值类型无效");
+        assertThat(date.error().message()).isEqualTo(ScriptStep.RETURN_DATE);
 
         ExecutionResult bare = run("""
                 - script:
@@ -366,7 +366,7 @@ class ScriptStepTest {
                 """, """
                 value: { type: string, description: 结果 }
                 """);
-        assertThat(bare.error().message()).isEqualTo("脚本返回值类型无效");
+        assertThat(bare.error().message()).isEqualTo(ScriptStep.RETURN_OBJECT);
 
         ExecutionResult reserved = run("""
                 - script:

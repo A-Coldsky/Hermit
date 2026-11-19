@@ -138,6 +138,10 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
               <dt>脚本错误</dt>
               <dd data-test="script-error">{{ scriptWhere(step.scriptError) }}：{{ step.scriptError.message }}</dd>
             </template>
+            <template v-if="step.error">
+              <dt>说明</dt>
+              <dd data-test="step-error">{{ step.error }}</dd>
+            </template>
             <template v-if="step.extractors?.length">
               <dt>提取</dt>
               <dd>{{ step.extractors.join('、') }}</dd>

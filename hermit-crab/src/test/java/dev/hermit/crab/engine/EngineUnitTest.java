@@ -4,14 +4,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 import org.junit.jupiter.api.Test;
 
@@ -20,6 +24,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
+import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.testing.SecretChecks;
@@ -759,6 +764,36 @@ class EngineUnitTest {
                       - set: { seen: true }
                 """;
     }
+
+    @Test
+    void failureSummaryMatchesTheCallErrorAfterMaskingAndClipping() {
+        String secret = EngineTestSupport.PASSWORD;
+        String encoded = URLEncoder.encode(secret, StandardCharsets.UTF_8);
+        Redactor redactor = Redactor.of(Set.of(secret));
+        DevTraceDraft draft = new DevTraceDraft(Instant.parse("2026-11-19T00:00:00Z"));
+        draft.add("action", 1, 1, failure("前缀" + secret + "中" + encoded + "后缀"));
+        String raw = "提取 name 失败：" + secret + "x".repeat(9000);
+        draft.add("action", 2, 1, failure(raw));
+        JsonNode steps = ApiJson.tree(draft.render(redactor, List.of(), false)).path("steps");
+        assertThat(steps.get(0).path("passed").asBoolean()).isFalse();
+        assertThat(steps.get(0).path("error").asText()).isEqualTo("前缀***中***后缀");
+        String clipped = steps.get(1).path("error").asText();
+        String call = HttpCalls.clipPublic(HttpCalls.presentUpstream(redactor.redact(raw)));
+        assertThat(clipped).isEqualTo(call);
+        assertThat(clipped.getBytes(StandardCharsets.UTF_8)).hasSize(4096);
+        assertThat(clipped).startsWith("提取 name 失败：***");
+        SecretChecks.absent(steps.toString(), secret);
+        SecretChecks.absent(steps.toString(), encoded);
+    }
+
+    private static Map<String, Object> failure(String summary) {
+        LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
+        piece.put("type", "extract");
+        piece.put("passed", false);
+        piece.put("error", summary);
+        return piece;
+    }
+
 
     private int apply(
             Map<String, Object> spec,

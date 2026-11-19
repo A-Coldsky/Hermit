@@ -16,8 +16,8 @@ public final class FilterRegistry {
     public static FilterRegistry defaults(Clock clock) {
         Objects.requireNonNull(clock, "clock");
         FilterRegistry registry = new FilterRegistry();
-        registry.register("md5", BuiltinFilters.hash("MD5"));
-        registry.register("sha256", BuiltinFilters.hash("SHA-256"));
+        registry.register("md5", BuiltinFilters.hash("md5", "MD5"));
+        registry.register("sha256", BuiltinFilters.hash("sha256", "SHA-256"));
         registry.register("base64", BuiltinFilters.base64());
         registry.register("urlencode", BuiltinFilters.urlencode());
         registry.register("trim", BuiltinFilters.trim());

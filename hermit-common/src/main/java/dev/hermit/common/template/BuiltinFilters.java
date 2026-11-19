@@ -2,6 +2,7 @@ package dev.hermit.common.template;
 
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PublicKey;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 
 import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
 
 final class BuiltinFilters {
 
@@ -32,18 +34,18 @@ final class BuiltinFilters {
     private BuiltinFilters() {
     }
 
-    static Filter hash(String algorithm) {
+    static Filter hash(String name, String algorithm) {
         return (value, args) -> {
             if (value == null) {
                 return null;
             }
-            rejectArgs(args, algorithm);
+            rejectArgs(args, name);
             try {
                 byte[] digest = MessageDigest.getInstance(algorithm)
-                        .digest(String.valueOf(value).getBytes(StandardCharsets.UTF_8));
+                        .digest(requireText(value, name).getBytes(StandardCharsets.UTF_8));
                 return HexFormat.of().formatHex(digest);
             } catch (GeneralSecurityException ex) {
-                throw new TemplateException(null, "无法计算 " + algorithm, ex);
+                throw new TemplateException(null, "无法计算 " + name, ex);
             }
         };
     }
@@ -54,7 +56,7 @@ final class BuiltinFilters {
                 return null;
             }
             rejectArgs(args, "base64");
-            return Base64.getEncoder().encodeToString(String.valueOf(value).getBytes(StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(requireText(value, "base64").getBytes(StandardCharsets.UTF_8));
         };
     }
 
@@ -64,7 +66,7 @@ final class BuiltinFilters {
                 return null;
             }
             rejectArgs(args, "urlencode");
-            String encoded = java.net.URLEncoder.encode(String.valueOf(value), StandardCharsets.UTF_8);
+            String encoded = java.net.URLEncoder.encode(requireText(value, "urlencode"), StandardCharsets.UTF_8);
             return encoded.replace("+", "%20");
         };
     }
@@ -75,7 +77,7 @@ final class BuiltinFilters {
                 return null;
             }
             rejectArgs(args, "trim");
-            return String.valueOf(value).trim();
+            return requireText(value, "trim").trim();
         };
     }
 
@@ -111,7 +113,7 @@ final class BuiltinFilters {
             } else if (value instanceof String text) {
                 dateTime = parseDate(text);
             } else {
-                throw new TemplateException(null, "日期无法解析");
+                throw new TemplateException(null, "日期需要文本");
             }
             return output.format(dateTime);
         };
@@ -133,6 +135,10 @@ final class BuiltinFilters {
                 return Base64.getEncoder().encodeToString(encrypted);
             } catch (TemplateException ex) {
                 throw ex;
+            } catch (IllegalBlockSizeException ex) {
+                throw new TemplateException(null, "明文超过这把公钥能加密的长度");
+            } catch (InvalidKeyException ex) {
+                throw new TemplateException(null, "RSA 公钥无效");
             } catch (GeneralSecurityException | IllegalArgumentException ex) {
                 throw new TemplateException(null, "RSA 加密失败");
             }
@@ -193,5 +199,16 @@ final class BuiltinFilters {
         if (!args.isEmpty()) {
             throw new TemplateException(null, name + " 不接受参数");
         }
+    }
+
+    /** Strings pass through. Numbers and booleans stay decimal / {@code true}/{@code false}. */
+    private static String requireText(Object value, String filter) {
+        if (value instanceof String text) {
+            return text;
+        }
+        if (value instanceof Number || value instanceof Boolean) {
+            return String.valueOf(value);
+        }
+        throw new TemplateException(null, filter + " 需要文本，得到的是对象");
     }
 }

@@ -174,25 +174,34 @@ final class Expressions {
                 } else if (peek() == '[') {
                     bump();
                     skipWs();
-                    if (done() || !Character.isDigit(peek())) {
-                        throw new TemplateException(path.toString(), "模板下标无效");
-                    }
-                    int start = index;
-                    while (!done() && Character.isDigit(peek())) {
+                    if (!done() && (peek() == '\'' || peek() == '"')) {
+                        String key = parseString(path.toString());
+                        skipWs();
+                        if (done() || peek() != ']') {
+                            throw new TemplateException(path.toString(), "模板下标无效");
+                        }
                         bump();
-                    }
-                    int subscript;
-                    try {
-                        subscript = Integer.parseInt(text.substring(start, index));
-                    } catch (NumberFormatException ex) {
+                        path.append(encodeSubscript(key));
+                    } else if (!done() && Character.isDigit(peek())) {
+                        int start = index;
+                        while (!done() && Character.isDigit(peek())) {
+                            bump();
+                        }
+                        int subscript;
+                        try {
+                            subscript = Integer.parseInt(text.substring(start, index));
+                        } catch (NumberFormatException ex) {
+                            throw new TemplateException(path.toString(), "模板下标无效");
+                        }
+                        skipWs();
+                        if (done() || peek() != ']') {
+                            throw new TemplateException(path.toString(), "模板下标无效");
+                        }
+                        bump();
+                        path.append('[').append(subscript).append(']');
+                    } else {
                         throw new TemplateException(path.toString(), "模板下标无效");
                     }
-                    skipWs();
-                    if (done() || peek() != ']') {
-                        throw new TemplateException(path.toString(), "模板下标无效");
-                    }
-                    bump();
-                    path.append('[').append(subscript).append(']');
                 } else {
                     break;
                 }
@@ -312,5 +321,49 @@ final class Expressions {
         private static boolean isPart(char c) {
             return isStart(c) || Character.isDigit(c);
         }
+    }
+
+    /** Canonical string subscript. Single quotes, with {@code \} and {@code '} escaped. */
+    static String encodeSubscript(String key) {
+        StringBuilder encoded = new StringBuilder(key.length() + 4);
+        encoded.append("['");
+        for (int i = 0; i < key.length(); i++) {
+            char c = key.charAt(i);
+            if (c == '\\' || c == '\'') {
+                encoded.append('\\');
+            }
+            encoded.append(c);
+        }
+        encoded.append("']");
+        return encoded.toString();
+    }
+
+    /**
+     * Reads a canonical quoted subscript starting at the opening quote.
+     * {@code null} when the quote is not closed.
+     */
+    static QuotedKey readQuoted(String path, int quoteAt) {
+        StringBuilder value = new StringBuilder();
+        int index = quoteAt + 1;
+        while (index < path.length()) {
+            char c = path.charAt(index);
+            if (c == '\\') {
+                if (index + 1 >= path.length()) {
+                    return null;
+                }
+                value.append(path.charAt(index + 1));
+                index += 2;
+                continue;
+            }
+            if (c == '\'') {
+                return new QuotedKey(value.toString(), index + 1);
+            }
+            value.append(c);
+            index++;
+        }
+        return null;
+    }
+
+    record QuotedKey(String key, int next) {
     }
 }

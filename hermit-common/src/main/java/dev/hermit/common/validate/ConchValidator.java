@@ -494,7 +494,7 @@ public final class ConchValidator {
         if (node instanceof String text) {
             try {
                 for (String ref : TEMPLATES.referencedPaths(text)) {
-                    if (ref.startsWith("credential.")) {
+                    if (ref.startsWith("credential.") || ref.startsWith("credential[")) {
                         errors.add(issue(ValidationCodes.CREDENTIAL_IN_OUTPUT, path, "返回值不得引用凭证"));
                     }
                     if (isLoginPath(ref)) {

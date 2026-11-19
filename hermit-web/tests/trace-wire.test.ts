@@ -155,7 +155,7 @@ describe('开发追踪的实际发送', () => {
 })
 
 describe('脚本失败', () => {
-  it('展开失败步骤，写出库或 code 的位置，列号未知时不写第 0 列', async () => {
+  it('展开失败步骤，写出本步脚本或脚本库的位置，列号未知时不写第 0 列', async () => {
     const wrapper = await mountPage(DevTracePanel, {
       attach: true,
       props: {
@@ -208,13 +208,13 @@ describe('脚本失败', () => {
     const library = itemNamed('script')
     expect(library?.textContent).toContain('脚本失败')
     expect(library?.querySelector('[data-test="script-error"]')?.textContent).toBe(
-      '脚本库 jsparse 第 4 行：Error: bad object at 0',
+      '脚本库「jsparse」 第 4 行：Error: bad object at 0',
     )
     expect(shown(library)).toBe(true)
 
     const items = [...document.querySelectorAll('.el-collapse-item')]
     const code = items[1]
-    expect(code.querySelector('[data-test="script-error"]')?.textContent).toBe('脚本 code 第 2 行第 3 列：syntax error')
+    expect(code.querySelector('[data-test="script-error"]')?.textContent).toBe('本步脚本 第 2 行第 3 列：syntax error')
     expect(code.textContent).not.toContain('第 0 列')
 
     const failed = itemNamed('assert')

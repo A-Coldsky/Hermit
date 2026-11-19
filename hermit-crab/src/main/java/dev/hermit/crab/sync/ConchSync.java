@@ -211,7 +211,7 @@ public final class ConchSync {
         } catch (SyncException ex) {
             // Record before leaving the sync lock so a later success cannot be overwritten
             // by this attempt, and this attempt cannot be overwritten by an older success.
-            ex.clientError().ifPresent(error -> deliver(SyncReport.failed(error)));
+            ex.clientError().filter(SyncErrors::replacesLastSuccess).ifPresent(error -> deliver(SyncReport.failed(error)));
             throw ex;
         }
     }
@@ -284,7 +284,7 @@ public final class ConchSync {
         try {
             manifest = reef.manifest(null);
         } catch (SyncException ex) {
-            ex.clientError().ifPresent(error -> deliver(SyncReport.failed(error)));
+            ex.clientError().filter(SyncErrors::replacesLastSuccess).ifPresent(error -> deliver(SyncReport.failed(error)));
             throw ex;
         }
         if (manifest.notModified()) {
@@ -1149,7 +1149,10 @@ public final class ConchSync {
         try {
             syncOnce();
         } catch (Exception ex) {
-            LOG.log(Level.WARNING, "conch sync failed: {0}", redact(ex.getMessage()));
+            String detail = ex instanceof SyncException sync
+                    ? sync.clientError().map(SyncError::message).orElse(ex.getMessage())
+                    : ex.getMessage();
+            LOG.log(Level.WARNING, "conch sync failed: {0}", redact(detail));
         }
     }
 

@@ -796,8 +796,14 @@ public final class RuleEngine implements ConchExecutor {
             try {
                 runSteps(steps, vars, true, null, logs, scope.key, scope.base, scope.deadline, "login",
                         scope.conch.scripts(), indexBase, false, scope.conch);
-                Map<String, String> snapshot = LoginSnapshots.capture(auth.steps(), vars);
-                LoginSnapshots.checkSize(snapshot);
+                Map<String, String> snapshot;
+                try {
+                    snapshot = LoginSnapshots.capture(auth.steps(), vars);
+                    int at = auth.steps().isEmpty() ? -1 : auth.steps().size() - 1;
+                    LoginSnapshots.checkSize(snapshot, at);
+                } catch (StepFailure ex) {
+                    throw new StepFailure(ex.code, ex.summary, ex.index, ex.type, logs);
+                }
                 scope.replaceSnapshot(snapshot);
                 sessions.markLoggedIn(scope.key);
                 sessions.recordAuthSuccess(scope.key);

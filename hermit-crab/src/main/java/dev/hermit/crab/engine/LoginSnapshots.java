@@ -24,40 +24,60 @@ final class LoginSnapshots {
         if (steps == null || vars == null) {
             return snapshot;
         }
-        for (Step step : steps) {
+        for (int i = 0; i < steps.size(); i++) {
+            Step step = steps.get(i);
             if ("extract".equals(step.type()) || "set".equals(step.type())) {
                 for (String name : step.def().keySet()) {
-                    take(snapshot, name, vars.get(name));
+                    take(snapshot, name, vars.get(name), i, step.type());
                 }
                 continue;
             }
             if ("script".equals(step.type()) && step.def().get("into") instanceof String name) {
-                take(snapshot, name, vars.get(name));
+                take(snapshot, name, vars.get(name), i, step.type());
             }
         }
         return snapshot;
     }
 
-    static void checkSize(Map<String, String> snapshot) {
+    static void checkSize(Map<String, String> snapshot, int stepIndex) {
+        checkSize(snapshot, stepIndex, JSON::writeValueAsBytes);
+    }
+
+    /** {@code writer} 抛出时对外只说快照无法保存，下标是当前登录步骤。 */
+    static void checkSize(Map<String, String> snapshot, int stepIndex, SnapshotWriter writer) {
         byte[] bytes;
         try {
-            bytes = JSON.writeValueAsBytes(snapshot);
+            bytes = writer.write(snapshot);
         } catch (JacksonException ex) {
-            throw new StepFailure(ErrorCode.AUTH_FAILED, "登录失败", -1, "request", List.of());
+            throw new StepFailure(ErrorCode.AUTH_FAILED, "登录快照无法保存", stepIndex, "request", List.of());
         }
         if (bytes.length > MAX_BYTES) {
             throw new StepFailure(ErrorCode.AUTH_FAILED, "登录变量超过 32KB", -1, "request", List.of());
         }
     }
 
-    private static void take(Map<String, String> snapshot, String name, Object value) {
+    private static void take(Map<String, String> snapshot, String name, Object value, int index, String type) {
         if (name == null || ConchRegistry.RESERVED.contains(name)) {
             return;
         }
         if (value instanceof String text) {
             snapshot.put(name, text);
-        } else {
-            snapshot.remove(name);
+            return;
         }
+        if (value == null) {
+            snapshot.remove(name);
+            return;
+        }
+        throw new StepFailure(
+                ErrorCode.AUTH_FAILED,
+                "登录变量 " + name + " 不是字符串，没有写入登录快照",
+                index,
+                type,
+                List.of());
+    }
+
+    @FunctionalInterface
+    interface SnapshotWriter {
+        byte[] write(Map<String, String> snapshot) throws JacksonException;
     }
 }

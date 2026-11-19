@@ -1179,6 +1179,27 @@ class CliTest {
         assertThat(err.toString(StandardCharsets.UTF_8)).contains("reef.url is not configured");
     }
 
+    @Test
+    void clientMessageKeepsTheFirstLineAndDropsStacks() {
+        assertThat(CrabCommand.clientMessage(new IllegalArgumentException("字".repeat(201))))
+                .isEqualTo("字".repeat(200) + "…");
+        assertThat(CrabCommand.clientMessage(new IllegalArgumentException("字".repeat(200))))
+                .isEqualTo("字".repeat(200));
+        assertThat(CrabCommand.clientMessage(new IllegalArgumentException("第一行\n第二行：字段 page")))
+                .isEqualTo("第一行");
+        assertThat(CrabCommand.clientMessage(new IllegalArgumentException("第一行\r\n第二行：字段 page")))
+                .isEqualTo("第一行");
+        String stack = """
+                java.lang.IllegalArgumentException: bad
+                \tat dev.hermit.crab.cli.CrabCommand.clientMessage(CrabCommand.java:1)
+                \tat dev.hermit.crab.cli.CliTest.clientMessageKeepsTheFirstLineAndDropsStacks(CliTest.java:1)""";
+        assertThat(CrabCommand.clientMessage(new IllegalArgumentException(stack))).isEqualTo("输入无效。");
+        assertThat(CrabCommand.clientMessage(new IllegalArgumentException(
+                "\tat dev.hermit.Foo.bar(Foo.java:1)\n\tat dev.hermit.Foo.main(Foo.java:2)")))
+                .isEqualTo("输入无效。");
+        assertThat(CrabCommand.clientMessage(new IllegalArgumentException((String) null))).isEqualTo("输入无效。");
+    }
+
     private static String lineContaining(String text, String token) {
         return text.lines().filter(line -> line.contains(token)).findFirst().orElse("");
     }

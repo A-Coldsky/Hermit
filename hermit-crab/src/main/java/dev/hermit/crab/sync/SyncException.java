@@ -33,9 +33,9 @@ public final class SyncException extends RuntimeException {
     }
 
     /**
-     * Set when this attempt should be shown and stored as the latest sync. That covers transport
-     * failures and a manifest HTTP 401 or 403. Empty for every other HTTP status and for an
-     * unreadable manifest: those keep their internal reason and do not replace the last success.
+     * 给人看的同步失败。传输失败和清单 401/403 会替换最近一次成功。
+     * Reef 已经返回的其它 HTTP 状态，以及读不出的清单，也有中文句子，但是
+     * {@link SyncErrors#replacesLastSuccess} 为 false，不替换最近一次成功，也不说成连不上。
      */
     public Optional<SyncError> clientError() {
         return SyncErrors.clientError(this);

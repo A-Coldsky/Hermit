@@ -72,4 +72,42 @@ public final class UserMessages {
         }
         return message;
     }
+
+    /**
+     * 控制台和 CLI 共用的一句说明。有换行时只留第一行；超过 200 字时截到 200 并加省略号。
+     * 第一行像堆栈（去掉行首空白后以 {@code at } 开头，或含 {@code Exception}）时返回 {@code invalid}，不印堆栈。
+     */
+    public static String oneLine(String message, String invalid) {
+        if (message == null) {
+            return invalid;
+        }
+        int breakAt = lineBreak(message);
+        String line = breakAt < 0 ? message : message.substring(0, breakAt);
+        if (!line.isEmpty() && line.charAt(line.length() - 1) == '\r') {
+            line = line.substring(0, line.length() - 1);
+        }
+        if (looksLikeStack(line) || (breakAt >= 0 && line.isEmpty())) {
+            return invalid;
+        }
+        if (line.length() > 200) {
+            return line.substring(0, 200) + "…";
+        }
+        return line;
+    }
+
+    private static int lineBreak(String message) {
+        int newline = message.indexOf('\n');
+        int carriage = message.indexOf('\r');
+        if (newline < 0) {
+            return carriage;
+        }
+        if (carriage < 0) {
+            return newline;
+        }
+        return Math.min(newline, carriage);
+    }
+
+    private static boolean looksLikeStack(String line) {
+        return line.stripLeading().startsWith("at ") || line.contains("Exception");
+    }
 }

@@ -1,6 +1,7 @@
 package dev.hermit.crab.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -12,6 +13,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -19,8 +22,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+
+import dev.hermit.common.model.Step;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -324,6 +330,70 @@ class LoginSnapshotEngineTest {
             assertThat(count("SELECT COUNT(*) FROM session_login")).isZero();
             assertThat(paths).isEmpty();
         }
+    }
+
+    @Test
+    void nonStringLoginVariableFailsWithoutWritingTheValue() throws Exception {
+        try (SessionManager sessions = open(EngineSettings.defaults(), Clock.systemUTC())) {
+            ConchRegistry registry = registry(doc(auth("""
+                    - script:
+                        code: |
+                          return 7;
+                        into: token
+                    """), """
+                    - request: { method: GET, path: /after }
+                    """, false));
+            ExecutionResult result = new RuleEngine(registry, sessions).execute(call("alice", Origin.OFFICIAL));
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            assertThat(result.error().message()).isEqualTo("登录变量 token 不是字符串，没有写入登录快照");
+            assertThat(result.error().message()).doesNotContain("7");
+            assertThat(result.error().failedStepIndex()).isEqualTo(0);
+            assertThat(result.error().failedStepType()).isEqualTo("script");
+            assertThat(count("SELECT COUNT(*) FROM session_login")).isZero();
+            assertThat(paths).isEmpty();
+        }
+    }
+
+    @Test
+    void snapshotKeepsStringsAndNamesAnUnreadableSnapshot() {
+        Map<String, Object> kept = new LinkedHashMap<>();
+        kept.put("token", "kept");
+        assertThat(LoginSnapshots.capture(List.of(new Step("set", Map.of("token", "kept"))), kept))
+                .containsExactly(Map.entry("token", "kept"));
+
+        Map<String, Object> number = new LinkedHashMap<>();
+        number.put("token", 7);
+        assertThatThrownBy(() -> LoginSnapshots.capture(List.of(new Step("set", Map.of("token", 7))), number))
+                .isInstanceOf(StepFailure.class)
+                .satisfies(thrown -> {
+                    StepFailure failure = (StepFailure) thrown;
+                    assertThat(failure.summary).isEqualTo("登录变量 token 不是字符串，没有写入登录快照");
+                    assertThat(failure.index).isEqualTo(0);
+                    assertThat(failure.summary).doesNotContain("7");
+                });
+
+        Map<String, Object> absent = new LinkedHashMap<>();
+        absent.put("token", null);
+        assertThat(LoginSnapshots.capture(List.of(new Step("extract", Map.of("token", Map.of()))), absent)).isEmpty();
+
+        Map<String, Object> flag = new LinkedHashMap<>();
+        flag.put("token", Boolean.TRUE);
+        assertThatThrownBy(() -> LoginSnapshots.capture(List.of(new Step("set", Map.of("token", true))), flag))
+                .isInstanceOf(StepFailure.class)
+                .hasMessageContaining("不是字符串")
+                .hasMessageNotContaining("true");
+
+        assertThatThrownBy(() -> LoginSnapshots.checkSize(Map.of("token", "kept"), 2, value -> {
+            throw new JsonProcessingException("nope") {
+            };
+        })).isInstanceOf(StepFailure.class).satisfies(thrown -> {
+            StepFailure failure = (StepFailure) thrown;
+            assertThat(failure.summary).isEqualTo("登录快照无法保存");
+            assertThat(failure.index).isEqualTo(2);
+            assertThat(failure.type).isEqualTo("request");
+            assertThat(failure.summary).doesNotContain("kept").doesNotContain("nope");
+        });
     }
 
     @Test

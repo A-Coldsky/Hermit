@@ -122,6 +122,40 @@ class ConsoleHttpTest {
     }
 
     @Test
+    void clientMessageKeepsTheFirstLineAndStillHidesStacks() throws Exception {
+        assertThat(UserMessages.zh(ConsoleApi.clientMessage(new IllegalArgumentException("字".repeat(201)))))
+                .isEqualTo("字".repeat(200) + "…");
+        assertThat(UserMessages.zh(ConsoleApi.clientMessage(new IllegalArgumentException("第一行\n第二行：字段 page"))))
+                .isEqualTo("第一行");
+        String stack = """
+                java.lang.IllegalStateException: boom
+                \tat dev.hermit.crab.gateway.ConsoleApi.clientMessage(ConsoleApi.java:1)""";
+        assertThat(ConsoleApi.clientMessage(new IllegalStateException(stack))).isEqualTo("invalid input");
+        assertThat(UserMessages.zh(ConsoleApi.clientMessage(new IllegalStateException(stack)))).isEqualTo("输入无效");
+
+        try (TestServer server = TestServer.open(
+                temp.resolve("lines"), PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
+            TestServer.Reply kept = server.console(
+                    "POST",
+                    "/console/api/apikeys",
+                    "{\"name\":\"desk\",\"all\":true,\"page\\n第二行：字段 page\":true}",
+                    true);
+            assertThat(kept.status()).isEqualTo(400);
+            assertThat(kept.json().path("error").path("message").asText()).isEqualTo("未知字段：page。");
+            assertThat(kept.body()).doesNotContain("第二行");
+
+            TestServer.Reply hidden = server.console(
+                    "POST",
+                    "/console/api/apikeys",
+                    "{\"name\":\"desk\",\"all\":true,\"IllegalArgumentException: x\\n\\tat F.m(F.java:1)\":true}",
+                    true);
+            assertThat(hidden.status()).isEqualTo(400);
+            assertThat(hidden.json().path("error").path("message").asText()).isEqualTo("输入无效");
+            assertThat(hidden.body()).doesNotContain("F.java").doesNotContain("IllegalArgument");
+        }
+    }
+
+    @Test
     void unloadedDisabledConchExplainsInChineseAndStaysNotFoundWhenTheTombstoneIsAbsent() throws Exception {
         try (TestServer server = TestServer.open(temp.resolve("gone"), PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
             server.configureAccount("alice");

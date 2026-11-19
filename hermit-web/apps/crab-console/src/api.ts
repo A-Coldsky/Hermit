@@ -327,7 +327,7 @@ export interface DevTraceWarning {
   message: string
 }
 
-/** 脚本抛出的错误。已脱敏。`source` 是脚本库名字，或步骤自己的 `code`。列号未知时为 null。 */
+/** 脚本抛出的错误。已脱敏。`source` 是脚本库名字，或步骤自己的 `code`。面板把 `code` 写成「本步脚本」，库名写成「脚本库「名字」」。列号未知时为 null。 */
 export interface ScriptError {
   source: string
   line: number

@@ -315,7 +315,10 @@ export interface DevTraceWire {
   truncation?: string
 }
 
-/** 请求步骤上的跟踪警告。已知 code：`cross_origin`、`secure_cookie`、`cookie_rejected`、`body_ended_by_idle`、`location_unresolved`、`not_text`。 */
+/**
+ * 步骤上的跟踪警告。已知 code：`cross_origin`、`secure_cookie`、`cookie_rejected`、`body_ended_by_idle`、`location_unresolved`、`not_text`、`snapshot_skipped`。
+ * `snapshot_skipped` 挂在产出该变量的登录步骤上，message 只带变量名，不带值。
+ */
 export interface DevTraceWarning {
   code:
     | 'cross_origin'
@@ -324,6 +327,7 @@ export interface DevTraceWarning {
     | 'body_ended_by_idle'
     | 'location_unresolved'
     | 'not_text'
+    | 'snapshot_skipped'
   message: string
 }
 
@@ -367,7 +371,7 @@ export interface DevTraceStep {
   /** 这一步连不上时的传输失败。没有则为空。 */
   transport?: DevTraceTransport | null
   wire?: DevTraceWire | null
-  /** 重定向、Cookie 和空闲结束正文（`body_ended_by_idle`）的说明。没有则为空。公开调用结果不含这项。 */
+  /** 重定向、Cookie、空闲结束正文（`body_ended_by_idle`）和未写入登录快照（`snapshot_skipped`）的说明。没有则为空。公开调用结果不含这项。 */
   warnings?: DevTraceWarning[]
 }
 

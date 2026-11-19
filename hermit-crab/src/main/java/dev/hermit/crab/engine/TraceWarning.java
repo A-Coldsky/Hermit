@@ -12,4 +12,9 @@ record TraceWarning(String code, String message) {
     static final String LOCATION_UNRESOLVED = "location_unresolved";
     /** query 或 form 的值是对象或数组，已按 JSON 写入。message 只带字段名。 */
     static final String NOT_TEXT = "not_text";
+    /**
+     * 登录变量不是字符串，没有写入登录快照。message 只带变量名，不带值。
+     * 登录仍然成功，正式调用也不报错。
+     */
+    static final String SNAPSHOT_SKIPPED = "snapshot_skipped";
 }

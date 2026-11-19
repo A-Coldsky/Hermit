@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +24,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -333,25 +336,63 @@ class LoginSnapshotEngineTest {
     }
 
     @Test
-    void nonStringLoginVariableFailsWithoutWritingTheValue() throws Exception {
-        try (SessionManager sessions = open(EngineSettings.defaults(), Clock.systemUTC())) {
-            ConchRegistry registry = registry(doc(auth("""
+    void nonStringLoginVariableSucceedsAndWarnsWithoutTheValue() throws Exception {
+        String leak = "not-for-snapshot-VALUE";
+        EngineSettings settings = new EngineSettings(Duration.ofSeconds(30), Duration.ofMinutes(10), 1);
+        try (SessionManager sessions = open(settings, Clock.systemUTC())) {
+            ConchDoc mixed = doc(auth("""
                     - script:
                         code: |
-                          return 7;
+                          return {leak: "%s"};
+                        into: rows
+                    - script:
+                        code: |
+                          return "kept-token";
                         into: token
+                    """.formatted(leak)), """
+                    - request: { method: GET, path: "/kept/{{login.token}}" }
+                    """, false);
+            ConchRegistry registry = registry(mixed);
+            RuleEngine engine = new RuleEngine(registry, sessions, settings, secrets);
+            ExecutionResult official = engine.execute(call("alice", Origin.OFFICIAL));
+            assertThat(official.success()).isTrue();
+            assertThat(official.error()).isNull();
+            assertThat(paths).containsExactly("/kept/kept-token");
+            SessionKey alice = new SessionKey(Origin.OFFICIAL, "sample_login", "alice");
+            assertThat(sessions.loginSnapshot(alice)).containsExactly(Map.entry("token", "kept-token"));
+            assertThat(sessions.loginPaused(alice)).isFalse();
+            assertThat(count("SELECT COUNT(*) FROM session_login")).isEqualTo(1);
+
+            CapturingSink sink = new CapturingSink();
+            RuleEngine local = new RuleEngine(registry(mixed), sessions, settings, secrets);
+            local.bindDevTraceSink(sink);
+            ExecutionResult traced = local.execute(call("carol", Origin.LOCAL));
+            assertThat(traced.success()).isTrue();
+            JsonNode warning = snapshotWarning(sink.body);
+            assertThat(warning.path("code").asText()).isEqualTo("snapshot_skipped");
+            assertThat(warning.path("message").asText())
+                    .isEqualTo("登录变量 rows 不是字符串，没有写入登录快照，恢复会话后取不到");
+            assertThat(warning.toString()).doesNotContain(leak);
+            assertThat(sink.body).doesNotContain(leak);
+            JsonNode trace = new ObjectMapper().readTree(sink.body);
+            assertThat(trace.path("session").path("loginOk").asBoolean()).isTrue();
+            assertThat(trace.path("steps").get(0).path("index").asInt()).isZero();
+            assertThat(trace.path("steps").get(0).path("warnings")).hasSize(1);
+
+            sessions.markLoggedOut(alice);
+            registry.put(doc(auth("""
+                    - request: { method: POST, path: /deny, form: { username: "{{credential.username}}" } }
+                    - assert: { cookie_exists: sid }
                     """), """
                     - request: { method: GET, path: /after }
                     """, false));
-            ExecutionResult result = new RuleEngine(registry, sessions).execute(call("alice", Origin.OFFICIAL));
-            assertThat(result.success()).isFalse();
-            assertThat(result.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
-            assertThat(result.error().message()).isEqualTo("登录变量 token 不是字符串，没有写入登录快照");
-            assertThat(result.error().message()).doesNotContain("7");
-            assertThat(result.error().failedStepIndex()).isEqualTo(0);
-            assertThat(result.error().failedStepType()).isEqualTo("script");
-            assertThat(count("SELECT COUNT(*) FROM session_login")).isZero();
-            assertThat(paths).isEmpty();
+            ExecutionResult failed = engine.execute(call("alice", Origin.OFFICIAL));
+            assertThat(failed.success()).isFalse();
+            assertThat(failed.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            assertThat(failed.error().message()).isNotEqualTo("该账号已暂停自动登录");
+            ExecutionResult paused = engine.execute(call("alice", Origin.OFFICIAL));
+            assertThat(paused.error().message()).isEqualTo("该账号已暂停自动登录");
+            assertThat(logins).hasValue(1);
         }
     }
 
@@ -362,27 +403,44 @@ class LoginSnapshotEngineTest {
         assertThat(LoginSnapshots.capture(List.of(new Step("set", Map.of("token", "kept"))), kept))
                 .containsExactly(Map.entry("token", "kept"));
 
+        ArrayList<LoginSnapshots.Skipped> skipped = new ArrayList<>();
         Map<String, Object> number = new LinkedHashMap<>();
         number.put("token", 7);
-        assertThatThrownBy(() -> LoginSnapshots.capture(List.of(new Step("set", Map.of("token", 7))), number))
-                .isInstanceOf(StepFailure.class)
-                .satisfies(thrown -> {
-                    StepFailure failure = (StepFailure) thrown;
-                    assertThat(failure.summary).isEqualTo("登录变量 token 不是字符串，没有写入登录快照");
-                    assertThat(failure.index).isEqualTo(0);
-                    assertThat(failure.summary).doesNotContain("7");
-                });
+        number.put("rows", List.of("leak-list-value"));
+        assertThat(LoginSnapshots.capture(List.of(
+                new Step("set", Map.of("token", 7)),
+                new Step("script", Map.of("into", "rows", "code", "return [];"))), number, skipped)).isEmpty();
+        assertThat(skipped).extracting(LoginSnapshots.Skipped::name).containsExactly("token", "rows");
+        assertThat(skipped).extracting(LoginSnapshots.Skipped::index).containsExactly(0, 1);
+        assertThat(skipped).allSatisfy(skip -> {
+            String message = LoginSnapshots.skippedMessage(skip.name());
+            assertThat(message).contains("不是字符串，没有写入登录快照，恢复会话后取不到");
+            assertThat(message).doesNotContain("7").doesNotContain("leak-list-value").doesNotContain("true");
+        });
 
         Map<String, Object> absent = new LinkedHashMap<>();
         absent.put("token", null);
         assertThat(LoginSnapshots.capture(List.of(new Step("extract", Map.of("token", Map.of()))), absent)).isEmpty();
 
+        ArrayList<LoginSnapshots.Skipped> flags = new ArrayList<>();
         Map<String, Object> flag = new LinkedHashMap<>();
         flag.put("token", Boolean.TRUE);
-        assertThatThrownBy(() -> LoginSnapshots.capture(List.of(new Step("set", Map.of("token", true))), flag))
-                .isInstanceOf(StepFailure.class)
-                .hasMessageContaining("不是字符串")
-                .hasMessageNotContaining("true");
+        flag.put("kept", "still-here");
+        assertThat(LoginSnapshots.capture(List.of(
+                new Step("set", Map.of("token", true)),
+                new Step("set", Map.of("kept", "still-here"))), flag, flags))
+                .containsExactly(Map.entry("kept", "still-here"));
+        assertThat(flags).extracting(LoginSnapshots.Skipped::name).containsExactly("token");
+        assertThat(LoginSnapshots.skippedMessage("token")).doesNotContain("true");
+
+        ArrayList<LoginSnapshots.Skipped> overwritten = new ArrayList<>();
+        Map<String, Object> later = new LinkedHashMap<>();
+        later.put("token", "later");
+        assertThat(LoginSnapshots.capture(List.of(
+                new Step("set", Map.of("token", 7)),
+                new Step("script", Map.of("into", "token"))), later, overwritten))
+                .containsExactly(Map.entry("token", "later"));
+        assertThat(overwritten).isEmpty();
 
         assertThatThrownBy(() -> LoginSnapshots.checkSize(Map.of("token", "kept"), 2, value -> {
             throw new JsonProcessingException("nope") {
@@ -738,6 +796,20 @@ class LoginSnapshotEngineTest {
             rows.next();
             return rows.getInt(1);
         }
+    }
+
+    private static JsonNode snapshotWarning(String body) throws Exception {
+        JsonNode trace = new ObjectMapper().readTree(body);
+        ArrayList<JsonNode> found = new ArrayList<>();
+        for (JsonNode step : trace.path("steps")) {
+            for (JsonNode warning : step.path("warnings")) {
+                if ("snapshot_skipped".equals(warning.path("code").asText())) {
+                    found.add(warning);
+                }
+            }
+        }
+        assertThat(found).hasSize(1);
+        return found.get(0);
     }
 
     private static final class CapturingSink implements DevTraceSink {

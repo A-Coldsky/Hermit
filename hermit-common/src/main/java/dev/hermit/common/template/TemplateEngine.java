@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -262,32 +263,118 @@ public final class TemplateEngine {
             return new Resolved(false, "now");
         }
         Object current = vars;
+        boolean atRoot = true;
+        boolean inResponse = false;
+        boolean headerNames = false;
         int index = 0;
         while (index < path.length()) {
             if (path.charAt(index) == '.') {
                 index++;
             }
-            if (index < path.length() && path.charAt(index) == '[') {
-                int end = path.indexOf(']', index);
-                int subscript = Integer.parseInt(path.substring(index + 1, end));
-                if (!(current instanceof List<?> list) || subscript < 0 || subscript >= list.size()) {
-                    return Resolved.MISSING;
-                }
-                current = list.get(subscript);
-                index = end + 1;
-                continue;
-            }
-            int start = index;
-            while (index < path.length() && path.charAt(index) != '.' && path.charAt(index) != '[') {
-                index++;
-            }
-            String field = path.substring(start, index);
-            if (!(current instanceof Map<?, ?> map) || !map.containsKey(field)) {
+            if (index >= path.length()) {
                 return Resolved.MISSING;
             }
-            current = map.get(field);
+            Step step = readStep(path, index);
+            if (step == null) {
+                return Resolved.MISSING;
+            }
+            index = step.next;
+            if (step.list) {
+                if (!(current instanceof List<?> list) || step.index < 0 || step.index >= list.size()) {
+                    return Resolved.MISSING;
+                }
+                current = list.get(step.index);
+                headerNames = false;
+                inResponse = false;
+                atRoot = false;
+                continue;
+            }
+            Object next = takeField(current, step.key, headerNames);
+            if (next == ABSENT) {
+                return Resolved.MISSING;
+            }
+            // 只有 response.headers 忽略大小写。头值本身不再按头名查找。
+            boolean enteredHeaders = inResponse && "headers".equals(step.key) && next instanceof Map<?, ?>;
+            boolean enteredResponse = atRoot && "response".equals(step.key) && next instanceof Map<?, ?>;
+            current = next;
+            headerNames = enteredHeaders;
+            inResponse = enteredResponse;
+            atRoot = false;
         }
         return new Resolved(false, current);
+    }
+
+    private static Step readStep(String path, int index) {
+        if (path.charAt(index) == '[') {
+            int cursor = index + 1;
+            if (cursor < path.length() && path.charAt(cursor) == '\'') {
+                Expressions.QuotedKey quoted = Expressions.readQuoted(path, cursor);
+                if (quoted == null || quoted.next() >= path.length() || path.charAt(quoted.next()) != ']') {
+                    return null;
+                }
+                return new Step(false, 0, quoted.key(), quoted.next() + 1);
+            }
+            int end = path.indexOf(']', cursor);
+            if (end < 0) {
+                return null;
+            }
+            try {
+                int subscript = Integer.parseInt(path.substring(cursor, end));
+                return new Step(true, subscript, null, end + 1);
+            } catch (NumberFormatException ex) {
+                return null;
+            }
+        }
+        int start = index;
+        while (index < path.length() && path.charAt(index) != '.' && path.charAt(index) != '[') {
+            index++;
+        }
+        return new Step(false, 0, path.substring(start, index), index);
+    }
+
+    private static Object takeField(Object current, String field, boolean headerNames) {
+        if (!(current instanceof Map<?, ?> map)) {
+            return ABSENT;
+        }
+        if (headerNames) {
+            return lookupHeader(map, field);
+        }
+        if (!map.containsKey(field)) {
+            return ABSENT;
+        }
+        return map.get(field);
+    }
+
+    /**
+     * Exact key wins. Otherwise the key equal to the lowercased name, then a single
+     * case-insensitive match. Two different casings and no lowercase key are missing,
+     * so a header value is not chosen arbitrarily.
+     */
+    private static Object lookupHeader(Map<?, ?> map, String field) {
+        if (map.containsKey(field)) {
+            return map.get(field);
+        }
+        String folded = field.toLowerCase(Locale.ROOT);
+        Object single = ABSENT;
+        int matches = 0;
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (!(entry.getKey() instanceof String key)) {
+                continue;
+            }
+            if (key.equals(folded)) {
+                return entry.getValue();
+            }
+            if (folded.equals(key.toLowerCase(Locale.ROOT))) {
+                matches++;
+                single = entry.getValue();
+            }
+        }
+        return matches == 1 ? single : ABSENT;
+    }
+
+    private static final Object ABSENT = new Object();
+
+    private record Step(boolean list, int index, String key, int next) {
     }
 
     private record Resolved(boolean missing, Object value) {

@@ -494,7 +494,7 @@ public final class ConchValidator {
         if (node instanceof String text) {
             try {
                 for (String ref : TEMPLATES.referencedPaths(text)) {
-                    if (ref.startsWith("credential.")) {
+                    if (ref.startsWith("credential.") || ref.startsWith("credential[")) {
                         errors.add(issue(ValidationCodes.CREDENTIAL_IN_OUTPUT, path, "返回值不得引用凭证"));
                     }
                     if (isLoginPath(ref)) {
@@ -1069,6 +1069,12 @@ public final class ConchValidator {
             List<ValidationIssue> warnings,
             Set<String> inputFields
     ) {
+        noteQuotedSubscript(ref, doc, errors);
+        if (QuotedSubscripts.reservedBracket(ref)) {
+            // 后面的 credential. / login. 只认点号，根上的方括号在这里挡住。
+            errors.add(issue(ValidationCodes.TEMPLATE_SYNTAX, path, QuotedSubscripts.USE_DOT));
+            return;
+        }
         if (isLoginPath(ref)) {
             usesLogin.set(true);
             if (handledByDefault) {
@@ -1142,6 +1148,19 @@ public final class ConchValidator {
                 ValidationCodes.UNDECLARED_VARIABLE,
                 path,
                 UndefinedVariable.message(ref)));
+    }
+
+    private static void noteQuotedSubscript(String ref, ConchDoc doc, List<ValidationIssue> errors) {
+        if (!QuotedSubscripts.quoted(ref)
+                || doc.minCrabVersion().compareTo(QuotedSubscripts.MIN_CRAB_VERSION) >= 0) {
+            return;
+        }
+        for (ValidationIssue existing : errors) {
+            if (QuotedSubscripts.VERSION.equals(existing.message())) {
+                return;
+            }
+        }
+        errors.add(issue(ValidationCodes.MIN_CRAB_VERSION, "min_crab_version", QuotedSubscripts.VERSION));
     }
 
     private static String head(String ref, String root) {
@@ -1648,6 +1667,11 @@ public final class ConchValidator {
         }
         try {
             for (String ref : TEMPLATES.referencedPaths(value)) {
+                noteQuotedSubscript(ref, doc, errors);
+                if (QuotedSubscripts.reservedBracket(ref)) {
+                    errors.add(issue(ValidationCodes.TEMPLATE_SYNTAX, path, QuotedSubscripts.USE_DOT));
+                    continue;
+                }
                 if ("input".equals(ref) || ref.startsWith("input.") || ref.startsWith("input[")) {
                     errors.add(issue(ValidationCodes.MCP_HEADER, path, "请求头不能引用 input"));
                     continue;

@@ -398,7 +398,7 @@ class EngineUnitTest {
                 vars("{\"n\":20261012}"),
                 filters,
                 templates));
-        assertThat(dated.summary).isEqualTo("提取 n 失败：日期无法解析");
+        assertThat(dated.summary).isEqualTo("提取 n 失败：日期需要文本");
         assertThat(dated.summary).doesNotContain("20261012");
 
         RuleProblem yes = catchProblem(() -> apply(

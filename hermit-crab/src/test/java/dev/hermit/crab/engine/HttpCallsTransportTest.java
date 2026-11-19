@@ -1,6 +1,7 @@
 package dev.hermit.crab.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -25,6 +26,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.template.TemplateEngine;
+import dev.hermit.common.template.TemplateException;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.testing.LabCertificates;
@@ -298,6 +301,69 @@ class HttpCallsTransportTest {
             assertThat(loop.hits().get(2).target()).isEqualTo("/q?q=%7B%22a%22%3A1%7D");
             assertThat(styled.warnings()).extracting(TraceWarning::message)
                     .containsExactly(HttpCalls.notTextWarning("query", "q"));
+        }
+    }
+
+    @Test
+    void loopbackResponseHeadersRenderByLowerNameWithoutLeakingValues() throws Exception {
+        String body = "{\"id\":\"BODY-NOT-IN-ERRORS\"}";
+        try (ScriptedLoopback loop = ScriptedLoopback.start();
+                CloseableHttpClient client = HttpClients.custom()
+                        .disableRedirectHandling()
+                        .disableAutomaticRetries()
+                        .build()) {
+            loop.reply(ScriptedLoopback.response(
+                    200,
+                    "application/json; charset=utf-8",
+                    body.getBytes(StandardCharsets.UTF_8),
+                    "ETag: W/1",
+                    "X-Token: s3cret value"));
+            HttpResult result = HttpCalls.execute(
+                    Map.of("method", "GET", "path", "/item"),
+                    client,
+                    () -> { },
+                    URI.create(loop.base() + "/"),
+                    null,
+                    deadline());
+            assertThat(result.status()).isEqualTo(200);
+            assertThat(result.body()).isEqualTo(body);
+            assertThat(result.headers()).containsEntry("content-type", "application/json; charset=utf-8");
+            assertThat(result.headers()).containsEntry("etag", "W/1");
+            assertThat(result.headers()).containsEntry("x-token", "s3cret value");
+            assertThat(result.headers()).doesNotContainKey("Content-Type");
+            assertThat(result.headers()).doesNotContainKey("ETag");
+            assertThat(result.headers()).doesNotContainKey("X-Token");
+
+            TemplateEngine engine = new TemplateEngine();
+            Map<String, Object> vars = Map.of("response", result.view());
+            assertThat(engine.render("{{response.headers['content-type']}}", vars))
+                    .isEqualTo("application/json; charset=utf-8");
+            assertThat(engine.render("{{response.headers['Content-Type']}}", vars))
+                    .isEqualTo("application/json; charset=utf-8");
+            assertThat(engine.render("{{response.headers.ETag}}", vars)).isEqualTo("W/1");
+            assertThat(engine.render("{{response.headers['x-token']}}", vars)).isEqualTo("s3cret value");
+            assertThatThrownBy(() -> engine.render("{{response.headers['x-missing']}}", vars))
+                    .isInstanceOf(TemplateException.class)
+                    .hasMessage("response.headers['x-missing']: 路径不存在: response.headers['x-missing']")
+                    .satisfies(error -> assertThat(error.getMessage())
+                            .doesNotContain("application/json")
+                            .doesNotContain("W/1")
+                            .doesNotContain("s3cret")
+                            .doesNotContain("s3cret%20value")
+                            .doesNotContain("s3cret+value")
+                            .doesNotContain("BODY-NOT-IN-ERRORS")
+                            .doesNotContain("%20"));
+            assertThatThrownBy(() -> engine.render("{{response.headers.content-type}}", vars))
+                    .isInstanceOf(TemplateException.class)
+                    .hasMessage("response.headers.content: 模板语法错误")
+                    .satisfies(error -> assertThat(error.getMessage())
+                            .doesNotContain("application/json")
+                            .doesNotContain("s3cret")
+                            .doesNotContain("BODY-NOT-IN-ERRORS"));
+            assertThatThrownBy(() -> engine.render("{{response.headers.ContentType}}", vars))
+                    .isInstanceOf(TemplateException.class)
+                    .hasMessage("response.headers.ContentType: 路径不存在: response.headers.ContentType")
+                    .satisfies(error -> assertThat(error.getMessage()).doesNotContain("application/json"));
         }
     }
 

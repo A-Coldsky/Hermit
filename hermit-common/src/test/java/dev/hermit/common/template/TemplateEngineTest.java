@@ -3,12 +3,15 @@ package dev.hermit.common.template;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -130,7 +133,218 @@ class TemplateEngineTest {
         assertThat(decrypt(fromDer, pair)).isEqualTo("hello");
         assertThatThrownBy(() -> engine.render("{{secret | rsa(key)}}", Map.of("secret", "hello", "key", "not-a-key")))
                 .isInstanceOf(TemplateException.class)
-                .hasMessageContaining("RSA 公钥无效");
+                .hasMessage("secret: RSA 公钥无效");
+    }
+
+    @Test
+    void quotedSubscriptsReadHyphenatedKeysAndHeaderNamesIgnoreCase() {
+        LinkedHashMap<String, Object> headers = new LinkedHashMap<>();
+        headers.put("content-type", "application/json; charset=utf-8");
+        headers.put("etag", "W/1");
+        headers.put("x-token", "s3cret value");
+        LinkedHashMap<String, Object> meta = new LinkedHashMap<>();
+        meta.put("ETag", "meta-value");
+        LinkedHashMap<String, Object> response = new LinkedHashMap<>();
+        response.put("headers", headers);
+        response.put("body", "BODY-NOT-IN-ERRORS");
+        response.put("meta", meta);
+        Map<String, Object> vars = Map.of("response", response);
+
+        assertThat(engine.render("{{response.headers['content-type']}}", vars))
+                .isEqualTo("application/json; charset=utf-8");
+        assertThat(engine.render("{{response.headers[\"content-type\"]}}", vars))
+                .isEqualTo("application/json; charset=utf-8");
+        assertThat(engine.render("{{response.headers[ 'content-type' ]}}", vars))
+                .isEqualTo("application/json; charset=utf-8");
+        assertThat(engine.render("t={{response.headers['Content-Type']}}", vars))
+                .isEqualTo("t=application/json; charset=utf-8");
+        assertThat(engine.render("{{response.headers.ETag}}", vars)).isEqualTo("W/1");
+        assertThat(engine.render("{{response.headers.etag}}", vars)).isEqualTo("W/1");
+        assertThat(engine.render("{{response.headers['ETag']}}", vars)).isEqualTo("W/1");
+        assertThat(engine.render("{{response.meta.ETag}}", vars)).isEqualTo("meta-value");
+        assertThat(engine.render("{{name | default(response.headers['x-token'])}}", mapWith(vars, "name", "")))
+                .isEqualTo("s3cret value");
+        assertThat(engine.referencedPaths("{{response.headers[\"content-type\"]}}"))
+                .containsExactly("response.headers['content-type']");
+        assertThat(engine.templateRefs("{{response.headers['content-type'] | default('')}}"))
+                .containsExactly(new TemplateRef("response.headers['content-type']", true));
+        assertThat(engine.referencesCredential("{{credential['password']}}")).isTrue();
+
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("a'b", "quote");
+        row.put("a\\b", "slash");
+        row.put("a|b", "pipe");
+        row.put("a.b", "dot");
+        row.put("0", "key");
+        row.put("内容", "text");
+        row.put("Name", "A");
+        assertThat(engine.render("{{row['a\\'b']}}", Map.of("row", row))).isEqualTo("quote");
+        assertThat(engine.render("{{row['a\\\\b']}}", Map.of("row", row))).isEqualTo("slash");
+        assertThat(engine.render("{{row['a|b']}}", Map.of("row", row))).isEqualTo("pipe");
+        assertThat(engine.render("{{row['a.b']}}", Map.of("row", row))).isEqualTo("dot");
+        assertThat(engine.render("{{row['内容']}}", Map.of("row", row))).isEqualTo("text");
+        assertThat(engine.render("{{row['0']}}", Map.of("row", row))).isEqualTo("key");
+        assertThat(engine.render("{{items[0]}}", Map.of("items", List.of("index")))).isEqualTo("index");
+        assertThat(engine.render("{{bag['a-b'][0]}}", Map.of("bag", Map.of("a-b", List.of("x")))))
+                .isEqualTo("x");
+        assertThat(engine.render("{{row.Name}}", Map.of("row", row))).isEqualTo("A");
+        assertThat(engine.referencedPaths("{{row['a\\'b']}}")).containsExactly("row['a\\'b']");
+
+        assertThatThrownBy(() -> engine.render("{{row.name}}", Map.of("row", row)))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("row.name: 路径不存在: row.name");
+        assertThatThrownBy(() -> engine.render("{{response.meta.etag}}", vars))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("response.meta.etag: 路径不存在: response.meta.etag");
+        assertThatThrownBy(() -> engine.render("{{response.Body}}", vars))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("response.Body: 路径不存在: response.Body");
+        assertThatThrownBy(() -> engine.render("{{response.headers.ContentType}}", vars))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("response.headers.ContentType: 路径不存在: response.headers.ContentType")
+                .satisfies(error -> assertHidden(error, "application/json", "W/1", "s3cret", "BODY-NOT-IN-ERRORS",
+                        "s3cret%20value", "s3cret+value"));
+        assertThatThrownBy(() -> engine.render("{{response.headers['x-missing']}}", vars))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("response.headers['x-missing']: 路径不存在: response.headers['x-missing']")
+                .satisfies(error -> assertHidden(error, "application/json", "W/1", "s3cret", "BODY-NOT-IN-ERRORS",
+                        "%20", "charset"));
+        assertThatThrownBy(() -> engine.render("{{response.headers.content-type}}", vars))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("response.headers.content: 模板语法错误")
+                .satisfies(error -> assertHidden(error, "application/json", "W/1", "s3cret", "BODY-NOT-IN-ERRORS"));
+        assertThatThrownBy(() -> engine.render("{{items[abc]}}", Map.of("items", List.of("a"))))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("items: 模板下标无效");
+        assertThatThrownBy(() -> engine.render("{{response.headers['content-type'}}}", vars))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("response.headers: 模板下标无效");
+        assertThatThrownBy(() -> engine.render("{{response.headers['content-type]}}", vars))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("模板缺少 '}}'");
+
+        LinkedHashMap<String, Object> both = new LinkedHashMap<>();
+        both.put("etag", "lower");
+        both.put("ETag", "upper");
+        assertThat(engine.render("{{response.headers.ETAG}}", Map.of("response", Map.of("headers", both))))
+                .isEqualTo("lower");
+        assertThat(engine.render("{{response.headers.ETag}}", Map.of("response", Map.of("headers", both))))
+                .isEqualTo("upper");
+
+        assertThat(engine.render(
+                "{{response.headers.etag}}",
+                Map.of("response", Map.of("headers", Map.of("ETag", "only-mixed")))))
+                .isEqualTo("only-mixed");
+
+        LinkedHashMap<String, String> ambiguous = new LinkedHashMap<>();
+        ambiguous.put("ETag", "upper");
+        ambiguous.put("ETAG", "shout");
+        assertThatThrownBy(() -> engine.render(
+                "{{response.headers.etag}}", Map.of("response", Map.of("headers", ambiguous))))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("response.headers.etag: 路径不存在: response.headers.etag")
+                .satisfies(error -> assertHidden(error, "upper", "shout"));
+
+        LinkedHashMap<String, Object> missingValue = new LinkedHashMap<>();
+        missingValue.put("etag", null);
+        assertThat(engine.render(
+                "{{response.headers.ETag | default('z')}}",
+                Map.of("response", Map.of("headers", missingValue)))).isEqualTo("z");
+    }
+
+    @Test
+    void textFiltersRejectObjectsAndKeepNumbersAndBooleans() throws Exception {
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("id", "A");
+        row.put("n", 1);
+        assertThat(engine.render("x={{row}}", Map.of("row", row))).isEqualTo("x={\"id\":\"A\",\"n\":1}");
+        assertThat(engine.render("{{n | md5}}", Map.of("n", 1))).isEqualTo(digest("MD5", "1"));
+        assertThat(engine.render("{{n | sha256}}", Map.of("n", true))).isEqualTo(digest("SHA-256", "true"));
+        assertThat(engine.render("{{n | base64}}", Map.of("n", 1))).isEqualTo("MQ==");
+        assertThat(engine.render("{{n | urlencode}}", Map.of("n", false))).isEqualTo("false");
+        assertThat(engine.render("{{n | trim}}", Map.of("n", 1.5d))).isEqualTo("1.5");
+
+        Object leak = new Object() {
+            @Override
+            public String toString() {
+                return "LEAKED-TOSTRING";
+            }
+        };
+        for (String filter : List.of("md5", "sha256", "base64", "urlencode", "trim")) {
+            assertThatThrownBy(() -> engine.render("{{row | " + filter + "}}", Map.of("row", leak)))
+                    .isInstanceOf(TemplateException.class)
+                    .hasMessage("row: " + filter + " 需要文本，得到的是对象")
+                    .satisfies(error -> assertHidden(error, "LEAKED-TOSTRING"));
+            assertThatThrownBy(() -> engine.render("{{row | " + filter + "}}", Map.of("row", row)))
+                    .isInstanceOf(TemplateException.class)
+                    .hasMessage("row: " + filter + " 需要文本，得到的是对象")
+                    .satisfies(error -> assertHidden(error, "{id=A", "\"id\"", "n=1"));
+        }
+        assertThatThrownBy(() -> engine.render("{{items | md5}}", Map.of("items", List.of("s3cret value"))))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("items: md5 需要文本，得到的是对象")
+                .satisfies(error -> assertHidden(error, "s3cret", "s3cret%20value", "s3cret+value", "%20"));
+    }
+
+    @Test
+    void defaultKeepsBlankZeroFalseAndEmptyList() {
+        assertThat(engine.render("{{name | default('z')}}", Map.of("name", "   "))).isEqualTo("   ");
+        assertThat(engine.render("{{name | trim | default('z')}}", Map.of("name", "   "))).isEqualTo("z");
+        assertThat(engine.render("{{n | default(9)}}", Map.of("n", 0))).isEqualTo(0);
+        assertThat(engine.render("{{flag | default('z')}}", Map.of("flag", false))).isEqualTo(false);
+        assertThat(engine.render("{{items | default('z')}}", Map.of("items", List.of()))).isEqualTo(List.of());
+        assertThat(engine.render("{{name | default('z')}}", Map.of("name", "0"))).isEqualTo("0");
+    }
+
+    @Test
+    void dateDistinguishesNonTextFromUnparseableText() {
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("password", "s3cret value");
+        assertThatThrownBy(() -> engine.render("{{d | date('yyyy-MM-dd')}}", Map.of("d", 20261012)))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("d: 日期需要文本")
+                .satisfies(error -> assertHidden(error, "20261012", "日期无法解析"));
+        assertThatThrownBy(() -> engine.render("{{d | date('yyyy-MM-dd')}}", Map.of("d", false)))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("d: 日期需要文本")
+                .satisfies(error -> assertHidden(error, "false"));
+        assertThatThrownBy(() -> engine.render("{{d | date('yyyy-MM-dd')}}", Map.of("d", row)))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("d: 日期需要文本")
+                .satisfies(error -> assertHidden(error, "s3cret", "{password"));
+        assertThatThrownBy(() -> engine.render("{{d | date('yyyy-MM-dd')}}", Map.of("d", "not-a-date")))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("d: 日期无法解析")
+                .satisfies(error -> assertHidden(error, "not-a-date", "日期需要文本"));
+        assertThatThrownBy(() -> engine.render("{{d | date('yyyy-MM-dd')}}", Map.of("d", "")))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("d: 日期无法解析");
+    }
+
+    @Test
+    void rsaTooLongPlaintextAndBadKeyStayFixedChinese() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        KeyPair pair = generator.generateKeyPair();
+        String pem = pem(pair.getPublic().getEncoded());
+        String plaintext = "S".repeat(300);
+        assertThatThrownBy(() -> engine.render("{{secret | rsa(key)}}", Map.of("secret", plaintext, "key", pem)))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("secret: 明文超过这把公钥能加密的长度")
+                .satisfies(error -> {
+                    assertHidden(error, "SSSS", "IllegalBlockSize", "BEGIN PUBLIC KEY", plaintext.substring(0, 8));
+                    assertThat(error.getCause()).isInstanceOf(TemplateException.class);
+                    assertThat(error.getCause().getCause()).isNull();
+                });
+        String junk = "not-a-key-" + "Q".repeat(48);
+        assertThatThrownBy(() -> engine.render("{{secret | rsa(key)}}", Map.of("secret", "hello", "key", junk)))
+                .isInstanceOf(TemplateException.class)
+                .hasMessage("secret: RSA 公钥无效")
+                .satisfies(error -> {
+                    assertHidden(error, junk, "hello", "InvalidKey", "RSA 加密失败");
+                    assertThat(error.getCause()).isInstanceOf(TemplateException.class);
+                    assertThat(error.getCause().getCause()).isNull();
+                });
     }
 
     @Test
@@ -147,6 +361,25 @@ class TemplateEngineTest {
                 .hasMessageContaining("no_such");
         assertThatThrownBy(() -> engine.render("{{name", Map.of("name", "a")))
                 .isInstanceOf(TemplateException.class);
+    }
+
+    private static Map<String, Object> mapWith(Map<String, Object> base, String key, Object value) {
+        LinkedHashMap<String, Object> copy = new LinkedHashMap<>(base);
+        copy.put(key, value);
+        return copy;
+    }
+
+    private static String digest(String algorithm, String text) throws Exception {
+        return HexFormat.of().formatHex(
+                MessageDigest.getInstance(algorithm).digest(text.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static void assertHidden(Throwable error, String... forbidden) {
+        String message = error.getMessage();
+        assertThat(message).doesNotContain("Exception");
+        for (String item : forbidden) {
+            assertThat(message).doesNotContain(item);
+        }
     }
 
     private static Map<String, Object> mapOf(String key, Object value) {

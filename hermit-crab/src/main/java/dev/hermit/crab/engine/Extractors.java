@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
@@ -44,6 +45,8 @@ final class Extractors {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final List<String> SELECTORS = List.of("css", "xpath", "jsonpath", "regex");
+    /** {@code response} 信封上的字段。路径第一段是这些名字时，不提示作者去读 body。 */
+    private static final Set<String> RESPONSE_FIELDS = Set.of("status", "body", "headers", "url", "redirect");
     /**
      * 一次 {@code Matcher.find} 不看能力 deadline，也不响应中断。可能回溯很久的匹配放到这组守护线程上，
      * 调用方只等到 deadline：到点就按超时返回，账号锁由 {@code RuleEngine} 的 finally 放开。
@@ -102,17 +105,22 @@ final class Extractors {
         Source source = spec.get("from") == null ? inherited : sourceFrom(Values.text(spec.get("from")), vars);
         String kind = selectorKind(spec);
         String selector = Values.text(spec.get(kind));
-        String where = kind + " " + clip(selector);
+        String where = label(kind) + " " + clip(selector);
         List<Source> matches;
+        boolean pathMissing = false;
         try {
             matches = select(kind, selector, spec, source, deadlineNanos);
+        } catch (PathMissing ignored) {
+            matches = List.of();
+            pathMissing = true;
         } catch (RuleProblem ex) {
             throw problem(ex.summary + "（" + where + "）");
         }
         if (spec.get("each") != null) {
             Integer min = Values.integerOrNull(spec.get("min"));
             if (min != null && matches.size() < min) {
-                throw problem(where + " 匹配 " + matches.size() + " 条，少于 " + min + " 条");
+                throw problem(withHint(
+                        where + " 匹配 " + matches.size() + " 条，少于 " + min + " 条", selector, source));
             }
             Map<String, Object> children = Values.map(spec.get("each"));
             if (children == null) {
@@ -133,10 +141,10 @@ final class Extractors {
             return List.copyOf(rows);
         }
         if (matches.isEmpty()) {
-            if (Values.bool(spec.get("optional"), false)) {
+            if (optionalFlag(spec.get("optional"))) {
                 return applyFilter(spec, null, vars, filters, templates);
             }
-            throw problem(where + " 匹配 0 条");
+            throw problem(missSummary(where, selector, source, pathMissing));
         }
         Object value = scalar(matches.get(0), spec);
         return applyFilter(spec, value, vars, filters, templates);
@@ -155,7 +163,7 @@ final class Extractors {
         try {
             return FilterChain.apply(filters, templates, Values.text(spec.get("filter")), value, vars);
         } catch (TemplateException ex) {
-            throw ex;
+            throw problem(filterFailure(ex));
         }
     }
 
@@ -201,8 +209,10 @@ final class Extractors {
                 matches.add(Source.element(element));
             }
             return matches;
-        } catch (IllegalArgumentException ex) {
-            throw problem("选择器无效");
+        } catch (IllegalArgumentException | IllegalStateException ex) {
+            // jsoup 1.23 的 SelectorParseException 继承 IllegalStateException。句子只用短原因，
+            // 不附解析器原文：原文会再写一遍选择器，极端情况下也可能带上片段。
+            throw problem("选择器无法解析");
         }
     }
 
@@ -220,7 +230,7 @@ final class Extractors {
             }
             return matches;
         } catch (XPathExpressionException ex) {
-            throw problem("XPath 无效");
+            throw problem("XPath 无法解析");
         }
     }
 
@@ -238,9 +248,9 @@ final class Extractors {
                 read = JsonPath.read(source.text(), selector);
             }
         } catch (PathNotFoundException ex) {
-            return List.of();
+            throw new PathMissing();
         } catch (InvalidPathException ex) {
-            throw problem("JsonPath 无效");
+            throw problem("JSON 路径无法解析");
         } catch (RuntimeException ex) {
             throw problem("响应不是 JSON");
         }
@@ -268,7 +278,7 @@ final class Extractors {
         try {
             pattern = Pattern.compile(selector);
         } catch (PatternSyntaxException ex) {
-            throw problem("正则无效");
+            throw problem("正则无法解析");
         }
         int group = spec.get("group") == null ? 1 : Values.integer(spec.get("group"), 1);
         String text = source.text();
@@ -286,7 +296,7 @@ final class Extractors {
             // 一次 find 返回之后再看时间。卡住的那一次 find 靠外层的等待上限结束。
             ensureDeadline(deadlineNanos);
             if (group < 0 || group > matcher.groupCount()) {
-                throw problem("正则没有该分组");
+                throw problem("这个正则没有第 " + group + " 组");
             }
             String captured = matcher.group(group);
             matches.add(Source.text(captured == null ? "" : captured));
@@ -405,7 +415,7 @@ final class Extractors {
 
     private static Source sourceFrom(String name, Map<String, Object> vars) {
         if (!vars.containsKey(name)) {
-            throw problem("来源变量不存在");
+            throw problem(missingSource(name));
         }
         Object value = vars.get(name);
         if (value == null) {
@@ -456,6 +466,155 @@ final class Extractors {
             return "";
         }
         return text.replaceAll("\\s+", " ").trim();
+    }
+
+    private static String label(String kind) {
+        return switch (kind) {
+            case "css" -> "CSS 选择器";
+            case "xpath" -> "XPath";
+            case "jsonpath" -> "JSON 路径";
+            case "regex" -> "正则";
+            default -> kind;
+        };
+    }
+
+    /**
+     * 确定路径没有取到，和不定路径一条都没匹配到，对外不是同一句。
+     * {@code optional} 仍把这两种都当成 0 条。
+     */
+    private static String missSummary(String where, String selector, Source source, boolean pathMissing) {
+        String summary = pathMissing ? "JSON 路径没有取到（" + where + "）" : where + " 匹配 0 条";
+        return withHint(summary, selector, source);
+    }
+
+    /**
+     * 来源是带 {@code body} 的对象，路径第一段又不是信封字段时，作者多半把信封当成了正文。
+     * 只追加固定短句，不打印对象。
+     */
+    private static String withHint(String summary, String selector, Source source) {
+        if (!bodySourceHint(selector, source)) {
+            return summary;
+        }
+        return summary + "，来源是对象，正文在 body";
+    }
+
+    private static boolean bodySourceHint(String selector, Source source) {
+        if (!(source.json instanceof Map<?, ?> map) || !map.containsKey("body")) {
+            return false;
+        }
+        String key = rootProperty(selector);
+        return key != null && !RESPONSE_FIELDS.contains(key);
+    }
+
+    /** {@code $.items}、{@code $['items']}、{@code $..items} 的第一段。认不出来就返回 null。 */
+    private static String rootProperty(String selector) {
+        if (selector == null) {
+            return null;
+        }
+        int index = 0;
+        int length = selector.length();
+        while (index < length && selector.charAt(index) <= ' ') {
+            index++;
+        }
+        if (index >= length || selector.charAt(index) != '$') {
+            return null;
+        }
+        index++;
+        if (index < length && selector.charAt(index) == '.') {
+            index++;
+            if (index < length && selector.charAt(index) == '.') {
+                index++;
+            }
+        }
+        if (index >= length) {
+            return null;
+        }
+        char current = selector.charAt(index);
+        if (current == '[') {
+            index++;
+            while (index < length && selector.charAt(index) <= ' ') {
+                index++;
+            }
+            if (index >= length) {
+                return null;
+            }
+            char quote = selector.charAt(index);
+            if (quote != '\'' && quote != '"') {
+                return null;
+            }
+            int end = selector.indexOf(quote, index + 1);
+            if (end <= index + 1) {
+                return null;
+            }
+            return selector.substring(index + 1, end);
+        }
+        if (!Character.isLetter(current) && current != '_') {
+            return null;
+        }
+        int start = index;
+        index++;
+        while (index < length) {
+            char part = selector.charAt(index);
+            if (!Character.isLetterOrDigit(part) && part != '_') {
+                break;
+            }
+            index++;
+        }
+        return selector.substring(start, index);
+    }
+
+    private static boolean optionalFlag(Object value) {
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof Boolean flag) {
+            return flag;
+        }
+        if (value instanceof String text) {
+            if ("true".equalsIgnoreCase(text)) {
+                return true;
+            }
+            if ("false".equalsIgnoreCase(text)) {
+                return false;
+            }
+        }
+        throw problem("optional 必须是 true 或 false");
+    }
+
+    private static String filterFailure(TemplateException ex) {
+        String message = ex.getMessage();
+        if (message == null || message.isBlank()) {
+            return "过滤器失败";
+        }
+        return message;
+    }
+
+    /**
+     * 只回显像变量名的短名字。{@code from} 会先被模板渲染，渲染结果若是正文就不能写进错误。
+     */
+    private static String missingSource(String name) {
+        if (name != null && name.length() <= 80 && identifierLike(name)) {
+            return "来源变量 " + name + " 不存在";
+        }
+        return "来源变量不存在";
+    }
+
+    private static boolean identifierLike(String name) {
+        if (name.isEmpty()) {
+            return false;
+        }
+        int first = name.codePointAt(0);
+        if (!Character.isLetter(first) && first != '_') {
+            return false;
+        }
+        for (int index = Character.charCount(first); index < name.length(); ) {
+            int point = name.codePointAt(index);
+            if (!(Character.isLetterOrDigit(point) || point == '_' || point == '.')) {
+                return false;
+            }
+            index += Character.charCount(point);
+        }
+        return true;
     }
 
     /** 规则里写的表达式，太长时截断，免得一条报错占满屏。 */
@@ -763,6 +922,12 @@ final class Extractors {
                     Math.max(left.quantifiers, right.quantifiers),
                     true,
                     left.risky || right.risky);
+        }
+    }
+
+    /** 确定的 JSON 路径没有取到。不是 {@link RuleProblem}，这样 {@code optional} 仍能把它当成 0 条。 */
+    private static final class PathMissing extends RuntimeException {
+        private PathMissing() {
         }
     }
 

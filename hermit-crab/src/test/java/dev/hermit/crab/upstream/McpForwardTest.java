@@ -1,10 +1,12 @@
 package dev.hermit.crab.upstream;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -159,12 +161,15 @@ class McpForwardTest {
             upstream.rpcMessage = "missing field";
             JsonNode bad = lab.call("search_customer", Map.of("q", "ada"), null, null);
             assertThat(bad.path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
-            assertThat(bad.path("error").path("message").asText()).isEqualTo(McpForwarder.BAD_ARGUMENTS);
+            assertThat(bad.path("error").path("message").asText()).isEqualTo("上游 JSON-RPC -32602：missing field");
 
             upstream.rpcCode = -32601;
             upstream.rpcMessage = "Method not found";
             JsonNode method = lab.call("search_customer", Map.of("q", "ada"), null, null);
             assertThat(method.path("error").path("code").asText()).isEqualTo("UPSTREAM_ERROR");
+            assertThat(method.path("error").path("message").asText())
+                    .isEqualTo("上游 JSON-RPC -32601：Method not found")
+                    .doesNotContain("HTTP");
 
             upstream.rpcCode = 0;
             upstream.toolError = "Input validation error: q " + TOKEN;
@@ -204,6 +209,115 @@ class McpForwardTest {
             JsonNode dropped = lab.call("search_customer", Map.of("q", "ada"), null, null);
             assertThat(dropped.path("error").path("code").asText()).isEqualTo("UPSTREAM_ERROR");
             assertThat(upstream.tools()).isEqualTo(tools + 1);
+        }
+    }
+
+    @Test
+    void jsonRpcErrorKeepsTheCodeAndMasksTheMessage() throws Exception {
+        String phrase = "se cret+val";
+        String quoted = "se\"cret";
+        String encodedPlus = URLEncoder.encode(phrase, StandardCharsets.UTF_8);
+        String encodedSpace = "se%20cret%2Bval";
+        String jsonEscaped = "se\\\"cret";
+        String derived = Base64.getEncoder().encodeToString(phrase.getBytes(StandardCharsets.UTF_8));
+        try (Upstream upstream = new Upstream();
+                Lab lab = Lab.open(temp.resolve("rpc-mask"), upstream, 4, 30)) {
+            lab.doc = ConchParser.parse(maskingYaml(upstream.port()));
+            lab.install();
+            lab.runtime.admin().writeCredentials(
+                    lab.doc, "alice", Map.of("phrase", phrase, "quoted", quoted), Actors.CLI);
+            upstream.rpcCode = -32000;
+            upstream.rpcData = "raw-body-marker";
+            upstream.rpcMessage = "application/json blue-tenant " + TOKEN + " Bearer " + TOKEN
+                    + " " + phrase + " xx" + phrase + "yy " + encodedPlus + " " + encodedSpace
+                    + " " + jsonEscaped + " " + quoted + " " + derived + " ${session} "
+                    + "a".repeat(600) + "TAIL";
+            JsonNode failed = lab.call("search_customer", Map.of("q", "ada"), null, null);
+            String message = failed.path("error").path("message").asText();
+            assertThat(failed.path("error").path("code").asText()).isEqualTo("UPSTREAM_ERROR");
+            assertThat(message).startsWith("上游 JSON-RPC -32000：");
+            assertThat(message).hasSizeLessThanOrEqualTo(500);
+            assertThat(message).contains("application/json").contains("blue-tenant").contains("xx***yy").contains("***");
+            assertThat(message).doesNotContain("HTTP").doesNotContain("TAIL").doesNotContain("raw-body-marker");
+            SecretChecks.absent(failed.toString(), TOKEN);
+            SecretChecks.absent(failed.toString(), "Bearer " + TOKEN);
+            SecretChecks.absent(failed.toString(), phrase);
+            SecretChecks.absent(failed.toString(), quoted);
+            SecretChecks.absent(failed.toString(), encodedPlus);
+            SecretChecks.absent(failed.toString(), encodedSpace);
+            SecretChecks.absent(failed.toString(), jsonEscaped);
+            SecretChecks.absent(failed.toString(), derived);
+            SecretChecks.absent(failed.toString(), upstream.sessionId);
+            assertThat(upstream.initializes()).isEqualTo(1);
+
+            int room = 500 - "上游 JSON-RPC -32000：".length();
+            upstream.rpcMessage = "a".repeat(room - 2) + TOKEN;
+            upstream.rpcData = null;
+            JsonNode straddling = lab.call("search_customer", Map.of("q", "ada"), null, null);
+            String clipped = straddling.path("error").path("message").asText();
+            assertThat(clipped).hasSize(500).endsWith("a**");
+            SecretChecks.absent(clipped, TOKEN);
+
+            upstream.rpcMessage = "   ";
+            upstream.rpcData = null;
+            JsonNode empty = lab.call("search_customer", Map.of("q", "ada"), null, null);
+            assertThat(empty.path("error").path("code").asText()).isEqualTo("UPSTREAM_ERROR");
+            assertThat(empty.path("error").path("message").asText())
+                    .isEqualTo("上游 JSON-RPC -32000")
+                    .doesNotContain("：")
+                    .doesNotContain("HTTP");
+        }
+    }
+
+    @Test
+    void headerTemplateFailuresNameThePathAndRejectNonText() throws Exception {
+        try (Upstream upstream = new Upstream();
+                Lab lab = Lab.open(temp.resolve("headers"), upstream, 4, 30)) {
+            lab.doc = ConchParser.parse(headerYaml(upstream.port(), """
+                      optional: {type: secret, label: 可选, required: false}
+                    """, """
+                      meta: {type: text, label: 备注, required: false}
+                    """, """
+                        X-Opt: "{{credential.optional}}"
+                    """));
+            lab.install();
+            JsonNode missing = lab.call("search_customer", Map.of("q", "ada"), null, null);
+            assertThat(lab.lastStatus).isEqualTo(409);
+            assertThat(missing.path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(missing.path("error").path("message").asText())
+                    .contains("credential.optional")
+                    .contains("路径不存在")
+                    .doesNotContain("上游请求头无法渲染");
+            SecretChecks.absent(missing.toString(), TOKEN);
+            assertThat(upstream.tools()).isZero();
+            assertThat(upstream.initializes()).isZero();
+
+            lab.doc = ConchParser.parse(headerYaml(upstream.port(), "", "", """
+                        X-Bad: "{{credential.token | nope}}"
+                    """));
+            lab.install();
+            JsonNode filter = lab.call("search_customer", Map.of("q", "ada"), null, null);
+            assertThat(filter.path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(filter.path("error").path("message").asText())
+                    .contains("credential.token")
+                    .contains("未知过滤器")
+                    .contains("nope")
+                    .doesNotContain("上游请求头无法渲染");
+            SecretChecks.absent(filter.toString(), TOKEN);
+            assertThat(upstream.tools()).isZero();
+
+            lab.doc = ConchParser.parse(headerYaml(upstream.port(), "", """
+                      meta: {type: text, label: 备注, required: false}
+                    """, """
+                        X-Whole: "{{config.meta | default(1)}}"
+                    """));
+            lab.install();
+            JsonNode number = lab.call("search_customer", Map.of("q", "ada"), null, null);
+            assertThat(number.path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(number.path("error").path("message").asText())
+                    .isEqualTo("请求头 X-Whole 的渲染结果不是文本")
+                    .doesNotContain("1");
+            assertThat(upstream.tools()).isZero();
         }
     }
 
@@ -426,6 +540,68 @@ class McpForwardTest {
     }
 
     @Test
+    void wholeConfigHeaderIsNotStringified() throws Exception {
+        ConchDoc doc = ConchParser.parse("""
+                conch: vendor_crm
+                version: 1.0.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 客户系统
+                description: 整份配置不能变成请求头。
+                credentials:
+                  token: {type: secret, label: 令牌, required: true}
+                config:
+                  meta: {type: text, label: 备注, required: false}
+                upstream:
+                  url: http://127.0.0.1:9/mcp
+                  transport: streamable_http
+                  auth: {type: headers}
+                  headers:
+                    Authorization: "Bearer {{credential.token}}"
+                    X-Whole: "{{config}}"
+                actions:
+                  search_customer:
+                    tool: searchCustomer
+                    title: 搜索客户
+                    description: 按名称搜索。
+                    mcp: {read_only: true}
+                    input_schema:
+                      type: object
+                      properties:
+                        q: {type: string}
+                      required: [q]
+                """);
+        try (SessionManager accounts = new SessionManager();
+                McpForwarder forwarder = new McpForwarder(accounts, KnownSecrets.empty(), Duration.ofSeconds(2), 1)) {
+            ExecutionResult result = forwarder.execute(new ExecutionRequest(
+                    "trace-header",
+                    Origin.OFFICIAL,
+                    doc.conch(),
+                    "search_customer",
+                    Map.of("q", "ada"),
+                    "alice",
+                    new AccountContext() {
+                        @Override
+                        public Map<String, String> credentials() {
+                            return Map.of("token", TOKEN);
+                        }
+
+                        @Override
+                        public Map<String, String> config() {
+                            return Map.of("meta", "note");
+                        }
+                    }), doc);
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.NOT_CONFIGURED);
+            assertThat(result.error().message())
+                    .isEqualTo("请求头 X-Whole 的渲染结果不是文本")
+                    .doesNotContain("note")
+                    .doesNotContain("{");
+            SecretChecks.absent(result.error().message(), TOKEN);
+        }
+    }
+
+    @Test
     void runtimeRejectsARemoteSchemaRef() {
         ConchDoc doc = ConchParser.parse("""
                 conch: vendor_crm
@@ -637,6 +813,79 @@ class McpForwardTest {
                     confirm: %s
                     mcp: {read_only: false, destructive: true}
                 """.formatted(url, confirm);
+    }
+
+    private static String maskingYaml(int port) {
+        return """
+                conch: vendor_crm
+                version: 1.2.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 客户系统（源站 MCP）
+                description: 上游错误要打码。
+                credentials:
+                  token: {type: secret, label: 令牌, required: true}
+                  phrase: {type: secret, label: 短语, required: true}
+                  quoted: {type: secret, label: 引号, required: true}
+                config:
+                  tenant: {type: text, label: 租户, required: false, default: blue-tenant}
+                upstream:
+                  url: http://127.0.0.1:%d/mcp
+                  transport: streamable_http
+                  auth: {type: headers}
+                  headers:
+                    Authorization: "Bearer {{credential.token}}"
+                    X-Tenant: "{{config.tenant}}"
+                    X-Fallback: "{{config.tenant | default(credential.token)}}"
+                    X-Type: application/json
+                    X-Enc: "{{credential.phrase | base64}}"
+                actions:
+                  search_customer:
+                    tool: searchCustomer
+                    title: 搜索客户
+                    description: 按名称搜索。
+                    mcp: {read_only: true}
+                    input_schema:
+                      type: object
+                      properties:
+                        q: {type: string}
+                      required: [q]
+                """.formatted(port);
+    }
+
+    private static String headerYaml(int port, String extraCredentials, String extraConfig, String extraHeaders) {
+        String config = extraConfig == null || extraConfig.isBlank() ? "config: {}\n" : "config:\n" + extraConfig;
+        return """
+                conch: vendor_crm
+                version: 1.3.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 客户系统（源站 MCP）
+                description: 请求头失败要带路径。
+                credentials:
+                  token: {type: secret, label: 令牌, required: true}
+                %s
+                %s
+                upstream:
+                  url: http://127.0.0.1:%d/mcp
+                  transport: streamable_http
+                  auth: {type: headers}
+                  headers:
+                    Authorization: "Bearer {{credential.token}}"
+                %s
+                actions:
+                  search_customer:
+                    tool: searchCustomer
+                    title: 搜索客户
+                    description: 按名称搜索。
+                    mcp: {read_only: true}
+                    input_schema:
+                      type: object
+                      properties:
+                        q: {type: string}
+                      required: [q]
+                """.formatted(extraCredentials == null ? "" : extraCredentials, config, port,
+                extraHeaders == null ? "" : extraHeaders);
     }
 
     private static String packageYaml(int port, String version, String auth, Integer timeout, String extra) {
@@ -952,6 +1201,7 @@ class McpForwardTest {
         volatile int toolsStatus = 200;
         volatile int rpcCode;
         volatile String rpcMessage;
+        volatile String rpcData;
         volatile String toolError;
         volatile boolean plainError;
         volatile boolean drop;
@@ -1150,9 +1400,26 @@ class McpForwardTest {
         private String payload(JsonNode id) {
             String idText = id.isNumber() ? id.asText() : "1";
             if (rpcCode != 0) {
-                return """
-                        {"result":null,"jsonrpc":"2.0","id":%s,"error":{"code":%d,"message":"%s"}}
-                        """.formatted(idText, rpcCode, rpcMessage);
+                String message = rpcMessage == null ? "" : rpcMessage;
+                if (sessionId != null) {
+                    message = message.replace("${session}", sessionId);
+                }
+                java.util.LinkedHashMap<String, Object> error = new java.util.LinkedHashMap<>();
+                error.put("code", rpcCode);
+                error.put("message", message);
+                if (rpcData != null) {
+                    error.put("data", rpcData);
+                }
+                java.util.LinkedHashMap<String, Object> root = new java.util.LinkedHashMap<>();
+                root.put("jsonrpc", "2.0");
+                root.put("id", id.isNumber() ? id.numberValue() : id.asText("1"));
+                root.put("result", null);
+                root.put("error", error);
+                try {
+                    return JSON.writeValueAsString(root);
+                } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+                    throw new IllegalStateException(ex);
+                }
             }
             if (toolError != null) {
                 return """

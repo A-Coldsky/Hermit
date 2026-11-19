@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,6 +26,7 @@ import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.secure.CredentialDecryptException;
 import dev.hermit.crab.secure.KnownSecrets;
+import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.CredentialVault;
@@ -39,6 +41,9 @@ public final class McpOAuth implements AutoCloseable {
     public static final String NOT_OAUTH = "这个规则包不是 OAuth 登录。";
     public static final String DISCOVERY_FAILED = "无法发现上游的授权端点。";
     public static final String REJECTED = "上游拒绝了登录。请到控制台重新连接。";
+    /** 令牌端点返回了 HTTP 200，但正文不是可用的令牌 JSON。不附正文。 */
+    public static final String TOKEN_UNREADABLE = "令牌响应无法读取。";
+    private static final int MESSAGE_LIMIT = 500;
     public static final String CALLBACK_OK = "已连接上游。可以关闭这个页面，回到控制台。";
     public static final String CALLBACK_EXPIRED = "登录已过期，请回到控制台重新连接。";
     public static final String CALLBACK_DENIED = "授权未完成。请回到控制台重新连接。";
@@ -139,6 +144,8 @@ public final class McpOAuth implements AutoCloseable {
         if (!usableCode(code)) {
             return Callback.fail(CALLBACK_FAILED);
         }
+        knownSecrets.add(code);
+        knownSecrets.add(login.verifier);
         long deadline = System.nanoTime() + START_BUDGET_NANOS;
         Loaded loaded = load(login.origin, login.conch, login.account, Map.of());
         McpOAuthClient.Target target = new McpOAuthClient.Target(login.upstreamUrl, login.allowedHosts);
@@ -292,16 +299,23 @@ public final class McpOAuth implements AutoCloseable {
                 doc.upstream().url(),
                 token.refreshToken(),
                 loaded.clientSecret,
+                token.accessToken(),
                 clock.instant(),
                 deadlineNanos);
         if (!exchange.ok()) {
-            return failedExchange(origin, conch, account, exchange);
+            return failedExchange(origin, conch, account, exchange, loaded);
         }
         save(origin, conch, account, exchange.token());
         return Attempt.ok(exchange.token());
     }
 
-    private Attempt failedExchange(Origin origin, String conch, String account, McpOAuthClient.Exchange exchange) {
+    private Attempt failedExchange(
+            Origin origin,
+            String conch,
+            String account,
+            McpOAuthClient.Exchange exchange,
+            Loaded loaded
+    ) {
         return switch (exchange.kind()) {
             case HOST -> Attempt.fail(ErrorCode.NOT_CONFIGURED, McpForwarder.HOST_DENIED);
             case ADDRESS -> Attempt.fail(ErrorCode.UPSTREAM_ERROR, McpForwarder.ADDRESS_DENIED);
@@ -309,12 +323,46 @@ public final class McpOAuth implements AutoCloseable {
             case CONNECT -> Attempt.fail(ErrorCode.UPSTREAM_ERROR,
                     exchange.detail() == null || exchange.detail().isBlank()
                             ? McpForwarder.CONNECT_FAILED
-                            : exchange.detail());
+                            : maskTokens(exchange.detail(), loaded));
             case REJECTED, TOKEN -> {
                 clearLocked(origin, conch, account);
-                yield Attempt.fail(ErrorCode.AUTH_FAILED, REJECTED);
+                String message = exchange.detail() == null || exchange.detail().isBlank()
+                        ? REJECTED
+                        : exchange.detail();
+                yield Attempt.fail(ErrorCode.AUTH_FAILED, maskTokens(message, loaded));
             }
         };
+    }
+
+    /**
+     * 令牌端点拒绝时的句子。{@code error} 只接受已经打码、且像 OAuth 错误码的文本；没有就只写状态。
+     */
+    public static String tokenRejected(int status, String error) {
+        if (error == null || error.isBlank()) {
+            return "上游拒绝了令牌，HTTP " + status + "。";
+        }
+        return "上游拒绝了令牌，HTTP " + status + "，error=" + error + "。";
+    }
+
+    /** 再过一遍访问令牌、刷新令牌和客户端机密。调用方已经打过请求里的授权码。 */
+    private static String maskTokens(String message, Loaded loaded) {
+        if (message == null) {
+            return "";
+        }
+        LinkedHashSet<String> secrets = new LinkedHashSet<>();
+        if (loaded != null && loaded.clientSecret != null) {
+            secrets.add(loaded.clientSecret);
+        }
+        if (loaded != null && loaded.token != null) {
+            if (loaded.token.accessToken() != null) {
+                secrets.add(loaded.token.accessToken());
+            }
+            if (loaded.token.refreshToken() != null) {
+                secrets.add(loaded.token.refreshToken());
+            }
+        }
+        String masked = secrets.isEmpty() ? message : Redactor.of(secrets).redact(message);
+        return masked.length() <= MESSAGE_LIMIT ? masked : masked.substring(0, MESSAGE_LIMIT);
     }
 
     private void save(Origin origin, String conch, String account, McpOAuthToken token) {

@@ -1032,6 +1032,8 @@ export const api = {
   /**
    * 开发者模式打开时，从上游 tools/list 重写本地 MCP 包。正式包为 409 `CONFLICT`。
    * OAuth 包使用已连接的令牌；没连上是 409 `NOT_CONFIGURED`，不打上游。
+   * 令牌端点非 200 是 422，message 带 HTTP 状态和 OAuth `error` 码，不带 `error_description`。
+   * 刷新后 `tools/list` 仍是 401 时，message 仍是「上游拒绝了登录。请到控制台重新连接。」。
    * version 不变。traceId 指向 action 为 mcp_refresh 的 JSON-RPC 追踪，没有对应调用记录。
    */
   refreshLocalMcp: (conch: string, account?: string) => {

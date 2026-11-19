@@ -54,7 +54,6 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     public static final String TOO_LARGE = "上游响应过大";
     public static final String AUTH_REJECTED = "上游拒绝了凭证，请核对凭证。";
     public static final String UNKNOWN_TOOL = "上游没有这个工具。";
-    public static final String BAD_ARGUMENTS = "上游拒绝了参数。";
     public static final String SESSION_LOST = "上游会话失效。";
     public static final String CONNECT_FAILED = "上游连接失败。";
     public static final String BAD_PROTOCOL = "上游协议版本不受支持。";
@@ -63,6 +62,14 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     public static final String INCOMPLETE = "上游响应不完整。";
 
     private static final Pattern UNKNOWN_TOOL_TEXT = Pattern.compile("(?i)^Tool\\s+\\S+\\s+not found\\s*$");
+    /**
+     * 作用在 {@code credential} 表达式上的变换过滤器。{@code default} 不算：没命中时结果是作者写的字面量。
+     * 参数里可以再出现括号，但不嵌套。
+     */
+    private static final Pattern CREDENTIAL_TRANSFORM = Pattern.compile(
+            "\\{\\{\\s*credential(?:\\.[A-Za-z_][A-Za-z0-9_]*|\\[[0-9]+\\])*"
+                    + "(?:\\s*\\|\\s*[A-Za-z_][A-Za-z0-9_]*(?:\\([^)]*\\))?)*"
+                    + "\\s*\\|\\s*(?:md5|sha256|base64|urlencode|trim|date|rsa)\\b");
     private static final String INPUT_VALIDATION = "Input validation error:";
     private static final int MESSAGE_LIMIT = 500;
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -362,7 +369,12 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         try {
             return Prepared.ready(renderHeaders(doc, request.accountContext()), allowLoopback);
         } catch (TemplateException ex) {
-            return Prepared.deny(finish(request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, "上游请求头无法渲染。", null, List.of()));
+            String message = ex.getMessage() == null ? "" : redactor(request.accountContext()).redact(ex.getMessage());
+            if (message.isBlank()) {
+                message = "上游请求头无法渲染。";
+            }
+            return Prepared.deny(finish(
+                    request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, message, null, List.of()));
         }
     }
 
@@ -489,10 +501,26 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         if (code == -32602 && UNKNOWN_TOOL_TEXT.matcher(text).matches()) {
             return logged(request, doc, tool, started, 200, false, null, ErrorCode.RULE_MISMATCH, UNKNOWN_TOOL, null);
         }
-        if (code == -32602) {
-            return logged(request, doc, tool, started, 200, false, null, ErrorCode.INVALID_INPUT, BAD_ARGUMENTS, null);
+        ErrorCode kind = code == -32602 ? ErrorCode.INVALID_INPUT : ErrorCode.UPSTREAM_ERROR;
+        return logged(request, doc, tool, started, 200, false, null, kind, jsonRpcFailure(request, code, text), null);
+    }
+
+    /**
+     * 只带上打码、截断后的 {@code error.message}。不写 HTTP 状态，也不附原始 body 或 {@code error.data}。
+     * 先打码再截断，避免秘密正好压在 500 字上留下前半段。
+     */
+    private String jsonRpcFailure(ExecutionRequest request, int code, String text) {
+        String detail = text == null ? "" : text.strip();
+        if (detail.isEmpty()) {
+            return "上游 JSON-RPC " + code;
         }
-        return logged(request, doc, tool, started, 200, false, null, ErrorCode.UPSTREAM_ERROR, HTTP_STATUS + "200", null);
+        String masked = redactor(request.accountContext()).redact(detail);
+        String prefix = "上游 JSON-RPC " + code + "：";
+        int room = Math.max(0, MESSAGE_LIMIT - prefix.length());
+        if (masked.length() > room) {
+            masked = masked.substring(0, room);
+        }
+        return prefix + masked;
     }
 
     private ExecutionResult mapTransport(
@@ -629,11 +657,33 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             if (value == null) {
                 continue;
             }
-            String text = String.valueOf(value);
+            if (!(value instanceof String text)) {
+                throw new TemplateException(null, "请求头 " + entry.getKey() + " 的渲染结果不是文本");
+            }
             rendered.put(entry.getKey(), text);
-            knownSecrets.add(text);
+            if (credentialHeader(entry.getValue(), text, account)) {
+                knownSecrets.add(text);
+            }
         }
         return Map.copyOf(rendered);
+    }
+
+    /**
+     * 字面量和只从 {@code config} 渲染出来的头不登记。凭证原文，以及 {@code base64} 这类换过的派生值，要登记。
+     */
+    private boolean credentialHeader(String template, String rendered, AccountContext account) {
+        if (template == null || !templates.referencesCredential(template)) {
+            return false;
+        }
+        Map<String, String> credentials = account == null ? null : account.credentials();
+        if (credentials != null) {
+            for (String secret : credentials.values()) {
+                if (secret != null && secret.length() >= 4 && rendered.contains(secret)) {
+                    return true;
+                }
+            }
+        }
+        return CREDENTIAL_TRANSFORM.matcher(template).find();
     }
 
     private Redactor redactor(AccountContext account) {

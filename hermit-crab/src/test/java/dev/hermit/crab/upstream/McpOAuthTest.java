@@ -198,7 +198,11 @@ class McpOAuthTest {
             Reply rejected = harness.call("alice", "ada");
             assertThat(rejected.status).isEqualTo(422);
             assertThat(rejected.json.path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
-            assertThat(rejected.json.path("error").path("message").asText()).isEqualTo(McpOAuth.REJECTED);
+            assertThat(rejected.json.path("error").path("message").asText())
+                    .isEqualTo("上游拒绝了令牌，HTTP 400，error=invalid_grant。");
+            SecretChecks.absent(rejected.body, upstream.issued.get(0).refresh);
+            SecretChecks.absent(rejected.body, upstream.issued.get(0).access);
+            assertThat(rejected.body).doesNotContain("refresh rejected").doesNotContain("error_description");
             assertThat(upstream.tools.get()).isZero();
             assertThat(upstream.tokenPosts.get()).isEqualTo(tokens + 1);
             Reply again = harness.call("alice", "ada");
@@ -213,11 +217,130 @@ class McpOAuthTest {
             Reply redirected = harness.call("bob", "bea");
             assertThat(redirected.status).isEqualTo(422);
             assertThat(redirected.json.path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
+            assertThat(redirected.json.path("error").path("message").asText())
+                    .isEqualTo("上游拒绝了令牌，HTTP 302。")
+                    .doesNotContain("sink");
+            SecretChecks.absent(redirected.body, upstream.issued.get(1).refresh);
             assertThat(upstream.tools.get()).isZero();
             assertThat(upstream.sinkHits.get()).isZero();
             assertThat(upstream.tokenPosts.get()).isEqualTo(bobTokens + 1);
             assertThat(harness.call("bob", "bea").status).isEqualTo(409);
             assertThat(upstream.tokenPosts.get()).isEqualTo(bobTokens + 1);
+        }
+    }
+
+    @Test
+    void tokenEndpointRejectionKeepsStatusAndDropsSecrets() throws Exception {
+        String secret = "se cret+val";
+        String code = "codealice91";
+        String plus = URLEncoder.encode(secret, StandardCharsets.UTF_8);
+        String space = "se%20cret%2Bval";
+        try (Upstream upstream = new Upstream();
+                Harness harness = Harness.open(temp.resolve("token-errors"), upstream.port, null)) {
+            harness.importLocal(harness.oauthYaml(true).getBytes(StandardCharsets.UTF_8));
+            harness.account("alice");
+            harness.write("alice", Map.of(McpOAuthToken.CLIENT_SECRET, secret));
+            harness.apiKey("vendor_oauth");
+
+            harness.connect("alice", code);
+            upstream.tokenStatus = 400;
+            upstream.tokenBody = "{\"error_description\":\"refresh rejected only " + secret + " " + code + "\"}";
+            Reply statusOnly = harness.call("alice", "ada");
+            assertThat(statusOnly.status).isEqualTo(422);
+            assertThat(statusOnly.json.path("error").path("message").asText()).isEqualTo("上游拒绝了令牌，HTTP 400。");
+            assertThat(statusOnly.body).doesNotContain("refresh rejected").doesNotContain("error_description");
+            SecretChecks.absent(statusOnly.body, secret);
+            SecretChecks.absent(statusOnly.body, code);
+            assertThat(upstream.tools.get()).isZero();
+
+            upstream.tokenStatus = null;
+            harness.connect("alice", code);
+            String refresh = upstream.issued.get(upstream.issued.size() - 1).refresh;
+            String access = upstream.issued.get(upstream.issued.size() - 1).access;
+            upstream.tokenStatus = 400;
+            upstream.tokenBody = "{\"error\":\"" + refresh + "\",\"error_description\":\"refresh rejected\"}";
+            Reply asToken = harness.call("alice", "ada");
+            assertThat(asToken.json.path("error").path("message").asText())
+                    .isEqualTo("上游拒绝了令牌，HTTP 400，error=***。");
+            SecretChecks.absent(asToken.body, refresh);
+            SecretChecks.absent(asToken.body, access);
+            assertThat(asToken.body).doesNotContain("refresh rejected");
+
+            upstream.tokenStatus = null;
+            harness.connect("alice", code);
+            upstream.tokenStatus = 400;
+            upstream.tokenBody = "{\"error\":\"xx" + secret + "yy" + plus + space + "\"}";
+            Reply infix = harness.call("alice", "ada");
+            assertThat(infix.json.path("error").path("message").asText())
+                    .isEqualTo("上游拒绝了令牌，HTTP 400，error=xx***yy******。");
+            SecretChecks.absent(infix.body, secret);
+            SecretChecks.absent(infix.body, plus);
+            SecretChecks.absent(infix.body, space);
+
+            upstream.tokenStatus = null;
+            harness.connect("alice", code);
+            upstream.tokenStatus = 400;
+            upstream.tokenBody = "{\"error\":\"bad-token-value\"}";
+            Reply hyphen = harness.call("alice", "ada");
+            assertThat(hyphen.json.path("error").path("message").asText()).isEqualTo("上游拒绝了令牌，HTTP 400。");
+            assertThat(hyphen.body).doesNotContain("bad-token-value");
+
+            upstream.tokenStatus = null;
+            harness.connect("alice", code);
+            upstream.tokenStatus = 400;
+            upstream.tokenBody = "{\"error\":\"" + code + "\"}";
+            Reply echoedCode = harness.call("alice", "ada");
+            assertThat(echoedCode.json.path("error").path("message").asText())
+                    .isEqualTo("上游拒绝了令牌，HTTP 400，error=***。");
+            SecretChecks.absent(echoedCode.body, code);
+
+            String longCode = "invalid_grant" + "a".repeat(80) + "TAIL";
+            upstream.tokenStatus = null;
+            harness.connect("alice", code);
+            upstream.tokenStatus = 400;
+            upstream.tokenBody = "{\"error\":\"" + longCode + "\"}";
+            Reply clipped = harness.call("alice", "ada");
+            assertThat(clipped.json.path("error").path("message").asText())
+                    .isEqualTo("上游拒绝了令牌，HTTP 400，error=" + longCode.substring(0, 64) + "。");
+            assertThat(clipped.body).doesNotContain("TAIL");
+
+            upstream.tokenStatus = null;
+            harness.connect("alice", code);
+            upstream.tokenStatus = 200;
+            upstream.tokenBody = "not-json <<<";
+            Reply garbage = harness.call("alice", "ada");
+            assertThat(garbage.json.path("error").path("message").asText()).isEqualTo(McpOAuth.TOKEN_UNREADABLE);
+            assertThat(garbage.body).doesNotContain("<<<").doesNotContain("not-json");
+
+            upstream.tokenStatus = null;
+            harness.connect("alice", code);
+            upstream.tokenStatus = 200;
+            upstream.tokenBody = "{\"error\":\"invalid_grant\",\"error_description\":\"refresh rejected\","
+                    + "\"access_token\":\"should-not-echo\"}";
+            Reply unreadable = harness.call("alice", "ada");
+            assertThat(unreadable.json.path("error").path("message").asText()).isEqualTo(McpOAuth.TOKEN_UNREADABLE);
+            assertThat(unreadable.body).doesNotContain("invalid_grant").doesNotContain("refresh rejected");
+            SecretChecks.absent(unreadable.body, "should-not-echo");
+
+            upstream.tokenStatus = null;
+            harness.connect("alice", code);
+            int sinks = upstream.sinkHits.get();
+            upstream.tokenStatus = 302;
+            upstream.tokenBody = null;
+            Reply redirect = harness.call("alice", "ada");
+            assertThat(redirect.json.path("error").path("message").asText()).isEqualTo("上游拒绝了令牌，HTTP 302。");
+            assertThat(redirect.body).doesNotContain("sink").doesNotContain("Location");
+            assertThat(upstream.sinkHits.get()).isEqualTo(sinks);
+            assertThat(upstream.tools.get()).isZero();
+
+            upstream.tokenStatus = null;
+            upstream.rejectCode = true;
+            Reply callback = harness.connect("alice", code);
+            assertThat(callback.status).isEqualTo(400);
+            assertThat(callback.body).contains(McpOAuth.CALLBACK_FAILED);
+            assertThat(callback.body).doesNotContain("invalid_grant").doesNotContain("error_description");
+            SecretChecks.absent(callback.body, code);
+            SecretChecks.absent(callback.body, secret);
         }
     }
 
@@ -680,6 +803,9 @@ class McpOAuthTest {
         volatile boolean rejectRefresh;
         volatile boolean probe;
         volatile int redirectTo;
+        volatile Integer tokenStatus;
+        volatile String tokenBody;
+        volatile boolean rejectCode;
         volatile String metaBody = "{}";
         volatile String protectedBody = "{}";
         volatile String serverBody = "{}";
@@ -765,8 +891,29 @@ class McpOAuthTest {
             String body = ctx.body();
             record(ctx, body);
             Map<String, String> form = form(body);
+            if ("authorization_code".equals(form.get("grant_type")) && rejectCode) {
+                String authorization = form.get("code") == null ? "" : form.get("code");
+                ctx.status(400).contentType("application/json").result(
+                        "{\"error\":\"invalid_grant\",\"error_description\":\"code " + authorization + "\"}");
+                return;
+            }
             if ("refresh_token".equals(form.get("grant_type")) && rejectRefresh) {
-                ctx.status(400).contentType("application/json").result("{\"error\":\"invalid_grant\"}");
+                String refresh = form.get("refresh_token") == null ? "" : form.get("refresh_token");
+                ctx.status(400).contentType("application/json").result(
+                        "{\"error\":\"invalid_grant\",\"error_description\":\"refresh rejected "
+                                + refresh + "\",\"echo\":\"" + refresh + "\"}");
+                return;
+            }
+            if ("refresh_token".equals(form.get("grant_type")) && tokenStatus != null) {
+                int status = tokenStatus;
+                ctx.status(status);
+                if (status >= 300 && status < 400) {
+                    ctx.header("Location", "http://127.0.0.1:" + sinkPort + "/sink");
+                }
+                if (tokenBody != null) {
+                    ctx.contentType("application/json");
+                    ctx.result(tokenBody);
+                }
                 return;
             }
             if ("refresh_token".equals(form.get("grant_type")) && redirectTo > 0) {

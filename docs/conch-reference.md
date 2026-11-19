@@ -19,7 +19,7 @@ Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里�
 
 业务接口只选用户确认过的功能对应的那一次请求。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
 
-凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.5.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。
+凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.6.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。
 
 ### 令牌
 
@@ -176,7 +176,7 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.5.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它 |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.6.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0 |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -257,7 +257,7 @@ actions:
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
-`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.5.0，可以载入 1.1.0、1.2.0、1.3.0 和 1.4.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.5.0 时会报高于当前 Crab。
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.6.0，可以载入 1.1.0、1.2.0、1.3.0、1.4.0 和 1.5.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.6.0 时会报高于当前 Crab。
 
 `GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
@@ -320,7 +320,7 @@ steps:
 
 ## 模板、输出与脚本
 
-模板如 `{{input.page}}`、`{{credential.password | md5}}`、`{{config.base_url}}`、`{{items}}`、`{{response.headers['content-type']}}`。路径是标识符，用 `.` 取字段，用 `[0]` 这类数字下标取列表元素。键名里有连字符等标识符不能写的字符时，用引号下标，写在点号后面，单引号或双引号都可以。`{{response.headers.content-type}}` 会在连字符处断开，不是合法写法。`response.headers` 里的头名是小写；查找忽略大小写，所以 `{{response.headers.ETag}}` 读到的是 `etag`。带连字符时写成 `{{response.headers['content-type']}}`。没有这个头是「路径不存在」，句子里只有路径，不带头的值，也不带正文。保存时变量名取到第一个 `.` 为止，所以这种写法的根是 `response`，可以保存。根上直接写 `row['a-b']` 或 `items[0]` 时，保存仍按整段路径找变量，认不出 `row`、`items`。支持的过滤器：`md5` 和 `sha256` 对 UTF-8 文本做摘要并输出小写十六进制，不接受参数；`base64`、`urlencode`、`trim` 也不接受参数。这五个过滤器接受字符串，也接受数字和布尔：数字用十进制文本（例如 `1`、`1.5`），布尔是 `true` 或 `false`。Map、List 和其他非文本会失败，句子是「md5 需要文本，得到的是对象」（过滤器名换成实际的那个），不写出对象内容，也不改成按 JSON 做摘要。`default` 需要一个后备值，只在原值是 null 或空串时替换。只含空白的字符串、`0`、`false` 和空列表都保持原值；空白要先 `trim`。`date` 需要一个输出格式；值可以是 `now`，或文本 `yyyy-MM-dd`、`yyyy/MM/dd`、`yyyy-MM-dd HH:mm:ss`、`yyyy/MM/dd HH:mm:ss`、`yyyy年M月d日`、`yyyyMMdd`。数字、布尔和对象是「日期需要文本」；文本解析不了是「日期无法解析」。两句都不带原值。`rsa` 需要一个公钥参数，用 RSA/ECB/PKCS1Padding 加密后再做 Base64；公钥是 X.509，可以是 PEM，也可以是去掉空白的 Base64。明文超过这把公钥能加密的长度时，句子是「明文超过这把公钥能加密的长度」。公钥规格不对是「RSA 公钥无效」。两句都不带明文、公钥或 Java 原文。完整表达式保留原值类型，拼接字符串则转成文本：Map 和 List 在拼接时变成 JSON。过滤器不会悄悄做这件事。引号下标不抬高 `min_crab_version`。旧 Crab 遇到 `['content-type']` 是「模板下标无效」。对象不再按 `{k=v}` 做摘要，升级后的 Crab 对所有规则都是这条，没有单独的兼容版本。
+模板如 `{{input.page}}`、`{{credential.password | md5}}`、`{{config.base_url}}`、`{{items}}`、`{{response.headers['content-type']}}`。路径是标识符，用 `.` 取字段，用 `[0]` 这类数字下标取列表元素。键名里有连字符等标识符不能写的字符时，用引号下标，写在点号后面，单引号或双引号都可以。`{{response.headers.content-type}}` 会在连字符处断开，不是合法写法。`response.headers` 里的头名是小写；查找忽略大小写，所以 `{{response.headers.ETag}}` 读到的是 `etag`。带连字符时写成 `{{response.headers['content-type']}}`。没有这个头是「路径不存在」，句子里只有路径，不带头的值，也不带正文。保存时变量名取到第一个 `.` 为止，所以这种写法的根是 `response`，可以保存。根上直接写 `row['a-b']` 或 `items[0]` 时，保存仍按整段路径找变量，认不出 `row`、`items`。`credential`、`login`、`config`、`input`、`now` 后面直接写方括号不能保存，例如 `credential['password']` 或 `login[0]`，message 为「这里请用点号」。点号后面的引号下标可以，例如 `response.headers['content-type']`。支持的过滤器：`md5` 和 `sha256` 对 UTF-8 文本做摘要并输出小写十六进制，不接受参数；`base64`、`urlencode`、`trim` 也不接受参数。这五个过滤器接受字符串，也接受数字和布尔：数字用十进制文本（例如 `1`、`1.5`），布尔是 `true` 或 `false`。Map、List 和其他非文本会失败，句子是「md5 需要文本，得到的是对象」（过滤器名换成实际的那个），不写出对象内容，也不改成按 JSON 做摘要。`default` 需要一个后备值，只在原值是 null 或空串时替换。只含空白的字符串、`0`、`false` 和空列表都保持原值；空白要先 `trim`。`date` 需要一个输出格式；值可以是 `now`，或文本 `yyyy-MM-dd`、`yyyy/MM/dd`、`yyyy-MM-dd HH:mm:ss`、`yyyy/MM/dd HH:mm:ss`、`yyyy年M月d日`、`yyyyMMdd`。数字、布尔和对象是「日期需要文本」；文本解析不了是「日期无法解析」。两句都不带原值。`rsa` 需要一个公钥参数，用 RSA/ECB/PKCS1Padding 加密后再做 Base64；公钥是 X.509，可以是 PEM，也可以是去掉空白的 Base64。明文超过这把公钥能加密的长度时，句子是「明文超过这把公钥能加密的长度」。公钥规格不对是「RSA 公钥无效」。两句都不带明文、公钥或 Java 原文。完整表达式保留原值类型，拼接字符串则转成文本：Map 和 List 在拼接时变成 JSON。过滤器不会悄悄做这件事。用了引号下标时，`min_crab_version` 必须不低于 1.6.0，否则 `MIN_CRAB_VERSION`，message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。Reef 上传和 Crab 载入用同一条校验。没写引号下标的包仍可以低于 1.6.0。旧 Crab 的兼容版本低于 1.6.0，会在安装时拒绝这个包。头名忽略大小写不另设门槛。`md5`、`sha256`、`base64`、`urlencode`、`trim` 拒绝对象也是运行时行为，不另设门槛：以前对 Map 或 List 会静默算出 `{k=v}` 的摘要，升级后的 Crab 对所有规则改成报错。这条适用于全部已安装的规则，没有单独的兼容版本。
 
 `input`、`credential`、`config`、`response`、`now`、`login` 是保留变量，不能通过 set/extract/script.into 覆盖。写入 `login` 的 message 是「不能写入保留变量 login」。request 更新 response，extract/set 产生后续步骤可用的变量。同一步骤列表里，后面的步骤可以引用前面 extract、set 或 script.into 声明的名字，例如登录里先提取再写 `{{viewstate}}`，能力里先提取再写 `{{items}}`。`{{input.page}}` 和 `{{credential.password}}` 用的是保留变量。`{{input.page}}` 还要这个能力的 `input` 声明了 `page`；没声明的字段报 `UNDECLARED_INPUT`，message 写出字段名，能定位时带行号。登录步骤里的 `{{input.字段}}` 要每个能力都声明了该字段，因为登录用的是这次调用的入参。`{{name | default(...)}}` 里的 `name` 若已由本列表更早的 extract、set 或 script.into 声明，不算未声明。`default` 过滤器算作这个名字已经处理：`{{token | default('')}}` 可以写，不算 `UNDECLARED_VARIABLE`。没加 `default` 的未声明名字，`conch_validate` 仍会报错并给出行号。`{{vars.token}}`、`{{token}}`、`{{auth.token}}` 就是这种。能力步骤引用只在登录步骤里声明、又没有 `default` 的名字，错误是「能力不能引用登录步骤里的变量。」，不是「引用了未定义的变量」。`credential.*` 和 `config.*` 不会因为加了 `default` 就放过未声明的凭证或配置。试跑遇到未定义变量时会点名这个变量，不会说成上游故障或版本不一致。
 
@@ -354,7 +354,7 @@ steps:
 
 script 步骤的 `use` 按顺序把这些库接在 `code` 前面，同一个函数作用域。`code` 仍最多 64 KiB，也不是模板。`use` 里的名字必须存在，不能重复。写了 `scripts`（非空）或 `use` 时，`min_crab_version` 必须不低于 1.2.0。Reef 上传和 Crab 载入用同一条校验。没写这两项的包仍可以低于 1.2.0。只写 `credential: true`、没有脚本库也没有 `use`，不因此抬高版本。
 
-脚本里的 `vars.response` 是上一次 `request` 留下的响应对象，不是正文。字段与模板看到的相同：`status` 是数字，`url` 是最终地址，`headers` 是小写头名到字符串，脚本按存进去的小写名字读，例如 `vars.response.headers['content-type']`，`body` 是按响应字符集解码后的正文，`redirect` 是最终响应仍为重定向时的 Location，否则为 null。正文用 `vars.response.body`。`String(vars.response)` 得到 `[object Object]`，不会变成正文。`input`、`config` 同样是对象。没有 `credential: true` 时没有 `vars.credential`，也没有 `vars.login`。
+脚本里的 `vars.response` 是上一次 `request` 留下的响应对象，不是正文。字段与模板看到的相同：`status` 是数字，`url` 是最终地址，`headers` 是小写头名到字符串，脚本按存进去的小写名字读，例如 `vars.response.headers['content-type']`。这是脚本取值，不是模板引号下标，不因此要求 1.6.0。`body` 是按响应字符集解码后的正文，`redirect` 是最终响应仍为重定向时的 Location，否则为 null。正文用 `vars.response.body`。`String(vars.response)` 得到 `[object Object]`，不会变成正文。`input`、`config` 同样是对象。没有 `credential: true` 时没有 `vars.credential`，也没有 `vars.login`。
 
 引擎是 Rhino 1.9.1，语言级别 ES6（`Context.VERSION_ES6`），解释模式（`setOptimizationLevel(-1)`）。`use` 按写出的顺序把库源码接在一起；库末尾没有换行时补一个换行，然后接 `code`，再包进 `(function(){` 和 `})()`。库和 `code` 在同一个函数作用域，都不是模板，`{{ }}` 不会替换。行号按这次拼接往回算：包装用的第一行和排在前面的库不占 `code` 的行号。错误落在哪个库，就用那个库自己的行号，并写出库的名字。
 

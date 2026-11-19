@@ -2,19 +2,22 @@
 import MascotCrab from '@shared/components/MascotCrab.vue'
 import MascotShell from '@shared/components/MascotShell.vue'
 
-/** 同步时的加载提示：小寄居蟹离开旧壳、跳进新壳。只在同步进行中挂载，动画只改 transform 和 opacity。 */
-defineProps<{ label: string }>()
+/**
+ * 换壳加载提示：小寄居蟹离开旧壳、跳进新壳。只在等待期间挂载，动画只改 transform 和 opacity。
+ * reverse 用于退回上一版：小蟹从右边的新壳走回左边的旧壳。compact 用在表格行里。
+ */
+defineProps<{ label: string; reverse?: boolean; compact?: boolean }>()
 </script>
 
 <template>
-  <div class="shell-swap" role="status" aria-live="polite" data-test="shell-swap">
-    <svg viewBox="0 0 120 40" width="150" height="50" aria-hidden="true">
+  <div class="shell-swap" :class="{ reverse, compact }" role="status" aria-live="polite" data-test="shell-swap">
+    <svg viewBox="0 0 120 40" :width="compact ? 84 : 150" :height="compact ? 28 : 50" aria-hidden="true">
       <path class="ground" d="M2 37H118" />
-      <g class="old">
-        <g transform="translate(2.65 18.65) scale(0.375)"><MascotShell tone="old" /></g>
+      <g class="from">
+        <g transform="translate(2.65 18.65) scale(0.375)"><MascotShell :tone="reverse ? 'brand' : 'old'" /></g>
       </g>
-      <g class="new">
-        <g transform="translate(86.2 14) scale(0.5)"><MascotShell /></g>
+      <g class="to">
+        <g transform="translate(86.2 14) scale(0.5)"><MascotShell :tone="reverse ? 'old' : 'brand'" /></g>
       </g>
       <g class="spark">
         <circle cx="86" cy="12" r="1.5" />
@@ -45,6 +48,15 @@ svg {
   overflow: visible;
 }
 
+.reverse svg {
+  transform: scaleX(-1);
+}
+
+.compact {
+  gap: 8px;
+  font-size: 12px;
+}
+
 .ground {
   stroke: var(--hm-border);
   stroke-width: 1.5;
@@ -57,8 +69,8 @@ svg {
 
 .walker,
 .bob,
-.old,
-.new,
+.from,
+.to,
 .spark {
   transform-box: fill-box;
   transform-origin: 50% 100%;
@@ -77,11 +89,11 @@ svg {
   animation: hm-swap-bob 0.32s ease-in-out infinite alternate;
 }
 
-.old {
+.from {
   animation: hm-swap-old 3.2s ease-in-out infinite;
 }
 
-.new {
+.to {
   animation: hm-swap-hop 3.2s ease-in-out infinite;
 }
 
@@ -168,8 +180,8 @@ svg {
 @media (prefers-reduced-motion: reduce) {
   .walker,
   .bob,
-  .old,
-  .new,
+  .from,
+  .to,
   .spark {
     animation: none !important;
   }

@@ -13,6 +13,7 @@ import AccountsPanel from '../components/AccountsPanel.vue'
 import CapabilityToggles from '../components/CapabilityToggles.vue'
 import ConfigPanel from '../components/ConfigPanel.vue'
 import DeveloperPanel from '../components/DeveloperPanel.vue'
+import ShellSwapLoader from '../components/ShellSwapLoader.vue'
 import { refreshPending } from '../status'
 import { unsubscribeMessage } from '../copy'
 import { canRollback, previousBlockedNote } from '../previous'
@@ -194,6 +195,8 @@ async function load() {
 const local = computed(() => detail.value?.source === 'LOCAL')
 const debug = ref<DebugState>({ enabled: false, expiresAt: null })
 const working = ref(false)
+/** 正在切换版本时显示换壳动画；退回是反方向走回旧壳。 */
+const swap = ref<{ label: string; reverse?: boolean } | null>(null)
 
 async function loadDebug() {
   try {
@@ -260,11 +263,12 @@ async function repair() {
   if (!detail.value?.repairRequired) return
   working.value = true
   try {
-    if (await repairConch(props.conch, detail.value.repairReason ?? null)) {
+    if (await repairConch(props.conch, detail.value.repairReason ?? null, () => (swap.value = { label: '正在修复，重新背上壳…' }))) {
       void refreshPending()
       await load()
     }
   } finally {
+    swap.value = null
     working.value = false
   }
 }
@@ -281,6 +285,7 @@ async function rollback() {
     return
   }
   working.value = true
+  swap.value = { label: `正在退回 v${detail.value.previousVersion}，换回旧壳…`, reverse: true }
   try {
     await api.rollback(props.conch)
     ElMessage.success(`已退回 v${detail.value.previousVersion}`)
@@ -289,6 +294,7 @@ async function rollback() {
   } catch (error) {
     notifyError(error)
   } finally {
+    swap.value = null
     working.value = false
   }
 }
@@ -297,17 +303,22 @@ async function update() {
   if (!detail.value) return
   working.value = true
   try {
-    const switched = await updateConch({
-      conch: props.conch,
-      installedVersion: detail.value.version,
-      latestVersion: detail.value.latestVersion,
-      newRequiredCredentials: detail.value.newRequiredCredentials,
-    })
+    const to = detail.value.latestVersion ? ` v${detail.value.latestVersion}` : '新版本'
+    const switched = await updateConch(
+      {
+        conch: props.conch,
+        installedVersion: detail.value.version,
+        latestVersion: detail.value.latestVersion,
+        newRequiredCredentials: detail.value.newRequiredCredentials,
+      },
+      () => (swap.value = { label: `正在更新到${to}，换上新壳…` }),
+    )
     if (switched) {
       void refreshPending()
       await load()
     }
   } finally {
+    swap.value = null
     working.value = false
   }
 }
@@ -371,6 +382,8 @@ watch(
       </template>
       <el-button v-else-if="detail" type="danger" plain :disabled="working" @click="unsubscribe">取消订阅</el-button>
     </PageHeader>
+
+    <ShellSwapLoader v-if="swap" :label="swap.label" :reverse="swap.reverse" data-test="version-swap" />
 
     <el-result v-if="missing" icon="warning" title="规则包未安装" :sub-title="`本机没有名为 ${conch} 的规则包`">
       <template #extra>

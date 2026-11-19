@@ -4,7 +4,7 @@ withDefaults(defineProps<{ tone?: 'brand' | 'alt' | 'old' }>(), { tone: 'brand' 
 </script>
 
 <template>
-  <g class="hm-shell" :class="tone">
+  <g class="hm-shell" :class="`tone-${tone}`">
     <circle class="deep" cx="32" cy="6.5" r="3.5" />
     <ellipse class="base" cx="32" cy="12.5" rx="8.5" ry="6.5" />
     <ellipse class="deep" cx="32" cy="21" rx="14.5" ry="9.5" />
@@ -29,27 +29,27 @@ withDefaults(defineProps<{ tone?: 'brand' | 'alt' | 'old' }>(), { tone: 'brand' 
   stroke-linecap: round;
 }
 
-.alt .base {
+.tone-alt .base {
   fill: var(--hm-shell-alt);
 }
 
-.alt .deep {
+.tone-alt .deep {
   fill: var(--hm-shell-alt-deep);
 }
 
-.alt .shine {
+.tone-alt .shine {
   stroke: var(--hm-shell-alt-shine);
 }
 
-.old .base {
+.tone-old .base {
   fill: var(--hm-shell-old);
 }
 
-.old .deep {
+.tone-old .deep {
   fill: var(--hm-shell-old-deep);
 }
 
-.old .shine {
+.tone-old .shine {
   stroke: var(--hm-shell-old-shine);
 }
 </style>

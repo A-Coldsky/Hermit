@@ -18,6 +18,8 @@ const router = useRouter()
 const loading = ref(true)
 const syncing = ref(false)
 const busy = ref<string | null>(null)
+/** 正在往本机装新版本的那一行（订阅、更新、修复），用来显示换壳动画。 */
+const installing = ref<string | null>(null)
 const catalog = ref<Catalog | null>(null)
 /** 同步标为需要修复、但目录还没有 repairRequired 的包（例如指针丢失）。 */
 const repairs = ref(new Map<string, string | null>())
@@ -64,6 +66,7 @@ async function refreshFromReef() {
 
 async function subscribe(row: CatalogConch) {
   busy.value = row.conch
+  installing.value = row.conch
   try {
     const result = await api.subscribe(row.conch)
     const kind = result.outcome?.kind
@@ -85,6 +88,7 @@ async function subscribe(row: CatalogConch) {
     await load()
   } finally {
     busy.value = null
+    installing.value = null
   }
 }
 
@@ -114,20 +118,22 @@ async function unsubscribe(row: CatalogConch) {
 async function update(row: CatalogConch) {
   busy.value = row.conch
   try {
-    if (await updateConch(row)) void refreshPending()
+    if (await updateConch(row, () => (installing.value = row.conch))) void refreshPending()
     await load()
   } finally {
     busy.value = null
+    installing.value = null
   }
 }
 
 async function repair(row: CatalogConch) {
   busy.value = row.conch
   try {
-    if (await repairConch(row.conch, repairReason(row))) void refreshPending()
+    if (await repairConch(row.conch, repairReason(row), () => (installing.value = row.conch))) void refreshPending()
     await load()
   } finally {
     busy.value = null
+    installing.value = null
   }
 }
 
@@ -187,7 +193,8 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="本机状态" min-width="200">
           <template #default="{ row }">
-            <div class="tags">
+            <ShellSwapLoader v-if="installing === row.conch" compact label="正在换上新壳…" data-test="row-swap" />
+            <div v-else class="tags">
               <el-tag v-if="row.localConflict" type="warning" effect="plain" size="small">与本地规则包同名</el-tag>
               <el-tag v-if="row.subscribed" type="success" effect="plain" size="small">已订阅</el-tag>
               <el-tag v-else-if="!row.localConflict" type="info" effect="plain" size="small">未订阅</el-tag>

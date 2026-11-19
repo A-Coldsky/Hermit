@@ -24,9 +24,9 @@ export interface UpdateTarget {
 
 /**
  * 修复同步标为 REPAIR_REQUIRED 的包。本机文件仍能验签就重新载入，不下载；验签失败才安装 Reef 当前版本。
- * 返回是否已恢复可调用。
+ * 返回是否已恢复可调用。onStart 在用户确认之后、请求发出之前调用。
  */
-export async function repairConch(conch: string, reason: string | null): Promise<boolean> {
+export async function repairConch(conch: string, reason: string | null, onStart?: () => void): Promise<boolean> {
   const why = reason ? `原因：${syncReasonLabels[reason] ?? reason}。` : ''
   try {
     await ElMessageBox.confirm(
@@ -37,6 +37,7 @@ export async function repairConch(conch: string, reason: string | null): Promise
   } catch {
     return false
   }
+  onStart?.()
   try {
     const result = await api.update(conch)
     const kind = result.outcome?.kind
@@ -68,7 +69,7 @@ export async function repairConch(conch: string, reason: string | null): Promise
 }
 
 /** 确认后安装最近一次同步看到的更高版本。返回是否已切换。 */
-export async function updateConch(target: UpdateTarget): Promise<boolean> {
+export async function updateConch(target: UpdateTarget, onStart?: () => void): Promise<boolean> {
   const from = target.installedVersion ? `v${target.installedVersion}` : '当前版本'
   const to = target.latestVersion ? `v${target.latestVersion}` : '最新版本'
   const credentials = target.newRequiredCredentials.length
@@ -83,6 +84,7 @@ export async function updateConch(target: UpdateTarget): Promise<boolean> {
   } catch {
     return false
   }
+  onStart?.()
   try {
     const result = await api.update(target.conch)
     const kind = result.outcome?.kind

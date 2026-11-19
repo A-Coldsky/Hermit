@@ -253,7 +253,8 @@ class EngineUnitTest {
     void extractMissesAndNonJsonAreRuleMismatches() {
         RuleProblem none = catchProblem(() -> apply(
                 Map.of("missing", Map.of("css", "#missing")), vars("<html></html>"), filters, templates));
-        assertThat(none.summary).isEqualTo("提取 missing 失败：css #missing 匹配 0 条");
+        assertThat(none.code).isEqualTo(ErrorCode.RULE_MISMATCH);
+        assertThat(none.summary).isEqualTo("提取 missing 失败：CSS 选择器 #missing 匹配 0 条");
 
         Map<String, Object> optional = vars("<html></html>");
         int count = apply(
@@ -271,7 +272,350 @@ class EngineUnitTest {
 
         RuleProblem notJson = catchProblem(() -> apply(
                 Map.of("name", Map.of("jsonpath", "$.name")), vars("<html></html>"), filters, templates));
-        assertThat(notJson.summary).isEqualTo("提取 name 失败：响应不是 JSON（jsonpath $.name）");
+        assertThat(notJson.summary).isEqualTo("提取 name 失败：响应不是 JSON（JSON 路径 $.name）");
+    }
+
+    @Test
+    void illegalSelectorsNameTheVariableAndStayRuleMismatches() {
+        String marker = "BODY-MARKER-991";
+        RuleProblem css = catchProblem(() -> apply(
+                Map.of("name", Map.of("css", "???")),
+                vars("<html><body>" + marker + "</body></html>"),
+                filters,
+                templates));
+        assertThat(css.code).isEqualTo(ErrorCode.RULE_MISMATCH);
+        assertThat(css.summary).isEqualTo("提取 name 失败：选择器无法解析（CSS 选择器 ???）");
+        assertThat(css.summary).doesNotContain(marker)
+                .doesNotContain("Could not parse")
+                .doesNotContain("SelectorParseException")
+                .doesNotContain("内部错误");
+
+        RuleProblem xpath = catchProblem(() -> apply(
+                Map.of("name", Map.of("xpath", "(((")),
+                vars("<html><body>" + marker + "</body></html>"),
+                filters,
+                templates));
+        assertThat(xpath.summary).isEqualTo("提取 name 失败：XPath 无法解析（XPath (((）");
+        assertThat(xpath.summary).doesNotContain(marker).doesNotContain("XPathExpression");
+
+        RuleProblem regex = catchProblem(() -> apply(
+                Map.of("name", Map.of("regex", "(")),
+                vars("hello " + marker),
+                filters,
+                templates));
+        assertThat(regex.summary).isEqualTo("提取 name 失败：正则无法解析（正则 (）");
+        assertThat(regex.summary).doesNotContain(marker).doesNotContain("Unclosed");
+
+        String selector = "a".repeat(90);
+        RuleProblem clipped = catchProblem(() -> apply(
+                Map.of("name", Map.of("css", selector)),
+                vars("<html>" + marker + "</html>"),
+                filters,
+                templates));
+        assertThat(clipped.summary).isEqualTo(
+                "提取 name 失败：CSS 选择器 " + "a".repeat(80) + "… 匹配 0 条");
+        assertThat(clipped.summary).doesNotContain("a".repeat(81)).doesNotContain(marker);
+    }
+
+    @Test
+    void jsonPathMissesDistinguishMissingPathsFromEmptyLists() {
+        String marker = "MARKER-771";
+        RuleProblem missing = catchProblem(() -> apply(
+                Map.of("name", Map.of("jsonpath", "$.name")),
+                vars("{\"items\":[\"" + marker + "\"]}"),
+                filters,
+                templates));
+        assertThat(missing.summary).isEqualTo("提取 name 失败：JSON 路径没有取到（JSON 路径 $.name）");
+        assertThat(missing.summary).doesNotContain(marker).doesNotContain("匹配 0 条");
+
+        RuleProblem empty = catchProblem(() -> apply(
+                Map.of("items", Map.of("jsonpath", "$.items[*]")),
+                vars("{\"items\":[]}"),
+                filters,
+                templates));
+        assertThat(empty.summary).isEqualTo("提取 items 失败：JSON 路径 $.items[*] 匹配 0 条");
+        assertThat(empty.summary).doesNotContain("没有取到");
+
+        RuleProblem typed = catchProblem(() -> apply(
+                Map.of("name", Map.of("jsonpath", "$.items[0].name")),
+                vars("{\"items\":1,\"note\":\"" + marker + "\"}"),
+                filters,
+                templates));
+        assertThat(typed.summary).isEqualTo("提取 name 失败：JSON 路径没有取到（JSON 路径 $.items[0].name）");
+        assertThat(typed.summary).doesNotContain(marker);
+
+        Map<String, Object> nulled = vars("{\"name\":null}");
+        int count = apply(Map.of("name", Map.of("jsonpath", "$.name")), nulled, filters, templates);
+        assertThat(nulled.get("name")).isEqualTo("");
+        assertThat(count).isEqualTo(1);
+
+        Map<String, Object> summed = vars("{\"items\":[1]}");
+        apply(Map.of("total", Map.of("jsonpath", "$.items.sum()")), summed, filters, templates);
+        assertThat(summed.get("total")).isEqualTo(1.0d);
+
+        Map<String, Object> rows = vars("{\"other\":1}");
+        apply(Map.of(
+                "rows", Map.of(
+                        "jsonpath", "$.items",
+                        "each", Map.of("name", Map.of("jsonpath", "$.name")))),
+                rows, filters, templates);
+        assertThat(rows.get("rows")).isEqualTo(List.of());
+
+        Map<String, Object> optional = vars("{\"items\":[1]}");
+        int skipped = apply(
+                Map.of("name", Map.of("jsonpath", "$.name", "optional", true)), optional, filters, templates);
+        assertThat(optional.get("name")).isNull();
+        assertThat(skipped).isZero();
+    }
+
+    @Test
+    void extractFiltersOptionalAndGroupsNameTheVariable() {
+        String marker = "BODY-MARKER-991";
+        RuleProblem unknown = catchProblem(() -> apply(
+                Map.of("name", Map.of("css", "p", "filter", "nope")),
+                vars("<p>" + marker + "</p>"),
+                filters,
+                templates));
+        assertThat(unknown.code).isEqualTo(ErrorCode.RULE_MISMATCH);
+        assertThat(unknown.summary).isEqualTo("提取 name 失败：未知过滤器: nope");
+        assertThat(unknown.summary).doesNotContain(marker);
+
+        RuleProblem dated = catchProblem(() -> apply(
+                Map.of("n", Map.of("jsonpath", "$.n", "filter", "date('yyyy-MM-dd')")),
+                vars("{\"n\":20261012}"),
+                filters,
+                templates));
+        assertThat(dated.summary).isEqualTo("提取 n 失败：日期无法解析");
+        assertThat(dated.summary).doesNotContain("20261012");
+
+        RuleProblem yes = catchProblem(() -> apply(
+                Map.of("name", Map.of("css", "#missing", "optional", "yes")),
+                vars("<html></html>"),
+                filters,
+                templates));
+        assertThat(yes.summary).isEqualTo("提取 name 失败：optional 必须是 true 或 false");
+        assertThat(yes.summary).doesNotContain("yes");
+
+        RuleProblem number = catchProblem(() -> apply(
+                Map.of("name", Map.of("css", "#missing", "optional", 1)),
+                vars("<html></html>"),
+                filters,
+                templates));
+        assertThat(number.summary).isEqualTo("提取 name 失败：optional 必须是 true 或 false");
+
+        Map<String, Object> hit = vars("<span id=\"name\">张三</span>");
+        apply(Map.of("name", Map.of("css", "#name", "optional", "yes")), hit, filters, templates);
+        assertThat(hit.get("name")).isEqualTo("张三");
+
+        RuleProblem group = catchProblem(() -> apply(
+                Map.of("name", Map.of("regex", "hello")),
+                vars("hello " + marker),
+                filters,
+                templates));
+        assertThat(group.summary).isEqualTo("提取 name 失败：这个正则没有第 1 组（正则 hello）");
+        assertThat(group.summary).doesNotContain(marker);
+
+        RuleProblem none = catchProblem(() -> apply(
+                Map.of("name", Map.of("regex", "(hello)")),
+                vars("zzz"),
+                filters,
+                templates));
+        assertThat(none.summary).isEqualTo("提取 name 失败：正则 (hello) 匹配 0 条");
+
+        RuleProblem second = catchProblem(() -> apply(
+                Map.of("name", Map.of("regex", "(hello)", "group", 2)),
+                vars("hello " + marker),
+                filters,
+                templates));
+        assertThat(second.summary).isEqualTo("提取 name 失败：这个正则没有第 2 组（正则 (hello)）");
+        assertThat(second.summary).doesNotContain(marker);
+    }
+
+    @Test
+    void responseObjectHintNamesTheSourceWithoutDumpingIt() {
+        String marker = "INBOX-991";
+        String body = "{\"items\":[{\"name\":\"" + marker + "\"}]}";
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("status", 200);
+        envelope.put("url", "http://127.0.0.1/items");
+        envelope.put("headers", Map.of("content-type", "application/json"));
+        envelope.put("body", body);
+        envelope.put("redirect", null);
+        Map<String, Object> vars = new LinkedHashMap<>();
+        vars.put("response", envelope);
+
+        RuleProblem items = catchProblem(() -> apply(
+                Map.of("items", Map.of("jsonpath", "$.items", "from", "response")),
+                vars, filters, templates));
+        assertThat(items.summary).isEqualTo(
+                "提取 items 失败：JSON 路径没有取到（JSON 路径 $.items），来源是对象，正文在 body");
+        assertThat(items.summary).doesNotContain(marker).doesNotContain(body);
+
+        RuleProblem quoted = catchProblem(() -> apply(
+                Map.of("items", Map.of("jsonpath", "$['items']", "from", "response")),
+                vars, filters, templates));
+        assertThat(quoted.summary).contains("来源是对象，正文在 body").contains("$['items']");
+        assertThat(quoted.summary).doesNotContain(marker);
+
+        RuleProblem header = catchProblem(() -> apply(
+                Map.of("name", Map.of("jsonpath", "$.headers.nope", "from", "response")),
+                vars, filters, templates));
+        assertThat(header.summary).isEqualTo("提取 name 失败：JSON 路径没有取到（JSON 路径 $.headers.nope）");
+        assertThat(header.summary).doesNotContain("正文在 body").doesNotContain(marker);
+
+        apply(Map.of("text", Map.of("jsonpath", "$.body", "from", "response")), vars, filters, templates);
+        assertThat(vars.get("text")).isEqualTo(body);
+        apply(Map.of("status", Map.of("jsonpath", "$.status", "from", "response")), vars, filters, templates);
+        assertThat(vars.get("status")).isEqualTo(200);
+
+        Map<String, Object> plain = new LinkedHashMap<>();
+        plain.put("row", Map.of("id", 1));
+        RuleProblem row = catchProblem(() -> apply(
+                Map.of("name", Map.of("jsonpath", "$.name", "from", "row")),
+                plain, filters, templates));
+        assertThat(row.summary).isEqualTo("提取 name 失败：JSON 路径没有取到（JSON 路径 $.name）");
+        assertThat(row.summary).doesNotContain("正文在 body");
+
+        RuleProblem named = catchProblem(() -> apply(
+                Map.of("items", Map.of("jsonpath", "$.items", "from", "nope")),
+                vars, filters, templates));
+        assertThat(named.summary).isEqualTo("提取 items 失败：来源变量 nope 不存在");
+
+        RuleProblem dumped = catchProblem(() -> apply(
+                Map.of("items", Map.of("jsonpath", "$.items", "from", body)),
+                vars, filters, templates));
+        assertThat(dumped.summary).isEqualTo("提取 items 失败：来源变量不存在");
+        assertThat(dumped.summary).doesNotContain(marker);
+
+        Map<String, Object> direct = vars(body);
+        apply(Map.of("items", Map.of("jsonpath", "$.items")), direct, filters, templates);
+        assertThat(direct.get("items")).isEqualTo(List.of(Map.of("name", marker)));
+
+        RuleProblem few = catchProblem(() -> apply(
+                Map.of("items", Map.of(
+                        "jsonpath", "$.items",
+                        "from", "response",
+                        "min", 1,
+                        "each", Map.of("name", Map.of("jsonpath", "$.name")))),
+                vars, filters, templates));
+        assertThat(few.summary).isEqualTo(
+                "提取 items 失败：JSON 路径 $.items 匹配 0 条，少于 1 条，来源是对象，正文在 body");
+        assertThat(few.summary).doesNotContain(marker);
+
+        RuleProblem shortfall = catchProblem(() -> apply(
+                Map.of("rows", Map.of(
+                        "css", "#missing",
+                        "min", 1,
+                        "each", Map.of("id", Map.of("css", "td")))),
+                vars("<html></html>"), filters, templates));
+        assertThat(shortfall.summary).isEqualTo("提取 rows 失败：CSS 选择器 #missing 匹配 0 条，少于 1 条");
+        assertThat(shortfall.summary).doesNotContain("正文在 body");
+    }
+
+    @Test
+    void illegalCssSelectorStaysOnTheExtractStep() throws Exception {
+        String marker = "BODY-MARKER-991";
+        String body = "<html><body><p>" + marker + "</p></body></html>";
+        try (ScriptedLoopback loop = ScriptedLoopback.start(); SessionManager sessions = new SessionManager()) {
+            loop.reply(ScriptedLoopback.response(200, "text/html", body.getBytes(StandardCharsets.UTF_8)));
+            ExecutionResult result = execute(sessions, EngineTestSupport.actionConch("css_conch", "read", """
+                    - request: { method: GET, path: /page }
+                    - extract:
+                        name: { css: "???{{credential.password}}" }
+                    """, true), loop.base(), "css_conch", "read");
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(result.error().failedStepIndex()).isEqualTo(1);
+            assertThat(result.error().failedStepType()).isEqualTo("extract");
+            assertThat(result.error().message())
+                    .isEqualTo("提取 name 失败：选择器无法解析（CSS 选择器 ???***）");
+            assertThat(result.error().summary()).isEqualTo(result.error().message());
+            assertThat(result.error().message()).doesNotContain(marker)
+                    .doesNotContain("内部错误")
+                    .doesNotContain("SelectorParseException")
+                    .doesNotContain("Could not parse");
+            SecretChecks.absent(result.error().message(), EngineTestSupport.PASSWORD);
+            SecretChecks.absent(EngineTestSupport.flatten(result), EngineTestSupport.PASSWORD);
+            assertThat(EngineTestSupport.flatten(result)).doesNotContain(marker);
+            assertThat(result.stepLogs()).anySatisfy(log -> {
+                assertThat(log.index()).isEqualTo(1);
+                assertThat(log.type()).isEqualTo("extract");
+            });
+        }
+    }
+
+    @Test
+    void responseFromReadsTheEnvelopeNotTheBody() throws Exception {
+        String marker = "INBOX-991";
+        byte[] json = ("{\"items\":[{\"name\":\"" + marker + "\"}]}")
+                .getBytes(StandardCharsets.UTF_8);
+        try (ScriptedLoopback loop = ScriptedLoopback.start(); SessionManager sessions = new SessionManager()) {
+            loop.reply(ScriptedLoopback.response(200, "application/json", json));
+            ExecutionResult missed = execute(sessions, EngineTestSupport.actionConch("env_conch", "read", """
+                    - request: { method: GET, path: /items }
+                    - extract:
+                        items: { jsonpath: "$.items", from: response }
+                    """, true), loop.base(), "env_conch", "read");
+            assertThat(missed.success()).isFalse();
+            assertThat(missed.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(missed.error().failedStepIndex()).isEqualTo(1);
+            assertThat(missed.error().failedStepType()).isEqualTo("extract");
+            assertThat(missed.error().message()).isEqualTo(
+                    "提取 items 失败：JSON 路径没有取到（JSON 路径 $.items），来源是对象，正文在 body");
+            assertThat(missed.error().message()).doesNotContain(marker).doesNotContain("内部错误");
+            assertThat(EngineTestSupport.flatten(missed)).doesNotContain(marker);
+
+            loop.reply(ScriptedLoopback.response(200, "application/json", json));
+            ExecutionResult found = execute(sessions, EngineTestSupport.actionConch("body_conch", "read", """
+                    - request: { method: GET, path: /items }
+                    - extract:
+                        value: { jsonpath: "$.items[0].name" }
+                    """, false), loop.base(), "body_conch", "read");
+            assertThat(found.success()).as(found.error() == null ? "" : found.error().message()).isTrue();
+            assertThat(found.data()).isEqualTo(Map.of("value", marker));
+        }
+    }
+
+    @Test
+    void loginExtractFilterIsARuleMismatch() throws Exception {
+        try (ScriptedLoopback loop = ScriptedLoopback.start(); SessionManager sessions = new SessionManager()) {
+            loop.reply(ScriptedLoopback.response(
+                    200, "text/html", "<p>ok</p>".getBytes(StandardCharsets.UTF_8)));
+            ExecutionResult result = execute(sessions, """
+                    conch: login_filter
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    title: 标题
+                    description: 说明
+                    credentials:
+                      username: { type: text, required: true }
+                      password: { type: secret, required: true }
+                    auth:
+                      steps:
+                        - request: { method: GET, path: /login }
+                        - extract:
+                            name: { css: p, filter: nope }
+                    actions:
+                      read:
+                        title: 读取
+                        description: 说明
+                        output:
+                          value: { type: string, description: 结果, value: ok }
+                        examples:
+                          - input: {}
+                            output: { value: ok }
+                        notes: 注意
+                        steps:
+                          - request: { method: GET, path: /never }
+                    """.stripIndent(), loop.base(), "login_filter", "read");
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(result.error().message()).isEqualTo("提取 name 失败：未知过滤器: nope");
+            assertThat(result.error().failedStepIndex()).isEqualTo(1);
+            assertThat(result.error().failedStepType()).isEqualTo("extract");
+            assertThat(result.error().message()).doesNotContain("ok</p>").doesNotContain("内部错误");
+        }
     }
 
     @Test

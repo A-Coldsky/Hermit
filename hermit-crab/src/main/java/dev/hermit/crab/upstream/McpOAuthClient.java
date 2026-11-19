@@ -11,8 +11,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -36,6 +38,7 @@ import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.model.McpAuth;
 import dev.hermit.crab.http.HttpMessageLimits;
 import dev.hermit.crab.http.OutboundHttp;
+import dev.hermit.crab.secure.Redactor;
 import dev.hermit.crab.tls.OutboundTls;
 import dev.hermit.crab.tls.TransportFailure;
 
@@ -46,6 +49,8 @@ import dev.hermit.crab.tls.TransportFailure;
 final class McpOAuthClient implements AutoCloseable {
 
     private static final int MAX_BODY = 64 * 1024;
+    private static final int ERROR_CODE_LIMIT = 64;
+    private static final Pattern OAUTH_ERROR = Pattern.compile("[A-Za-z0-9_*]+");
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Pattern RESOURCE_METADATA = Pattern.compile(
             "(?i)resource_metadata\\s*=\\s*(\"([^\"]*)\"|([^\\s,]+))");
@@ -114,7 +119,8 @@ final class McpOAuthClient implements AutoCloseable {
                 "client_id", clientId,
                 "code_verifier", verifier,
                 "resource", resource), clientSecret);
-        return postToken(target, tokenEndpoint, body, null, now, deadlineNanos);
+        return postToken(
+                target, tokenEndpoint, body, secrets(code, verifier, clientSecret), null, now, deadlineNanos);
     }
 
     Exchange refresh(
@@ -124,6 +130,7 @@ final class McpOAuthClient implements AutoCloseable {
             String resource,
             String refreshToken,
             String clientSecret,
+            String accessToken,
             Instant now,
             long deadlineNanos
     ) {
@@ -132,7 +139,14 @@ final class McpOAuthClient implements AutoCloseable {
                 "refresh_token", refreshToken,
                 "client_id", clientId,
                 "resource", resource), clientSecret);
-        return postToken(target, tokenEndpoint, body, refreshToken, now, deadlineNanos);
+        return postToken(
+                target,
+                tokenEndpoint,
+                body,
+                secrets(refreshToken, clientSecret, accessToken),
+                refreshToken,
+                now,
+                deadlineNanos);
     }
 
     @Override
@@ -295,6 +309,7 @@ final class McpOAuthClient implements AutoCloseable {
             Target target,
             String tokenEndpoint,
             String body,
+            Set<String> secrets,
             String previousRefresh,
             Instant now,
             long deadlineNanos
@@ -308,18 +323,52 @@ final class McpOAuthClient implements AutoCloseable {
         if (response.kind != ExchangeKind.TOKEN) {
             return new Exchange(response.kind, null, response.detail());
         }
-        if (response.status >= 300 && response.status < 400) {
-            return new Exchange(ExchangeKind.REJECTED, null);
-        }
         if (response.status != 200) {
-            return new Exchange(ExchangeKind.REJECTED, null);
+            return new Exchange(
+                    ExchangeKind.REJECTED,
+                    null,
+                    McpOAuth.tokenRejected(response.status, visibleError(response.body, secrets)));
         }
         JsonNode node = json(response.body);
         McpOAuthToken token = McpOAuthToken.fromResponse(node, now, previousRefresh);
         if (token == null) {
-            return new Exchange(ExchangeKind.REJECTED, null);
+            return new Exchange(ExchangeKind.REJECTED, null, McpOAuth.TOKEN_UNREADABLE);
         }
         return new Exchange(ExchangeKind.TOKEN, token);
+    }
+
+    /**
+     * 只接受打码之后仍像 OAuth 错误码的 {@code error}。先打码再判断，带连字符的令牌若是已知秘密会变成
+     * {@code ***}；含空格、{@code %} 或换行且打码后仍不像错误码的文本整段丢掉，只留 HTTP 状态。
+     * 不读 {@code error_description}。
+     */
+    private static String visibleError(byte[] body, Set<String> secrets) {
+        JsonNode node = json(body);
+        if (node == null) {
+            return null;
+        }
+        JsonNode error = node.get("error");
+        if (error == null || !error.isTextual()) {
+            return null;
+        }
+        String masked = secrets == null || secrets.isEmpty() ? error.asText() : Redactor.of(secrets).redact(error.asText());
+        if (!OAUTH_ERROR.matcher(masked).matches()) {
+            return null;
+        }
+        return masked.length() <= ERROR_CODE_LIMIT ? masked : masked.substring(0, ERROR_CODE_LIMIT);
+    }
+
+    private static Set<String> secrets(String... values) {
+        LinkedHashSet<String> secrets = new LinkedHashSet<>();
+        if (values == null) {
+            return secrets;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                secrets.add(value);
+            }
+        }
+        return secrets;
     }
 
     private HttpResult get(String url, Target target, long deadlineNanos) {

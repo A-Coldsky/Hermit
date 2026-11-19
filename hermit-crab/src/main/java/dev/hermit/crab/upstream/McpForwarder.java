@@ -54,7 +54,6 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     public static final String TOO_LARGE = "上游响应过大";
     public static final String AUTH_REJECTED = "上游拒绝了凭证，请核对凭证。";
     public static final String UNKNOWN_TOOL = "上游没有这个工具。";
-    public static final String BAD_ARGUMENTS = "上游拒绝了参数。";
     public static final String SESSION_LOST = "上游会话失效。";
     public static final String CONNECT_FAILED = "上游连接失败。";
     public static final String BAD_PROTOCOL = "上游协议版本不受支持。";
@@ -71,7 +70,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     private final McpOAuth oauth;
     private final KnownSecrets knownSecrets;
     private final Duration capabilityTimeout;
-    private final TemplateEngine templates = new TemplateEngine();
+    private final TemplateEngine templates;
     private final InputPreparer inputs = new InputPreparer();
     private volatile DevTraceStore traces;
 
@@ -99,12 +98,27 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             Clock clock,
             HttpMessageLimits headers
     ) {
+        this(accounts, knownSecrets, capabilityTimeout, concurrency, vault, clock, headers, new TemplateEngine());
+    }
+
+    /** 测试可以换上带额外过滤器的引擎。生产构造仍用默认过滤器。 */
+    McpForwarder(
+            SessionManager accounts,
+            KnownSecrets knownSecrets,
+            Duration capabilityTimeout,
+            int concurrency,
+            CredentialVault vault,
+            Clock clock,
+            HttpMessageLimits headers,
+            TemplateEngine templates
+    ) {
         if (concurrency < 1 || concurrency > 32) {
             throw new IllegalArgumentException("mcp concurrency must be 1..32");
         }
         HttpMessageLimits limits = headers == null ? HttpMessageLimits.defaults() : headers;
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
         this.capabilityTimeout = capabilityTimeout;
+        this.templates = templates == null ? new TemplateEngine() : templates;
         this.sessions = new McpUpstreamSessions(new McpUpstreamClient(limits), accounts, concurrency);
         this.oauth = new McpOAuth(
                 vault, accounts, sessions::discard, this.knownSecrets, clock, new McpOAuthClient(limits));
@@ -362,7 +376,12 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         try {
             return Prepared.ready(renderHeaders(doc, request.accountContext()), allowLoopback);
         } catch (TemplateException ex) {
-            return Prepared.deny(finish(request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, "上游请求头无法渲染。", null, List.of()));
+            String message = ex.getMessage() == null ? "" : redactor(request.accountContext()).redact(ex.getMessage());
+            if (message.isBlank()) {
+                message = "上游请求头无法渲染。";
+            }
+            return Prepared.deny(finish(
+                    request, doc, started, false, null, ErrorCode.NOT_CONFIGURED, message, null, List.of()));
         }
     }
 
@@ -489,10 +508,26 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         if (code == -32602 && UNKNOWN_TOOL_TEXT.matcher(text).matches()) {
             return logged(request, doc, tool, started, 200, false, null, ErrorCode.RULE_MISMATCH, UNKNOWN_TOOL, null);
         }
-        if (code == -32602) {
-            return logged(request, doc, tool, started, 200, false, null, ErrorCode.INVALID_INPUT, BAD_ARGUMENTS, null);
+        ErrorCode kind = code == -32602 ? ErrorCode.INVALID_INPUT : ErrorCode.UPSTREAM_ERROR;
+        return logged(request, doc, tool, started, 200, false, null, kind, jsonRpcFailure(request, code, text), null);
+    }
+
+    /**
+     * 只带上打码、截断后的 {@code error.message}。不写 HTTP 状态，也不附原始 body 或 {@code error.data}。
+     * 先打码再截断，避免秘密正好压在 500 字上留下前半段。
+     */
+    private String jsonRpcFailure(ExecutionRequest request, int code, String text) {
+        String detail = text == null ? "" : text.strip();
+        if (detail.isEmpty()) {
+            return "上游 JSON-RPC " + code;
         }
-        return logged(request, doc, tool, started, 200, false, null, ErrorCode.UPSTREAM_ERROR, HTTP_STATUS + "200", null);
+        String masked = redactor(request.accountContext()).redact(detail);
+        String prefix = "上游 JSON-RPC " + code + "：";
+        int room = Math.max(0, MESSAGE_LIMIT - prefix.length());
+        if (masked.length() > room) {
+            masked = masked.substring(0, room);
+        }
+        return prefix + masked;
     }
 
     private ExecutionResult mapTransport(
@@ -629,11 +664,26 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             if (value == null) {
                 continue;
             }
-            String text = String.valueOf(value);
+            if (!(value instanceof String text)) {
+                throw new TemplateException(null, "请求头 " + entry.getKey() + " 的渲染结果不是文本");
+            }
             rendered.put(entry.getKey(), text);
-            knownSecrets.add(text);
+            if (credentialHeader(entry.getValue(), text)) {
+                knownSecrets.add(text);
+            }
         }
         return Map.copyOf(rendered);
+    }
+
+    /**
+     * 字面量和只从 {@code config} 渲染出来的头不登记。模板只要读了 {@code credential}，
+     * 渲染结果达到 4 个字符就整段登记，不看出了哪个过滤器。{@code default} 的字面量若和
+     * credential 写在同一条模板里，也会登记。
+     */
+    private boolean credentialHeader(String template, String rendered) {
+        return template != null
+                && rendered.length() >= 4
+                && templates.referencesCredential(template);
     }
 
     private Redactor redactor(AccountContext account) {

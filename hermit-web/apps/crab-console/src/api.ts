@@ -315,9 +315,15 @@ export interface DevTraceWire {
   truncation?: string
 }
 
-/** 请求步骤上的跟踪警告。已知 code：`cross_origin`、`secure_cookie`、`cookie_rejected`、`body_ended_by_idle`。 */
+/** 请求步骤上的跟踪警告。已知 code：`cross_origin`、`secure_cookie`、`cookie_rejected`、`body_ended_by_idle`、`location_unresolved`、`not_text`。 */
 export interface DevTraceWarning {
-  code: 'cross_origin' | 'secure_cookie' | 'cookie_rejected' | 'body_ended_by_idle'
+  code:
+    | 'cross_origin'
+    | 'secure_cookie'
+    | 'cookie_rejected'
+    | 'body_ended_by_idle'
+    | 'location_unresolved'
+    | 'not_text'
   message: string
 }
 

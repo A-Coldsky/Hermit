@@ -169,16 +169,17 @@ final class HttpCalls {
         boolean follow = Values.bool(spec.get("follow_redirects"), false);
         boolean formQuery = formQuery(spec);
         Long stepLimit = timeoutLimit(spec.get("timeout_ms"));
+        ArrayList<TraceWarning> warnings = new ArrayList<>();
         URI target = resolve(base, spec, charset);
         Map<String, Object> query = optionalMap(spec.get("query"), "query");
         if (query != null && !query.isEmpty()) {
-            target = withQuery(target, appendQuery(target.getRawQuery(), query, charset, formQuery));
+            target = withQuery(target, appendQuery(target.getRawQuery(), query, charset, formQuery, "query", warnings));
         }
         byte[] body = null;
         ContentType contentType = null;
         if (spec.get("form") != null) {
             Map<String, Object> form = optionalMap(spec.get("form"), "form");
-            String encoded = appendQuery(null, form, charset, true);
+            String encoded = appendQuery(null, form, charset, true, "form", warnings);
             body = encoded.getBytes(charset);
             contentType = ContentType.create("application/x-www-form-urlencoded", charset);
         } else if (spec.get("json") != null) {
@@ -197,7 +198,6 @@ final class HttpCalls {
         }
         Map<String, Object> headers = optionalMap(spec.get("headers"), "headers");
         Set<String> secrets = sensitive == null ? Set.of() : sensitive;
-        ArrayList<TraceWarning> warnings = new ArrayList<>();
         boolean lost = false;
         int hops = 0;
         boolean stripSecrets = false;
@@ -231,6 +231,7 @@ final class HttpCalls {
             try {
                 next = target.resolve(exchange.redirect);
             } catch (IllegalArgumentException ex) {
+                warnings.add(new TraceWarning(TraceWarning.LOCATION_UNRESOLVED, LOCATION_WARNING));
                 return exchange.toResult(lost, warnings);
             }
             boolean same = sameOrigin(target, next);
@@ -597,7 +598,7 @@ final class HttpCalls {
             }
             if (name.equalsIgnoreCase("Host")) {
                 if (!hostMatches(target, value)) {
-                    throw new RuleProblem(ErrorCode.INTERNAL, "目标地址与 base_url 不同源", method, pathOf(target), null);
+                    throw new RuleProblem(ErrorCode.RULE_MISMATCH, HOST_MISMATCH, method, pathOf(target), null);
                 }
                 continue;
             }
@@ -857,7 +858,7 @@ final class HttpCalls {
             URI resolved = HostNames.withoutTrailingDot(
                     UrlComponents.resolve(HostNames.withoutTrailingDot(base), reference, charset));
             if (!sameOrigin(base, resolved)) {
-                throw new RuleProblem(ErrorCode.INTERNAL, "目标地址与 base_url 不同源", null, null, null);
+                throw new RuleProblem(ErrorCode.RULE_MISMATCH, CROSS_ORIGIN_TARGET, null, null, null);
             }
             return resolved;
         } catch (UrlComponents.Unencodable ex) {
@@ -867,8 +868,18 @@ final class HttpCalls {
         }
     }
 
-    /** {@code form} 为 true 时用 HTML 表单编码。query 默认走 URL 编码；form 正文始终为 true。 */
-    private static String appendQuery(String existing, Map<String, Object> query, Charset charset, boolean form) {
+    /**
+     * {@code form} 为 true 时用 HTML 表单编码。query 默认走 URL 编码；form 正文始终为 true。
+     * 对象和数组先写成 JSON 再编码，并记一条只含字段名的警告。数字和布尔仍是文本，不警告。
+     */
+    private static String appendQuery(
+            String existing,
+            Map<String, Object> query,
+            Charset charset,
+            boolean form,
+            String section,
+            List<TraceWarning> warnings
+    ) {
         StringBuilder builder = new StringBuilder();
         if (existing != null && !existing.isEmpty()) {
             builder.append(existing);
@@ -879,7 +890,12 @@ final class HttpCalls {
             }
             builder.append(encodeComponent(entry.getKey(), charset, form));
             builder.append('=');
-            builder.append(encodeComponent(Values.text(entry.getValue()), charset, form));
+            Object value = entry.getValue();
+            if (value instanceof Map<?, ?> || value instanceof List<?>) {
+                warnings.add(new TraceWarning(
+                        TraceWarning.NOT_TEXT, notTextWarning(section, entry.getKey())));
+            }
+            builder.append(encodeComponent(Values.text(value), charset, form));
         }
         return builder.toString();
     }
@@ -1234,9 +1250,19 @@ final class HttpCalls {
     }
 
     static final String STEP_TIMEOUT = "步骤超时";
+    /** 能力 GET 停在无法解析的 Location 上时的调用错误。不带 Location。 */
+    static final String UNRESOLVED_LOCATION = "重定向地址无法解析，未跟随";
+    static final String LOCATION_WARNING = "Location 无法解析，未跟随";
+    static final String CROSS_ORIGIN_TARGET = "目标地址与 base_url 不同源";
+    static final String HOST_MISMATCH = "Host 与目标地址不一致";
 
     static String upstreamStatus(int status) {
         return "上游状态码 " + status;
+    }
+
+    /** 开发追踪里只写 query 或 form 的字段名，不写值。 */
+    static String notTextWarning(String section, String field) {
+        return section + "." + field + " 不是文本，已按 JSON 写入";
     }
 
     private static long remainingMillis(long deadlineNanos) {

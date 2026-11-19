@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -155,7 +156,13 @@ final class StepRunner {
         vars.put("response", result.view());
         if (!capture) {
             return new Outcome(
-                    result.method(), result.path(), result.status(), null, result.sessionLost(), result.bodyBytes());
+                    result.method(),
+                    result.path(),
+                    result.status(),
+                    null,
+                    result.sessionLost(),
+                    result.bodyBytes(),
+                    result.warnings());
         }
         Map<String, Object> piece = DevTraceDraft.requestPiece(
                 spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
@@ -168,7 +175,8 @@ final class StepRunner {
                 null,
                 result.sessionLost(),
                 piece,
-                result.bodyBytes());
+                result.bodyBytes(),
+                result.warnings());
     }
 
     private Outcome extract(
@@ -378,10 +386,15 @@ record Outcome(
         Integer extractCount,
         boolean sessionLost,
         Map<String, Object> capture,
-        byte[] bodyBytes
+        byte[] bodyBytes,
+        List<TraceWarning> warnings
 ) {
+    Outcome {
+        warnings = warnings == null || warnings.isEmpty() ? List.of() : List.copyOf(warnings);
+    }
+
     Outcome(String method, String path, Integer status, Integer extractCount, boolean sessionLost) {
-        this(method, path, status, extractCount, sessionLost, null, null);
+        this(method, path, status, extractCount, sessionLost, null, null, List.of());
     }
 
     Outcome(
@@ -392,10 +405,34 @@ record Outcome(
             boolean sessionLost,
             Map<String, Object> capture
     ) {
-        this(method, path, status, extractCount, sessionLost, capture, null);
+        this(method, path, status, extractCount, sessionLost, capture, null, List.of());
     }
 
     Outcome(String method, String path, Integer status, Integer extractCount, boolean sessionLost, byte[] bodyBytes) {
-        this(method, path, status, extractCount, sessionLost, null, bodyBytes);
+        this(method, path, status, extractCount, sessionLost, null, bodyBytes, List.of());
+    }
+
+    Outcome(
+            String method,
+            String path,
+            Integer status,
+            Integer extractCount,
+            boolean sessionLost,
+            byte[] bodyBytes,
+            List<TraceWarning> warnings
+    ) {
+        this(method, path, status, extractCount, sessionLost, null, bodyBytes, warnings);
+    }
+
+    Outcome(
+            String method,
+            String path,
+            Integer status,
+            Integer extractCount,
+            boolean sessionLost,
+            Map<String, Object> capture,
+            byte[] bodyBytes
+    ) {
+        this(method, path, status, extractCount, sessionLost, capture, bodyBytes, List.of());
     }
 }

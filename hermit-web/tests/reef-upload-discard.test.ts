@@ -124,6 +124,28 @@ describe('上传规则包', () => {
     expect(reef.discardVersion).toHaveBeenCalledWith('legacy_oa', '1.1.0')
     expect(wrapper.find('[data-test="discard-upload"]').exists()).toBe(false)
   })
+
+  it('发布成功后留在本页显示已发布和新壳插画，重新选文件后撤掉', async () => {
+    reef.upload.mockResolvedValue({ conch: 'legacy_oa', version: '1.1.0', warnings: [], diff: null })
+    reef.publish.mockResolvedValue({})
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = await mountPage(UploadView)
+    await chooseFile(wrapper)
+    await wrapper.get('[data-test="confirm-upload"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="coral-sprout"]').exists()).toBe(false)
+
+    await wrapper.findAll('button').find((b) => b.text().includes('发布此版本'))!.trigger('click')
+    await flushPromises()
+    expect(reef.publish).toHaveBeenCalledWith('legacy_oa', '1.1.0')
+    const done = wrapper.get('[data-test="published"]')
+    expect(done.text()).toContain('已发布')
+    expect(done.find('[data-test="coral-sprout"]').classes()).toContain('done')
+    expect(wrapper.find('[data-test="discard-upload"]').exists()).toBe(false)
+
+    await chooseFile(wrapper)
+    expect(wrapper.find('[data-test="published"]').exists()).toBe(false)
+  })
 })
 
 describe('版本表丢弃', () => {

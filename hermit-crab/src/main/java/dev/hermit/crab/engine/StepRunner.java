@@ -21,9 +21,15 @@ import dev.hermit.crab.http.OutboundHttp;
 
 final class StepRunner {
 
-    /** 登录路径会换成带下一步的说明；其它 cookie 断言也用这段，不再暴露 assert 键名。 */
+    /**
+     * 能力步骤找不到规则要求的 Cookie。登录路径在 {@code RuleEngine} 里换成登录专用句。
+     * 不写 Cookie 的名字和值，也不提密码。
+     */
     static final String COOKIE_MISSING_SUMMARY =
-            "没有找到会话 Cookie。请核对账号和密码；若凭证无误，再确认上游是否仍会建立会话。";
+            "没有找到规则要求的 Cookie。请核对前面的请求是否还在设置会话。";
+
+    /** 期望值不是数字，也不是数字列表。不写渲染结果，也不把责任推给上游改版。 */
+    static final String STATUS_NOT_NUMERIC = "status 的期望值不是数字";
 
     static final String CONTAINS_MISMATCH =
             "响应正文里没有规则要求的内容。请核对上游页面是否改版，或更新规则中的包含条件。";
@@ -290,7 +296,7 @@ final class StepRunner {
                         fail(REDIRECT_FORBIDDEN);
                     }
                 }
-                default -> fail("未知的 assert 键");
+                default -> fail("未知的 assert 键 " + entry.getKey());
             }
         }
         if (!capture) {
@@ -300,21 +306,34 @@ final class StepRunner {
     }
 
     private static void checkStatus(Object expected, int actual) {
-        if (expected instanceof java.util.List<?> list) {
-            for (Object item : list) {
-                if (item instanceof Number number && number.intValue() == actual) {
-                    return;
-                }
+        if (expected instanceof Number number) {
+            if (number.intValue() == actual) {
+                return;
             }
             fail(statusMismatch(expected, actual));
         }
-        if (expected instanceof Number number && number.intValue() == actual) {
-            return;
+        if (expected instanceof java.util.List<?> list) {
+            boolean numbers = !list.isEmpty();
+            boolean matched = false;
+            for (Object item : list) {
+                if (item instanceof Number number) {
+                    if (number.intValue() == actual) {
+                        matched = true;
+                    }
+                } else {
+                    numbers = false;
+                }
+            }
+            if (matched) {
+                return;
+            }
+            // 列表里夹着非数字时，不能把那些渲染结果写进「期望 …」。有数字命中时上面已经通过。
+            fail(numbers ? statusMismatch(expected, actual) : STATUS_NOT_NUMERIC);
         }
-        fail(statusMismatch(expected, actual));
+        fail(STATUS_NOT_NUMERIC);
     }
 
-    /** 只写出数字状态码。期望值若不是数字，不能把渲染后的原文放进错误说明。 */
+    /** 只写出数字状态码。调用方已经确认期望值全是数字。 */
     private static String statusMismatch(Object expected, int actual) {
         return "响应状态与规则不一致：期望 " + statusText(expected) + "，实际 " + actual
                 + "。请核对上游接口是否改版，或更新规则里的状态断言。";

@@ -303,6 +303,119 @@ class EngineUnitTest {
                 .isInstanceOf(NullPointerException.class);
     }
 
+    @Test
+    void quotedStatusAndCapabilityCookieDoNotBlameTheUpstream() throws Exception {
+        String body = "body-secret-value";
+        byte[] ok = ScriptedLoopback.response(200, "text/plain", body.getBytes(StandardCharsets.UTF_8));
+        try (ScriptedLoopback loop = ScriptedLoopback.start(); SessionManager sessions = new SessionManager()) {
+            loop.reply(ok);
+            ExecutionResult quoted = execute(sessions, EngineTestSupport.actionConch("quote_conch", "ping", """
+                    - request: { method: GET, path: /ping }
+                    - assert: { status: "200" }
+                    """, true), loop.base(), "quote_conch", "ping");
+            assertThat(quoted.success()).isFalse();
+            assertThat(quoted.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(quoted.error().message()).isEqualTo(StepRunner.STATUS_NOT_NUMERIC);
+            assertThat(quoted.error().message())
+                    .doesNotContain("改版")
+                    .doesNotContain("200")
+                    .doesNotContain(body)
+                    .doesNotContain(EngineTestSupport.PASSWORD);
+
+            loop.reply(ok);
+            ExecutionResult numeric = execute(sessions, EngineTestSupport.actionConch("num_conch", "ping", """
+                    - request: { method: GET, path: /ping }
+                    - assert: { status: 200 }
+                    """, true), loop.base(), "num_conch", "ping");
+            assertThat(numeric.success()).as(numeric.error() == null ? "" : numeric.error().message()).isTrue();
+
+            loop.reply(ScriptedLoopback.response(200, "text/html", "ok".getBytes(StandardCharsets.UTF_8)));
+            ExecutionResult header = execute(sessions, EngineTestSupport.actionConch("head_conch", "ping", """
+                    - request: { method: GET, path: /ping }
+                    - assert: { header_exists: Content-Type }
+                    """, true), loop.base(), "head_conch", "ping");
+            assertThat(header.success()).as(header.error() == null ? "" : header.error().message()).isTrue();
+
+            loop.reply(ok);
+            ExecutionResult cookie = execute(sessions, EngineTestSupport.actionConch("cookie_conch", "ping", """
+                    - request: { method: GET, path: /ping }
+                    - assert: { cookie_exists: session-cookie-name }
+                    """, true), loop.base(), "cookie_conch", "ping");
+            assertThat(cookie.success()).isFalse();
+            assertThat(cookie.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(cookie.error().message()).isEqualTo(StepRunner.COOKIE_MISSING_SUMMARY);
+            assertThat(cookie.error().message())
+                    .doesNotContain("密码")
+                    .doesNotContain("session-cookie-name")
+                    .doesNotContain(body);
+
+            loop.reply(ok);
+            ExecutionResult login = execute(sessions, loginCookieConch(), loop.base(), "login_cookie", "ping");
+            assertThat(login.success()).isFalse();
+            assertThat(login.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            assertThat(login.error().message()).contains("登录未建立会话").contains("用户名和密码");
+            assertThat(login.error().message())
+                    .doesNotContain("没有找到规则要求的 Cookie")
+                    .doesNotContain("session-cookie-name")
+                    .doesNotContain(EngineTestSupport.PASSWORD);
+
+            loop.reply(ok);
+            ExecutionResult unknown = execute(sessions, EngineTestSupport.actionConch("statu_conch", "ping", """
+                    - request: { method: GET, path: /ping }
+                    - assert: { statu: "s3cret-value" }
+                    """, true), loop.base(), "statu_conch", "ping");
+            assertThat(unknown.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+            assertThat(unknown.error().message()).isEqualTo("未知的 assert 键 statu");
+            assertThat(unknown.error().message()).doesNotContain("s3cret-value").doesNotContain(body);
+        }
+    }
+
+    private static ExecutionResult execute(
+            SessionManager sessions,
+            String yaml,
+            String base,
+            String conch,
+            String action
+    ) {
+        ConchRegistry registry = new ConchRegistry();
+        registry.put(ConchParser.parse(yaml));
+        return new RuleEngine(registry, sessions).execute(EngineTestSupport.request(
+                Origin.OFFICIAL,
+                conch,
+                action,
+                "alice",
+                Map.of(),
+                EngineTestSupport.account("alice", EngineTestSupport.PASSWORD, base)));
+    }
+
+    private static String loginCookieConch() {
+        return """
+                conch: login_cookie
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                auth:
+                  steps:
+                    - request: { method: GET, path: /login }
+                    - assert: { cookie_exists: session-cookie-name }
+                actions:
+                  ping:
+                    title: 能力
+                    description: 说明
+                    output:
+                      value: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { value: ok }
+                    notes: 注意
+                    steps:
+                      - set: { seen: true }
+                """;
+    }
+
     private int apply(
             Map<String, Object> spec,
             Map<String, Object> vars,

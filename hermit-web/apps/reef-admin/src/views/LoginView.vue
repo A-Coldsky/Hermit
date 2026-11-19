@@ -4,6 +4,7 @@ import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { errorText } from '@shared/format'
 import { ApiError } from '@shared/http'
+import HermitMark from '@shared/components/HermitMark.vue'
 import { api } from '../api'
 import { consumeExpiredRedirect, setRole, signIn } from '../auth'
 
@@ -42,11 +43,7 @@ async function submit() {
 <template>
   <div class="login">
     <section class="brand">
-      <svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true">
-        <path d="M10 44c0-14 10-26 24-26 9 0 17 5 20 13-6-3-12-2-16 2 5 1 9 5 9 11H10z" fill="currentColor" />
-        <circle cx="26" cy="34" r="3" fill="#0f172a" />
-        <path d="M8 48h48" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
-      </svg>
+      <HermitMark variant="reef" :size="64" :tile="false" intro />
       <h1>Hermit Reef</h1>
       <p>把内网老系统包装成可调用的 OpenAPI 与 MCP 能力。在这里上传、发布和停用规则包，并查看各 Crab 回传的运行指标。</p>
       <ul class="points">

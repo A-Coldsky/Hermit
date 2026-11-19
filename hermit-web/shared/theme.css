@@ -100,6 +100,20 @@ html:root {
   --hm-tip-border: transparent;
   --hm-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
   --hm-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* 品牌插画：寄居蟹（Crab）、珊瑚（Reef）和贝壳。只用于图标与装饰，不当文字色。 */
+  --hm-mark-tile: #10272b;
+  --hm-crab: #f26b4f;
+  --hm-shell: #f59e0b;
+  --hm-shell-line: #b45309;
+  --hm-shell-shine: #fcd34d;
+  --hm-shell-old: #cdd6d9;
+  --hm-shell-old-line: #8c9ca2;
+  --hm-shell-alt: #5eead4;
+  --hm-shell-alt-line: #0f766e;
+  --hm-coral: #2dd4bf;
+  --hm-eye: #ffffff;
+  --hm-pupil: #10272b;
 }
 
 /* 暗色：明暗阶按 Element 暗色主题的算法，light-N 与 #141414 混合，dark-2 与白色混合。 */
@@ -181,6 +195,8 @@ html.dark {
   --hm-shadow-raised: 0 6px 20px rgba(0, 0, 0, 0.4);
   --hm-shadow-lg: 0 8px 24px -6px rgba(0, 0, 0, 0.55);
   --hm-subtle: #182024;
+  --hm-shell-old: #3a4b50;
+  --hm-shell-old-line: #6f848a;
   --hm-teal-soft: #143f3a;
   --hm-ring: 0 0 0 3px rgba(20, 184, 166, 0.3);
   --hm-hover-border: #34434a;

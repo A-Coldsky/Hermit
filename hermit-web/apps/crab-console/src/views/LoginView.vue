@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { errorText } from '@shared/format'
 import { ApiError } from '@shared/http'
+import HermitMark from '@shared/components/HermitMark.vue'
 import { api } from '../api'
 import { markSignedIn, refreshSession, safeRedirect } from '../session'
 
@@ -44,6 +45,7 @@ async function submit() {
 <template>
   <div class="login">
     <el-form class="form" label-position="top" size="large" @submit.prevent="submit">
+      <HermitMark variant="crab" :size="52" intro class="mark" />
       <h2>Crab 本地控制台</h2>
       <p class="lead">这台 Crab 设置了控制台口令，输入后才能继续</p>
       <el-form-item label="控制台口令">
@@ -86,6 +88,10 @@ async function submit() {
   border-radius: 18px;
   padding: 36px 32px 28px;
   box-shadow: var(--hm-shadow-lg);
+}
+
+.mark {
+  margin-bottom: 16px;
 }
 
 .form h2 {

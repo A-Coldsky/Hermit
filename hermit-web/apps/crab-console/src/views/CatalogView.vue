@@ -10,6 +10,7 @@ import { notifyError } from '@shared/format'
 import { api, type Catalog, type CatalogConch } from '../api'
 import { outcomeLabels, syncReasonLabels } from '../labels'
 import { refreshPending } from '../status'
+import ShellSwapLoader from '../components/ShellSwapLoader.vue'
 import { unsubscribeMessage } from '../copy'
 import { repairConch, updateConch } from '../update'
 
@@ -160,6 +161,7 @@ onMounted(load)
         <span v-if="catalog.syncedAt">目录更新于 <TimeText :value="catalog.syncedAt" /></span>
         <span v-else>还没有从 Reef 取到目录</span>
       </div>
+      <ShellSwapLoader v-if="syncing" label="正在从 Reef 拉取目录…" class="swap" />
       <p class="hm-scroll-hint">表格可以左右滑动，「订阅」在最右侧。</p>
       <el-table v-loading="loading" :data="rows">
         <template #empty>
@@ -234,6 +236,10 @@ onMounted(load)
   gap: 16px;
   margin-bottom: 8px;
   font-size: 12.5px;
+}
+
+.swap {
+  margin-bottom: 8px;
 }
 
 .meta b {

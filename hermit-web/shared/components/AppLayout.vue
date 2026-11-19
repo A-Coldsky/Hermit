@@ -4,6 +4,7 @@ import type { Component } from 'vue'
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { colorMode, toggleColorMode } from '../color-mode'
+import HermitMark from './HermitMark.vue'
 
 export interface NavItem {
   to: string
@@ -15,6 +16,7 @@ export interface NavItem {
 const props = defineProps<{
   product: string
   subtitle: string
+  mark: 'crab' | 'reef'
   items: NavItem[]
 }>()
 
@@ -67,12 +69,7 @@ function toggleSidebar() {
   <div class="layout" :class="{ collapsed, 'drawer-open': drawerOpen }">
     <aside class="sidebar">
       <div class="brand">
-        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
-          <path d="M6 22c0-7 5-13 12-13 4 0 8 3 8 8v5H6z" fill="#14b8a6" />
-          <path d="M10 22c0-4 3-8 8-8" stroke="#10272b" stroke-width="2" fill="none" />
-          <circle cx="22" cy="12" r="1.6" fill="#10272b" />
-          <path d="M4 24h24" stroke="#f59e0b" stroke-width="2.4" stroke-linecap="round" />
-        </svg>
+        <HermitMark :variant="mark" :size="34" class="logo" />
         <div class="brand-text">
           <div class="product">{{ product }}</div>
           <div class="subtitle">{{ subtitle }}</div>
@@ -177,13 +174,8 @@ function toggleSidebar() {
 }
 
 .logo {
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
-  background: #e6fffb;
   border-radius: 10px;
-  padding: 3px;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 6px 16px -6px rgba(20, 184, 166, 0.6);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 6px 16px -6px rgba(20, 184, 166, 0.6);
 }
 
 .product {

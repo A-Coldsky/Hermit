@@ -56,7 +56,7 @@ function logout() {
 </script>
 
 <template>
-  <AppLayout product="Reef" subtitle="Hermit 管理端" :items="items">
+  <AppLayout product="Reef" mark="reef" subtitle="Hermit 管理端" :items="items">
     <template #topbar>
       <el-dropdown trigger="click" @command="onCommand">
         <el-button text data-test="account-menu">

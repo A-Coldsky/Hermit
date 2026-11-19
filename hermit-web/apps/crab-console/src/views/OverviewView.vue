@@ -12,6 +12,8 @@ import { api, type CallSummary, type CrabRelease, type DebugState, type ConchSum
 import { outcomeLabels, syncReasonLabels } from '../labels'
 import { refreshPending } from '../status'
 import { repairConch } from '../update'
+import ShellPicker from '../components/ShellPicker.vue'
+import ShellSwapLoader from '../components/ShellSwapLoader.vue'
 
 const router = useRouter()
 
@@ -273,6 +275,7 @@ onMounted(load)
           <span>同步状态</span>
           <span v-if="syncedAt" class="hm-muted small">{{ relativeTime(syncedAt) }}同步</span>
         </div>
+        <ShellSwapLoader v-if="syncing" label="正在从 Reef 拉取规则包…" class="swap" />
         <p v-if="syncIntervalText" class="hm-muted small sync-interval" data-test="sync-interval">
           {{ syncIntervalText }}。Reef 发布新版后，要等下次同步或点「立即同步」才看得到。
         </p>
@@ -370,7 +373,10 @@ onMounted(load)
       <div class="hm-card">
         <div class="hm-card-title">
           <span>开发者模式</span>
-          <el-tag v-if="debug.enabled" type="warning" effect="plain" size="small">开发者模式</el-tag>
+          <span v-if="debug.enabled" class="debug-badge">
+            <ShellPicker />
+            <el-tag type="warning" effect="plain" size="small">开发者模式</el-tag>
+          </span>
         </div>
         <div class="debug">
           <el-switch
@@ -534,6 +540,16 @@ onMounted(load)
 
 :deep(.clickable) {
   cursor: pointer;
+}
+
+.swap {
+  margin-bottom: 12px;
+}
+
+.debug-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .debug p {

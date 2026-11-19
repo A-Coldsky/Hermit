@@ -287,6 +287,19 @@ public final class DevTraceDraft {
         return piece;
     }
 
+    /** 脚本失败。没有抛出位置时只记变量名，例如模板还没跑到脚本。 */
+    public static Map<String, Object> scriptFailurePiece(Map<String, Object> values, ScriptFault fault) {
+        if (fault == null) {
+            return variablePiece("script", values);
+        }
+        LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
+        piece.put("type", "script");
+        piece.put("variables", variables(values));
+        piece.put("passed", false);
+        piece.put("scriptError", fault.view());
+        return piece;
+    }
+
     public static Map<String, Object> headers(Object raw) {
         Map<String, Object> source = Values.map(raw);
         if (source == null && raw instanceof Map<?, ?> map) {

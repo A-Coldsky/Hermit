@@ -299,7 +299,7 @@ class ScriptLibraryEngineTest {
                       ???
                 """);
         assertThat(result.success()).isFalse();
-        assertThat(result.error().message()).isEqualTo("Rhino SyntaxError line 2");
+        assertThat(result.error().message()).isEqualTo("脚本 code 第 2 行第 3 列：syntax error");
     }
 
     @Test

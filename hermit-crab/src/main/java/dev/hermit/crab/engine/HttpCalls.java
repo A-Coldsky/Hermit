@@ -374,6 +374,20 @@ final class HttpCalls {
         return text.substring(0, newline + 1) + clipUtf8(text.substring(newline + 1), UPSTREAM_BODY_LIMIT);
     }
 
+    /**
+     * 打码之后的对外说明。不超过 8 KiB 的原文保留；更长的截到 4 KiB UTF-8。
+     * 上游 5xx 的正文已经先截过，短前缀加 4 KiB 不会再进这里。
+     */
+    static String clipPublic(String text) {
+        if (text == null) {
+            return null;
+        }
+        if (text.getBytes(StandardCharsets.UTF_8).length <= 8192) {
+            return text;
+        }
+        return clipUtf8(text, UPSTREAM_BODY_LIMIT);
+    }
+
     static Set<String> sensitiveValues(Map<String, Object> vars, CookieStore cookies) {
         LinkedHashSet<String> raw = new LinkedHashSet<>();
         if (vars != null) {
@@ -1115,7 +1129,7 @@ final class HttpCalls {
         };
     }
 
-    private static String clipUtf8(String text, int maxBytes) {
+    static String clipUtf8(String text, int maxBytes) {
         if (text == null || text.isEmpty() || maxBytes <= 0) {
             return "";
         }

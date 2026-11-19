@@ -62,14 +62,6 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     public static final String INCOMPLETE = "上游响应不完整。";
 
     private static final Pattern UNKNOWN_TOOL_TEXT = Pattern.compile("(?i)^Tool\\s+\\S+\\s+not found\\s*$");
-    /**
-     * 作用在 {@code credential} 表达式上的变换过滤器。{@code default} 不算：没命中时结果是作者写的字面量。
-     * 参数里可以再出现括号，但不嵌套。
-     */
-    private static final Pattern CREDENTIAL_TRANSFORM = Pattern.compile(
-            "\\{\\{\\s*credential(?:\\.[A-Za-z_][A-Za-z0-9_]*|\\[[0-9]+\\])*"
-                    + "(?:\\s*\\|\\s*[A-Za-z_][A-Za-z0-9_]*(?:\\([^)]*\\))?)*"
-                    + "\\s*\\|\\s*(?:md5|sha256|base64|urlencode|trim|date|rsa)\\b");
     private static final String INPUT_VALIDATION = "Input validation error:";
     private static final int MESSAGE_LIMIT = 500;
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -78,7 +70,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     private final McpOAuth oauth;
     private final KnownSecrets knownSecrets;
     private final Duration capabilityTimeout;
-    private final TemplateEngine templates = new TemplateEngine();
+    private final TemplateEngine templates;
     private final InputPreparer inputs = new InputPreparer();
     private volatile DevTraceStore traces;
 
@@ -106,12 +98,27 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             Clock clock,
             HttpMessageLimits headers
     ) {
+        this(accounts, knownSecrets, capabilityTimeout, concurrency, vault, clock, headers, new TemplateEngine());
+    }
+
+    /** 测试可以换上带额外过滤器的引擎。生产构造仍用默认过滤器。 */
+    McpForwarder(
+            SessionManager accounts,
+            KnownSecrets knownSecrets,
+            Duration capabilityTimeout,
+            int concurrency,
+            CredentialVault vault,
+            Clock clock,
+            HttpMessageLimits headers,
+            TemplateEngine templates
+    ) {
         if (concurrency < 1 || concurrency > 32) {
             throw new IllegalArgumentException("mcp concurrency must be 1..32");
         }
         HttpMessageLimits limits = headers == null ? HttpMessageLimits.defaults() : headers;
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
         this.capabilityTimeout = capabilityTimeout;
+        this.templates = templates == null ? new TemplateEngine() : templates;
         this.sessions = new McpUpstreamSessions(new McpUpstreamClient(limits), accounts, concurrency);
         this.oauth = new McpOAuth(
                 vault, accounts, sessions::discard, this.knownSecrets, clock, new McpOAuthClient(limits));
@@ -661,7 +668,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
                 throw new TemplateException(null, "请求头 " + entry.getKey() + " 的渲染结果不是文本");
             }
             rendered.put(entry.getKey(), text);
-            if (credentialHeader(entry.getValue(), text, account)) {
+            if (credentialHeader(entry.getValue(), text)) {
                 knownSecrets.add(text);
             }
         }
@@ -669,21 +676,14 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     }
 
     /**
-     * 字面量和只从 {@code config} 渲染出来的头不登记。凭证原文，以及 {@code base64} 这类换过的派生值，要登记。
+     * 字面量和只从 {@code config} 渲染出来的头不登记。模板只要读了 {@code credential}，
+     * 渲染结果达到 4 个字符就整段登记，不看出了哪个过滤器。{@code default} 的字面量若和
+     * credential 写在同一条模板里，也会登记。
      */
-    private boolean credentialHeader(String template, String rendered, AccountContext account) {
-        if (template == null || !templates.referencesCredential(template)) {
-            return false;
-        }
-        Map<String, String> credentials = account == null ? null : account.credentials();
-        if (credentials != null) {
-            for (String secret : credentials.values()) {
-                if (secret != null && secret.length() >= 4 && rendered.contains(secret)) {
-                    return true;
-                }
-            }
-        }
-        return CREDENTIAL_TRANSFORM.matcher(template).find();
+    private boolean credentialHeader(String template, String rendered) {
+        return template != null
+                && rendered.length() >= 4
+                && templates.referencesCredential(template);
     }
 
     private Redactor redactor(AccountContext account) {

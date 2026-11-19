@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -24,6 +25,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.template.FilterRegistry;
+import dev.hermit.common.template.TemplateEngine;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.engine.AccountContext;
 import dev.hermit.crab.engine.ExecutionRequest;
@@ -266,6 +269,88 @@ class McpForwardTest {
                     .isEqualTo("上游 JSON-RPC -32000")
                     .doesNotContain("：")
                     .doesNotContain("HTTP");
+        }
+    }
+
+    @Test
+    void credentialThroughAnUnlistedFilterIsMasked() throws Exception {
+        String phrase = "se cret";
+        String derived = phrase.toUpperCase(Locale.ROOT);
+        String visible = "visible-note";
+        String mixed = "mixed-note";
+        TemplateEngine templates = new TemplateEngine(FilterRegistry.defaults().register(
+                "upper", (value, args) -> String.valueOf(value).toUpperCase(Locale.ROOT)));
+        try (Upstream upstream = new Upstream();
+                SessionManager accounts = new SessionManager();
+                McpForwarder forwarder = new McpForwarder(
+                        accounts, KnownSecrets.empty(), Duration.ofSeconds(4), 1, null, null, null, templates)) {
+            ConchDoc doc = ConchParser.parse("""
+                    conch: vendor_crm
+                    version: 1.4.0
+                    driver: mcp
+                    min_crab_version: 1.1.0
+                    title: 客户系统（源站 MCP）
+                    description: 未列入旧名单的过滤器也要打码。
+                    credentials:
+                      token: {type: secret, label: 令牌, required: true}
+                      phrase: {type: secret, label: 短语, required: true}
+                      short: {type: secret, label: 短, required: false}
+                    config:
+                      tenant: {type: text, label: 租户, required: false, default: visible-note}
+                      other: {type: text, label: 其它, required: false, default: mixed-note}
+                    upstream:
+                      url: http://127.0.0.1:%d/mcp
+                      transport: streamable_http
+                      auth: {type: headers}
+                      headers:
+                        Authorization: "Bearer {{credential.token}}"
+                        X-Tenant: "{{credential.phrase | upper}}"
+                        X-Short: "{{credential.short | upper}}"
+                        X-Plain: "{{config.tenant}}"
+                        X-Mixed: "{{config.other | default(credential.phrase)}}"
+                        X-Type: application/json
+                    actions:
+                      search_customer:
+                        tool: searchCustomer
+                        title: 搜索客户
+                        description: 按名称搜索。
+                        mcp: {read_only: true}
+                        input_schema:
+                          type: object
+                          properties:
+                            q: {type: string}
+                          required: [q]
+                    """.formatted(upstream.port()));
+            upstream.rpcCode = -32000;
+            upstream.rpcMessage = "xx" + derived + "yy " + mixed + " " + visible + " ABC application/json";
+            ExecutionResult result = forwarder.execute(new ExecutionRequest(
+                    "trace-upper",
+                    Origin.OFFICIAL,
+                    doc.conch(),
+                    "search_customer",
+                    Map.of("q", "ada"),
+                    "alice",
+                    new AccountContext() {
+                        @Override
+                        public Map<String, String> credentials() {
+                            return Map.of("token", TOKEN, "phrase", phrase, "short", "abc");
+                        }
+
+                        @Override
+                        public Map<String, String> config() {
+                            return Map.of("tenant", visible, "other", mixed);
+                        }
+                    }), doc);
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
+            String message = result.error().message();
+            assertThat(message).startsWith("上游 JSON-RPC -32000：");
+            assertThat(message).contains("xx***yy").contains(visible).contains("ABC").contains("application/json");
+            assertThat(message).doesNotContain(derived).doesNotContain(phrase).doesNotContain(mixed);
+            SecretChecks.absent(message, derived);
+            SecretChecks.absent(message, phrase);
+            assertThat(upstream.tools()).isEqualTo(1);
+            assertThat(upstream.toolHits().get(0).tenant).isEqualTo(derived);
         }
     }
 
@@ -836,7 +921,7 @@ class McpForwardTest {
                   headers:
                     Authorization: "Bearer {{credential.token}}"
                     X-Tenant: "{{config.tenant}}"
-                    X-Fallback: "{{config.tenant | default(credential.token)}}"
+                    X-Fallback: "{{config.tenant | default('plain-fallback')}}"
                     X-Type: application/json
                     X-Enc: "{{credential.phrase | base64}}"
                 actions:

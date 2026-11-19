@@ -380,7 +380,7 @@ class ScriptFailureReportTest {
                     - extract:
                         name: { regex: "%s" }
                     """.formatted(secret)), base(server), trace);
-            String masked = "提取 name 失败：regex *** 匹配 0 条";
+            String masked = "提取 name 失败：正则 *** 匹配 0 条";
             assertThat(result.success()).isFalse();
             assertThat(result.error().message()).isEqualTo(masked);
             assertThat(result.error().message()).doesNotContain("收件箱");

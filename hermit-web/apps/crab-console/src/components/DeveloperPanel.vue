@@ -6,6 +6,7 @@ import JsonBlock from '@shared/components/JsonBlock.vue'
 import { ApiError, type Envelope } from '@shared/http'
 import { copyText, errorCodeLabels, errorText, notifyError } from '@shared/format'
 import { api, type Account, type CapabilityState, type McpRefreshResult } from '../api'
+import ShellPicker from './ShellPicker.vue'
 import TrustJump from './TrustJump.vue'
 
 const props = defineProps<{
@@ -123,7 +124,7 @@ async function refreshTools() {
     </p>
   </div>
   <div v-else class="hm-card" data-test="developer-panel">
-    <div class="hm-card-title"><span>开发者模式</span></div>
+    <div class="hm-card-title"><span>开发者模式</span><ShellPicker /></div>
     <p class="hm-muted hint">
       试跑不需要 API Key，也不上报 Tide。追踪写在调用详情里，关掉开发者模式会立刻删除。
     </p>

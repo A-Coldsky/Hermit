@@ -8,6 +8,7 @@ const crab = vi.hoisted(() => ({
   debug: vi.fn(),
   setDebug: vi.fn(),
   syncStatus: vi.fn(),
+  sync: vi.fn(),
 }))
 
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
@@ -177,5 +178,31 @@ describe('Crab 概览', () => {
     await flushPromises()
     expect(linked.get('a[href="https://example.invalid/crab.jar"]').text()).toBe('https://example.invalid/crab.jar')
   })
-})
 
+  it('换壳动画只在同步进行中出现', async () => {
+    const pending = deferred<ReturnType<typeof report>>()
+    crab.sync.mockReturnValue(pending.promise)
+    const wrapper = await mountPage(OverviewView)
+    await flushPromises()
+    expect(wrapper.find('[data-test="shell-swap"]').exists()).toBe(false)
+
+    await wrapper.findAll('button').find((b) => b.text().includes('立即同步'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="shell-swap"]').text()).toContain('正在从 Reef 拉取规则包')
+
+    pending.resolve(report({}))
+    await flushPromises()
+    expect(wrapper.find('[data-test="shell-swap"]').exists()).toBe(false)
+  })
+
+  it('挑壳的小螃蟹只在开发者模式打开时出现', async () => {
+    const off = await mountPage(OverviewView)
+    await flushPromises()
+    expect(off.find('[data-test="shell-picker"]').exists()).toBe(false)
+
+    crab.debug.mockResolvedValue({ enabled: true, expiresAt: null })
+    const on = await mountPage(OverviewView)
+    await flushPromises()
+    expect(on.find('[data-test="shell-picker"]').exists()).toBe(true)
+  })
+})

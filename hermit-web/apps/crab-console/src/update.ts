@@ -68,7 +68,7 @@ export async function repairConch(conch: string, reason: string | null): Promise
 }
 
 /** 确认后安装最近一次同步看到的更高版本。返回是否已切换。 */
-export async function updateConch(target: UpdateTarget): Promise<boolean> {
+export async function updateConch(target: UpdateTarget, onStart?: () => void): Promise<boolean> {
   const from = target.installedVersion ? `v${target.installedVersion}` : '当前版本'
   const to = target.latestVersion ? `v${target.latestVersion}` : '最新版本'
   const credentials = target.newRequiredCredentials.length
@@ -83,6 +83,7 @@ export async function updateConch(target: UpdateTarget): Promise<boolean> {
   } catch {
     return false
   }
+  onStart?.()
   try {
     const result = await api.update(target.conch)
     const kind = result.outcome?.kind

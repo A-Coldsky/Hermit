@@ -2,7 +2,7 @@ import { flushPromises } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../shared/http'
-import { mountPage } from './helpers'
+import { deferred, mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
   catalog: vi.fn(),
@@ -113,6 +113,27 @@ describe('可订阅规则包', () => {
     expect(wrapper.text()).toContain('已订阅')
     expect(wrapper.text()).toContain('已安装 v1.1.0')
     expect(buttons(wrapper, '取消订阅')).toHaveLength(1)
+  })
+
+  it('订阅安装期间这一行显示换壳动画，结束后撤掉', async () => {
+    crab.catalog.mockResolvedValue({ conches: [entry()], syncedAt: '2026-10-30T00:00:00Z', configured: true })
+    const pending = deferred<unknown>()
+    crab.subscribe.mockReturnValue(pending.promise)
+    const wrapper = await mountPage(CatalogView)
+    await flushPromises()
+    expect(wrapper.find('[data-test="row-swap"]').exists()).toBe(false)
+
+    await buttons(wrapper, '订阅')[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="row-swap"]').exists()).toBe(true)
+
+    pending.resolve({
+      conch: 'legacy_oa',
+      subscribed: true,
+      outcome: { conch: 'legacy_oa', version: '1.1.0', kind: 'INSTALLED', reason: null },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-test="row-swap"]').exists()).toBe(false)
   })
 
   it('订阅结果没有安装结果时不说已安装到本机', async () => {

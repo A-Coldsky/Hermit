@@ -10,6 +10,7 @@ import { notifyError } from '@shared/format'
 import { api, type Catalog, type CatalogConch } from '../api'
 import { outcomeLabels, syncReasonLabels } from '../labels'
 import { refreshPending } from '../status'
+import ShellSwapLoader from '../components/ShellSwapLoader.vue'
 import { unsubscribeMessage } from '../copy'
 import { repairConch, updateConch } from '../update'
 
@@ -17,6 +18,8 @@ const router = useRouter()
 const loading = ref(true)
 const syncing = ref(false)
 const busy = ref<string | null>(null)
+/** 正在订阅安装的那一行，用来显示换壳动画。 */
+const installing = ref<string | null>(null)
 const catalog = ref<Catalog | null>(null)
 /** 同步标为需要修复、但目录还没有 repairRequired 的包（例如指针丢失）。 */
 const repairs = ref(new Map<string, string | null>())
@@ -63,6 +66,7 @@ async function refreshFromReef() {
 
 async function subscribe(row: CatalogConch) {
   busy.value = row.conch
+  installing.value = row.conch
   try {
     const result = await api.subscribe(row.conch)
     const kind = result.outcome?.kind
@@ -84,6 +88,7 @@ async function subscribe(row: CatalogConch) {
     await load()
   } finally {
     busy.value = null
+    installing.value = null
   }
 }
 
@@ -160,6 +165,7 @@ onMounted(load)
         <span v-if="catalog.syncedAt">目录更新于 <TimeText :value="catalog.syncedAt" /></span>
         <span v-else>还没有从 Reef 取到目录</span>
       </div>
+      <ShellSwapLoader v-if="syncing" label="正在从 Reef 拉取目录…" class="swap" />
       <p class="hm-scroll-hint">表格可以左右滑动，「订阅」在最右侧。</p>
       <el-table v-loading="loading" :data="rows">
         <template #empty>
@@ -185,7 +191,8 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="本机状态" min-width="200">
           <template #default="{ row }">
-            <div class="tags">
+            <ShellSwapLoader v-if="installing === row.conch" compact label="正在换上新壳…" data-test="row-swap" />
+            <div v-else class="tags">
               <el-tag v-if="row.localConflict" type="warning" effect="plain" size="small">与本地规则包同名</el-tag>
               <el-tag v-if="row.subscribed" type="success" effect="plain" size="small">已订阅</el-tag>
               <el-tag v-else-if="!row.localConflict" type="info" effect="plain" size="small">未订阅</el-tag>
@@ -234,6 +241,10 @@ onMounted(load)
   gap: 16px;
   margin-bottom: 8px;
   font-size: 12.5px;
+}
+
+.swap {
+  margin-bottom: 8px;
 }
 
 .meta b {

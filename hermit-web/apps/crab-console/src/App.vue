@@ -23,7 +23,7 @@ onMounted(refreshPending)
 </script>
 
 <template>
-  <AppLayout product="Crab" subtitle="Hermit 本地控制台" :items="items">
+  <AppLayout product="Crab" mark="crab" subtitle="Hermit 本地控制台" :items="items">
     <template #topbar>
       <el-tag type="info" effect="plain" size="small">仅限本机访问</el-tag>
       <el-button

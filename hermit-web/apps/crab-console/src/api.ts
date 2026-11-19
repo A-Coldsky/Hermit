@@ -626,7 +626,8 @@ export interface SyncReport {
 export interface ValidationIssue {
   /**
    * 校验代码。请求编码相关：`IGNORED_REQUEST_FIELD`、`DOUBLE_ENCODE`、
-   * `PERCENT_ENCODED`、`FRAGMENT_DROPPED` 是警告，不阻止保存；`QUERY_STYLE` 是错误。
+   * `PERCENT_ENCODED`、`FRAGMENT_DROPPED`、`BODY_CONTENT_TYPE` 是警告，不阻止保存；
+   * `QUERY_STYLE` 和 `REQUEST_BODY` 是错误。
    * 提取和 assert 的形状：`EXTRACT_SPEC`、`EXTRACT_FIELD`、`EXTRACT_OPTIONAL`、
    * `ASSERT_KEY`、`ASSERT_STATUS` 是警告，不阻止保存。
    * `HOSTNAME` 是错误（下划线或非 ASCII 主机名）；`SINGLE_LABEL_HOST` 是警告。
@@ -645,10 +646,11 @@ export interface LocalImportResult {
   /**
    * 不阻止保存。控制台给这些代码加短中文：`IGNORED_REQUEST_FIELD`（未知字段不会发送）、
    * `DOUBLE_ENCODE`（`query` / `form` 用了 `urlencode`）、`PERCENT_ENCODED`（`query` 字面值里已有 `%xx`）、
-   * `FRAGMENT_DROPPED`（path 或 url 里的 `#`）。
+   * `FRAGMENT_DROPPED`（path 或 url 里的 `#`）、`BODY_CONTENT_TYPE`（`body` 未声明 Content-Type）。
    * `EXTRACT_SPEC`、`EXTRACT_FIELD`、`EXTRACT_OPTIONAL`、`ASSERT_KEY`、`ASSERT_STATUS` 也是警告，不阻止保存；
    * 没有单独的短标签，仍显示服务端 message。未知代码同样显示服务端 message。
-   * 不合法的 `query_style` 是错误 `QUERY_STYLE`，出现在失败响应的 `errors`，不在这份列表里。
+   * 不合法的 `query_style` 是错误 `QUERY_STYLE`，`body` 与 `form`/`json` 冲突或不是字符串是错误 `REQUEST_BODY`，
+   * 出现在失败响应的 `errors`，不在这份列表里。
    */
   warnings: ValidationIssue[]
   /** 覆盖时的上一版。新建为 null。 */

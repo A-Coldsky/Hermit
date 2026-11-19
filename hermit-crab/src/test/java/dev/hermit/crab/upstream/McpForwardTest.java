@@ -81,7 +81,7 @@ class McpForwardTest {
             SecretChecks.absent(call.body, lab.key.plaintext());
             Hit opened = upstream.initHits().get(0);
             assertThat(opened.session).isNull();
-            assertThat(opened.body).contains("2025-11-25").contains("hermit-crab").contains("1.6.0");
+            assertThat(opened.body).contains("2025-11-25").contains("hermit-crab").contains("1.7.0");
             assertThat(opened.body).contains("\"capabilities\":{}");
 
             upstream.mode = Mode.SSE;

@@ -74,7 +74,7 @@ public final class ConchValidator {
     private static final int SCRIPT_TIMEOUT_MAX = 5000;
     private static final Set<String> SCRIPT_KEYS = Set.of("code", "into", "timeout_ms", "use", "credential");
     private static final Set<String> REQUEST_KEYS = Set.of(
-            "method", "path", "url", "query", "headers", "form", "json",
+            "method", "path", "url", "query", "headers", "form", "json", "body",
             "encoding", "follow_redirects", "timeout_ms", "query_style");
     private static final Set<String> EXTRACT_SELECTORS = Set.of("css", "xpath", "jsonpath", "regex");
     private static final Set<String> EXTRACT_KEYS = Set.of(
@@ -137,6 +137,7 @@ public final class ConchValidator {
                     "min_crab_version " + doc.minCrabVersion() + " 高于当前 Crab " + ctx.currentCrabVersion()));
         }
         checkScriptLibraries(doc, errors);
+        checkRequestBodyFeatures(doc, errors);
         if (mcp) {
             if (doc.minCrabVersion().compareTo(McpLimits.MIN_CRAB_VERSION) < 0) {
                 errors.add(issue(
@@ -652,6 +653,23 @@ public final class ConchValidator {
                     ValidationCodes.QUERY_STYLE,
                     path + ".query_style",
                     "query_style 只允许 url 或 form"));
+        }
+        Object body = request.get("body");
+        Object form = request.get("form");
+        Object json = request.get("json");
+        int kinds = (body != null ? 1 : 0) + (form != null ? 1 : 0) + (json != null ? 1 : 0);
+        if (kinds > 1) {
+            errors.add(issue(ValidationCodes.REQUEST_BODY, path, RequestBodies.EXCLUSIVE));
+        }
+        if (body != null && !(body instanceof String)) {
+            errors.add(issue(ValidationCodes.REQUEST_BODY, path + ".body", RequestBodies.BODY_TYPE));
+        }
+        if (warnings != null
+                && body instanceof String
+                && form == null
+                && json == null
+                && !declaresContentType(request.get("headers"))) {
+            warnings.add(issue(ValidationCodes.BODY_CONTENT_TYPE, path + ".body", RequestBodies.CONTENT_TYPE));
         }
         checkLiteralHost(path + ".path", request.get("path"), errors, warnings);
         checkLiteralHost(path + ".url", request.get("url"), errors, warnings);
@@ -1922,6 +1940,161 @@ public final class ConchValidator {
                     break;
             }
             i += Character.charCount(codePoint);
+        }
+        return false;
+    }
+
+    private static void checkRequestBodyFeatures(ConchDoc doc, List<ValidationIssue> errors) {
+        boolean body = usesRawBody(doc);
+        boolean xml = usesXmlEscape(doc);
+        if (!body && !xml) {
+            return;
+        }
+        if (doc.minCrabVersion().compareTo(RequestBodies.MIN_CRAB_VERSION) >= 0) {
+            return;
+        }
+        if (body) {
+            errors.add(issue(ValidationCodes.MIN_CRAB_VERSION, "min_crab_version", RequestBodies.BODY_VERSION));
+        }
+        if (xml) {
+            errors.add(issue(ValidationCodes.MIN_CRAB_VERSION, "min_crab_version", RequestBodies.XML_ESCAPE_VERSION));
+        }
+    }
+
+    private static boolean usesRawBody(ConchDoc doc) {
+        if (doc.auth() != null) {
+            if (stepsUseBody(doc.auth().steps())) {
+                return true;
+            }
+            AliveCheck alive = doc.auth().aliveCheck();
+            if (alive != null && mapUsesBody(alive.request())) {
+                return true;
+            }
+        }
+        for (Action action : doc.actions().values()) {
+            if (stepsUseBody(action.steps())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean stepsUseBody(List<Step> steps) {
+        if (steps == null) {
+            return false;
+        }
+        for (Step step : steps) {
+            if ("request".equals(step.type()) && mapUsesBody(step.def())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean mapUsesBody(Map<String, Object> map) {
+        return map != null && map.get("body") != null;
+    }
+
+    /**
+     * 只看会渲染的模板，以及提取步骤的 filter 链。
+     * script 的 code、use、credential 和脚本库源码不是模板，出现这几个字也不算。
+     */
+    private static boolean usesXmlEscape(ConchDoc doc) {
+        if (doc.auth() != null) {
+            if (stepsUseXml(doc.auth().steps())) {
+                return true;
+            }
+            AliveCheck alive = doc.auth().aliveCheck();
+            if (alive != null && TEMPLATES.usesFilter(alive.request(), RequestBodies.FILTER)) {
+                return true;
+            }
+        }
+        for (Action action : doc.actions().values()) {
+            if (stepsUseXml(action.steps()) || TEMPLATES.usesFilter(action.output(), RequestBodies.FILTER)) {
+                return true;
+            }
+        }
+        if (doc.upstream() != null) {
+            for (String value : doc.upstream().headers().values()) {
+                if (TEMPLATES.usesFilter(value, RequestBodies.FILTER)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean stepsUseXml(List<Step> steps) {
+        if (steps == null) {
+            return false;
+        }
+        for (Step step : steps) {
+            if ("script".equals(step.type())) {
+                for (Map.Entry<String, Object> entry : step.def().entrySet()) {
+                    if ("code".equals(entry.getKey())
+                            || "use".equals(entry.getKey())
+                            || "credential".equals(entry.getKey())) {
+                        continue;
+                    }
+                    if (TEMPLATES.usesFilter(entry.getValue(), RequestBodies.FILTER)) {
+                        return true;
+                    }
+                }
+                continue;
+            }
+            if ("extract".equals(step.type()) && extractDeclaresXmlEscape(step.def())) {
+                return true;
+            }
+            if (TEMPLATES.usesFilter(step.def(), RequestBodies.FILTER)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean extractDeclaresXmlEscape(Object node) {
+        if (node instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if ("filter".equals(String.valueOf(entry.getKey()))
+                        && entry.getValue() instanceof String text
+                        && RequestBodies.filterChain(text)) {
+                    return true;
+                }
+                if (extractDeclaresXmlEscape(entry.getValue())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (node instanceof List<?> list) {
+            for (Object item : list) {
+                if (extractDeclaresXmlEscape(item)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 非空 Content-Type 才算声明。大小写不敏感；空白值继续看后面的同名键。 */
+    private static boolean declaresContentType(Object headers) {
+        if (!(headers instanceof Map<?, ?> map)) {
+            return false;
+        }
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (entry.getKey() == null || !"content-type".equalsIgnoreCase(String.valueOf(entry.getKey()))) {
+                continue;
+            }
+            Object value = entry.getValue();
+            if (value instanceof String text) {
+                if (!text.isBlank()) {
+                    return true;
+                }
+                continue;
+            }
+            if (value != null) {
+                return true;
+            }
         }
         return false;
     }

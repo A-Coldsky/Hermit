@@ -49,8 +49,12 @@ export const importIssueLabels: Record<string, string> = {
   SINGLE_LABEL_HOST: '单标签主机名',
   VERSION_INVALID: '版本号无效',
   RESERVED_VARIABLE: '保留变量',
-  /** 请求上的未知字段，例如 `body`、`multipart`。警告，不阻止保存。 */
+  /** 请求上的未知字段，例如 `multipart`。警告，不阻止保存。 */
   IGNORED_REQUEST_FIELD: '字段不会发送',
+  /** `body` 不是字符串，或与 `form`、`json` 同时出现。错误，阻止保存。 */
+  REQUEST_BODY: '请求正文无效',
+  /** `body` 没有声明 Content-Type。警告，不阻止保存。 */
+  BODY_CONTENT_TYPE: '未声明 Content-Type',
   /** `query` 或 `form` 的值用了 `| urlencode`。警告，不阻止保存。 */
   DOUBLE_ENCODE: '会被编码两次',
   /** `query` 的字面值里已经有 `%xx`。警告，不阻止保存。 */

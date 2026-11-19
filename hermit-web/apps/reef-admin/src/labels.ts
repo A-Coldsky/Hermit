@@ -79,6 +79,14 @@ export const issueHints: Record<string, IssueHint> = {
     title: '单标签主机名不会发送 SNI',
     hint: 'https 的单标签名可能拿到别的证书。不改也能保存。',
   },
+  REQUEST_BODY: {
+    title: '请求正文无效',
+    hint: 'body、form、json 只能写一个。body 必须是字符串模板。',
+  },
+  BODY_CONTENT_TYPE: {
+    title: '未声明 Content-Type',
+    hint: 'body 会按 text/plain 发送。需要 XML 时在 headers 里声明 Content-Type。不改也能保存。',
+  },
 }
 
 export function isoDaysAgo(days: number): string {

@@ -251,6 +251,103 @@ class RequestWireTest {
         }
     }
 
+    @Test
+    void rawBodyIsSentAsEncodedBytesWithoutFurtherEscaping() throws Exception {
+        String xml = "<object><int name=\"fid\">1</int><string name=\"order\">a&b<c></string></object>";
+        try (RawLoopback loop = RawLoopback.open()) {
+            LinkedHashMap<String, Object> spec = request("POST", "/p");
+            spec.put("headers", Map.of("Content-Type", "application/xml"));
+            spec.put("body", xml);
+            RawLoopback.Hit hit = loop.exchange(spec);
+            assertThat(hit.captured().body).isEqualTo(xml.getBytes(StandardCharsets.UTF_8));
+            assertThat(hit.captured().headers.get("content-type")).isEqualTo("application/xml");
+            assertThat(hit.captured().headerCount("Content-Type")).isEqualTo(1);
+            assertThat(new String(hit.captured().body, StandardCharsets.UTF_8)).doesNotContain("%26").doesNotContain("&amp;");
+            assertThat(hit.result().wire().get("body")).isEqualTo(xml);
+            assertThat(hit.result().wire().get("contentType")).isEqualTo("application/xml");
+
+            LinkedHashMap<String, Object> plain = request("POST", "/p");
+            plain.put("body", xml);
+            RawLoopback.Hit fallback = loop.exchange(plain);
+            assertThat(fallback.captured().headers.get("content-type")).isEqualTo("text/plain; charset=UTF-8");
+            assertThat(fallback.captured().body).isEqualTo(xml.getBytes(StandardCharsets.UTF_8));
+
+            LinkedHashMap<String, Object> gbk = request("POST", "/p");
+            gbk.put("encoding", "GBK");
+            gbk.put("headers", Map.of("content-type", "text/xml"));
+            gbk.put("body", "<string>中</string>");
+            RawLoopback.Hit encoded = loop.exchange(gbk);
+            assertThat(encoded.captured().body).isEqualTo("<string>中</string>".getBytes(Charset.forName("GBK")));
+            assertThat(encoded.captured().headers.get("content-type")).isEqualTo("text/xml");
+            assertThat(encoded.captured().headers.get("content-type")).doesNotContain("charset");
+
+            LinkedHashMap<String, Object> empty = request("POST", "/p");
+            empty.put("body", "");
+            empty.put("headers", Map.of("Content-Type", "application/xml"));
+            RawLoopback.Hit zero = loop.exchange(empty);
+            assertThat(zero.captured().body).isEmpty();
+            assertThat(zero.captured().headers.get("content-type")).isEqualTo("application/xml");
+
+            LinkedHashMap<String, Object> absent = request("POST", "/p");
+            RawLoopback.Hit none = loop.exchange(absent);
+            assertThat(none.captured().body).isEmpty();
+            assertThat(none.captured().headers).doesNotContainKey("content-type");
+        }
+    }
+
+    @Test
+    void declaredContentTypeReplacesFormAndJsonDefaultsWithoutAddingCharset() throws Exception {
+        try (RawLoopback loop = RawLoopback.open()) {
+            LinkedHashMap<String, Object> headers = new LinkedHashMap<>();
+            headers.put("Content-Type", "");
+            headers.put("content-type", "application/xml");
+            LinkedHashMap<String, Object> form = request("POST", "/p");
+            form.put("form", Map.of("f", "X:Y"));
+            form.put("headers", headers);
+            RawLoopback.Hit posted = loop.exchange(form);
+            assertThat(posted.captured().body).isEqualTo("f=X%3AY".getBytes(StandardCharsets.US_ASCII));
+            assertThat(posted.captured().headers.get("content-type")).isEqualTo("application/xml");
+            assertThat(posted.captured().headerCount("Content-Type")).isEqualTo(1);
+
+            LinkedHashMap<String, Object> json = request("POST", "/p");
+            json.put("json", Map.of("n", "ok"));
+            json.put("headers", Map.of("Content-Type", "text/plain"));
+            RawLoopback.Hit written = loop.exchange(json);
+            assertThat(written.captured().body).isEqualTo("{\"n\":\"ok\"}".getBytes(StandardCharsets.UTF_8));
+            assertThat(written.captured().headers.get("content-type")).isEqualTo("text/plain");
+            assertThat(written.captured().headerCount("Content-Type")).isEqualTo(1);
+
+            LinkedHashMap<String, Object> get = request("GET", "/p");
+            get.put("headers", Map.of("Content-Type", "application/xml"));
+            RawLoopback.Hit fetched = loop.exchange(get);
+            assertThat(fetched.captured().body).isEmpty();
+            assertThat(fetched.captured().headers.get("content-type")).isEqualTo("application/xml");
+        }
+    }
+
+    @Test
+    void rawBodyRejectsNonTextAndUnencodableCharactersBeforeTheSocket() throws Exception {
+        try (RawLoopback loop = RawLoopback.open()) {
+            LinkedHashMap<String, Object> both = request("POST", "/p");
+            both.put("body", "<object/>");
+            both.put("json", Map.of("n", 1));
+            RuleProblem exclusive = loop.refuse(both);
+            assertThat(exclusive.getMessage()).isEqualTo("body、form 与 json 互斥");
+
+            LinkedHashMap<String, Object> number = request("POST", "/p");
+            number.put("body", 1);
+            RuleProblem notText = loop.refuse(number);
+            assertThat(notText.getMessage()).isEqualTo("body 的渲染结果不是文本");
+            assertThat(notText.getMessage()).doesNotContain("1");
+
+            LinkedHashMap<String, Object> latin = request("POST", "/p");
+            latin.put("encoding", "ISO-8859-1");
+            latin.put("body", "中");
+            RuleProblem unencodable = loop.refuse(latin);
+            assertThat(unencodable.getMessage()).isEqualTo("body 含有编码无法表示的字符");
+        }
+    }
+
     private static JsonNode storedWire(Map<String, Object> spec, RawLoopback.Hit hit, Set<String> secrets) {
         return ApiJson.tree(render(spec, hit, secrets)).path("steps").get(0).path("wire");
     }

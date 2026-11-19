@@ -318,7 +318,7 @@ describe('本地规则包', () => {
       version: '1.0.0',
       replaced: false,
       warnings: [
-        { code: 'IGNORED_REQUEST_FIELD', path: 'actions.list.steps[0].request.body', message: '这个字段不会被发送', line: 12 },
+        { code: 'IGNORED_REQUEST_FIELD', path: 'actions.list.steps[0].request.payload', message: '这个字段不会被发送', line: 12 },
         { code: 'DOUBLE_ENCODE', path: 'actions.list.steps[0].request.query.func', message: '这个值用了 urlencode，发出去时会被再编码一次' },
         {
           code: 'PERCENT_ENCODED',

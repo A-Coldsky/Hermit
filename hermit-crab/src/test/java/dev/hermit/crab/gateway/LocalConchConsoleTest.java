@@ -51,7 +51,7 @@ class LocalConchConsoleTest {
                           - request:
                               method: GET
                               path: /p
-                              body: nope
+                              payload: nope
                         output:
                           ok: {type: string, description: 结果}
                         examples:
@@ -68,7 +68,7 @@ class LocalConchConsoleTest {
                     .contains("\"code\":\"IGNORED_REQUEST_FIELD\"")
                     .contains("这个字段不会被发送");
 
-            String bad = yaml.replace("conch: encode_warn", "conch: encode_bad").replace("body: nope", "query_style: nope");
+            String bad = yaml.replace("conch: encode_warn", "conch: encode_bad").replace("payload: nope", "query_style: nope");
             HttpResponse<String> rejected = post(
                     server, "/console/api/local-conches", "text/yaml; charset=utf-8",
                     bad.getBytes(StandardCharsets.UTF_8));

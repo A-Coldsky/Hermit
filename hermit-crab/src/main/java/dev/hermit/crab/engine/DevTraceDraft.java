@@ -137,6 +137,40 @@ public final class DevTraceDraft {
         }
     }
 
+    /**
+     * 把一条警告挂到已经记下的步骤上。续跑登录时，产出变量的步骤可能不在这一次追踪里，那时补一条只含警告的步骤。
+     */
+    public void addWarning(String phase, int index, String type, TraceWarning warning) {
+        if (warning == null) {
+            return;
+        }
+        String where = phase == null ? "" : phase;
+        for (int i = steps.size() - 1; i >= 0; i--) {
+            Map<String, Object> step = steps.get(i);
+            if (where.equals(step.get("phase")) && Integer.valueOf(index).equals(step.get("index"))) {
+                appendWarning(step, warning);
+                return;
+            }
+        }
+        LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
+        piece.put("type", type == null || type.isBlank() ? where : type);
+        appendWarning(piece, warning);
+        add(where, index, 0, piece);
+    }
+
+    private static void appendWarning(Map<String, Object> step, TraceWarning warning) {
+        Object current = step.get("warnings");
+        ArrayList<Object> rows = new ArrayList<>();
+        if (current instanceof List<?> list) {
+            rows.addAll(list);
+        }
+        LinkedHashMap<String, String> row = new LinkedHashMap<>();
+        row.put("code", warning.code());
+        row.put("message", warning.message());
+        rows.add(row);
+        step.put("warnings", rows);
+    }
+
     public void add(String phase, int index, long durationMs, Map<String, Object> fields) {
         LinkedHashMap<String, Object> step = new LinkedHashMap<>();
         step.put("index", index);

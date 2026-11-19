@@ -93,9 +93,26 @@ class SyncExceptionTest {
 
     @Test
     void httpStatusFromReefIsNotAnUnreachableError() {
-        assertThat(new SyncException(SyncReasons.http(500)).clientError()).isEmpty();
-        assertThat(new SyncException(SyncReasons.http(404)).clientError()).isEmpty();
-        assertThat(new SyncException("manifest rejected").clientError()).isEmpty();
+        SyncError http = new SyncException(SyncReasons.http(500)).clientError().orElseThrow();
+        assertThat(http.code()).isEqualTo(ErrorCode.INTERNAL);
+        assertThat(http.message()).isEqualTo("Reef 返回了 HTTP 500。");
+        assertThat(http.message()).doesNotContain("无法连接").doesNotContain("令牌").doesNotContain("HTTP_");
+
+        SyncError missing = new SyncException(SyncReasons.http(404)).clientError().orElseThrow();
+        assertThat(missing.message()).isEqualTo("Reef 返回了 HTTP 404。");
+        assertThat(missing.message()).doesNotContain("无法连接");
+        assertThat(SyncErrors.replacesLastSuccess(http)).isFalse();
+        assertThat(SyncErrors.replacesLastSuccess(missing)).isFalse();
+
+        for (String detail : List.of("manifest rejected", "manifest unreadable")) {
+            SyncError manifest = new SyncException(detail).clientError().orElseThrow();
+            assertThat(manifest.code()).isEqualTo(ErrorCode.INTERNAL);
+            assertThat(manifest.message()).isEqualTo("Reef 返回的清单无法读取。");
+            assertThat(manifest.message()).doesNotContain("无法连接").doesNotContain("令牌").doesNotContain(detail);
+            assertThat(SyncErrors.replacesLastSuccess(manifest)).isFalse();
+        }
+        assertThat(new SyncException("HTTP_500 <html>secret</html>").clientError()).isEmpty();
+        assertThat(new SyncException("package unreadable").clientError()).isEmpty();
     }
 
     @Test

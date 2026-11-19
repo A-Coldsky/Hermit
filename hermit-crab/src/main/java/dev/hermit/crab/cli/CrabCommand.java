@@ -29,6 +29,7 @@ import dev.hermit.crab.config.ConfigFileException;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.config.CrabConfigLoader;
 import dev.hermit.crab.engine.ConchRejectedException;
+import dev.hermit.crab.gateway.UserMessages;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.mcp.McpStdio;
 import dev.hermit.crab.upstream.McpOAuthToken;
@@ -1446,12 +1447,8 @@ public final class CrabCommand {
         }
     }
 
-    private static String clientMessage(RuntimeException ex) {
-        String message = ex.getMessage();
-        if (message == null || message.length() > 200 || message.indexOf('\n') >= 0) {
-            return "输入无效。";
-        }
-        return message;
+    static String clientMessage(RuntimeException ex) {
+        return UserMessages.oneLine(ex.getMessage(), "输入无效。");
     }
 
     private record Parsed(

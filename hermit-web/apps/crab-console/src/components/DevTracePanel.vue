@@ -20,7 +20,7 @@ watch(
 )
 
 function scriptWhere(error: ScriptError): string {
-  const where = error.source === 'code' ? '脚本 code' : `脚本库 ${error.source}`
+  const where = error.source === 'code' ? '本步脚本' : `脚本库「${error.source}」`
   if (!error.line) return where
   const column = error.column != null && error.column > 0 ? `第 ${error.column} 列` : ''
   return `${where} 第 ${error.line} 行${column}`

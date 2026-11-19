@@ -1875,12 +1875,8 @@ final class ConsoleApi {
         return limit;
     }
 
-    private static String clientMessage(RuntimeException ex) {
-        String message = ex.getMessage();
-        if (message == null || message.length() > 200 || message.indexOf('\n') >= 0) {
-            return "invalid input";
-        }
-        return message;
+    static String clientMessage(RuntimeException ex) {
+        return UserMessages.oneLine(ex.getMessage(), "invalid input");
     }
 
     private static String text(String value) {

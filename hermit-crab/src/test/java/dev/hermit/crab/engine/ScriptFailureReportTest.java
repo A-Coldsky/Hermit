@@ -221,7 +221,7 @@ class ScriptFailureReportTest {
                           return folders[0].name;
                         into: value
                     """), base(server), trace);
-            String expected = "脚本库 jsparse 第 " + BAD_OBJECT_LINE + " 行：Error: bad object at 0";
+            String expected = "脚本库「jsparse」 第 " + BAD_OBJECT_LINE + " 行：Error: bad object at 0";
             assertThat(result.success()).isFalse();
             assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
             assertThat(result.error().failedStepIndex()).isEqualTo(2);
@@ -282,7 +282,7 @@ class ScriptFailureReportTest {
                         into: value
                     """), base(server), null);
             assertThat(result.success()).isFalse();
-            assertThat(result.error().message()).isEqualTo("脚本 code 第 2 行：Error: 未解析到文件夹列表");
+            assertThat(result.error().message()).isEqualTo("本步脚本 第 2 行：Error: 未解析到文件夹列表");
             assertThat(result.error().message()).doesNotContain("脚本库").doesNotContain("收件箱").doesNotContain("org.mozilla");
             assertThat(result.error().failedStepIndex()).isEqualTo(1);
         } finally {
@@ -300,8 +300,8 @@ class ScriptFailureReportTest {
                     into: value
                 """), "http://127.0.0.1", null);
         assertThat(result.error().message())
-                .isEqualTo("脚本库 jsparse 第 " + BAD_OBJECT_LINE + " 行：Error: bad object at 0");
-        assertThat(result.error().message()).doesNotContain("脚本 code").doesNotContain("第 0 行");
+                .isEqualTo("脚本库「jsparse」 第 " + BAD_OBJECT_LINE + " 行：Error: bad object at 0");
+        assertThat(result.error().message()).doesNotContain("本步脚本").doesNotContain("第 0 行");
     }
 
     @Test
@@ -320,7 +320,7 @@ class ScriptFailureReportTest {
                     into: value
                 """.formatted(TICKET)), "http://127.0.0.1", trace);
         String masked = "***|***|***|cat";
-        assertThat(result.error().message()).isEqualTo("脚本 code 第 1 行：Error: " + masked);
+        assertThat(result.error().message()).isEqualTo("本步脚本 第 1 行：Error: " + masked);
         String flat = EngineTestSupport.flatten(result);
         EngineTestSupport.secretsAbsent(flat, EngineTestSupport.PASSWORD);
         assertThat(flat).doesNotContain(TICKET).doesNotContain(".replace").doesNotContain("%21").contains("cat");
@@ -347,12 +347,24 @@ class ScriptFailureReportTest {
                 """.formatted(xs)), "http://127.0.0.1", trace);
         String message = result.error().message();
         assertThat(message.getBytes(StandardCharsets.UTF_8)).hasSize(4096);
-        assertThat(message).startsWith("脚本 code 第 1 行：Error: ***");
+        assertThat(message).startsWith("本步脚本 第 1 行：Error: ***");
         EngineTestSupport.secretsAbsent(message, EngineTestSupport.PASSWORD);
         JsonNode reported = step(ApiJson.tree(trace.body), "script").get("scriptError");
         String detail = reported.path("message").asText();
         assertThat(detail).startsWith("Error: ***").doesNotContain(EngineTestSupport.PASSWORD);
         assertThat(detail.getBytes(StandardCharsets.UTF_8).length).isGreaterThan(4096);
+    }
+
+    @Test
+    void codeSecretDoesNotEraseTheStepLabel() {
+        ExecutionResult result = run(conch("", """
+                - script:
+                    code: |
+                      throw new Error('bad object at 0');
+                    into: value
+                """), "http://127.0.0.1", null, "code");
+        assertThat(result.error().message()).isEqualTo("本步脚本 第 1 行：Error: bad object at 0");
+        assertThat(result.error().message()).doesNotContain("***");
     }
 
     @Test
@@ -363,7 +375,7 @@ class ScriptFailureReportTest {
                       nope;
                     into: value
                 """), "http://127.0.0.1", null);
-        assertThat(result.error().message()).startsWith("脚本 code 第 1 行：ReferenceError:");
+        assertThat(result.error().message()).startsWith("本步脚本 第 1 行：ReferenceError:");
         assertThat(result.error().message()).contains("nope").doesNotContain("列").doesNotContain("org.mozilla");
     }
 
@@ -626,6 +638,10 @@ class ScriptFailureReportTest {
     }
 
     private static ExecutionResult run(String yaml, String baseUrl, MemoryTrace trace) {
+        return run(yaml, baseUrl, trace, EngineTestSupport.PASSWORD);
+    }
+
+    private static ExecutionResult run(String yaml, String baseUrl, MemoryTrace trace, String password) {
         try (SessionManager sessions = new SessionManager(
                 new NopSessionPersistence(), EngineSettings.defaults(), Clock.systemUTC())) {
             ConchRegistry registry = new ConchRegistry();
@@ -640,7 +656,7 @@ class ScriptFailureReportTest {
                     "run",
                     "alice",
                     Map.of(),
-                    EngineTestSupport.account("alice", EngineTestSupport.PASSWORD, baseUrl)));
+                    EngineTestSupport.account("alice", password, baseUrl)));
         }
     }
 

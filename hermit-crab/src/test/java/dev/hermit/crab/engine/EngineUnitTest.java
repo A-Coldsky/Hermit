@@ -278,6 +278,14 @@ class EngineUnitTest {
         RuleProblem notJson = catchProblem(() -> apply(
                 Map.of("name", Map.of("jsonpath", "$.name")), vars("<html></html>"), filters, templates));
         assertThat(notJson.summary).isEqualTo("提取 name 失败：响应不是 JSON（JSON 路径 $.name）");
+
+        Redactor json = Redactor.of(Set.of("json"));
+        assertThat(json.redact(notJson.summary)).isEqualTo(notJson.summary);
+        assertThat(json.redact("xxjsonyy")).isEqualTo("xx***yy");
+        RuleProblem fuzzy = catchProblem(() -> apply(
+                Map.of("name", Map.of("jsonpath", "$.json.name")), vars("<html></html>"), filters, templates));
+        assertThat(json.redact(fuzzy.summary))
+                .isEqualTo("提取 name 失败：响应不是 JSON（JSON 路径 $.***.name）");
     }
 
     @Test

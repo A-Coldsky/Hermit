@@ -236,6 +236,26 @@ class RedactorTest {
     }
 
     @Test
+    void shortSecretsStillMaskInsideWordsAndLeaveRenamedDiagnostics() {
+        Redactor json = Redactor.of(Set.of("json"));
+        String sentence = "提取 name 失败：响应不是 JSON（JSON 路径 $.name）";
+        assertThat(json.redact(sentence)).isEqualTo(sentence);
+        assertThat(json.redact("本步脚本 第 2 行：Error: bad object at 0"))
+                .isEqualTo("本步脚本 第 2 行：Error: bad object at 0");
+        assertThat(json.redact("xxjsonyy")).isEqualTo("xx***yy");
+        assertThat(json.redact("JSON 路径 $.json.name")).isEqualTo("JSON 路径 $.***.name");
+
+        Redactor code = Redactor.of(Set.of("code"));
+        assertThat(code.redact("本步脚本 第 2 行：Error: bad object at 0"))
+                .isEqualTo("本步脚本 第 2 行：Error: bad object at 0");
+        assertThat(code.redact("前缀code后缀")).isEqualTo("前缀***后缀");
+
+        Redactor value = Redactor.of(Set.of("s3cret-value"));
+        assertThat(value.redact("本步脚本 第 2 行：Error: s3cret-value"))
+                .isEqualTo("本步脚本 第 2 行：Error: ***");
+    }
+
+    @Test
     void rejectsANullSecretValue() {
         assertThatThrownBy(() -> Redactor.of(java.util.Collections.singleton(null)))
                 .isInstanceOf(IllegalArgumentException.class);

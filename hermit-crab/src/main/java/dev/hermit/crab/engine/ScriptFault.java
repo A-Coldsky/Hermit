@@ -24,7 +24,8 @@ final class ScriptFault {
     }
 
     String summary() {
-        String where = CODE.equals(source) ? "脚本 code" : "脚本库 " + source;
+        // 「code」「json」这类短秘密仍按子串打码。来源不写这两个词，避免把位置打掉。
+        String where = CODE.equals(source) ? "本步脚本" : "脚本库「" + source + "」";
         StringBuilder out = new StringBuilder(where);
         if (line > 0) {
             out.append(" 第 ").append(line).append(" 行");

@@ -323,7 +323,7 @@ class ScriptStepTest {
         assertThat(result.success()).isFalse();
         assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
         assertThat(result.error().failedStepType()).isEqualTo("script");
-        String message = "脚本 code 第 2 行：TypeError: " + SAMPLE + "***" + SOURCE_TOKEN;
+        String message = "本步脚本 第 2 行：TypeError: " + SAMPLE + "***" + SOURCE_TOKEN;
         assertThat(result.error().message()).isEqualTo(message);
         assertThat(result.error().summary()).isEqualTo(message);
         String flat = EngineTestSupport.flatten(result);

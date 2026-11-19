@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { crabPaths, shellPaths } from '../mascot'
+import MascotCrab from './MascotCrab.vue'
+import MascotShell from './MascotShell.vue'
 
 /**
- * Hermit 品牌图标。crab 是钻在海螺壳里的寄居蟹（Crab 控制台），reef 是长着贝壳的珊瑚（Reef 管理端）。
+ * Hermit 品牌图标。crab 是背着螺壳的小寄居蟹（Crab 控制台），reef 是一丛珊瑚（Reef 管理端）。
  * 只用 SVG 和 CSS：悬停眨眼、intro 的一次性入场动画都不占脚本，系统要求减少动态效果时不播放。
  */
 withDefaults(defineProps<{ variant: 'crab' | 'reef'; size?: number; tile?: boolean; intro?: boolean }>(), {
@@ -24,37 +25,24 @@ withDefaults(defineProps<{ variant: 'crab' | 'reef'; size?: number; tile?: boole
   >
     <rect v-if="tile" class="tile" width="64" height="64" rx="14" />
     <template v-if="variant === 'crab'">
-      <g class="shell">
-        <path class="shell-body" :d="shellPaths.spire" />
-        <path class="shell-body" :d="shellPaths.body" />
-        <path class="shell-shine" :d="shellPaths.shine" />
-        <path class="shell-line" :d="shellPaths.spiral" />
-      </g>
-      <g class="crab">
-        <path class="limb" :d="crabPaths.limbs" />
-        <path class="crab-body" :d="crabPaths.body" />
-        <path class="crab-body" :d="crabPaths.claw" />
-        <g class="eyes">
-          <template v-for="eye in crabPaths.eyes" :key="eye.cx">
-            <circle class="eye" :cx="eye.cx" :cy="eye.cy" r="3.6" />
-            <circle class="pupil" :cx="eye.cx + 0.6" :cy="eye.cy + 0.4" r="1.8" />
-          </template>
-        </g>
-      </g>
+      <MascotShell />
+      <g class="peek"><MascotCrab /></g>
     </template>
     <template v-else>
-      <path
-        class="coral"
-        d="M31 55 C31 46 30 40 29 34 C27 28 22 25 19 19 M29 36 C33 30 38 26 40 19 C41 16 43 14 46 11 M40 22 C43 24 45 26 46 30 M30 44 C25 42 19 39 15 33 C14 31 13 29 13 26"
-      />
-      <path class="seabed" d="M8 55 H56" />
-      <g class="shell" transform="translate(26 31) scale(0.5)">
-        <path class="shell-body" :d="shellPaths.spire" />
-        <path class="shell-body" :d="shellPaths.body" />
-        <path class="shell-line" :d="shellPaths.spiral" />
+      <rect class="coral-deep" x="13" y="23" width="11" height="27" rx="5.5" />
+      <rect class="coral-deep" x="40" y="19" width="11" height="31" rx="5.5" />
+      <rect class="coral" x="26" y="9" width="12" height="41" rx="6" />
+      <rect class="coral" x="13" y="35" width="38" height="18" rx="9" />
+      <g class="eyes">
+        <circle class="pupil" cx="27" cy="43" r="2.3" />
+        <circle class="pupil" cx="37" cy="43" r="2.3" />
       </g>
-      <circle class="bubble b1" cx="52" cy="28" r="2.4" />
-      <circle class="bubble b2" cx="55" cy="19" r="1.6" />
+      <path class="smile" d="M29.5 47.5q2.5 2.3 5 0" />
+      <ellipse class="blush" cx="22.5" cy="46.5" rx="2.6" ry="1.6" />
+      <ellipse class="blush" cx="41.5" cy="46.5" rx="2.6" ry="1.6" />
+      <circle class="bubble b1" cx="54" cy="12" r="2.4" />
+      <circle class="bubble b2" cx="10" cy="15" r="1.7" />
+      <path class="seabed" d="M8 56H56" />
     </template>
   </svg>
 </template>
@@ -70,49 +58,34 @@ withDefaults(defineProps<{ variant: 'crab' | 'reef'; size?: number; tile?: boole
   fill: var(--hm-mark-tile);
 }
 
-.shell-body {
+.coral {
   fill: var(--hm-shell);
 }
 
-.shell-shine {
-  fill: none;
-  stroke: var(--hm-shell-shine);
-  stroke-width: 2.2;
-  stroke-linecap: round;
-}
-
-.shell-line {
-  fill: none;
-  stroke: var(--hm-shell-line);
-  stroke-width: 2.4;
-  stroke-linecap: round;
-}
-
-.crab-body {
-  fill: var(--hm-crab);
-}
-
-.limb {
-  fill: none;
-  stroke: var(--hm-crab);
-  stroke-width: 2.6;
-  stroke-linecap: round;
-}
-
-.eye {
-  fill: var(--hm-eye);
+.coral-deep {
+  fill: var(--hm-shell-deep);
 }
 
 .pupil {
   fill: var(--hm-pupil);
 }
 
-.coral {
+.smile {
   fill: none;
-  stroke: var(--hm-coral);
-  stroke-width: 5.5;
+  stroke: var(--hm-pupil);
+  stroke-width: 1.7;
   stroke-linecap: round;
-  stroke-linejoin: round;
+}
+
+.blush {
+  fill: var(--hm-shell-shine);
+  opacity: 0.8;
+}
+
+.bubble {
+  fill: none;
+  stroke: var(--hm-shell-shine);
+  stroke-width: 1.6;
 }
 
 .seabed {
@@ -121,24 +94,20 @@ withDefaults(defineProps<{ variant: 'crab' | 'reef'; size?: number; tile?: boole
   stroke-linecap: round;
 }
 
-.bubble {
-  fill: none;
-  stroke: var(--hm-brand-soft);
-  stroke-width: 1.5;
-}
-
 .eyes,
-.crab,
+.hm-mark :deep(.eyes),
+.peek,
 .bubble {
   transform-box: fill-box;
-  transform-origin: 50% 100%;
+  transform-origin: 50% 60%;
 }
 
-.hm-mark.crab:hover .eyes {
+.hm-mark:hover .eyes,
+.hm-mark:hover :deep(.eyes) {
   animation: hm-blink 0.36s ease-in-out;
 }
 
-.intro .crab {
+.intro .peek {
   animation: hm-peek 0.7s var(--hm-ease) 0.15s backwards;
 }
 
@@ -152,14 +121,14 @@ withDefaults(defineProps<{ variant: 'crab' | 'reef'; size?: number; tile?: boole
 
 @keyframes hm-blink {
   50% {
-    transform: scaleY(0.15);
+    transform: scaleY(0.12);
   }
 }
 
 @keyframes hm-peek {
   from {
     opacity: 0;
-    transform: translate(10px, 4px) scale(0.85);
+    transform: translateY(9px) scale(0.9);
   }
 }
 
@@ -175,7 +144,8 @@ withDefaults(defineProps<{ variant: 'crab' | 'reef'; size?: number; tile?: boole
 
 @media (prefers-reduced-motion: reduce) {
   .eyes,
-  .crab,
+  .hm-mark :deep(.eyes),
+  .peek,
   .bubble {
     animation: none !important;
   }

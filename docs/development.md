@@ -66,7 +66,7 @@ npm run dev:reef
 
 - Element Plus 按需引入。两套 Vite 配置共用 [vite.shared.ts](../hermit-web/vite.shared.ts)，模板中的 `el-*` 组件和 `v-loading` 由 `unplugin-vue-components` 自动引入脚本与样式；`ElMessage`、`ElMessageBox` 这类函数式调用不经过模板，样式在 [shared/boot.ts](../hermit-web/shared/boot.ts) 中引入，新增其他函数式组件（如 `ElNotification`）时也在那里补样式。中文语言包通过 `provideGlobalConfig` 全局提供。
 - 颜色统一用 [theme.css](../hermit-web/shared/theme.css) 中的 `--hm-*` 与 `--el-*` token，不在组件中写死色值。浅色 token 位于 `html:root`，暗色位于 `html.dark`；Element 组件样式随页面分块按需加载，排在 `theme.css` 之后，覆盖 Element 类名的规则需加 `html` 前缀。明暗阶由 `theme.test.ts` 按 Element 算法校验。
-- 品牌图标用 [HermitMark](../hermit-web/shared/components/HermitMark.vue)：`crab` 是钻在海螺壳里的寄居蟹，`reef` 是长着贝壳的珊瑚，图形数据在 [mascot.ts](../hermit-web/shared/mascot.ts)，`index.html` 的 favicon 用同一组路径。Crab 同步时的换壳加载（`ShellSwapLoader`）和开发者模式的挑壳小蟹（`ShellPicker`）只用 SVG 与 CSS transform/opacity 动画，挑壳播两轮后停下；系统开启减少动态效果时都不播放。
+- 品牌图标用 [HermitMark](../hermit-web/shared/components/HermitMark.vue)：`crab` 是背着青绿螺壳的 Q 版小寄居蟹，`reef` 是一丛带表情的珊瑚；小蟹和螺壳的图形在 `MascotCrab.vue`、`MascotShell.vue`，`index.html` 的 favicon 是同一套图形的静态副本。Crab 同步时的换壳加载（`ShellSwapLoader`）和开发者模式的挑壳小蟹（`ShellPicker`）只用 SVG 与 CSS transform/opacity 动画，挑壳播两轮后停下；系统开启减少动态效果时都不播放。
 - 明暗模式默认跟随系统，顶栏可切换，选择记在浏览器 `localStorage` 的 `hermit.color-mode`；`index.html` 中的首帧脚本使用同一键，避免闪烁。侧栏折叠状态记在 `hermit.sidebar-collapsed`，窄屏（≤ 900px）下侧栏改为抽屉。
 
 ## 测试地图

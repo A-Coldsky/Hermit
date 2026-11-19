@@ -1,36 +1,29 @@
 <script setup lang="ts">
-import { crabPaths, shellPaths } from '@shared/mascot'
+import MascotCrab from '@shared/components/MascotCrab.vue'
+import MascotShell from '@shared/components/MascotShell.vue'
 
-/** 同步时的加载提示：寄居蟹离开旧壳、钻进新壳。只在同步进行中挂载，动画只改 transform 和 opacity。 */
+/** 同步时的加载提示：小寄居蟹离开旧壳、跳进新壳。只在同步进行中挂载，动画只改 transform 和 opacity。 */
 defineProps<{ label: string }>()
 </script>
 
 <template>
   <div class="shell-swap" role="status" aria-live="polite" data-test="shell-swap">
-    <svg viewBox="0 0 120 40" width="132" height="44" aria-hidden="true">
-      <path class="ground" d="M2 37 H118" />
-      <g transform="translate(-6 12) scale(0.5)">
-        <path class="old" :d="shellPaths.spire" />
-        <path class="old" :d="shellPaths.body" />
-        <path class="old-line" :d="shellPaths.spiral" />
+    <svg viewBox="0 0 120 40" width="150" height="50" aria-hidden="true">
+      <path class="ground" d="M2 37H118" />
+      <g class="old">
+        <g transform="translate(2.65 18.65) scale(0.375)"><MascotShell tone="old" /></g>
       </g>
       <g class="new">
-        <g transform="translate(72 8) scale(0.6)">
-          <path class="shell" :d="shellPaths.spire" />
-          <path class="shell" :d="shellPaths.body" />
-          <path class="shine" :d="shellPaths.shine" />
-          <path class="line" :d="shellPaths.spiral" />
-        </g>
+        <g transform="translate(86.2 14) scale(0.5)"><MascotShell /></g>
+      </g>
+      <g class="spark">
+        <circle cx="86" cy="12" r="1.5" />
+        <circle cx="114" cy="10" r="1.8" />
+        <circle cx="100" cy="6" r="1.3" />
       </g>
       <g class="walker">
-        <g transform="translate(4 10) scale(0.5)">
-          <path class="limb" :d="crabPaths.limbs" />
-          <path class="crab" :d="crabPaths.body" />
-          <path class="crab" :d="crabPaths.claw" />
-          <template v-for="eye in crabPaths.eyes" :key="eye.cx">
-            <circle class="eye" :cx="eye.cx" :cy="eye.cy" r="3.6" />
-            <circle class="pupil" :cx="eye.cx + 0.6" :cy="eye.cy + 0.4" r="1.8" />
-          </template>
+        <g class="bob">
+          <g transform="translate(2.6 6.2) scale(0.52)"><MascotCrab /></g>
         </g>
       </g>
     </svg>
@@ -42,7 +35,7 @@ defineProps<{ label: string }>()
 .shell-swap {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   color: var(--hm-muted);
   font-size: 13px;
 }
@@ -58,129 +51,135 @@ svg {
   stroke-linecap: round;
 }
 
-.old {
-  fill: var(--hm-shell-old);
-}
-
-.old-line {
-  fill: none;
-  stroke: var(--hm-shell-old-line);
-  stroke-width: 2.4;
-  stroke-linecap: round;
-}
-
-.shell {
-  fill: var(--hm-shell);
-}
-
-.shine {
-  fill: none;
-  stroke: var(--hm-shell-shine);
-  stroke-width: 2.2;
-  stroke-linecap: round;
-}
-
-.line {
-  fill: none;
-  stroke: var(--hm-shell-line);
-  stroke-width: 2.4;
-  stroke-linecap: round;
-}
-
-.crab {
-  fill: var(--hm-crab);
-}
-
-.limb {
-  fill: none;
-  stroke: var(--hm-crab);
-  stroke-width: 2.6;
-  stroke-linecap: round;
-}
-
-.eye {
-  fill: var(--hm-eye);
-}
-
-.pupil {
-  fill: var(--hm-pupil);
+.spark {
+  fill: var(--hm-shell-alt);
 }
 
 .walker,
-.new {
+.bob,
+.old,
+.new,
+.spark {
   transform-box: fill-box;
   transform-origin: 50% 100%;
 }
 
+.spark {
+  transform-origin: 50% 50%;
+  animation: hm-swap-spark 3.2s ease-out infinite;
+}
+
 .walker {
-  animation: hm-swap-walk 2.6s ease-in-out infinite;
+  animation: hm-swap-walk 3.2s ease-in-out infinite;
+}
+
+.bob {
+  animation: hm-swap-bob 0.32s ease-in-out infinite alternate;
+}
+
+.old {
+  animation: hm-swap-old 3.2s ease-in-out infinite;
 }
 
 .new {
-  animation: hm-swap-wiggle 2.6s ease-in-out infinite;
+  animation: hm-swap-hop 3.2s ease-in-out infinite;
+}
+
+@keyframes hm-swap-bob {
+  to {
+    transform: translateY(-1.6px);
+  }
 }
 
 @keyframes hm-swap-walk {
-  0% {
+  0%,
+  6% {
     opacity: 0;
-    transform: translate(0, 5px);
+    transform: translate(0, 3px) scale(0.7);
   }
-  12% {
+  14% {
     opacity: 1;
-    transform: translate(0, 0);
+    transform: translate(8px, 0) scale(1);
   }
-  20% {
-    transform: translate(8px, -1.5px);
-  }
-  28% {
-    transform: translate(17px, 0);
-  }
-  36% {
-    transform: translate(26px, -1.5px);
-  }
-  44% {
-    transform: translate(35px, 0);
-  }
-  52% {
-    transform: translate(44px, -1.5px);
-  }
-  60% {
-    transform: translate(53px, 0);
+  62% {
+    opacity: 1;
+    transform: translate(70px, 0) scale(1);
   }
   68% {
     opacity: 1;
-    transform: translate(61px, 0);
+    transform: translate(78px, -9px) scale(0.9);
   }
-  78%,
+  74%,
   100% {
     opacity: 0;
-    transform: translate(68px, 3px) scale(0.8);
+    transform: translate(84px, -2px) scale(0.5);
   }
 }
 
-@keyframes hm-swap-wiggle {
+@keyframes hm-swap-old {
   0%,
-  76%,
+  12%,
+  100% {
+    transform: none;
+  }
+  4% {
+    transform: rotate(-8deg);
+  }
+  8% {
+    transform: rotate(6deg);
+  }
+}
+
+@keyframes hm-swap-hop {
+  0%,
+  72%,
+  92%,
+  100% {
+    transform: none;
+  }
+  78% {
+    transform: translateY(-5px) scale(0.96, 1.05);
+  }
+  84% {
+    transform: scale(1.06, 0.92);
+  }
+  88% {
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes hm-swap-spark {
+  0%,
+  76% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  84% {
+    opacity: 1;
+    transform: scale(1);
+  }
   96%,
   100% {
-    transform: rotate(0);
-  }
-  82% {
-    transform: rotate(-7deg);
-  }
-  89% {
-    transform: rotate(5deg);
+    opacity: 0;
+    transform: scale(1.3);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .walker,
-  .new {
+  .bob,
+  .old,
+  .new,
+  .spark {
     animation: none !important;
   }
 
   .walker {
     transform: translate(40px, 0);
+  }
+
+  .spark {
+    opacity: 0;
   }
 }
 </style>

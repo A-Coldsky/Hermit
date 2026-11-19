@@ -1,38 +1,32 @@
 <script setup lang="ts">
-import { crabPaths, shellPaths } from '@shared/mascot'
+import MascotCrab from '@shared/components/MascotCrab.vue'
+import MascotShell from '@shared/components/MascotShell.vue'
 
 /**
- * 开发者模式的小插画：寄居蟹挨个掂量三只壳。播两轮就停在原地，鼠标移上去再继续，
- * 不会在打开开发者模式的整段时间里一直占用渲染。
+ * 开发者模式的小插画：小寄居蟹挨个掂量三只壳，最后挑中中间那只。播两轮就停在原地，
+ * 鼠标移上去再继续，不会在打开开发者模式的整段时间里一直占用渲染。
  */
-const shells = [
-  { x: 30, tone: 'amber' },
-  { x: 50, tone: 'mint' },
-  { x: 70, tone: 'old' },
-] as const
 </script>
 
 <template>
   <span class="shell-picker" data-test="shell-picker" title="开发者模式：挑一只合适的壳">
-    <svg viewBox="0 0 92 30" width="92" height="30" aria-hidden="true">
-      <path class="ground" d="M2 28 H90" />
-      <g v-for="(shell, index) in shells" :key="shell.x" class="pick" :class="[`s${index}`, shell.tone]">
-        <g :transform="`translate(${shell.x} 12.6) scale(0.32)`">
-          <path class="body" :d="shellPaths.spire" />
-          <path class="body" :d="shellPaths.body" />
-          <path class="line" :d="shellPaths.spiral" />
-        </g>
+    <svg viewBox="0 0 140 34" width="164" height="40" aria-hidden="true">
+      <path class="ground" d="M2 32H138" />
+      <g class="pick s0">
+        <g transform="translate(38.92 18.2) scale(0.3)"><MascotShell tone="alt" /></g>
+      </g>
+      <g class="pick s1">
+        <g transform="translate(75.4 13.6) scale(0.4)"><MascotShell /></g>
+      </g>
+      <g class="pick s2">
+        <g transform="translate(116.55 18.2) scale(0.3)"><MascotShell tone="old" /></g>
       </g>
       <g class="walker">
-        <g transform="translate(0 8.4) scale(0.36)">
-          <path class="limb" :d="crabPaths.limbs" />
-          <path class="crab" :d="crabPaths.body" />
-          <path class="crab" :d="crabPaths.claw" />
-          <template v-for="eye in crabPaths.eyes" :key="eye.cx">
-            <circle class="eye" :cx="eye.cx" :cy="eye.cy" r="3.6" />
-            <circle class="pupil" :cx="eye.cx + 0.6" :cy="eye.cy + 0.4" r="1.8" />
-          </template>
+        <g class="bob">
+          <g transform="translate(0.99 9.82) scale(0.3744)"><MascotCrab /></g>
         </g>
+        <text class="mark ask" x="19" y="15">?</text>
+        <text class="mark found" x="19" y="15">!</text>
       </g>
     </svg>
   </span>
@@ -50,71 +44,46 @@ svg {
 
 .ground {
   stroke: var(--hm-border);
-  stroke-width: 1.2;
+  stroke-width: 1.3;
   stroke-linecap: round;
 }
 
-.amber .body {
-  fill: var(--hm-shell);
+.mark {
+  font-size: 9px;
+  font-weight: 700;
+  fill: var(--hm-muted);
 }
 
-.amber .line {
-  stroke: var(--hm-shell-line);
-}
-
-.mint .body {
+.found {
+  font-size: 10px;
+  font-weight: 800;
   fill: var(--hm-shell-alt);
 }
 
-.mint .line {
-  stroke: var(--hm-shell-alt-line);
-}
-
-.old .body {
-  fill: var(--hm-shell-old);
-}
-
-.old .line {
-  stroke: var(--hm-shell-old-line);
-}
-
-.line {
-  fill: none;
-  stroke-width: 3;
-  stroke-linecap: round;
-}
-
-.crab {
-  fill: var(--hm-crab);
-}
-
-.limb {
-  fill: none;
-  stroke: var(--hm-crab);
-  stroke-width: 2.8;
-  stroke-linecap: round;
-}
-
-.eye {
-  fill: var(--hm-eye);
-}
-
-.pupil {
-  fill: var(--hm-pupil);
-}
-
 .walker,
+.bob,
 .pick {
   transform-box: fill-box;
   transform-origin: 50% 100%;
-  animation-duration: 7s;
+}
+
+.walker,
+.pick,
+.mark {
+  animation-duration: 8s;
   animation-timing-function: ease-in-out;
   animation-iteration-count: 2;
   animation-fill-mode: both;
 }
 
+.bob {
+  animation: hm-pick-bob 0.36s ease-in-out 44 alternate;
+}
+
 .shell-picker:hover .walker,
-.shell-picker:hover .pick {
+.shell-picker:hover .pick,
+.shell-picker:hover .mark,
+.shell-picker:hover .bob {
   animation-iteration-count: infinite;
 }
 
@@ -134,26 +103,40 @@ svg {
   animation-name: hm-pick-s2;
 }
 
+.ask {
+  animation-name: hm-pick-ask;
+}
+
+.found {
+  animation-name: hm-pick-found;
+}
+
+@keyframes hm-pick-bob {
+  to {
+    transform: translateY(-1.6px);
+  }
+}
+
 @keyframes hm-pick-walk {
   0%,
-  4% {
+  3% {
     transform: translateX(0);
   }
-  12%,
-  26% {
-    transform: translateX(22px);
+  11%,
+  24% {
+    transform: translateX(17px);
   }
-  34%,
-  48% {
-    transform: translateX(42px);
+  32%,
+  45% {
+    transform: translateX(55px);
   }
-  56%,
-  70% {
-    transform: translateX(62px);
+  53%,
+  66% {
+    transform: translateX(95px);
   }
-  80%,
-  90% {
-    transform: translateX(42px);
+  76%,
+  94% {
+    transform: translateX(55px);
   }
   100% {
     transform: translateX(0);
@@ -162,58 +145,98 @@ svg {
 
 @keyframes hm-pick-s0 {
   0%,
-  13%,
-  25%,
+  12%,
+  24%,
   100% {
     transform: none;
   }
-  17%,
-  21% {
+  16%,
+  20% {
     transform: translateY(-3px) rotate(-10deg);
   }
 }
 
 @keyframes hm-pick-s1 {
   0%,
-  35%,
-  47%,
-  81%,
-  89%,
+  33%,
+  45%,
+  78%,
+  92%,
   100% {
     transform: none;
   }
-  39%,
-  43% {
+  37%,
+  41% {
     transform: translateY(-3px) rotate(-10deg);
   }
-  84% {
-    transform: translateY(-2px);
+  82% {
+    transform: translateY(-5px);
   }
   86% {
     transform: none;
   }
-  88% {
-    transform: translateY(-2px);
+  89% {
+    transform: translateY(-2.5px);
   }
 }
 
 @keyframes hm-pick-s2 {
   0%,
-  57%,
-  69%,
+  54%,
+  66%,
   100% {
     transform: none;
   }
-  61%,
+  58%,
+  62% {
+    transform: translateY(-3px) rotate(9deg);
+  }
+}
+
+@keyframes hm-pick-ask {
+  0%,
+  12%,
+  25%,
+  33%,
+  46%,
+  54%,
+  67%,
+  100% {
+    opacity: 0;
+  }
+  14%,
+  23%,
+  35%,
+  44%,
+  56%,
   65% {
-    transform: translateY(-3px) rotate(8deg);
+    opacity: 1;
+  }
+}
+
+@keyframes hm-pick-found {
+  0%,
+  77%,
+  93%,
+  100% {
+    opacity: 0;
+  }
+  79%,
+  91% {
+    opacity: 1;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .walker,
-  .pick {
+  .bob,
+  .pick,
+  .mark {
     animation: none !important;
+  }
+
+  .mark {
+    opacity: 0;
   }
 }
 </style>

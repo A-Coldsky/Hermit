@@ -74,7 +74,13 @@ public final class LocalConches {
     public static final int MAX_BYTES = 1024 * 1024;
     /** 待确认覆盖的内存寿命。重启即丢，拒绝和到期不写审计。 */
     public static final Duration PENDING_TTL = Duration.ofMinutes(30);
-    static final int HISTORY_KEEP = 10;
+    /**
+     * {@code .history} 里每个包保留的份数。正在使用的 {@code {conch}.yaml} 不占这名额，
+     * 所以这是「当前版本之外的最近 3 份」。启动和 reload 不删；下一次写入在同一把锁里备份后修剪。
+     */
+    static final int HISTORY_KEEP = 3;
+    /** 带 API Key 的请求不能创建或撤销自动确认，即使同时带了控制台头。 */
+    public static final String GRANT_API_KEY = "API Key 不能授权或撤销自动确认。";
 
     private static final Logger LOG = Logger.getLogger(LocalConches.class.getName());
     private static final String SUFFIX = ".yaml";
@@ -93,6 +99,11 @@ public final class LocalConches {
     private final LinkedHashMap<String, BrokenLocal> broken = new LinkedHashMap<>();
     /** 每个包最多一条。新的替换旧的。不落库。 */
     private final LinkedHashMap<String, PendingOverwrite> pending = new LinkedHashMap<>();
+    /**
+     * 控制台在本次开发者模式里勾选「不再询问」的包。按包名，没有全局授权。
+     * 只在内存：关掉开发者模式、到期、撤销或进程重启都会丢掉。不写 schema。
+     */
+    private final LinkedHashMap<String, OverrideGrant> grants = new LinkedHashMap<>();
     private volatile Consumer<String> onWidened = name -> {
     };
     /** 第一次清会话返回之后、写文件之前。测试在这个窗口里插入登录。生产路径是空操作。 */
@@ -260,7 +271,20 @@ public final class LocalConches {
      * 磁盘已不是提交时的 {@code baseSha} 时 409，并丢掉这条待确认。
      */
     public ImportResult confirmPending(String conch, String sha256, String actor) {
+        return confirmPending(conch, sha256, actor, false);
+    }
+
+    /**
+     * {@code remember} 为 true 时，成功写入之后给这个包记下自动确认。
+     * 只有控制台 actor 可以记下；其它 actor 是 403，不写文件，也不留下授权。
+     * 开发者模式关着时这次确认仍然写入，但不留下授权。
+     * 判断、写入和记授权都在同一把锁里。
+     */
+    public ImportResult confirmPending(String conch, String sha256, String actor, boolean remember) {
         String checked = actor(actor);
+        if (remember && !Actors.CONSOLE.equals(checked)) {
+            throw LocalConchException.forbidden(LocalConchException.GRANT_CONSOLE_ONLY);
+        }
         synchronized (lock) {
             PendingOverwrite row = fresh(conch);
             if (row == null) {
@@ -270,17 +294,77 @@ public final class LocalConches {
                 throw LocalConchException.pendingChanged();
             }
             try {
-                return writeUnlocked(
+                ImportResult result = writeUnlocked(
                         row.yaml(),
                         checked,
                         true,
                         new ReplaceOptions(row.baseSha(), row.submittedBy(), AuditKind.LOCAL_CONCH_REPLACED));
+                if (remember && debugOn()) {
+                    grants.put(result.conch(), new OverrideGrant(result.conch(), clock.instant(), checked));
+                }
+                return result;
             } catch (LocalConchException ex) {
                 if (LocalConchException.STALE.equals(ex.getMessage())) {
                     pending.remove(conch);
                 }
                 throw ex;
             }
+        }
+    }
+
+    /**
+     * 这个包在本次开发者模式里已被控制台授权时，在同一把锁里走与确认相同的校验、大小、摘要和路径检查，
+     * 并写入历史。没有授权，或开发者模式已经关掉时返回 empty，不写文件。
+     * 校验失败抛出，授权还在，文件不动。
+     */
+    public Optional<ImportResult> applyIfGranted(byte[] raw, String actor, String keyName) {
+        String checked = actor(actor);
+        requireRaw(raw);
+        synchronized (lock) {
+            if (!debugOn()) {
+                grants.clear();
+                return Optional.empty();
+            }
+            Parsed parsed = parse(raw);
+            OverrideGrant grant = grants.get(parsed.doc().conch());
+            if (grant == null) {
+                return Optional.empty();
+            }
+            return Optional.of(writeUnlocked(
+                    raw,
+                    checked,
+                    true,
+                    ReplaceOptions.autoApproved(keyName, grant.createdBy())));
+        }
+    }
+
+    /** 还在本次开发者模式里的自动确认，按包名排序。开发者模式关着时先清空。 */
+    public List<OverrideGrant> grants() {
+        synchronized (lock) {
+            if (!debugOn()) {
+                grants.clear();
+                return List.of();
+            }
+            ArrayList<OverrideGrant> rows = new ArrayList<>(grants.values());
+            rows.sort(Comparator.comparing(OverrideGrant::conch));
+            return List.copyOf(rows);
+        }
+    }
+
+    /** 没有这项授权时返回 false。 */
+    public boolean revokeGrant(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return false;
+        }
+        synchronized (lock) {
+            return grants.remove(conch) != null;
+        }
+    }
+
+    /** 关掉开发者模式、到期或重启时丢掉全部自动确认。 */
+    public void clearGrants() {
+        synchronized (lock) {
+            grants.clear();
         }
     }
 
@@ -826,7 +910,9 @@ public final class LocalConches {
                     outcome.previousSha256(),
                     outcome.boundary(),
                     outcome.backupId(),
-                    options.keyName()));
+                    options.keyName(),
+                    options.autoApproved(),
+                    options.grantedBy()));
         }
         return new ImportResult(
                 parsed.doc().conch(),
@@ -1046,6 +1132,11 @@ public final class LocalConches {
     }
 
     private boolean allowEmptyMcpActions() {
+        return debugOn();
+    }
+
+    /** 开发者模式读取失败时当作关着，避免误放自动确认。不在这里改授权表。 */
+    private boolean debugOn() {
         try {
             return debugEnabled.getAsBoolean();
         } catch (RuntimeException ex) {
@@ -1142,6 +1233,7 @@ public final class LocalConches {
         return name.substring(0, name.length() - SUFFIX.length());
     }
 
+    /** 同一把锁、同一次写入里丢掉最旧的备份，只留 {@link #HISTORY_KEEP} 份。当前 yaml 不在这个目录里。 */
     private static void pruneHistory(Path dir) {
         try (var children = Files.list(dir)) {
             ArrayList<Path> files = new ArrayList<>();
@@ -1253,6 +1345,22 @@ public final class LocalConches {
             String backupId,
             String keyName
     ) {
+        return detail(
+                conch, version, previousVersion, sha256, previousSha256, boundary, backupId, keyName, false, null);
+    }
+
+    private static Map<String, Object> detail(
+            String conch,
+            String version,
+            String previousVersion,
+            String sha256,
+            String previousSha256,
+            ConchDestinations.Boundary boundary,
+            String backupId,
+            String keyName,
+            boolean autoApproved,
+            String grantedBy
+    ) {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", conch);
         body.put("version", version);
@@ -1264,6 +1372,10 @@ public final class LocalConches {
         body.put("backupId", backupId);
         if (keyName != null && !keyName.isBlank()) {
             body.put("key", keyName);
+        }
+        if (autoApproved) {
+            body.put("autoApproved", true);
+            body.put("grantedBy", grantedBy == null ? "" : grantedBy);
         }
         return body;
     }
@@ -1496,10 +1608,26 @@ public final class LocalConches {
     /**
      * 一次覆盖相对提交时磁盘的约束。{@code expectedBaseSha} 为 null 时不核对。
      * {@code auditKind} 为 null 时，新建记 IMPORTED，覆盖记 REPLACED。
+     * {@code autoApproved} 为 true 时审计种类是 {@link AuditKind#LOCAL_CONCH_AUTO_APPROVED}，
+     * 详情带 {@code grantedBy}。
      */
-    public record ReplaceOptions(String expectedBaseSha, String keyName, AuditKind auditKind) {
+    public record ReplaceOptions(
+            String expectedBaseSha,
+            String keyName,
+            AuditKind auditKind,
+            boolean autoApproved,
+            String grantedBy
+    ) {
+        public ReplaceOptions(String expectedBaseSha, String keyName, AuditKind auditKind) {
+            this(expectedBaseSha, keyName, auditKind, false, null);
+        }
+
         public static ReplaceOptions none() {
             return new ReplaceOptions(null, null, null);
+        }
+
+        public static ReplaceOptions autoApproved(String keyName, String grantedBy) {
+            return new ReplaceOptions(null, keyName, AuditKind.LOCAL_CONCH_AUTO_APPROVED, true, grantedBy);
         }
     }
 
@@ -1530,6 +1658,17 @@ public final class LocalConches {
 
     /** {@code id} 是 {@code .history} 里的文件名去掉 {@code .yaml}。 */
     public record HistoryEntry(String id, String version, Instant savedAt) {
+    }
+
+    /**
+     * 控制台在本次开发者模式里授权的自动确认。{@code createdBy} 是记下授权的 actor，目前只有 {@code console}。
+     */
+    public record OverrideGrant(String conch, Instant since, String createdBy) {
+        public OverrideGrant {
+            Objects.requireNonNull(conch, "conch");
+            Objects.requireNonNull(since, "since");
+            Objects.requireNonNull(createdBy, "createdBy");
+        }
     }
 
     public record FileResult(String file, String conch, String version, boolean ok, List<ValidationIssue> issues) {

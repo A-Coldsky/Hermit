@@ -39,7 +39,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * 开发者模式下的本地包覆盖。Crab 以独立进程跑 {@code crab serve}，上游只有两个回环模拟站。
- * 同目的地覆盖不询问确认，旧文件进 {@code .history}。扩大目的地且客户端没有 elicitation 时返回
+ * 同目的地覆盖不询问确认，旧文件进 {@code .history}。当前文件之外只留最近 3 份，下一次写入才修剪。扩大目的地且客户端没有 elicitation 时返回
  * {@code CONFIRM_REQUIRED}；控制台按 sha256 确认后，下一次调用打到新站，并且不带旧 Cookie。
  * 待确认过期依赖进程内的 {@code Clock.systemUTC()}，这里不等 30 分钟；重启会清掉内存里的待确认。
  * 客户端 elicitation 和覆盖进行中的调用分别由 {@code AuthoringMcpTest}、{@code LocalConchReplaceSessionTest} 覆盖。
@@ -253,6 +253,7 @@ class LocalOverwriteAcceptanceTest {
         assertThat(bravo.lastCookie("/ping")).contains(BRAVO);
         assertThat(bravo.lastCookie("/login")).doesNotContain(ALPHA);
 
+        assertThat(versions(history())).containsExactly("1.0.2", "1.0.1", "1.0.0");
         String restoreA = historyId("1.0.0");
         HttpResponse<String> restored = console(
                 "POST", "/console/api/local-conches/" + CONCH + "/history/" + restoreA + "/restore", "");
@@ -266,12 +267,15 @@ class LocalOverwriteAcceptanceTest {
         assertThat(alpha.logins()).isEqualTo(loginsBeforeStale + 1);
         assertThat(alpha.lastCookie("/ping")).contains(ALPHA);
         assertThat(alpha.lastCookie("/login")).doesNotContain(BRAVO);
+        // 回退先备份当前的 1.1.0，同一把锁里只留最近 3 份，所以刚用掉的 1.0.0 被剪掉。
+        assertThat(versions(history())).containsExactly("1.1.0", "1.0.2", "1.0.1");
         String restoreB = historyId("1.1.0");
 
         crab.close();
         CliResult listed = cli("local", "history", CONCH);
         assertThat(listed.code()).as(listed.err()).isZero();
-        assertThat(listed.out()).contains(restoreA + " 1.0.0").contains(restoreB + " 1.1.0");
+        assertThat(listed.out()).contains(restoreB + " 1.1.0").doesNotContain(restoreA + " 1.0.0");
+        assertThat(listed.out()).contains("1.0.2").contains("1.0.1");
         CliResult cliRestored = cli("local", "restore", CONCH, restoreB);
         assertThat(cliRestored.code()).as(cliRestored.err()).isZero();
         assertThat(cliRestored.out()).isEqualTo(CONCH + " 1.1.0 已回退\n");
@@ -359,6 +363,14 @@ class LocalOverwriteAcceptanceTest {
             }
         }
         return null;
+    }
+
+    private static List<String> versions(JsonNode history) {
+        ArrayList<String> versions = new ArrayList<>();
+        for (JsonNode row : history) {
+            versions.add(row.path("version").asText());
+        }
+        return versions;
     }
 
     private JsonNode history() throws Exception {

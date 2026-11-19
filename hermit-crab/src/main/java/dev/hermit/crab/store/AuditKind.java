@@ -31,6 +31,11 @@ public enum AuditKind {
     LOCAL_CONCH_DELETED,
     /** 覆盖已有本地规则包。详情含新旧版本、摘要、边界、新增地址和备份编号。 */
     LOCAL_CONCH_REPLACED,
+    /**
+     * 开发者模式下，控制台已经授权的包被自动确认覆盖。
+     * 详情在覆盖字段之外还有 {@code autoApproved: true} 和 {@code grantedBy}（授权的控制台 actor）。
+     */
+    LOCAL_CONCH_AUTO_APPROVED,
     /** 地址扩大、客户端不能当场确认，记一条待确认覆盖。拒绝和到期不记。 */
     LOCAL_CONCH_REPLACE_PENDING,
     /** 用人保存的历史把本地规则包换回去。 */

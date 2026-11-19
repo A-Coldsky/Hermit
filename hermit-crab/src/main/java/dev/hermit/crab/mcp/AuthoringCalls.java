@@ -41,6 +41,8 @@ final class AuthoringCalls {
     static final String SAME_NAME = "改已有的包就用同一个名字保存；如果需要确认，请让用户确认，不要换名字。";
     static final String OVERWRITE_DECLINED = "未确认覆盖，本地规则包没有改动。";
     static final String CONFIRM_PARAM = "不能用参数确认覆盖。覆盖已有本地规则包时，要在客户端里确认。";
+    /** 请求字段不能创建自动确认。只有控制台勾选才行。 */
+    static final String GRANT_PARAM = "不能用参数授权自动确认。请到控制台确认。";
     static final String LOCAL_ONLY = "写规则包和这份指南只允许本机调用。请从本机连接 Crab。";
     static final String READ_ONLY_SAVE = "这把 API Key 只允许调用只读能力，不能保存本地规则包。";
     static final String READ_ONLY_TRIAL_PREFIX = "这把 API Key 只允许调用只读能力。能力 ";
@@ -54,6 +56,9 @@ final class AuthoringCalls {
 
     private static final Pattern ACCOUNT = Pattern.compile(McpCatalog.ACCOUNT_PATTERN);
     private static final Set<String> YAML_ONLY = Set.of("yaml");
+    /** 这些字段都不能创建自动确认。大小写按客户端传来的键名，不另做折叠。 */
+    private static final Set<String> GRANT_FIELDS = Set.of(
+            "remember", "autoApprove", "auto_approve", "skipConfirm", "grant");
     private static final Set<String> TRIAL_FIELDS = Set.of("conch", "action", "input", "account");
 
     private final CrabRuntime runtime;
@@ -123,6 +128,18 @@ final class AuthoringCalls {
                 if (same.replaceConch() == null) {
                     return importFailure(same, attempt);
                 }
+            }
+            try {
+                Optional<LocalConches.ImportResult> granted =
+                        runtime.localConches().applyIfGranted(raw, Actors.MCP, keyName);
+                if (granted.isPresent()) {
+                    return saved(granted.get(), beforeKeys);
+                }
+            } catch (LocalConchException granted) {
+                return importFailure(granted, attempt);
+            }
+            if (!devMode()) {
+                return McpCalls.fail(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
             }
             ConchDoc after = ConchParser.parse(yaml.text());
             ConchDoc before = runtime.localConches().readableDoc(ex.replaceConch()).orElse(null);
@@ -469,6 +486,9 @@ final class AuthoringCalls {
     }
 
     private YamlArg yamlArgument(Map<String, Object> arguments, McpCalls.Attempt attempt) {
+        if (grantField(arguments)) {
+            return new YamlArg(null, McpCalls.failAsRequest(attempt, "FORBIDDEN", GRANT_PARAM));
+        }
         if (arguments.containsKey("confirm")) {
             return new YamlArg(null, McpCalls.failAsRequest(attempt, "INVALID_INPUT", CONFIRM_PARAM));
         }
@@ -484,6 +504,15 @@ final class AuthoringCalls {
     }
 
     private record YamlArg(String text, McpSchema.CallToolResult error) {
+    }
+
+    private static boolean grantField(Map<String, Object> arguments) {
+        for (String name : GRANT_FIELDS) {
+            if (arguments.containsKey(name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String unknownField(Map<String, Object> arguments, Set<String> allowed) {

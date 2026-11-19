@@ -9,6 +9,8 @@ const crab = vi.hoisted(() => ({
   conches: vi.fn(),
   localConches: vi.fn(),
   pendingLocalOverwrites: vi.fn(),
+  localOverrideGrants: vi.fn(),
+  revokeLocalOverrideGrant: vi.fn(),
   confirmPendingOverwrite: vi.fn(),
   rejectPendingOverwrite: vi.fn(),
   localConchHistory: vi.fn(),
@@ -59,6 +61,7 @@ beforeEach(() => {
   crab.conches.mockResolvedValue({ conches: [] })
   crab.localConches.mockResolvedValue({ conches: [] })
   crab.pendingLocalOverwrites.mockResolvedValue({ pending: [] })
+  crab.localOverrideGrants.mockResolvedValue({ grants: [] })
   crab.localConchHistory.mockResolvedValue({ history: [] })
 })
 
@@ -117,7 +120,7 @@ describe('待确认覆盖', () => {
     await wrapper.get('[data-test="pending-confirm"]').trigger('click')
     await flushPromises()
 
-    expect(crab.confirmPendingOverwrite).toHaveBeenCalledWith('local_ping', sha)
+    expect(crab.confirmPendingOverwrite).toHaveBeenCalledWith('local_ping', sha, false)
     expect(crab.confirmPendingOverwrite.mock.calls[0][1]).not.toBe(baseSha)
     expect(success).toHaveBeenCalledWith('已确认覆盖 local_ping v1.2.0')
     expect(wrapper.find('[data-test="pending-overwrite"]').exists()).toBe(false)
@@ -221,6 +224,43 @@ describe('待确认覆盖', () => {
     expect(wrapper.find('[data-test="pending-overwrite"]').exists()).toBe(false)
     expect(error).toHaveBeenCalled()
     expect(JSON.stringify(error.mock.calls[0][0])).toContain('没有待确认的覆盖。')
+  })
+
+  it('勾选本次不再询问后，确认把 true 传给接口', async () => {
+    crab.pendingLocalOverwrites.mockResolvedValue({ pending: [pending()] })
+    crab.confirmPendingOverwrite.mockResolvedValue({ conch: 'local_ping', version: '1.2.0' })
+    const wrapper = await mountPage(ConchesView)
+    await flushPromises()
+
+    const box = wrapper.get('[data-test="pending-remember"]')
+    expect(box.text()).toContain('本次开发者模式内不再询问')
+    await box.get('input[type="checkbox"]').setValue(true)
+    await flushPromises()
+    await wrapper.get('[data-test="pending-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(crab.confirmPendingOverwrite).toHaveBeenCalledWith('local_ping', sha, true)
+  })
+
+  it('列出自动确认，撤销后重新读取', async () => {
+    const success = vi.spyOn(ElMessage, 'success')
+    crab.localOverrideGrants
+      .mockResolvedValueOnce({ grants: [{ conch: 'local_ping', since: '2026-11-19T01:02:03.000Z' }] })
+      .mockResolvedValue({ grants: [] })
+    crab.revokeLocalOverrideGrant.mockResolvedValue({ conch: 'local_ping', revoked: true })
+    const wrapper = await mountPage(ConchesView)
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="override-grants"]').findAll('[data-test="override-grant"]')).toHaveLength(1)
+    expect(wrapper.get('[data-test="override-grant-conch"]').text()).toBe('local_ping')
+    expect(wrapper.get('[data-test="override-grant-since"]').text()).toContain(formatTime('2026-11-19T01:02:03.000Z'))
+    expect(wrapper.get('[data-test="override-grant-since"]').text()).toContain('起不再询问')
+    await wrapper.get('[data-test="override-grant-revoke"]').trigger('click')
+    await flushPromises()
+
+    expect(crab.revokeLocalOverrideGrant).toHaveBeenCalledWith('local_ping')
+    expect(success).toHaveBeenCalledWith('已取消 local_ping 的自动确认')
+    expect(wrapper.find('[data-test="override-grant"]').exists()).toBe(false)
   })
 
   it('没有 sha256 时不能确认', async () => {

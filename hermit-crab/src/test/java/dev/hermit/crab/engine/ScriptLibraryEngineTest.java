@@ -263,7 +263,7 @@ class ScriptLibraryEngineTest {
                 """);
         assertThat(result.success()).isFalse();
         assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
-        assertThat(result.error().message()).contains("脚本返回值类型无效");
+        assertThat(result.error().message()).isEqualTo(ScriptStep.RETURN_BYTES);
     }
 
     @Test

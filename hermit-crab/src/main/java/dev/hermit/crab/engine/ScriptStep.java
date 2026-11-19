@@ -51,6 +51,14 @@ final class ScriptStep {
     static final int MAX_SOURCE_BYTES = 64 * 1024;
     static final int MAX_RESULT_BYTES = 1024 * 1024;
     static final String MEMORY_EXCEEDED = "脚本内存超限";
+    /** 脚本自己的时限到了。能力 deadline 仍是 {@code 执行超时}，不走这句。 */
+    static final String SCRIPT_TIMEOUT = "脚本超时";
+    /** 省略 {@code into} 时合并进变量表，必须是对象。句子不带返回值。 */
+    static final String RETURN_OBJECT = "省略 into 时要返回对象";
+    /** Uint8Array 不能当结果交出去。句子不带字节。 */
+    static final String RETURN_BYTES = "不能直接返回字节数组，请先 hermit.hex 或 base64";
+    /** Date 不是可保存的值。句子不带时间。 */
+    static final String RETURN_DATE = "不能返回 Date";
     /**
      * 一次脚本（含把变量转成 JS 对象）在本线程上最多分配的字节数，按 JVM 的线程分配计数，包含已回收的垃圾。
      * 同一个 JVM 里没有真正的内存隔离；这里挡住循环里不断变大的脚本。单次巨大的分配在 {@link #run} 里接住。
@@ -95,7 +103,7 @@ final class ScriptStep {
             throw timeout(ex);
         } catch (ScriptMemoryExceeded | OutOfMemoryError ex) {
             // OOM 多半来自脚本里一次巨大的分配（如超长 repeat），那次分配没有成功，放手后可以回收。
-            throw mismatch(MEMORY_EXCEEDED);
+            throw faulted(MEMORY_EXCEEDED);
         } catch (StackOverflowError ex) {
             throw mismatch("脚本调用栈过深");
         } catch (RuntimeException ex) {
@@ -311,7 +319,10 @@ final class ScriptStep {
         }
         if (isTypedArray(value)) {
             // Uint8Array 是 NativeArray 的子类。直接返回会变成数字列表，调用方无法区分字节。
-            throw mismatch("脚本返回值类型无效");
+            throw faulted(RETURN_BYTES);
+        }
+        if (value instanceof Scriptable scriptable && "Date".equals(scriptable.getClassName())) {
+            throw faulted(RETURN_DATE);
         }
         if (value instanceof NativeArray array) {
             return fromArray(array, seen);
@@ -403,7 +414,7 @@ final class ScriptStep {
         }
         Map<String, Object> map = Values.map(converted);
         if (map == null) {
-            throw mismatch("脚本返回值类型无效");
+            throw faulted(RETURN_OBJECT);
         }
         for (String key : map.keySet()) {
             if (ConchRegistry.RESERVED.contains(key)) {
@@ -470,7 +481,16 @@ final class ScriptStep {
         if (ex.capability) {
             return new DeadlineExceeded(-1, "script", List.of());
         }
-        return mismatch("script timeout");
+        // 脚本已经在跑，但指令计数拿不到抛出的行。记在 code 上，不编造列号。
+        return faulted(SCRIPT_TIMEOUT);
+    }
+
+    /**
+     * 脚本已经执行，只是没有可引用的行号。来源记在 {@code code}，{@code line} 为 0，列号为 null。
+     * 调用错误仍是 {@code summary} 本身，不把返回值写进去。
+     */
+    private static RuleProblem faulted(String summary) {
+        return mismatch(summary).withScript(new ScriptFault(ScriptFault.CODE, 0, null, summary));
     }
 
     private static RuleProblem described(Throwable ex, List<SourceSpan> libraries, String code) {

@@ -356,13 +356,17 @@ script 步骤的 `use` 按顺序把这些库接在 `code` 前面，同一个函�
 
 引擎是 Rhino 1.9.1，语言级别 ES6（`Context.VERSION_ES6`），解释模式（`setOptimizationLevel(-1)`）。`use` 按写出的顺序把库源码接在一起；库末尾没有换行时补一个换行，然后接 `code`，再包进 `(function(){` 和 `})()`。库和 `code` 在同一个函数作用域，都不是模板，`{{ }}` 不会替换。行号按这次拼接往回算：包装用的第一行和排在前面的库不占 `code` 的行号。错误落在哪个库，就用那个库自己的行号，并写出库的名字。
 
-脚本抛出时，试跑错误的 message 带上抛出值的文本和位置。`Error` 的文本是「名字: 说明」，例如 `Error: bad object at 0`。位置写成 `脚本 code 第 N 行` 或 `脚本库 名字 第 N 行`。Rhino 给出列号时再写 `第 C 列`。语法错误有列号。`throw` 以及运行时的 `ReferenceError`、`TypeError` 在 Rhino 1.9.1 的解释模式里只有行号，列号是 null，句子里不写「第 0 列」。开发追踪里这一步 `passed` 为 false，并有 `scriptError`：`source`（库名，或步骤自己的 `code`）、`line`、`column`、`message`。说明走现有打码：长度至少 4 的已知凭证、Cookie、登录值，以及这次调用里从凭证得出的字符串，还有它们的 URL 编码。引擎不把响应正文或变量表额外放进错误。不写 Java 堆栈，也不写脚本源码行。抛出的说明在打码前最多保留 100 万个字符。打码之后，试跑错误超过 8 KiB 时截到 4 KiB UTF-8；开发追踪仍是先打码，再按单步 256 KiB 截断。脚本步骤没有 HTTP 状态码。
+脚本抛出时，试跑错误的 message 带上抛出值的文本和位置。`Error` 的文本是「名字: 说明」，例如 `Error: bad object at 0`。位置写成 `脚本 code 第 N 行` 或 `脚本库 名字 第 N 行`。Rhino 给出列号时再写 `第 C 列`。语法错误有列号。`throw` 以及运行时的 `ReferenceError`、`TypeError` 在 Rhino 1.9.1 的解释模式里只有行号，列号是 null，句子里不写「第 0 列」。开发追踪里这一步 `passed` 为 false，并有 `scriptError`：`source`（库名，或步骤自己的 `code`）、`line`、`column`、`message`。说明走现有打码：长度至少 4 的已知凭证、Cookie、登录值，以及这次调用里从凭证得出的字符串，还有它们的 URL 编码。引擎不把响应正文或变量表额外放进错误。不写 Java 堆栈，也不写脚本源码行。抛出的说明在打码前最多保留 100 万个字符。打码之后，试跑错误超过 8 KiB 时截到 4 KiB UTF-8；开发追踪里的 `scriptError` 仍是先打码，再按单步 256 KiB 截断。脚本步骤没有 HTTP 状态码。
+
+超时、内存超限，以及返回值类型不对，同样带 `scriptError`。来源是 `code`。这些失败没有可引用的行号，`line` 为 0，`column` 为 null，句子里不写「第 0 行」或「第 0 列」。试跑错误仍是短句，不把返回值写进去：到点是「脚本超时」；省略 `into` 却没有返回对象时是「省略 into 时要返回对象」；直接返回 Uint8Array（含嵌在对象或数组里）时是「不能直接返回字节数组，请先 hermit.hex 或 base64」；返回 Date 时是「不能返回 Date」。函数等其它不能保存的类型仍是「脚本返回值类型无效」。`into` 是目的地，不会出现在这一步的变量列表里。
+
+提取和 set 失败，以及脚本在跑起来之前就失败（没有 `scriptError`）时，这一步 `passed` 为 false，并有 `error`。句子与调用错误相同：先打码，超过 8 KiB 再截到 4 KiB UTF-8。不把响应正文写进这句。断言失败仍只有 `passed: false`。图片验证码读不出来时，ask 这一步同样 `passed` 为 false，`error` 用「验证码图片不是支持的格式」或「验证码图片超过 512 KiB」，不写图片字节。停下来等输入的 ask 不标未通过。
 
 `credential: true` 时，脚本里的 `vars.credential` 是当前账号凭证字段的副本。脚本改这份副本，不影响后面的 `{{credential.password}}`。不写或写 false 时，脚本看不到顶层 credential。登录步骤和能力步骤都可以写。要在脚本里使用凭证，写 `credential: true`。先用 set 把 `{{credential.password}}` 抄进普通变量，再被没有这个标记的脚本读到，仍不会因为这次读取而自动打码。
 
-脚本在 Rhino 1.9.1 的 ES6 解释模式与受限全局对象中执行，不提供 Java 类、文件或网络访问入口。全局对象 `hermit` 已冻结，不能改写，里面的函数也不能改。`utf8` / `fromUtf8` 在字符串和 Uint8Array 之间转换。`hex` / `unhex` 使用小写十六进制。`base64` / `unbase64` 是标准 Base64。`base64url` / `unbase64url` 使用 URL 安全字母表，填充的 `=` 可以不写。`randomBytes(n)` 取 1 到 1024 个随机字节。`now()` 是引擎时钟的毫秒数。没有 BigInt，也没有加密原语。返回值只能是字符串、数字、布尔或普通数组和对象。超出安全整数的数会丢精度。Uint8Array 不能直接返回，先转成十六进制或 Base64。不能写 `class` 或 `async`。需要浏览器加密接口的算法，用纯 JavaScript 放进脚本库。SM2、SM3、SM4 也可以这样贴进去，但必须落在下面的预算里。脚本仍然不能访问网络。
+脚本在 Rhino 1.9.1 的 ES6 解释模式与受限全局对象中执行，不提供 Java 类、文件或网络访问入口。全局对象 `hermit` 已冻结，不能改写，里面的函数也不能改。`utf8` / `fromUtf8` 在字符串和 Uint8Array 之间转换。`hex` / `unhex` 使用小写十六进制。`base64` / `unbase64` 是标准 Base64。`base64url` / `unbase64url` 使用 URL 安全字母表，填充的 `=` 可以不写。`randomBytes(n)` 取 1 到 1024 个随机字节。`now()` 是引擎时钟的毫秒数。没有 BigInt，也没有加密原语。返回值只能是字符串、数字、布尔或普通数组和对象。超出安全整数的数会丢精度。Uint8Array 不能直接返回，运行时是「不能直接返回字节数组，请先 hermit.hex 或 base64」，先转成十六进制或 Base64。Date 不能返回，运行时是「不能返回 Date」。这两句都不带返回值。不能写 `class` 或 `async`。需要浏览器加密接口的算法，用纯 JavaScript 放进脚本库。SM2、SM3、SM4 也可以这样贴进去，但必须落在下面的预算里。脚本仍然不能访问网络。
 
-默认 1000ms、最大 5000ms，`code` 最多 64 KiB，结果最多 1 MiB，调用栈 1000，一次脚本在执行线程上累计分配超过 256 MiB（含已回收的临时对象）时停下。单次过大的分配导致内存不足时也停下，都是 `RULE_MISMATCH`「脚本内存超限」。脚本执行仍在同一 JVM，这不是进程级内存隔离。`into` 可保存结果；省略时要求适合合并的对象结果。这一版不新增过滤器，仍只有 `md5`、`sha256`、`base64`、`urlencode`、`trim`、`default`、`date`、`rsa`。
+默认 1000ms、最大 5000ms，`code` 最多 64 KiB，结果最多 1 MiB，调用栈 1000，一次脚本在执行线程上累计分配超过 256 MiB（含已回收的临时对象）时停下。单次过大的分配导致内存不足时也停下，都是 `RULE_MISMATCH`「脚本内存超限」。脚本执行仍在同一 JVM，这不是进程级内存隔离。`into` 可保存结果；省略时要返回对象，否则是「省略 into 时要返回对象」，不把返回值写进错误。这一版不新增过滤器，仍只有 `md5`、`sha256`、`base64`、`urlencode`、`trim`、`default`、`date`、`rsa`。
 
 版本对比会列出新增、删除和源码有改动的脚本库名字，不带出源码。能力步骤的 `use` 用到被改过或被删掉的库时，这个能力算作步骤有变化。哈希和签名仍覆盖整份 YAML。
 

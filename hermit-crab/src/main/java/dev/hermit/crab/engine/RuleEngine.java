@@ -539,6 +539,7 @@ public final class RuleEngine implements ConchExecutor {
                     byte[] bytes = outcome == null ? null : outcome.bodyBytes();
                     String reason = CaptchaImages.reject(bytes);
                     if (reason != null) {
+                        traceAsk(ticket.askIndex(), 0, ticket.kind(), ticket.label(), reason);
                         return finish(false, null, ErrorCode.AUTH_FAILED, reason, stepIndex, "request", reason, logs,
                                 version, request, credentials, scope.redactionValues(), start);
                     }
@@ -629,7 +630,7 @@ public final class RuleEngine implements ConchExecutor {
             String reason = previousRequest ? CaptchaImages.reject(previousBytes) : CaptchaImages.UNSUPPORTED;
             if (reason != null) {
                 logs.add(askLog(at, took));
-                traceAsk(at, took, kind, label);
+                traceAsk(at, took, kind, label, reason);
                 return new StepFailure(ErrorCode.AUTH_FAILED, reason, at, "ask", logs);
             }
             CaptchaImages.Accepted accepted = CaptchaImages.accept(previousBytes);
@@ -674,6 +675,14 @@ public final class RuleEngine implements ConchExecutor {
     }
 
     private static void traceAsk(int index, long took, String kind, String label) {
+        traceAsk(index, took, kind, label, null);
+    }
+
+    /**
+     * {@code failure} 非空时是图片读不出来。写入 {@code passed: false} 和现有句子，不放图片字节。
+     * 停下来等输入时没有这句，不能把等待标成未通过。
+     */
+    private static void traceAsk(int index, long took, String kind, String label, String failure) {
         DevTraceDraft draft = DevTraceScope.current();
         if (draft == null) {
             return;
@@ -682,6 +691,12 @@ public final class RuleEngine implements ConchExecutor {
         piece.put("type", "ask");
         piece.put("kind", kind);
         piece.put("label", label);
+        if (failure != null) {
+            piece.put("passed", Boolean.FALSE);
+            if (!failure.isBlank()) {
+                piece.put("error", failure);
+            }
+        }
         draft.add("login", index, took, piece);
     }
 
@@ -931,13 +946,16 @@ public final class RuleEngine implements ConchExecutor {
                     }
                 }
                 logs.add(new StepLog(at, step.type(), elapsed(started), ex.method, ex.path, ex.status, null));
-                recordFailure(phase, at, step, elapsed(started), ex, credentialBearingRequest(loginPhase, step));
+                recordFailure(
+                        phase, at, step, elapsed(started), ex, summary, credentialBearingRequest(loginPhase, step));
                 throw new StepFailure(code, summary, at, step.type(), logs);
             } catch (TemplateException ex) {
+                String summary = undefinedOr(ex);
                 logs.add(new StepLog(at, step.type(), elapsed(started), null, null, null, null));
-                recordFailure(phase, at, step, elapsed(started), null, credentialBearingRequest(loginPhase, step));
+                recordFailure(
+                        phase, at, step, elapsed(started), null, summary, credentialBearingRequest(loginPhase, step));
                 ErrorCode code = auth ? ErrorCode.AUTH_FAILED : ErrorCode.RULE_MISMATCH;
-                throw new StepFailure(code, undefinedOr(ex), at, step.type(), logs);
+                throw new StepFailure(code, summary, at, step.type(), logs);
             } catch (DeadlineExceeded ex) {
                 throw new DeadlineExceeded(at, step.type(), logs);
             }
@@ -1180,6 +1198,7 @@ public final class RuleEngine implements ConchExecutor {
             Step step,
             long durationMs,
             RuleProblem problem,
+            String summary,
             boolean credentialBearing
     ) {
         DevTraceDraft draft = DevTraceScope.current();
@@ -1195,9 +1214,9 @@ public final class RuleEngine implements ConchExecutor {
         Map<String, Object> piece = switch (step.type()) {
             case "assert" -> DevTraceDraft.assertPiece(step.def(), false);
             case "extract" -> DevTraceDraft.extractPiece(step.def(), 0, Map.of());
-            case "set" -> DevTraceDraft.variablePiece(step.type(), namesOnly(step.def()));
+            case "set" -> DevTraceDraft.variablePiece(step.type(), namesOnly(step.def(), false));
             case "script" -> DevTraceDraft.scriptFailurePiece(
-                    namesOnly(step.def()), problem == null ? null : problem.script);
+                    namesOnly(step.def(), true), problem == null ? null : problem.script);
             case "request" -> {
                 Map<String, Object> request = DevTraceDraft.requestPiece(
                         null,
@@ -1217,17 +1236,35 @@ public final class RuleEngine implements ConchExecutor {
             }
             default -> Map.of("type", step.type());
         };
+        // 说明与这次调用错误是同一句。渲染时再打码并截断，这里不附加正文。
+        stampFailure(piece, step.type(), summary);
         stampCredential(piece, credentialBearing);
         draft.add(phase, index, durationMs, piece);
     }
 
-    private static Map<String, Object> namesOnly(Map<String, Object> def) {
+    /** 提取、set、以及没有抛出位置的脚本。已有 {@code scriptError} 的抛出保持原样。 */
+    private static void stampFailure(Map<String, Object> piece, String type, String summary) {
+        if (!"extract".equals(type) && !"set".equals(type) && !"script".equals(type)) {
+            return;
+        }
+        piece.put("passed", Boolean.FALSE);
+        if (piece.containsKey("scriptError") || summary == null || summary.isBlank()) {
+            return;
+        }
+        piece.put("error", summary);
+    }
+
+    private static Map<String, Object> namesOnly(Map<String, Object> def, boolean script) {
         LinkedHashMap<String, Object> names = new LinkedHashMap<>();
         if (def == null) {
             return names;
         }
         for (String key : def.keySet()) {
             if ("code".equals(key) || "timeout_ms".equals(key) || ConchRegistry.RESERVED.contains(key)) {
+                continue;
+            }
+            // into 是脚本的目的地，不是这次写出来的变量。
+            if (script && "into".equals(key)) {
                 continue;
             }
             names.put(key, null);

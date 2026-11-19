@@ -193,7 +193,7 @@ class ScriptStepTest {
         long elapsed = Duration.ofNanos(System.nanoTime() - started).toMillis();
         assertThat(result.success()).isFalse();
         assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
-        assertThat(result.error().message()).isEqualTo("script timeout");
+        assertThat(result.error().message()).isEqualTo(ScriptStep.SCRIPT_TIMEOUT);
         assertThat(result.error().failedStepType()).isEqualTo("script");
         assertThat(elapsed).isLessThan(2_000);
 
@@ -208,7 +208,7 @@ class ScriptStepTest {
                 """);
         long defaultElapsed = Duration.ofNanos(System.nanoTime() - defaultStarted).toMillis();
         assertThat(defaults.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
-        assertThat(defaults.error().message()).isEqualTo("script timeout");
+        assertThat(defaults.error().message()).isEqualTo(ScriptStep.SCRIPT_TIMEOUT);
         assertThat(defaultElapsed).isBetween(500L, 4_000L);
     }
 
@@ -357,7 +357,7 @@ class ScriptStepTest {
                 """, """
                 value: { type: string, description: 结果 }
                 """);
-        assertThat(date.error().message()).isEqualTo("脚本返回值类型无效");
+        assertThat(date.error().message()).isEqualTo(ScriptStep.RETURN_DATE);
 
         ExecutionResult bare = run("""
                 - script:
@@ -366,7 +366,7 @@ class ScriptStepTest {
                 """, """
                 value: { type: string, description: 结果 }
                 """);
-        assertThat(bare.error().message()).isEqualTo("脚本返回值类型无效");
+        assertThat(bare.error().message()).isEqualTo(ScriptStep.RETURN_OBJECT);
 
         ExecutionResult reserved = run("""
                 - script:

@@ -287,10 +287,17 @@ public final class DevTraceDraft {
         return piece;
     }
 
-    /** 脚本失败。没有抛出位置时只记变量名，例如模板还没跑到脚本。 */
+    /**
+     * 脚本失败。没有抛出位置时仍记 {@code passed: false}，调用方再写入已经打码前的说明。
+     * 有 {@link ScriptFault} 时保持抛出位置，不再另加一句。
+     */
     public static Map<String, Object> scriptFailurePiece(Map<String, Object> values, ScriptFault fault) {
         if (fault == null) {
-            return variablePiece("script", values);
+            LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
+            piece.put("type", "script");
+            piece.put("variables", variables(values));
+            piece.put("passed", false);
+            return piece;
         }
         LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
         piece.put("type", "script");
@@ -341,6 +348,7 @@ public final class DevTraceDraft {
             }
             Map<String, Object> copy = mutableMap(masked);
             maskCredentialBodies(copy, mask);
+            clipStepErrors(copy);
             limitWireBodies(copy);
             limitSteps(copy);
             limitFields(copy);
@@ -513,6 +521,25 @@ public final class DevTraceDraft {
             mutable.put("body", truncateUtf8(text, HttpCalls.WIRE_BODY_LIMIT));
             mutable.put("truncated", true);
             mutable.put("truncation", HttpCalls.WIRE_BODY_NOTE);
+        }
+    }
+
+    /**
+     * 失败说明与调用错误同一句：先打码，再按对外说明截断。
+     * 不截 {@code scriptError}，抛出说明仍按单步上限处理。
+     */
+    private static void clipStepErrors(Map<String, Object> document) {
+        Object raw = document.get("steps");
+        if (!(raw instanceof List<?> steps)) {
+            return;
+        }
+        for (Object step : steps) {
+            if (!(step instanceof Map<?, ?> map) || !(map.get("error") instanceof String text)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> mutable = (Map<String, Object>) map;
+            mutable.put("error", HttpCalls.clipPublic(HttpCalls.presentUpstream(text)));
         }
     }
 

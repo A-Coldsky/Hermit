@@ -355,7 +355,12 @@ export interface DevTraceStep {
   variables?: DevTraceVariable[]
   assertions?: string[]
   passed?: boolean
-  /** 脚本失败时的抛出说明和位置。没有则为空。 */
+  /**
+   * 这一步失败、又没有 `scriptError` 时的说明。
+   * 与调用错误同一句：已脱敏，超过 8 KiB 时截到 4 KiB。不含响应正文。
+   */
+  error?: string
+  /** 脚本失败时的抛出说明和位置。没有则为空。`line` 为 0 表示脚本已跑但没有行号。 */
   scriptError?: ScriptError | null
   truncated?: boolean
   truncation?: string

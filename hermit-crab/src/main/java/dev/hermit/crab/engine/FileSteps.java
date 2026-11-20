@@ -14,6 +14,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.http.UrlComponents;
 import dev.hermit.common.validate.FileTransfers;
 import dev.hermit.crab.files.FileScope;
 import dev.hermit.crab.files.FileStageException;
@@ -62,7 +63,7 @@ final class FileSteps {
             if (value == null) {
                 continue;
             }
-            write(out, "--" + boundary + "\r\n", charset);
+            ascii(out, "--" + boundary + "\r\n");
             if (value instanceof Map<?, ?> filePart) {
                 Object id = filePart.get("file");
                 if (!(id instanceof String fileId) || fileId.isBlank()) {
@@ -83,21 +84,28 @@ final class FileSteps {
                 String type = filePart.get("content_type") instanceof String given && !given.isBlank()
                         ? given
                         : file.mime();
-                write(out, "Content-Disposition: form-data; name=\"" + quote(field) + "\"; filename=\""
-                        + quote(name) + "\"\r\nContent-Type: " + oneLine(type) + "\r\n\r\n", charset);
+                ascii(out, "Content-Disposition: form-data; name=\"");
+                text(out, quote(field), charset, field);
+                ascii(out, "\"; filename=\"");
+                text(out, quote(name), charset, field);
+                ascii(out, "\"\r\nContent-Type: ");
+                text(out, oneLine(type), charset, field);
+                ascii(out, "\r\n\r\n");
                 out.writeBytes(bytes);
                 summary.add(field + "=<文件 " + name + "，" + bytes.length + " 字节，" + type
                         + "，sha256 " + file.sha256() + ">");
             } else if (value instanceof String || value instanceof Number || value instanceof Boolean) {
-                write(out, "Content-Disposition: form-data; name=\"" + quote(field) + "\"\r\n\r\n", charset);
-                write(out, String.valueOf(value), charset);
+                ascii(out, "Content-Disposition: form-data; name=\"");
+                text(out, quote(field), charset, field);
+                ascii(out, "\"\r\n\r\n");
+                text(out, String.valueOf(value), charset, field);
                 summary.add(field + "=" + value);
             } else {
                 throw new RuleProblem(ErrorCode.RULE_MISMATCH, FileTransfers.PART_TYPE, null, null, null);
             }
-            write(out, "\r\n", charset);
+            ascii(out, "\r\n");
         }
-        write(out, "--" + boundary + "--\r\n", charset);
+        ascii(out, "--" + boundary + "--\r\n");
         return new Multipart(
                 out.toByteArray(),
                 "multipart/form-data; boundary=" + boundary,
@@ -173,8 +181,19 @@ final class FileSteps {
         }
     }
 
-    private static void write(ByteArrayOutputStream out, String text, Charset charset) {
-        out.writeBytes(text.getBytes(charset));
+    /** 分隔符和头的语法固定按 ASCII 写，不跟步骤的 encoding 走。 */
+    private static void ascii(ByteArrayOutputStream out, String text) {
+        out.writeBytes(text.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    /** 字段名、文件名和文本值按步骤的 encoding 写；表示不了的字符失败，不换成问号。 */
+    private static void text(ByteArrayOutputStream out, String text, Charset charset, String field) {
+        try {
+            out.writeBytes(UrlComponents.encode(text, charset));
+        } catch (UrlComponents.Unencodable ex) {
+            throw new RuleProblem(
+                    ErrorCode.RULE_MISMATCH, "multipart." + field + " 含有编码无法表示的字符", null, null, null);
+        }
     }
 
     private static String quote(String value) {

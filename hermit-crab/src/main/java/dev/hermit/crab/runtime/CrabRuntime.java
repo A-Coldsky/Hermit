@@ -249,7 +249,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(
-                paths, registry, database.dataSource(), () -> debug.get().enabled(), clock);
+                paths, registry.scoped(Origin.LOCAL), database.dataSource(), () -> debug.get().enabled(), clock);
         this.localConches.onWidened(this::clearWidenedSessions);
         this.admin.bindOriginFallback(name -> localConches.occupies(name) ? Origin.LOCAL : null);
         this.admin.bindAccountRemoved(mcpForwarder::forgetAccount);
@@ -727,7 +727,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return new LoadReport(List.of(), List.of());
         }
         paths.conches();
-        LoadReport official = InstalledConches.loadAll(paths, reefKey, registry);
+        LoadReport official = InstalledConches.loadAll(paths, reefKey, registry.scoped(Origin.OFFICIAL));
         localConches.loadStartup();
         return official;
     }
@@ -926,9 +926,6 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      */
     public ConchOutcome subscribe(String conch, String actor) {
         prepare();
-        if (localConches.occupies(conch) && registry.origin(conch) != Origin.LOCAL) {
-            throw new SubscriptionException(409, ErrorCode.INVALID_INPUT, SubscriptionException.LOCAL_CONFLICT);
-        }
         if (conchSync == null) {
             throw new SubscriptionException(
                     409, ErrorCode.NOT_CONFIGURED, SubscriptionException.NOT_CONFIGURED);
@@ -997,7 +994,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return;
         }
         SubscriptionCommands.unsubscribe(
-                null, paths, registry, disabledConches, subscriptions, database.dataSource(), conch, actor);
+                null, paths, registry.scoped(Origin.OFFICIAL), disabledConches, subscriptions, database.dataSource(), conch, actor);
     }
 
     public Optional<SyncReport> syncOnce(String requestedBy) {
@@ -1307,7 +1304,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private void attachReef(URI reefUrl, Optional<String> token, PublicKey key, Duration interval, UUID instance) {
         SyncSettings syncSettings = new SyncSettings(reefUrl, token, key, interval, instance);
         ConchSync sync = new ConchSync(
-                syncSettings, paths, registry, vault, database.dataSource(), clock, disabledConches);
+                syncSettings, paths, registry.scoped(Origin.OFFICIAL), vault, database.dataSource(), clock, disabledConches);
         sync.onReport(this::rememberCompletedSync);
         this.conchSync = sync;
         admin.bindStagedDeclarations(sync::stagedDeclaration);

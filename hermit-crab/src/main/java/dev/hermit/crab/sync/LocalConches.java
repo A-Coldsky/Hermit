@@ -1066,12 +1066,7 @@ public final class LocalConches {
     }
 
     private void rejectClash(String conch) {
-        if (registry.origin(conch) == Origin.OFFICIAL) {
-            throw LocalConchException.conflict("与已安装的正式规则包重名");
-        }
-        if (new Subscriptions(dataSource).contains(conch)) {
-            throw LocalConchException.conflict("与已订阅的规则包重名");
-        }
+        // 本地包可以和正式包同名：两份都留在本机，同一时刻只有一份生效。
     }
 
     private Parsed parse(byte[] raw) {

@@ -160,9 +160,27 @@ public final class RuleEngine implements ConchExecutor {
         }
     }
 
+    /**
+     * 请求带着某个来源的账号和凭证进来。同名的本地包和正式包切换后，生效的可能已经是另一份；
+     * 那时按「不存在」处理，不拿这个来源的凭证去跑另一个来源的规则。
+     */
+    private ConchDoc liveConch(ExecutionRequest request) {
+        ConchRegistry.Active live = registry.active(request.conch()).orElse(null);
+        if (live == null) {
+            return null;
+        }
+        if (live.origin() == request.origin()) {
+            return live.doc();
+        }
+        // 正式来源的凭证不交给本地规则。反过来，本机没有本地那份时，
+        // 本地来源的请求仍可以跑已验签的正式规则，与只有一个槽时的行为一致。
+        boolean officialOnly = live.origin() == Origin.OFFICIAL && !registry.has(request.conch(), Origin.LOCAL);
+        return officialOnly ? live.doc() : null;
+    }
+
     private ConchDoc authorizedConch(ExecutionRequest request, ConchDoc authorized) {
         if (authorized == null) {
-            return registry.find(request.conch()).orElse(null);
+            return liveConch(request);
         }
         if (!authorized.conch().equals(request.conch())) {
             return null;
@@ -193,7 +211,7 @@ public final class RuleEngine implements ConchExecutor {
         Map<String, String> config = copyStrings(request.accountContext().config());
         String version = null;
         try {
-            ConchDoc conch = registry.find(request.conch()).orElse(null);
+            ConchDoc conch = liveConch(request);
             if (conch == null) {
                 return finish(false, null, ErrorCode.NOT_FOUND, "规则包不存在", null, null, "规则包不存在",
                         List.of(), version, request, credentials, List.of(), start);
@@ -405,7 +423,7 @@ public final class RuleEngine implements ConchExecutor {
         List<String> supplied = value == null ? List.of() : List.of(value);
         String version = null;
         try {
-            ConchDoc conch = registry.find(request.conch()).orElse(null);
+            ConchDoc conch = liveConch(request);
             version = conch == null ? null : conch.version().toString();
             if (rejected != null) {
                 return finish(false, null, ErrorCode.INVALID_INPUT, rejected, null, null, rejected, List.of(),
@@ -474,7 +492,7 @@ public final class RuleEngine implements ConchExecutor {
         Map<String, String> config = copyStrings(request.accountContext().config());
         String version = null;
         try {
-            ConchDoc conch = registry.find(request.conch()).orElse(null);
+            ConchDoc conch = liveConch(request);
             version = conch == null ? null : conch.version().toString();
             if (conch == null) {
                 return finish(false, null, ErrorCode.NOT_FOUND, "规则包不存在", null, null, "规则包不存在",
@@ -1153,7 +1171,7 @@ public final class RuleEngine implements ConchExecutor {
             return null;
         }
         if (doc == null) {
-            doc = registry.find(request.conch()).orElse(null);
+            doc = liveConch(request);
         }
         // HTTP steps only. A forwarder records MCP JSON-RPC with DevTraceStore.recordJsonRpc.
         if (doc == null || !"http".equals(doc.driver())) {

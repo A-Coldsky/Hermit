@@ -1131,11 +1131,15 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 LinkedHashMap<String, String> fields = new LinkedHashMap<>();
                 for (Map.Entry<String, String> entry
                         : vault.decryptForExecution(Origin.LOCAL, conch, account.account()).entrySet()) {
-                    if (target.credentials().containsKey(entry.getKey())) {
+                    // OAuth 令牌由系统写入，不复制；正式包上重新连接一次。
+                    if (target.credentials().containsKey(entry.getKey())
+                            && !dev.hermit.crab.upstream.McpOAuthToken.FIELD.equals(entry.getKey())) {
                         fields.put(entry.getKey(), entry.getValue());
                     }
                 }
-                DeclaredSettings.checkCredentialFields(target, fields);
+                if (!fields.isEmpty()) {
+                    DeclaredSettings.checkCredentialFields(target, fields);
+                }
                 secrets.put(account.account(), fields);
                 if (account.defaultAccount()) {
                     localDefault = account.account();

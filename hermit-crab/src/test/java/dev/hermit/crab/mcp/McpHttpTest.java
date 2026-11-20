@@ -324,6 +324,38 @@ class McpHttpTest {
     }
 
     @Test
+    void relatedCapabilitiesAreShownWhenVisible() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("related"), PASSWORD)) {
+            String session = server.post(server.apiKey.plaintext(), null, null, initialize("{}")).header("Mcp-Session-Id");
+            Reply listed = server.post(server.apiKey.plaintext(), session, null, request(2, "tools/list", null));
+            JsonNode tools = listed.json().path("result").path("tools");
+            // 自己、不存在的名字不写出来。
+            assertThat(tool(tools, "legacy_oa__save_note").path("description").asText())
+                    .endsWith("相关能力：legacy_oa__list_todo、legacy_oa__purge_note");
+            assertThat(tool(tools, "legacy_oa__list_todo").path("description").asText()).doesNotContain("相关能力");
+            Reply guide = server.post(server.apiKey.plaintext(), session, null, request(3, "resources/read",
+                    Map.of("uri", "hermit://conches/legacy_oa/guide")));
+            assertThat(guide.json().path("result").path("contents").get(0).path("text").asText())
+                    .contains("- 相关能力: `legacy_oa__list_todo`、`legacy_oa__purge_note`");
+
+            // 停用的能力从相关能力里消失。
+            server.runtime.setCapabilityDisabled("legacy_oa", "purge_note", true, Actors.CLI);
+            Reply afterDisable = server.post(server.apiKey.plaintext(), session, null, request(4, "tools/list", null));
+            assertThat(tool(afterDisable.json().path("result").path("tools"), "legacy_oa__save_note").path("description").asText())
+                    .endsWith("相关能力：legacy_oa__list_todo");
+            server.runtime.setCapabilityDisabled("legacy_oa", "purge_note", false, Actors.CLI);
+
+            // 当前 Key 看不到的能力也不写出来。
+            CreatedApiKey narrow = server.runtime.admin().createApiKey(
+                    "narrow-related", new ApiKeyScope(Set.of(), Set.of("legacy_oa.save_note"), false), Actors.CLI);
+            String narrowSession = server.post(narrow.plaintext(), null, null, initialize("{}")).header("Mcp-Session-Id");
+            Reply narrowListed = server.post(narrow.plaintext(), narrowSession, null, request(2, "tools/list", null));
+            assertThat(tool(narrowListed.json().path("result").path("tools"), "legacy_oa__save_note").path("description").asText())
+                    .doesNotContain("相关能力");
+        }
+    }
+
+    @Test
     void notifiesToolListChanges() throws Exception {
         try (Harness server = Harness.open(temp.resolve("notify"), PASSWORD)) {
             Reply initialized = server.post(server.apiKey.plaintext(), null, null, initialize("{}"));
@@ -402,6 +434,7 @@ class McpHttpTest {
             assertThat(describedBody.path("inputSchema").get("additionalProperties").booleanValue()).isFalse();
             assertThat(describedBody.path("examples").get(0).path("input").path("text").asText()).isEqualTo("hi");
             assertThat(describedBody.path("output").toString()).contains("是否写入");
+            assertThat(describedBody.path("related").toString()).isEqualTo("[\"bulk_conch__act_00\"]");
             Reply hidden = call(server, scoped.plaintext(), session, "describe_capability",
                     Map.of("name", "secret_conch__hidden"));
             assertThat(toolError(hidden).path("code").asText()).isEqualTo("NOT_FOUND");
@@ -1058,6 +1091,7 @@ class McpHttpTest {
                       - input: { text: hi }
                         output: { saved: true }
                     notes: 需要确认后才执行
+                    related: [act_00]
                     mcp: { read_only: false, destructive: true }
                 """);
         for (int i = 0; i < 40; i++) {
@@ -1182,6 +1216,7 @@ class McpHttpTest {
                     - input: { text: hello }
                       output: { saved: true }
                   notes: 测试写能力。
+                  related: [list_todo, purge_note, save_note, no_such]
                   mcp: { read_only: false }
                 purge_note:
                   title: 清空备注

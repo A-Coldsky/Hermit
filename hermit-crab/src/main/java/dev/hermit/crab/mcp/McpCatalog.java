@@ -64,8 +64,9 @@ final class McpCatalog {
         if (directory(principal)) {
             tools.addAll(directoryTools(outputSchema));
         } else {
-            for (CapabilityRef ref : visible(principal)) {
-                tools.add(directTool(ref, outputSchema));
+            List<CapabilityRef> visible = visible(principal);
+            for (CapabilityRef ref : visible) {
+                tools.add(directTool(ref, visible, outputSchema));
             }
         }
         if (devMode.getAsBoolean()) {
@@ -195,6 +196,7 @@ final class McpCatalog {
         }
         body.put("description", description);
         body.put("notes", action.notes());
+        body.put("related", related(ref, visible(principal)));
         body.put("readOnly", CapabilityHttp.readOnly(action));
         body.put("idempotent", action.idempotent());
         body.put("inputSchema", action.inputJsonSchema());
@@ -250,13 +252,13 @@ final class McpCatalog {
                 tool(CALL, "调用一个能力。需要确认的能力必须先经用户确认。", callSchema(), null, false, false));
     }
 
-    private McpSchema.Tool directTool(CapabilityRef ref, boolean outputSchema) {
+    private McpSchema.Tool directTool(CapabilityRef ref, List<CapabilityRef> visible, boolean outputSchema) {
         Action action = ref.action();
         boolean readOnly = CapabilityHttp.readOnly(action);
         boolean mcp = action.tool() != null;
         McpSchema.Tool.Builder builder = McpSchema.Tool.builder(ref.toolName(), withAccount(action))
                 .title(action.title())
-                .description(localMark(ref.conch().conch(), toolDescription(action)))
+                .description(localMark(ref.conch().conch(), toolDescription(action, related(ref, visible))))
                 .annotations(McpSchema.ToolAnnotations.builder()
                         .readOnlyHint(readOnly)
                         .destructiveHint(action.effectiveDestructive())
@@ -467,6 +469,7 @@ final class McpCatalog {
         properties.put("title", Map.of());
         properties.put("description", Map.of());
         properties.put("notes", Map.of());
+        properties.put("related", arraySchema(Map.of("type", "string")));
         properties.put("readOnly", Map.of("type", "boolean"));
         properties.put("idempotent", Map.of("type", "boolean"));
         properties.put("inputSchema", Map.of("type", "object"));
@@ -493,12 +496,38 @@ final class McpCatalog {
         return LOCAL_PREFIX + (text == null ? "" : text);
     }
 
-    static String toolDescription(Action action) {
+    static String toolDescription(Action action, List<String> related) {
         StringBuilder text = new StringBuilder();
         append(text, action.title());
         append(text, action.description());
         append(text, action.notes());
+        if (!related.isEmpty()) {
+            append(text, "相关能力：" + String.join("、", related));
+        }
         return text.toString();
+    }
+
+    /**
+     * 同一规则包里 related 点名的能力的工具名。只留当前 Key 看得到的：
+     * 不存在、未暴露、已停用或没有权限的名字不写出来。
+     */
+    private static List<String> related(CapabilityRef ref, List<CapabilityRef> visible) {
+        List<String> names = ref.action().related();
+        if (names == null || names.isEmpty()) {
+            return List.of();
+        }
+        ArrayList<String> found = new ArrayList<>();
+        for (String name : names) {
+            for (CapabilityRef other : visible) {
+                if (other.conch().conch().equals(ref.conch().conch())
+                        && other.action().name().equals(name)
+                        && !other.action().name().equals(ref.action().name())
+                        && !found.contains(other.toolName())) {
+                    found.add(other.toolName());
+                }
+            }
+        }
+        return List.copyOf(found);
     }
 
     static Map<String, Object> withAccount(Action action) {
@@ -621,6 +650,10 @@ final class McpCatalog {
             }
             text.append("- 只读: ").append(CapabilityHttp.readOnly(action) ? "是" : "否").append('\n');
             text.append("- 幂等: ").append(action.idempotent() ? "是" : "否").append('\n');
+            List<String> related = related(ref, actions);
+            if (!related.isEmpty()) {
+                text.append("- 相关能力: `").append(String.join("`、`", related)).append("`\n");
+            }
             text.append("\n参数:\n");
             if (action.input().isEmpty()) {
                 text.append("- 无\n");

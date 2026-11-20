@@ -121,6 +121,10 @@ class FileStageTest {
         assertThat(file.name()).doesNotContain("/", "\\", "\r", "\n");
         assertThat(file.mime()).doesNotContain("\r", "\n");
         assertThat(stage.store(bytes("x"), null, null, null).name()).isNotBlank();
+        // 200 个字符处正好切在表情中间：不留半个代理对。
+        String cut = stage.store(bytes("x"), "a".repeat(199) + "😀.txt", null, null).name();
+        assertThat(cut).isEqualTo("a".repeat(199));
+        assertThat(new String(cut.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8)).isEqualTo(cut);
     }
 
     @Test

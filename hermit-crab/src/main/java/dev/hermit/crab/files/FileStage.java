@@ -312,7 +312,17 @@ public final class FileStage implements AutoCloseable {
                 out.append(c);
             }
         }
-        String result = out.toString().trim();
+        // 截断不能留下半个代理对，也去掉本来就不成对的代理项：这样的名字没有编码能发出去。
+        StringBuilder whole = new StringBuilder();
+        for (int i = 0; i < out.length(); i++) {
+            char c = out.charAt(i);
+            if (Character.isHighSurrogate(c) && i + 1 < out.length() && Character.isLowSurrogate(out.charAt(i + 1))) {
+                whole.append(c).append(out.charAt(++i));
+            } else if (!Character.isSurrogate(c)) {
+                whole.append(c);
+            }
+        }
+        String result = whole.toString().trim();
         return result.isEmpty() || ".".equals(result) || "..".equals(result) ? "file" : result;
     }
 

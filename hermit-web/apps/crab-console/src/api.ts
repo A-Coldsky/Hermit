@@ -838,6 +838,32 @@ export interface ReefConnection {
 }
 
 /** 控制台保存的上报开关。`intervalSeconds` 至少为 60，并覆盖 config.yml。 */
+/** 文件暂存区的设置。字节数都是整数。 */
+export interface FileStageSettings {
+  ttlSeconds: number
+  maxFileBytes: number
+  maxTotalBytes: number
+}
+
+/** 暂存区里的一个文件。清单不带下载链接。 */
+export interface StagedFile {
+  fileId: string
+  name: string
+  size: number
+  mime: string
+  expiresAt: string
+  createdAt?: string
+  /** 控制台上传的文件，所有 API Key 都能在调用里使用。 */
+  shared?: boolean
+  apiKeyId?: string | null
+}
+
+export interface FileStageView {
+  settings: FileStageSettings
+  usage: { files: number; bytes: number }
+  files: StagedFile[]
+}
+
 export interface ReportSettings {
   enabled: boolean
   intervalSeconds: number
@@ -988,6 +1014,11 @@ export const api = {
   /** 导入引导 JSON。服务端会先连 Reef 校验令牌，再热更新本进程。 */
   importReefBootstrap: (body: unknown) => http.post<ReefConnection>(`${base}/reef/bootstrap`, body),
 
+  files: () => http.get<FileStageView>(`${base}/files`),
+  /** 请求体就是文件内容。上传的文件所有 API Key 都能用，返回里的 fileId 填进能力的文件参数。 */
+  uploadFile: (file: File) => http.raw<StagedFile>(`${base}/files`, file, { name: file.name }),
+  deleteFile: (fileId: string) => http.del<unknown>(`${base}/files/${seg(fileId)}`),
+  updateFileSettings: (body: FileStageSettings) => http.put<FileStageSettings>(`${base}/files/settings`, body),
   reportSettings: () => http.get<ReportSettings>(`${base}/reports/settings`),
   updateReportSettings: (body: ReportSettings) => http.put<ReportSettings>(`${base}/reports/settings`, body),
 

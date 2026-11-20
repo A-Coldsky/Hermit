@@ -160,7 +160,7 @@ public final class Invoker {
      * 文件入参统一换成 fileId：data URI 的小文件先存进暂存区，fileId 要求存在且属于这个 Key。
      * 之后的追踪、幂等和步骤模板看到的都只是 fileId。
      */
-    private static Map<String, Object> stageFileInputs(Action capability, Map<String, Object> rawInput) {
+    public static Map<String, Object> stageFileInputs(Action capability, Map<String, Object> rawInput) {
         java.util.LinkedHashMap<String, Object> staged = null;
         for (Map.Entry<String, dev.hermit.common.model.ParamSpec> entry : capability.input().entrySet()) {
             if (!entry.getValue().file() || !(rawInput.get(entry.getKey()) instanceof String value)) {
@@ -391,11 +391,6 @@ public final class Invoker {
         } catch (InvalidInput ex) {
             return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
         }
-        try {
-            rawInput = stageFileInputs(capability, rawInput);
-        } catch (FileStageException ex) {
-            return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
-        }
         CallChannel recorded = channel == null ? CallChannel.HTTP : channel;
         if (recorded == CallChannel.HTTP) {
             InvokeOutcome confirm = httpConfirm(doc, capability, httpConfirmed, confirmToken, traceId);
@@ -407,6 +402,13 @@ public final class Invoker {
             return replayOrExecute(
                     principal, doc, origin, action, rawInput, resolved, secrets, merged,
                     idempotencyKey.get(), bodySha256, recorded, traceId);
+        }
+        // 文件入参放在确认和幂等重放之后处理：要确认的调用不提前占暂存区，
+        // 已完成的写操作在入参文件过期后仍能取回结果。
+        try {
+            rawInput = stageFileInputs(capability, rawInput);
+        } catch (FileStageException ex) {
+            return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
         }
         return execute(principal, doc, origin, action, rawInput, resolved, secrets, merged, Optional.empty(), recorded, traceId);
     }
@@ -450,8 +452,14 @@ public final class Invoker {
                 }
                 return replay(stored.get().envelope());
             }
+            Map<String, Object> staged;
+            try {
+                staged = stageFileInputs(doc.actions().get(action), input);
+            } catch (FileStageException ex) {
+                return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
+            }
             InvokeOutcome outcome = execute(
-                    principal, doc, origin, action, input, account, secrets, merged, Optional.of(key), channel, traceId);
+                    principal, doc, origin, action, staged, account, secrets, merged, Optional.of(key), channel, traceId);
             if (!loginInputRequired(outcome)) {
                 idempotency.save(
                         origin,

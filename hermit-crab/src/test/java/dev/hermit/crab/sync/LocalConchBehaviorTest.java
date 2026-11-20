@@ -102,10 +102,11 @@ public class LocalConchBehaviorTest {
                  Statement statement = connection.createStatement()) {
                 statement.execute("INSERT INTO subscriptions (conch, subscribed_at, actor) VALUES ('subscribed_ping', CURRENT_TIMESTAMP, 'cli')");
             }
-            assertThatThrownBy(() -> runtime.localConches().importBytes(
-                    ping("subscribed_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI))
-                    .isInstanceOf(LocalConchException.class)
-                    .hasMessage("与已订阅的规则包重名");
+            // 已订阅但还没装上的同名包也不挡本地导入。
+            runtime.localConches().importBytes(
+                    ping("subscribed_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            assertThat(runtime.registry().origin("subscribed_ping")).isEqualTo(Origin.LOCAL);
+            runtime.localConches().delete("subscribed_ping", Actors.CLI);
 
             try (Connection connection = runtime.dataSource().getConnection();
                  PreparedStatement query = connection.prepareStatement(

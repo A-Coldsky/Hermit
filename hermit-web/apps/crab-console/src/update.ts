@@ -76,7 +76,7 @@ export async function updateConch(target: UpdateTarget, onStart?: () => void): P
     : ''
   try {
     await ElMessageBox.confirm(
-      `把 ${target.conch} 从 ${from} 更新到 ${to}。更新后可以退回刚换下的那一版。新版本校验不过时不会替换本机版本。${credentials}`,
+      `把 ${target.conch} 从 ${from} 更新到 ${to}。本机会留着${target.installedVersion ? ` ${from}` : from}，更新后不合适可以退回。新版本校验不通过时，本机版本保持不变。${credentials}`,
       `更新 ${target.conch}`,
       { confirmButtonText: '更新', cancelButtonText: '暂不更新', type: 'info' },
     )

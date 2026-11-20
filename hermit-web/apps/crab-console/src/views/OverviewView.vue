@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Box, CircleCheckFilled, Connection, List, Refresh, Setting, Warning, WarningFilled } from '@element-plus/icons-vue'
+import { Box, CircleCheckFilled, Connection, CopyDocument, List, Refresh, Setting, Warning, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -9,6 +9,7 @@ import TraceId from '@shared/components/TraceId.vue'
 import { ApiError } from '@shared/http'
 import { copyText, errorCodeLabels, formatTime, notifyError, percent, relativeTime } from '@shared/format'
 import { api, type CallSummary, type CrabRelease, type DebugState, type ConchSummary, type SyncReport } from '../api'
+import { connectPrompt } from '../connect'
 import { outcomeLabels, syncReasonLabels } from '../labels'
 import { refreshPending } from '../status'
 import { repairConch } from '../update'
@@ -52,6 +53,18 @@ const failures = computed(() => calls.value.filter((c) => !c.success).length)
 const repairs = computed(() => report.value?.conches.filter((s) => s.kind === 'REPAIR_REQUIRED') ?? [])
 const repairing = ref<string | null>(null)
 const debugBusy = ref(false)
+const mcpEndpoint = `${window.location.origin}/mcp`
+/** 没吊销的 Key 数。读不到时是 null，卡片不猜。 */
+const activeKeys = ref<number | null>(null)
+
+async function loadKeys() {
+  try {
+    const result = await api.apiKeys()
+    activeKeys.value = result.apiKeys.filter((key) => !key.revokedAt).length
+  } catch {
+    activeKeys.value = null
+  }
+}
 const authoringPrompt = computed(() => {
   const endpoint = `${window.location.origin}/mcp`
   return [
@@ -114,7 +127,7 @@ async function loadSync() {
 async function load() {
   loading.value = true
   try {
-    const [s, c, d] = await Promise.all([api.conches(), api.calls({ limit: 100 }), api.debug(), loadSync()])
+    const [s, c, d] = await Promise.all([api.conches(), api.calls({ limit: 100 }), api.debug(), loadSync(), loadKeys()])
     conches.value = s.conches
     calls.value = c.calls
     debug.value = d
@@ -405,6 +418,27 @@ onMounted(load)
       </div>
     </div>
 
+    <div class="hm-card" data-test="connect-card">
+      <div class="hm-card-title">
+        <span>接入 Agent</span>
+        <router-link to="/apikeys" class="small" data-test="connect-keys">管理 API Key</router-link>
+      </div>
+      <div class="connect">
+        <div class="connect-info">
+          <div>MCP 地址：<span class="mono" data-test="connect-endpoint">{{ mcpEndpoint }}</span></div>
+          <div v-if="activeKeys === 0" class="hm-muted" data-test="connect-nokey">
+            还没有 API Key，Agent 接不进来。<router-link to="/apikeys">去创建</router-link>
+          </div>
+          <div v-else class="hm-muted" data-test="connect-hint">
+            <template v-if="activeKeys != null">有 {{ activeKeys }} 把可用的 API Key。</template>把接入提示词发给 AI，它就知道怎么接入和查找能力；里面不含 Key。
+          </div>
+        </div>
+        <el-button :icon="CopyDocument" data-test="copy-connect" @click="copyText(connectPrompt(mcpEndpoint), '已复制接入提示词')">
+          复制接入提示词
+        </el-button>
+      </div>
+    </div>
+
     <div class="hm-card">
       <div class="hm-card-title">
         <span>最近失败</span>
@@ -558,6 +592,21 @@ onMounted(load)
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.connect {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.connect-info {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .authoring {

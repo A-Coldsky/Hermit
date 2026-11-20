@@ -551,9 +551,10 @@ onMounted(load)
             <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
           </div>
         </div>
-        <div class="status" :class="row.ruleDisabled ? 'bad' : row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
-          <el-icon><component :is="row.ruleDisabled ? CircleCloseFilled : row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
+        <div class="status" :class="row.ruleDisabled || row.switchedOff ? 'bad' : row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
+          <el-icon><component :is="row.ruleDisabled || row.switchedOff ? CircleCloseFilled : row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
           <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
+          <span v-else-if="row.switchedOff" data-test="switched-off-status">已停用：不能调用，进入详情可以重新启用</span>
           <span v-else-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
           <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
           <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>

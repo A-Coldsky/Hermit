@@ -96,6 +96,37 @@ describe('停用状态说真话', () => {
     expect(page.find('[data-test="conch-disable"]').exists()).toBe(true)
   })
 
+  it('本机停用的卡片不写「可用」', async () => {
+    crab.conches.mockResolvedValue({
+      conches: [
+        {
+          conch: 'legacy_oa',
+          version: '1.0.1',
+          title: '协同办公 OA',
+          capabilityCount: 2,
+          subscribed: true,
+          accountCount: 1,
+          needsConfiguration: false,
+          loginPaused: false,
+          source: 'REEF',
+          reefDisabled: false,
+          reefDisabledAt: null,
+          updateAvailable: false,
+          latestVersion: null,
+          newRequiredCredentials: [],
+          switchedOff: true,
+        },
+      ],
+    })
+    crab.localConches.mockResolvedValue({ conches: [] })
+    const page = await mountPage(ConchesView)
+    await flushPromises()
+
+    expect(page.get('[data-test="switched-off-tag"]').text()).toBe('本机已停用')
+    expect(page.get('[data-test="switched-off-status"]').text()).toContain('不能调用')
+    expect(page.text()).not.toContain('可以通过 OpenAPI 和 MCP 调用')
+  })
+
   it('停用卡片上「已停用」只出现一次，原因段只写原因', async () => {
     crab.conches.mockResolvedValue({
       conches: [

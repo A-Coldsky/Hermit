@@ -508,7 +508,7 @@ watch(
       </div>
       <el-alert v-if="local" type="info" show-icon :closable="false" title="本地规则包：未经 Reef 签名，只在本机可用">
         <template #default>
-          全部权限的 Key 可以调用这个本地规则包。在范围里点名了它的 Key 也可以调用。调用不会上报 Reef。
+          <template v-if="!detail.switchedOff">全部权限的 Key 可以调用这个本地规则包。</template><template v-else>规则包启用时，全部权限的 Key 可以调用这个本地规则包。</template>在范围里点名了它的 Key 也可以调用。调用不会上报 Reef。
           导出的 YAML 可以直接在 Reef「上传规则包」页面上传，校验签名后发布给其他 Crab。
         </template>
       </el-alert>

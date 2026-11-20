@@ -65,11 +65,12 @@ public final class ConchRegistry {
         }
 
         Origin activeOrigin(String conch) {
-            ConchDoc doc = active.get(conch);
-            if (doc == null) {
+            boolean mine = local.containsKey(conch);
+            boolean theirs = official.containsKey(conch);
+            if (!mine && !theirs) {
                 return null;
             }
-            return doc == local.get(conch) ? Origin.LOCAL : Origin.OFFICIAL;
+            return mine && (!theirs || selected.get(conch) == Origin.LOCAL) ? Origin.LOCAL : Origin.OFFICIAL;
         }
     }
 

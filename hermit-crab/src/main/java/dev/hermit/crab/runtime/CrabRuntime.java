@@ -543,6 +543,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (capability == null) {
             throw new TrialRejected(404, ErrorCode.NOT_FOUND, TRIAL_NOT_FOUND, true);
         }
+        if (conchSwitchedOff(conch)) {
+            throw new TrialRejected(409, ErrorCode.CONCH_DISABLED, Invoker.CONCH_SWITCHED_OFF_CALL, true);
+        }
         if (disabled(conch, action)) {
             throw new TrialRejected(404, ErrorCode.CAPABILITY_DISABLED, Invoker.CAPABILITY_DISABLED_MESSAGE, true);
         }

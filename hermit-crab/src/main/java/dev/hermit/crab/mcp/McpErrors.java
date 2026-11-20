@@ -272,7 +272,9 @@ final class McpErrors {
                     ? "确认能力名，或用 tools/list、search_capabilities 查看当前 Key 可见的能力。"
                     : "确认能力名，或用 tools/list 查看当前 Key 可见的能力。";
             case "CAPABILITY_DISABLED" -> "在 Crab 控制台重新启用该能力，或从 config.yml 的 capabilities.disabled 里去掉后再调用。";
-            case "CONCH_DISABLED" -> "该规则包已在 Reef 停用，且本机没有可调用的已安装版本。管理员重新启用后同步即可装回；已安装的版本仍可调用。";
+            case "CONCH_DISABLED" -> message != null && message.startsWith("该规则包已在本机停用")
+                    ? "在 Crab 控制台的规则包详情里重新启用该规则包后再调用。"
+                    : "该规则包已在 Reef 停用，且本机没有可调用的已安装版本。管理员重新启用后同步即可装回；已安装的版本仍可调用。";
             case "ACCOUNT_NOT_FOUND" -> "在 Crab 控制台或 CLI 为该规则包创建账号，或改用已有账号名。";
             case "NOT_CONFIGURED" -> "在 Crab 控制台补齐该规则包的配置和凭证。";
             case "AUTH_FAILED" -> "这是上游登录失败，不是 API Key 错误。请检查该账号的凭证，或在控制台执行测试登录。";

@@ -4,6 +4,7 @@ import { mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
   conch: vi.fn(),
+  setConchEnabled: vi.fn(),
   conches: vi.fn(),
   localConches: vi.fn(),
   pendingLocalOverwrites: vi.fn(async () => ({ pending: [] })),
@@ -70,6 +71,60 @@ describe('停用状态说真话', () => {
     expect(page.find('[data-test="ready"]').text()).toContain('配置完整')
     expect(page.text()).not.toContain('已停用')
     expect(page.find('[data-test="test-login"]').exists()).toBe(true)
+  })
+
+  it('本机停用的包显示提示和「启用规则包」，点了就调启用接口', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), switchedOff: true })
+    crab.setConchEnabled.mockResolvedValue({ conch: 'legacy_oa', switchedOff: false })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    expect(page.get('[data-test="switched-off"]').text()).toContain('所有能力都不能调用')
+    expect(page.find('[data-test="conch-disable"]').exists()).toBe(false)
+    await page.get('[data-test="conch-enable"]').trigger('click')
+    await flushPromises()
+    expect(crab.setConchEnabled).toHaveBeenCalledWith('legacy_oa', true)
+  })
+
+  it('未停用的包只有「停用规则包」', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), switchedOff: false })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    expect(page.find('[data-test="switched-off"]').exists()).toBe(false)
+    expect(page.find('[data-test="conch-enable"]').exists()).toBe(false)
+    expect(page.find('[data-test="conch-disable"]').exists()).toBe(true)
+  })
+
+  it('本机停用的卡片不写「可用」', async () => {
+    crab.conches.mockResolvedValue({
+      conches: [
+        {
+          conch: 'legacy_oa',
+          version: '1.0.1',
+          title: '协同办公 OA',
+          capabilityCount: 2,
+          subscribed: true,
+          accountCount: 1,
+          needsConfiguration: false,
+          loginPaused: false,
+          source: 'REEF',
+          reefDisabled: false,
+          reefDisabledAt: null,
+          updateAvailable: false,
+          latestVersion: null,
+          newRequiredCredentials: [],
+          switchedOff: true,
+        },
+      ],
+    })
+    crab.localConches.mockResolvedValue({ conches: [] })
+    const page = await mountPage(ConchesView)
+    await flushPromises()
+
+    expect(page.get('[data-test="switched-off-tag"]').text()).toBe('本机已停用')
+    expect(page.get('[data-test="switched-off-status"]').text()).toContain('不能调用')
+    expect(page.text()).not.toContain('可以通过 OpenAPI 和 MCP 调用')
   })
 
   it('停用卡片上「已停用」只出现一次，原因段只写原因', async () => {

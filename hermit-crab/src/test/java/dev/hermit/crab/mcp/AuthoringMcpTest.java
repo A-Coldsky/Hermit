@@ -446,6 +446,13 @@ class AuthoringMcpTest {
             assertThat(hits).hasValue(0);
 
             server.runtime.admin().createAccount("trial_ping", "main", Actors.CONSOLE);
+            // 整包停用时试跑报整包停用，不让人去启用单个能力。
+            server.runtime.setConchDisabled("trial_ping", true, Actors.CONSOLE);
+            JsonNode off = server.call(session, "conch_trial_run", Map.of("conch", "trial_ping", "action", "ping"));
+            assertThat(toolError(off).path("code").asText()).isEqualTo("CONCH_DISABLED");
+            assertThat(toolMessage(off)).isEqualTo(dev.hermit.crab.runtime.Invoker.CONCH_SWITCHED_OFF_CALL);
+            assertThat(hits).hasValue(0);
+            server.runtime.setConchDisabled("trial_ping", false, Actors.CONSOLE);
             JsonNode ran = server.call(session, "conch_trial_run", Map.of("conch", "trial_ping", "action", "ping"));
             JsonNode body = structured(ran);
             assertThat(ran.path("result").path("isError").asBoolean(true)).as(ran.toString()).isFalse();

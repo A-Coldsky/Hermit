@@ -544,15 +544,17 @@ onMounted(load)
               {{ row.title || row.conch }}
               <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
               <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
+              <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
               <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
               <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
             </strong>
             <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
           </div>
         </div>
-        <div class="status" :class="row.ruleDisabled ? 'bad' : row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
-          <el-icon><component :is="row.ruleDisabled ? CircleCloseFilled : row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
+        <div class="status" :class="row.ruleDisabled || row.switchedOff ? 'bad' : row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
+          <el-icon><component :is="row.ruleDisabled || row.switchedOff ? CircleCloseFilled : row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
           <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
+          <span v-else-if="row.switchedOff" data-test="switched-off-status">已停用：不能调用，进入详情可以重新启用</span>
           <span v-else-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
           <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
           <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>

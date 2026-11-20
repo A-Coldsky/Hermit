@@ -44,6 +44,8 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   API_KEY_REVOKED: { text: '吊销 API Key', tone: 'danger' },
   CAPABILITY_ENABLED: { text: '启用能力', tone: 'success' },
   CAPABILITY_DISABLED: { text: '停用能力', tone: 'warning' },
+  CONCH_SWITCHED_OFF: { text: '停用规则包', tone: 'warning' },
+  CONCH_SWITCHED_ON: { text: '启用规则包', tone: 'success' },
   DEBUG_CHANGED: { text: '切换调试', tone: 'info' },
   TEST_LOGIN: { text: '测试登录', tone: 'info' },
   SYNC_REQUESTED: { text: '手动同步', tone: 'info' },

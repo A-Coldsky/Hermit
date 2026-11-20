@@ -68,7 +68,7 @@ class CrabSchemaHistoryTest {
             fresh = shape(database);
         }
 
-        assertThat(upgraded).contains("version 16", "version 17");
+        assertThat(upgraded).contains("version 16", "version 17", "version 18");
         assertThat(upgraded)
                 .as("已发布的库升级后和全新安装的结构不一致：已发布的升级步骤不能就地改，结构变化请新增版本")
                 .containsExactlyElementsOf(fresh);

@@ -320,6 +320,14 @@ final class McpCalls {
                 return failAsRequest(attempt, "CONCH_DISABLED", DisabledConches.CALL_MESSAGE);
             }
         }
+        // 整包在本机停用：工具不在列表里，说明原因而不是说没有这个工具。
+        String switchedOff = longestConchPrefix(toolName, runtime.conchSwitchedOffNames());
+        if (switchedOff != null && runtime.registry().find(switchedOff).isPresent()) {
+            String live = longestConchPrefix(toolName, runtime.registry().snapshot().keySet());
+            if (live == null || live.length() <= switchedOff.length()) {
+                return failAsRequest(attempt, "CONCH_DISABLED", Invoker.CONCH_SWITCHED_OFF_CALL);
+            }
+        }
         // 装着、但当前校验不让载入的包：工具不在列表里，也不能说成没有这个工具。
         String rejected = longestConchPrefix(toolName, runtime.ruleDisabledNames());
         if (rejected != null) {

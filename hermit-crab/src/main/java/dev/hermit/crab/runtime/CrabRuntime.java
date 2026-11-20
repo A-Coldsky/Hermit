@@ -126,6 +126,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final CallLogStore callLogs;
     private final IdempotencyStore idempotency;
     private final CapabilitySwitchStore switches;
+    private final dev.hermit.crab.store.ConchSwitchStore conchSwitches;
+    private final Set<String> conchSwitchedOff = ConcurrentHashMap.newKeySet();
     private final DebugStateStore debug;
     private final DevTraceStore devTraces;
     private final ConsolePassword consolePassword;
@@ -221,6 +223,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.callLogs = new CallLogStore(database.dataSource(), clock);
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());
+        this.conchSwitches = new dev.hermit.crab.store.ConchSwitchStore(database.dataSource());
+        this.conchSwitchedOff.addAll(conchSwitches.disabledNames());
         this.debug = new DebugStateStore(database.dataSource(), clock, this::onDebugChanged);
         this.devTraces = new DevTraceStore(database.dataSource(), clock, debug);
         this.mcpForwarder.bindDevTraces(devTraces);
@@ -241,6 +245,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.invoker.bindKnownSecrets(knownSecrets);
         this.invoker.bindMcpForwarder(mcpForwarder);
         this.invoker.bindRuleDisabled(this::ruleDisabled);
+        this.invoker.bindSwitchedOff(this::conchSwitchedOff);
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(
@@ -537,6 +542,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         Action capability = doc.actions().get(action);
         if (capability == null) {
             throw new TrialRejected(404, ErrorCode.NOT_FOUND, TRIAL_NOT_FOUND, true);
+        }
+        if (conchSwitchedOff(conch)) {
+            throw new TrialRejected(409, ErrorCode.CONCH_DISABLED, Invoker.CONCH_SWITCHED_OFF_CALL, true);
         }
         if (disabled(conch, action)) {
             throw new TrialRejected(404, ErrorCode.CAPABILITY_DISABLED, Invoker.CAPABILITY_DISABLED_MESSAGE, true);
@@ -1043,7 +1051,41 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     @Override
     public boolean disabled(String conch, String action) {
         String key = conch + "." + action;
+        return conchSwitchedOff.contains(conch) || configDisabled.contains(key) || switchDisabled.contains(key);
+    }
+
+    /** 只看按能力的开关和 config.yml，不看整包开关。控制台用它显示每个能力自己的状态。 */
+    public boolean capabilityDisabled(String conch, String action) {
+        String key = conch + "." + action;
         return configDisabled.contains(key) || switchDisabled.contains(key);
+    }
+
+    /** 整个规则包是否在本机被停用。按包名，不分来源。 */
+    public boolean conchSwitchedOff(String conch) {
+        return conch != null && conchSwitchedOff.contains(conch);
+    }
+
+    public Set<String> conchSwitchedOffNames() {
+        return Set.copyOf(conchSwitchedOff);
+    }
+
+    /**
+     * 停用要求包已载入。启用不要求：包被退订或删除后，留下的停用标记仍可以清掉。
+     * 已经进入执行的调用不会被打断。
+     */
+    public void setConchDisabled(String conch, boolean disabled, String actor) {
+        boolean loaded = registry.find(conch).isPresent();
+        if (disabled ? !loaded : !loaded && !conchSwitchedOff.contains(conch)) {
+            throw new IllegalArgumentException("conch not found");
+        }
+        Origin stored = registry.origin(conch);
+        conchSwitches.setDisabled(stored == null ? Origin.OFFICIAL : stored, conch, disabled, actor);
+        if (disabled) {
+            conchSwitchedOff.add(conch);
+        } else {
+            conchSwitchedOff.remove(conch);
+        }
+        notifyCatalogListeners();
     }
 
     public void setCapabilityDisabled(String conch, String action, boolean disabled, String actor) {

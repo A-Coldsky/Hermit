@@ -41,6 +41,7 @@ import dev.hermit.crab.gateway.CrabHttpServer;
 import dev.hermit.crab.gateway.RequestBodies;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
+import dev.hermit.crab.runtime.Invoker;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.CrabPaths;
@@ -289,6 +290,36 @@ class McpHttpTest {
             SecretChecks.absent(logs.text(), server.apiKey.plaintext());
         } finally {
             Logger.getLogger("").removeHandler(logs);
+        }
+    }
+
+    @Test
+    void switchedOffConchLeavesMcpUntilEnabledAgain() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("conch-switch"), PASSWORD)) {
+            String key = server.apiKey.plaintext();
+            String session = server.post(key, null, null, initialize("{}")).header("Mcp-Session-Id");
+            try (Sse sse = Sse.open(server, session)) {
+                sse.awaitPrefix(": open");
+                server.runtime.setConchDisabled("legacy_oa", true, Actors.CLI);
+                sse.awaitMethod("notifications/tools/list_changed");
+                Reply listed = server.post(key, session, null, request(2, "tools/list", null));
+                assertThat(names(listed.json().path("result").path("tools")))
+                        .noneMatch(name -> name.startsWith("legacy_oa__"))
+                        .contains("account_conch__lookup");
+                assertThat(server.post(key, session, null, request(3, "resources/list", null)).body())
+                        .doesNotContain("hermit://conches/legacy_oa/guide");
+                // 客户端拿着旧工具名来调：全权限 Key 也被拒，并说明是本机停用。
+                Reply stale = server.post(key, session, null, request(4, "tools/call",
+                        Map.of("name", "legacy_oa__list_todo", "arguments", Map.of("page", 1))));
+                assertThat(toolError(stale).path("code").asText()).isEqualTo("CONCH_DISABLED");
+                assertThat(toolError(stale).path("message").asText()).isEqualTo(Invoker.CONCH_SWITCHED_OFF_CALL);
+                assertThat(toolError(stale).path("hint").asText()).contains("重新启用");
+
+                server.runtime.setConchDisabled("legacy_oa", false, Actors.CLI);
+                sse.awaitMethod("notifications/tools/list_changed");
+                Reply back = server.post(key, session, null, request(5, "tools/list", null));
+                assertThat(names(back.json().path("result").path("tools"))).contains("legacy_oa__list_todo");
+            }
         }
     }
 

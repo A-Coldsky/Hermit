@@ -44,6 +44,8 @@ export interface ConchSummary {
    * 本地包为 false。
    */
   reefDisabled: boolean
+  /** 整个规则包在本机被停用：所有能力不可调用，也不出现在 MCP 和 OpenAPI 里。未载入的包没有这个字段。 */
+  switchedOff?: boolean
   /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
   reefDisabledAt: string | null
   /** 最近一次同步的清单版本高于已安装版本，且 Crab 可以安装它。 */
@@ -115,6 +117,8 @@ export interface ConchDetail {
   driver: 'http' | 'mcp' | null
   /** Reef 已停用。本机仍保留已安装版本并可调用。本地包为 false。 */
   reefDisabled: boolean
+  /** 整个规则包在本机被停用：所有能力不可调用，也不出现在 MCP 和 OpenAPI 里。未载入的包没有这个字段。 */
+  switchedOff?: boolean
   /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
   reefDisabledAt: string | null
   /** 最近一次同步的清单版本高于已安装版本，且 Crab 可以安装它。 */
@@ -925,6 +929,10 @@ export const api = {
   config: (conch: string) => http.get<{ fields: Record<string, ConfigValue> }>(`${conchPath(conch)}/config`),
   writeConfig: (conch: string, values: Record<string, string>) =>
     http.put<{ updated: boolean }>(`${conchPath(conch)}/config`, values),
+
+  /** 启用或停用整个规则包。停用后所有 Key 都不能调用，凭证、账号和配置不动。 */
+  setConchEnabled: (conch: string, enabled: boolean) =>
+    http.post<{ conch: string; switchedOff: boolean }>(`${conchPath(conch)}/${enabled ? 'enable' : 'disable'}`),
 
   setCapability: (conch: string, action: string, enabled: boolean) =>
     http.post<{ disabled: boolean }>(`${base}/capabilities/${seg(conch)}/${seg(action)}/${enabled ? 'enable' : 'disable'}`),

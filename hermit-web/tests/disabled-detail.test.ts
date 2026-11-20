@@ -5,6 +5,7 @@ import { mountPage } from './helpers'
 const crab = vi.hoisted(() => ({
   conch: vi.fn(),
   setConchEnabled: vi.fn(),
+  setConchSource: vi.fn(),
   conches: vi.fn(),
   localConches: vi.fn(),
   pendingLocalOverwrites: vi.fn(async () => ({ pending: [] })),
@@ -94,6 +95,46 @@ describe('停用状态说真话', () => {
     expect(page.find('[data-test="switched-off"]').exists()).toBe(false)
     expect(page.find('[data-test="conch-enable"]').exists()).toBe(false)
     expect(page.find('[data-test="conch-disable"]').exists()).toBe(true)
+  })
+
+  it('只有一份时不出现来源切换', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), localVersion: null, reefVersion: '1.0.1' })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    expect(page.find('[data-test="two-sources"]').exists()).toBe(false)
+  })
+
+  it('同名两份时切到正式包先问是否复制，选「只切换」不复制', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), source: 'LOCAL', localVersion: '9.9.9', reefVersion: '1.0.1' })
+    crab.setConchSource.mockResolvedValue({ conch: 'legacy_oa', source: 'REEF', copied: false, copiedAccounts: 0, copiedConfigKeys: 0 })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    expect(page.get('[data-test="two-sources"]').text()).toContain('本地包 v9.9.9')
+    expect(page.get('[data-test="two-sources"]').text()).toContain('正式包 v1.0.1')
+    expect(page.find('[data-test="source-to-local"]').exists()).toBe(false)
+    await page.get('[data-test="source-to-reef"]').trigger('click')
+    await flushPromises()
+    expect(crab.setConchSource).not.toHaveBeenCalled()
+    const box = document.querySelector('.el-message-box') as HTMLElement
+    expect(box.textContent).toContain('要把本地包的账号、凭证和配置复制到正式包吗')
+    const buttons = Array.from(box.querySelectorAll('.el-message-box__btns button')) as HTMLElement[]
+    buttons.find((button) => button.textContent?.includes('只切换，不复制'))!.click()
+    await flushPromises()
+    expect(crab.setConchSource).toHaveBeenCalledWith('legacy_oa', 'REEF', false)
+  })
+
+  it('选「复制并切换」才带 copy', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), source: 'LOCAL', localVersion: '9.9.9', reefVersion: '1.0.1' })
+    crab.setConchSource.mockResolvedValue({ conch: 'legacy_oa', source: 'REEF', copied: true, copiedAccounts: 1, copiedConfigKeys: 1 })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    await page.get('[data-test="source-to-reef"]').trigger('click')
+    await flushPromises()
+    const buttons = Array.from(document.querySelectorAll('.el-message-box__btns button')) as HTMLElement[]
+    buttons.find((button) => button.textContent?.includes('复制并切换'))!.click()
+    await flushPromises()
+    expect(crab.setConchSource).toHaveBeenCalledWith('legacy_oa', 'REEF', true)
   })
 
   it('本机停用的卡片不写「可用」', async () => {

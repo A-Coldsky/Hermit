@@ -427,6 +427,6 @@ ZIP 只包含 `conch.yaml`、`manifest.json`、`signature.sig`；manifest format
 
 导入走与 Reef 上传相同的解析和校验，也同样拒绝 `actions` 里重复的能力名（`DUPLICATE_ACTION`，带行号），以及顶层 `scripts` 里重复的库名（`SCRIPT_STEP`，带行号，message 为「脚本库 名字 重复」，不回显源码）：MCP 的 `conch_validate`、`conch_save_local`，控制台导入和 CLI 导入都会拦下，不会在本地通过、到 Reef 上传才被拒。`config` 仍然不能写 `type: secret`。单文件上限 1 MiB。控制台这次请求还受 Crab 现有请求体上限（1_000_000 字节）约束。校验失败返回 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，每项含 `code`、`path`、`message`。能定位到 YAML 行时再加 `line`（从 1 计）；缺字段这类定位不到的情况没有 `line`。失败不写文件。
 
-名字只和本机注册表里的正式包、以及 `subscriptions` 里的名字冲突。冲突是 HTTP 409，错误码仍是 `INVALID_INPUT`。已安装正式包时拒绝更换另一把 Reef 公钥也是 `CONFLICT`。订阅一个已经导入的本地规则包同样是 409，`message` 为「与本机本地规则包同名」。与已有本地规则包同名（含未能载入的坏包，或目录里已经有同名 yaml）必须确认后才覆盖：控制台不带 `confirm=true` 是 409 `CONFLICT`，CLI 不带 `--replace` 退出 1，都不写文件。确认后版本以 YAML 为准。账号和凭证留在 `(LOCAL, conch, account)` 上，删除本地规则包也不清它们。
+本地规则包可以和正式包同名，导入和订阅都不再因为重名被拒。两份都留在本机，同一时刻只有一份生效：只有一份时它生效；第二份出现时原来那份继续生效，在控制台规则包详情页切换来源。包名、工具名、HTTP 路径和 API Key 范围不随来源变化。已安装正式包时拒绝更换另一把 Reef 公钥仍是 `CONFLICT`。与已有本地规则包同名（含未能载入的坏包，或目录里已经有同名 yaml）必须确认后才覆盖：控制台不带 `confirm=true` 是 409 `CONFLICT`，CLI 不带 `--replace` 退出 1，都不写文件。确认后版本以 YAML 为准。账号和凭证留在 `(LOCAL, conch, account)` 上，删除本地规则包也不清它们。
 
 导出的是磁盘上的原始字节，`Content-Type` 为 `application/yaml`。本地规则包可以经 HTTP 和 MCP 调用。全部权限，以及更早存下来、`conches` 与 `actions` 都为空的 Key 可以调用；写了 `conches` 或 `actions` 的 Key 仍要在 `conches` 里点名。只读限制仍然有效。MCP 工具和资源说明以 `[本地] ` 开头。调用记录的 `source` 为 `LOCAL`，不会进入 Tide 上报。同步不会下载、覆盖或卸下本地规则包。

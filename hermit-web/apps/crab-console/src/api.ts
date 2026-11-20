@@ -46,6 +46,10 @@ export interface ConchSummary {
   reefDisabled: boolean
   /** 整个规则包在本机被停用：所有能力不可调用，也不出现在 MCP 和 OpenAPI 里。未载入的包没有这个字段。 */
   switchedOff?: boolean
+  /** 本机同名本地包的版本，没有为 null。和 reefVersion 都有值时，两份同名，只有 source 那份生效。 */
+  localVersion?: string | null
+  /** 本机同名正式包的版本，没有为 null。 */
+  reefVersion?: string | null
   /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
   reefDisabledAt: string | null
   /** 最近一次同步的清单版本高于已安装版本，且 Crab 可以安装它。 */
@@ -119,6 +123,10 @@ export interface ConchDetail {
   reefDisabled: boolean
   /** 整个规则包在本机被停用：所有能力不可调用，也不出现在 MCP 和 OpenAPI 里。未载入的包没有这个字段。 */
   switchedOff?: boolean
+  /** 本机同名本地包的版本，没有为 null。和 reefVersion 都有值时，两份同名，只有 source 那份生效。 */
+  localVersion?: string | null
+  /** 本机同名正式包的版本，没有为 null。 */
+  reefVersion?: string | null
   /** 本机第一次记下停用墓碑的时间，ISO-8601。未停用为 null。 */
   reefDisabledAt: string | null
   /** 最近一次同步的清单版本高于已安装版本，且 Crab 可以安装它。 */
@@ -934,6 +942,13 @@ export const api = {
   setConchEnabled: (conch: string, enabled: boolean) =>
     http.post<{ conch: string; switchedOff: boolean }>(`${conchPath(conch)}/${enabled ? 'enable' : 'disable'}`),
 
+  /** 同名的本地包和正式包之间切换生效的那份。copy 只在切到 REEF 时有效：复制本地包的账号、凭证和配置。 */
+  setConchSource: (conch: string, source: 'LOCAL' | 'REEF', copy = false) =>
+    http.post<{ conch: string; source: 'LOCAL' | 'REEF'; copied: boolean; copiedAccounts: number; copiedConfigKeys: number }>(
+      `${conchPath(conch)}/source`,
+      source === 'REEF' ? { source, copy } : { source },
+    ),
+
   setCapability: (conch: string, action: string, enabled: boolean) =>
     http.post<{ disabled: boolean }>(`${base}/capabilities/${seg(conch)}/${seg(action)}/${enabled ? 'enable' : 'disable'}`),
 
@@ -984,7 +999,7 @@ export const api = {
   /**
    * `file` 是 multipart 字段名。校验失败时 400，data 为 `{ errors, warnings }`。
    * 同名本地包（含坏包）已存在且未确认时 409 `CONFLICT`，data 为 {@link LocalImportConflict}，
-   * 用户同意后带 `confirm` 再传一次。与正式包或已订阅名字重名是 409 `INVALID_INPUT`，确认也不能覆盖。
+   * 用户同意后带 `confirm` 再传一次。与正式包同名可以导入，导入后原来生效的正式包继续生效。
    */
   importLocalConch: (file: File, confirm = false) => {
     const form = new FormData()

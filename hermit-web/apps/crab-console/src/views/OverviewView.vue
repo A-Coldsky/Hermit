@@ -430,7 +430,7 @@ onMounted(load)
             还没有 API Key，Agent 接不进来。<router-link to="/apikeys">去创建</router-link>
           </div>
           <div v-else class="hm-muted" data-test="connect-hint">
-            <template v-if="activeKeys != null">有 {{ activeKeys }} 把可用的 API Key。</template>把接入提示词发给 AI，它就知道怎么接入和查找能力；里面不含 Key。
+            <template v-if="activeKeys != null">有 {{ activeKeys }} 把可用的 API Key。</template>把接入提示词发给 AI，它会自己配置好 MCP，并告诉你 API Key 该填在哪里；里面不含 Key。
           </div>
         </div>
         <el-button :icon="CopyDocument" data-test="copy-connect" @click="copyText(connectPrompt(mcpEndpoint), '已复制接入提示词')">

@@ -144,7 +144,7 @@ onMounted(load)
       <div class="hm-card-title">Agent 接入提示词</div>
       <div class="connect-bar">
         <el-button :icon="CopyDocument" data-test="copy-connect" @click="copyText(connectText, '已复制接入提示词')">复制</el-button>
-        <p class="hm-muted">把下面这段发给 AI，它就知道怎么接入 Crab 和查找能力。里面不含 API Key，Key 请自己配置到 MCP 客户端。</p>
+        <p class="hm-muted">把下面这段发给 AI，它会自己把 Crab 加进 MCP 配置，并告诉你 API Key 该填在哪里。里面不含 API Key；在本页创建 Key 后，按它说的位置填进去。</p>
       </div>
       <pre class="prompt">{{ connectText }}</pre>
     </div>

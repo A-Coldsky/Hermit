@@ -68,7 +68,7 @@ describe('Crab 概览', () => {
     await card.get('[data-test="copy-connect"]').trigger('click')
     await flushPromises()
     const copied = writeText.mock.calls[0][0] as string
-    expect(copied).toContain(`接入地址是 ${window.location.origin}/mcp`)
+    expect(copied).toContain(`地址是 ${window.location.origin}/mcp`)
     expect(copied).toContain('list_systems')
   })
 

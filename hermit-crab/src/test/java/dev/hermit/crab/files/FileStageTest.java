@@ -80,6 +80,16 @@ class FileStageTest {
     }
 
     @Test
+    void emptyFilesAreLimitedByCount() {
+        FileStage stage = new FileStage(temp.resolve("files"), clock, FileStageSettings.defaults());
+        for (int i = 0; i < FileStage.MAX_FILES; i++) {
+            stage.store(new byte[0], "empty", null, "key-1");
+        }
+        assertThatThrownBy(() -> stage.store(new byte[0], "empty", null, "key-1"))
+                .isInstanceOf(FileStageException.class).hasMessage(FileStage.FULL);
+    }
+
+    @Test
     void aNewTtlOnlyAppliesToLaterFiles() {
         FileStage stage = new FileStage(temp.resolve("files"), clock, FileStageSettings.defaults());
         StagedFile before = stage.store(bytes("a"), "a", null, null);

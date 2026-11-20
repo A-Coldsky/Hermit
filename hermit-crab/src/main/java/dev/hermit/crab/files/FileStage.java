@@ -34,6 +34,8 @@ public final class FileStage implements AutoCloseable {
 
     /** 小文件可以直接用 data URI 传进来，解码后的上限。 */
     public static final int INLINE_LIMIT = 256 * 1024;
+    /** 暂存区里最多同时放这么多个文件。 */
+    public static final int MAX_FILES = 10_000;
     public static final String TOO_LARGE = "文件超过暂存区的单文件上限";
     public static final String FULL = "文件暂存区已满，等已有文件过期后再试，或在 Crab 控制台调大总容量";
     public static final String MISSING = "文件不存在、已过期，或不属于这个 API Key";
@@ -71,6 +73,10 @@ public final class FileStage implements AutoCloseable {
 
     public StagedFile store(InputStream in, String name, String mime, String owner) {
         sweep();
+        // 空文件不占字节数，另按个数拦。
+        if (byId.size() >= MAX_FILES) {
+            throw new FileStageException(FULL);
+        }
         FileStageSettings limits = settings;
         String fileId = "f_" + random(12);
         Path target = dir.resolve(fileId);

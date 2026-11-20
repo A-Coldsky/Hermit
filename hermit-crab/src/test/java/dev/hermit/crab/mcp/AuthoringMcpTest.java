@@ -348,11 +348,19 @@ class AuthoringMcpTest {
 
             server.runtime.registry().put(ConchParser.parse(LocalConchBehaviorTest.ping("official_ping", "1.0.0")));
             String official = LocalConchBehaviorTest.ping("official_ping", "1.0.0");
-            JsonNode blocked = server.call(session, "conch_save_local", Map.of("yaml", official));
-            assertThat(toolMessage(blocked)).isEqualTo(AuthoringCalls.OFFICIAL);
-            assertThat(server.runtime.paths().localConches().resolve("official_ping.yaml")).doesNotExist();
+            // 没有本地那份时不能试跑正式包。
             JsonNode trial = server.call(session, "conch_trial_run", Map.of("conch", "official_ping", "action", "ping"));
             assertThat(toolMessage(trial)).isEqualTo(AuthoringCalls.OFFICIAL);
+            JsonNode blocked = server.call(session, "conch_save_local", Map.of("yaml", official));
+            // 和正式包同名可以保存；本地这份不生效，试跑要先切来源。
+            assertThat(blocked.path("result").path("isError").asBoolean()).as(blocked.toString()).isFalse();
+            assertThat(server.runtime.paths().localConches().resolve("official_ping.yaml")).exists();
+            assertThat(server.runtime.registry().origin("official_ping")).isEqualTo(dev.hermit.crab.store.Origin.OFFICIAL);
+            JsonNode inactive = server.call(session, "conch_trial_run", Map.of("conch", "official_ping", "action", "ping"));
+            assertThat(toolMessage(inactive)).isEqualTo(AuthoringCalls.LOCAL_INACTIVE);
+            assertThat(server.runtime.registry().activate("official_ping", dev.hermit.crab.store.Origin.LOCAL)).isTrue();
+            JsonNode ran = server.call(session, "conch_trial_run", Map.of("conch", "official_ping", "action", "ping"));
+            assertThat(toolMessage(ran)).isNotEqualTo(AuthoringCalls.LOCAL_INACTIVE);
         }
     }
 

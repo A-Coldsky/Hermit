@@ -610,12 +610,17 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     /** Official packages fail even when the debug switch is off. */
+    public static final String LOCAL_INACTIVE = "同名的正式规则包正在生效，本地这份没有生效。先在控制台把来源切到本地。";
+
     private ConchDoc requireLocalDebug(String conch) {
         ConchDoc doc = registry.find(conch).orElse(null);
         if (doc == null) {
             throw new TrialRejected(404, ErrorCode.NOT_FOUND, TRIAL_NOT_FOUND, true);
         }
         if (registry.origin(conch) != Origin.LOCAL) {
+            if (registry.has(conch, Origin.LOCAL)) {
+                throw new TrialRejected(409, ErrorCode.CONFLICT, LOCAL_INACTIVE, true);
+            }
             throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地规则包上开发，再导出上传。", true);
         }
         if (!debug.get().enabled()) {

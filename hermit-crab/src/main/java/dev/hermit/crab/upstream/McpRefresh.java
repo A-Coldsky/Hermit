@@ -53,7 +53,7 @@ public final class McpRefresh {
             throw new TrialRejected(StatusCodes.of(ex.code()), ex.code(), ex.getMessage());
         }
         localConches.importBytes(next, actor, true);
-        ConchDoc updated = registry.find(doc.conch()).orElse(doc);
+        ConchDoc updated = registry.find(doc.conch(), dev.hermit.crab.store.Origin.LOCAL).orElse(doc);
         ConchDiff diff = ConchDiff.between(doc, updated);
         ArrayList<String> added = new ArrayList<>();
         ArrayList<String> removed = new ArrayList<>();

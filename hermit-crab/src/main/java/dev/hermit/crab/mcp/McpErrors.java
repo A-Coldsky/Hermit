@@ -249,6 +249,9 @@ final class McpErrors {
         if (AuthoringCalls.OVERWRITE_DECLINED.equals(message)) {
             return "本地规则包没有改动。要覆盖时，在客户端确认。";
         }
+        if (AuthoringCalls.LOCAL_INACTIVE.equals(message)) {
+            return "在 Crab 控制台的规则包详情里把来源切到本地，再试跑。";
+        }
         if (AuthoringCalls.OFFICIAL.equals(message)) {
             return "正式包不能在这里保存或试跑。先在本地规则包上开发，再导出上传。";
         }

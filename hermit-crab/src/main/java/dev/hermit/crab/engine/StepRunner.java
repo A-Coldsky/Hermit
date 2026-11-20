@@ -159,7 +159,8 @@ final class StepRunner {
             }
             throw ex;
         }
-        vars.put("response", result.view());
+        dev.hermit.crab.files.StagedFile saved = FileSteps.downloads(spec) ? FileSteps.save(spec, result) : null;
+        vars.put("response", FileSteps.view(result, saved));
         if (!capture) {
             return new Outcome(
                     result.method(),
@@ -173,6 +174,9 @@ final class StepRunner {
         Map<String, Object> piece = DevTraceDraft.requestPiece(
                 spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
                 result.wire());
+        if (saved != null) {
+            piece.put("file", saved.metadata());
+        }
         HttpCalls.attachWarnings(piece, result.warnings());
         return new Outcome(
                 result.method(),

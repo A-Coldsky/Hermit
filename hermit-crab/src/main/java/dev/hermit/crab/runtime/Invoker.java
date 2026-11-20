@@ -21,6 +21,9 @@ import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.crab.files.FileScope;
+import dev.hermit.crab.files.FileStage;
+import dev.hermit.crab.files.FileStageException;
 import dev.hermit.crab.engine.ConchDigest;
 import dev.hermit.crab.engine.ExecutionError;
 import dev.hermit.crab.engine.ExecutionRequest;
@@ -96,6 +99,8 @@ public final class Invoker {
     private volatile Clock versionClock = Clock.systemUTC();
     private volatile McpForwarder mcpForwarder;
     private volatile java.util.function.Predicate<String> ruleDisabled = name -> false;
+    private volatile FileStage fileStage;
+    private volatile String fileBase;
     private volatile java.util.function.Predicate<String> switchedOff = name -> false;
 
     public Invoker(
@@ -143,6 +148,40 @@ public final class Invoker {
 
     public void bindKnownSecrets(KnownSecrets knownSecrets) {
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
+    }
+
+    /** 文件暂存区。{@code fallbackBase} 在拿不到请求地址时用来拼下载链接。 */
+    public void bindFileStage(FileStage stage, String fallbackBase) {
+        this.fileStage = stage;
+        this.fileBase = fallbackBase;
+    }
+
+    /**
+     * 文件入参统一换成 fileId：data URI 的小文件先存进暂存区，fileId 要求存在且属于这个 Key。
+     * 之后的追踪、幂等和步骤模板看到的都只是 fileId。
+     */
+    public static Map<String, Object> stageFileInputs(Action capability, Map<String, Object> rawInput) {
+        java.util.LinkedHashMap<String, Object> staged = null;
+        for (Map.Entry<String, dev.hermit.common.model.ParamSpec> entry : capability.input().entrySet()) {
+            if (!entry.getValue().file() || !(rawInput.get(entry.getKey()) instanceof String value)) {
+                continue;
+            }
+            FileScope scope = FileScope.current();
+            if (scope == null) {
+                throw new FileStageException("这台 Crab 没有启用文件暂存区");
+            }
+            Optional<FileStage.Inline> inline = FileStage.inline(value);
+            if (inline.isEmpty()) {
+                scope.require(value);
+                continue;
+            }
+            if (staged == null) {
+                staged = new java.util.LinkedHashMap<>(rawInput);
+            }
+            staged.put(entry.getKey(), scope.store(
+                    inline.get().bytes(), inline.get().name(), inline.get().mime()).fileId());
+        }
+        return staged == null ? rawInput : staged;
     }
 
     /** 整个规则包的本机开关。停用的包不论 Key 范围一律拒绝。 */
@@ -255,6 +294,30 @@ public final class Invoker {
             ConchDoc confirmedAgainst,
             String confirmToken
     ) {
+        // 这次调用能用的暂存区文件按 API Key 划分，引擎发请求时从线程上取。
+        FileScope previous = FileScope.begin(fileStage, principal == null ? null : principal.id(), fileBase);
+        try {
+            return invokeScoped(principal, conch, action, input, account, idempotencyKey, bodySha256, channel,
+                    traceId, httpConfirmed, confirmedAgainst, confirmToken);
+        } finally {
+            FileScope.restore(previous);
+        }
+    }
+
+    private InvokeOutcome invokeScoped(
+            ApiKeyPrincipal principal,
+            String conch,
+            String action,
+            Map<String, Object> input,
+            Optional<String> account,
+            Optional<String> idempotencyKey,
+            String bodySha256,
+            CallChannel channel,
+            String traceId,
+            boolean httpConfirmed,
+            ConchDoc confirmedAgainst,
+            String confirmToken
+    ) {
         if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
         }
@@ -340,6 +403,13 @@ public final class Invoker {
                     principal, doc, origin, action, rawInput, resolved, secrets, merged,
                     idempotencyKey.get(), bodySha256, recorded, traceId);
         }
+        // 文件入参放在确认和幂等重放之后处理：要确认的调用不提前占暂存区，
+        // 已完成的写操作在入参文件过期后仍能取回结果。
+        try {
+            rawInput = stageFileInputs(capability, rawInput);
+        } catch (FileStageException ex) {
+            return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
+        }
         return execute(principal, doc, origin, action, rawInput, resolved, secrets, merged, Optional.empty(), recorded, traceId);
     }
 
@@ -382,8 +452,14 @@ public final class Invoker {
                 }
                 return replay(stored.get().envelope());
             }
+            Map<String, Object> staged;
+            try {
+                staged = stageFileInputs(doc.actions().get(action), input);
+            } catch (FileStageException ex) {
+                return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
+            }
             InvokeOutcome outcome = execute(
-                    principal, doc, origin, action, input, account, secrets, merged, Optional.of(key), channel, traceId);
+                    principal, doc, origin, action, staged, account, secrets, merged, Optional.of(key), channel, traceId);
             if (!loginInputRequired(outcome)) {
                 idempotency.save(
                         origin,

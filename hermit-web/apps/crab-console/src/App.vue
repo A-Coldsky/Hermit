@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Box, Connection, DataAnalysis, Document, House, Key, List, Lock, Shop, Unlock } from '@element-plus/icons-vue'
+import { Box, Connection, DataAnalysis, Document, FolderOpened, House, Key, List, Lock, Shop, Unlock } from '@element-plus/icons-vue'
 import { computed, onMounted, ref } from 'vue'
 import AppLayout, { type NavItem } from '@shared/components/AppLayout.vue'
 import PasswordDialog from './components/PasswordDialog.vue'
@@ -13,6 +13,7 @@ const items = computed<NavItem[]>(() => [
   { to: '/apikeys', label: 'API Key', icon: Key },
   { to: '/calls', label: '调用记录', icon: List },
   { to: '/audit', label: '配置审计', icon: Document },
+  { to: '/files', label: '文件暂存区', icon: FolderOpened },
   { to: '/reports', label: '上报', icon: DataAnalysis },
   { to: '/reef', label: '连接 Reef', icon: Connection },
   { to: '/trust', label: 'HTTPS 信任', icon: Unlock },

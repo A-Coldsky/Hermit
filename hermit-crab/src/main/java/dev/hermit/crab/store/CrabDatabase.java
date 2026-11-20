@@ -74,6 +74,10 @@ import dev.hermit.common.validate.ConchValidator;
  * official package share one name). It starts empty: before this version the two could not both
  * be loaded, and with no row the official copy stays active.
  * Later versions must not edit {@link #applyV19}.
+ * Version 20 adds {@code file_stage_settings} (one row: how long staged files live, the per-file
+ * limit and the total limit). It starts empty, and an empty table means the defaults apply
+ * (1 hour, 50 MiB, 1 GiB). Staged files themselves are not in the database.
+ * Later versions must not edit {@link #applyV20}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Crab has been released with versions 1–15. Version 16 is
@@ -232,6 +236,11 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 19)) {
                 applyV19(connection);
                 insertVersion(connection, 19);
+            }
+            // Do not gate version 20 on MAX(version), and do not rewrite applyV19. No backfill.
+            if (!applied(connection, 20)) {
+                applyV20(connection);
+                insertVersion(connection, 20);
             }
             return null;
         });
@@ -697,6 +706,19 @@ public final class CrabDatabase implements AutoCloseable {
                     ciphertext BLOB NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
                     PRIMARY KEY (origin, conch, account)
+                )
+                """);
+    }
+
+    private static void applyV20(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS file_stage_settings (
+                    id INT NOT NULL,
+                    ttl_seconds INT NOT NULL,
+                    max_file_bytes BIGINT NOT NULL,
+                    max_total_bytes BIGINT NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    PRIMARY KEY (id)
                 )
                 """);
     }

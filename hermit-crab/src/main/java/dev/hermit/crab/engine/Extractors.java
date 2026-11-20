@@ -46,7 +46,7 @@ final class Extractors {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final List<String> SELECTORS = List.of("css", "xpath", "jsonpath", "regex");
     /** {@code response} 信封上的字段。路径第一段是这些名字时，不提示作者去读 body。 */
-    private static final Set<String> RESPONSE_FIELDS = Set.of("status", "body", "headers", "url", "redirect");
+    private static final Set<String> RESPONSE_FIELDS = Set.of("status", "body", "headers", "url", "redirect", "file");
     /**
      * 一次 {@code Matcher.find} 不看能力 deadline，也不响应中断。可能回溯很久的匹配放到这组守护线程上，
      * 调用方只等到 deadline：到点就按超时返回，账号锁由 {@code RuleEngine} 的 finally 放开。

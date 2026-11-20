@@ -176,7 +176,7 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.7.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高 |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.8.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高 |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -297,7 +297,50 @@ path 和 url 在拼接前只编码 URI 里非法的字符：空格、控制字�
 
 写了 `encoding` 时，JSON 正文按该字符集编码。没有在 headers 里声明 Content-Type 时，`Content-Type` 带上这个 charset。表示不了的字符失败，message 为「json 含有编码无法表示的字符」，不会换成问号。没写 `encoding` 时 JSON 仍是 UTF-8。form 正文在没有声明 Content-Type 时仍是 `application/x-www-form-urlencoded` 加 charset。声明了就用声明的值，字节仍然是原来的 form 或 JSON。
 
-这些不阻止保存：请求上引擎不认识的字段（例如 `multipart`）警告「这个字段不会被发送」；query 或 form 的值用了 `urlencode` 警告「这个值用了 urlencode，发出去时会被再编码一次」；query 字面值里已经有百分号编码警告「字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。」；path 或 url 字面值里有 `#` 警告「# 后面的内容不会发出去」。`query_style` 不是 `url` 或 `form` 是错误「query_style 只允许 url 或 form」，不能保存。只写了 `query_style` 不必把 `min_crab_version` 抬到 1.5.0：旧 Crab 忽略这个字段，查询串仍是表单编码。需要上面的 URL 编码时，再把下限写成 1.5.0。
+这些不阻止保存：请求上引擎不认识的字段（例如 `attachment`）警告「这个字段不会被发送」；query 或 form 的值用了 `urlencode` 警告「这个值用了 urlencode，发出去时会被再编码一次」；query 字面值里已经有百分号编码警告「字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。」；path 或 url 字面值里有 `#` 警告「# 后面的内容不会发出去」。`query_style` 不是 `url` 或 `form` 是错误「query_style 只允许 url 或 form」，不能保存。只写了 `query_style` 不必把 `min_crab_version` 抬到 1.5.0：旧 Crab 忽略这个字段，查询串仍是表单编码。需要上面的 URL 编码时，再把下限写成 1.5.0。
+
+### 上传和下载文件
+
+文件不放进调用参数和返回里，放在 Crab 的文件暂存区，参数和返回里只有 `fileId`。这三种写法从 1.8.0 起可用，用了任意一种时 `min_crab_version` 必须不低于 1.8.0；只有 `driver: http` 的包能用，`driver: mcp` 的包写了会报「driver: mcp 的规则包不支持 type: file、multipart 和 download」。登录步骤和 `alive_check` 里不能写 `multipart` 和 `download`。
+
+| 写法 | 位置 | 含义 |
+| --- | --- | --- |
+| `type: file` | 能力的 `input` | 文件参数。在 JSON Schema 里是字符串，调用方填 `fileId`，或 256 KiB 以内的 `data:<类型>;name=<文件名>;base64,<内容>`。说明后面会自动加上怎么取得 `fileId` 的提示 |
+| `multipart` | request | 「字段名: 值」的映射，按 `multipart/form-data` 发出。值是文本，或 `{file, filename, content_type}`：`file` 渲染出 `fileId`，后两项可省略，省略时用暂存区里记的文件名和类型。与 `body`、`form`、`json` 互斥，Content-Type 由 Crab 生成 |
+| `download` | request | `true`，或 `{filename: ...}`。2xx 响应的正文存进暂存区，`response.file` 是 `{fileId, url, name, size, mime, expiresAt}`，`response.body` 为空。文件名依次取 `filename`、响应的 Content-Disposition、URL 最后一段 |
+
+```yaml
+min_crab_version: 1.8.0
+actions:
+  export_report:
+    title: 导出报表
+    description: 导出本月报表，返回文件的下载链接。
+    steps:
+      - request: { method: GET, path: /report/export, download: true }
+      - set: { file: "{{ response.file }}" }
+    output:
+      file: { type: object, description: 报表文件，url 是下载链接 }
+  upload_attachment:
+    title: 上传附件
+    description: 给一张审批单上传附件。
+    method: POST
+    input:
+      id: { type: string, required: true, description: 审批单号 }
+      doc: { type: file, required: true, description: 附件 }
+    steps:
+      - request:
+          method: POST
+          path: /attachment/upload
+          multipart:
+            id: "{{ input.id }}"
+            file: { file: "{{ input.doc }}" }
+```
+
+调用方先把文件传到 Crab（`POST /api/-/files`，或在控制台「文件暂存区」页上传），拿到 `fileId` 再调用能力。一个能力下载得到的 `fileId` 可以直接作另一个能力的文件参数。`fileId` 只有创建它的 API Key 能用，控制台上传的文件所有 Key 都能用；别的 Key 的 `fileId`、过期或不存在的 `fileId` 都是 `INVALID_INPUT`「文件不存在、已过期，或不属于这个 API Key」。`url` 自带随机令牌，有效期内不需要 API Key 就能反复下载，拿到链接的人都能下载。
+
+下载的文件大小不受 5MB 响应上限约束，改用暂存区的单文件上限（默认 50 MiB，控制台可改）；超过时调用失败，message 为「文件超过暂存区的单文件上限」。暂存区满了是「文件暂存区已满，等已有文件过期后再试，或在 Crab 控制台调大总容量」。下载时整个文件先读进内存再落盘，上限调大前先确认 Crab 的内存够用。非 2xx 响应不存文件，正文仍按文本处理。
+
+开发追踪、调用记录和发给 Reef 的上报只有文件名、大小、类型和 SHA-256，没有文件内容。**输出脱敏不扫描文件内容**：老系统导出的文件里如果带口令或 Cookie，会原样交给调用方。
 
 未写 `timeout_ms` 时，有 Content-Length 或分块编码的空闲读超时等于剩余的能力 deadline（`engine.capability_timeout_seconds`，默认 60 秒），不再固定 15 秒，到点是 `TIMEOUT`。写了 `timeout_ms` 时使用该毫秒数，且不超过剩余 deadline；更短的空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。没有 Content-Length、也不是分块编码、并且响应会保持连接（HTTP/1.1 且没有 `Connection: close`，或 HTTP/1.0 且有 `Connection: keep-alive`）时，正文改按相邻读取的空闲计时（`engine.body_idle_timeout_ms`，默认 5 秒）。到点就把已经读到的内容当作正文，开发追踪记一条 `body_ended_by_idle`，并打一行不含路径和正文的警告日志，不把这次当成步骤超时。这段空闲比 `timeout_ms` 更长时，仍以步骤超时为准。`Connection: close` 和没有 keep-alive 的 HTTP/1.0 一直读到对端关闭，是完整正文，不记这条警告。连接池里闲置超过 2 秒的连接，下次借出前会先确认还活着。GET、HEAD 和 OPTIONS 只有在复用已经完成过请求的连接、又撞上对端已经关掉或连接被重置时，才换一条连接再试一次；新连接上的失败不重试。POST 和其他方法不重试，503 和超时也不重试。响应头单行默认 64 KiB、最多 500 个，由 `engine.max_header_line_bytes` 和 `engine.max_header_count` 配置。规则引擎的 TCP 连接超时是 `engine.connect_timeout_ms`，默认 15 秒。写了步骤 `encoding` 时，响应用它解码，盖过 Content-Type charset 和 HTML meta；没写或空白则仍是 Content-Type、meta、UTF-8。请求的 query、form 和 JSON 没写 `encoding` 时仍是 UTF-8。解码后去掉开头的 U+FEFF。`follow_redirects` 默认 false。写成 true 时最多跟随 5 次；第 6 个响应仍是 3xx 则 `UPSTREAM_ERROR`，message 为「重定向过多」。同源跳转保留规则请求头。301、302、303 改成 GET，并去掉 `Content-Type`、`Content-Length` 和正文；307、308 保留方法、正文和这些头。同一主机、默认端口的 http 到 https（80 到 443，没写端口也算默认端口）可以跟随。这一跳不发送 `Authorization`、`Proxy-Authorization`、`Cookie`，以及值里含有凭证、登录变量或 Cookie 值的头。其它跨源不跟随，把 3xx 交回规则。开发追踪记 `cross_origin`，message 为「跳转到不同源 scheme://host[:port]，未跟随」，不含路径和查询。`Location` 无法按 URI 解析时也不跟随。开发追踪记 `location_unresolved`，message 为「Location 无法解析，未跟随」，不写 Location 的值。这种 GET 若后面没有覆盖该状态码的 `assert.status`，调用错误仍是 `UPSTREAM_ERROR`，message 为「重定向地址无法解析，未跟随」，不再只报「上游状态码 302」。能解析的跨源跳转仍是上面那句「跳转到不同源」，调用错误仍按状态码。没有打开 `follow_redirects` 时，解析不了的 Location 仍只按状态码处理。`Location` 里的裸 UTF-8 会按 UTF-8 收回来，空格等非法字符再百分号编码，已经写好的 `%HH` 不动。Cookie 仍由账号客户端管理，按 `(origin, conch, account)` 隔离，规则不能自行覆盖 Cookie 头。全名星期加两位年的 `Expires`（例如 `Wednesday, 09-Nov-99 23:12:40 GMT`）可以解析。两位年按 RFC 6265：70–99 是 19xx，00–69 是 20xx，所以这条日期是 1999 年，会删掉同名 Cookie。星期和日期对不上也不拒绝。`Path` 没有前导斜杠时不覆盖默认路径。明文连接上的 Secure cookie 会记下但不会发回去，追踪警告 `secure_cookie`，message 为「收到 Secure cookie 名字，明文连接不会发送」。解析不了的 `Set-Cookie` 记 `cookie_rejected`，不写 Cookie 的值。最终响应仍是 3xx 时：非 GET 且不是登录重定向（表单常见 `follow_redirects: false` 的 302/303）不拒绝；GET 只在后面没有覆盖该状态码的 `assert.status` 时才是 `UPSTREAM_ERROR`。其中 Location 无法解析、又开了 `follow_redirects` 的，message 为「重定向地址无法解析，未跟随」，不写 Location；其余仍是「上游状态码 N」。非 GET 的无法解析 Location 不拒绝，只在开发追踪里警告。
 

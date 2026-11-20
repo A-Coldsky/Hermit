@@ -50,6 +50,10 @@ import dev.hermit.crab.upstream.McpForwarder;
 import dev.hermit.crab.upstream.McpOAuth;
 import dev.hermit.crab.upstream.McpRefresh;
 import dev.hermit.crab.engine.ConchRegistry;
+import dev.hermit.crab.files.FileScope;
+import dev.hermit.crab.files.FileStage;
+import dev.hermit.crab.files.FileStageSettings;
+import dev.hermit.crab.files.FileStageSettingsStore;
 import dev.hermit.crab.report.LiveReportSettings;
 import dev.hermit.crab.report.ReportQueue;
 import dev.hermit.crab.report.ReportSender;
@@ -160,6 +164,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private volatile int reportIntervalSeconds;
     /** Last completed sync, from startup, the timer, or a manual request. Sync threads write; HTTP threads read. */
     private volatile SyncReport lastSync;
+    private final FileStage fileStage;
     private ScheduledExecutorService scheduler;
     private ScheduledExecutorService syncScheduler;
     private ScheduledExecutorService reportScheduler;
@@ -260,6 +265,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.invoker.bindMcpForwarder(mcpForwarder);
         this.invoker.bindRuleDisabled(this::ruleDisabled);
         this.invoker.bindSwitchedOff(this::conchSwitchedOff);
+        this.fileStage = new FileStage(
+                paths.data().resolve("files"),
+                clock,
+                new FileStageSettingsStore(database.dataSource()).read().orElse(FileStageSettings.defaults()));
+        this.invoker.bindFileStage(fileStage, fileBase());
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(
@@ -577,9 +587,25 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 input == null ? Map.of() : input,
                 ready.account(),
                 new MappedAccount(ready.secrets(), ready.config()));
-        ExecutionResult result = "mcp".equals(doc.driver())
-                ? mcpForwarder.execute(request, doc)
-                : engine.execute(request, doc);
+        ExecutionResult result;
+        FileScope previous = FileScope.begin(fileStage, apiKeyId, fileBase());
+        try {
+            if (!"mcp".equals(doc.driver())) {
+                try {
+                    request = new ExecutionRequest(
+                            request.traceId(), request.origin(), request.conch(), request.action(),
+                            Invoker.stageFileInputs(capability, request.rawInput()),
+                            request.account(), request.accountContext());
+                } catch (dev.hermit.crab.files.FileStageException ex) {
+                    throw new TrialRejected(400, ErrorCode.INVALID_INPUT, ex.getMessage(), true);
+                }
+            }
+            result = "mcp".equals(doc.driver())
+                    ? mcpForwarder.execute(request, doc)
+                    : engine.execute(request, doc);
+        } finally {
+            FileScope.restore(previous);
+        }
         logTrial(result, ready.secrets(), doc.conch(), action, ready.account(), apiKeyId);
         return httpView(result);
     }
@@ -879,6 +905,37 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             }
         }
         return reefStatus();
+    }
+
+    public FileStage fileStage() {
+        return fileStage;
+    }
+
+    /** 拿不到请求地址时拼下载链接用的前缀：配置的对外地址，否则监听地址。 */
+    public String fileBase() {
+        if (config.publicUrl() != null) {
+            return config.publicUrl();
+        }
+        String host = config.serverHost();
+        if ("0.0.0.0".equals(host) || "::".equals(host)) {
+            host = "127.0.0.1";
+        }
+        return "http://" + (host.contains(":") ? "[" + host + "]" : host) + ":" + config.serverPort();
+    }
+
+    /** 新的有效期只作用于之后存入的文件；上限立即生效，已有文件不会因此被删。 */
+    public FileStageSettings updateFileSettings(FileStageSettings settings, String actor) {
+        new FileStageSettingsStore(database.dataSource()).write(settings, clock.instant());
+        fileStage.updateSettings(settings);
+        AuditLog.record(
+                database.dataSource(),
+                actor,
+                AuditKind.FILE_SETTINGS_UPDATED,
+                "files",
+                "{\"ttlSeconds\":" + settings.ttlSeconds()
+                        + ",\"maxFileBytes\":" + settings.maxFileBytes()
+                        + ",\"maxTotalBytes\":" + settings.maxTotalBytes() + "}");
+        return settings;
     }
 
     public Map<String, Object> reportSettings() {
@@ -1245,6 +1302,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             if (scheduler == null) {
                 scheduler = scheduler("hermit-crab-retention");
                 scheduler.scheduleWithFixedDelay(this::safePurge, 1, 1, TimeUnit.HOURS);
+                scheduler.scheduleWithFixedDelay(() -> {
+                    try {
+                        fileStage.sweep();
+                    } catch (RuntimeException ex) {
+                        LOG.warning("file stage sweep failed: " + ex.getClass().getName());
+                    }
+                }, 1, 1, TimeUnit.MINUTES);
             }
         }
     }
@@ -1343,6 +1407,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return;
         }
         try {
+            fileStage.close();
             abandonServing();
             ReportQueue queue = reportQueue;
             if (queue != null) {

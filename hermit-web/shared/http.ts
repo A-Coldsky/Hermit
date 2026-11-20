@@ -76,6 +76,10 @@ export function createClient(options: ClientOptions = {}) {
     let payload: BodyInit | undefined
     if (body instanceof FormData) {
       payload = body
+    } else if (body instanceof Blob) {
+      // 请求体就是文件内容。
+      headers['Content-Type'] = body.type || 'application/octet-stream'
+      payload = body
     } else if (body !== undefined) {
       headers['Content-Type'] = 'application/json'
       payload = JSON.stringify(body)
@@ -96,6 +100,7 @@ export function createClient(options: ClientOptions = {}) {
     patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body ?? {}),
     del: <T>(path: string) => request<T>('DELETE', path),
     upload: <T>(path: string, form: FormData) => request<T>('POST', path, form),
+    raw: <T>(path: string, file: Blob, query?: Query) => request<T>('POST', path, file, query),
     text,
     blob,
   }

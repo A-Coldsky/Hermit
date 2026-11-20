@@ -31,8 +31,24 @@ public record CrabConfig(
         int connectTimeoutMs,
         int bodyIdleTimeoutMs,
         int maxHeaderLineBytes,
-        int maxHeaderCount
+        int maxHeaderCount,
+        String publicUrl
 ) {
+    /** 不带 {@code server.public_url} 的写法。 */
+    public CrabConfig(
+            String reefUrl, String reefToken, String reefPublicKey, String serverHost, int serverPort,
+            int syncIntervalSeconds, boolean reportEnabled, int reportIntervalSeconds,
+            List<String> disabledCapabilities, Map<String, String> aliases, int capabilityTimeoutSeconds,
+            int sessionIdleMinutes, int maxLoginFailures, List<String> mcpAllowedOrigins,
+            int mcpMaxConcurrencyPerAccount, String tlsCaDir, boolean tlsSystemTrust, int connectTimeoutMs,
+            int bodyIdleTimeoutMs, int maxHeaderLineBytes, int maxHeaderCount
+    ) {
+        this(reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
+                reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust,
+                connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount, null);
+    }
+
     public CrabConfig {
         if (serverHost == null || serverHost.isBlank()) {
             throw new IllegalArgumentException("server.host is required");
@@ -79,6 +95,7 @@ public record CrabConfig(
             requireAlias(alias.getKey(), alias.getValue());
         }
         mcpAllowedOrigins = normalizeOrigins(mcpAllowedOrigins);
+        publicUrl = normalizePublicUrl(publicUrl);
         if (tlsCaDir != null) {
             tlsCaDir = tlsCaDir.strip();
             if (tlsCaDir.isEmpty()) {
@@ -107,42 +124,71 @@ public record CrabConfig(
         return new CrabConfig(
                 url, token, publicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
+                publicUrl);
     }
 
     public CrabConfig withListen(String host, int port) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, host, port, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
+                publicUrl);
     }
 
     public CrabConfig withAliases(Map<String, String> aliasMap) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliasMap, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
+                publicUrl);
     }
 
     public CrabConfig withDisabled(List<String> disabled) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabled, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount);
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
+                publicUrl);
     }
 
     public CrabConfig withLimits(int capabilityTimeoutSeconds, int concurrencyPerAccount) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, mcpAllowedOrigins, concurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount);
+                maxLoginFailures, mcpAllowedOrigins, concurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
+                publicUrl);
     }
 
     public CrabConfig withMcpAllowedOrigins(List<String> origins) {
         return new CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
-                maxLoginFailures, origins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount);
+                maxLoginFailures, origins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
+                publicUrl);
+    }
+
+    /** 下载链接的前缀。只接受 http 或 https 的地址，不带查询串；末尾的斜杠去掉。 */
+    private static String normalizePublicUrl(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String text = value.strip();
+        while (text.endsWith("/")) {
+            text = text.substring(0, text.length() - 1);
+        }
+        java.net.URI uri;
+        try {
+            uri = java.net.URI.create(text);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("server.public_url must be an http or https URL");
+        }
+        boolean http = "http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme());
+        if (!http || uri.getHost() == null || uri.getRawQuery() != null || uri.getRawFragment() != null
+                || uri.getRawUserInfo() != null) {
+            throw new IllegalArgumentException("server.public_url must be an http or https URL");
+        }
+        return text;
     }
 
     /** 空白或省略时用 {@code $HERMIT_HOME/trust/ca}。相对路径相对 HERMIT_HOME。 */

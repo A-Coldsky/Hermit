@@ -17,6 +17,7 @@ public enum AuditKind {
     CONCH_SWITCHED_ON,
     /** 同名的本地包和正式包之间切换了生效来源。目标是切换后的 {@code origin/conch}。 */
     CONCH_SOURCE_SWITCHED,
+    FILE_SETTINGS_UPDATED,
     DEBUG_CHANGED,
     /** Console password accepted or rejected. Detail is {@code {"ok":true|false}} and has no password. */
     CONSOLE_LOGIN,

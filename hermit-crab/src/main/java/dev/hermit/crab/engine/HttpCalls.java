@@ -56,6 +56,7 @@ import org.apache.hc.core5.util.Timeout;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.http.HostNames;
 import dev.hermit.common.http.UrlComponents;
+import dev.hermit.common.validate.FileTransfers;
 import dev.hermit.common.validate.RequestBodies;
 import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.tls.TransportFailure;
@@ -152,6 +153,40 @@ final class HttpCalls {
             Set<String> sensitive,
             Duration bodyIdle
     ) {
+        // multipart 的请求体和 download 的响应正文是文件：追踪里只留摘要，正文上限改用暂存区的单文件上限。
+        if (spec.get("multipart") == null && !FileSteps.downloads(spec)) {
+            return run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle);
+        }
+        FileMode mode = new FileMode();
+        if (FileSteps.downloads(spec)) {
+            mode.bodyLimit = FileSteps.scope().stage().settings().maxFileBytes();
+        }
+        FILE_MODE.set(mode);
+        try {
+            return run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle);
+        } finally {
+            FILE_MODE.remove();
+        }
+    }
+
+    private static final ThreadLocal<FileMode> FILE_MODE = new ThreadLocal<>();
+
+    private static final class FileMode {
+        /** 大于 0 时是 download：响应正文按文件收，不解码成文本。 */
+        long bodyLimit;
+        String wireBody;
+    }
+
+    private static HttpResult run(
+            Map<String, Object> spec,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            URI base,
+            String expectPrefix,
+            long deadlineNanos,
+            Set<String> sensitive,
+            Duration bodyIdle
+    ) {
         Duration idle = bodyIdle == null || bodyIdle.isZero() || bodyIdle.isNegative()
                 ? OutboundHttp.DEFAULT_BODY_IDLE
                 : bodyIdle;
@@ -161,6 +196,10 @@ final class HttpCalls {
         if ((spec.get("json") != null && spec.get("form") != null)
                 || (spec.get("body") != null && (spec.get("json") != null || spec.get("form") != null))) {
             throw problem(ErrorCode.RULE_MISMATCH, RequestBodies.EXCLUSIVE);
+        }
+        if (spec.get("multipart") != null
+                && (spec.get("json") != null || spec.get("form") != null || spec.get("body") != null)) {
+            throw problem(ErrorCode.RULE_MISMATCH, FileTransfers.EXCLUSIVE);
         }
         String method = Values.upper(spec.get("method"), "GET");
         if (!method.matches("[A-Z]+")) {
@@ -179,7 +218,13 @@ final class HttpCalls {
         }
         byte[] body = null;
         ContentType generated = null;
-        if (spec.get("form") != null) {
+        String multipartType = null;
+        if (spec.get("multipart") != null) {
+            FileSteps.Multipart multipart = FileSteps.multipart(spec.get("multipart"), charset);
+            body = multipart.body();
+            multipartType = multipart.contentType();
+            FILE_MODE.get().wireBody = multipart.wire();
+        } else if (spec.get("form") != null) {
             Map<String, Object> form = optionalMap(spec.get("form"), "form");
             String encoded = appendQuery(null, form, charset, true, "form", warnings);
             body = encoded.getBytes(charset);
@@ -211,7 +256,10 @@ final class HttpCalls {
         String declared = declaredContentType(headers);
         String contentType = null;
         if (body != null) {
-            if (declared != null) {
+            if (multipartType != null) {
+                // 分隔符由 Crab 生成，headers 里声明的 Content-Type 不覆盖它。
+                contentType = multipartType;
+            } else if (declared != null) {
                 contentType = declared;
             } else if (generated != null) {
                 contentType = generated.toString();
@@ -545,7 +593,10 @@ final class HttpCalls {
                     headerMap.put("location", location);
                 }
                 String redirect = isRedirect(status) && location != null && !location.isBlank() ? location : null;
-                String decoded = decode(read.bytes(), headerMap.get("content-type"), responseCharset);
+                FileMode fileMode = FILE_MODE.get();
+                boolean file = fileMode != null && fileMode.bodyLimit > 0 && status >= 200 && status < 300;
+                // 文件正文不解码：response.body 留空，追踪里也就没有文件内容。
+                String decoded = file ? "" : decode(read.bytes(), headerMap.get("content-type"), responseCharset);
                 ArrayList<TraceWarning> stepWarnings = new ArrayList<>(warningsOf(notices));
                 if (read.endedByIdle()) {
                     logIdleCutoff(method, target);
@@ -773,9 +824,13 @@ final class HttpCalls {
             ensureWithinDeadline(deadlineNanos, request);
             return new BodyBytes(new byte[0], false);
         }
+        FileMode mode = FILE_MODE.get();
+        boolean asFile = mode != null && mode.bodyLimit > 0 && status >= 200 && status < 300;
+        long limit = asFile ? mode.bodyLimit : MAX_BODY_BYTES;
+        String tooLarge = asFile ? dev.hermit.crab.files.FileStage.TOO_LARGE : "响应体超过 5MB";
         long declared = entity.getContentLength();
-        if (declared > MAX_BODY_BYTES) {
-            throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, "响应体超过 5MB", method, path, status);
+        if (declared > limit) {
+            throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, tooLarge, method, path, status);
         }
         // Content-Length、分块编码，以及会由对端关闭来结束的正文，仍受步骤或能力超时约束。
         // 只有保持连接又没有长度时，才按相邻读取的空闲截断。
@@ -785,7 +840,7 @@ final class HttpCalls {
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buffer = new byte[8192];
-            int total = 0;
+            long total = 0;
             while (true) {
                 ensureWithinDeadline(deadlineNanos, request);
                 if (watch != null) {
@@ -800,6 +855,13 @@ final class HttpCalls {
                         throw new DeadlineExceeded(-1, "request", List.of());
                     }
                     if (watch != null && watch.endedByIdle()) {
+                        if (asFile) {
+                            // 文本可以带着警告用已收到的部分；半个文件不能当成文件交出去。
+                            throw new RuleProblem(
+                                    ErrorCode.UPSTREAM_ERROR,
+                                    "文件没有收完：上游没有给出长度，传到一半停住了",
+                                    method, path, status);
+                        }
                         return new BodyBytes(out.toByteArray(), true);
                     }
                     throw ex;
@@ -815,8 +877,8 @@ final class HttpCalls {
                     throw new DeadlineExceeded(-1, "request", List.of());
                 }
                 total += read;
-                if (total > MAX_BODY_BYTES) {
-                    throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, "响应体超过 5MB", method, path, status);
+                if (total > limit) {
+                    throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, tooLarge, method, path, status);
                 }
                 out.write(buffer, 0, read);
             }
@@ -1024,6 +1086,11 @@ final class HttpCalls {
         }
         wire.put("headers", headers);
         // 全文留给追踪里的脱敏。64 KiB 在替换之后再截，否则正好压在截断点上的秘密会留下前半段。
+        FileMode mode = FILE_MODE.get();
+        if (mode != null && mode.wireBody != null) {
+            wire.put("body", mode.wireBody);
+            return wire;
+        }
         wire.put("body", body == null ? null : new String(body, charset));
         return wire;
     }

@@ -26,7 +26,7 @@ public final class CrabConfigLoader {
     private static final Set<String> ROOT = Set.of(
             "reef", "server", "sync", "report", "capabilities", "aliases", "engine", "mcp", "tls");
     private static final Set<String> REEF = Set.of("url", "token", "public_key");
-    private static final Set<String> SERVER = Set.of("host", "port");
+    private static final Set<String> SERVER = Set.of("host", "port", "public_url");
     private static final Set<String> SYNC = Set.of("interval_seconds");
     private static final Set<String> REPORT = Set.of("enabled", "interval_seconds");
     private static final Set<String> CAPABILITIES = Set.of("disabled");
@@ -121,7 +121,8 @@ public final class CrabConfigLoader {
                     integer(file, engine, "max_header_line_bytes", "engine.max_header_line_bytes",
                             defaults.maxHeaderLineBytes(), 256, 1_048_576),
                     integer(file, engine, "max_header_count", "engine.max_header_count",
-                            defaults.maxHeaderCount(), 1, 10_000));
+                            defaults.maxHeaderCount(), 1, 10_000),
+                    text(file, server, "public_url", "server.public_url"));
         } catch (IllegalArgumentException ex) {
             throw new ConfigFileException(file + ": " + ex.getMessage());
         }

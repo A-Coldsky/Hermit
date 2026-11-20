@@ -36,6 +36,22 @@ const clientExample = computed(() => `{
   }
 }`)
 
+/** 发给 Agent 的接入说明。只讲怎么接入和怎么找能力；具体能力的说明在 MCP 里。不含 Key 明文。 */
+const connectPrompt = computed(() =>
+  [
+    '请接入 Hermit Crab 的 MCP 服务，用它提供的工具访问内部系统。',
+    '',
+    `接入地址是 ${endpoint.value}（Streamable HTTP）。请求头用 Authorization: Bearer <API Key> 或 X-Hermit-Key。Key 由 Crab 本机签发，我会自己配置到 MCP 客户端里。不要把 Key 明文写进对话，也不要向我索要。`,
+    '',
+    '接入后：',
+    '1. 先看 tools/list。工具名形如 规则包__能力，说明里写了用途、注意事项和相关能力，参数在 inputSchema 里。',
+    '2. 如果只看到 list_systems、search_capabilities、describe_capability、call_capability，说明能力较多：用 list_systems 看有哪些规则包，用 search_capabilities 找能力，用 describe_capability 看参数和示例，再用 call_capability 调用。',
+    '3. 需要了解某个规则包的全貌时，读资源 hermit://conches/<规则包>/guide。',
+    '4. 列表里没有的能力就是这把 Key 不能用或已停用，不要猜工具名。调用失败时按返回里的 code 和 hint 处理。',
+    '5. 一个规则包有多个账号时，用 account 参数指定账号。',
+  ].join('\n'),
+)
+
 function conchLabel(s: ConchDetail): string {
   return s.title ? `${s.title}（${s.conch}）` : s.conch
 }
@@ -136,6 +152,15 @@ onMounted(load)
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-button type="primary" :icon="Plus" @click="openCreate">创建 API Key</el-button>
     </PageHeader>
+
+    <div class="hm-card connect" data-test="connect-prompt">
+      <div class="hm-card-title">Agent 接入提示词</div>
+      <div class="connect-bar">
+        <el-button :icon="CopyDocument" data-test="copy-connect" @click="copyText(connectPrompt, '已复制接入提示词')">复制</el-button>
+        <p class="hm-muted">把下面这段发给 AI，它就知道怎么接入 Crab 和查找能力。里面不含 API Key，Key 请自己配置到 MCP 客户端。</p>
+      </div>
+      <pre class="prompt">{{ connectPrompt }}</pre>
+    </div>
 
     <div class="hm-card">
       <p class="hm-scroll-hint">表格可以左右滑动，「吊销」在最右侧。</p>
@@ -246,6 +271,29 @@ onMounted(load)
 </template>
 
 <style scoped>
+.connect {
+  margin-bottom: 16px;
+}
+
+.connect-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.connect-bar p {
+  margin: 0;
+}
+
+.prompt {
+  margin: 8px 0 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+}
+
 /* 示例完整显示：换行而不是截断，带底色和等宽字。 */
 .example {
   margin: 0 0 12px;

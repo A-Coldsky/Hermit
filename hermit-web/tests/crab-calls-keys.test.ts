@@ -54,6 +54,29 @@ describe('Crab 调用记录', () => {
 })
 
 describe('Crab API Keys', () => {
+  it('页面上有可复制的 Agent 接入提示词，不含 Key 明文', async () => {
+    crab.apiKeys.mockResolvedValue({ apiKeys: [] })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const wrapper = await mountPage(ApiKeysView)
+    await flushPromises()
+
+    const text = wrapper.find('[data-test="connect-prompt"] pre').text()
+    expect(text).toContain(`${window.location.origin}/mcp`)
+    expect(text).toContain('Authorization: Bearer <API Key>')
+    expect(text).toContain('X-Hermit-Key')
+    expect(text).toContain('不要把 Key 明文写进对话')
+    expect(text).toContain('tools/list')
+    expect(text).toContain('list_systems')
+    expect(text).not.toMatch(/hk_[A-Za-z0-9]/)
+
+    await wrapper.find('[data-test="copy-connect"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledTimes(1)
+    expect(writeText.mock.calls[0][0]).toContain('/mcp')
+    wrapper.unmount()
+  })
+
   it('操作列固定在右侧，创建前就提示 Key 只显示一次', async () => {
     crab.apiKeys.mockResolvedValue({
       apiKeys: [

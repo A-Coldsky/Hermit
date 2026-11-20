@@ -85,14 +85,30 @@ class ConchSourceHttpTest {
             assertThat(server.console("POST", "/console/api/conches/legacy_oa/enable", "{}", true).status()).isEqualTo(200);
             assertThat(server.call("GET", CALL, key, "alice", null, null).status()).isEqualTo(200);
 
+            // 本地这份再加一个账号并设为默认；在本地停用一个能力。
+            server.configureAccount("bob");
+            new dev.hermit.crab.store.AccountStore(server.runtime.dataSource())
+                    .setDefault(Origin.LOCAL, "legacy_oa", "bob", Actors.CONSOLE);
+            server.runtime.setCapabilityDisabled("legacy_oa", "list_todo", true, Actors.CONSOLE);
+
             // 切到正式并复制：账号、凭证和配置带过去，直接能调。
             TestServer.Reply copied = switchTo(server, "REEF", true);
             assertThat(copied.status()).as(copied.body()).isEqualTo(200);
             assertThat(copied.json().path("data").path("copied").asBoolean()).isTrue();
-            assertThat(copied.json().path("data").path("copiedAccounts").asInt()).isEqualTo(1);
+            assertThat(copied.json().path("data").path("copiedAccounts").asInt()).isEqualTo(2);
+            // 默认账号跟本地包一致，不是按创建先后。
+            assertThat(new dev.hermit.crab.store.AccountStore(server.runtime.dataSource())
+                    .resolve(Origin.OFFICIAL, "legacy_oa", java.util.Optional.empty()).account()).isEqualTo("bob");
+            // 能力开关按名字生效；在正式包上启用后，本地来源留下的停用记录也清掉，重启不会再停用。
+            assertThat(server.call("GET", CALL, key, "alice", null, null).status()).isNotEqualTo(200);
+            server.runtime.setCapabilityDisabled("legacy_oa", "list_todo", false, Actors.CONSOLE);
+            dev.hermit.crab.store.CapabilitySwitchStore switches =
+                    new dev.hermit.crab.store.CapabilitySwitchStore(server.runtime.dataSource());
+            assertThat(switches.disabledKeys(Origin.LOCAL)).isEmpty();
+            assertThat(switches.disabledKeys(Origin.OFFICIAL)).isEmpty();
             assertThat(copied.json().path("data").path("copiedConfigKeys").asInt()).isEqualTo(1);
             assertThat(copied.body()).doesNotContain(PASSWORD);
-            assertThat(server.runtime.admin().listAccounts("legacy_oa")).hasSize(1);
+            assertThat(server.runtime.admin().listAccounts("legacy_oa")).hasSize(2);
             assertThat(server.call("GET", CALL, key, "alice", null, null).status()).isEqualTo(200);
 
             // 参数不对或没有那个来源时拒绝，不改生效来源。

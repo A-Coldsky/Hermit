@@ -1124,10 +1124,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         boolean copied = copy && origin == Origin.OFFICIAL && registry.has(conch, Origin.LOCAL);
         if (copied) {
             ConchDoc target = registry.find(conch, Origin.OFFICIAL).orElseThrow();
-            Set<String> existing = new java.util.HashSet<>();
-            for (Account account : accounts.list(Origin.OFFICIAL, conch)) {
-                existing.add(account.account());
-            }
+            // 先把要复制的值全部读出并按正式包的声明校验，任何一项不行就什么都不写。
+            LinkedHashMap<String, Map<String, String>> secrets = new LinkedHashMap<>();
+            String localDefault = null;
             for (Account account : accounts.list(Origin.LOCAL, conch)) {
                 LinkedHashMap<String, String> fields = new LinkedHashMap<>();
                 for (Map.Entry<String, String> entry
@@ -1136,20 +1135,37 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                         fields.put(entry.getKey(), entry.getValue());
                     }
                 }
-                if (!existing.contains(account.account())) {
-                    accounts.create(Origin.OFFICIAL, conch, account.account(), actor);
+                DeclaredSettings.checkCredentialFields(target, fields);
+                secrets.put(account.account(), fields);
+                if (account.defaultAccount()) {
+                    localDefault = account.account();
                 }
-                if (!fields.isEmpty()) {
-                    vault.write(Origin.OFFICIAL, conch, account.account(), fields, actor);
-                    sessions.invalidate(new dev.hermit.crab.engine.SessionKey(Origin.OFFICIAL, conch, account.account()));
-                }
-                copiedAccounts++;
             }
             LinkedHashMap<String, String> values = new LinkedHashMap<>();
             for (Map.Entry<String, String> entry : conchConfig.all(Origin.LOCAL, conch).entrySet()) {
                 if (target.config().containsKey(entry.getKey()) && !entry.getValue().isEmpty()) {
+                    DeclaredSettings.checkConfigValue(target.config().get(entry.getKey()), entry.getValue());
                     values.put(entry.getKey(), entry.getValue());
                 }
+            }
+            Set<String> existing = new java.util.HashSet<>();
+            for (Account account : accounts.list(Origin.OFFICIAL, conch)) {
+                existing.add(account.account());
+            }
+            boolean hadAccounts = !existing.isEmpty();
+            for (Map.Entry<String, Map<String, String>> entry : secrets.entrySet()) {
+                if (!existing.contains(entry.getKey())) {
+                    accounts.create(Origin.OFFICIAL, conch, entry.getKey(), actor);
+                }
+                if (!entry.getValue().isEmpty()) {
+                    vault.write(Origin.OFFICIAL, conch, entry.getKey(), entry.getValue(), actor);
+                    sessions.invalidate(new dev.hermit.crab.engine.SessionKey(Origin.OFFICIAL, conch, entry.getKey()));
+                }
+                copiedAccounts++;
+            }
+            // 正式包原来没有账号时，默认账号跟本地包一致；原来有账号时不动它的默认账号。
+            if (!hadAccounts && localDefault != null) {
+                accounts.setDefault(Origin.OFFICIAL, conch, localDefault, actor);
             }
             if (!values.isEmpty()) {
                 conchConfig.putAll(Origin.OFFICIAL, conch, values, actor);
@@ -1173,7 +1189,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             throw new IllegalArgumentException("capability not found");
         }
         Origin stored = registry.origin(conch);
-        switches.setDisabled(stored == null ? Origin.OFFICIAL : stored, conch, action, disabled, actor);
+        Origin source = stored == null ? Origin.OFFICIAL : stored;
+        switches.setDisabled(source, conch, action, disabled, actor);
+        // 开关在内存里按「包名.能力」生效。同名的另一份留着停用记录时，启用要一起清掉，
+        // 否则重启后又被那条记录停用。
+        Origin other = source == Origin.LOCAL ? Origin.OFFICIAL : Origin.LOCAL;
+        if (!disabled && switches.disabledKeys(other).contains(conch + "." + action)) {
+            switches.setDisabled(other, conch, action, false, actor);
+        }
         String key = conch + "." + action;
         if (disabled) {
             switchDisabled.add(key);

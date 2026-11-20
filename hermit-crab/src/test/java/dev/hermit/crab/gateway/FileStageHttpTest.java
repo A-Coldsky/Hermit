@@ -28,6 +28,9 @@ class FileStageHttpTest {
                   - set: { file: "{{ response.file }}" }
                 output:
                   file: { type: object, description: 报表文件 }
+                examples:
+                  - input: {}
+                    output: { file: { fileId: f_1 } }
                 mcp: { read_only: true }
               upload_attachment:
                 title: 上传附件
@@ -46,6 +49,9 @@ class FileStageHttpTest {
                   - set: { ok: "{{ response.body }}" }
                 output:
                   ok: { type: string, description: 结果 }
+                examples:
+                  - input: { doc: f_1 }
+                    output: { ok: ok }
             """;
 
     @TempDir
@@ -60,9 +66,13 @@ class FileStageHttpTest {
                     .replaceFirst("(?m)^conch:.*$", "conch: file_oa")
                     .replaceFirst("(?m)^min_crab_version:.*$", "min_crab_version: 1.8.0")
                     .replaceFirst("(?m)^actions:\\n", "actions:\n" + ACTIONS);
-            server.runtime.localConches().importBytes(yaml.getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            try {
+                server.runtime.localConches().importBytes(yaml.getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            } catch (dev.hermit.crab.sync.LocalConchException ex) {
+                throw new AssertionError(String.valueOf(ex.errors()), ex);
+            }
             server.runtime.admin().createAccount("file_oa", "alice", Actors.CONSOLE);
-            server.runtime.admin().putCredentials(
+            server.runtime.admin().writeCredentials(
                     server.runtime.registry().find("file_oa").orElseThrow(),
                     "alice",
                     java.util.Map.of("username", "alice", "password", PASSWORD),
@@ -133,7 +143,9 @@ class FileStageHttpTest {
                     .contains("filename=\"b.txt\"").contains("inline-bytes");
 
             // 别的 Key 用不了这个 fileId；控制台上传的文件所有 Key 都能用。
-            String other = server.runtime.apiKeys().create("other", Actors.CONSOLE).plaintext();
+            String other = server.runtime.admin().createApiKey(
+                    "other", new dev.hermit.crab.store.ApiKeyScope(java.util.Set.of(), java.util.Set.of(), false),
+                    Actors.CONSOLE).plaintext();
             TestServer.Reply denied = server.call("POST", "/api/file_oa/upload_attachment", other, "alice", null,
                     "{\"doc\":\"" + mine + "\"}");
             assertThat(denied.status()).isEqualTo(400);

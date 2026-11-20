@@ -16,6 +16,17 @@ public record ParamSpec(
         Object items,
         boolean required
 ) {
+    public static final String FILE_TYPE = "file";
+    /** 追加在文件入参的说明后面，Agent 从工具参数说明里读到。 */
+    public static final String FILE_HINT =
+            "文件参数：填 Crab 暂存区的 fileId（先把文件用 POST 传到 Crab 的 /api/-/files 取得，"
+                    + "或用其它能力返回的 fileId）。不超过 256 KiB 的小文件也可以直接填 "
+                    + "data:<类型>;name=<文件名>;base64,<内容>。";
+
+    public boolean file() {
+        return FILE_TYPE.equals(type);
+    }
+
     public ParamSpec {
         ArrayList<Object> enums = new ArrayList<>();
         if (enumValues != null) {
@@ -30,10 +41,16 @@ public record ParamSpec(
 
     Map<String, Object> toSchemaProperty() {
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
+        // 文件入参在 JSON Schema 里是字符串：fileId 或 data URI。各家 MCP 客户端都认得字符串。
+        boolean file = FILE_TYPE.equals(type);
         if (type != null) {
-            schema.put("type", type);
+            schema.put("type", file ? "string" : type);
         }
-        if (description != null) {
+        if (file) {
+            schema.put("description", description == null || description.isBlank()
+                    ? FILE_HINT
+                    : description + "（" + FILE_HINT + "）");
+        } else if (description != null) {
             schema.put("description", description);
         }
         if (defaultValue != null) {

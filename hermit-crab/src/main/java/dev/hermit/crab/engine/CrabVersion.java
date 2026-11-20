@@ -11,7 +11,7 @@ public final class CrabVersion {
      * 规则可以用 {@code query_style: form} 退回表单编码。1.6.0 起可以载入引号下标。
      * 1.7.0 起可以载入 request 的原始 {@code body} 和 {@code xml_escape}。
      */
-    public static final SemVer CURRENT = SemVer.parse("1.7.0");
+    public static final SemVer CURRENT = SemVer.parse("1.8.0");
 
     private CrabVersion() {
     }

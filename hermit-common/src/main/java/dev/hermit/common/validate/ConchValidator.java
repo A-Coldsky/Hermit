@@ -75,7 +75,7 @@ public final class ConchValidator {
     private static final Set<String> SCRIPT_KEYS = Set.of("code", "into", "timeout_ms", "use", "credential");
     private static final Set<String> REQUEST_KEYS = Set.of(
             "method", "path", "url", "query", "headers", "form", "json", "body",
-            "encoding", "follow_redirects", "timeout_ms", "query_style");
+            "encoding", "follow_redirects", "timeout_ms", "query_style", "multipart", "download");
     private static final Set<String> EXTRACT_SELECTORS = Set.of("css", "xpath", "jsonpath", "regex");
     private static final Set<String> EXTRACT_KEYS = Set.of(
             "css", "xpath", "jsonpath", "regex", "attr", "html", "each", "min",
@@ -138,6 +138,7 @@ public final class ConchValidator {
         }
         checkScriptLibraries(doc, errors);
         checkRequestBodyFeatures(doc, errors);
+        checkFileFeatures(doc, errors);
         if (mcp) {
             if (doc.minCrabVersion().compareTo(McpLimits.MIN_CRAB_VERSION) < 0) {
                 errors.add(issue(
@@ -663,6 +664,33 @@ public final class ConchValidator {
         }
         if (body != null && !(body instanceof String)) {
             errors.add(issue(ValidationCodes.REQUEST_BODY, path + ".body", RequestBodies.BODY_TYPE));
+        }
+        Object multipart = request.get("multipart");
+        if (multipart != null) {
+            if (kinds > 0) {
+                errors.add(issue(ValidationCodes.REQUEST_BODY, path, FileTransfers.EXCLUSIVE));
+            }
+            if (!(multipart instanceof Map<?, ?> parts) || parts.isEmpty()) {
+                errors.add(issue(ValidationCodes.REQUEST_BODY, path + ".multipart", FileTransfers.MULTIPART_TYPE));
+            } else {
+                for (Map.Entry<?, ?> part : parts.entrySet()) {
+                    if (!validPart(part.getValue())) {
+                        errors.add(issue(
+                                ValidationCodes.REQUEST_BODY,
+                                path + ".multipart." + part.getKey(),
+                                FileTransfers.PART_TYPE));
+                    }
+                }
+            }
+        }
+        Object download = request.get("download");
+        if (download != null && !(download instanceof Boolean)) {
+            boolean ok = download instanceof Map<?, ?> options
+                    && FileTransfers.DOWNLOAD_KEYS.containsAll(options.keySet())
+                    && (options.get("filename") == null || options.get("filename") instanceof String);
+            if (!ok) {
+                errors.add(issue(ValidationCodes.REQUEST_BODY, path + ".download", FileTransfers.DOWNLOAD_TYPE));
+            }
         }
         if (warnings != null
                 && body instanceof String
@@ -1940,6 +1968,76 @@ public final class ConchValidator {
                     break;
             }
             i += Character.charCount(codePoint);
+        }
+        return false;
+    }
+
+    private static boolean validPart(Object value) {
+        if (value instanceof Map<?, ?> part) {
+            return part.get("file") instanceof String
+                    && FileTransfers.PART_KEYS.containsAll(part.keySet())
+                    && (part.get("filename") == null || part.get("filename") instanceof String)
+                    && (part.get("content_type") == null || part.get("content_type") instanceof String);
+        }
+        return value instanceof String || value instanceof Number || value instanceof Boolean;
+    }
+
+    private static void checkFileFeatures(ConchDoc doc, List<ValidationIssue> errors) {
+        boolean param = false;
+        for (Action action : doc.actions().values()) {
+            for (ParamSpec spec : action.input().values()) {
+                param |= spec.file();
+            }
+        }
+        boolean multipart = usesRequestKey(doc, "multipart");
+        boolean download = usesRequestKey(doc, "download");
+        if (!param && !multipart && !download) {
+            return;
+        }
+        if ("mcp".equals(doc.driver())) {
+            errors.add(issue(ValidationCodes.REQUEST_BODY, "driver", FileTransfers.MCP_DRIVER));
+            return;
+        }
+        if (doc.minCrabVersion().compareTo(FileTransfers.MIN_CRAB_VERSION) >= 0) {
+            return;
+        }
+        if (param) {
+            errors.add(issue(ValidationCodes.MIN_CRAB_VERSION, "min_crab_version", FileTransfers.FILE_PARAM_VERSION));
+        }
+        if (multipart) {
+            errors.add(issue(ValidationCodes.MIN_CRAB_VERSION, "min_crab_version", FileTransfers.MULTIPART_VERSION));
+        }
+        if (download) {
+            errors.add(issue(ValidationCodes.MIN_CRAB_VERSION, "min_crab_version", FileTransfers.DOWNLOAD_VERSION));
+        }
+    }
+
+    private static boolean usesRequestKey(ConchDoc doc, String key) {
+        if (doc.auth() != null) {
+            if (stepsUseKey(doc.auth().steps(), key)) {
+                return true;
+            }
+            AliveCheck alive = doc.auth().aliveCheck();
+            if (alive != null && alive.request() != null && alive.request().get(key) != null) {
+                return true;
+            }
+        }
+        for (Action action : doc.actions().values()) {
+            if (stepsUseKey(action.steps(), key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean stepsUseKey(List<Step> steps, String key) {
+        if (steps == null) {
+            return false;
+        }
+        for (Step step : steps) {
+            if ("request".equals(step.type()) && step.def().get(key) != null) {
+                return true;
+            }
         }
         return false;
     }

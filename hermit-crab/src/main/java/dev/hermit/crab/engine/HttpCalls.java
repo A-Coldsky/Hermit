@@ -855,6 +855,13 @@ final class HttpCalls {
                         throw new DeadlineExceeded(-1, "request", List.of());
                     }
                     if (watch != null && watch.endedByIdle()) {
+                        if (asFile) {
+                            // 文本可以带着警告用已收到的部分；半个文件不能当成文件交出去。
+                            throw new RuleProblem(
+                                    ErrorCode.UPSTREAM_ERROR,
+                                    "文件没有收完：上游没有给出长度，传到一半停住了",
+                                    method, path, status);
+                        }
                         return new BodyBytes(out.toByteArray(), true);
                     }
                     throw ex;

@@ -133,6 +133,24 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 
 能力请求已经发出后，上游 HTTP 400 也返回 `INVALID_INPUT`，文案为「上游拒绝了输入（HTTP 400）。请修改参数后重试。」，不再继续提取或断言。它和调用前的参数校验共用错误码，但 `failedStepType` 为 `request`。MCP 对这段文案的 hint 是按该系统的要求修改参数。上游 HTTP 401/403，以及重定向到登录页，都视为会话失效：幂等能力重新登录并重放一次，其它能力返回 `SESSION_EXPIRED` 且不重放。这两类都不会把响应体抽成空列表。500 及以上在提取之前返回 `UPSTREAM_ERROR`，message 以「上游状态码 N」开头。有响应体时换行后附上已脱敏、最多 4 KiB UTF-8 的正文；没有正文时仍只有「上游状态码 N」。不看后面的 `status` 断言。登录步骤的 5xx 同样是 `UPSTREAM_ERROR` 并带上这段正文。其它非 2xx：从这次 request 到下一个 request 之间，若 `assert.status` 的数字或数字列表包含实际状态码，则不拒绝，extract 和 assert 照常执行（所以 `status: 302` 或 `status: 304` 可以通过；期望 200 实际 404 仍是 `UPSTREAM_ERROR`）。含模板的 `status` 不预拒。没有覆盖该状态码的期望时，GET 的 302、304、404、409 是 `UPSTREAM_ERROR`，没有状态断言的 `list_todo` 遇到 404 不再是 HTTP 200 的空列表。非 GET 的 3xx 不是登录重定向时不拒绝，`follow_redirects: false` 的表单 POST 收到 302/303 可以成功。登录步骤不走这套映射，失败仍是 `AUTH_FAILED`；`cookie_exists` 未通过时说明登录未建立会话，并提示核对用户名和密码、重新测试登录，或检查登录页是否改版。`contains`、`not_contains`、`header_exists`、`not_redirected_to` 和 `status` 失败时同样给出下一步说明，不以「assert 未通过」开头，也不写入断言原文、凭证或 Cookie。`status` 会写出期望和实际的状态码；期望值不是数字时不回显原文。2xx 上期望与实际不一致（例如期望 201、实际 200）仍是 `RULE_MISMATCH`。被 status 断言接住的非 2xx 若仍对不上，同样是 `RULE_MISMATCH`。失配只进入失败报告，不会切换已安装版本。未写步骤 `timeout_ms` 时，空闲读超时等于剩余的能力 deadline，到点是 `TIMEOUT`（「执行超时」）。写了 `timeout_ms` 时使用该毫秒数，且不超过剩余 deadline；更短的空闲读到点仍是 `UPSTREAM_ERROR`，message 为「步骤超时」。
 
+### 文件暂存区
+
+```text
+POST /api/-/files?name=报表.pdf     请求体就是文件内容，Content-Type 是文件类型
+GET  /api/-/files/{token}          下载，不需要 API Key
+```
+
+上传要带 API Key（和能力调用同样的请求头），返回 `{fileId, url, name, size, mime, expiresAt}`。`fileId` 填进能力的 `type: file` 参数，只有上传它的 Key 能用。例如：
+
+```bash
+curl -X POST "http://127.0.0.1:7777/api/-/files?name=a.pdf" \
+  -H "Authorization: Bearer $HERMIT_API_KEY" -H "Content-Type: application/pdf" --data-binary @a.pdf
+```
+
+`url` 指向下载接口，路径里是随机令牌，不是 `fileId`；有效期内可以反复下载，过期或不存在是 404。响应带 `Content-Disposition: attachment` 和 `X-Content-Type-Options: nosniff`。链接的主机默认取请求的 Host，`config.yml` 的 `server.public_url` 可以覆盖。
+
+超过单文件上限、暂存区已满是 400 `INVALID_INPUT`。有效期默认 1 小时，单文件默认 50 MiB，总容量默认 1 GiB，都在控制台「文件暂存区」页修改。文件留到过期，不会因为被用过而删除；Crab 重启时清空。规则包里的写法见 [规则包参考](conch-reference.md)。
+
 ## Crab 本机管理 API
 
 下列路由前缀 `/console/api`，全部需要回环连接和控制台头：
@@ -184,6 +202,10 @@ POST 可带 `Idempotency-Key`。缓存键为 origin/conch/account/action/key，�
 | GET | `/local-conches/{conch}/history` | 这个包的备份，最近的在前，最多 3 条。这是当前正在使用的 `{conch}.yaml` 之外的最近 3 份。每项 `{id, version, savedAt}`。`id` 是文件名去掉 `.yaml`。包已经删除时，历史还在就能列出。没有历史时 `history` 为空。启动和 reload 不删除多余备份；下一次写入在同一把锁里备份后删掉最旧的。已经多于 3 份的旧安装也是下一次写入才修剪。回退只对还留着的那几份 |
 | POST | `/local-conches/{conch}/history/{id}/restore` | 用这份历史覆盖当前文件。覆盖前先备份当前版本；地址范围扩大时先清掉该包全部账号的会话和登录快照，写入成功后再清一次。成功形状与导入相同。没有这份历史是 404「没有这份历史。」。编号含空白、`..` 或其它非法字符是 400「历史编号无效。」 |
 | POST | `/local-conches/{conch}/mcp/refresh` | 开发者模式打开时，用上游 `tools/list` 重写本地 MCP 包。查询参数 `account` 可省略，表示默认账号。不需要 JSON 正文。成功 `data` 为 `{version, added, removed, changed, traceId}`，名字是本地 action。`version` 不变。`traceId` 指向 `action` 为 `mcp_refresh` 的 JSON-RPC 追踪，没有对应调用记录。门禁与失败见下方「刷新」 |
+| GET | `/files` | 文件暂存区：`{settings, usage, files}`。`files` 每项 `{fileId, name, size, mime, expiresAt, createdAt, shared, apiKeyId}`，不带下载链接 |
+| POST | `/files?name=` | 上传文件，请求体就是文件内容。所有 API Key 都能用这个 `fileId` |
+| PUT | `/files/settings` | `{ttlSeconds, maxFileBytes, maxTotalBytes}`，三项都要给。有效期 60 秒到 7 天；新的有效期只对之后存入的文件生效 |
+| DELETE | `/files/{fileId}` | 删除一个文件 |
 
 `GET /console/api/local-conches` 的 `data.conches` 按包名排序。每一项：
 

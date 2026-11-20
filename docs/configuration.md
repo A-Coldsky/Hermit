@@ -62,6 +62,8 @@ tls:
   ca_dir: trust/ca
 ```
 
+`server.public_url` 可选，是文件暂存区下载链接的前缀（例如 `https://crab.example.com`），只接受 http 或 https 地址。不写时用调用请求里的 Host。Crab 在容器或反向代理后面、调用方看到的地址和 Crab 监听的地址不一样时填它。文件暂存区的有效期和容量上限不在 `config.yml` 里，在控制台「文件暂存区」页修改。
+
 此例的 disabled 项是路径格式示意，示例 Conch 中不包含 submit_leave。别名仍使用相同的 API Key、账号和能力权限；重启后读取新别名。
 
 规则 HTTP、MCP 转发和 MCP OAuth 的连接池在借出闲置超过 2 秒的连接前，会先确认它还活着。这个间隔是固定的，不写在 `config.yml` 里。GET、HEAD、OPTIONS 只有在这条连接已经完成过请求、又遇到对端没有响应或连接重置时，才换一条连接再试一次。新建立的连接上的重置不重试。POST 和其他方法、503 和超时都不重试。OAuth 仍关闭自动重试。

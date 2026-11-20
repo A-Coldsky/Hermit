@@ -296,6 +296,56 @@ async function setEnabled(enabled: boolean) {
   }
 }
 
+const twoSources = computed(() => !!detail.value?.localVersion && !!detail.value?.reefVersion)
+
+async function switchSource(target: 'LOCAL' | 'REEF') {
+  let copy = false
+  try {
+    if (target === 'REEF') {
+      try {
+        await ElMessageBox.confirm(
+          '切换后调用的是从 Reef 订阅的正式包，包名、API Key 和工具名都不变。正式包的账号、凭证和配置与本地包分开保存。要把本地包的账号、凭证和配置复制到正式包吗？只复制正式包声明了的字段，正式包已有的同名值会被覆盖。',
+          `切到正式包 ${props.conch}`,
+          {
+            confirmButtonText: '复制并切换',
+            cancelButtonText: '只切换，不复制',
+            distinguishCancelAndClose: true,
+            type: 'info',
+          },
+        )
+        copy = true
+      } catch (action) {
+        if (action !== 'cancel') return
+      }
+    } else {
+      await ElMessageBox.confirm(
+        '切换后调用的是本机的本地包，包名、API Key 和工具名都不变。本地包使用它自己的账号、凭证和配置，正式包的不会带过来。',
+        `切到本地包 ${props.conch}`,
+        { confirmButtonText: '切换', cancelButtonText: '取消', type: 'info' },
+      )
+    }
+  } catch {
+    return
+  }
+  working.value = true
+  try {
+    const done = await api.setConchSource(props.conch, target, copy)
+    ElMessage.success(
+      target === 'LOCAL'
+        ? '已切到本地包'
+        : done.copied
+          ? `已切到正式包，复制了 ${done.copiedAccounts} 个账号、${done.copiedConfigKeys} 项配置`
+          : '已切到正式包，没有复制凭证和配置',
+    )
+    void refreshPending()
+    await load()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    working.value = false
+  }
+}
+
 async function rollback() {
   if (!detail.value || !canRollback(detail.value)) return
   try {
@@ -448,6 +498,34 @@ watch(
             :loading="working"
             @click="rollback"
           >退回 v{{ detail.previousVersion }}</el-button>
+        </template>
+      </el-alert>
+      <el-alert
+        v-if="twoSources"
+        type="info"
+        show-icon
+        :closable="false"
+        :title="local ? '本机有同名的正式包，当前生效的是本地包' : '本机有同名的本地包，当前生效的是正式包'"
+        data-test="two-sources"
+      >
+        <template #default>
+          本地包 v{{ detail.localVersion }}，正式包 v{{ detail.reefVersion }}。两份都留在本机，同一时刻只有一份被调用；账号、凭证和配置各自保存。
+          <el-button
+            v-if="local"
+            link
+            type="primary"
+            :disabled="working"
+            data-test="source-to-reef"
+            @click="switchSource('REEF')"
+          >切到正式包</el-button>
+          <el-button
+            v-else
+            link
+            type="primary"
+            :disabled="working"
+            data-test="source-to-local"
+            @click="switchSource('LOCAL')"
+          >切到本地包</el-button>
         </template>
       </el-alert>
       <el-alert

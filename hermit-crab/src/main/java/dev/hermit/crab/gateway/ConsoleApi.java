@@ -109,6 +109,7 @@ final class ConsoleApi {
         put(app, "/console/api/conches/{conch}/config", ctx -> writeConfig(runtime, ctx));
         post(app, "/console/api/conches/{conch}/enable", ctx -> toggleConch(runtime, ctx, false));
         post(app, "/console/api/conches/{conch}/disable", ctx -> toggleConch(runtime, ctx, true));
+        post(app, "/console/api/conches/{conch}/source", ctx -> switchSource(runtime, ctx));
         post(app, "/console/api/capabilities/{conch}/{action}/enable", ctx -> toggle(runtime, ctx, false));
         post(app, "/console/api/capabilities/{conch}/{action}/disable", ctx -> toggle(runtime, ctx, true));
         get(app, "/console/api/apikeys", ctx -> apiKeys(runtime, ctx));
@@ -174,6 +175,7 @@ final class ConsoleApi {
             row.put("loginPaused", loginPaused);
             row.put("source", source(runtime, doc.conch()));
             row.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
+            putSources(runtime, doc.conch(), row);
             putReefDisabled(runtime, doc.conch(), row);
             putUpdateFields(catalog.get(doc.conch()), row);
             putPrevious(runtime, doc.conch(), row);
@@ -218,6 +220,7 @@ final class ConsoleApi {
         body.put("loginPaused", paused);
         body.put("source", source(runtime, doc.conch()));
         body.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
+        putSources(runtime, doc.conch(), body);
         putReefDisabled(runtime, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
         putPrevious(runtime, doc.conch(), body);
@@ -763,6 +766,43 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of(
                 "conch", conch,
                 "switchedOff", runtime.conchSwitchedOff(conch)));
+    }
+
+    private static final Set<String> SOURCE_FIELDS = Set.of("source", "copy");
+
+    private static void switchSource(CrabRuntime runtime, Context ctx) throws Exception {
+        String conch = ctx.pathParam("conch");
+        JsonNode body = object(ctx);
+        rejectUnknownFields(body, SOURCE_FIELDS);
+        String source = requiredText(body, "source");
+        Origin origin;
+        if ("LOCAL".equals(source)) {
+            origin = Origin.LOCAL;
+        } else if ("REEF".equals(source)) {
+            origin = Origin.OFFICIAL;
+        } else {
+            throw new IllegalArgumentException("source must be LOCAL or REEF");
+        }
+        boolean copy = bool(body, "copy", false);
+        if (copy && origin != Origin.OFFICIAL) {
+            throw new IllegalArgumentException("copy is only for switching to REEF");
+        }
+        CrabRuntime.SourceSwitch done = runtime.switchSource(conch, origin, copy, Actors.CONSOLE);
+        LinkedHashMap<String, Object> data = new LinkedHashMap<>();
+        data.put("conch", conch);
+        data.put("source", source(runtime, conch));
+        data.put("copied", done.copied());
+        data.put("copiedAccounts", done.accounts());
+        data.put("copiedConfigKeys", done.configKeys());
+        GatewayResponses.writeData(ctx, data);
+    }
+
+    /** 同名的两份各自的版本；本机没有那一份时为 null。两个都有值时详情页可以切换来源。 */
+    private static void putSources(CrabRuntime runtime, String conch, Map<String, Object> row) {
+        row.put("localVersion", runtime.registry().find(conch, Origin.LOCAL)
+                .map(doc -> doc.version().toString()).orElse(null));
+        row.put("reefVersion", runtime.registry().find(conch, Origin.OFFICIAL)
+                .map(doc -> doc.version().toString()).orElse(null));
     }
 
     private static void toggle(CrabRuntime runtime, Context ctx, boolean disabled) {
@@ -1511,6 +1551,7 @@ final class ConsoleApi {
             row.put("file", pkg.file());
             row.put("version", pkg.version());
             row.put("loaded", pkg.loaded());
+            row.put("active", pkg.loaded() && runtime.registry().origin(pkg.conch()) == Origin.LOCAL);
             row.put("broken", pkg.broken());
             row.put("reason", pkg.reason());
             row.put("ruleDisabled", pkg.ruleDisabled());

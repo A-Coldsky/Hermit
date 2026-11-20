@@ -115,6 +115,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final CrabDatabase database;
     private final CredentialCipher cipher;
     private final AccountStore accounts;
+    private final dev.hermit.crab.store.ConchSourceStore conchSources;
     private final CredentialVault vault;
     private final ConchConfigStore conchConfig;
     private final ApiKeyService apiKeys;
@@ -224,6 +225,19 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());
         this.conchSwitches = new dev.hermit.crab.store.ConchSwitchStore(database.dataSource());
+        dev.hermit.crab.store.ConchSourceStore sources = new dev.hermit.crab.store.ConchSourceStore(database.dataSource());
+        this.conchSources = sources;
+        this.registry.bindSelections(new ConchRegistry.Selections() {
+            @Override
+            public Map<String, Origin> load() {
+                return sources.load();
+            }
+
+            @Override
+            public void save(String conch, Origin origin) {
+                sources.save(conch, origin);
+            }
+        });
         this.conchSwitchedOff.addAll(conchSwitches.disabledNames());
         this.debug = new DebugStateStore(database.dataSource(), clock, this::onDebugChanged);
         this.devTraces = new DevTraceStore(database.dataSource(), clock, debug);
@@ -249,7 +263,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches);
         this.localConches = new LocalConches(
-                paths, registry, database.dataSource(), () -> debug.get().enabled(), clock);
+                paths, registry.scoped(Origin.LOCAL), database.dataSource(), () -> debug.get().enabled(), clock);
         this.localConches.onWidened(this::clearWidenedSessions);
         this.admin.bindOriginFallback(name -> localConches.occupies(name) ? Origin.LOCAL : null);
         this.admin.bindAccountRemoved(mcpForwarder::forgetAccount);
@@ -598,12 +612,17 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     /** Official packages fail even when the debug switch is off. */
+    public static final String LOCAL_INACTIVE = "同名的正式规则包正在生效，本地这份没有生效。先在控制台把来源切到本地。";
+
     private ConchDoc requireLocalDebug(String conch) {
         ConchDoc doc = registry.find(conch).orElse(null);
         if (doc == null) {
             throw new TrialRejected(404, ErrorCode.NOT_FOUND, TRIAL_NOT_FOUND, true);
         }
         if (registry.origin(conch) != Origin.LOCAL) {
+            if (registry.has(conch, Origin.LOCAL)) {
+                throw new TrialRejected(409, ErrorCode.CONFLICT, LOCAL_INACTIVE, true);
+            }
             throw new TrialRejected(409, ErrorCode.CONFLICT, "先在本地规则包上开发，再导出上传。", true);
         }
         if (!debug.get().enabled()) {
@@ -727,7 +746,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return new LoadReport(List.of(), List.of());
         }
         paths.conches();
-        LoadReport official = InstalledConches.loadAll(paths, reefKey, registry);
+        LoadReport official = InstalledConches.loadAll(paths, reefKey, registry.scoped(Origin.OFFICIAL));
         localConches.loadStartup();
         return official;
     }
@@ -926,9 +945,6 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      */
     public ConchOutcome subscribe(String conch, String actor) {
         prepare();
-        if (localConches.occupies(conch) && registry.origin(conch) != Origin.LOCAL) {
-            throw new SubscriptionException(409, ErrorCode.INVALID_INPUT, SubscriptionException.LOCAL_CONFLICT);
-        }
         if (conchSync == null) {
             throw new SubscriptionException(
                     409, ErrorCode.NOT_CONFIGURED, SubscriptionException.NOT_CONFIGURED);
@@ -997,7 +1013,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return;
         }
         SubscriptionCommands.unsubscribe(
-                null, paths, registry, disabledConches, subscriptions, database.dataSource(), conch, actor);
+                null, paths, registry.scoped(Origin.OFFICIAL), disabledConches, subscriptions, database.dataSource(), conch, actor);
     }
 
     public Optional<SyncReport> syncOnce(String requestedBy) {
@@ -1088,13 +1104,103 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         notifyCatalogListeners();
     }
 
+    /** 切换来源的结果。{@code accounts} 和 {@code configKeys} 是复制过去的账号数和配置项数。 */
+    public record SourceSwitch(String conch, Origin origin, boolean copied, int accounts, int configKeys) {
+    }
+
+    public static final String SOURCE_MISSING = "这个规则包在本机没有这个来源。";
+
+    /**
+     * 同名的本地包和正式包之间切换生效的那份。API Key 范围和整包开关按包名，不随来源变。
+     * {@code copy} 只在切到正式包时有效：把本地包的账号、凭证和配置复制到正式包，
+     * 只复制正式包声明了的字段，正式包已有的同名值被覆盖。不传 {@code copy} 时两边互不影响。
+     */
+    public SourceSwitch switchSource(String conch, Origin origin, boolean copy, String actor) {
+        if (conch == null || origin == null || !registry.has(conch, origin)) {
+            throw new IllegalArgumentException(SOURCE_MISSING);
+        }
+        int copiedAccounts = 0;
+        int copiedConfig = 0;
+        boolean copied = copy && origin == Origin.OFFICIAL && registry.has(conch, Origin.LOCAL);
+        if (copied) {
+            ConchDoc target = registry.find(conch, Origin.OFFICIAL).orElseThrow();
+            // 先把要复制的值全部读出并按正式包的声明校验，任何一项不行就什么都不写。
+            LinkedHashMap<String, Map<String, String>> secrets = new LinkedHashMap<>();
+            String localDefault = null;
+            for (Account account : accounts.list(Origin.LOCAL, conch)) {
+                LinkedHashMap<String, String> fields = new LinkedHashMap<>();
+                for (Map.Entry<String, String> entry
+                        : vault.decryptForExecution(Origin.LOCAL, conch, account.account()).entrySet()) {
+                    // OAuth 令牌由系统写入，不复制；正式包上重新连接一次。
+                    if (target.credentials().containsKey(entry.getKey())
+                            && !dev.hermit.crab.upstream.McpOAuthToken.FIELD.equals(entry.getKey())) {
+                        fields.put(entry.getKey(), entry.getValue());
+                    }
+                }
+                if (!fields.isEmpty()) {
+                    DeclaredSettings.checkCredentialFields(target, fields);
+                }
+                secrets.put(account.account(), fields);
+                if (account.defaultAccount()) {
+                    localDefault = account.account();
+                }
+            }
+            LinkedHashMap<String, String> values = new LinkedHashMap<>();
+            for (Map.Entry<String, String> entry : conchConfig.all(Origin.LOCAL, conch).entrySet()) {
+                if (target.config().containsKey(entry.getKey()) && !entry.getValue().isEmpty()) {
+                    DeclaredSettings.checkConfigValue(target.config().get(entry.getKey()), entry.getValue());
+                    values.put(entry.getKey(), entry.getValue());
+                }
+            }
+            Set<String> existing = new java.util.HashSet<>();
+            for (Account account : accounts.list(Origin.OFFICIAL, conch)) {
+                existing.add(account.account());
+            }
+            boolean hadAccounts = !existing.isEmpty();
+            for (Map.Entry<String, Map<String, String>> entry : secrets.entrySet()) {
+                if (!existing.contains(entry.getKey())) {
+                    accounts.create(Origin.OFFICIAL, conch, entry.getKey(), actor);
+                }
+                if (!entry.getValue().isEmpty()) {
+                    vault.write(Origin.OFFICIAL, conch, entry.getKey(), entry.getValue(), actor);
+                    sessions.invalidate(new dev.hermit.crab.engine.SessionKey(Origin.OFFICIAL, conch, entry.getKey()));
+                }
+                copiedAccounts++;
+            }
+            // 正式包原来没有账号时，默认账号跟本地包一致；原来有账号时不动它的默认账号。
+            if (!hadAccounts && localDefault != null) {
+                accounts.setDefault(Origin.OFFICIAL, conch, localDefault, actor);
+            }
+            if (!values.isEmpty()) {
+                conchConfig.putAll(Origin.OFFICIAL, conch, values, actor);
+            }
+            copiedConfig = values.size();
+        }
+        boolean changed = registry.origin(conch) != origin;
+        if (!registry.activate(conch, origin)) {
+            throw new IllegalArgumentException(SOURCE_MISSING);
+        }
+        if (changed || copied) {
+            conchSources.audit(conch, origin, copied, actor);
+        }
+        notifyCatalogListeners();
+        return new SourceSwitch(conch, origin, copied, copiedAccounts, copiedConfig);
+    }
+
     public void setCapabilityDisabled(String conch, String action, boolean disabled, String actor) {
         ConchDoc doc = registry.find(conch).orElse(null);
         if (doc == null || !doc.actions().containsKey(action)) {
             throw new IllegalArgumentException("capability not found");
         }
         Origin stored = registry.origin(conch);
-        switches.setDisabled(stored == null ? Origin.OFFICIAL : stored, conch, action, disabled, actor);
+        Origin source = stored == null ? Origin.OFFICIAL : stored;
+        switches.setDisabled(source, conch, action, disabled, actor);
+        // 开关在内存里按「包名.能力」生效。同名的另一份留着停用记录时，启用要一起清掉，
+        // 否则重启后又被那条记录停用。
+        Origin other = source == Origin.LOCAL ? Origin.OFFICIAL : Origin.LOCAL;
+        if (!disabled && switches.disabledKeys(other).contains(conch + "." + action)) {
+            switches.setDisabled(other, conch, action, false, actor);
+        }
         String key = conch + "." + action;
         if (disabled) {
             switchDisabled.add(key);
@@ -1307,7 +1413,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private void attachReef(URI reefUrl, Optional<String> token, PublicKey key, Duration interval, UUID instance) {
         SyncSettings syncSettings = new SyncSettings(reefUrl, token, key, interval, instance);
         ConchSync sync = new ConchSync(
-                syncSettings, paths, registry, vault, database.dataSource(), clock, disabledConches);
+                syncSettings, paths, registry.scoped(Origin.OFFICIAL), vault, database.dataSource(), clock, disabledConches);
         sync.onReport(this::rememberCompletedSync);
         this.conchSync = sync;
         admin.bindStagedDeclarations(sync::stagedDeclaration);

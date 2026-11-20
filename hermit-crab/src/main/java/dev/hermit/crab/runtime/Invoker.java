@@ -261,7 +261,9 @@ public final class Invoker {
         // 墓碑只表示 Reef 不再分发。包仍在注册表里时，调用继续走后面的权限和能力检查。
         // 注册表里已经没有这份包（旧数据清掉了 current）才返回 CONCH_DISABLED。
         // 已经带着授权快照进入引擎的请求仍执行那份快照（审计 A01）。
-        ConchDoc doc = registry.find(conch).orElse(null);
+        // 文档和来源取自同一个快照：同名的本地包和正式包切换时，不会拿一边的规则配另一边的账号。
+        ConchRegistry.Active live = registry.active(conch).orElse(null);
+        ConchDoc doc = live == null ? null : live.doc();
         if (doc == null && disabledConches.contains(conch)) {
             return requestOnly(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE);
         }
@@ -281,10 +283,7 @@ public final class Invoker {
         if (disabled.disabled(conch, action)) {
             return requestOnly(traceId, ErrorCode.CAPABILITY_DISABLED, CAPABILITY_DISABLED_MESSAGE);
         }
-        Origin origin = registry.origin(conch);
-        if (origin == null) {
-            origin = Origin.OFFICIAL;
-        }
+        Origin origin = live.origin();
         // grantsAllOfficial（all: true，或旧的空 conches 且空 actions）包含本地包。
         // 写了 conches 或 actions 的 Key 仍要求本地包出现在 conches 里。只读由后面的 permits 限制。
         if (origin == Origin.LOCAL && !principal.scope().allowsLocal(conch)) {

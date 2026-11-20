@@ -514,6 +514,44 @@ class SubscriptionTest {
     }
 
     @Test
+    void subscribingNextToASameNameLocalConchKeepsBothAndSurvivesRestart() throws Exception {
+        try (FakeReef reef = new FakeReef()) {
+            reef.publish(ConchTexts.standard("legacy_oa", "2.0.0"));
+            CrabConfig config = config(reef).withListen("127.0.0.1", 0);
+            Path home = temp.resolve("same-name");
+            Files.createDirectories(home.resolve("local-conches"));
+            Files.writeString(home.resolve("local-conches/legacy_oa.yaml"), ConchTexts.standard("legacy_oa", "1.0.0"));
+            try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config, name -> null)) {
+                runtime.loadInstalledConches();
+                assertThat(runtime.registry().origin("legacy_oa")).isEqualTo(dev.hermit.crab.store.Origin.LOCAL);
+                runtime.subscribe("legacy_oa", dev.hermit.crab.store.Actors.CLI);
+                // 正式包装上了，但原来生效的本地包继续生效。
+                assertThat(runtime.registry().find("legacy_oa", dev.hermit.crab.store.Origin.OFFICIAL)
+                        .orElseThrow().version().toString()).isEqualTo("2.0.0");
+                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+                runtime.switchSource("legacy_oa", dev.hermit.crab.store.Origin.OFFICIAL, false, dev.hermit.crab.store.Actors.CLI);
+                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("2.0.0");
+            }
+            // 重启：选择留在正式包上。
+            try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config, name -> null)) {
+                runtime.loadInstalledConches();
+                assertThat(runtime.registry().origin("legacy_oa")).isEqualTo(dev.hermit.crab.store.Origin.OFFICIAL);
+                assertThat(runtime.registry().has("legacy_oa", dev.hermit.crab.store.Origin.LOCAL)).isTrue();
+                runtime.switchSource("legacy_oa", dev.hermit.crab.store.Origin.LOCAL, false, dev.hermit.crab.store.Actors.CLI);
+            }
+            try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config, name -> null)) {
+                runtime.loadInstalledConches();
+                assertThat(runtime.registry().origin("legacy_oa")).isEqualTo(dev.hermit.crab.store.Origin.LOCAL);
+                // 退订只卸下正式那份，本地包还在并继续生效。
+                runtime.unsubscribe("legacy_oa", dev.hermit.crab.store.Actors.CLI);
+                assertThat(runtime.registry().has("legacy_oa", dev.hermit.crab.store.Origin.OFFICIAL)).isFalse();
+                assertThat(runtime.registry().find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
+                assertThat(Files.exists(home.resolve("local-conches/legacy_oa.yaml"))).isTrue();
+            }
+        }
+    }
+
+    @Test
     void consoleCatalogSubscribeAndUnsubscribe() throws Exception {
         try (FakeReef reef = new FakeReef()) {
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
@@ -524,12 +562,12 @@ class SubscriptionTest {
             CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config, name -> null);
             try (CrabServer server = CrabServer.start(runtime)) {
                 HttpClient http = HttpClient.newHttpClient();
+                // 同名的本地包不挡订阅；Reef 上没有这个包，所以是 404。
                 HttpResponse<String> clash = send(
                         http, server.port(), "POST", "/console/api/conches/other_sys/subscription", "{}");
-                assertThat(clash.statusCode()).isEqualTo(409);
-                assertThat(JSON.readTree(clash.body()).path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+                assertThat(clash.statusCode()).isEqualTo(404);
                 assertThat(JSON.readTree(clash.body()).path("error").path("message").asText())
-                        .isEqualTo(SubscriptionException.LOCAL_CONFLICT);
+                        .isEqualTo(SubscriptionException.CANNOT_SUBSCRIBE);
                 assertThat(reef.downloads()).isZero();
 
                 HttpResponse<String> subscribed = send(

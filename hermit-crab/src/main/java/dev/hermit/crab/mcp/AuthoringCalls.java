@@ -38,6 +38,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 final class AuthoringCalls {
     static final String DEV_MODE_CLOSED = "开发者模式没有打开。请到 Crab 控制台概览打开开发者模式。";
     static final String OFFICIAL = "先在本地规则包上开发，再导出上传。";
+    static final String LOCAL_INACTIVE = CrabRuntime.LOCAL_INACTIVE;
     static final String SAME_NAME = "改已有的包就用同一个名字保存；如果需要确认，请让用户确认，不要换名字。";
     static final String OVERWRITE_DECLINED = "未确认覆盖，本地规则包没有改动。";
     static final String CONFIRM_PARAM = "不能用参数确认覆盖。覆盖已有本地规则包时，要在客户端里确认。";
@@ -105,10 +106,8 @@ final class AuthoringCalls {
             return issues(false, checked.conch(), null, checked.errors(), checked.warnings(), "规则包校验失败", null, null,
                     attempt.traceId());
         }
-        if (runtime.registry().origin(checked.conch()) == Origin.OFFICIAL) {
-            return McpCalls.fail(attempt, "CONFLICT", OFFICIAL);
-        }
-        ConchDoc beforeDoc = runtime.registry().find(checked.conch()).orElse(null);
+        // 和正式包同名也可以保存：本地这份先不生效，在控制台切换来源后才被调用。
+        ConchDoc beforeDoc = runtime.registry().find(checked.conch(), Origin.LOCAL).orElse(null);
         Set<String> beforeKeys = beforeDoc == null ? null : credentialNames(beforeDoc);
         try {
             LocalConches.ImportResult saved = runtime.localConches().importBytes(raw, Actors.MCP, false);
@@ -312,7 +311,7 @@ final class AuthoringCalls {
         if (Boolean.TRUE.equals(result.replaced())) {
             try {
                 if (!runtime.admin().listAccounts(result.conch()).isEmpty()) {
-                    ConchDoc after = runtime.registry().find(result.conch()).orElse(null);
+                    ConchDoc after = runtime.registry().find(result.conch(), Origin.LOCAL).orElse(null);
                     if (beforeKeys == null || after == null || !beforeKeys.equals(credentialNames(after))) {
                         next = NEXT_LOGIN;
                     } else {
@@ -335,9 +334,6 @@ final class AuthoringCalls {
     }
 
     private McpSchema.CallToolResult importFailure(LocalConchException ex, McpCalls.Attempt attempt) {
-        if ("与已安装的正式规则包重名".equals(ex.getMessage())) {
-            return McpCalls.fail(attempt, "CONFLICT", OFFICIAL);
-        }
         if (ex.hasIssues()) {
             return issues(false, ex.parsedConch(), null, ex.errors(), ex.warnings(), ex.getMessage(), null, null,
                     attempt.traceId());

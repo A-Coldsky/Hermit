@@ -40,10 +40,67 @@ class ConchRegistryTest {
         assertThat(registry.find("other_conch")).isPresent();
         registry.remove("missing");
         assertThat(registry.find("other_conch")).isPresent();
-        registry.put(registry.find("other_conch").orElseThrow(), Origin.LOCAL);
-        assertThat(registry.origin("other_conch")).isEqualTo(Origin.LOCAL);
-        registry.put(registry.find("other_conch").orElseThrow());
-        assertThat(registry.origin("other_conch")).isEqualTo(Origin.OFFICIAL);
+    }
+
+    @Test
+    void sameNameKeepsBothCopiesAndOnlyOneIsActive() {
+        ConchRegistry registry = new ConchRegistry();
+        var official = EngineTestSupport.legacy();
+        var local = ConchParser.parse(EngineTestSupport.actionConch("legacy_oa", "ping", """
+                - set:
+                    marker: ok
+                """, false));
+        java.util.HashMap<String, Origin> saved = new java.util.HashMap<>();
+        registry.bindSelections(new ConchRegistry.Selections() {
+            @Override
+            public java.util.Map<String, Origin> load() {
+                return java.util.Map.of();
+            }
+
+            @Override
+            public void save(String conch, Origin origin) {
+                if (origin == null) {
+                    saved.remove(conch);
+                } else {
+                    saved.put(conch, origin);
+                }
+            }
+        });
+        java.util.ArrayList<String> dropped = new java.util.ArrayList<>();
+        registry.onRemove(dropped::add);
+        ConchRegistry localView = registry.scoped(Origin.LOCAL);
+        ConchRegistry officialView = registry.scoped(Origin.OFFICIAL);
+
+        officialView.put(official);
+        localView.put(local);
+        // 后来的那份不自动生效。
+        assertThat(registry.find("legacy_oa")).containsSame(official);
+        assertThat(registry.origin("legacy_oa")).isEqualTo(Origin.OFFICIAL);
+        assertThat(saved).containsEntry("legacy_oa", Origin.OFFICIAL);
+        assertThat(localView.find("legacy_oa")).containsSame(local);
+        assertThat(localView.origin("legacy_oa")).isEqualTo(Origin.LOCAL);
+        assertThat(officialView.origin("legacy_oa")).isEqualTo(Origin.OFFICIAL);
+        assertThat(registry.snapshot()).hasSize(1);
+        assertThat(dropped).isEmpty();
+
+        assertThat(registry.activate("legacy_oa", Origin.LOCAL)).isTrue();
+        assertThat(registry.active("legacy_oa").orElseThrow().doc()).isSameAs(local);
+        assertThat(registry.active("legacy_oa").orElseThrow().origin()).isEqualTo(Origin.LOCAL);
+        assertThat(saved).containsEntry("legacy_oa", Origin.LOCAL);
+        assertThat(officialView.find("legacy_oa")).containsSame(official);
+        assertThat(dropped).containsExactly("legacy_oa");
+        assertThat(registry.activate("missing", Origin.LOCAL)).isFalse();
+
+        // 单来源视图只移出自己的槽，剩下的那份生效。
+        localView.remove("legacy_oa");
+        assertThat(registry.find("legacy_oa")).containsSame(official);
+        assertThat(registry.origin("legacy_oa")).isEqualTo(Origin.OFFICIAL);
+        assertThat(saved).isEmpty();
+        assertThat(localView.find("legacy_oa")).isEmpty();
+        assertThatThrownBy(() -> localView.put(official, Origin.OFFICIAL)).isInstanceOf(IllegalArgumentException.class);
+        officialView.remove("legacy_oa");
+        assertThat(registry.find("legacy_oa")).isEmpty();
+        assertThat(registry.origin("legacy_oa")).isNull();
     }
 
     @Test

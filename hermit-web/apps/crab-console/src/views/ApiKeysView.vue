@@ -6,6 +6,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, notifyError, relativeTime } from '@shared/format'
 import { api, type ApiKey, type CreatedApiKey, type ConchDetail } from '../api'
+import { connectPrompt } from '../connect'
 
 const loading = ref(true)
 const keys = ref<ApiKey[]>([])
@@ -35,6 +36,8 @@ const clientExample = computed(() => `{
     }
   }
 }`)
+
+const connectText = computed(() => connectPrompt(endpoint.value))
 
 function conchLabel(s: ConchDetail): string {
   return s.title ? `${s.title}（${s.conch}）` : s.conch
@@ -136,6 +139,15 @@ onMounted(load)
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-button type="primary" :icon="Plus" @click="openCreate">创建 API Key</el-button>
     </PageHeader>
+
+    <div class="hm-card connect" data-test="connect-prompt">
+      <div class="hm-card-title">Agent 接入提示词</div>
+      <div class="connect-bar">
+        <el-button :icon="CopyDocument" data-test="copy-connect" @click="copyText(connectText, '已复制接入提示词')">复制</el-button>
+        <p class="hm-muted">把下面这段发给 AI，它会自己把 Crab 加进 MCP 配置，并告诉你 API Key 该填在哪里。里面不含 API Key；在本页创建 Key 后，按它说的位置填进去。</p>
+      </div>
+      <pre class="prompt">{{ connectText }}</pre>
+    </div>
 
     <div class="hm-card">
       <p class="hm-scroll-hint">表格可以左右滑动，「吊销」在最右侧。</p>
@@ -246,6 +258,29 @@ onMounted(load)
 </template>
 
 <style scoped>
+.connect {
+  margin-bottom: 16px;
+}
+
+.connect-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.connect-bar p {
+  margin: 0;
+}
+
+.prompt {
+  margin: 8px 0 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+}
+
 /* 示例完整显示：换行而不是截断，带底色和等宽字。 */
 .example {
   margin: 0 0 12px;

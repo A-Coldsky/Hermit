@@ -33,6 +33,22 @@ public final class ConchSourceStore {
         });
     }
 
+    /** 用户主动切换来源时记一条审计。{@code copied} 是有没有把本地包的账号、凭证和配置复制过去。 */
+    public void audit(String conch, Origin origin, boolean copied, String actor) {
+        String checked = Checks.conch(conch);
+        Origin checkedOrigin = Checks.origin(origin);
+        String checkedActor = Checks.actor(actor);
+        Db.transaction(dataSource, connection -> {
+            ConfigAudit.append(
+                    connection,
+                    checkedActor,
+                    AuditKind.CONCH_SOURCE_SWITCHED,
+                    checkedOrigin.name() + "/" + checked,
+                    Json.write(Map.of("copied", copied)));
+            return null;
+        });
+    }
+
     /** {@code origin} 为 null 时删掉记录。 */
     public void save(String conch, Origin origin) {
         String checked = Checks.conch(conch);

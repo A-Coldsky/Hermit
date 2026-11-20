@@ -115,6 +115,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final CrabDatabase database;
     private final CredentialCipher cipher;
     private final AccountStore accounts;
+    private final dev.hermit.crab.store.ConchSourceStore conchSources;
     private final CredentialVault vault;
     private final ConchConfigStore conchConfig;
     private final ApiKeyService apiKeys;
@@ -225,6 +226,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.switches = new CapabilitySwitchStore(database.dataSource());
         this.conchSwitches = new dev.hermit.crab.store.ConchSwitchStore(database.dataSource());
         dev.hermit.crab.store.ConchSourceStore sources = new dev.hermit.crab.store.ConchSourceStore(database.dataSource());
+        this.conchSources = sources;
         this.registry.bindSelections(new ConchRegistry.Selections() {
             @Override
             public Map<String, Origin> load() {
@@ -1100,6 +1102,69 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             conchSwitchedOff.remove(conch);
         }
         notifyCatalogListeners();
+    }
+
+    /** 切换来源的结果。{@code accounts} 和 {@code configKeys} 是复制过去的账号数和配置项数。 */
+    public record SourceSwitch(String conch, Origin origin, boolean copied, int accounts, int configKeys) {
+    }
+
+    public static final String SOURCE_MISSING = "这个规则包在本机没有这个来源。";
+
+    /**
+     * 同名的本地包和正式包之间切换生效的那份。API Key 范围和整包开关按包名，不随来源变。
+     * {@code copy} 只在切到正式包时有效：把本地包的账号、凭证和配置复制到正式包，
+     * 只复制正式包声明了的字段，正式包已有的同名值被覆盖。不传 {@code copy} 时两边互不影响。
+     */
+    public SourceSwitch switchSource(String conch, Origin origin, boolean copy, String actor) {
+        if (conch == null || origin == null || !registry.has(conch, origin)) {
+            throw new IllegalArgumentException(SOURCE_MISSING);
+        }
+        int copiedAccounts = 0;
+        int copiedConfig = 0;
+        boolean copied = copy && origin == Origin.OFFICIAL && registry.has(conch, Origin.LOCAL);
+        if (copied) {
+            ConchDoc target = registry.find(conch, Origin.OFFICIAL).orElseThrow();
+            Set<String> existing = new java.util.HashSet<>();
+            for (Account account : accounts.list(Origin.OFFICIAL, conch)) {
+                existing.add(account.account());
+            }
+            for (Account account : accounts.list(Origin.LOCAL, conch)) {
+                LinkedHashMap<String, String> fields = new LinkedHashMap<>();
+                for (Map.Entry<String, String> entry
+                        : vault.decryptForExecution(Origin.LOCAL, conch, account.account()).entrySet()) {
+                    if (target.credentials().containsKey(entry.getKey())) {
+                        fields.put(entry.getKey(), entry.getValue());
+                    }
+                }
+                if (!existing.contains(account.account())) {
+                    accounts.create(Origin.OFFICIAL, conch, account.account(), actor);
+                }
+                if (!fields.isEmpty()) {
+                    vault.write(Origin.OFFICIAL, conch, account.account(), fields, actor);
+                    sessions.invalidate(new dev.hermit.crab.engine.SessionKey(Origin.OFFICIAL, conch, account.account()));
+                }
+                copiedAccounts++;
+            }
+            LinkedHashMap<String, String> values = new LinkedHashMap<>();
+            for (Map.Entry<String, String> entry : conchConfig.all(Origin.LOCAL, conch).entrySet()) {
+                if (target.config().containsKey(entry.getKey()) && !entry.getValue().isEmpty()) {
+                    values.put(entry.getKey(), entry.getValue());
+                }
+            }
+            if (!values.isEmpty()) {
+                conchConfig.putAll(Origin.OFFICIAL, conch, values, actor);
+            }
+            copiedConfig = values.size();
+        }
+        boolean changed = registry.origin(conch) != origin;
+        if (!registry.activate(conch, origin)) {
+            throw new IllegalArgumentException(SOURCE_MISSING);
+        }
+        if (changed || copied) {
+            conchSources.audit(conch, origin, copied, actor);
+        }
+        notifyCatalogListeners();
+        return new SourceSwitch(conch, origin, copied, copiedAccounts, copiedConfig);
     }
 
     public void setCapabilityDisabled(String conch, String action, boolean disabled, String actor) {

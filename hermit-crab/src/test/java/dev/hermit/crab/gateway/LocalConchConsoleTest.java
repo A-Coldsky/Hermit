@@ -94,8 +94,12 @@ class LocalConchConsoleTest {
                     "/console/api/local-conches",
                     "application/yaml",
                     LocalConchBehaviorTest.ping("legacy_oa", "1.0.0").getBytes(StandardCharsets.UTF_8));
-            assertThat(clash.statusCode()).isEqualTo(409);
-            assertThat(clash.body()).contains("INVALID_INPUT").contains("与已安装的正式规则包重名");
+            // 与正式包同名可以导入，正式那份继续生效；删掉本地那份后恢复原样。
+            assertThat(clash.statusCode()).as(clash.body()).isEqualTo(200);
+            assertThat(server.runtime.registry().origin("legacy_oa")).isEqualTo(dev.hermit.crab.store.Origin.OFFICIAL);
+            assertThat(server.runtime.registry().has("legacy_oa", dev.hermit.crab.store.Origin.LOCAL)).isTrue();
+            server.runtime.localConches().delete("legacy_oa", Actors.CONSOLE);
+            assertThat(server.runtime.registry().has("legacy_oa", dev.hermit.crab.store.Origin.LOCAL)).isFalse();
 
             HttpResponse<String> invalid = post(
                     server, "/console/api/local-conches", "text/yaml", "conch: [\n".getBytes(StandardCharsets.UTF_8));

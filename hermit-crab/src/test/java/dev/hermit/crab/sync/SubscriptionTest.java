@@ -524,12 +524,12 @@ class SubscriptionTest {
             CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config, name -> null);
             try (CrabServer server = CrabServer.start(runtime)) {
                 HttpClient http = HttpClient.newHttpClient();
+                // 同名的本地包不挡订阅；Reef 上没有这个包，所以是 404。
                 HttpResponse<String> clash = send(
                         http, server.port(), "POST", "/console/api/conches/other_sys/subscription", "{}");
-                assertThat(clash.statusCode()).isEqualTo(409);
-                assertThat(JSON.readTree(clash.body()).path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+                assertThat(clash.statusCode()).isEqualTo(404);
                 assertThat(JSON.readTree(clash.body()).path("error").path("message").asText())
-                        .isEqualTo(SubscriptionException.LOCAL_CONFLICT);
+                        .isEqualTo(SubscriptionException.CANNOT_SUBSCRIBE);
                 assertThat(reef.downloads()).isZero();
 
                 HttpResponse<String> subscribed = send(

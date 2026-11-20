@@ -72,20 +72,15 @@ public class LocalConchBehaviorTest {
                     .containsExactly("alice");
 
             runtime.registry().put(ConchParser.parse(ping("official_ping", "1.0.0")), Origin.OFFICIAL);
-            assertThatThrownBy(() -> runtime.localConches().importBytes(
-                    ping("official_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI))
-                    .isInstanceOf(LocalConchException.class)
-                    .hasMessage("与已安装的正式规则包重名")
-                    .satisfies(ex -> {
-                        LocalConchException failure = (LocalConchException) ex;
-                        assertThat(failure.status()).isEqualTo(409);
-                        assertThat(failure.code()).isEqualTo(ErrorCode.INVALID_INPUT);
-                    });
-            assertThatThrownBy(() -> runtime.localConches().importBytes(
-                    ping("official_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI, true))
-                    .isInstanceOf(LocalConchException.class)
-                    .hasMessage("与已安装的正式规则包重名");
-
+            // 与正式包同名可以导入：两份都在，正式那份继续生效。
+            runtime.localConches().importBytes(
+                    ping("official_ping", "2.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            assertThat(runtime.registry().origin("official_ping")).isEqualTo(Origin.OFFICIAL);
+            assertThat(runtime.registry().find("official_ping").orElseThrow().version().toString()).isEqualTo("1.0.0");
+            assertThat(runtime.registry().find("official_ping", Origin.LOCAL).orElseThrow().version().toString())
+                    .isEqualTo("2.0.0");
+            runtime.localConches().delete("official_ping", Actors.CLI);
+            assertThat(runtime.registry().origin("official_ping")).isEqualTo(Origin.OFFICIAL);
             assertThatThrownBy(() -> runtime.localConches().importBytes(secretConfig(), Actors.CLI))
                     .isInstanceOf(LocalConchException.class)
                     .hasMessage("规则包校验失败")
@@ -319,9 +314,10 @@ public class LocalConchBehaviorTest {
             assertThat(runtime.invoker().invoke(
                     principal, "local_two", "ping", java.util.Map.of(), Optional.empty(), Optional.empty(), "trace-two")
                     .status()).isEqualTo(200);
+            // 同名的本地文件不再挡住订阅；这里没有配置 Reef。
             assertThatThrownBy(() -> runtime.subscribe("local_ping", Actors.CLI))
                     .isInstanceOf(SubscriptionException.class)
-                    .hasMessage("与本机本地规则包同名");
+                    .hasMessage(SubscriptionException.NOT_CONFIGURED);
 
             runtime.localConches().delete("local_ping", Actors.CLI);
             assertThat(pingFile).doesNotExist();

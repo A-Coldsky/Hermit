@@ -9,6 +9,7 @@ const crab = vi.hoisted(() => ({
   setDebug: vi.fn(),
   syncStatus: vi.fn(),
   sync: vi.fn(),
+  apiKeys: vi.fn(),
 }))
 
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
@@ -47,9 +48,43 @@ beforeEach(() => {
   crab.calls.mockResolvedValue({ calls: [] })
   crab.debug.mockResolvedValue({ enabled: false, expiresAt: null })
   crab.syncStatus.mockResolvedValue({ report: null, latestCrab: null })
+  crab.apiKeys.mockResolvedValue({ apiKeys: [] })
 })
 
 describe('Crab 概览', () => {
+  it('接入 Agent 卡片给出地址、Key 数和复制按钮', async () => {
+    crab.apiKeys.mockResolvedValue({ apiKeys: [{ id: 'a', revokedAt: null }, { id: 'b', revokedAt: '2026-01-01T00:00:00Z' }] })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const wrapper = await mountPage(OverviewView)
+    await flushPromises()
+
+    const card = wrapper.get('[data-test="connect-card"]')
+    expect(card.get('[data-test="connect-endpoint"]').text()).toBe(`${window.location.origin}/mcp`)
+    expect(card.get('[data-test="connect-hint"]').text()).toContain('有 1 把可用的 API Key')
+    expect(card.find('[data-test="connect-nokey"]').exists()).toBe(false)
+    expect(card.get('[data-test="connect-keys"]').attributes('href')).toContain('/apikeys')
+
+    await card.get('[data-test="copy-connect"]').trigger('click')
+    await flushPromises()
+    const copied = writeText.mock.calls[0][0] as string
+    expect(copied).toContain(`地址是 ${window.location.origin}/mcp`)
+    expect(copied).toContain('list_systems')
+  })
+
+  it('没有 Key 时提示先创建，读不到 Key 时不显示数量', async () => {
+    const empty = await mountPage(OverviewView)
+    await flushPromises()
+    expect(empty.get('[data-test="connect-nokey"]').text()).toContain('还没有 API Key')
+
+    crab.apiKeys.mockRejectedValue(new Error('boom'))
+    const unknown = await mountPage(OverviewView)
+    await flushPromises()
+    expect(unknown.find('[data-test="connect-nokey"]').exists()).toBe(false)
+    expect(unknown.get('[data-test="connect-hint"]').text()).not.toContain('把可用的')
+    expect(unknown.text()).toContain('暂无调用')
+  })
+
   it('加载中不显示 0 和「暂无调用」', async () => {
     const calls = deferred<{ calls: unknown[] }>()
     crab.calls.mockReturnValue(calls.promise)

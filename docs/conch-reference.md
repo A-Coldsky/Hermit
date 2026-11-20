@@ -198,7 +198,7 @@ actions:
 
 凭证、配置、账号和能力开关会在 Crab 的 `config_audit` 追加一条记录。记录里是字段名和动作，不是凭证明文、密文或配置值。本机 `GET /console/api/audit` 和 CLI `audit list` 按时间倒序读取，结果同样只有操作者、动作、origin、Conch、账号、时间和字段名。detail 里其它键不会被读出来。
 
-Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 键时警告是「缺少 related」；写成 `related: []` 表示没有关联能力，不产生这条警告。`related: null` 与省略相同，仍是「缺少 related」。related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。上面的 `sample_oa` 只有 `list_todo`，所以 `related` 写成 `[]`。
+Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 键时警告是「缺少 related」；写成 `related: []` 表示没有关联能力，不产生这条警告。`related: null` 与省略相同，仍是「缺少 related」。related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。Crab 把 related 交给 Agent：直接工具说明末尾多一行「相关能力：conch__action、…」，`describe_capability` 返回 `related` 数组，使用指南里每个能力多一行「相关能力」。只写出同一规则包里当前 Key 看得到的能力；指向自己、不存在、未暴露、已停用或没有权限的名字不写。上面的 `sample_oa` 只有 `list_todo`，所以 `related` 写成 `[]`。
 
 输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由输入层转换并按生成的 JSON Schema 校验。生成的 schema 含 `additionalProperties: false`。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换、小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`），以及未声明字段，都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内、也不会丢掉多余字段再当成功。HTTP 网关和 MCP 走同一条校验，所以两边相同。MCP 在校验前去掉账号选择（直接工具的 `account`，或能力入参已占用该名字时的 `_account`）。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`、`traceId`，能定位到单个字段时还有 `field`。`traceId` 与响应头 `X-Hermit-Trace` 相同。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；上面 `sample_oa` 的 `page` 声明了 `minimum: 1`。
 

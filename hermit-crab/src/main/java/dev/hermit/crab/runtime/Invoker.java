@@ -69,6 +69,9 @@ public final class Invoker {
     /** 装在本机但当前校验不让载入的包。不是「不存在」，409 CONCH_DISABLED。 */
     public static final String RULE_DISABLED_CALL =
             "规则包已停用：这版规则没有通过当前校验，所有账号暂时都不能调用。到 Crab 控制台的规则包详情里更新、退回或改好后重新导入，再调用。";
+    /** 整个规则包在本机被停用。409 CONCH_DISABLED，排在 Key 权限检查之前。 */
+    public static final String CONCH_SWITCHED_OFF_CALL =
+            "该规则包已在本机停用，调用前需要在 Crab 控制台的规则包详情里重新启用。";
     /** 等待确认期间规则包被更新、回滚或重新导入。409，不执行。 */
     public static final String CHANGED_AFTER_CONFIRM = "确认期间规则包已经变化，没有执行。请重新发起，并确认新版本。";
     private final ConchRegistry registry;
@@ -93,6 +96,7 @@ public final class Invoker {
     private volatile Clock versionClock = Clock.systemUTC();
     private volatile McpForwarder mcpForwarder;
     private volatile java.util.function.Predicate<String> ruleDisabled = name -> false;
+    private volatile java.util.function.Predicate<String> switchedOff = name -> false;
 
     public Invoker(
             ConchRegistry registry,
@@ -139,6 +143,11 @@ public final class Invoker {
 
     public void bindKnownSecrets(KnownSecrets knownSecrets) {
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
+    }
+
+    /** 整个规则包的本机开关。停用的包不论 Key 范围一律拒绝。 */
+    public void bindSwitchedOff(java.util.function.Predicate<String> lookup) {
+        this.switchedOff = lookup == null ? name -> false : lookup;
     }
 
     /** 包不在注册表里时，用它分清「已停用」和「不存在」。 */
@@ -265,6 +274,9 @@ public final class Invoker {
         Action capability = doc == null ? null : doc.actions().get(action);
         if (doc == null || capability == null) {
             return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
+        }
+        if (switchedOff.test(conch)) {
+            return requestOnly(traceId, ErrorCode.CONCH_DISABLED, CONCH_SWITCHED_OFF_CALL);
         }
         if (disabled.disabled(conch, action)) {
             return requestOnly(traceId, ErrorCode.CAPABILITY_DISABLED, CAPABILITY_DISABLED_MESSAGE);

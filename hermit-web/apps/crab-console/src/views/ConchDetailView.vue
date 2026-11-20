@@ -272,6 +272,30 @@ async function repair() {
   }
 }
 
+async function setEnabled(enabled: boolean) {
+  if (!enabled) {
+    try {
+      await ElMessageBox.confirm(
+        '停用后这个规则包的所有能力都不能调用，也不出现在 MCP 工具列表和 OpenAPI 里。账号、凭证和配置保持不变，可以随时重新启用。正在执行的调用不会被打断。',
+        `停用 ${props.conch}`,
+        { confirmButtonText: '停用', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
+  }
+  working.value = true
+  try {
+    await api.setConchEnabled(props.conch, enabled)
+    ElMessage.success(enabled ? '已启用规则包' : '已停用规则包')
+    await load()
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    working.value = false
+  }
+}
+
 async function rollback() {
   if (!detail.value || !canRollback(detail.value)) return
   try {
@@ -368,10 +392,15 @@ watch(
         <el-tag v-if="detail?.version && !detail.repairRequired" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
         <el-tag v-if="local" type="info" effect="plain" round>本地</el-tag>
         <el-tag v-if="detail?.ruleDisabled" type="danger" effect="plain" round>已停用</el-tag>
+        <el-tag v-if="detail?.switchedOff" type="danger" effect="plain" round data-test="switched-off-tag">本机已停用</el-tag>
         <el-tag v-if="detail?.reefDisabled" type="warning" effect="plain" round>Reef 已停用</el-tag>
         <el-tag v-if="detail?.updateAvailable" type="warning" effect="plain" round class="mono">有新版本 v{{ detail.latestVersion }}</el-tag>
       </template>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
+      <template v-if="detail && detail.switchedOff !== undefined">
+        <el-button v-if="detail.switchedOff" type="primary" :disabled="working" data-test="conch-enable" @click="setEnabled(true)">启用规则包</el-button>
+        <el-button v-else type="warning" plain :disabled="working" data-test="conch-disable" @click="setEnabled(false)">停用规则包</el-button>
+      </template>
       <template v-if="local">
         <el-button :icon="Download" :loading="working" @click="exportYaml">导出 YAML</el-button>
         <el-button type="danger" plain :icon="Delete" :disabled="working" @click="removeLocal">删除</el-button>
@@ -419,6 +448,18 @@ watch(
             :loading="working"
             @click="rollback"
           >退回 v{{ detail.previousVersion }}</el-button>
+        </template>
+      </el-alert>
+      <el-alert
+        v-if="detail.switchedOff"
+        type="error"
+        show-icon
+        :closable="false"
+        title="这个规则包已在本机停用"
+        data-test="switched-off"
+      >
+        <template #default>
+          所有能力都不能调用，也不出现在 MCP 工具列表和 OpenAPI 里，有权限的 API Key 也一样。账号、凭证和配置保持不变，点「启用规则包」即可恢复。
         </template>
       </el-alert>
       <el-alert

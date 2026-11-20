@@ -107,6 +107,8 @@ final class ConsoleApi {
         app.get("/console/oauth/callback", ctx -> oauthCallback(runtime, ctx));
         get(app, "/console/api/conches/{conch}/config", ctx -> config(runtime, ctx));
         put(app, "/console/api/conches/{conch}/config", ctx -> writeConfig(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/enable", ctx -> toggleConch(runtime, ctx, false));
+        post(app, "/console/api/conches/{conch}/disable", ctx -> toggleConch(runtime, ctx, true));
         post(app, "/console/api/capabilities/{conch}/{action}/enable", ctx -> toggle(runtime, ctx, false));
         post(app, "/console/api/capabilities/{conch}/{action}/disable", ctx -> toggle(runtime, ctx, true));
         get(app, "/console/api/apikeys", ctx -> apiKeys(runtime, ctx));
@@ -171,6 +173,7 @@ final class ConsoleApi {
             row.put("needsConfiguration", needsConfiguration(runtime, doc, accounts, loginPaused));
             row.put("loginPaused", loginPaused);
             row.put("source", source(runtime, doc.conch()));
+            row.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
             putReefDisabled(runtime, doc.conch(), row);
             putUpdateFields(catalog.get(doc.conch()), row);
             putPrevious(runtime, doc.conch(), row);
@@ -214,6 +217,7 @@ final class ConsoleApi {
         body.put("needsConfiguration", needsConfiguration(runtime, doc, accounts, paused));
         body.put("loginPaused", paused);
         body.put("source", source(runtime, doc.conch()));
+        body.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
         putReefDisabled(runtime, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
         putPrevious(runtime, doc.conch(), body);
@@ -412,7 +416,7 @@ final class ConsoleApi {
             row.put("description", text(action.description()));
             row.put("method", CapabilityHttp.method(action).name());
             row.put("readOnly", CapabilityHttp.readOnly(action));
-            row.put("disabled", runtime.disabled(doc.conch(), action.name()));
+            row.put("disabled", runtime.capabilityDisabled(doc.conch(), action.name()));
             capabilities.add(row);
         }
         body.put("capabilities", capabilities);
@@ -753,6 +757,14 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of("updated", true));
     }
 
+    private static void toggleConch(CrabRuntime runtime, Context ctx, boolean disabled) {
+        String conch = ctx.pathParam("conch");
+        runtime.setConchDisabled(conch, disabled, Actors.CONSOLE);
+        GatewayResponses.writeData(ctx, Map.of(
+                "conch", conch,
+                "switchedOff", runtime.conchSwitchedOff(conch)));
+    }
+
     private static void toggle(CrabRuntime runtime, Context ctx, boolean disabled) {
         String conch = ctx.pathParam("conch");
         String action = ctx.pathParam("action");
@@ -760,7 +772,7 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of(
                 "conch", conch,
                 "action", action,
-                "disabled", runtime.disabled(conch, action)));
+                "disabled", runtime.capabilityDisabled(conch, action)));
     }
 
     private static void apiKeys(CrabRuntime runtime, Context ctx) {

@@ -11,6 +11,10 @@ public enum AuditKind {
     API_KEY_REVOKED,
     CAPABILITY_ENABLED,
     CAPABILITY_DISABLED,
+    /** 整个规则包在本机停用。目标是 {@code origin/conch}。 */
+    CONCH_SWITCHED_OFF,
+    /** 整个规则包在本机重新启用。 */
+    CONCH_SWITCHED_ON,
     DEBUG_CHANGED,
     /** Console password accepted or rejected. Detail is {@code {"ok":true|false}} and has no password. */
     CONSOLE_LOGIN,

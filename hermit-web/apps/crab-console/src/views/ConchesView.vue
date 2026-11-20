@@ -544,6 +544,7 @@ onMounted(load)
               {{ row.title || row.conch }}
               <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
               <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
+              <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
               <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
               <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
             </strong>

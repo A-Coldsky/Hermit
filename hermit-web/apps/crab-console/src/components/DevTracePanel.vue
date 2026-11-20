@@ -126,6 +126,10 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
               <dt>响应体</dt>
               <dd><JsonBlock :value="step.responseBody" /></dd>
             </template>
+            <template v-if="step.file">
+              <dt>保存的文件</dt>
+              <dd data-test="trace-file"><JsonBlock :value="step.file" /></dd>
+            </template>
             <template v-if="step.warnings?.length">
               <dt>警告</dt>
               <dd>

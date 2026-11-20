@@ -366,6 +366,8 @@ export interface DevTraceStep {
   requestBody?: unknown
   responseHeaders?: Record<string, unknown>
   responseBody?: unknown
+  /** `download` 存进暂存区的文件。只有元数据，没有内容。 */
+  file?: { fileId: string; name: string; size: number; mime: string; sha256: string }
   extractors?: string[]
   extractCount?: number
   variables?: DevTraceVariable[]

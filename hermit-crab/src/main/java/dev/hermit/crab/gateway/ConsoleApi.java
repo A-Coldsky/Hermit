@@ -129,6 +129,10 @@ final class ConsoleApi {
         delete(app, "/console/api/conches/{conch}/subscription", ctx -> unsubscribe(runtime, ctx));
         get(app, "/console/api/reef", ctx -> reef(runtime, ctx));
         post(app, "/console/api/reef/bootstrap", ctx -> importReef(runtime, ctx));
+        get(app, "/console/api/files", ctx -> files(runtime, ctx));
+        post(app, "/console/api/files", ctx -> uploadFile(runtime, ctx));
+        put(app, "/console/api/files/settings", ctx -> updateFileSettings(runtime, ctx));
+        delete(app, "/console/api/files/{fileId}", ctx -> deleteFile(runtime, ctx));
         get(app, "/console/api/reports/settings", ctx -> reportSettings(runtime, ctx));
         put(app, "/console/api/reports/settings", ctx -> updateReportSettings(runtime, ctx));
         get(app, "/console/api/reports/preview", ctx -> reportPreview(runtime, ctx));
@@ -1218,6 +1222,74 @@ final class ConsoleApi {
 
     private static void importReef(CrabRuntime runtime, Context ctx) throws Exception {
         GatewayResponses.writeData(ctx, runtime.importBootstrap(RequestBodies.read(ctx.req()), Actors.CONSOLE));
+    }
+
+    private static Map<String, Object> fileSettingsView(dev.hermit.crab.files.FileStageSettings settings) {
+        LinkedHashMap<String, Object> view = new LinkedHashMap<>();
+        view.put("ttlSeconds", settings.ttlSeconds());
+        view.put("maxFileBytes", settings.maxFileBytes());
+        view.put("maxTotalBytes", settings.maxTotalBytes());
+        return view;
+    }
+
+    /** 清单不带下载令牌；{@code shared} 表示控制台上传、所有 Key 可用。 */
+    private static void files(CrabRuntime runtime, Context ctx) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (dev.hermit.crab.files.StagedFile file : runtime.fileStage().list()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>(file.view(null));
+            row.put("createdAt", file.createdAt().toString());
+            row.put("shared", file.owner() == null);
+            row.put("apiKeyId", file.owner());
+            rows.add(row);
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("settings", fileSettingsView(runtime.fileStage().settings()));
+        body.put("usage", runtime.fileStage().usage());
+        body.put("files", rows);
+        GatewayResponses.writeData(ctx, body);
+    }
+
+    /** 请求体就是文件内容。控制台上传的文件所有 API Key 都能在调用里使用。 */
+    private static void uploadFile(CrabRuntime runtime, Context ctx) throws Exception {
+        try {
+            dev.hermit.crab.files.StagedFile file = runtime.fileStage().store(
+                    ctx.req().getInputStream(), ctx.queryParam("name"), ctx.header("Content-Type"), null);
+            GatewayResponses.writeData(ctx, file.view(null));
+        } catch (dev.hermit.crab.files.FileStageException ex) {
+            GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, ex.getMessage());
+        }
+    }
+
+    private static void deleteFile(CrabRuntime runtime, Context ctx) {
+        if (!runtime.fileStage().delete(ctx.pathParam("fileId"))) {
+            GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "文件不存在或已过期");
+            return;
+        }
+        GatewayResponses.writeData(ctx, Map.of("deleted", true));
+    }
+
+    private static void updateFileSettings(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = ApiJson.tree(RequestBodies.read(ctx.req()));
+        if (body == null || !body.isObject()) {
+            throw new IllegalArgumentException("invalid file settings");
+        }
+        rejectUnknownFields(body, Set.of("ttlSeconds", "maxFileBytes", "maxTotalBytes"));
+        JsonNode ttl = body.get("ttlSeconds");
+        JsonNode maxFile = body.get("maxFileBytes");
+        JsonNode maxTotal = body.get("maxTotalBytes");
+        if (ttl == null || !ttl.isIntegralNumber() || !ttl.canConvertToInt()
+                || maxFile == null || !maxFile.isIntegralNumber() || !maxFile.canConvertToLong()
+                || maxTotal == null || !maxTotal.isIntegralNumber() || !maxTotal.canConvertToLong()) {
+            throw new IllegalArgumentException("ttlSeconds, maxFileBytes and maxTotalBytes are required");
+        }
+        dev.hermit.crab.files.FileStageSettings settings;
+        try {
+            settings = new dev.hermit.crab.files.FileStageSettings(ttl.asInt(), maxFile.asLong(), maxTotal.asLong());
+        } catch (IllegalArgumentException ex) {
+            GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, ex.getMessage());
+            return;
+        }
+        GatewayResponses.writeData(ctx, fileSettingsView(runtime.updateFileSettings(settings, Actors.CONSOLE)));
     }
 
     private static void reportSettings(CrabRuntime runtime, Context ctx) {

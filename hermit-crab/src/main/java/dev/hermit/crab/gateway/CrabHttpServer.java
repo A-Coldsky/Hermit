@@ -15,6 +15,11 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.mcp.McpEndpoint;
+import dev.hermit.crab.files.FileRoutes;
+import dev.hermit.crab.files.FileScope;
+import dev.hermit.crab.files.FileStage;
+import dev.hermit.crab.files.FileStageException;
+import dev.hermit.crab.files.StagedFile;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.BodyDigests;
 import dev.hermit.crab.runtime.CapabilityHttp;
@@ -91,6 +96,7 @@ public final class CrabHttpServer implements AutoCloseable {
         });
         http.before(ctx -> {
             GatewayResponses.trace(ctx);
+            FileScope.publicBase(publicBase(ctx));
             String path = ctx.path();
             if (consolePage(path) && Loopback.address(ctx.req().getRemoteAddr()) && !ConsoleHosts.allowed(ctx.req())) {
                 // 回环连接但浏览器解析的是别的名字：DNS rebinding。页面和 API 都挡。
@@ -110,7 +116,11 @@ public final class CrabHttpServer implements AutoCloseable {
                 ctx.skipRemainingHandlers();
             }
         });
+        http.after(ctx -> FileScope.publicBase(null));
         mcp.register(http);
+        // 先于 /api/{conch}/{action} 注册；规则包名以小写字母开头，不会是 "-"。
+        http.post(FileRoutes.UPLOAD, this::uploadFile);
+        http.get(FileRoutes.DOWNLOAD_PREFIX + "{token}", this::downloadFile);
         http.get("/openapi.json", ctx -> {
             byte[] body = OpenApiDocument.bytes(runtime, http.port());
             GatewayResponses.write(ctx, 200, body, GatewayResponses.trace(ctx), false);
@@ -142,6 +152,68 @@ public final class CrabHttpServer implements AutoCloseable {
             GatewayResponses.writeError(ctx, 500, ErrorCode.INTERNAL, "internal error");
         });
         return http;
+    }
+
+    /** 下载链接的前缀：配置了 server.public_url 就用它，否则用请求里的 Host。 */
+    private String publicBase(Context ctx) {
+        String configured = runtime.config().publicUrl();
+        if (configured != null) {
+            return configured;
+        }
+        String host = ctx.header("Host");
+        if (host == null || !host.matches("[A-Za-z0-9.:\\-\\[\\]]{1,255}")) {
+            return null;
+        }
+        return ctx.scheme() + "://" + host;
+    }
+
+    /** 请求体就是文件内容。文件只有这把 Key 能在调用里使用。 */
+    private void uploadFile(Context ctx) throws IOException {
+        String token = token(ctx);
+        if (token == null) {
+            GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, UserMessages.MISSING_KEY);
+            return;
+        }
+        Optional<ApiKeyPrincipal> principal = runtime.apiKeys().authenticate(token);
+        if (principal.isEmpty()) {
+            GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, UserMessages.INVALID_KEY);
+            return;
+        }
+        try {
+            StagedFile file = runtime.fileStage().store(
+                    ctx.req().getInputStream(), ctx.queryParam("name"), ctx.header("Content-Type"),
+                    principal.get().id());
+            String base = publicBase(ctx);
+            GatewayResponses.writeData(ctx, file.view(base == null ? runtime.fileBase() : base));
+        } catch (FileStageException ex) {
+            GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, ex.getMessage());
+        }
+    }
+
+    /** 不要 API Key：链接里的随机令牌就是凭据，有效期内可以反复下载。 */
+    private void downloadFile(Context ctx) throws IOException {
+        Optional<StagedFile> found = runtime.fileStage().byToken(ctx.pathParam("token"));
+        if (found.isEmpty()) {
+            GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "文件不存在或已过期");
+            return;
+        }
+        writeFile(ctx, runtime.fileStage(), found.get());
+    }
+
+    static void writeFile(Context ctx, FileStage stage, StagedFile file) throws IOException {
+        String encoded = java.net.URLEncoder.encode(file.name(), java.nio.charset.StandardCharsets.UTF_8)
+                .replace("+", "%20");
+        ctx.status(200);
+        ctx.header("Content-Type", file.mime());
+        ctx.header("Content-Length", String.valueOf(file.size()));
+        ctx.header("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
+        ctx.header("X-Content-Type-Options", "nosniff");
+        ctx.header("Cache-Control", "no-store");
+        try (java.io.InputStream in = stage.open(file)) {
+            in.transferTo(ctx.res().getOutputStream());
+        } catch (FileStageException ex) {
+            GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "文件不存在或已过期");
+        }
     }
 
     private void handleApi(Context ctx, String conch, String action) throws IOException {

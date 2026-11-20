@@ -70,6 +70,10 @@ import dev.hermit.common.validate.ConchValidator;
  * machine). It runs when its own row is missing and does not rewrite earlier versions. The table
  * starts empty, so every package installed before the upgrade stays enabled.
  * Later versions must not edit {@link #applyV18}.
+ * Version 19 adds {@code conch_active_origin} (which copy is active when a local package and an
+ * official package share one name). It starts empty: before this version the two could not both
+ * be loaded, and with no row the official copy stays active.
+ * Later versions must not edit {@link #applyV19}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Crab has been released with versions 1–15. Version 16 is
@@ -223,6 +227,11 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 18)) {
                 applyV18(connection);
                 insertVersion(connection, 18);
+            }
+            // Do not gate version 19 on MAX(version), and do not rewrite applyV18. No backfill.
+            if (!applied(connection, 19)) {
+                applyV19(connection);
+                insertVersion(connection, 19);
             }
             return null;
         });
@@ -688,6 +697,17 @@ public final class CrabDatabase implements AutoCloseable {
                     ciphertext BLOB NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
                     PRIMARY KEY (origin, conch, account)
+                )
+                """);
+    }
+
+    private static void applyV19(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS conch_active_origin (
+                    conch VARCHAR(256) NOT NULL,
+                    origin VARCHAR(16) NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    PRIMARY KEY (conch)
                 )
                 """);
     }

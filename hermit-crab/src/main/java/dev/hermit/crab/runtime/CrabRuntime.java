@@ -224,6 +224,18 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.idempotency = new IdempotencyStore(database.dataSource(), cipher, clock);
         this.switches = new CapabilitySwitchStore(database.dataSource());
         this.conchSwitches = new dev.hermit.crab.store.ConchSwitchStore(database.dataSource());
+        dev.hermit.crab.store.ConchSourceStore sources = new dev.hermit.crab.store.ConchSourceStore(database.dataSource());
+        this.registry.bindSelections(new ConchRegistry.Selections() {
+            @Override
+            public Map<String, Origin> load() {
+                return sources.load();
+            }
+
+            @Override
+            public void save(String conch, Origin origin) {
+                sources.save(conch, origin);
+            }
+        });
         this.conchSwitchedOff.addAll(conchSwitches.disabledNames());
         this.debug = new DebugStateStore(database.dataSource(), clock, this::onDebugChanged);
         this.devTraces = new DevTraceStore(database.dataSource(), clock, debug);

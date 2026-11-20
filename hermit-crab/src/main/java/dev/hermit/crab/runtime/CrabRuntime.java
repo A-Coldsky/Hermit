@@ -590,6 +590,16 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         ExecutionResult result;
         FileScope previous = FileScope.begin(fileStage, apiKeyId, fileBase());
         try {
+            if (!"mcp".equals(doc.driver())) {
+                try {
+                    request = new ExecutionRequest(
+                            request.traceId(), request.origin(), request.conch(), request.action(),
+                            Invoker.stageFileInputs(capability, request.rawInput()),
+                            request.account(), request.accountContext());
+                } catch (dev.hermit.crab.files.FileStageException ex) {
+                    throw new TrialRejected(400, ErrorCode.INVALID_INPUT, ex.getMessage(), true);
+                }
+            }
             result = "mcp".equals(doc.driver())
                     ? mcpForwarder.execute(request, doc)
                     : engine.execute(request, doc);

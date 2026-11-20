@@ -228,14 +228,14 @@ public final class FileStage implements AutoCloseable {
         if (!base64) {
             throw new FileStageException("data URI 只支持 base64");
         }
-        String payload = value.substring(comma + 1).trim();
+        String payload = value.substring(comma + 1).replaceAll("\\s", "");
         // 先按长度拦，不为超限的内容分配解码缓冲。
         if (payload.length() > (INLINE_LIMIT / 3 + 1) * 4L + 4) {
             throw new FileStageException("data URI 里的文件超过 256 KiB，请先上传到暂存区再传 fileId");
         }
         byte[] bytes;
         try {
-            bytes = Base64.getMimeDecoder().decode(payload);
+            bytes = Base64.getDecoder().decode(payload);
         } catch (IllegalArgumentException ex) {
             throw new FileStageException("data URI 的 base64 无法解码");
         }

@@ -58,7 +58,7 @@ class ConchValidatorTest {
                           form:
                             f: "{{now | urlencode}}"
                             already: pre%2Fpost
-                          multipart: nope
+                          attachment: nope
                       - request:
                           method: GET
                           url: "/next#frag"
@@ -80,7 +80,7 @@ class ConchValidatorTest {
                                 "字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。"),
                         tuple(ValidationCodes.DOUBLE_ENCODE, "actions.ping.steps[0].request.form.f",
                                 "这个值用了 urlencode，发出去时会被再编码一次"),
-                        tuple(ValidationCodes.IGNORED_REQUEST_FIELD, "actions.ping.steps[0].request.multipart",
+                        tuple(ValidationCodes.IGNORED_REQUEST_FIELD, "actions.ping.steps[0].request.attachment",
                                 "这个字段不会被发送"),
                         tuple(ValidationCodes.FRAGMENT_DROPPED, "actions.ping.steps[1].request.url",
                                 "# 后面的内容不会发出去"));

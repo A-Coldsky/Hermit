@@ -23,6 +23,7 @@ public final class FileTransfers {
     public static final String PART_TYPE =
             "multipart 的字段要么是文本，要么是带 file 的映射（可选 filename、content_type）";
     public static final String DOWNLOAD_TYPE = "download 只能是 true、false，或只带 filename 的映射";
+    public static final String AUTH_STEPS = "登录步骤和 alive_check 不支持 multipart 和 download，只能写在能力的步骤里";
     public static final String MCP_DRIVER = "driver: mcp 的规则包不支持 type: file、multipart 和 download";
 
     /** 追加在文件入参的说明后面，Agent 从工具参数说明里读到。 */

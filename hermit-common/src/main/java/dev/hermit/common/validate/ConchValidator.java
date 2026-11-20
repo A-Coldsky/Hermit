@@ -1991,6 +1991,15 @@ public final class ConchValidator {
         }
         boolean multipart = usesRequestKey(doc, "multipart");
         boolean download = usesRequestKey(doc, "download");
+        if (doc.auth() != null) {
+            AliveCheck alive = doc.auth().aliveCheck();
+            boolean inAuth = stepsUseKey(doc.auth().steps(), "multipart") || stepsUseKey(doc.auth().steps(), "download")
+                    || (alive != null && alive.request() != null
+                    && (used(alive.request().get("multipart")) || used(alive.request().get("download"))));
+            if (inAuth) {
+                errors.add(issue(ValidationCodes.REQUEST_BODY, "auth", FileTransfers.AUTH_STEPS));
+            }
+        }
         if (!param && !multipart && !download) {
             return;
         }
@@ -2018,7 +2027,7 @@ public final class ConchValidator {
                 return true;
             }
             AliveCheck alive = doc.auth().aliveCheck();
-            if (alive != null && alive.request() != null && alive.request().get(key) != null) {
+            if (alive != null && alive.request() != null && used(alive.request().get(key))) {
                 return true;
             }
         }
@@ -2035,11 +2044,16 @@ public final class ConchValidator {
             return false;
         }
         for (Step step : steps) {
-            if ("request".equals(step.type()) && step.def().get(key) != null) {
+            if ("request".equals(step.type()) && used(step.def().get(key))) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** {@code download: false} 等于没写。 */
+    private static boolean used(Object value) {
+        return value != null && !Boolean.FALSE.equals(value);
     }
 
     private static void checkRequestBodyFeatures(ConchDoc doc, List<ValidationIssue> errors) {

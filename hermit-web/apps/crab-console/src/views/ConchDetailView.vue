@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Delete, Download, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
@@ -129,8 +129,12 @@ const defaultAccount = computed(() => accounts.value.find((a) => a.default) ?? n
 /** 停用包不在调用路径上，账号是否齐全都不能调用，横幅要先说这一点。 */
 const RULE_DISABLED_BANNER = '这版已停用，所有账号暂时都不能调用'
 
+/** 整包停用时账号的状态只说明启用之后的事，不能读成现在可以调用。 */
+const SWITCHED_OFF_BANNER = '规则包已停用。重新启用前，下面这些账号和配置还需要处理'
+
 const bannerTitle = computed(() => {
   if (detail.value?.ruleDisabled) return RULE_DISABLED_BANNER
+  if (detail.value?.switchedOff) return SWITCHED_OFF_BANNER
   if (missingConfig.value.length) return '缺少必填配置，调用会返回「待配置」'
   if (needsAccount.value) return '还没有账号，调用会返回「待配置」'
   const account = defaultAccount.value
@@ -298,35 +302,32 @@ async function setEnabled(enabled: boolean) {
 
 const twoSources = computed(() => !!detail.value?.localVersion && !!detail.value?.reefVersion)
 
+/** 切到正式包的确认框。复制会覆盖正式包已有的值，所以默认不勾选。 */
+const toReef = reactive({ open: false, copy: false })
+
 async function switchSource(target: 'LOCAL' | 'REEF') {
-  let copy = false
+  if (target === 'REEF') {
+    Object.assign(toReef, { open: true, copy: false })
+    return
+  }
   try {
-    if (target === 'REEF') {
-      try {
-        await ElMessageBox.confirm(
-          '切换后调用的是从 Reef 订阅的正式包，包名、API Key 和工具名都不变。正式包的账号、凭证和配置与本地包分开保存。要把本地包的账号、凭证和配置复制到正式包吗？只复制正式包声明了的字段，正式包已有的同名值会被覆盖。',
-          `切到正式包 ${props.conch}`,
-          {
-            confirmButtonText: '复制并切换',
-            cancelButtonText: '只切换，不复制',
-            distinguishCancelAndClose: true,
-            type: 'info',
-          },
-        )
-        copy = true
-      } catch (action) {
-        if (action !== 'cancel') return
-      }
-    } else {
-      await ElMessageBox.confirm(
-        '切换后调用的是本机的本地包，包名、API Key 和工具名都不变。本地包使用它自己的账号、凭证和配置，正式包的不会带过来。',
-        `切到本地包 ${props.conch}`,
-        { confirmButtonText: '切换', cancelButtonText: '取消', type: 'info' },
-      )
-    }
+    await ElMessageBox.confirm(
+      '切换后调用的是本机的本地包，包名、API Key 和工具名都不变。本地包使用它自己的账号、凭证和配置，正式包的不会带过来。',
+      `切到本地包 ${props.conch}`,
+      { confirmButtonText: '切换', cancelButtonText: '取消', type: 'info' },
+    )
   } catch {
     return
   }
+  await applySource('LOCAL', false)
+}
+
+async function confirmToReef() {
+  toReef.open = false
+  await applySource('REEF', toReef.copy)
+}
+
+async function applySource(target: 'LOCAL' | 'REEF', copy: boolean) {
   working.value = true
   try {
     const done = await api.setConchSource(props.conch, target, copy)
@@ -602,6 +603,7 @@ watch(
         show-icon
         :closable="false"
         :title="bannerTitle"
+        data-test="setup-banner"
       >
         <template #default>
           <div v-if="needsAccount">先新建一个账号。</div>
@@ -664,10 +666,33 @@ watch(
         />
       </div>
     </template>
+    <el-dialog v-model="toReef.open" :title="`切到正式包 ${props.conch}`" width="min(520px, 94vw)" data-test="to-reef-dialog">
+      <p class="to-reef-text">
+        切换后调用的是从 Reef 订阅的正式包，包名、API Key 和工具名都不变。正式包的账号、凭证和配置与本地包分开保存。
+      </p>
+      <el-checkbox v-model="toReef.copy" data-test="to-reef-copy">同时把本地包的账号、凭证和配置复制到正式包</el-checkbox>
+      <p class="to-reef-note">
+        只复制正式包声明了的字段。<strong>正式包已有的同名值会被覆盖</strong>，OAuth 连接不复制，需要在正式包上重新连接。
+      </p>
+      <template #footer>
+        <el-button data-test="to-reef-cancel" @click="toReef.open = false">取消</el-button>
+        <el-button type="primary" data-test="to-reef-confirm" @click="confirmToReef">{{ toReef.copy ? '复制并切换' : '切换' }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.to-reef-text {
+  margin: 0 0 14px;
+  line-height: 1.6;
+}
+.to-reef-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--hm-muted);
+}
 .detail {
   display: flex;
   flex-direction: column;

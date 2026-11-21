@@ -9,6 +9,10 @@ import { api, type ApiKey, type CreatedApiKey, type ConchDetail } from '../api'
 import { connectPrompt } from '../connect'
 
 const loading = ref(true)
+/** 读取失败和「一把都没有」要分开：失败时不能让人以为 Key 没了。 */
+const loadFailed = ref(false)
+const promptOpen = ref(false)
+const conchesLoaded = ref(false)
 const keys = ref<ApiKey[]>([])
 const showRevoked = ref(false)
 const conchDetails = ref<ConchDetail[]>([])
@@ -60,7 +64,9 @@ async function load() {
   loading.value = true
   try {
     keys.value = (await api.apiKeys()).apiKeys
+    loadFailed.value = false
   } catch (error) {
+    loadFailed.value = true
     notifyError(error)
   } finally {
     loading.value = false
@@ -71,6 +77,7 @@ async function loadConches() {
   try {
     const list = (await api.conches()).conches
     conchDetails.value = await Promise.all(list.map((s) => api.conch(s.conch)))
+    conchesLoaded.value = true
   } catch (error) {
     notifyError(error)
   }
@@ -125,6 +132,20 @@ async function revoke(key: ApiKey) {
   }
 }
 
+/** 明文只显示一次：除了「我已保存」，其它关闭方式都先问一句。 */
+async function confirmCloseCreated(done: () => void) {
+  try {
+    await ElMessageBox.confirm('关闭后无法再查看完整的 Key。没保存的话只能吊销这把、重新创建。', '已经保存 API Key 了吗？', {
+      confirmButtonText: '已保存，关闭',
+      cancelButtonText: '返回复制',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  done()
+}
+
 function scopeText(list: string[] | null, all: string): string {
   return list && list.length ? list.join('、') : all
 }
@@ -144,15 +165,27 @@ onMounted(load)
       <div class="hm-card-title">Agent 接入提示词</div>
       <div class="connect-bar">
         <el-button :icon="CopyDocument" data-test="copy-connect" @click="copyText(connectText, '已复制接入提示词')">复制</el-button>
+        <el-button link type="primary" data-test="toggle-connect" @click="promptOpen = !promptOpen">{{ promptOpen ? '收起全文' : '查看全文' }}</el-button>
         <p class="hm-muted">把下面这段发给 AI，它会自己把 Crab 加进 MCP 配置，并告诉你 API Key 该填在哪里。里面不含 API Key；在本页创建 Key 后，按它说的位置填进去。</p>
       </div>
-      <pre class="prompt">{{ connectText }}</pre>
+      <pre v-show="promptOpen" class="prompt">{{ connectText }}</pre>
     </div>
 
     <div class="hm-card">
+      <el-alert
+        v-if="loadFailed"
+        type="error"
+        show-icon
+        :closable="false"
+        class="load-failed"
+        :title="keys.length ? 'API Key 列表刷新失败，下面是上一次读到的内容' : 'API Key 列表读取失败'"
+        data-test="keys-load-failed"
+      >
+        <el-button size="small" :loading="loading" @click="load">重试</el-button>
+      </el-alert>
       <p class="hm-scroll-hint">表格可以左右滑动，「吊销」在最右侧。</p>
       <el-table v-loading="loading" :data="visible">
-        <template #empty>{{ loading ? '' : '还没有 API Key' }}</template>
+        <template #empty>{{ loading ? '' : loadFailed ? '没有读到 API Key 列表' : '还没有 API Key' }}</template>
         <el-table-column label="名称" min-width="160">
           <template #default="{ row }">
             <strong>{{ row.name }}</strong>
@@ -213,6 +246,17 @@ onMounted(load)
           <div>Key 泄露时影响面最大。只给信任的调用方，能指定范围时尽量指定。</div>
         </el-alert>
         <el-form-item v-if="!form.all" label="允许的规则包">
+          <el-alert
+            v-if="conchesLoaded && !conchDetails.length"
+            type="warning"
+            show-icon
+            :closable="false"
+            class="no-conches"
+            title="本机还没有规则包，现在没有可选的范围"
+            data-test="no-conches"
+          >
+            先<router-link to="/catalog">订阅规则包</router-link>，或在<router-link to="/conches">规则包</router-link>页导入本地规则包，再回来创建 Key。不建议为了跳过这一步改选「全部权限」。
+          </el-alert>
           <el-select v-model="form.conches" multiple clearable placeholder="不选表示按下面的能力限定" class="full">
             <el-option v-for="s in conchDetails" :key="s.conch" :label="conchLabel(s)" :value="s.conch">
               <span>{{ conchLabel(s) }}</span>
@@ -240,7 +284,7 @@ onMounted(load)
       </template>
     </el-dialog>
 
-    <el-dialog :model-value="!!created" title="API Key 已创建" width="560px" :close-on-click-modal="false" @close="created = null">
+    <el-dialog :model-value="!!created" title="API Key 已创建" width="560px" :close-on-click-modal="false" :before-close="confirmCloseCreated" data-test="created-dialog" @close="created = null">
       <el-alert type="warning" :closable="false" show-icon title="完整的 Key 只显示这一次，关闭后无法再查看。请立即复制保存。" />
       <div v-if="created" class="plaintext">
         <code>{{ created.plaintext }}</code>
@@ -296,6 +340,10 @@ onMounted(load)
   overflow-x: auto;
 }
 
+.load-failed,
+.no-conches {
+  margin-bottom: 12px;
+}
 .once {
   margin-bottom: 16px;
 }

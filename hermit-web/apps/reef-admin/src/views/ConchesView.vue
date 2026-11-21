@@ -12,6 +12,8 @@ import { isMcp, pullCountHint, upstreamHost } from '../labels'
 
 const router = useRouter()
 const loading = ref(true)
+/** 读取失败和目录为空要分开：失败时不能让人以为规则包没了。 */
+const loadFailed = ref(false)
 const conches = ref<ConchSummary[]>([])
 const keyword = ref('')
 const kind = ref<'all' | 'mcp' | 'http'>('all')
@@ -33,6 +35,9 @@ const filtered = computed(() => {
 
 /** 目录本身为空才提示上传；筛选零匹配用另一句，两种视图共用。 */
 const emptyText = computed(() => {
+  if (loadFailed.value && !conches.value.length) {
+    return '没有读到规则包目录'
+  }
   if (!conches.value.length) {
     return isAdmin.value ? '还没有规则包，先上传一个 YAML' : '还没有规则包，等管理员上传'
   }
@@ -46,7 +51,9 @@ async function load() {
   loading.value = true
   try {
     conches.value = await api.conches()
+    loadFailed.value = false
   } catch (error) {
+    loadFailed.value = true
     notifyError(error)
   } finally {
     loading.value = false
@@ -81,6 +88,18 @@ onMounted(load)
         <el-radio-button value="table" aria-label="列表视图"><el-icon><List /></el-icon></el-radio-button>
       </el-radio-group>
     </div>
+
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      class="load-failed"
+      :title="conches.length ? '规则包目录刷新失败，下面是上一次读到的内容' : '规则包目录读取失败'"
+      data-test="catalog-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
 
     <template v-if="loading && !conches.length">
       <div v-if="mode === 'cards'" data-test="catalog-loading">
@@ -128,7 +147,7 @@ onMounted(load)
       </div>
       <div v-else-if="!loading" class="hm-card empty">
         <span>{{ emptyText }}</span>
-        <el-button v-if="isAdmin && !conches.length" type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
+        <el-button v-if="isAdmin && !conches.length && !loadFailed" type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
       </div>
     </template>
 
@@ -180,6 +199,9 @@ onMounted(load)
 </template>
 
 <style scoped>
+.load-failed {
+  margin-bottom: 12px;
+}
 .search {
   max-width: 340px;
 }

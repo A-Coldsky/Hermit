@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useNarrow } from '@shared/narrow'
 import { CopyDocument, Download, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
@@ -9,6 +10,8 @@ import { api, type AgentToken, type CrabInstance, type IssuedAgentToken } from '
 import { isAdmin } from '../auth'
 import { bootstrapFileName, buildBootstrap, downloadJson, normalizeReefUrl } from '../bootstrap'
 
+/** 窄屏只留辨认令牌要用的列，吊销按钮不再固定盖住前缀。 */
+const narrow = useNarrow()
 const loading = ref(true)
 const showAll = ref(false)
 const tokens = ref<AgentToken[]>([])
@@ -163,22 +166,23 @@ onMounted(load)
         <span>Agent 令牌</span>
         <el-switch v-if="isAdmin" v-model="showAll" active-text="显示所有用户" data-test="show-all" />
       </div>
+      <p class="hm-scroll-hint">窄屏只显示名称、前缀、状态和操作；创建和最近使用时间在宽屏上查看。</p>
       <el-table v-loading="loading" :data="tokens">
         <template #empty>{{ loading ? '' : '还没有令牌。点「生成令牌」为一台 Crab 生成' }}</template>
-        <el-table-column label="名称" min-width="180">
+        <el-table-column label="名称" :min-width="narrow ? 120 : 180">
           <template #default="{ row }">
             <span>{{ row.name }}</span>
             <el-tag v-if="row.source === 'CONFIG'" size="small" type="info" effect="plain" class="tag">配置令牌</el-tag>
           </template>
         </el-table-column>
         <el-table-column v-if="showAll" prop="owner" label="所属用户" min-width="120" />
-        <el-table-column label="前缀" min-width="140">
+        <el-table-column label="前缀" :min-width="narrow ? 110 : 140">
           <template #default="{ row }"><span class="mono">{{ row.prefix ? `${row.prefix}…` : '—' }}</span></template>
         </el-table-column>
-        <el-table-column label="创建" min-width="170">
+        <el-table-column v-if="!narrow" label="创建" min-width="170">
           <template #default="{ row }"><TimeText v-if="row.createdAt" :value="row.createdAt" /><span v-else>—</span></template>
         </el-table-column>
-        <el-table-column label="最近使用" min-width="170">
+        <el-table-column v-if="!narrow" label="最近使用" min-width="170">
           <template #default="{ row }"><TimeText v-if="row.lastUsedAt" :value="row.lastUsedAt" /><span v-else class="hm-muted">从未使用</span></template>
         </el-table-column>
         <el-table-column label="状态" width="100">
@@ -187,7 +191,7 @@ onMounted(load)
             <el-tag v-else type="success" size="small" effect="plain">有效</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" align="right" fixed="right">
+        <el-table-column label="操作" :width="narrow ? 72 : 100" align="right" :fixed="narrow ? false : 'right'">
           <template #default="{ row }">
             <el-button
               v-if="row.source === 'CONFIG' && !row.revokedAt && isAdmin"
@@ -215,6 +219,7 @@ onMounted(load)
 
     <div class="hm-card">
       <div class="hm-card-title"><span>{{ isAdmin ? '已连接的 Crab' : '我的 Crab' }}</span></div>
+      <p class="hm-scroll-hint">表格可以左右滑动。</p>
       <el-table v-loading="loading" :data="crabs">
         <template #empty>{{ loading ? '' : '还没有 Crab 用令牌连接过 Reef' }}</template>
         <el-table-column label="Crab" min-width="280">

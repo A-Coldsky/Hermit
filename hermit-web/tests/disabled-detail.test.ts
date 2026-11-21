@@ -87,6 +87,17 @@ describe('停用状态说真话', () => {
     expect(crab.setConchEnabled).toHaveBeenCalledWith('legacy_oa', true)
   })
 
+  it('本机停用且还缺账号时，横幅先说已停用，不写调用结果', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), switchedOff: true, needsConfiguration: true })
+    crab.accounts.mockResolvedValue({ accounts: [] })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+    const banner = page.get('[data-test="setup-banner"]').text()
+    expect(banner).toContain('规则包已停用')
+    expect(banner).not.toContain('可以调用')
+    expect(banner).not.toContain('调用会返回')
+  })
+
   it('未停用的包只有「停用规则包」', async () => {
     crab.conch.mockResolvedValue({ ...detail(false), switchedOff: false })
     const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
@@ -104,10 +115,10 @@ describe('停用状态说真话', () => {
     expect(page.find('[data-test="two-sources"]').exists()).toBe(false)
   })
 
-  it('同名两份时切到正式包先问是否复制，选「只切换」不复制', async () => {
+  it('同名两份时切到正式包：默认不复制，取消不切换', async () => {
     crab.conch.mockResolvedValue({ ...detail(false), source: 'LOCAL', localVersion: '9.9.9', reefVersion: '1.0.1' })
     crab.setConchSource.mockResolvedValue({ conch: 'legacy_oa', source: 'REEF', copied: false, copiedAccounts: 0, copiedConfigKeys: 0 })
-    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' }, attach: true })
     await flushPromises()
 
     expect(page.get('[data-test="two-sources"]').text()).toContain('本地包 v9.9.9')
@@ -116,25 +127,40 @@ describe('停用状态说真话', () => {
     await page.get('[data-test="source-to-reef"]').trigger('click')
     await flushPromises()
     expect(crab.setConchSource).not.toHaveBeenCalled()
-    const box = document.querySelector('.el-message-box') as HTMLElement
-    expect(box.textContent).toContain('要把本地包的账号、凭证和配置复制到正式包吗')
-    const buttons = Array.from(box.querySelectorAll('.el-message-box__btns button')) as HTMLElement[]
-    buttons.find((button) => button.textContent?.includes('只切换，不复制'))!.click()
+    const confirm = () => document.querySelector('[data-test="to-reef-confirm"]') as HTMLElement
+    expect(confirm().textContent?.trim()).toBe('切换')
+    ;(document.querySelector('[data-test="to-reef-cancel"]') as HTMLElement).click()
+    await flushPromises()
+    expect(crab.setConchSource).not.toHaveBeenCalled()
+
+    await page.get('[data-test="source-to-reef"]').trigger('click')
+    await flushPromises()
+    confirm().click()
     await flushPromises()
     expect(crab.setConchSource).toHaveBeenCalledWith('legacy_oa', 'REEF', false)
+    page.unmount()
   })
 
-  it('选「复制并切换」才带 copy', async () => {
+  it('勾选「同时复制」才带 copy，再次打开时回到不勾选', async () => {
     crab.conch.mockResolvedValue({ ...detail(false), source: 'LOCAL', localVersion: '9.9.9', reefVersion: '1.0.1' })
     crab.setConchSource.mockResolvedValue({ conch: 'legacy_oa', source: 'REEF', copied: true, copiedAccounts: 1, copiedConfigKeys: 1 })
-    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' }, attach: true })
     await flushPromises()
     await page.get('[data-test="source-to-reef"]').trigger('click')
     await flushPromises()
-    const buttons = Array.from(document.querySelectorAll('.el-message-box__btns button')) as HTMLElement[]
-    buttons.find((button) => button.textContent?.includes('复制并切换'))!.click()
+    const box = () => document.querySelector('[data-test="to-reef-copy"] input') as HTMLInputElement
+    box().click()
+    await flushPromises()
+    const confirm = document.querySelector('[data-test="to-reef-confirm"]') as HTMLElement
+    expect(confirm.textContent?.trim()).toBe('复制并切换')
+    confirm.click()
     await flushPromises()
     expect(crab.setConchSource).toHaveBeenCalledWith('legacy_oa', 'REEF', true)
+
+    await page.get('[data-test="source-to-reef"]').trigger('click')
+    await flushPromises()
+    expect(box().checked).toBe(false)
+    page.unmount()
   })
 
   it('本机停用的卡片不写「可用」', async () => {

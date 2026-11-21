@@ -47,7 +47,7 @@ function isDownloadLink(url: string): boolean {
 defineExpose({ isDownloadLink })
 /** 停用的包调不了，它们的能力不算进概览。 */
 const callableCapabilities = computed(() =>
-  conches.value.filter((s) => !s.ruleDisabled).reduce((n, s) => n + s.capabilityCount, 0),
+  conches.value.filter((s) => !s.ruleDisabled && !s.switchedOff).reduce((n, s) => n + s.capabilityCount, 0),
 )
 const failures = computed(() => calls.value.filter((c) => !c.success).length)
 const repairs = computed(() => report.value?.conches.filter((s) => s.kind === 'REPAIR_REQUIRED') ?? [])
@@ -426,7 +426,10 @@ onMounted(load)
       <div class="connect">
         <div class="connect-info">
           <div>MCP 地址：<span class="mono" data-test="connect-endpoint">{{ mcpEndpoint }}</span></div>
-          <div v-if="activeKeys === 0" class="hm-muted" data-test="connect-nokey">
+          <div v-if="loaded && !conches.length" class="hm-muted" data-test="connect-noconch">
+            第一步：本机还没有规则包。先<router-link to="/catalog">订阅规则包</router-link>（没连 Reef 时会带你去连接），或在<router-link to="/conches">规则包</router-link>页导入本地规则包；有了规则包再创建 API Key。
+          </div>
+          <div v-else-if="activeKeys === 0" class="hm-muted" data-test="connect-nokey">
             还没有 API Key，Agent 接不进来。<router-link to="/apikeys">去创建</router-link>
           </div>
           <div v-else class="hm-muted" data-test="connect-hint">

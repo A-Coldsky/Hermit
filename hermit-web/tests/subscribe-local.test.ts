@@ -166,7 +166,7 @@ describe('可订阅规则包', () => {
     expect(warning).toHaveBeenCalledWith('没有订阅 legacy_oa：Reef 上当前不能订阅这个规则包')
   })
 
-  it('与本地包同名时不能订阅', async () => {
+  it('与本地包同名时仍然可以订阅', async () => {
     crab.catalog.mockResolvedValue({
       conches: [entry({ localConflict: true, installed: true, installedVersion: '0.1.0' })],
       syncedAt: '2026-10-30T00:00:00Z',
@@ -174,11 +174,11 @@ describe('可订阅规则包', () => {
     })
     const wrapper = await mountPage(CatalogView)
     await flushPromises()
-    expect(wrapper.text()).toContain('与本地规则包同名')
+    expect(wrapper.find('[data-test="local-active-tag"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('已安装 v0.1.0')
     const subscribe = buttons(wrapper, '订阅')
     expect(subscribe).toHaveLength(1)
-    expect(subscribe[0].attributes('disabled')).toBeDefined()
+    expect(subscribe[0].attributes('disabled')).toBeUndefined()
   })
 })
 

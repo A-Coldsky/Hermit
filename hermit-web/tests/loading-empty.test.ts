@@ -45,6 +45,25 @@ beforeEach(() => {
   localStorage.removeItem('hermit.reef.conchesView')
 })
 
+describe('读取失败不冒充空目录', () => {
+  it('Reef 规则包目录读取失败时显示错误和重试，不提示上传', async () => {
+    setRole('ADMIN')
+    reef.conches.mockRejectedValueOnce(new Error('boom'))
+    const wrapper = await mountPage(ReefConchesView)
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="catalog-load-failed"]').text()).toContain('规则包目录读取失败')
+    expect(wrapper.text()).not.toContain('还没有规则包')
+    expect(wrapper.find('.empty button').exists()).toBe(false)
+
+    reef.conches.mockResolvedValue([])
+    await wrapper.get('[data-test="catalog-load-failed"] button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="catalog-load-failed"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('还没有规则包')
+  })
+})
+
 describe('Reef 规则包目录', () => {
   it('请求返回前不显示空态', async () => {
     const pending = deferred<unknown[]>()

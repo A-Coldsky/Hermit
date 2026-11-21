@@ -53,11 +53,16 @@ class ConchRepository {
     }
 
     List<VersionRow> listByConch(String conch) {
-        return jdbc.query(COLUMNS + "WHERE conch = ? ORDER BY id", ROWS, conch);
+        // MySQL 的排序规则不分大小写，这里再按原文比一次，和 H2 上一致。
+        return jdbc.query(COLUMNS + "WHERE conch = ? ORDER BY id", ROWS, conch).stream()
+                .filter(row -> row.conch().equals(conch))
+                .toList();
     }
 
     Optional<VersionRow> find(String conch, String version) {
-        return jdbc.query(COLUMNS + "WHERE conch = ? AND version = ?", ROWS, conch, version).stream().findFirst();
+        return jdbc.query(COLUMNS + "WHERE conch = ? AND version = ?", ROWS, conch, version).stream()
+                .filter(row -> row.conch().equals(conch) && row.version().equals(version))
+                .findFirst();
     }
 
     /**

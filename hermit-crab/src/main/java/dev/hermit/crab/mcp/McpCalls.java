@@ -21,6 +21,7 @@ import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.InvokeOutcome;
+import dev.hermit.crab.runtime.InvokeRequest;
 import dev.hermit.crab.runtime.Invoker;
 import dev.hermit.crab.upstream.McpCallPayload;
 import dev.hermit.crab.store.ApiKeyPrincipal;
@@ -464,17 +465,10 @@ final class McpCalls {
             // MCP 不传 Idempotency-Key。同键回放只在 HTTP POST。
             // 确认过的调用带上确认时那份规则包：等待期间换了版本就拒绝，不执行没确认过的内容。
             outcome = runtime.invoker().invoke(
-                    principal,
-                    ref.conch().conch(),
-                    ref.action().name(),
-                    input,
-                    account,
-                    Optional.empty(),
-                    null,
-                    CallChannel.MCP,
-                    attempt.traceId(),
-                    false,
-                    confirmed ? ref.conch() : null);
+                    InvokeRequest.of(principal, ref.conch().conch(), ref.action().name(), input, attempt.traceId())
+                            .account(account)
+                            .channel(CallChannel.MCP)
+                            .confirmedAgainst(confirmed ? ref.conch() : null));
         } catch (RuntimeException ex) {
             return fail(attempt, "INTERNAL", "internal error");
         }

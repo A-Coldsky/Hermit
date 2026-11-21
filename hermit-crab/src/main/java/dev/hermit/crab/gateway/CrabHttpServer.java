@@ -27,6 +27,7 @@ import dev.hermit.crab.runtime.ConsoleSessions;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.IdempotencyKeys;
 import dev.hermit.crab.runtime.InvokeOutcome;
+import dev.hermit.crab.runtime.InvokeRequest;
 import dev.hermit.crab.runtime.Invoker;
 import dev.hermit.crab.store.ApiKeyPrincipal;
 import dev.hermit.crab.store.CallChannel;
@@ -279,18 +280,10 @@ public final class CrabHttpServer implements AutoCloseable {
         }
         Optional<String> accountName = headerAccount.isPresent() ? headerAccount : queryAccount;
         InvokeOutcome outcome = runtime.invoker().invoke(
-                caller,
-                conch,
-                action,
-                input,
-                accountName,
-                idempotency,
-                bodySha256,
-                CallChannel.HTTP,
-                GatewayResponses.trace(ctx),
-                confirmed(ctx),
-                null,
-                confirmToken(ctx));
+                InvokeRequest.of(caller, conch, action, input, GatewayResponses.trace(ctx))
+                        .account(accountName)
+                        .idempotency(idempotency, bodySha256)
+                        .httpConfirm(confirmed(ctx), confirmToken(ctx)));
         GatewayResponses.writeOutcome(ctx, outcome);
     }
 
@@ -325,15 +318,8 @@ public final class CrabHttpServer implements AutoCloseable {
      */
     private boolean writeEarlierRejection(Context ctx, ApiKeyPrincipal principal, String conch, String action) {
         InvokeOutcome gate = runtime.invoker().invoke(
-                principal,
-                conch,
-                action,
-                Map.of(),
-                Optional.of(ACCOUNT_ADMISSION_PROBE),
-                Optional.empty(),
-                null,
-                CallChannel.HTTP,
-                GatewayResponses.trace(ctx));
+                InvokeRequest.of(principal, conch, action, Map.of(), GatewayResponses.trace(ctx))
+                        .account(Optional.of(ACCOUNT_ADMISSION_PROBE)));
         if (invalidAccountName(gate)) {
             return false;
         }

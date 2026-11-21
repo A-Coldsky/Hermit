@@ -88,6 +88,9 @@ class CliTest {
                     "account",
                     "list",
                     "legacy_oa");
+            // JVM 会把这些变量的内容回显到 stderr，混进要断言的输出。
+            builder.environment().remove("JDK_JAVA_OPTIONS");
+            builder.environment().remove("JAVA_TOOL_OPTIONS");
             builder.environment().put("HERMIT_HOME", pathsAgain.root().toString());
             builder.environment().remove("HERMIT_MASTER_KEY");
             Path outputFile = temp.resolve("locked-out.txt");

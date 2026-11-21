@@ -214,110 +214,35 @@ public final class Invoker {
             Optional<String> idempotencyKey,
             String traceId
     ) {
-        return invoke(principal, conch, action, input, account, idempotencyKey, null, CallChannel.HTTP, traceId);
+        return invoke(InvokeRequest.of(principal, conch, action, input, traceId)
+                .account(account)
+                .idempotency(idempotencyKey, null));
     }
 
-    /**
-     * {@code bodySha256} is the raw-body digest for an idempotency key. Null matches only another
-     * null (in-process callers). HTTP passes {@link BodyDigests#sha256}. {@code channel} is the
-     * entry that reached this invoker; null is recorded as {@link CallChannel#HTTP}.
-     */
-    public InvokeOutcome invoke(
-            ApiKeyPrincipal principal,
-            String conch,
-            String action,
-            Map<String, Object> input,
-            Optional<String> account,
-            Optional<String> idempotencyKey,
-            String bodySha256,
-            CallChannel channel,
-            String traceId
-    ) {
-        return invoke(principal, conch, action, input, account, idempotencyKey, bodySha256, channel, traceId, false);
-    }
-
-    /**
-     * {@code httpConfirmed} 只对 HTTP 入口有意义。MCP 的确认走 elicitation，不看这个头。
-     */
-    public InvokeOutcome invoke(
-            ApiKeyPrincipal principal,
-            String conch,
-            String action,
-            Map<String, Object> input,
-            Optional<String> account,
-            Optional<String> idempotencyKey,
-            String bodySha256,
-            CallChannel channel,
-            String traceId,
-            boolean httpConfirmed
-    ) {
-        return invoke(principal, conch, action, input, account, idempotencyKey, bodySha256, channel, traceId,
-                httpConfirmed, null, null);
-    }
-
-    /**
-     * {@code confirmedAgainst} 是调用方已经据此做过确认（MCP elicitation）的那份规则包。
-     * 注册表里的版本和它不一样时拒绝，不执行用户没有确认过的新版本。null 表示调用方没有做过确认。
-     */
-    public InvokeOutcome invoke(
-            ApiKeyPrincipal principal,
-            String conch,
-            String action,
-            Map<String, Object> input,
-            Optional<String> account,
-            Optional<String> idempotencyKey,
-            String bodySha256,
-            CallChannel channel,
-            String traceId,
-            boolean httpConfirmed,
-            ConchDoc confirmedAgainst
-    ) {
-        return invoke(principal, conch, action, input, account, idempotencyKey, bodySha256, channel, traceId,
-                httpConfirmed, confirmedAgainst, null);
-    }
-
-    /**
-     * {@code confirmToken} 是 HTTP 请求头 {@code X-Hermit-Confirm-Token} 的原文。
-     * 需要确认时，必须和 {@code X-Hermit-Confirm: true} 一起对上这次读到的文档。MCP 不看它。
-     */
-    public InvokeOutcome invoke(
-            ApiKeyPrincipal principal,
-            String conch,
-            String action,
-            Map<String, Object> input,
-            Optional<String> account,
-            Optional<String> idempotencyKey,
-            String bodySha256,
-            CallChannel channel,
-            String traceId,
-            boolean httpConfirmed,
-            ConchDoc confirmedAgainst,
-            String confirmToken
-    ) {
+    public InvokeOutcome invoke(InvokeRequest request) {
+        ApiKeyPrincipal principal = request.principal();
         // 这次调用能用的暂存区文件按 API Key 划分，引擎发请求时从线程上取。
         FileScope previous = FileScope.begin(fileStage, principal == null ? null : principal.id(), fileBase);
         try {
-            return invokeScoped(principal, conch, action, input, account, idempotencyKey, bodySha256, channel,
-                    traceId, httpConfirmed, confirmedAgainst, confirmToken);
+            return invokeScoped(request);
         } finally {
             FileScope.restore(previous);
         }
     }
 
-    private InvokeOutcome invokeScoped(
-            ApiKeyPrincipal principal,
-            String conch,
-            String action,
-            Map<String, Object> input,
-            Optional<String> account,
-            Optional<String> idempotencyKey,
-            String bodySha256,
-            CallChannel channel,
-            String traceId,
-            boolean httpConfirmed,
-            ConchDoc confirmedAgainst,
-            String confirmToken
-    ) {
+    private InvokeOutcome invokeScoped(InvokeRequest request) {
+        ApiKeyPrincipal principal = request.principal();
+        String conch = request.conch();
+        String action = request.action();
+        Map<String, Object> input = request.input();
+        Optional<String> account = request.account();
+        Optional<String> idempotencyKey = request.idempotencyKey();
+        String bodySha256 = request.bodySha256();
+        CallChannel channel = request.channel();
+        String traceId = request.traceId();
+        boolean httpConfirmed = request.httpConfirmed();
+        ConchDoc confirmedAgainst = request.confirmedAgainst();
+        String confirmToken = request.confirmToken();
         if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
         }

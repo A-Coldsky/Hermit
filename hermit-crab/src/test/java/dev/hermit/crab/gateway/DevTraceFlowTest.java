@@ -164,7 +164,7 @@ class DevTraceFlowTest {
             InvokeOutcome invoked = runtime.invoker().invoke(
                     new ApiKeyPrincipal(localKey.id(), localKey.name(), localKey.scope()),
                     "local_echo", "echo", Map.of(), Optional.of("alice"),
-                    Optional.empty(), null, CallChannel.HTTP, "key-trace");
+                    Optional.empty(), "key-trace");
             assertThat(invoked.status()).as(new String(invoked.body(), StandardCharsets.UTF_8)).isEqualTo(200);
             assertThat(runtime.devTraces().find("key-trace")).isPresent();
             assertThat(new String(invoked.body(), StandardCharsets.UTF_8)).doesNotContain("devTrace");
@@ -172,7 +172,7 @@ class DevTraceFlowTest {
             InvokeOutcome officialCall = runtime.invoker().invoke(
                     new ApiKeyPrincipal(otherKey.id(), otherKey.name(), otherKey.scope()),
                     "official_ping", "ping", Map.of(), Optional.of("alice"),
-                    Optional.empty(), null, CallChannel.HTTP, "official-trace");
+                    Optional.empty(), "official-trace");
             assertThat(officialCall.status()).isEqualTo(200);
             assertThat(runtime.devTraces().find("official-trace")).isEmpty();
             var officialLog = runtime.callLogs().findByTraceId("official-trace").orElseThrow();

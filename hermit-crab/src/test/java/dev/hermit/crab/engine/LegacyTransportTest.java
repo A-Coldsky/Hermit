@@ -38,6 +38,8 @@ class LegacyTransportTest {
 
     @Test
     void localhostRefusedNamesBothPeers() throws Exception {
+        // 有的机器 localhost 只解析到 IPv4，这时没有第二个对端可报。
+        org.junit.jupiter.api.Assumptions.assumeTrue(InetAddress.getAllByName("localhost").length > 1);
         int port;
         try (ServerSocket closed = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
             port = closed.getLocalPort();

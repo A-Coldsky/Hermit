@@ -69,7 +69,7 @@ public final class LegacyOaFixture implements AutoCloseable {
         this.baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
     }
 
-    /** 文件暂存区测试：/files/report.bin 返回这些字节，/files/upload 记下收到的 multipart。 */
+    /** 文件暂存区测试：/files/report.bin 返回这些字节（null 时返回 204），/files/upload 记下收到的 multipart。 */
     public volatile byte[] fileBytes = new byte[] {0, 1, 2, (byte) 0xff};
     public volatile String uploadType;
     public volatile byte[] uploadBody;
@@ -185,6 +185,11 @@ public final class LegacyOaFixture implements AutoCloseable {
         }
         if ("/files/report.bin".equals(path)) {
             byte[] bytes = fileBytes;
+            if (bytes == null) {
+                exchange.sendResponseHeaders(204, -1);
+                exchange.close();
+                return;
+            }
             exchange.getResponseHeaders().add("Content-Type", "application/pdf");
             exchange.getResponseHeaders().add(
                     "Content-Disposition", "attachment; filename*=UTF-8''%E6%8A%A5%E8%A1%A8.pdf");

@@ -167,6 +167,13 @@ class FileStageHttpTest {
             TestServer.Reply tooLarge = server.call("GET", "/api/file_oa/export_report", key, "alice", null, null);
             assertThat(tooLarge.status()).isNotEqualTo(200);
             assertThat(tooLarge.body()).contains("单文件上限");
+
+            // 没有正文的成功响应（204）也给出一个零字节文件，规则里的 response.file 照常可用。
+            server.fixture.fileBytes = null;
+            TestServer.Reply empty = server.call("GET", "/api/file_oa/export_report", key, "alice", null, null);
+            assertThat(empty.status()).as(empty.body()).isEqualTo(200);
+            assertThat(empty.json().path("data").path("file").path("size").asLong()).isZero();
+            assertThat(empty.json().path("data").path("file").path("fileId").asText()).startsWith("f_");
         }
     }
 

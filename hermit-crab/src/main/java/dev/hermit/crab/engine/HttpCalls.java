@@ -842,12 +842,23 @@ final class HttpCalls {
             Duration bodyIdle,
             boolean persistent
     ) throws IOException {
-        if (entity == null) {
-            ensureWithinDeadline(deadlineNanos, request);
-            return new BodyBytes(new byte[0], false);
-        }
         FileMode mode = FILE_MODE.get();
         boolean asFile = mode != null && mode.bodyLimit > 0 && status >= 200 && status < 300;
+        if (entity == null) {
+            ensureWithinDeadline(deadlineNanos, request);
+            if (asFile) {
+                // 没有正文的成功响应（如 204）也是一个文件，只是长度为零。
+                if (mode.pending != null) {
+                    mode.pending.abort();
+                }
+                try {
+                    mode.pending = FileSteps.scope().begin();
+                } catch (FileStageException ex) {
+                    throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, ex.getMessage(), method, path, status);
+                }
+            }
+            return new BodyBytes(new byte[0], false);
+        }
         long limit = asFile ? mode.bodyLimit : MAX_BODY_BYTES;
         String tooLarge = asFile ? dev.hermit.crab.files.FileStage.TOO_LARGE : "响应体超过 5MB";
         long declared = entity.getContentLength();

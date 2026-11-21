@@ -90,6 +90,9 @@ class CliTest {
                     "legacy_oa");
             builder.environment().put("HERMIT_HOME", pathsAgain.root().toString());
             builder.environment().remove("HERMIT_MASTER_KEY");
+            // 这两个变量会让 JVM 自己往 stderr 打一行 "Picked up ..."，混进要比对的输出。
+            builder.environment().remove("JDK_JAVA_OPTIONS");
+            builder.environment().remove("JAVA_TOOL_OPTIONS");
             Path outputFile = temp.resolve("locked-out.txt");
             builder.redirectErrorStream(true);
             builder.redirectOutput(outputFile.toFile());

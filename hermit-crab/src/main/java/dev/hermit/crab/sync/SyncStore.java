@@ -119,24 +119,15 @@ final class SyncStore {
     }
 
     void recordSuccess(String conch, String version, Instant at) {
+        // 一条 MERGE：两个并发的首次成功不会先后 INSERT 撞主键。
         Db.transaction(dataSource, connection -> {
-            try (PreparedStatement update = connection.prepareStatement("""
-                    UPDATE version_success SET last_success_at = ? WHERE conch = ? AND version = ?
+            try (PreparedStatement merge = connection.prepareStatement("""
+                    MERGE INTO version_success (conch, version, last_success_at) KEY (conch, version) VALUES (?, ?, ?)
                     """)) {
-                Db.setInstant(update, 1, at);
-                update.setString(2, conch);
-                update.setString(3, version);
-                if (update.executeUpdate() == 1) {
-                    return null;
-                }
-            }
-            try (PreparedStatement insert = connection.prepareStatement("""
-                    INSERT INTO version_success (conch, version, last_success_at) VALUES (?, ?, ?)
-                    """)) {
-                insert.setString(1, conch);
-                insert.setString(2, version);
-                Db.setInstant(insert, 3, at);
-                insert.executeUpdate();
+                merge.setString(1, conch);
+                merge.setString(2, version);
+                Db.setInstant(merge, 3, at);
+                merge.executeUpdate();
             }
             return null;
         });

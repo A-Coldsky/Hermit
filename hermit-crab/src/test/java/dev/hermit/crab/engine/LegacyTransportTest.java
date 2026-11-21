@@ -44,7 +44,12 @@ class LegacyTransportTest {
         }
         RuleProblem refused = failure(Map.of("url", "http://localhost:" + port + "/"));
         assertThat(refused.transport).containsEntry("kind", "REFUSED");
-        assertThat(refused.summary).contains("localhost:" + port).contains("127.0.0.1").contains("::1");
+        assertThat(refused.summary).contains("localhost:" + port);
+        // 有的主机 localhost 只解析到 IPv4：按本机实际解析结果断言，每个对端都要出现。
+        for (InetAddress peer : InetAddress.getAllByName("localhost")) {
+            String shown = peer.getHostAddress().replace("0:0:0:0:0:0:0:1", "::1");
+            assertThat(refused.summary).contains(shown);
+        }
         assertThat(refused.summary).doesNotContain("Connection refused");
     }
 

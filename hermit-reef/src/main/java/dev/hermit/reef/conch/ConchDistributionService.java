@@ -11,8 +11,10 @@ import dev.hermit.reef.web.ApiException;
 import dev.hermit.reef.web.ReefErrorCode;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,11 @@ public class ConchDistributionService {
     private final SigningKeyStore keys;
     private final PackageVerifier verifier;
     private final ObjectMapper objectMapper;
+    /**
+     * 已验签包的清单条目，键是 zip 字节的 SHA-256。每次轮询仍然读文件、算摘要，
+     * 磁盘上的包被改动后摘要对不上，会重新验签并失败；签名公钥在进程内不变。
+     */
+    private final ConcurrentHashMap<String, ManifestEntry> verifiedEntries = new ConcurrentHashMap<>();
 
     public ConchDistributionService(ConchRepository repository, ConchAvailabilityRepository availability,
             ConchStorage storage, SigningKeyStore keys, PackageVerifier verifier, ObjectMapper objectMapper) {
@@ -41,21 +48,20 @@ public class ConchDistributionService {
 
     public ManifestNegotiation manifest(String ifNoneMatch) {
         List<ManifestEntry> entries = new ArrayList<>();
+        HashMap<String, ManifestEntry> seen = new HashMap<>();
         for (VersionRow row : currentRows()) {
-            VerifiedConch verified = verifiedPackage(row);
-            McpPackageView.Projection mcp = McpPackageView.of(verified.conchDoc());
-            entries.add(new ManifestEntry(
-                    verified.manifest().conch(),
-                    verified.manifest().version(),
-                    verified.manifest().sha256(),
-                    verified.manifest().minCrabVersion(),
-                    verified.conchDoc().title(),
-                    verified.conchDoc().description(),
-                    verified.conchDoc().actions().size(),
-                    requiredCredentialNames(verified.conchDoc()),
-                    mcp.driver(),
-                    mcp.upstreamHost()));
+            byte[] zip = storage.readZip(row.conch(), row.version());
+            String digest = ConchHashes.sha256(zip);
+            ManifestEntry entry = verifiedEntries.get(digest);
+            if (entry == null) {
+                entry = entry(verified(zip));
+            }
+            seen.put(digest, entry);
+            entries.add(entry);
         }
+        // 只留当前清单用到的条目：换版本、停用后旧条目随之丢弃。
+        verifiedEntries.keySet().retainAll(seen.keySet());
+        verifiedEntries.putAll(seen);
         entries.sort(Comparator.comparing(ManifestEntry::conch));
         byte[] canonical;
         try {
@@ -118,7 +124,7 @@ public class ConchDistributionService {
     }
 
     private List<VersionRow> currentRows() {
-        List<VersionRow> currents = repository.listAll().stream().filter(VersionRow::current).toList();
+        List<VersionRow> currents = repository.listCurrent();
         long conches = currents.stream().map(VersionRow::conch).distinct().count();
         if (conches != currents.size()) {
             throw new ApiException(500, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message());
@@ -140,20 +146,33 @@ public class ConchDistributionService {
         } catch (IllegalArgumentException ex) {
             throw notFound();
         }
-        return repository.listAll().stream()
-                .filter(row -> row.conch().equals(conch) && row.version().equals(parsed.toString()))
+        return repository.find(conch, parsed.toString())
                 .filter(row -> "PUBLISHED".equals(row.status()))
-                .findFirst()
                 .orElseThrow(ConchDistributionService::notFound);
     }
 
-    private VerifiedConch verifiedPackage(VersionRow row) {
+    private VerifiedConch verified(byte[] zip) {
         try {
-            return verifier.verify(storage.readZip(row.conch(), row.version()), keys.publicKey());
+            return verifier.verify(zip, keys.publicKey());
         } catch (PackageVerificationException ex) {
             log.error("Published conch failed verification reason={}", ex.reason());
             throw new ApiException(500, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message());
         }
+    }
+
+    private static ManifestEntry entry(VerifiedConch verified) {
+        McpPackageView.Projection mcp = McpPackageView.of(verified.conchDoc());
+        return new ManifestEntry(
+                verified.manifest().conch(),
+                verified.manifest().version(),
+                verified.manifest().sha256(),
+                verified.manifest().minCrabVersion(),
+                verified.conchDoc().title(),
+                verified.conchDoc().description(),
+                verified.conchDoc().actions().size(),
+                requiredCredentialNames(verified.conchDoc()),
+                mcp.driver(),
+                mcp.upstreamHost());
     }
 
     private static ApiException notFound() {

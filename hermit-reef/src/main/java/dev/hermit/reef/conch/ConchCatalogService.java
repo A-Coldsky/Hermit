@@ -173,7 +173,7 @@ public class ConchCatalogService {
         if (conch == null || conch.isBlank() || conch.length() > 128 || !ConchPaths.singleSegment(conch)) {
             throw notFound();
         }
-        return repository.listAll().stream().filter(row -> row.conch().equals(conch)).toList();
+        return repository.listByConch(conch);
     }
 
     private ConchDoc readDoc(VersionRow row) {

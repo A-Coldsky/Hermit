@@ -15,7 +15,7 @@ Hermit 用声明式 YAML 规则包（Conch）描述老系统的登录、请求�
 | 编写 YAML 规则 | [规则包（Conch）参考](docs/conch-reference.md) |
 | 接入 HTTP、控制台或 MCP | [接口参考](docs/api.md) |
 | 了解已实现与未完成的能力 | [功能状态与测试证据](docs/feature-status.md) |
-| 查看当前风险和修复顺序 | [2026-11-12 代码复核](docs/audits/2026-11-12.md)；历史基线见 [2026-10-16 项目审计](docs/audits/2026-10-16.md) |
+| 查看当前风险和修复顺序 | [2026-11-22 整体复查](docs/audits/2026-11-22.md)；[2026-11-12 代码复核](docs/audits/2026-11-12.md)；历史基线见 [2026-10-16 项目审计](docs/audits/2026-10-16.md) |
 
 ## 构建
 

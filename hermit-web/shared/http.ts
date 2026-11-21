@@ -22,6 +22,24 @@ export class ApiError extends Error {
   }
 }
 
+/** 请求没有到达服务端，或者连接中途断开。不是 ApiError：没有状态码，也没有信封。 */
+export class NetworkError extends Error {
+  constructor(readonly cause: unknown) {
+    super('连不上服务：服务可能已停止，或者网络断开。请确认服务在运行后重试。')
+  }
+}
+
+async function send(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init)
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error
+    }
+    throw new NetworkError(error)
+  }
+}
+
 export interface ClientOptions {
   headers?: () => Record<string, string>
   onUnauthorized?: (error: ApiError) => void
@@ -35,7 +53,7 @@ export function createClient(options: ClientOptions = {}) {
   }
 
   async function text(path: string): Promise<string> {
-    const response = await fetch(path, { headers: options.headers?.() ?? {} })
+    const response = await send(path, { headers: options.headers?.() ?? {} })
     const body = await response.text()
     if (!response.ok) {
       throw fail(response.status, parseEnvelope(body))
@@ -45,7 +63,7 @@ export function createClient(options: ClientOptions = {}) {
 
   /** 二进制响应。不走 JSON 信封；失败时仍按信封解析错误。`cache: no-store` 避免浏览器留下图片。 */
   async function blob(path: string, query?: Query): Promise<Blob> {
-    const response = await fetch(withQuery(path, query), {
+    const response = await send(withQuery(path, query), {
       headers: options.headers?.() ?? {},
       cache: 'no-store',
     })
@@ -84,7 +102,7 @@ export function createClient(options: ClientOptions = {}) {
       headers['Content-Type'] = 'application/json'
       payload = JSON.stringify(body)
     }
-    const response = await fetch(withQuery(path, query), { method, headers, body: payload })
+    const response = await send(withQuery(path, query), { method, headers, body: payload })
     const parsed = parseEnvelope<T>(await response.text())
     if (!response.ok || !parsed || !parsed.success) {
       throw fail(response.status, parsed)

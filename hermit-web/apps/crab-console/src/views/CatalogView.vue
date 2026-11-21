@@ -7,6 +7,7 @@ import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { notifyError } from '@shared/format'
+import { useNarrow } from '@shared/narrow'
 import { api, type Catalog, type CatalogConch } from '../api'
 import { outcomeLabels, syncReasonLabels } from '../labels'
 import { refreshPending } from '../status'
@@ -14,6 +15,8 @@ import ShellSwapLoader from '../components/ShellSwapLoader.vue'
 import { unsubscribeMessage } from '../copy'
 import { repairConch, updateConch } from '../update'
 
+/** 手机上不固定操作列：固定列会盖住大半张表，前面几列读不到。 */
+const narrow = useNarrow()
 const router = useRouter()
 const loading = ref(true)
 const syncing = ref(false)
@@ -217,7 +220,7 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" align="right" fixed="right">
+        <el-table-column label="操作" width="200" align="right" :fixed="narrow ? false : 'right'">
           <template #default="{ row }">
             <el-button v-if="row.installed && !row.localConflict && !needsRepair(row)" link type="primary" @click="open(row)">管理</el-button>
             <el-button v-if="needsRepair(row)" link type="warning" :loading="busy === row.conch" data-test="repair" @click="repair(row)">修复</el-button>

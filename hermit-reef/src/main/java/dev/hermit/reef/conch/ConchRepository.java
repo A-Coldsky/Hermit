@@ -3,6 +3,7 @@ package dev.hermit.reef.conch;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -39,6 +40,29 @@ class ConchRepository {
                         + "published_by, published_at, is_current, validation_json, diff_json, pull_count "
                         + "FROM hermit_conch_versions ORDER BY conch, id",
                 ROWS);
+    }
+
+    private static final String COLUMNS =
+            "SELECT id, conch, version, sha256, min_crab_version, package_path, status, uploaded_by, uploaded_at, "
+                    + "published_by, published_at, is_current, validation_json, diff_json, pull_count "
+                    + "FROM hermit_conch_versions ";
+
+    /** 各规则包当前发布的那一行。Crab 每次轮询清单都会走到这里，不读其它版本。 */
+    List<VersionRow> listCurrent() {
+        return jdbc.query(COLUMNS + "WHERE is_current = TRUE ORDER BY conch, id", ROWS);
+    }
+
+    List<VersionRow> listByConch(String conch) {
+        // MySQL 的排序规则不分大小写，这里再按原文比一次，和 H2 上一致。
+        return jdbc.query(COLUMNS + "WHERE conch = ? ORDER BY id", ROWS, conch).stream()
+                .filter(row -> row.conch().equals(conch))
+                .toList();
+    }
+
+    Optional<VersionRow> find(String conch, String version) {
+        return jdbc.query(COLUMNS + "WHERE conch = ? AND version = ?", ROWS, conch, version).stream()
+                .filter(row -> row.conch().equals(conch) && row.version().equals(version))
+                .findFirst();
     }
 
     /**

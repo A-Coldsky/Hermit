@@ -775,6 +775,29 @@ class ConchApiTest {
     }
 
     @Test
+    void manifestNoticesAPackageChangedOnDiskAfterAnEarlierPoll() throws Exception {
+        upload(sample());
+        mockMvc.perform(post("/api/admin/conches/legacy_oa/versions/1.0.0/publish")
+                        .header(HttpHeaders.AUTHORIZATION, bearer()))
+                .andExpect(status().isOk());
+        String etag = manifestEtag("1.0.0");
+        assertThat(manifestEtag("1.0.0")).isEqualTo(etag);
+
+        Path stored = DATA.resolve("conches/legacy_oa/1.0.0/package.zip");
+        byte[] original = Files.readAllBytes(stored);
+        byte[] changed = original.clone();
+        changed[changed.length / 2] ^= 0x01;
+        Files.write(stored, changed);
+        try {
+            mockMvc.perform(agent("/agent/conches/manifest").header(HttpHeaders.IF_NONE_MATCH, etag))
+                    .andExpect(status().isInternalServerError());
+        } finally {
+            Files.write(stored, original);
+        }
+        assertThat(manifestEtag("1.0.0")).isEqualTo(etag);
+    }
+
+    @Test
     void disablingAConchDropsItFromTheManifestUntilItIsEnabled() throws Exception {
         byte[] sample = sample();
         upload(sample);

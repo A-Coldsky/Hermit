@@ -95,8 +95,7 @@ public final class Invoker {
     private final ConcurrentHashMap<String, CompletableFuture<Void>> idempotencyInFlight = new ConcurrentHashMap<>();
     private volatile ReportQueue reportQueue;
     private volatile KnownSecrets knownSecrets = KnownSecrets.empty();
-    private volatile DataSource versionSuccess;
-    private volatile Clock versionClock = Clock.systemUTC();
+    private volatile VersionSuccess versionSuccess;
     private volatile McpForwarder mcpForwarder;
     private volatile java.util.function.Predicate<String> ruleDisabled = name -> false;
     private volatile FileStage fileStage;
@@ -201,8 +200,7 @@ public final class Invoker {
 
     /** Successful official calls record the executed version so retention can keep it. */
     public void bindVersionSuccess(DataSource dataSource, Clock clock) {
-        this.versionSuccess = dataSource;
-        this.versionClock = clock == null ? Clock.systemUTC() : clock;
+        this.versionSuccess = dataSource == null ? null : new VersionSuccess(dataSource, clock);
     }
 
     public InvokeOutcome invoke(
@@ -665,10 +663,10 @@ public final class Invoker {
             }
         }
         if (result.success()) {
-            DataSource source = versionSuccess;
-            if (source != null) {
+            VersionSuccess recorder = versionSuccess;
+            if (recorder != null) {
                 try {
-                    VersionSuccess.record(source, invocation.conch(), version, Instant.now(versionClock));
+                    recorder.record(invocation.conch(), version);
                 } catch (RuntimeException ex) {
                     LOG.warning("version success hook failed: " + ex.getClass().getName());
                 }

@@ -6,10 +6,13 @@ import PageHeader from '@shared/components/PageHeader.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { ApiError } from '@shared/http'
 import { notifyError } from '@shared/format'
+import { useNarrow } from '@shared/narrow'
 import { api, type AdminRole, type AdminUser } from '../api'
 import { session } from '../auth'
 import { roleLabels, userErrorText } from '../labels'
 
+/** 手机上不固定操作列：固定列会盖住大半张表，前面几列读不到。 */
+const narrow = useNarrow()
 const loading = ref(true)
 const users = ref<AdminUser[]>([])
 const busy = ref<string | null>(null)
@@ -156,6 +159,7 @@ onMounted(load)
     </PageHeader>
 
     <div class="hm-card">
+      <p class="hm-scroll-hint">表格可以左右滑动，操作在最右侧。</p>
       <el-table v-loading="loading" :data="users">
         <template #empty>{{ loading ? '' : '没有用户' }}</template>
         <el-table-column label="用户名" min-width="160">
@@ -188,7 +192,7 @@ onMounted(load)
         <el-table-column label="创建" min-width="170">
           <template #default="{ row }"><TimeText :value="row.createdAt" /></template>
         </el-table-column>
-        <el-table-column label="操作" width="160" align="right" fixed="right">
+        <el-table-column label="操作" width="160" align="right" :fixed="narrow ? false : 'right'">
           <template #default="{ row }">
             <template v-if="!isSelf(row)">
               <el-button link type="primary" @click="openReset(row)">重置密码</el-button>

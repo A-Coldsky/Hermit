@@ -72,43 +72,104 @@ public final class FileStage implements AutoCloseable {
     }
 
     public StagedFile store(InputStream in, String name, String mime, String owner) {
+        Pending pending = begin(owner);
+        try {
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = in.read(buffer)) >= 0) {
+                pending.write(buffer, 0, read);
+            }
+            return pending.commit(name, mime);
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        } finally {
+            pending.abort();
+        }
+    }
+
+    /**
+     * 边收边写一个新文件，内容不整份留在内存里。写完调 {@link Pending#commit}，
+     * 中途放弃调 {@link Pending#abort}（提交之后再调没有效果）。
+     */
+    public Pending begin(String owner) {
         sweep();
         // 空文件不占字节数，另按个数拦。
         if (byId.size() >= MAX_FILES) {
             throw new FileStageException(FULL);
         }
-        FileStageSettings limits = settings;
         String fileId = "f_" + random(12);
         Path target = dir.resolve(fileId);
-        long written = 0;
-        long held = 0;
-        MessageDigest digest = sha256();
-        boolean done = false;
         try {
             Files.createDirectories(dir);
-            try (OutputStream out = Files.newOutputStream(target)) {
-                byte[] buffer = new byte[64 * 1024];
-                while (true) {
-                    int read = in.read(buffer);
-                    if (read < 0) {
-                        break;
-                    }
-                    written += read;
-                    if (written > limits.maxFileBytes()) {
-                        throw new FileStageException(TOO_LARGE);
-                    }
-                    // 按块占用总容量，并发上传不会一起越过上限。
-                    synchronized (capacity) {
-                        if (reserved + read > limits.maxTotalBytes()) {
-                            throw new FileStageException(FULL);
-                        }
-                        reserved += read;
-                    }
-                    held += read;
-                    digest.update(buffer, 0, read);
-                    out.write(buffer, 0, read);
-                }
+            return new Pending(fileId, target, Files.newOutputStream(target), owner, settings);
+        } catch (IOException ex) {
+            deleteQuietly(target);
+            throw new UncheckedIOException(ex);
+        }
+    }
+
+    /** 正在写入、还没进清单的文件。不是线程安全的，一次只由一个线程写。 */
+    public final class Pending {
+        private final String fileId;
+        private final Path target;
+        private final OutputStream out;
+        private final String owner;
+        private final FileStageSettings limits;
+        private final MessageDigest digest = sha256();
+        private long written;
+        private boolean closed;
+
+        private Pending(String fileId, Path target, OutputStream out, String owner, FileStageSettings limits) {
+            this.fileId = fileId;
+            this.target = target;
+            this.out = out;
+            this.owner = owner;
+            this.limits = limits;
+        }
+
+        /** 超过单文件上限或总容量时抛 {@link FileStageException}，文件已经丢弃。 */
+        public void write(byte[] buffer, int offset, int length) throws IOException {
+            if (closed) {
+                throw new IOException("staged file already closed");
             }
+            if (length <= 0) {
+                return;
+            }
+            try {
+                if (written + length > limits.maxFileBytes()) {
+                    throw new FileStageException(TOO_LARGE);
+                }
+                // 按块占用总容量，并发上传不会一起越过上限。
+                synchronized (capacity) {
+                    if (reserved + length > limits.maxTotalBytes()) {
+                        throw new FileStageException(FULL);
+                    }
+                    reserved += length;
+                }
+                written += length;
+                digest.update(buffer, offset, length);
+                out.write(buffer, offset, length);
+            } catch (IOException | RuntimeException ex) {
+                abort();
+                throw ex;
+            }
+        }
+
+        public long written() {
+            return written;
+        }
+
+        public StagedFile commit(String name, String mime) {
+            if (closed) {
+                throw new IllegalStateException("staged file already closed");
+            }
+            try {
+                out.close();
+            } catch (IOException ex) {
+                abort();
+                throw new UncheckedIOException(ex);
+            }
+            closed = true;
             Instant now = clock.instant();
             StagedFile file = new StagedFile(
                     fileId,
@@ -123,15 +184,21 @@ public final class FileStage implements AutoCloseable {
                     target);
             byId.put(fileId, file);
             byToken.put(file.token(), file);
-            done = true;
             return file;
-        } catch (IOException ex) {
-            throw new UncheckedIOException(ex);
-        } finally {
-            if (!done) {
-                release(held);
-                deleteQuietly(target);
+        }
+
+        public void abort() {
+            if (closed) {
+                return;
             }
+            closed = true;
+            try {
+                out.close();
+            } catch (IOException ignored) {
+                // 反正要删。
+            }
+            release(written);
+            deleteQuietly(target);
         }
     }
 

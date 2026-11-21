@@ -59,6 +59,32 @@ class FileStageTest {
     }
 
     @Test
+    void anAbandonedPartialFileLeavesNothingBehind() throws Exception {
+        FileStage stage = new FileStage(temp.resolve("files"), clock, new FileStageSettings(3600, 1024, 4096));
+        FileStage.Pending dropped = stage.begin("key-1");
+        dropped.write(bytes("12345"), 0, 5);
+        dropped.abort();
+        // 写到一半超过单文件上限：文件丢弃，占用的容量退回。
+        FileStage.Pending tooLarge = stage.begin("key-1");
+        tooLarge.write(new byte[1000], 0, 1000);
+        assertThatThrownBy(() -> tooLarge.write(new byte[25], 0, 25))
+                .isInstanceOf(FileStageException.class)
+                .hasMessage(FileStage.TOO_LARGE);
+
+        assertThat(stage.usage()).containsEntry("files", 0).containsEntry("bytes", 0L);
+        try (java.util.stream.Stream<Path> left = java.nio.file.Files.list(temp.resolve("files"))) {
+            assertThat(left).isEmpty();
+        }
+
+        FileStage.Pending kept = stage.begin("key-1");
+        kept.write(bytes("abc"), 0, 3);
+        StagedFile file = kept.commit("a.txt", "text/plain");
+        kept.abort();
+        assertThat(stage.read(stage.find(file.fileId(), "key-1").orElseThrow())).isEqualTo(bytes("abc"));
+        assertThat(stage.usage()).containsEntry("files", 1).containsEntry("bytes", 3L);
+    }
+
+    @Test
     void filesExpireAndTheirBytesAreFreed() {
         FileStage stage = new FileStage(temp.resolve("files"), clock, new FileStageSettings(60, 1024, 2048));
         StagedFile file = stage.store(new byte[1024], "a.bin", null, "key-1");

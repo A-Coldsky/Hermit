@@ -1,22 +1,34 @@
 package dev.hermit.crab.engine;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.SequenceInputStream;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.apache.hc.core5.http.HttpEntity;
+import org.apache.hc.core5.http.io.entity.AbstractHttpEntity;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.http.UrlComponents;
 import dev.hermit.common.validate.FileTransfers;
 import dev.hermit.crab.files.FileScope;
+import dev.hermit.crab.files.FileStage;
 import dev.hermit.crab.files.FileStageException;
 import dev.hermit.crab.files.StagedFile;
 
@@ -32,7 +44,76 @@ final class FileSteps {
     }
 
     /** {@code wire} 是写进追踪的请求体摘要：字段名和文件元数据，没有文件内容。 */
-    record Multipart(byte[] body, String contentType, String wire) {
+    record Multipart(HttpEntity entity, String contentType, String wire) {
+    }
+
+    /**
+     * multipart 请求体：文本段在内存里，文件段发送时才从暂存区读。长度事先算得出，
+     * 重定向或重发时可以再写一遍。
+     */
+    private static final class MultipartEntity extends AbstractHttpEntity {
+        /** 每一段是 {@code byte[]} 或 {@link StagedFile}。 */
+        private final List<Object> segments;
+        private final long length;
+
+        MultipartEntity(List<Object> segments) {
+            super((String) null, null);
+            this.segments = segments;
+            long total = 0;
+            for (Object segment : segments) {
+                total += segment instanceof byte[] bytes ? bytes.length : ((StagedFile) segment).size();
+            }
+            this.length = total;
+        }
+
+        @Override
+        public boolean isRepeatable() {
+            return true;
+        }
+
+        @Override
+        public long getContentLength() {
+            return length;
+        }
+
+        @Override
+        public boolean isStreaming() {
+            return false;
+        }
+
+        @Override
+        public InputStream getContent() throws IOException {
+            ArrayList<InputStream> streams = new ArrayList<>();
+            try {
+                for (Object segment : segments) {
+                    streams.add(segment instanceof byte[] bytes
+                            ? new ByteArrayInputStream(bytes)
+                            : Files.newInputStream(((StagedFile) segment).path()));
+                }
+            } catch (IOException ex) {
+                for (InputStream stream : streams) {
+                    stream.close();
+                }
+                throw ex;
+            }
+            return new SequenceInputStream(Collections.enumeration(streams));
+        }
+
+        @Override
+        public void writeTo(OutputStream out) throws IOException {
+            for (Object segment : segments) {
+                if (segment instanceof byte[] bytes) {
+                    out.write(bytes);
+                } else {
+                    Files.copy(((StagedFile) segment).path(), out);
+                }
+            }
+        }
+
+        @Override
+        public void close() {
+            // 没有常开的资源。
+        }
     }
 
     static boolean downloads(Map<String, Object> spec) {
@@ -55,6 +136,7 @@ final class FileSteps {
         byte[] seed = new byte[16];
         RANDOM.nextBytes(seed);
         String boundary = "----HermitCrab" + HexFormat.of().formatHex(seed);
+        ArrayList<Object> segments = new ArrayList<>();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ArrayList<String> summary = new ArrayList<>();
         for (Map.Entry<?, ?> part : parts.entrySet()) {
@@ -71,10 +153,8 @@ final class FileSteps {
                             ErrorCode.RULE_MISMATCH, "multipart." + field + ".file 没有渲染出 fileId", null, null, null);
                 }
                 StagedFile file;
-                byte[] bytes;
                 try {
                     file = scope().require(fileId);
-                    bytes = scope().stage().read(file);
                 } catch (FileStageException ex) {
                     throw new RuleProblem(ErrorCode.INVALID_INPUT, ex.getMessage(), null, null, null);
                 }
@@ -91,8 +171,10 @@ final class FileSteps {
                 ascii(out, "\"\r\nContent-Type: ");
                 text(out, oneLine(type), charset, field);
                 ascii(out, "\r\n\r\n");
-                out.writeBytes(bytes);
-                summary.add(field + "=<文件 " + name + "，" + bytes.length + " 字节，" + type
+                segments.add(out.toByteArray());
+                segments.add(file);
+                out.reset();
+                summary.add(field + "=<文件 " + name + "，" + file.size() + " 字节，" + type
                         + "，sha256 " + file.sha256() + ">");
             } else if (value instanceof String || value instanceof Number || value instanceof Boolean) {
                 ascii(out, "Content-Disposition: form-data; name=\"");
@@ -106,17 +188,15 @@ final class FileSteps {
             ascii(out, "\r\n");
         }
         ascii(out, "--" + boundary + "--\r\n");
+        segments.add(out.toByteArray());
         return new Multipart(
-                out.toByteArray(),
+                new MultipartEntity(List.copyOf(segments)),
                 "multipart/form-data; boundary=" + boundary,
                 "multipart/form-data\n" + String.join("\n", summary));
     }
 
-    /** 把 2xx 响应的正文存进暂存区，返回 {@code response.file} 的内容；其它状态返回 null。 */
-    static StagedFile save(Map<String, Object> spec, HttpResult result) {
-        if (result.status() < 200 || result.status() >= 300 || result.bodyBytes() == null) {
-            return null;
-        }
+    /** 下载的正文已经写完，定下文件名和类型，放进暂存区的清单。 */
+    static StagedFile commit(Map<String, Object> spec, HttpResult result, FileStage.Pending pending) {
         String name = null;
         if (spec.get("download") instanceof Map<?, ?> options
                 && options.get("filename") instanceof String given && !given.isBlank()) {
@@ -128,12 +208,7 @@ final class FileSteps {
         if (name == null) {
             name = pathName(result.url());
         }
-        try {
-            return scope().store(result.bodyBytes(), name, result.headers().get("content-type"));
-        } catch (FileStageException ex) {
-            throw new RuleProblem(
-                    ErrorCode.UPSTREAM_ERROR, ex.getMessage(), result.method(), result.path(), result.status());
-        }
+        return pending.commit(name, result.headers().get("content-type"));
     }
 
     static Map<String, Object> view(HttpResult result, StagedFile file) {

@@ -65,6 +65,10 @@ public final class FileScope {
         return stage.store(bytes, name, mime, owner);
     }
 
+    public FileStage.Pending begin() {
+        return stage.begin(owner);
+    }
+
     public Map<String, Object> view(StagedFile file) {
         return file.view(baseUrl);
     }

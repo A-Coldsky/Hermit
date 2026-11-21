@@ -58,6 +58,9 @@ import dev.hermit.common.http.HostNames;
 import dev.hermit.common.http.UrlComponents;
 import dev.hermit.common.validate.FileTransfers;
 import dev.hermit.common.validate.RequestBodies;
+import dev.hermit.crab.files.FileStage;
+import dev.hermit.crab.files.FileStageException;
+import dev.hermit.crab.files.StagedFile;
 import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.tls.TransportFailure;
 
@@ -163,11 +166,23 @@ final class HttpCalls {
         }
         FILE_MODE.set(mode);
         try {
-            return run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle);
+            HttpResult result = run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle);
+            if (mode.pending == null) {
+                return result;
+            }
+            FileStage.Pending pending = mode.pending;
+            return result.withFile(FileSteps.commit(spec, result, pending));
         } finally {
+            // 提交过的再放弃没有效果；没走到提交的（后面的步骤出错）在这里丢掉，不占暂存区。
+            if (mode.pending != null) {
+                mode.pending.abort();
+            }
             FILE_MODE.remove();
         }
     }
+
+    /** 占位：请求体是 {@link FileMode#upload}，不是这个数组。 */
+    private static final byte[] MULTIPART_BODY = new byte[0];
 
     private static final ThreadLocal<FileMode> FILE_MODE = new ThreadLocal<>();
 
@@ -175,6 +190,10 @@ final class HttpCalls {
         /** 大于 0 时是 download：响应正文按文件收，不解码成文本。 */
         long bodyLimit;
         String wireBody;
+        /** multipart 的请求体：按段写出，文件直接从暂存区读，不整份进内存。 */
+        HttpEntity upload;
+        /** download 正在写入暂存区的文件。 */
+        FileStage.Pending pending;
     }
 
     private static HttpResult run(
@@ -221,9 +240,10 @@ final class HttpCalls {
         String multipartType = null;
         if (spec.get("multipart") != null) {
             FileSteps.Multipart multipart = FileSteps.multipart(spec.get("multipart"), charset);
-            body = multipart.body();
+            body = MULTIPART_BODY;
             multipartType = multipart.contentType();
             FILE_MODE.get().wireBody = multipart.wire();
+            FILE_MODE.get().upload = multipart.entity();
         } else if (spec.get("form") != null) {
             Map<String, Object> form = optionalMap(spec.get("form"), "form");
             String encoded = appendQuery(null, form, charset, true, "form", warnings);
@@ -543,7 +563,9 @@ final class HttpCalls {
                 .build());
         if (body != null) {
             // 实体不带 ContentType，避免客户端按字符集再序列化或补 charset。
-            request.setEntity(new ByteArrayEntity(body, (ContentType) null));
+            request.setEntity(body == MULTIPART_BODY
+                    ? FILE_MODE.get().upload
+                    : new ByteArrayEntity(body, (ContentType) null));
             if (contentType != null && !contentType.isEmpty()) {
                 if (unsendableHeader(contentType)) {
                     throw new RuleProblem(
@@ -839,6 +861,17 @@ final class HttpCalls {
         InputStream in = entity.getContent();
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
+            if (asFile) {
+                // 文件边收边写进暂存区，不整份留在内存里。
+                if (mode.pending != null) {
+                    mode.pending.abort();
+                }
+                try {
+                    mode.pending = FileSteps.scope().begin();
+                } catch (FileStageException ex) {
+                    throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, ex.getMessage(), method, path, status);
+                }
+            }
             byte[] buffer = new byte[8192];
             long total = 0;
             while (true) {
@@ -880,7 +913,15 @@ final class HttpCalls {
                 if (total > limit) {
                     throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, tooLarge, method, path, status);
                 }
-                out.write(buffer, 0, read);
+                if (asFile) {
+                    try {
+                        mode.pending.write(buffer, 0, read);
+                    } catch (FileStageException ex) {
+                        throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, ex.getMessage(), method, path, status);
+                    }
+                } else {
+                    out.write(buffer, 0, read);
+                }
             }
         } finally {
             if (watch != null) {
@@ -1476,7 +1517,8 @@ final class HttpCalls {
                     sessionLost,
                     bodyBytes,
                     List.copyOf(all),
-                    wire);
+                    wire,
+                    null);
         }
     }
 }
@@ -1492,8 +1534,14 @@ record HttpResult(
         boolean sessionLost,
         byte[] bodyBytes,
         List<TraceWarning> warnings,
-        Map<String, Object> wire
+        Map<String, Object> wire,
+        StagedFile file
 ) {
+    HttpResult withFile(StagedFile saved) {
+        return new HttpResult(
+                status, url, method, path, headers, body, redirect, sessionLost, bodyBytes, warnings, wire, saved);
+    }
+
     Map<String, Object> view() {
         LinkedHashMap<String, Object> view = new LinkedHashMap<>();
         view.put("status", status);

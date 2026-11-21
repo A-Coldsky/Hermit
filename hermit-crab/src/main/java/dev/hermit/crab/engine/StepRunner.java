@@ -159,7 +159,7 @@ final class StepRunner {
             }
             throw ex;
         }
-        dev.hermit.crab.files.StagedFile saved = FileSteps.downloads(spec) ? FileSteps.save(spec, result) : null;
+        dev.hermit.crab.files.StagedFile saved = result.file();
         vars.put("response", FileSteps.view(result, saved));
         if (!capture) {
             return new Outcome(

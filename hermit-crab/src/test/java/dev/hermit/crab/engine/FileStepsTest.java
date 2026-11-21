@@ -14,13 +14,25 @@ class FileStepsTest {
     void syntaxStaysAsciiAndValuesFollowTheStepEncoding() {
         FileSteps.Multipart utf16 = FileSteps.multipart(Map.of("note", "你好"), StandardCharsets.UTF_16BE);
         String boundary = utf16.contentType().substring(utf16.contentType().indexOf("boundary=") + 9);
-        String raw = new String(utf16.body(), StandardCharsets.ISO_8859_1);
+        String raw = new String(body(utf16), StandardCharsets.ISO_8859_1);
         assertThat(raw).startsWith("--" + boundary + "\r\nContent-Disposition: form-data; name=\"");
         assertThat(raw).endsWith("\r\n--" + boundary + "--\r\n");
-        assertThat(utf16.body()).containsSequence("你好".getBytes(StandardCharsets.UTF_16BE));
+        assertThat(body(utf16)).containsSequence("你好".getBytes(StandardCharsets.UTF_16BE));
 
         FileSteps.Multipart gbk = FileSteps.multipart(Map.of("note", "你好"), Charset.forName("GBK"));
-        assertThat(gbk.body()).containsSequence("你好".getBytes(Charset.forName("GBK")));
+        assertThat(body(gbk)).containsSequence("你好".getBytes(Charset.forName("GBK")));
+    }
+
+    private static byte[] body(FileSteps.Multipart multipart) {
+        try {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            multipart.entity().writeTo(out);
+            assertThat(multipart.entity().getContentLength()).isEqualTo(out.size());
+            assertThat(multipart.entity().getContent().readAllBytes()).isEqualTo(out.toByteArray());
+            return out.toByteArray();
+        } catch (java.io.IOException ex) {
+            throw new java.io.UncheckedIOException(ex);
+        }
     }
 
     @Test

@@ -215,6 +215,34 @@ class ConfigAuditReadTest {
                 .orElseThrow();
     }
 
+    @Test
+    void purgeDropsOnlyEntriesOlderThanTheCutoff() throws Exception {
+        Instant cutoff = Instant.parse("2026-01-01T00:00:00Z");
+        insert(cutoff.minusSeconds(1), Actors.CONSOLE, "SYNC_REQUESTED", "sync", "{}");
+        insert(cutoff, Actors.CONSOLE, "DEBUG_CHANGED", "debug", "{}");
+
+        assertThat(AuditLog.purgeBefore(fixture.dataSource, cutoff)).isEqualTo(1);
+
+        AuditLog.Page page = AuditLog.page(fixture.dataSource, null, null, 1, 50);
+        assertThat(page.entries()).extracting(AuditLog.Entry::action).containsExactly("DEBUG_CHANGED");
+    }
+
+    @Test
+    void atomicWritesAcrossStoresRollBackTogether() {
+        AccountStore accounts = fixture.accounts;
+        assertThatThrownBy(() -> ConchLocks.atomic(fixture.dataSource, Origin.OFFICIAL, "oa", () -> {
+            accounts.create(Origin.OFFICIAL, "oa", "alice", Actors.CLI);
+            fixture.vault.write(Origin.OFFICIAL, "oa", "alice", Map.of("password", PASSWORD), Actors.CLI);
+            throw new IllegalStateException("boom");
+        })).hasMessage("boom");
+
+        assertThat(accounts.list(Origin.OFFICIAL, "oa")).isEmpty();
+        assertThat(AuditLog.page(fixture.dataSource, null, null, 1, 50).entries()).isEmpty();
+        // 事务结束后同一线程的写入照常各自提交。
+        accounts.create(Origin.OFFICIAL, "oa", "alice", Actors.CLI);
+        assertThat(accounts.list(Origin.OFFICIAL, "oa")).hasSize(1);
+    }
+
     private void insert(Instant at, String actor, String kind, String target, String detail) throws Exception {
         try (Connection connection = fixture.dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement("""

@@ -35,6 +35,18 @@ public final class AuditLog {
         });
     }
 
+    public static int purgeBefore(DataSource dataSource, Instant cutoff) {
+        Objects.requireNonNull(dataSource, "dataSource");
+        Objects.requireNonNull(cutoff, "cutoff");
+        return Db.transaction(dataSource, connection -> {
+            try (java.sql.PreparedStatement statement = connection.prepareStatement(
+                    "DELETE FROM config_audit WHERE at < ?")) {
+                Db.setInstant(statement, 1, cutoff);
+                return statement.executeUpdate();
+            }
+        });
+    }
+
     /**
      * Newest first ({@code at}, then {@code id}). Blank conch or account means no filter.
      * {@code page} is 1-based. {@code limit} is from 1 through {@link #MAX_LIMIT}.

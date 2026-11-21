@@ -27,14 +27,24 @@ public final class VersionSuccess {
         if (!ConchFiles.safeSegment(conch) || !ConchFiles.safeSegment(version)) {
             return;
         }
-        Instant now = clock.instant();
-        Stamp last = written.get(conch);
-        if (last != null && last.version().equals(version)
-                && Duration.between(last.at(), now).abs().compareTo(MIN_INTERVAL) < 0) {
+        Stamp seen = written.get(conch);
+        if (fresh(seen, version, clock.instant())) {
             return;
         }
-        new SyncStore(dataSource).recordSuccess(conch, version, now);
-        written.put(conch, new Stamp(version, now));
+        // 判断、写库、记下这次写入在同一个规则包上排队：两个版本并发成功时，内存里记的和库里最新的是同一条。
+        written.compute(conch, (key, last) -> {
+            Instant now = clock.instant();
+            if (fresh(last, version, now)) {
+                return last;
+            }
+            new SyncStore(dataSource).recordSuccess(conch, version, now);
+            return new Stamp(version, now);
+        });
+    }
+
+    private static boolean fresh(Stamp last, String version, Instant now) {
+        return last != null && last.version().equals(version)
+                && Duration.between(last.at(), now).abs().compareTo(MIN_INTERVAL) < 0;
     }
 
     public static void record(DataSource dataSource, String conch, String version, Instant at) {

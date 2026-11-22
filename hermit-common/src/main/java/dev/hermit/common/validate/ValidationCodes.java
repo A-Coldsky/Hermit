@@ -67,6 +67,11 @@ public final class ValidationCodes {
     /** {@code status} 的字面量不是数字。含模板时不报。警告，不阻止保存。 */
     public static final String ASSERT_STATUS = "ASSERT_STATUS";
 
+    /** {@code if} 或 {@code repeat} 写法不对：缺 then / steps / max、未知的键、嵌套过深等。阻止保存。 */
+    public static final String FLOW_STEP = "FLOW_STEP";
+    /** request 的 {@code retry} 写法不对，或用在了不能重复提交的请求上。阻止保存。 */
+    public static final String RETRY = "RETRY";
+
     private ValidationCodes() {
     }
 }

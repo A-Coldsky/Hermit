@@ -794,7 +794,7 @@ async function disconnect(account: Account) {
           <span class="hm-muted">请求编号</span>
           <span class="mono">{{ testResult.requestId }}</span>
           <el-button link :icon="CopyDocument" aria-label="复制请求编号" @click="copyText(testResult.requestId, '请求编号已复制')" />
-          <span class="hm-muted">执行前就被拒绝了，没有追踪可查。</span>
+          <span class="hm-muted">{{ testResult.requestNote || '测试登录不记录调用追踪。' }}</span>
         </template>
       </template>
     </el-result>

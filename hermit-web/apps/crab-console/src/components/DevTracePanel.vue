@@ -130,7 +130,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
               <dt>{{ step.wire ? '规则请求头' : '请求头' }}</dt>
               <dd><JsonBlock :value="step.requestHeaders" /></dd>
             </template>
-            <template v-if="step.requestBody !== undefined">
+            <template v-if="step.requestBody != null">
               <dt>{{ step.wire ? '规则请求体' : '请求体' }}</dt>
               <dd><JsonBlock :value="step.requestBody" /></dd>
             </template>
@@ -138,7 +138,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
               <dt>响应头</dt>
               <dd><JsonBlock :value="step.responseHeaders" /></dd>
             </template>
-            <template v-if="step.responseBody !== undefined">
+            <template v-if="step.responseBody != null">
               <dt>响应体</dt>
               <dd><JsonBlock :value="step.responseBody" /></dd>
             </template>
@@ -165,6 +165,17 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
             <template v-if="step.extractors?.length">
               <dt>提取</dt>
               <dd>{{ step.extractors.join('、') }}</dd>
+            </template>
+            <template v-if="step.variables?.length">
+              <dt>变量</dt>
+              <dd data-test="step-variables">
+                <ul class="variables">
+                  <li v-for="(item, idx) in step.variables" :key="`${item.name}-${idx}`" class="var-item">
+                    <span class="mono var-name">{{ item.name }}</span>
+                    <JsonBlock :value="item.summary" />
+                  </li>
+                </ul>
+              </dd>
             </template>
             <template v-if="step.assertions?.length">
               <dt>断言</dt>
@@ -269,5 +280,24 @@ h4 {
 
 :deep(.el-collapse-item__header) {
   gap: 8px;
+}
+
+.variables {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.var-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.var-name {
+  font-weight: 600;
 }
 </style>

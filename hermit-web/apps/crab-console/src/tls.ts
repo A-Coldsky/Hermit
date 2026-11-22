@@ -23,7 +23,7 @@ export function caFileError(name: string, detail: string): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-const TLS_KINDS = new Set(['TLS_UNTRUSTED', 'TLS_INTERMEDIATE', 'TLS_HOSTNAME', 'TLS_EXPIRED', 'TLS_OTHER'])
+const PINNABLE_TLS_KINDS = new Set(['TLS_UNTRUSTED', 'TLS_INTERMEDIATE', 'TLS_HOSTNAME', 'TLS_EXPIRED', 'TLS_OTHER'])
 
 const TLS_PHRASES = [
   '上游证书不受信任',
@@ -41,7 +41,13 @@ export const transportKindLabels: Record<string, string> = {
   TLS_INTERMEDIATE: '缺少中间证书',
   TLS_HOSTNAME: '证书与地址不符',
   TLS_EXPIRED: '证书已过期',
+  TLS_PROTOCOL: 'TLS 协议版本过旧',
+  TLS_CIPHER: '没有共同支持的加密套件',
+  TLS_CERT_ALGORITHM: '证书算法或密钥不受支持',
+  TLS_SNI: '站点拒绝了 SNI 主机名',
   TLS_OTHER: '安全连接失败',
+  NO_RESPONSE: '站点没有返回响应',
+  HEADER_LIMIT: '响应头超出上限',
   OTHER: '连接失败',
 }
 
@@ -55,7 +61,12 @@ export const sourceFallbackLabels: Record<string, string> = {
 export const PIN_NOTE = '只信任这一张证书。证书到期或这个站点更换证书后，需要重新确认。'
 
 export function isTlsKind(kind: string | null | undefined): boolean {
-  return !!kind && (TLS_KINDS.has(kind) || kind.startsWith('TLS_'))
+  return !!kind && (PINNABLE_TLS_KINDS.has(kind) || kind.startsWith('TLS_'))
+}
+
+/** 可通过信任站点证书或检查证书到期来处理的 TLS 失败种类。协议、套件、算法、SNI 问题不能靠登记证书绕过。 */
+export function isPinnableTlsKind(kind: string | null | undefined): boolean {
+  return !!kind && PINNABLE_TLS_KINDS.has(kind)
 }
 
 /** 错误码仍是 UPSTREAM_ERROR，只能从种类或消息判断是不是 TLS。 */
@@ -82,7 +93,11 @@ export function trustLocation(input: {
   host?: string | null
   port?: number | null
 }): { path: '/trust'; query: Record<string, string> } | null {
-  if (!isTlsFailure(input)) return null
+  if (input.kind) {
+    if (!isPinnableTlsKind(input.kind)) return null
+  } else if (!isTlsFailure(input)) {
+    return null
+  }
   const parsed = input.message ? endpointFromMessage(input.message) : null
   const host = (input.host || parsed?.host || '').trim()
   const port = input.port || parsed?.port
@@ -141,8 +156,20 @@ export function plainFailure(input: { kind: string; host: string }): string {
       return `这个站点出示的证书和地址 ${host} 对不上。请先确认地址没有填错，再决定要不要信任它。`
     case 'TLS_EXPIRED':
       return `这个站点的证书已经过期。确认地址是 ${host} 无误后，可以看一下到期时间；过期的证书信任了也不会放行。`
+    case 'TLS_PROTOCOL':
+      return `${host} 只支持过旧的 TLS 协议（如 TLS 1.0/1.1），本机默认不连接。信任证书无法解决这个问题。`
+    case 'TLS_CIPHER':
+      return `和 ${host} 协商安全连接失败，常见原因是对方只提供已禁用的加密方式。信任证书无法解决这个问题。`
+    case 'TLS_CERT_ALGORITHM':
+      return `${host} 的证书使用了已禁用的算法或过短的密钥（如 RSA 512），需要对方更换证书。信任证书无法解决这个问题。`
+    case 'TLS_SNI':
+      return `${host} 拒绝了连接时发出的主机名（SNI）。请确认地址是否正确，或改用 IP 或单标签名。`
     case 'TLS_OTHER':
       return `和 ${host} 建立安全连接没有成功。可以打开详情查看原因。`
+    case 'NO_RESPONSE':
+      return `${host} 接受了连接，但没有返回 HTTP 响应。`
+    case 'HEADER_LIMIT':
+      return `${host} 返回的响应头超过了长度或数量上限。`
     case 'DNS':
       return `找不到地址 ${host}。请检查名称是否写对。这通常不是证书问题。`
     case 'REFUSED':

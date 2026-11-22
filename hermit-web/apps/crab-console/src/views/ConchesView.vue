@@ -38,6 +38,7 @@ import { updateConch } from '../update'
 
 const router = useRouter()
 const loading = ref(true)
+const loadFailed = ref(false)
 const conches = ref<ConchSummary[]>([])
 const broken = ref<LocalConchEntry[]>([])
 const deleting = ref<string | null>(null)
@@ -282,8 +283,10 @@ async function load() {
     conches.value = nextConches
     broken.value = nextBroken
     rememberPending(nextPending)
+    loadFailed.value = false
     void refreshPending()
   } catch (error) {
+    loadFailed.value = true
     notifyError(error)
   } finally {
     loading.value = false
@@ -300,6 +303,14 @@ function rejectKey(conch: string) {
 
 function restoreKey(conch: string, id: string) {
   return `restore:${conch}:${id}`
+}
+
+function rollbackKey(conch: string) {
+  return `rollback:${conch}`
+}
+
+function updateKey(conch: string) {
+  return `update:${conch}`
 }
 
 function restoreLoadingId(conch: string): string | null {
@@ -413,7 +424,8 @@ async function rollbackListed(row: ConchSummary) {
   } catch {
     return
   }
-  acting.value = row.conch
+  const key = rollbackKey(row.conch)
+  acting.value = key
   try {
     await api.rollback(row.conch)
     ElMessage.success(`已退回 v${row.previousVersion}`)
@@ -421,12 +433,13 @@ async function rollbackListed(row: ConchSummary) {
   } catch (error) {
     notifyError(error)
   } finally {
-    acting.value = null
+    if (acting.value === key) acting.value = null
   }
 }
 
 async function updateListed(row: ConchSummary) {
-  acting.value = row.conch
+  const key = updateKey(row.conch)
+  acting.value = key
   try {
     if (await updateConch({
       conch: row.conch,
@@ -437,7 +450,7 @@ async function updateListed(row: ConchSummary) {
       await load()
     }
   } finally {
-    acting.value = null
+    if (acting.value === key) acting.value = null
   }
 }
 
@@ -452,6 +465,18 @@ onMounted(load)
       <el-button type="primary" :icon="Upload" :loading="importing" @click="pickFile">导入本地规则包</el-button>
       <input ref="fileInput" type="file" accept=".yaml,.yml" class="file" data-test="local-file" @change="importFile" />
     </PageHeader>
+
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      class="load-failed"
+      :title="conches.length || broken.length ? '规则包列表刷新失败，下面是上一次读到的内容' : '规则包列表读取失败'"
+      data-test="conches-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
 
     <p v-if="pendingDropped" class="pending-conflict pending-dropped" data-test="pending-dropped" role="alert">
       {{ pendingDropped }}
@@ -595,16 +620,18 @@ onMounted(load)
             type="primary"
             class="card-action"
             data-test="rollback"
-            :loading="acting === row.conch"
+            :loading="acting === rollbackKey(row.conch)"
             @click.stop="rollbackListed(row)"
+            @keyup.enter.stop
           >退回 v{{ row.previousVersion }}</el-button>
           <el-button
             v-if="row.updateAvailable"
             link
             type="primary"
             class="card-action"
-            :loading="acting === row.conch"
+            :loading="acting === updateKey(row.conch)"
             @click.stop="updateListed(row)"
+            @keyup.enter.stop
           >更新到 v{{ row.latestVersion }}</el-button>
           <span class="manage">管理<el-icon><ArrowRight /></el-icon></span>
         </div>
@@ -652,11 +679,12 @@ onMounted(load)
             :icon="Delete"
             :loading="deleting === row.conch"
             @click.stop="removeBroken(row)"
+            @keyup.enter.stop
           >删除</el-button>
         </div>
       </div>
     </div>
-    <div v-else-if="!loading && !pendingOverwrites.length" class="hm-card empty">
+    <div v-else-if="!loading && !loadFailed && !pendingOverwrites.length" class="hm-card empty">
       还没有规则包。到<router-link to="/catalog">可订阅规则包</router-link>订阅 Reef 上的规则包，或导入本地规则包
     </div>
 
@@ -713,6 +741,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.load-failed {
+  margin-bottom: 16px;
+}
+
 /* 卡片上的「退回」「更新到」和正文同一字号。 */
 .card-action {
   font-size: 12.5px;
@@ -720,7 +752,7 @@ onMounted(load)
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
   gap: 16px;
 }
 

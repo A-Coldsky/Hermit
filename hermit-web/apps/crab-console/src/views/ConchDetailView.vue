@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Delete, Download, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
@@ -108,8 +108,14 @@ function resolvedTab(): DetailTab {
   return tabChoices().includes(requested as DetailTab) ? (requested as DetailTab) : fallbackTab()
 }
 
+let unmounted = false
+let loadSeq = 0
+onBeforeUnmount(() => {
+  unmounted = true
+})
+
 watch(tab, (value) => {
-  if (!tabsReady.value || route.query.tab === value) return
+  if (unmounted || !tabsReady.value || route.query.tab === value) return
   void router.replace({ query: { ...route.query, tab: value } })
 })
 
@@ -123,7 +129,7 @@ watch(
 )
 
 function settleTabs() {
-  if (!detail.value || detail.value.repairRequired) return
+  if (unmounted || !detail.value || detail.value.repairRequired) return
   const next = resolvedTab()
   tabsReady.value = true
   if (tab.value !== next) tab.value = next
@@ -156,29 +162,38 @@ const bannerTitle = computed(() => {
   return '默认账号可以调用，部分账号需要处理'
 })
 
-async function fetchParts(): Promise<[Account[], Record<string, ConfigValue>]> {
-  const [a, c] = await Promise.all([api.accounts(props.conch), api.config(props.conch)])
+async function fetchParts(conch: string = props.conch): Promise<[Account[], Record<string, ConfigValue>]> {
+  const [a, c] = await Promise.all([api.accounts(conch), api.config(conch)])
   return [a.accounts, c.fields]
 }
 
 async function reloadParts() {
+  const seq = loadSeq
+  const target = props.conch
   try {
-    ;[accounts.value, config.value] = await fetchParts()
+    const [nextAccounts, nextConfig] = await fetchParts(target)
+    if (unmounted || seq !== loadSeq) return
+    accounts.value = nextAccounts
+    config.value = nextConfig
     partsFailed.value = false
     void refreshPending()
   } catch (error) {
+    if (unmounted || seq !== loadSeq) return
     partsFailed.value = true
     notifyError(error)
   }
 }
 
 async function load() {
+  const seq = ++loadSeq
+  const target = props.conch
   loading.value = true
   missing.value = false
   let next: ConchDetail
   try {
-    next = await api.conch(props.conch)
+    next = await api.conch(target)
   } catch (error) {
+    if (unmounted || seq !== loadSeq) return
     detail.value = null
     if (error instanceof ApiError && error.status === 404) {
       missing.value = true
@@ -188,6 +203,7 @@ async function load() {
     loading.value = false
     return
   }
+  if (unmounted || seq !== loadSeq) return
   if (next.repairRequired) {
     accounts.value = []
     config.value = {}
@@ -197,10 +213,14 @@ async function load() {
     return
   }
   try {
-    ;[accounts.value, config.value] = await fetchParts()
+    const [nextAccounts, nextConfig] = await fetchParts(target)
+    if (unmounted || seq !== loadSeq) return
+    accounts.value = nextAccounts
+    config.value = nextConfig
     partsFailed.value = false
     void refreshPending()
   } catch (error) {
+    if (unmounted || seq !== loadSeq) return
     partsFailed.value = true
     notifyError(error)
   }
@@ -217,8 +237,11 @@ const swap = ref<string | null>(null)
 
 async function loadDebug() {
   try {
-    debug.value = await api.debug()
+    const next = await api.debug()
+    if (unmounted) return
+    debug.value = next
   } catch {
+    if (unmounted) return
     debug.value = { enabled: false, expiresAt: null }
   }
 }
@@ -437,6 +460,8 @@ watch(
     detail.value = null
     accounts.value = []
     config.value = {}
+    partsFailed.value = false
+    toReef.open = false
     void load()
     void loadDebug()
   },

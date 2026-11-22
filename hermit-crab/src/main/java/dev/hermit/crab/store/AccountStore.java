@@ -5,6 +5,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -15,9 +16,15 @@ import java.util.Optional;
 
 public final class AccountStore {
     private final DataSource dataSource;
+    private final Clock clock;
 
     public AccountStore(DataSource dataSource) {
+        this(dataSource, Clock.systemUTC());
+    }
+
+    public AccountStore(DataSource dataSource, Clock clock) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     public Account create(Origin origin, String conch, String account, String actor) {
@@ -31,7 +38,7 @@ public final class AccountStore {
                     throw new IllegalStateException("account already exists");
                 }
                 boolean first = count(connection, checkedOrigin, checkedConch) == 0;
-                Instant now = Instant.now();
+                Instant now = clock.instant();
                 try (PreparedStatement statement = connection.prepareStatement("""
                         INSERT INTO accounts (origin, conch, account, is_default, created_at)
                         VALUES (?, ?, ?, ?, ?)
@@ -48,6 +55,7 @@ public final class AccountStore {
                 detail.put("default", first);
                 ConfigAudit.append(
                         connection,
+                        now,
                         checkedActor,
                         AuditKind.ACCOUNT_CREATED,
                         ConfigAudit.target(checkedOrigin, checkedConch, checkedAccount),
@@ -88,6 +96,7 @@ public final class AccountStore {
                 }
                 ConfigAudit.append(
                         connection,
+                        clock.instant(),
                         checkedActor,
                         AuditKind.DEFAULT_CHANGED,
                         ConfigAudit.target(checkedOrigin, checkedConch, checkedAccount),
@@ -131,6 +140,7 @@ public final class AccountStore {
                 }
                 ConfigAudit.append(
                         connection,
+                        clock.instant(),
                         checkedActor,
                         AuditKind.ACCOUNT_DELETED,
                         ConfigAudit.target(checkedOrigin, checkedConch, checkedAccount),

@@ -8,6 +8,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -29,10 +30,16 @@ import java.util.Set;
 public final class CredentialVault {
     private final DataSource dataSource;
     private final CredentialCipher cipher;
+    private final Clock clock;
 
     public CredentialVault(DataSource dataSource, CredentialCipher cipher) {
+        this(dataSource, cipher, Clock.systemUTC());
+    }
+
+    public CredentialVault(DataSource dataSource, CredentialCipher cipher, Clock clock) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.cipher = Objects.requireNonNull(cipher, "cipher");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     /** True when any credential ciphertext is stored. Used before generating a missing master key. */
@@ -113,7 +120,7 @@ public final class CredentialVault {
                 }
                 List<String> written = new ArrayList<>();
                 List<String> cleared = new ArrayList<>();
-                Instant now = Instant.now();
+                Instant now = clock.instant();
                 for (Map.Entry<String, String> entry : snapshot.entrySet()) {
                     if (entry.getValue().isEmpty()) {
                         deleteField(connection, checkedOrigin, checkedConch, checkedAccount, entry.getKey());
@@ -132,6 +139,7 @@ public final class CredentialVault {
                 detail.put("cleared", cleared);
                 ConfigAudit.append(
                         connection,
+                        now,
                         checkedActor,
                         AuditKind.CREDENTIALS_WRITTEN,
                         ConfigAudit.target(checkedOrigin, checkedConch, checkedAccount),

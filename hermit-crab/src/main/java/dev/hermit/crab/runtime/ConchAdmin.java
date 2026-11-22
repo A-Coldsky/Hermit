@@ -1,5 +1,6 @@
 package dev.hermit.crab.runtime;
 
+import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -44,6 +45,7 @@ public final class ConchAdmin {
     private final RuleEngine engine;
     private final ConchRegistry registry;
     private final DisabledConches disabledConches;
+    private final Clock clock;
     private volatile Consumer<SessionKey> accountRemoved = key -> { };
     private volatile Function<String, Optional<ConchDoc>> stagedDeclarations = name -> Optional.empty();
     private volatile Function<String, Origin> originFallback = name -> null;
@@ -59,6 +61,21 @@ public final class ConchAdmin {
             ConchRegistry registry,
             DisabledConches disabledConches
     ) {
+        this(dataSource, accounts, vault, config, apiKeys, sessions, engine, registry, disabledConches, Clock.systemUTC());
+    }
+
+    public ConchAdmin(
+            DataSource dataSource,
+            AccountStore accounts,
+            CredentialVault vault,
+            ConchConfigStore config,
+            ApiKeyService apiKeys,
+            SessionManager sessions,
+            RuleEngine engine,
+            ConchRegistry registry,
+            DisabledConches disabledConches,
+            Clock clock
+    ) {
         this.dataSource = dataSource;
         this.accounts = accounts;
         this.vault = vault;
@@ -68,6 +85,7 @@ public final class ConchAdmin {
         this.engine = engine;
         this.registry = registry;
         this.disabledConches = disabledConches == null ? DisabledConches.none() : disabledConches;
+        this.clock = clock == null ? Clock.systemUTC() : clock;
     }
 
     /**
@@ -243,6 +261,7 @@ public final class ConchAdmin {
         sessions.invalidate(key);
         AuditLog.record(
                 dataSource,
+                clock.instant(),
                 actor,
                 AuditKind.TEST_LOGIN,
                 source.name() + "/" + doc.conch() + "/" + resolved.account(),

@@ -1380,7 +1380,8 @@ public final class LocalConches {
         if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor) && !Actors.MCP.equals(actor)) {
             return;
         }
-        AuditLog.record(dataSource, actor, kind, Origin.LOCAL.name() + "/" + body.get("conch"), ApiJson.write(body));
+        AuditLog.record(
+                dataSource, clock.instant(), actor, kind, Origin.LOCAL.name() + "/" + body.get("conch"), ApiJson.write(body));
     }
 
     private void audit(String actor, AuditKind kind, ConchDoc doc) {
@@ -1393,6 +1394,7 @@ public final class LocalConches {
         }
         AuditLog.record(
                 dataSource,
+                clock.instant(),
                 actor,
                 kind,
                 Origin.LOCAL.name() + "/" + conch,

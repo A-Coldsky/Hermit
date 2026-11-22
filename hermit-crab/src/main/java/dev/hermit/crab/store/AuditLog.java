@@ -24,13 +24,25 @@ public final class AuditLog {
     }
 
     public static void record(DataSource dataSource, String actor, AuditKind kind, String target, String detail) {
+        record(dataSource, Instant.now(), actor, kind, target, detail);
+    }
+
+    public static void record(
+            DataSource dataSource,
+            Instant at,
+            String actor,
+            AuditKind kind,
+            String target,
+            String detail
+    ) {
         Objects.requireNonNull(dataSource, "dataSource");
+        Objects.requireNonNull(at, "at");
         Objects.requireNonNull(kind, "kind");
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(detail, "detail");
         String checkedActor = Checks.actor(actor);
         Db.transaction(dataSource, connection -> {
-            ConfigAudit.append(connection, checkedActor, kind, target, detail);
+            ConfigAudit.append(connection, at, checkedActor, kind, target, detail);
             return null;
         });
     }

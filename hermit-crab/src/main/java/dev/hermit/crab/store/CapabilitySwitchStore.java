@@ -5,6 +5,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.Objects;
@@ -13,9 +14,15 @@ import java.util.Set;
 /** Per-capability disable flags. Combined with {@code config.yml} by the runtime. */
 public final class CapabilitySwitchStore {
     private final DataSource dataSource;
+    private final Clock clock;
 
     public CapabilitySwitchStore(DataSource dataSource) {
+        this(dataSource, Clock.systemUTC());
+    }
+
+    public CapabilitySwitchStore(DataSource dataSource, Clock clock) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     public void setDisabled(Origin origin, String conch, String action, boolean disabled, String actor) {
@@ -24,9 +31,11 @@ public final class CapabilitySwitchStore {
         String checkedAction = Checks.field(action);
         String checkedActor = Checks.actor(actor);
         Db.transaction(dataSource, connection -> {
-            upsert(connection, checkedOrigin, checkedConch, checkedAction, disabled, Instant.now());
+            Instant now = clock.instant();
+            upsert(connection, checkedOrigin, checkedConch, checkedAction, disabled, now);
             ConfigAudit.append(
                     connection,
+                    now,
                     checkedActor,
                     disabled ? AuditKind.CAPABILITY_DISABLED : AuditKind.CAPABILITY_ENABLED,
                     checkedOrigin.name() + "/" + checkedConch + "/" + checkedAction,

@@ -503,7 +503,7 @@ public final class TlsTrust {
     }
 
     private void audit(AuditKind kind, String target, Map<String, Object> detail) {
-        AuditLog.record(dataSource, Actors.CONSOLE, kind, target, ApiJson.write(detail));
+        AuditLog.record(dataSource, clock.instant(), Actors.CONSOLE, kind, target, ApiJson.write(detail));
     }
 
     private static List<Map<String, Object>> certificatesIn(Path target) {

@@ -295,12 +295,12 @@ public final class ConchSync {
     }
 
     private void auditSubscribed(String conch, String actor) {
-        AuditLog.record(dataSource, actor, AuditKind.CONCH_SUBSCRIBED, "OFFICIAL/" + conch, conch);
+        AuditLog.record(dataSource, clock.instant(), actor, AuditKind.CONCH_SUBSCRIBED, "OFFICIAL/" + conch, conch);
     }
 
     public void unsubscribe(String conch, String actor) {
         SubscriptionCommands.unsubscribe(
-                syncLock, paths, registry, disabledConches, subscriptions, dataSource, conch, actor);
+                syncLock, paths, registry, disabledConches, subscriptions, dataSource, conch, actor, clock);
     }
 
     /**
@@ -454,6 +454,7 @@ public final class ConchSync {
             auditDetail.put("to", target);
             AuditLog.record(
                     dataSource,
+                    clock.instant(),
                     actor,
                     AuditKind.CONCH_UPDATED,
                     "OFFICIAL/" + conch,
@@ -565,6 +566,7 @@ public final class ConchSync {
         String auditedFrom = fromVersion == null ? "" : fromVersion;
         AuditLog.record(
                 dataSource,
+                clock.instant(),
                 actor,
                 AuditKind.CONCH_UPDATED,
                 "OFFICIAL/" + conch,
@@ -1397,7 +1399,7 @@ public final class ConchSync {
             return;
         }
         disabledConches.mark(conch, version, clock.instant());
-        AuditLog.record(dataSource, Actors.SYNC, AuditKind.REEF_CONCH_DISABLED, "OFFICIAL/" + conch, conch);
+        AuditLog.record(dataSource, clock.instant(), Actors.SYNC, AuditKind.REEF_CONCH_DISABLED, "OFFICIAL/" + conch, conch);
     }
 
     /** Reef listed the conch again. One audit row, then the forward-only compare runs. */
@@ -1406,7 +1408,7 @@ public final class ConchSync {
             return;
         }
         disabledConches.clear(conch);
-        AuditLog.record(dataSource, Actors.SYNC, AuditKind.REEF_CONCH_ENABLED, "OFFICIAL/" + conch, conch);
+        AuditLog.record(dataSource, clock.instant(), Actors.SYNC, AuditKind.REEF_CONCH_ENABLED, "OFFICIAL/" + conch, conch);
     }
 
     private InstallResult alignCurrent(ReefClient.CatalogEntry entry) {
@@ -1684,6 +1686,7 @@ public final class ConchSync {
         }
         AuditLog.record(
                 dataSource,
+                clock.instant(),
                 Actors.SYNC,
                 AuditKind.CONCH_REPAIR_REQUIRED,
                 "OFFICIAL/" + conch,

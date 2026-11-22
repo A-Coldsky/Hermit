@@ -245,6 +245,69 @@ class ConfigAuditReadTest {
         assertThat(accounts.list(Origin.OFFICIAL, "oa")).hasSize(1);
     }
 
+    @Test
+    void runtimeAuditWritesUseInjectedClockAndPurgeExpiredRespects180DayRetention() {
+        Instant t0 = Instant.parse("2020-01-01T00:00:00Z");
+        dev.hermit.crab.testing.MutableClock clock = new dev.hermit.crab.testing.MutableClock(t0);
+        dev.hermit.common.model.ConchDoc doc = dev.hermit.common.parse.ConchParser.parse("""
+                conch: clock_conch
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: "http://127.0.0.1:9"
+                title: 时钟审计
+                description: 验证审计时间与清理时钟一致。
+                credentials:
+                  secret: { type: secret, required: true }
+                config:
+                  tenant: { type: text, required: false }
+                actions:
+                  ping:
+                    title: 探测
+                    description: 探测能力。
+                    steps:
+                      - set: { ok: true }
+                    output:
+                      ok: { type: boolean, description: 结果 }
+                    examples:
+                      - input: {}
+                        output: { ok: true }
+                    notes: 仅测试用
+                """);
+        try (dev.hermit.crab.runtime.CrabRuntime runtime = dev.hermit.crab.runtime.CrabRuntime.open(
+                new CrabPaths(temp.resolve("clock-runtime")),
+                dev.hermit.crab.config.CrabConfig.defaults(),
+                name -> null,
+                clock)) {
+            runtime.registry().put(doc, Origin.OFFICIAL);
+            runtime.registry().put(doc, Origin.LOCAL);
+            runtime.admin().createAccount("clock_conch", "alice", Actors.CONSOLE);
+            runtime.admin().createAccount("clock_conch", "bob", Actors.CONSOLE);
+            runtime.admin().setDefault("clock_conch", "bob", Actors.CONSOLE);
+            runtime.admin().writeCredentials(doc, "alice", Map.of("secret", PASSWORD), Actors.CONSOLE);
+            runtime.admin().putConfig(doc, "tenant", "acme", Actors.CONSOLE);
+            runtime.admin().createApiKey("ci", new ApiKeyScope(java.util.Set.of(), java.util.Set.of(), false, true), Actors.CONSOLE);
+            runtime.setCapabilityDisabled("clock_conch", "ping", true, Actors.CONSOLE);
+            runtime.setConchDisabled("clock_conch", true, Actors.CONSOLE);
+            runtime.debug().setEnabled(true, Actors.CONSOLE);
+            runtime.debug().setEnabled(false, Actors.CONSOLE);
+            runtime.recordConsoleLogin(true);
+            runtime.switchSource("clock_conch", Origin.LOCAL, false, Actors.CONSOLE);
+
+            AuditLog.Page initial = AuditLog.page(runtime.dataSource(), null, null, 1, 50);
+            assertThat(initial.entries()).hasSize(12);
+            assertThat(initial.entries()).extracting(AuditLog.Entry::at).containsOnly(t0);
+
+            clock.advance(java.time.Duration.ofDays(179));
+            runtime.purgeExpired();
+            assertThat(AuditLog.page(runtime.dataSource(), null, null, 1, 50).entries()).hasSize(12);
+
+            clock.advance(java.time.Duration.ofDays(1).plusSeconds(1));
+            runtime.purgeExpired();
+            assertThat(AuditLog.page(runtime.dataSource(), null, null, 1, 50).entries()).isEmpty();
+        }
+    }
+
     private void insert(Instant at, String actor, String kind, String target, String detail) throws Exception {
         try (Connection connection = fixture.dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement("""

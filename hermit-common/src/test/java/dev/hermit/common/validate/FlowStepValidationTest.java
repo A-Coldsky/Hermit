@@ -201,6 +201,31 @@ class FlowStepValidationTest {
                 """))).isNotEmpty();
     }
 
+    @Test
+    void untilSeesWhatTheRoundWroteAndElseDoesNotSeeThen() {
+        assertThat(messages(validate("1.9.0", """
+                - repeat:
+                    max: 3
+                    steps:
+                      - request: {method: GET, path: /list}
+                      - extract:
+                          total: {jsonpath: "$.total"}
+                          names: {jsonpath: "$.names"}
+                    collect: {cookie_names: names}
+                    until: {equals: {loop.index: "{{total}}"}}
+                """))).isEmpty();
+        assertThat(messages(validate("1.9.0", """
+                - request: {method: GET, path: /list}
+                - if:
+                    status: 200
+                    then:
+                      - set: {a: "1"}
+                    else:
+                      - set: {b: "{{a}}"}
+                - set: {c: "{{a}}"}
+                """))).singleElement().asString().contains("a");
+    }
+
     private static ValidationResult validate(String min, String steps) {
         return ConchValidator.validate(
                 ConchParser.parse(conch(min, steps, "")), ConchValidator.Context.of(SemVer.parse("1.9.0")));

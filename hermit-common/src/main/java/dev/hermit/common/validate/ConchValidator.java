@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -420,7 +421,10 @@ public final class ConchValidator {
             boolean variableNames = "extract".equals(step.type());
             String typed = path + "[" + i + "]." + step.type();
             if (FlowSteps.isFlow(step)) {
-                checkPlainMap(typed, FlowSteps.own(step), false, true, errors);
+                // collect 两边都是变量名，不是写死的值。
+                Map<String, Object> own = new LinkedHashMap<>(FlowSteps.own(step));
+                own.remove("collect");
+                checkPlainMap(typed, own, false, true, errors);
                 for (String key : FlowSteps.branchKeys(step)) {
                     checkPlainStepList(FlowSteps.branch(step, key), typed + "." + key, errors);
                 }
@@ -952,15 +956,26 @@ public final class ConchValidator {
             String typed = path + "[" + i + "]." + step.type();
             if (FlowSteps.isFlow(step)) {
                 FlowChecks.shape(typed, step, nest, errors);
-                checkRefs(typed, FlowSteps.own(step), doc, declared, loginNames, loginVars, usesLogin,
-                        errors, warnings, inputFields);
                 boolean repeat = FlowSteps.REPEAT.equals(step.type());
                 if (repeat) {
                     declared.add(FlowSteps.LOOP);
+                } else {
+                    checkRefs(typed, FlowSteps.own(step), doc, declared, loginNames, loginVars, usesLogin,
+                            errors, warnings, inputFields);
                 }
+                // then 和 else 只跑一个：一个分支里写的变量，另一个分支读不到。
+                Set<String> after = new LinkedHashSet<>(declared);
                 for (String key : FlowSteps.branchKeys(step)) {
-                    checkOrderedSteps(FlowSteps.branch(step, key), typed + "." + key, doc, declared, loginNames,
+                    Set<String> inside = new LinkedHashSet<>(declared);
+                    checkOrderedSteps(FlowSteps.branch(step, key), typed + "." + key, doc, inside, loginNames,
                             loginVars, usesLogin, errors, warnings, inputFields, nest.into(repeat));
+                    after.addAll(inside);
+                }
+                declared.addAll(after);
+                if (repeat) {
+                    // until 在每一轮的 steps 之后判断，读得到这一轮写的变量。
+                    checkRefs(typed, FlowSteps.own(step), doc, declared, loginNames, loginVars, usesLogin,
+                            errors, warnings, inputFields);
                 }
                 if (repeat && step.def().get("collect") instanceof Map<?, ?> collect) {
                     for (Object name : collect.keySet()) {

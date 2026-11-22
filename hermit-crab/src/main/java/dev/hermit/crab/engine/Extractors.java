@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -212,9 +213,18 @@ final class Extractors {
 
     private static List<Source> css(String selector, Source source) {
         try {
-            List<Element> elements = source.element != null
-                    ? source.element.select(selector)
-                    : source.document().select(selector);
+            List<Element> elements;
+            if (source.element != null) {
+                elements = source.element.select(selector);
+                if (rewritesDocument(selector)) {
+                    source.forgetParsed();
+                }
+            } else if (rewritesDocument(selector)) {
+                // :matchText 会往文档里插入合成元素，不能落在各字段共用的那一份上。
+                elements = Jsoup.parse(source.text()).select(selector);
+            } else {
+                elements = source.document().select(selector);
+            }
             ArrayList<Source> matches = new ArrayList<>();
             for (Element element : elements) {
                 matches.add(Source.element(element));
@@ -225,6 +235,10 @@ final class Extractors {
             // 不附解析器原文：原文会再写一遍选择器，极端情况下也可能带上片段。
             throw problem("选择器无法解析");
         }
+    }
+
+    private static boolean rewritesDocument(String selector) {
+        return selector.toLowerCase(Locale.ROOT).contains(":matchtext");
     }
 
     private static List<Source> xpath(String selector, Source source) {
@@ -247,7 +261,9 @@ final class Extractors {
             if (source.json != null) {
                 read = JsonPath.read(source.json, selector);
             } else {
-                read = source.jsonContext().read(selector);
+                DocumentContext shared = source.jsonContext();
+                // 函数（append 等）会就地改数组，带括号的表达式各读各的一份。
+                read = selector.indexOf('(') < 0 ? shared.read(selector) : JsonPath.read(source.text(), selector);
             }
         } catch (PathNotFoundException ex) {
             throw new PathMissing();
@@ -956,6 +972,12 @@ final class Extractors {
                 document = Jsoup.parse(element != null ? element.outerHtml() : text());
             }
             return document;
+        }
+
+        /** 元素被就地改过之后，按它的 HTML 解析出来的缓存作废。 */
+        private void forgetParsed() {
+            document = null;
+            dom = null;
         }
 
         private org.w3c.dom.Document dom() {

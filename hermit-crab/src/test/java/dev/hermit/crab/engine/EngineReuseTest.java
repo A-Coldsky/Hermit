@@ -130,6 +130,56 @@ class EngineReuseTest {
         }
     }
 
+    /** jsonpath 的函数（append 等）会就地改解析出来的数组，这类表达式不能读共用的那一份。 */
+    @Test
+    void jsonpathFunctionDoesNotChangeWhatLaterFieldsRead() {
+        Map<String, Object> vars = response("{\"nums\": [1, 2]}");
+        LinkedHashMap<String, Object> spec = new LinkedHashMap<>();
+        spec.put("before", Map.of("jsonpath", "$.nums.length()"));
+        spec.put("sum", Map.of("jsonpath", "$.nums.append(10).sum()"));
+        spec.put("after", Map.of("jsonpath", "$.nums.length()"));
+        spec.put("nums", Map.of("jsonpath", "$.nums"));
+
+        extract(spec, vars);
+
+        assertThat(((Number) vars.get("sum")).intValue()).isEqualTo(13);
+        assertThat(vars.get("before")).isEqualTo(2);
+        assertThat(vars.get("after")).isEqualTo(2);
+        assertThat(vars.get("nums")).isEqualTo(List.of(1, 2));
+    }
+
+    /** :matchText 会往文档里插入合成元素，后面的字段不能看到它们。 */
+    @Test
+    void matchTextDoesNotLeaveElementsForLaterFields() {
+        Map<String, Object> vars = response("<html><body><p>one<br>two</p></body></html>");
+        LinkedHashMap<String, Object> spec = new LinkedHashMap<>();
+        spec.put("lines", Map.of("css", "p:matchText"));
+        spec.put("html", Map.of("css", "p", "html", true));
+        spec.put("viaXpath", Map.of("xpath", "//p", "html", true));
+
+        extract(spec, vars);
+
+        assertThat(vars.get("lines")).isEqualTo("one");
+        assertThat(String.valueOf(vars.get("html"))).doesNotContain("jsoup").doesNotContain("pseudo");
+        assertThat(String.valueOf(vars.get("viaXpath"))).doesNotContain("jsoup").doesNotContain("pseudo");
+    }
+
+    /** 带标签的模板字面量：每次调用拿到的 strings 都是这次全局对象下的数组。 */
+    @Test
+    void taggedTemplateSeesThisCallsGlobals() {
+        ScriptStep step = new ScriptStep(Clock.systemUTC());
+        Map<String, Object> spec = Map.of("code", """
+                function tag(strings) { return (strings instanceof Array) + ':' + strings[0]; }
+                return { tagged: tag`x${vars.n}y` };
+                """);
+        for (int n = 1; n <= 3; n++) {
+            Map<String, Object> vars = new LinkedHashMap<>();
+            vars.put("n", n);
+            step.run(spec, vars, System.nanoTime() + TimeUnit.SECONDS.toNanos(10), Map.of());
+            assertThat(vars.get("tagged")).isEqualTo("true:x");
+        }
+    }
+
     @Test
     void syntaxErrorIsReportedTheSameWayEveryTime() {
         ScriptStep step = new ScriptStep(Clock.systemUTC());

@@ -142,6 +142,11 @@ public final class ConchValidator {
         checkRequestBodyFeatures(doc, errors);
         checkFileFeatures(doc, errors);
         FlowChecks.version(doc, errors);
+        if (doc.auth() != null && doc.auth().concurrentReads()
+                && doc.actions().values().stream().noneMatch(a -> a != null && a.mcp().readOnly())) {
+            warnings.add(issue(ValidationCodes.CONCURRENT_READS, "auth.concurrent_reads",
+                    "没有能力写 mcp.read_only: true，concurrent_reads 不起作用"));
+        }
         if (mcp) {
             if (doc.minCrabVersion().compareTo(McpLimits.MIN_CRAB_VERSION) < 0) {
                 errors.add(issue(

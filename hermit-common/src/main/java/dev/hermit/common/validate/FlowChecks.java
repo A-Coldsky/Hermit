@@ -50,7 +50,7 @@ final class FlowChecks {
         return doc.minCrabVersion().compareTo(MIN_CRAB) >= 0;
     }
 
-    /** 用了 if、repeat 或 retry 的包，min_crab_version 不能低于 1.9.0。 */
+    /** 用了 if、repeat、retry 或 auth.concurrent_reads 的包，min_crab_version 不能低于 1.9.0。 */
     static void version(ConchDoc doc, List<ValidationIssue> errors) {
         if (strict(doc)) {
             return;
@@ -65,6 +65,9 @@ final class FlowChecks {
             }
         }
         TreeSet<String> used = new TreeSet<>();
+        if (doc.auth() != null && doc.auth().concurrentReads()) {
+            used.add("auth.concurrent_reads");
+        }
         for (Step step : all) {
             if (FlowSteps.isFlow(step)) {
                 used.add(step.type());

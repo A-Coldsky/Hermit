@@ -236,6 +236,7 @@ actions:
 | `auth.steps` | 登录步骤；可省略；没有登录步骤也会创建账号会话 |
 | `auth.alive_check` | 请求及 `expect_not_redirect`，空闲超时后检测会话。可以引用 `{{login.名字}}` |
 | `auth.cookies` | 可选。模板标识符到 Cookie 名，例如 `xsrf: "XSRF-TOKEN"`，之后写 `{{login.xsrf}}`。空映射不要求 1.3.0。非空时 `min_crab_version` 不低于 1.3.0 |
+| `auth.concurrent_reads` | 可选布尔，默认 false。打开后，写了 `mcp.read_only: true` 的能力在同一账号下可以同时执行，见「同一账号的只读能力并行」。`min_crab_version` 不低于 1.9.0 |
 | `actions` | 能力映射，每个包含输入、步骤、输出和示例等 |
 | `health_check` | 目前仅解析/保存，没有自动执行器 |
 | `owner`、`tags`、`changelog` | 管理元数据 |
@@ -321,6 +322,25 @@ actions:
 - `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。会话失效包括重定向到 `alive_check.expect_not_redirect` 前缀，以及能力请求返回 HTTP 401/403。重放前清掉登录快照；重新登录成功后换成新快照，重放使用新值。第二次仍失效则 `SESSION_EXPIRED`，快照再次删掉，不再重放。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
 - POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。同键换请求体返回 `IDEMPOTENCY_CONFLICT`。
 - `mcp.expose` 默认 true，read_only/destructive 默认 false。能力工具的 `destructiveHint` 用上一节的有效破坏性。目录元工具 `call_capability` 仍从「非只读且非幂等」计算 `destructiveHint`。需要确认时，HTTP 要同时带 `X-Hermit-Confirm: true` 和与当前规则包一致的 `X-Hermit-Confirm-Token`，Hermit 自己的 MCP 两种模式都走 elicitation。
+
+## 同一账号的只读能力并行
+
+同一个 `(origin, conch, account)` 的调用默认一个接一个执行，后来的等前面的全部步骤跑完，等待时间算进能力总超时。查询多、上游又慢时，在 `auth` 下写：
+
+```yaml
+auth:
+  concurrent_reads: true
+  steps: [...]
+actions:
+  list_orders:
+    mcp: {read_only: true}
+```
+
+- 只有写了 `mcp.read_only: true` 的能力并行。`idempotent: true`、GET 都不算；其它能力照旧独占，要等正在跑的只读调用全部结束，它执行期间只读调用也等着。
+- 并行只发生在会话可以直接用的时候。没登录、登录失败已暂停、有等待输入的 `ask`、空闲超时要跑 `alive_check`、能力引用的 `{{login.名字}}` 取不到，这些情况都改成独占执行，和没打开时一样；同时到达的调用只登录一次。
+- 并行的调用发现会话失效（401/403 或跳回登录页）时，各自改成独占再处理：第一个清会话并重新登录，其余的看到已经重新登录过，直接重跑。能力没写 `idempotent: true` 时仍返回 `SESSION_EXPIRED`，不重跑。
+- 并行的调用共用同一个 Cookie 罐。**上游每次响应都换 Cookie 或令牌（滚动会话、一次性 CSRF 令牌）时不要打开**，并行的请求会互相顶掉。只读能力里也不要依赖上一步请求在服务器上留下的状态（例如「先选部门，再查列表」靠服务器会话记住部门），两个调用会串。
+- 没有任何能力写 `mcp.read_only: true` 时是警告 `CONCURRENT_READS`，message 为「没有能力写 mcp.read_only: true，concurrent_reads 不起作用」。`min_crab_version` 低于 1.9.0 是 `MIN_CRAB_VERSION`，message 为「使用 auth.concurrent_reads 时 min_crab_version 必须不低于 1.9.0」。值不是布尔是解析错误。`driver: mcp` 的包不能写 `auth`。
 
 ## 步骤
 

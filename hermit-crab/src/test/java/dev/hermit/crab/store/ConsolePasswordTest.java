@@ -65,6 +65,44 @@ class ConsolePasswordTest {
     }
 
     @Test
+    void concurrentVerifyCannotBypassLockoutCap() throws Exception {
+        try (StoreFixture fixture = StoreFixture.open(temp.resolve("concurrent-lock"))) {
+            MutableClock clock = new MutableClock(Instant.parse("2026-11-05T00:00:00Z"));
+            ConsolePassword passwords = new ConsolePassword(fixture.dataSource, clock);
+            passwords.set(PASSWORD);
+            for (int i = 0; i < ConsolePassword.MAX_FAILURES - 1; i++) {
+                assertThat(passwords.verify("wrong-password")).isEqualTo(ConsolePassword.Result.REJECTED);
+            }
+            assertThat(failureRows(fixture)).isEqualTo(ConsolePassword.MAX_FAILURES - 1);
+
+            int threads = 8;
+            java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(threads);
+            java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+            try {
+                java.util.List<java.util.concurrent.Future<ConsolePassword.Result>> futures = new java.util.ArrayList<>();
+                for (int i = 0; i < threads; i++) {
+                    futures.add(pool.submit(() -> {
+                        ready.countDown();
+                        go.await();
+                        return passwords.verify("wrong-password");
+                    }));
+                }
+                assertThat(ready.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                go.countDown();
+                for (java.util.concurrent.Future<ConsolePassword.Result> future : futures) {
+                    assertThat(future.get(15, java.util.concurrent.TimeUnit.SECONDS))
+                            .isEqualTo(ConsolePassword.Result.REJECTED);
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+            assertThat(failureRows(fixture)).isEqualTo(ConsolePassword.MAX_FAILURES);
+            assertThat(passwords.verify(PASSWORD)).isEqualTo(ConsolePassword.Result.REJECTED);
+        }
+    }
+
+    @Test
     void rejectsPasswordsOutsideTheLengthBounds() {
         try (StoreFixture fixture = StoreFixture.open(temp.resolve("length"))) {
             ConsolePassword passwords = new ConsolePassword(fixture.dataSource, Clock.systemUTC());

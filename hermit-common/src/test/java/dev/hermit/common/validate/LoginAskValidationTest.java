@@ -72,6 +72,15 @@ class LoginAskValidationTest {
         assertThat(messages("""
                 - ask: { into: login, kind: code, label: 验证码 }
                 """)).contains("不能写入保留变量 login");
+        ValidationResult loopAsk = validate(packageYaml("1.4.0", """
+                - ask: { into: loop, kind: code, label: 验证码 }
+                """), "1.4.0");
+        assertThat(loopAsk.errors())
+                .anySatisfy(issue -> {
+                    assertThat(issue.code()).isEqualTo(ValidationCodes.RESERVED_VARIABLE);
+                    assertThat(issue.path()).isEqualTo("auth.steps[0].ask.into");
+                    assertThat(issue.message()).isEqualTo("不能写入保留变量 loop");
+                });
         assertThat(messages("""
                 - extract:
                     captcha: { jsonpath: $.captcha }

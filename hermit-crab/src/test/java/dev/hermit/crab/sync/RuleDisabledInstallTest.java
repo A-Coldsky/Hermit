@@ -13,9 +13,14 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.logging.Handler;
@@ -315,6 +320,93 @@ class RuleDisabledInstallTest {
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.0/package.zip"))).isTrue();
             assertThat(Files.exists(crab.paths.conches().resolve("legacy_oa/1.0.2/package.zip"))).isTrue();
         }
+    }
+
+    @Test
+    void rollbackRecordsConchUpdatedAudit() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("rollback-audit"))) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = new ConchSync(
+                    settings(reef), crab.paths, registry, crab.vault, crab.dataSource, Clock.systemUTC());
+            TestSubscriptions.grantKnown(crab.dataSource);
+            sync.syncOnce();
+
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            sync.syncOnce();
+            assertThat(sync.update("legacy_oa", Actors.CONSOLE).outcome().version()).isEqualTo("1.0.1");
+
+            assertThat(sync.rollback("legacy_oa", Actors.CLI).outcome().version()).isEqualTo("1.0.0");
+
+            List<String[]> rows = auditRows(crab, "CONCH_UPDATED");
+            assertThat(rows).isNotEmpty();
+            String[] last = rows.get(rows.size() - 1);
+            assertThat(last[0]).isEqualTo(Actors.CLI);
+            assertThat(last[1]).isEqualTo("OFFICIAL/legacy_oa");
+            JsonNode detail = JSON.readTree(last[2]);
+            assertThat(detail.path("from").asText()).isEqualTo("1.0.1");
+            assertThat(detail.path("to").asText()).isEqualTo("1.0.0");
+        }
+    }
+
+    @Test
+    void ruleDisabledConchDroppedByReefBecomesDisabled() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp.resolve("rule-disabled-drop"))) {
+            byte[] yaml = blocked("1.0.0").getBytes(StandardCharsets.UTF_8);
+            byte[] zip = ConchPackage.write(yaml, reef.keys().getPrivate());
+            ConchFiles.install(crab.paths, "legacy_oa", "1.0.0", zip, yaml);
+            ConchFiles.writeCurrent(crab.paths, "legacy_oa", "1.0.0");
+            new SyncStore(crab.dataSource).recordInstalled("legacy_oa", "1.0.0", Instant.parse("2026-11-01T00:00:00Z"));
+            TestSubscriptions.grantKnown(crab.dataSource);
+
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.1"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = new ConchSync(
+                    settings(reef), crab.paths, registry, crab.vault, crab.dataSource, Clock.systemUTC());
+            SyncReport waiting = sync.syncOnce();
+            assertThat(waiting.conches()).anySatisfy(outcome -> {
+                assertThat(outcome.conch()).isEqualTo("legacy_oa");
+                assertThat(outcome.kind()).isEqualTo(OutcomeKind.RULE_DISABLED);
+            });
+
+            reef.remove("legacy_oa");
+            SyncReport dropped = sync.syncOnce();
+            assertThat(dropped.conches()).anySatisfy(outcome -> {
+                assertThat(outcome.conch()).isEqualTo("legacy_oa");
+                assertThat(outcome.kind()).isEqualTo(OutcomeKind.DISABLED);
+                assertThat(outcome.reason()).isEqualTo(SyncReasons.DISABLED);
+                assertThat(outcome.version()).isEqualTo("1.0.0");
+            });
+            assertThat(sync.disabledConches().contains("legacy_oa")).isTrue();
+            assertThat(sync.disabledConches().version("legacy_oa")).isEqualTo("1.0.0");
+            assertThat(auditRows(crab, "REEF_CONCH_DISABLED")).hasSize(1);
+            assertThat(sync.visibleStatus(dropped).conches()).anySatisfy(outcome -> {
+                assertThat(outcome.conch()).isEqualTo("legacy_oa");
+                assertThat(outcome.kind()).isEqualTo(OutcomeKind.DISABLED);
+            });
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .satisfies(error -> {
+                        UpdateException update = (UpdateException) error;
+                        assertThat(update.code()).isEqualTo(ErrorCode.CONCH_DISABLED);
+                        assertThat(update.getMessage()).isEqualTo(DisabledConches.CALL_MESSAGE);
+                    });
+        }
+    }
+
+    private static List<String[]> auditRows(OpenCrab crab, String kind) throws Exception {
+        List<String[]> rows = new ArrayList<>();
+        try (Connection connection = crab.dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT actor, target, detail FROM config_audit WHERE kind = ? ORDER BY id ASC")) {
+            statement.setString(1, kind);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    rows.add(new String[] {resultSet.getString(1), resultSet.getString(2), resultSet.getString(3)});
+                }
+            }
+        }
+        return rows;
     }
 
     @Test

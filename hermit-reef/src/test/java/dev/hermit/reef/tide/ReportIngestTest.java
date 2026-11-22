@@ -250,6 +250,75 @@ class ReportIngestTest {
     }
 
     @Test
+    void upsertCountRetriesUpdateOnDuplicateKey() {
+        List<String> operations = new ArrayList<>();
+        JdbcTemplate racingJdbc = new JdbcTemplate() {
+            private int updates;
+
+            @Override
+            public <T> List<T> queryForList(String sql, Class<T> elementType, Object... args) {
+                if (sql.startsWith("SELECT 1 FROM hermit_hourly_counts")) {
+                    operations.add("SELECT");
+                    return List.of();
+                }
+                throw new AssertionError("unexpected sql: " + sql);
+            }
+
+            @Override
+            public int update(String sql, Object... args) {
+                if (sql.startsWith("UPDATE hermit_hourly_counts")) {
+                    operations.add("UPDATE#" + (++updates));
+                    return 1;
+                }
+                if (sql.startsWith("INSERT INTO hermit_hourly_counts")) {
+                    operations.add("INSERT");
+                    throw new org.springframework.dao.DuplicateKeyException("pk collision");
+                }
+                throw new AssertionError("unexpected sql: " + sql);
+            }
+        };
+        ReportIngestService service = new ReportIngestService(racingJdbc, clock);
+        ReportBatch batch = batch(List.of(), List.of(count(7, 2, 15, 35)), List.of());
+
+        ReportAccepted accepted = service.ingest(batch, 42L);
+        assertThat(accepted.accepted().counts()).isEqualTo(1);
+        assertThat(operations).containsExactly("SELECT", "INSERT", "UPDATE#1");
+    }
+
+    @Test
+    void concurrentCountReportsForTheSameHourDoNotFail() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        try {
+            for (int round = 0; round < 10; round++) {
+                jdbc.update("DELETE FROM hermit_hourly_counts");
+                CountDownLatch ready = new CountDownLatch(4);
+                CountDownLatch start = new CountDownLatch(1);
+                List<Future<MvcResult>> futures = new ArrayList<>();
+                for (int i = 0; i < 4; i++) {
+                    int n = i + 1;
+                    String json = ReportJson.write(batch(List.of(), List.of(count(n, 1, 10L * n, 20L * n)), List.of()));
+                    futures.add(pool.submit(() -> {
+                        ready.countDown();
+                        start.await();
+                        return send(json, INSTANCE);
+                    }));
+                }
+                assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+                start.countDown();
+                for (Future<MvcResult> future : futures) {
+                    MvcResult result = future.get(30, TimeUnit.SECONDS);
+                    assertThat(result.getResponse().getStatus())
+                            .as(result.getResponse().getContentAsString())
+                            .isEqualTo(200);
+                }
+                assertThat(count("hermit_hourly_counts")).isEqualTo(1);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     void longSummaryIsTruncatedTo200CodePoints() throws Exception {
         String emoji = "😀";
         String raw = "a".repeat(199) + emoji + "b";

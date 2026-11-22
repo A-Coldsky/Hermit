@@ -89,11 +89,18 @@ public final class ConchAdmin {
     }
 
     public Account createAccount(String conch, String name, String actor) {
-        return accounts.create(origin(conch), conch, name, actor);
+        return createAccount(origin(conch), conch, name, actor);
+    }
+
+    public Account createAccount(Origin source, String conch, String name, String actor) {
+        return accounts.create(source, conch, name, actor);
     }
 
     public void deleteAccount(String conch, String name, String actor) {
-        Origin source = origin(conch);
+        deleteAccount(origin(conch), conch, name, actor);
+    }
+
+    public void deleteAccount(Origin source, String conch, String name, String actor) {
         accounts.delete(source, conch, name, actor);
         SessionKey key = new SessionKey(source, conch, name);
         sessions.forget(key);
@@ -106,78 +113,132 @@ public final class ConchAdmin {
     }
 
     public void setDefault(String conch, String name, String actor) {
-        accounts.setDefault(origin(conch), conch, name, actor);
+        setDefault(origin(conch), conch, name, actor);
+    }
+
+    public void setDefault(Origin source, String conch, String name, String actor) {
+        accounts.setDefault(source, conch, name, actor);
     }
 
     public List<Account> listAccounts(String conch) {
-        return accounts.list(origin(conch), conch);
+        return listAccounts(origin(conch), conch);
+    }
+
+    public List<Account> listAccounts(Origin source, String conch) {
+        return accounts.list(source, conch);
     }
 
     public Account requireAccount(String conch, String name) {
-        return accounts.resolve(origin(conch), conch, Optional.of(name));
+        return requireAccount(origin(conch), conch, name);
+    }
+
+    public Account requireAccount(Origin source, String conch, String name) {
+        return accounts.resolve(source, conch, Optional.of(name));
     }
 
     public List<String> missingCredentials(ConchDoc doc, String account) {
-        return DeclaredSettings.missingCredentials(doc, vault.fieldNames(origin(doc.conch()), doc.conch(), account));
+        return missingCredentials(origin(doc.conch()), doc, account);
+    }
+
+    public List<String> missingCredentials(Origin source, ConchDoc doc, String account) {
+        return DeclaredSettings.missingCredentials(doc, vault.fieldNames(source, doc.conch(), account));
     }
 
     public Set<String> credentialNames(String conch, String account) {
-        return vault.fieldNames(origin(conch), conch, account);
+        return credentialNames(origin(conch), conch, account);
+    }
+
+    public Set<String> credentialNames(Origin source, String conch, String account) {
+        return vault.fieldNames(source, conch, account);
     }
 
     /** Stored ciphertext for this account cannot be opened with the current master key. */
     public boolean credentialsUnreadable(String conch, String account) {
-        return !vault.readable(origin(conch), conch, account);
+        return credentialsUnreadable(origin(conch), conch, account);
+    }
+
+    public boolean credentialsUnreadable(Origin source, String conch, String account) {
+        return !vault.readable(source, conch, account);
     }
 
     public boolean loginPaused(String conch, String account) {
-        return sessions.loginPaused(new SessionKey(origin(conch), conch, account));
+        return loginPaused(origin(conch), conch, account);
+    }
+
+    public boolean loginPaused(Origin source, String conch, String account) {
+        return sessions.loginPaused(new SessionKey(source, conch, account));
     }
 
     public boolean declaresCredential(ConchDoc doc, String field) {
-        return DeclaredSettings.declaresCredential(doc, staged(doc.conch()), field);
+        return declaresCredential(origin(doc.conch()), doc, field);
+    }
+
+    public boolean declaresCredential(Origin source, ConchDoc doc, String field) {
+        return DeclaredSettings.declaresCredential(doc, stagedFor(source, doc.conch()), field);
     }
 
     public void writeCredentials(ConchDoc doc, String account, Map<String, String> fields, String actor) {
-        requireAccount(doc.conch(), account);
-        DeclaredSettings.checkCredentialFields(doc, staged(doc.conch()), fields);
-        Origin source = origin(doc.conch());
+        writeCredentials(origin(doc.conch()), doc, account, fields, actor);
+    }
+
+    public void writeCredentials(Origin source, ConchDoc doc, String account, Map<String, String> fields, String actor) {
+        requireAccount(source, doc.conch(), account);
+        DeclaredSettings.checkCredentialFields(doc, stagedFor(source, doc.conch()), fields);
         vault.write(source, doc.conch(), account, fields, actor);
         sessions.invalidate(new SessionKey(source, doc.conch(), account));
     }
 
     public Map<String, String> storedConfig(String conch) {
-        return config.all(origin(conch), conch);
+        return storedConfig(origin(conch), conch);
+    }
+
+    public Map<String, String> storedConfig(Origin source, String conch) {
+        return config.all(source, conch);
     }
 
     public void putConfig(ConchDoc doc, String key, String value, String actor) {
+        putConfig(origin(doc.conch()), doc, key, value, actor);
+    }
+
+    public void putConfig(Origin source, ConchDoc doc, String key, String value, String actor) {
         ConfigField field = doc.config().get(key);
         DeclaredSettings.checkConfigValue(field, value);
         if (value.isEmpty()) {
-            config.delete(origin(doc.conch()), doc.conch(), key, actor);
+            config.delete(source, doc.conch(), key, actor);
             return;
         }
-        config.put(origin(doc.conch()), doc.conch(), key, value, actor);
+        config.put(source, doc.conch(), key, value, actor);
     }
 
     /** 先校验每一项，全部合法才在一个事务里写入。空串表示删除该项。 */
     public void putConfigs(ConchDoc doc, Map<String, String> values, String actor) {
+        putConfigs(origin(doc.conch()), doc, values, actor);
+    }
+
+    public void putConfigs(Origin source, ConchDoc doc, Map<String, String> values, String actor) {
         for (Map.Entry<String, String> entry : values.entrySet()) {
             DeclaredSettings.checkConfigValue(doc.config().get(entry.getKey()), entry.getValue());
         }
-        config.putAll(origin(doc.conch()), doc.conch(), values, actor);
+        config.putAll(source, doc.conch(), values, actor);
     }
 
     public void deleteConfig(ConchDoc doc, String key, String actor) {
+        deleteConfig(origin(doc.conch()), doc, key, actor);
+    }
+
+    public void deleteConfig(Origin source, ConchDoc doc, String key, String actor) {
         if (!doc.config().containsKey(key)) {
             throw new IllegalArgumentException("unknown config field");
         }
-        config.delete(origin(doc.conch()), doc.conch(), key, actor);
+        config.delete(source, doc.conch(), key, actor);
     }
 
     public ExecutionResult testLogin(ConchDoc doc, String account, String traceId, String actor) {
-        Account resolved = requireAccount(doc.conch(), account);
-        Origin source = origin(doc.conch());
+        return testLogin(origin(doc.conch()), doc, account, traceId, actor);
+    }
+
+    public ExecutionResult testLogin(Origin source, ConchDoc doc, String account, String traceId, String actor) {
+        Account resolved = requireAccount(source, doc.conch(), account);
         SessionKey key = new SessionKey(source, doc.conch(), resolved.account());
         sessions.invalidate(key);
         AuditLog.record(
@@ -191,7 +252,7 @@ public final class ConchAdmin {
         if (!missingConfig.isEmpty()) {
             return failed(doc, traceId, Invoker.missingConfig(missingConfig));
         }
-        List<String> missingCredentials = missingCredentials(doc, resolved.account());
+        List<String> missingCredentials = missingCredentials(source, doc, resolved.account());
         if (!missingCredentials.isEmpty()) {
             return failed(doc, traceId, CredentialMessages.missing(
                     resolved.account(), missingCredentials, doc.credentials()));
@@ -214,43 +275,63 @@ public final class ConchAdmin {
     }
 
     public PendingLogins.View loginInput(String conch, String account) {
-        Account resolved = requireAccount(conch, account);
-        return sessions.pending().view(new SessionKey(origin(conch), conch, resolved.account()));
+        return loginInput(origin(conch), conch, account);
+    }
+
+    public PendingLogins.View loginInput(Origin source, String conch, String account) {
+        Account resolved = requireAccount(source, conch, account);
+        return sessions.pending().view(new SessionKey(source, conch, resolved.account()));
     }
 
     public PendingLogins.Image loginInputImage(String conch, String account) {
-        Account resolved = requireAccount(conch, account);
-        return sessions.pending().image(new SessionKey(origin(conch), conch, resolved.account()));
+        return loginInputImage(origin(conch), conch, account);
+    }
+
+    public PendingLogins.Image loginInputImage(Origin source, String conch, String account) {
+        Account resolved = requireAccount(source, conch, account);
+        return sessions.pending().image(new SessionKey(source, conch, resolved.account()));
     }
 
     public void abandonLoginInput(String conch, String account) {
-        Account resolved = requireAccount(conch, account);
-        sessions.pending().discard(new SessionKey(origin(conch), conch, resolved.account()));
+        abandonLoginInput(origin(conch), conch, account);
+    }
+
+    public void abandonLoginInput(Origin source, String conch, String account) {
+        Account resolved = requireAccount(source, conch, account);
+        sessions.pending().discard(new SessionKey(source, conch, resolved.account()));
     }
 
     /** 不使会话失效。验证码留在这次调用的打码名单里，不写审计。 */
     public ExecutionResult submitLoginInput(ConchDoc doc, String account, String traceId, String value) {
-        return runLoginInput(doc, account, traceId, request -> engine.continueLogin(request, value));
+        return submitLoginInput(origin(doc.conch()), doc, account, traceId, value);
+    }
+
+    public ExecutionResult submitLoginInput(Origin source, ConchDoc doc, String account, String traceId, String value) {
+        return runLoginInput(source, doc, account, traceId, request -> engine.continueLogin(request, value));
     }
 
     public ExecutionResult resendLoginInput(ConchDoc doc, String account, String traceId) {
-        return runLoginInput(doc, account, traceId, engine::resendLogin);
+        return resendLoginInput(origin(doc.conch()), doc, account, traceId);
+    }
+
+    public ExecutionResult resendLoginInput(Origin source, ConchDoc doc, String account, String traceId) {
+        return runLoginInput(source, doc, account, traceId, engine::resendLogin);
     }
 
     private ExecutionResult runLoginInput(
+            Origin source,
             ConchDoc doc,
             String account,
             String traceId,
             Function<ExecutionRequest, ExecutionResult> call
     ) {
-        Account resolved = requireAccount(doc.conch(), account);
-        Origin source = origin(doc.conch());
+        Account resolved = requireAccount(source, doc.conch(), account);
         Map<String, String> stored = config.all(source, doc.conch());
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
         if (!missingConfig.isEmpty()) {
             return failed(doc, traceId, Invoker.missingConfig(missingConfig));
         }
-        List<String> missingCredentials = missingCredentials(doc, resolved.account());
+        List<String> missingCredentials = missingCredentials(source, doc, resolved.account());
         if (!missingCredentials.isEmpty()) {
             return failed(doc, traceId, CredentialMessages.missing(
                     resolved.account(), missingCredentials, doc.credentials()));
@@ -272,6 +353,14 @@ public final class ConchAdmin {
         return call.apply(request);
     }
 
+    /** 暂存更新只属于 Reef 正式包，本地包不读暂存声明。 */
+    private ConchDoc stagedFor(Origin source, String conch) {
+        if (source == Origin.LOCAL) {
+            return null;
+        }
+        return staged(conch);
+    }
+
     private ConchDoc staged(String conch) {
         Function<String, Optional<ConchDoc>> lookup = stagedDeclarations;
         if (lookup == null || conch == null) {
@@ -283,9 +372,9 @@ public final class ConchAdmin {
 
     /** Registry origin, then the fallback, otherwise {@link Origin#OFFICIAL}. */
     private Origin origin(String conch) {
-        Origin stored = registry.origin(conch);
-        if (stored != null) {
-            return stored;
+        ConchRegistry.Active active = registry.active(conch).orElse(null);
+        if (active != null) {
+            return active.origin();
         }
         Origin fallback = originFallback.apply(conch);
         return fallback == null ? Origin.OFFICIAL : fallback;

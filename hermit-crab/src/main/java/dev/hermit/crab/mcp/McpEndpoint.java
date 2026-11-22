@@ -285,6 +285,12 @@ public final class McpEndpoint {
             return;
         }
         McpSession.Sink sink = session.openSink();
+        if (sink == null) {
+            boolean gone = session.closed.get();
+            writeRpcError(ctx, null, gone ? McpErrors.sessionNotFound() : McpErrors.tooManyStreams(),
+                    gone ? null : session);
+            return;
+        }
         try {
             ctx.status(200);
             ctx.contentType("text/event-stream; charset=utf-8");
@@ -294,7 +300,7 @@ public final class McpEndpoint {
             writeEvent(ctx, out, ": open\n\n");
             while (!closed.get() && !session.closed.get() && !sink.closed.get()) {
                 String json = sink.queue.poll(15, TimeUnit.SECONDS);
-                if (closed.get() || session.closed.get()) {
+                if (closed.get() || session.closed.get() || sink.closed.get()) {
                     break;
                 }
                 if (json == null) {

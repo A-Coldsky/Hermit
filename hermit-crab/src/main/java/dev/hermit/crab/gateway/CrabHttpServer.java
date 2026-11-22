@@ -201,15 +201,17 @@ public final class CrabHttpServer implements AutoCloseable {
     }
 
     static void writeFile(Context ctx, FileStage stage, StagedFile file) throws IOException {
-        String encoded = java.net.URLEncoder.encode(file.name(), java.nio.charset.StandardCharsets.UTF_8)
-                .replace("+", "%20");
-        ctx.status(200);
-        ctx.header("Content-Type", file.mime());
-        ctx.header("Content-Length", String.valueOf(file.size()));
-        ctx.header("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
-        ctx.header("X-Content-Type-Options", "nosniff");
-        ctx.header("Cache-Control", "no-store");
         try (java.io.InputStream in = stage.open(file)) {
+            String encoded = java.net.URLEncoder.encode(file.name(), java.nio.charset.StandardCharsets.UTF_8)
+                    .replace("+", "%20");
+            ctx.status(200);
+            ctx.header("Content-Type", file.mime());
+            ctx.header("Content-Length", String.valueOf(file.size()));
+            ctx.header("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
+            ctx.header("X-Content-Type-Options", "nosniff");
+            ctx.header("Content-Security-Policy", "default-src 'none'; sandbox");
+            ctx.header("Referrer-Policy", "no-referrer");
+            ctx.header("Cache-Control", "no-store");
             in.transferTo(ctx.res().getOutputStream());
         } catch (FileStageException ex) {
             GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "文件不存在或已过期");
@@ -228,9 +230,9 @@ public final class CrabHttpServer implements AutoCloseable {
             GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, UserMessages.INVALID_KEY);
             return;
         }
-        String method = ctx.req().getMethod();
-        if (enabled.isPresent() && !enabled.get().effectiveMethod().name().equals(method)) {
-            String expected = enabled.get().effectiveMethod().name();
+        String method = ctx.method().name();
+        if (enabled.isPresent() && !CapabilityHttp.method(enabled.get()).name().equals(method)) {
+            String expected = CapabilityHttp.method(enabled.get()).name();
             ctx.header("Allow", expected);
             GatewayResponses.writeError(ctx, 405, ErrorCode.INVALID_INPUT, "这个能力要用 " + expected + " 调用。");
             return;
@@ -271,7 +273,7 @@ public final class CrabHttpServer implements AutoCloseable {
         Optional<String> headerAccount = headerAccount(ctx);
         ApiKeyPrincipal caller = principal.get();
         if (headerAccount.isPresent() && queryAccount.isPresent() && !headerAccount.get().equals(queryAccount.get())) {
-            if (writeEarlierRejection(ctx, caller, conch, action)) {
+            if (writeEarlierRejection(ctx, caller, conch, action, method)) {
                 return;
             }
             GatewayResponses.writeError(ctx, 400, ErrorCode.INVALID_INPUT, accountMismatch(selector));
@@ -290,7 +292,9 @@ public final class CrabHttpServer implements AutoCloseable {
                 GatewayResponses.trace(ctx),
                 confirmed(ctx),
                 null,
-                confirmToken(ctx));
+                null,
+                confirmToken(ctx),
+                method);
         GatewayResponses.writeOutcome(ctx, outcome);
     }
 
@@ -323,7 +327,13 @@ public final class CrabHttpServer implements AutoCloseable {
     /**
      * @return 已经写过更早的拒绝（权限、能力停用、不存在）时为 true。账号名探针被拒绝时为 false，调用方再写冲突 400。
      */
-    private boolean writeEarlierRejection(Context ctx, ApiKeyPrincipal principal, String conch, String action) {
+    private boolean writeEarlierRejection(
+            Context ctx,
+            ApiKeyPrincipal principal,
+            String conch,
+            String action,
+            String method
+    ) {
         InvokeOutcome gate = runtime.invoker().invoke(
                 principal,
                 conch,
@@ -333,7 +343,12 @@ public final class CrabHttpServer implements AutoCloseable {
                 Optional.empty(),
                 null,
                 CallChannel.HTTP,
-                GatewayResponses.trace(ctx));
+                GatewayResponses.trace(ctx),
+                false,
+                null,
+                null,
+                null,
+                method);
         if (invalidAccountName(gate)) {
             return false;
         }

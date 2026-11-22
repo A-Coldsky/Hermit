@@ -173,21 +173,21 @@ public class AdminUsers {
 
     @Transactional
     public UserSummary resetPassword(String actor, String username, String newPassword) {
-        if (actor.equals(username)) {
-            throw new ApiException(400, ReefErrorCode.INVALID_INPUT, CANNOT_RESET_OWN_PASSWORD);
-        }
-        AdminAccount user = find(username);
-        if (user == null) {
+        AdminAccount target = find(username);
+        if (target == null) {
             throw notFound();
+        }
+        if (actor.equals(target.username())) {
+            throw new ApiException(400, ReefErrorCode.INVALID_INPUT, CANNOT_RESET_OWN_PASSWORD);
         }
         // 版本号加一，已经签出的 JWT（包括调用方自己这一张）随即失效。
         jdbc.update(
                 "UPDATE hermit_admin_users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
                 passwordEncoder.encode(newPassword),
-                user.id());
+                target.id());
         auditService.record(actor, AuditAction.USER_PASSWORD_RESET, null, null,
-                detail(Map.of("username", username)));
-        return summarize(user);
+                detail(Map.of("username", target.username())));
+        return summarize(target);
     }
 
     private UserSummary summarize(AdminAccount account) {

@@ -290,6 +290,26 @@ class TideQueryTest {
     }
 
     @Test
+    void compareCapsTheNumberOfVersions() throws Exception {
+        String atLimit = java.util.stream.IntStream.range(0, TideQueryService.MAX_COMPARE_VERSIONS)
+                .mapToObj(i -> "1.0." + i)
+                .collect(java.util.stream.Collectors.joining(","));
+        JsonNode ok = admin(get("/api/admin/tide/compare")
+                .param("conch", "legacy_oa")
+                .param("versions", atLimit))
+                .get("data").get("versions");
+        assertThat(ok).hasSize(TideQueryService.MAX_COMPARE_VERSIONS);
+
+        String overLimit = atLimit + ",1.0." + TideQueryService.MAX_COMPARE_VERSIONS;
+        mockMvc.perform(get("/api/admin/tide/compare")
+                        .param("conch", "legacy_oa")
+                        .param("versions", overLimit)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+    }
+
+    @Test
     void rollbacksAreNewestFirstAndHonorConchAndTime() throws Exception {
         rollback("legacy_oa", "old", DAY);
         rollback("legacy_oa", "new", DAY.plusSeconds(10));

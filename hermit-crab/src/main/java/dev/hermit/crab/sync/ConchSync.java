@@ -46,6 +46,7 @@ import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ConchRejectedException;
+import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.tls.OutboundTls;
 import dev.hermit.crab.store.AccountStore;
@@ -448,6 +449,15 @@ public final class ConchSync {
             } catch (RuntimeException ex) {
                 LOG.log(Level.WARNING, "rollback prune failed conch={0}", conch);
             }
+            LinkedHashMap<String, Object> auditDetail = new LinkedHashMap<>();
+            auditDetail.put("from", current == null ? "" : current);
+            auditDetail.put("to", target);
+            AuditLog.record(
+                    dataSource,
+                    actor,
+                    AuditKind.CONCH_UPDATED,
+                    "OFFICIAL/" + conch,
+                    ApiJson.write(auditDetail));
             store.clearRepairNotice(conch);
             return new UpdateResult(
                     new ConchOutcome(conch, target, OutcomeKind.INSTALLED, null),
@@ -745,14 +755,24 @@ public final class ConchSync {
             }
         }
         List<String> removed = new ArrayList<>();
-        // Withdraw only a subscribed official conch Reef dropped. Leave unsubscribed names alone,
-        // and leave Origin.LOCAL alone. Both checks stay.
-        Map<String, ConchDoc> loaded = registry.snapshot();
-        for (String conch : loaded.keySet()) {
+        // Withdraw only a subscribed official conch Reef dropped, including unloaded installs
+        // (RULE_DISABLED / REPAIR_REQUIRED). Leave unsubscribed names, never-installed names,
+        // and Origin.LOCAL alone.
+        LinkedHashSet<String> installedOfficial = new LinkedHashSet<>(registry.snapshot().keySet());
+        for (String subscribed : subscriptions.names()) {
+            if (subscribed != null && !present.contains(subscribed)
+                    && !disabledConches.contains(subscribed)
+                    && (previouslyInstalled(subscribed)
+                            || (ConchFiles.safeSegment(subscribed)
+                                    && ConchFiles.readCurrent(paths, subscribed).isPresent()))) {
+                installedOfficial.add(subscribed);
+            }
+        }
+        for (String conch : installedOfficial) {
             if (present.contains(conch)) {
                 continue;
             }
-            if (!subscriptions.contains(conch) || registry.origin(conch) == Origin.LOCAL) {
+            if (!subscriptions.contains(conch) || isLocal(conch)) {
                 continue;
             }
             deactivate(conch, conches);
@@ -1354,7 +1374,12 @@ public final class ConchSync {
                 return;
             }
             String version = ConchFiles.readCurrent(paths, conch)
-                    .orElseGet(() -> registry.find(conch).map(doc -> doc.version().toString()).orElse(null));
+                    .orElseGet(() -> registry.find(conch)
+                            .map(doc -> doc.version().toString())
+                            .orElseGet(() -> {
+                                String disabled = disabledConches.version(conch);
+                                return disabled != null ? disabled : newestInstalled(conch);
+                            }));
             try {
                 noteReefDisabled(conch, version);
             } catch (RuntimeException ex) {

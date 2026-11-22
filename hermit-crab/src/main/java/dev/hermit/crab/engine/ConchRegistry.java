@@ -16,6 +16,7 @@ import java.util.logging.Logger;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.Auth;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.Step;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationIssue;
@@ -25,7 +26,7 @@ import dev.hermit.crab.store.Origin;
 public final class ConchRegistry {
     private static final Logger LOG = Logger.getLogger(ConchRegistry.class.getName());
 
-    static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now", "login");
+    static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now", "login", "loop");
     private static final Set<String> STEP_TYPES = Set.of(
             "request", "extract", "assert", "set", "script", "ask", "if", "repeat");
 
@@ -360,19 +361,22 @@ public final class ConchRegistry {
     private static void reserved(ConchDoc doc, List<ValidationIssue> issues) {
         Auth auth = doc.auth();
         if (auth != null) {
-            reservedSteps(auth.steps(), "auth.steps", issues);
+            reservedSteps(auth.steps(), "auth.steps", issues, 0);
         }
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
-            reservedSteps(entry.getValue().steps(), "actions." + entry.getKey() + ".steps", issues);
+            reservedSteps(entry.getValue().steps(), "actions." + entry.getKey() + ".steps", issues, 0);
         }
     }
 
-    private static void reservedSteps(List<Step> steps, String path, List<ValidationIssue> issues) {
+    private static void reservedSteps(List<Step> steps, String path, List<ValidationIssue> issues, int depth) {
+        if (steps == null || depth > FlowSteps.MAX_DEPTH + 2) {
+            return;
+        }
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
-            for (String branch : dev.hermit.common.model.FlowSteps.branchKeys(step)) {
-                reservedSteps(dev.hermit.common.model.FlowSteps.branch(step, branch),
-                        path + "[" + i + "]." + step.type() + "." + branch, issues);
+            for (String branch : FlowSteps.branchKeys(step)) {
+                reservedSteps(FlowSteps.branch(step, branch),
+                        path + "[" + i + "]." + step.type() + "." + branch, issues, depth + 1);
             }
             if ("script".equals(step.type())) {
                 Object into = step.def().get("into");

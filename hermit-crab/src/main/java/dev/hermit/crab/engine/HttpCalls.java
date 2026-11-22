@@ -3,6 +3,7 @@ package dev.hermit.crab.engine;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
@@ -17,6 +18,7 @@ import java.nio.charset.UnsupportedCharsetException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -35,6 +37,7 @@ import java.util.regex.Pattern;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.apache.hc.client5.http.ConnectTimeoutException;
 import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.cookie.Cookie;
@@ -227,11 +230,12 @@ final class HttpCalls {
             target = withQuery(target, appendQuery(target.getRawQuery(), query, charset, formQuery, "query", warnings));
         }
         byte[] body = null;
+        HttpEntity entity = null;
         ContentType generated = null;
         String multipartType = null;
         if (spec.get("multipart") != null) {
             FileSteps.Multipart multipart = FileSteps.multipart(spec.get("multipart"), charset);
-            body = multipart.body();
+            entity = multipart.entity();
             multipartType = multipart.contentType();
             FILE_MODE.get().wireBody = multipart.wire();
         } else if (spec.get("form") != null) {
@@ -265,7 +269,7 @@ final class HttpCalls {
         Map<String, Object> headers = optionalMap(spec.get("headers"), "headers");
         String declared = declaredContentType(headers);
         String contentType = null;
-        if (body != null) {
+        if (body != null || entity != null) {
             if (multipartType != null) {
                 // 分隔符由 Crab 生成，headers 里声明的 Content-Type 不覆盖它。
                 contentType = multipartType;
@@ -288,6 +292,7 @@ final class HttpCalls {
                     method,
                     target,
                     body,
+                    entity,
                     contentType,
                     headers,
                     charset,
@@ -339,7 +344,12 @@ final class HttpCalls {
             if (toGet) {
                 method = "GET";
                 body = null;
+                entity = null;
                 contentType = null;
+                FileMode mode = FILE_MODE.get();
+                if (mode != null) {
+                    mode.wireBody = null;
+                }
             }
             headers = headersForHop(headers, toGet, upgrade, secrets);
             stripSecrets = upgrade;
@@ -533,6 +543,7 @@ final class HttpCalls {
             String method,
             URI target,
             byte[] body,
+            HttpEntity entity,
             String contentType,
             Map<String, Object> headers,
             Charset requestCharset,
@@ -551,9 +562,12 @@ final class HttpCalls {
                 .setResponseTimeout(Timeout.ofMilliseconds(timeoutMs))
                 .setConnectionRequestTimeout(Timeout.ofMilliseconds(Math.min(timeoutMs, 15_000)))
                 .build());
-        if (body != null) {
+        HttpEntity requestEntity = entity != null
+                ? entity
+                : (body != null ? new ByteArrayEntity(body, (ContentType) null) : null);
+        if (requestEntity != null) {
             // 实体不带 ContentType，避免客户端按字符集再序列化或补 charset。
-            request.setEntity(new ByteArrayEntity(body, (ContentType) null));
+            request.setEntity(requestEntity);
             if (contentType != null && !contentType.isEmpty()) {
                 if (unsendableHeader(contentType)) {
                     throw new RuleProblem(
@@ -566,7 +580,7 @@ final class HttpCalls {
                 request.setHeader("Content-Type", contentType);
             }
         }
-        applyHeaders(request, headers, target, method, body != null);
+        applyHeaders(request, headers, target, method, requestEntity != null);
         String path = pathOf(target);
         // responseTimeout 只限制相邻读取的空闲。持续慢速输出不会触发它，到能力 deadline 时取消请求，
         // 才能打断已经阻塞在 InputStream.read 上的线程。没写 timeout_ms 时，这段空闲上限就是剩余 deadline。
@@ -647,15 +661,20 @@ final class HttpCalls {
             Map<String, Object> wire = captured.get() != null
                     ? captured.get()
                     : snapshotWire(executed(context, request), body, requestCharset);
+            dev.hermit.crab.files.FileStageException stageError = findFileStageCause(ex);
+            if (stageError != null) {
+                throw new RuleProblem(ErrorCode.INVALID_INPUT, stageError.getMessage(), method, path, null, wire);
+            }
             if (System.nanoTime() >= deadlineNanos) {
                 cancellable.cancel();
                 throw new DeadlineExceeded(-1, "request", List.of());
             }
             if (isTimeout(ex) && capabilityBound) {
-                throw new DeadlineExceeded(-1, "request", List.of());
+                throw new DeadlineExceeded(-1, "request", List.of(), isConnectTimeout(ex) ? "connect" : "timeout");
             }
             if (isTimeout(ex)) {
-                throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, STEP_TIMEOUT, method, path, null, wire);
+                throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, STEP_TIMEOUT, method, path, null, wire)
+                        .withRetryReason(isConnectTimeout(ex) ? "connect" : "timeout");
             }
             TransportFailure.View view = TransportFailure.observe(ex, target.getHost(), port(target));
             throw new RuleProblem(
@@ -664,6 +683,17 @@ final class HttpCalls {
             cancellation.cancel(false);
             afterExchange.run();
         }
+    }
+
+    private static dev.hermit.crab.files.FileStageException findFileStageCause(Throwable error) {
+        Throwable cursor = error;
+        for (int depth = 0; cursor != null && depth < 16; depth++) {
+            if (cursor instanceof dev.hermit.crab.files.FileStageException stageError) {
+                return stageError;
+            }
+            cursor = cursor.getCause();
+        }
+        return null;
     }
 
     private static ScheduledFuture<?> scheduleCancellation(Cancellable cancellable, long deadlineNanos) {
@@ -1431,6 +1461,24 @@ final class HttpCalls {
 
     private static boolean isTimeout(Throwable failure) {
         return TransportFailure.isTimeout(failure);
+    }
+
+    private static boolean isConnectTimeout(Throwable failure) {
+        Throwable current = failure;
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        while (current != null && seen.add(current)) {
+            if (current instanceof ConnectTimeoutException) {
+                return true;
+            }
+            if (current instanceof SocketTimeoutException) {
+                String message = current.getMessage();
+                if (message != null && message.toLowerCase(Locale.ROOT).contains("connect")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private static boolean isRedirect(int status) {

@@ -148,6 +148,49 @@ class EngineReuseTest {
         assertThat(vars.get("nums")).isEqualTo(List.of(1, 2));
     }
 
+    /** each 和 from 变量里调用会改写数组的 jsonpath 函数时，不能污染共享 JSON 和 vars。 */
+    @Test
+    void jsonpathFunctionInsideEachAndFromVarDoesNotMutateSharedData() {
+        Map<String, Object> vars = response("{\"rows\": [{\"nums\": [1, 2]}, {\"nums\": [3, 4]}]}");
+        LinkedHashMap<String, Object> spec = new LinkedHashMap<>();
+        spec.put("rows", Map.of(
+                "jsonpath", "$.rows[*]",
+                "each", ordered(
+                        "sum", Map.of("jsonpath", "$.nums.append(10).sum()"),
+                        "count", Map.of("jsonpath", "$.nums.length()"),
+                        "nums", Map.of("jsonpath", "$.nums"))));
+        spec.put("after", Map.of("jsonpath", "$.rows[0].nums"));
+
+        extract(spec, vars);
+
+        List<?> rows = (List<?>) vars.get("rows");
+        assertThat(rows).hasSize(2);
+        Map<?, ?> first = (Map<?, ?>) rows.get(0);
+        Map<?, ?> second = (Map<?, ?>) rows.get(1);
+        assertThat(((Number) first.get("sum")).intValue()).isEqualTo(13);
+        assertThat(first.get("count")).isEqualTo(2);
+        assertThat(first.get("nums")).isEqualTo(List.of(1, 2));
+        assertThat(((Number) second.get("sum")).intValue()).isEqualTo(17);
+        assertThat(second.get("count")).isEqualTo(2);
+        assertThat(second.get("nums")).isEqualTo(List.of(3, 4));
+        assertThat(vars.get("after")).isEqualTo(List.of(1, 2));
+
+        ArrayList<Object> liveList = new ArrayList<>(List.of(1, 2));
+        LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
+        payload.put("nums", liveList);
+        Map<String, Object> fromVars = response("{}");
+        fromVars.put("payload", payload);
+        LinkedHashMap<String, Object> fromSpec = new LinkedHashMap<>();
+        fromSpec.put("sum", Map.of("from", "payload", "jsonpath", "$.nums.append(10).sum()"));
+        fromSpec.put("after", Map.of("from", "payload", "jsonpath", "$.nums"));
+
+        extract(fromSpec, fromVars);
+
+        assertThat(((Number) fromVars.get("sum")).intValue()).isEqualTo(13);
+        assertThat(fromVars.get("after")).isEqualTo(List.of(1, 2));
+        assertThat(liveList).containsExactly(1, 2);
+    }
+
     /** :matchText 会往文档里插入合成元素，后面的字段不能看到它们。 */
     @Test
     void matchTextDoesNotLeaveElementsForLaterFields() {
@@ -162,6 +205,31 @@ class EngineReuseTest {
         assertThat(vars.get("lines")).isEqualTo("one");
         assertThat(String.valueOf(vars.get("html"))).doesNotContain("jsoup").doesNotContain("pseudo");
         assertThat(String.valueOf(vars.get("viaXpath"))).doesNotContain("jsoup").doesNotContain("pseudo");
+    }
+
+    /** each 里使用 :matchText 不能改写行元素或共享文档（含表格行 tr/td）。 */
+    @Test
+    void matchTextInsideEachDoesNotMutateRowElementOrSharedDocument() {
+        Map<String, Object> vars = response(
+                "<html><body><table><tr><td>alpha<b>beta</b></td></tr></table></body></html>");
+        LinkedHashMap<String, Object> spec = new LinkedHashMap<>();
+        spec.put("rows", Map.of(
+                "css", "table tr",
+                "each", ordered(
+                        "text", Map.of("css", "td:matchText"),
+                        "firstChild", Map.of("css", "td > :first-child"),
+                        "html", Map.of("css", "td", "html", true))));
+        spec.put("outerFirstChild", Map.of("css", "table tr td > :first-child"));
+        spec.put("outerHtml", Map.of("css", "table tr td", "html", true));
+
+        extract(spec, vars);
+
+        assertThat(vars.get("rows")).isEqualTo(List.of(Map.of(
+                "text", "alpha",
+                "firstChild", "beta",
+                "html", "alpha<b>beta</b>")));
+        assertThat(vars.get("outerFirstChild")).isEqualTo("beta");
+        assertThat(vars.get("outerHtml")).isEqualTo("alpha<b>beta</b>");
     }
 
     /** 带标签的模板字面量：每次调用拿到的 strings 都是这次全局对象下的数组。 */

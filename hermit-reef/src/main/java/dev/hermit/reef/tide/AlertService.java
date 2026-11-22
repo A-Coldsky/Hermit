@@ -13,6 +13,7 @@ import java.sql.Types;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -95,7 +96,8 @@ public class AlertService {
     }
 
     private void considerRegression(CurrentVersion current, List<WebhookNotice> created, Instant now) {
-        Totals calls = totals(current.conch(), current.version(), current.publishedAt(), null);
+        Instant currentFrom = current.publishedAt().truncatedTo(ChronoUnit.HOURS);
+        Totals calls = totals(current.conch(), current.version(), currentFrom, null);
         if (calls.calls() < properties.getNewVersionMinCalls()) {
             return;
         }

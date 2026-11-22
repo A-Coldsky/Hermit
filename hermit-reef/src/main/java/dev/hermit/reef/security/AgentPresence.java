@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
 public class AgentPresence {
 
     static final Duration MIN_INTERVAL = Duration.ofSeconds(60);
-    private static final int EVICT_AT = 10_000;
+    static final int EVICT_AT = 10_000;
 
     private final JdbcTemplate jdbc;
     private final Clock clock;
@@ -48,6 +48,9 @@ public class AgentPresence {
         if (lastWrite.size() > EVICT_AT) {
             Instant cutoff = now.minus(MIN_INTERVAL);
             lastWrite.entrySet().removeIf(entry -> entry.getValue().isBefore(cutoff));
+            if (lastWrite.size() > EVICT_AT) {
+                lastWrite.clear();
+            }
         }
         if (!write.get()) {
             return;
@@ -113,6 +116,10 @@ public class AgentPresence {
                 "DELETE FROM hermit_crab_instances WHERE instance_id = ? AND user_id <> ?",
                 instanceId,
                 principal.userId());
+    }
+
+    int cacheSize() {
+        return lastWrite.size();
     }
 
     private static String key(AgentPrincipal principal, String instanceId) {

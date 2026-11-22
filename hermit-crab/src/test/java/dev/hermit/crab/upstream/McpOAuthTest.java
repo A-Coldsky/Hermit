@@ -521,6 +521,63 @@ class McpOAuthTest {
         return values;
     }
 
+    @Test
+    void clearIfMatchesPreservesNewerTokenAndDeletedAccountCallbackFailsCleanly() throws Exception {
+        try (Upstream upstream = new Upstream();
+                Harness harness = Harness.open(temp.resolve("oauth-races"), upstream.port, null)) {
+            harness.importLocal(harness.oauthYaml(true).getBytes(StandardCharsets.UTF_8));
+            harness.account("ada");
+            harness.apiKey("vendor_oauth");
+            McpOAuth oauth = harness.runtime.oauth();
+            ConchDoc doc = harness.runtime.registry().find("vendor_oauth").orElseThrow();
+
+            // 第一次连接写入 tok-1。
+            assertThat(harness.connect("ada", "code-first").status).isEqualTo(200);
+            String firstToken = upstream.issued.get(0).access;
+            assertThat(oauth.status(dev.hermit.crab.store.Origin.LOCAL, doc, "ada").connected()).isTrue();
+
+            // 重新连接写入 tok-2。
+            assertThat(harness.connect("ada", "code-second").status).isEqualTo(200);
+            String secondToken = upstream.issued.get(1).access;
+            assertThat(secondToken).isNotEqualTo(firstToken);
+
+            // 旧调用拿 tok-1 收到二次 401 时调用 clearIfMatches，不能删掉新写入的 tok-2。
+            oauth.clearIfMatches(dev.hermit.crab.store.Origin.LOCAL, "vendor_oauth", "ada", firstToken);
+            assertThat(oauth.status(dev.hermit.crab.store.Origin.LOCAL, doc, "ada").connected()).isTrue();
+            McpOAuthToken kept = oauth.peek(dev.hermit.crab.store.Origin.LOCAL, "vendor_oauth", "ada", Map.of());
+            assertThat(kept).isNotNull();
+            assertThat(kept.accessToken()).isEqualTo(secondToken);
+
+            // 匹配当前令牌 tok-2 时，clearIfMatches 才清理。
+            oauth.clearIfMatches(dev.hermit.crab.store.Origin.LOCAL, "vendor_oauth", "ada", secondToken);
+            assertThat(oauth.status(dev.hermit.crab.store.Origin.LOCAL, doc, "ada").connected()).isFalse();
+
+            // 账号在回调前被删：forget 清理待完成授权并回收锁，callback 返回已过期。
+            Reply started = harness.console(
+                    "POST", "/console/api/conches/vendor_oauth/accounts/ada/oauth/start", "{}", null);
+            assertThat(started.status).isEqualTo(200);
+            String state = query(started.json.path("data").path("authorizationUrl").asText()).get("state");
+            harness.runtime.admin().deleteAccount(dev.hermit.crab.store.Origin.LOCAL, "vendor_oauth", "ada", Actors.CONSOLE);
+            McpOAuth.Callback expiredCb = oauth.callback("code-after-delete", state, null);
+            assertThat(expiredCb.connected()).isFalse();
+            assertThat(expiredCb.message()).isEqualTo(McpOAuth.CALLBACK_EXPIRED);
+            assertThat(oauth.lockCount()).isZero();
+
+            // 授权码换令牌期间账号被删（pending 已取走后才删库行）：save 捕获 AccountNotFoundException 返回 CALLBACK_FAILED。
+            harness.account("ada");
+            Reply started2 = harness.console(
+                    "POST", "/console/api/conches/vendor_oauth/accounts/ada/oauth/start", "{}", null);
+            assertThat(started2.status).isEqualTo(200);
+            String state2 = query(started2.json.path("data").path("authorizationUrl").asText()).get("state");
+            new dev.hermit.crab.store.AccountStore(harness.runtime.dataSource())
+                    .delete(dev.hermit.crab.store.Origin.LOCAL, "vendor_oauth", "ada", Actors.CONSOLE);
+            McpOAuth.Callback midFlightCb = oauth.callback("code-mid-flight", state2, null);
+            assertThat(midFlightCb.connected()).isFalse();
+            assertThat(midFlightCb.message()).isEqualTo(McpOAuth.CALLBACK_FAILED);
+            assertThat(oauth.lockCount()).isZero();
+        }
+    }
+
     private static String decode(String value) {
         return URLDecoder.decode(value, StandardCharsets.UTF_8);
     }

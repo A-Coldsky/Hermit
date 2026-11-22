@@ -12,6 +12,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.McpTool;
 import dev.hermit.common.model.Step;
 
@@ -161,7 +162,7 @@ public record ConchDiff(
         if (steps == null || names.isEmpty()) {
             return false;
         }
-        for (Step step : steps) {
+        for (Step step : FlowSteps.flat(steps)) {
             if (!"script".equals(step.type()) || step.def() == null) {
                 continue;
             }

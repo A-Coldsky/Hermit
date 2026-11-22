@@ -172,6 +172,33 @@ class AlertEvaluationTest {
     }
 
     @Test
+    void regressionCountsLaunchHourWhenPublishedMidHour() {
+        Instant publishedAt = Instant.parse("2026-06-08T10:15:00Z");
+        Instant launchHour = Instant.parse("2026-06-08T10:00:00Z");
+        clock.setInstant(Instant.parse("2026-06-08T10:30:00Z"));
+        publish(CONCH, "1.0.0", Instant.parse("2026-06-07T08:00:00Z"), false);
+        publish(CONCH, "1.1.0", publishedAt, true);
+        hour(CONCH, "1.0.0", Instant.parse("2026-06-08T08:00:00Z"), 20, 0);
+        hour(CONCH, "1.1.0", Instant.parse("2026-06-08T09:00:00Z"), 100, 0);
+        hour(CONCH, "1.1.0", launchHour, 80, 20);
+        alertService.evaluate();
+        assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
+        String detail = jdbc.queryForObject("SELECT detail_json FROM hermit_alerts", String.class);
+        assertThat(detail).contains("\"baselineVersion\":\"1.0.0\"");
+        assertThat(detail).contains("\"currentCalls\":100");
+        assertThat(detail).contains("\"currentFailures\":20");
+        assertThat(detail).contains("\"baselineCalls\":20");
+
+        jdbc.update("DELETE FROM hermit_alerts");
+        jdbc.update("DELETE FROM hermit_hourly_counts");
+        jdbc.update("DELETE FROM hermit_conch_versions");
+        publish(CONCH, "1.1.0", publishedAt, true);
+        hour(CONCH, "1.1.0", launchHour, 9, 11);
+        alertService.evaluate();
+        assertThat(alertCount(AlertKind.NEW_VERSION_REGRESSION)).isEqualTo(1);
+    }
+
+    @Test
     void previousVersionFollowsPublishTimeRatherThanSemver() {
         publish(CONCH, "1.0.0", PUBLISHED.minus(Duration.ofDays(2)), false);
         publish(CONCH, "1.2.0", PUBLISHED.minus(Duration.ofDays(1)), false);

@@ -11,6 +11,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -46,8 +48,10 @@ final class McpUpstreamSessions implements AutoCloseable {
     private final McpUpstreamClient client;
     private final SessionManager accounts;
     private final int permits;
+    private final AtomicLong ids = new AtomicLong(2);
+    private final AtomicLong generations = new AtomicLong(1);
     private final ConcurrentHashMap<SessionKey, Handle> handles = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<SessionKey, Semaphore> lanes = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<SessionKey, Lane> lanes = new ConcurrentHashMap<>();
 
     McpUpstreamSessions(McpUpstreamClient client, SessionManager accounts, int permits) {
         this.client = client;
@@ -55,13 +59,47 @@ final class McpUpstreamSessions implements AutoCloseable {
         this.permits = permits;
     }
 
+    long nextGeneration() {
+        return generations.getAndIncrement();
+    }
+
+    int laneCount() {
+        return lanes.size();
+    }
+
+    Handle currentHandle(SessionKey key) {
+        return handles.get(key);
+    }
+
     Permit acquire(SessionKey key, long deadlineNanos) throws InterruptedException {
-        Semaphore lane = lanes.computeIfAbsent(key, ignored -> new Semaphore(permits, true));
-        long wait = deadlineNanos - System.nanoTime();
-        if (wait <= 0 || !lane.tryAcquire(wait, TimeUnit.NANOSECONDS)) {
+        Lane lane = lanes.compute(key, (ignored, existing) -> {
+            Lane current = existing == null ? new Lane(permits) : existing;
+            current.refs++;
+            return current;
+        });
+        boolean acquired = false;
+        try {
+            long wait = deadlineNanos - System.nanoTime();
+            if (wait > 0 && lane.semaphore.tryAcquire(wait, TimeUnit.NANOSECONDS)) {
+                acquired = true;
+                return new Permit(this, key, lane);
+            }
             return null;
+        } finally {
+            if (!acquired) {
+                releaseLaneRef(key, lane);
+            }
         }
-        return new Permit(lane);
+    }
+
+    private void releaseLaneRef(SessionKey key, Lane lane) {
+        lanes.computeIfPresent(key, (ignored, existing) -> {
+            if (existing != lane) {
+                return existing;
+            }
+            existing.refs--;
+            return existing.refs <= 0 ? null : existing;
+        });
     }
 
     CallResult call(
@@ -76,10 +114,28 @@ final class McpUpstreamSessions implements AutoCloseable {
             boolean allowLoopback,
             ExchangeSink sink
     ) {
+        return call(key, doc, material, nextGeneration(), headers, tool, arguments,
+                deadlineNanos, timeoutMs, allowLoopback, sink);
+    }
+
+    CallResult call(
+            SessionKey key,
+            ConchDoc doc,
+            String material,
+            long generation,
+            Map<String, String> headers,
+            String tool,
+            Map<String, Object> arguments,
+            long deadlineNanos,
+            Long timeoutMs,
+            boolean allowLoopback,
+            ExchangeSink sink
+    ) {
         String fingerprint = fingerprint(doc, material);
         Handle current = handles.get(key);
         if (current == null || !current.fingerprint.equals(fingerprint)) {
-            CallResult opened = open(key, doc, fingerprint, headers, deadlineNanos, timeoutMs, allowLoopback, current, sink);
+            CallResult opened = open(
+                    key, doc, fingerprint, generation, headers, deadlineNanos, timeoutMs, allowLoopback, current, false, sink);
             if (opened.error() != null || opened.handle() == null) {
                 return opened;
             }
@@ -88,19 +144,31 @@ final class McpUpstreamSessions implements AutoCloseable {
         CallResult first = toolsCall(
                 key, current, doc, headers, tool, arguments, deadlineNanos, timeoutMs, allowLoopback, sink);
         if (first.error() != SessionError.NOT_FOUND) {
+            if (current.ephemeral) {
+                Handle used = first.handle() != null ? first.handle() : current;
+                delete(null, doc, headers, used, allowLoopback);
+            }
             return first;
         }
-        CallResult rebuilt = open(key, doc, fingerprint, headers, deadlineNanos, timeoutMs, allowLoopback, current, sink);
+        CallResult rebuilt = open(
+                key, doc, fingerprint, generation, headers, deadlineNanos, timeoutMs, allowLoopback, current, true, sink);
         if (rebuilt.error() != null || rebuilt.handle() == null) {
             return rebuilt.error() == null
                     ? CallResult.fail(SessionError.NOT_FOUND, 404, null)
                     : rebuilt;
         }
+        Handle rebuiltHandle = rebuilt.handle();
         CallResult second = toolsCall(
-                key, rebuilt.handle(), doc, headers, tool, arguments, deadlineNanos, timeoutMs, allowLoopback, sink);
+                key, rebuiltHandle, doc, headers, tool, arguments, deadlineNanos, timeoutMs, allowLoopback, sink);
         if (second.error() == SessionError.NOT_FOUND) {
-            handles.remove(key, rebuilt.handle());
+            if (!rebuiltHandle.ephemeral) {
+                handles.remove(key, rebuiltHandle);
+            }
             return CallResult.fail(SessionError.LOST, 404, null);
+        }
+        if (rebuiltHandle.ephemeral) {
+            Handle used = second.handle() != null ? second.handle() : rebuiltHandle;
+            delete(null, doc, headers, used, allowLoopback);
         }
         return second;
     }
@@ -115,10 +183,25 @@ final class McpUpstreamSessions implements AutoCloseable {
             boolean allowLoopback,
             ExchangeSink sink
     ) {
+        return list(key, doc, material, nextGeneration(), headers, deadlineNanos, timeoutMs, allowLoopback, sink);
+    }
+
+    ListResult list(
+            SessionKey key,
+            ConchDoc doc,
+            String material,
+            long generation,
+            Map<String, String> headers,
+            long deadlineNanos,
+            Long timeoutMs,
+            boolean allowLoopback,
+            ExchangeSink sink
+    ) {
         String fingerprint = fingerprint(doc, material);
         Handle current = handles.get(key);
         if (current == null || !current.fingerprint.equals(fingerprint)) {
-            CallResult opened = open(key, doc, fingerprint, headers, deadlineNanos, timeoutMs, allowLoopback, current, sink);
+            CallResult opened = open(
+                    key, doc, fingerprint, generation, headers, deadlineNanos, timeoutMs, allowLoopback, current, false, sink);
             if (opened.error() != null || opened.handle() == null) {
                 return ListResult.failed(opened.error() == null
                         ? CallResult.fail(SessionError.NOT_FOUND, 404, null)
@@ -128,18 +211,30 @@ final class McpUpstreamSessions implements AutoCloseable {
         }
         ListResult first = collect(key, current, doc, headers, deadlineNanos, timeoutMs, allowLoopback, sink);
         if (first.failure() == null || first.failure().error() != SessionError.NOT_FOUND) {
+            if (current.ephemeral) {
+                Handle used = first.handle() != null ? first.handle() : current;
+                delete(null, doc, headers, used, allowLoopback);
+            }
             return first;
         }
-        CallResult rebuilt = open(key, doc, fingerprint, headers, deadlineNanos, timeoutMs, allowLoopback, current, sink);
+        CallResult rebuilt = open(
+                key, doc, fingerprint, generation, headers, deadlineNanos, timeoutMs, allowLoopback, current, true, sink);
         if (rebuilt.error() != null || rebuilt.handle() == null) {
             return ListResult.failed(rebuilt.error() == null
                     ? CallResult.fail(SessionError.NOT_FOUND, 404, null)
                     : rebuilt);
         }
-        ListResult second = collect(key, rebuilt.handle(), doc, headers, deadlineNanos, timeoutMs, allowLoopback, sink);
+        Handle rebuiltHandle = rebuilt.handle();
+        ListResult second = collect(key, rebuiltHandle, doc, headers, deadlineNanos, timeoutMs, allowLoopback, sink);
         if (second.failure() != null && second.failure().error() == SessionError.NOT_FOUND) {
-            handles.remove(key, rebuilt.handle());
+            if (!rebuiltHandle.ephemeral) {
+                handles.remove(key, rebuiltHandle);
+            }
             return ListResult.failed(CallResult.fail(SessionError.LOST, 404, null));
+        }
+        if (rebuiltHandle.ephemeral) {
+            Handle used = second.handle() != null ? second.handle() : rebuiltHandle;
+            delete(null, doc, headers, used, allowLoopback);
         }
         return second;
     }
@@ -148,13 +243,18 @@ final class McpUpstreamSessions implements AutoCloseable {
             SessionKey key,
             ConchDoc doc,
             String fingerprint,
+            long generation,
             Map<String, String> headers,
             long deadlineNanos,
             Long timeoutMs,
             boolean allowLoopback,
             Handle previous,
+            boolean broken,
             ExchangeSink sink
     ) {
+        long effectiveGen = (broken && previous != null && !previous.ephemeral && previous.fingerprint.equals(fingerprint))
+                ? Math.max(generation, previous.generation)
+                : generation;
         boolean locked = false;
         try {
             locked = accounts.tryLock(key, deadlineNanos);
@@ -165,31 +265,45 @@ final class McpUpstreamSessions implements AutoCloseable {
         if (!locked) {
             return CallResult.fail(SessionError.DEADLINE, 0, null);
         }
+        boolean useEphemeral = false;
         try {
             Handle raced = handles.get(key);
             if (raced != null && raced.fingerprint.equals(fingerprint) && raced != previous) {
                 return CallResult.ready(raced);
             }
-            if (previous != null && previous.sessionId != null) {
-                delete(doc, headers, previous, allowLoopback);
+            if (raced != null && raced.generation > effectiveGen) {
+                // 共享会话已经被更新的令牌或规则版本替换，不能删除或覆盖它；改为在锁外建临时会话。
+                useEphemeral = true;
+            } else {
+                if (raced != null && raced.sessionId != null) {
+                    delete(key, doc, headers, raced, allowLoopback);
+                }
+                if (broken && previous != null && !previous.ephemeral && previous != raced && previous.sessionId != null) {
+                    delete(key, doc, headers, previous, allowLoopback);
+                }
+                return initialize(
+                        key, doc, fingerprint, effectiveGen, headers, deadlineNanos, timeoutMs, allowLoopback, true, sink);
             }
-            if (raced != null && raced != previous && raced.sessionId != null) {
-                delete(doc, headers, raced, allowLoopback);
-            }
-            return initialize(key, doc, fingerprint, headers, deadlineNanos, timeoutMs, allowLoopback, sink);
         } finally {
             accounts.unlock(key);
         }
+        if (useEphemeral) {
+            return initialize(
+                    key, doc, fingerprint, effectiveGen, headers, deadlineNanos, timeoutMs, allowLoopback, false, sink);
+        }
+        return CallResult.fail(SessionError.HTTP, 0, null);
     }
 
     private CallResult initialize(
             SessionKey key,
             ConchDoc doc,
             String fingerprint,
+            long generation,
             Map<String, String> headers,
             long deadlineNanos,
             Long timeoutMs,
             boolean allowLoopback,
+            boolean store,
             ExchangeSink sink
     ) {
         long id = 1L;
@@ -247,8 +361,12 @@ final class McpUpstreamSessions implements AutoCloseable {
                 protocol,
                 doc.version(),
                 textOrNull(serverInfo.get("name")),
-                textOrNull(serverInfo.get("version")));
-        handles.put(key, handle);
+                textOrNull(serverInfo.get("version")),
+                generation,
+                !store);
+        if (store) {
+            handles.put(key, handle);
+        }
         return CallResult.ready(handle);
     }
 
@@ -275,7 +393,9 @@ final class McpUpstreamSessions implements AutoCloseable {
         McpUpstreamClient.RpcResult response = post(
                 doc, headers, handle.sessionId, handle.protocol, body, id, deadlineNanos, timeoutMs, allowLoopback, true, sink);
         if (response.status() == 404) {
-            handles.remove(key, handle);
+            if (!handle.ephemeral) {
+                handles.remove(key, handle);
+            }
             return CallResult.fail(SessionError.NOT_FOUND, 404, null);
         }
         CallResult failed = transport(response);
@@ -288,14 +408,24 @@ final class McpUpstreamSessions implements AutoCloseable {
         String refreshed = response.sessionId();
         if (refreshed != null && !refreshed.isBlank() && !refreshed.equals(handle.sessionId)) {
             Handle updated = handle.withSession(refreshed);
-            handles.replace(key, handle, updated);
+            if (!handle.ephemeral) {
+                handles.replace(key, handle, updated);
+            }
             handle = updated;
         }
         return CallResult.message(handle, response.message());
     }
 
-    private void delete(ConchDoc doc, Map<String, String> headers, Handle handle, boolean allowLoopback) {
-        handles.values().remove(handle);
+    private void delete(SessionKey key, ConchDoc doc, Map<String, String> headers, Handle handle, boolean allowLoopback) {
+        if (handle == null || !handle.deleted.compareAndSet(false, true)) {
+            return;
+        }
+        if (!handle.ephemeral && key != null) {
+            handles.remove(key, handle);
+        }
+        if (handle.sessionId == null || handle.sessionId.isBlank()) {
+            return;
+        }
         long budget = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         post(doc, headers, handle.sessionId, handle.protocol, null, null, budget, 2_000L, allowLoopback, false, null);
     }
@@ -316,49 +446,49 @@ final class McpUpstreamSessions implements AutoCloseable {
         for (int page = 1; page <= MAX_LIST_PAGES; page++) {
             CallResult fetched = toolsListPage(
                     key, handle, doc, headers, cursor, deadlineNanos, timeoutMs, allowLoopback, sink);
-            if (fetched.error() != null) {
-                return ListResult.failed(fetched);
-            }
             if (fetched.handle() != null) {
                 handle = fetched.handle();
             }
+            if (fetched.error() != null) {
+                return ListResult.failed(handle, fetched);
+            }
             JsonNode message = fetched.message();
             if (message == null || !message.isObject()) {
-                return ListResult.limit(LIST_INCOMPLETE);
+                return ListResult.limit(handle, LIST_INCOMPLETE);
             }
             if (message.has("error")) {
-                return ListResult.failed(CallResult.fail(SessionError.RPC, 200, message));
+                return ListResult.failed(handle, CallResult.fail(SessionError.RPC, 200, message));
             }
             JsonNode result = message.get("result");
             if (result == null || !result.isObject() || !result.path("tools").isArray()) {
-                return ListResult.limit(LIST_INCOMPLETE);
+                return ListResult.limit(handle, LIST_INCOMPLETE);
             }
             for (JsonNode tool : result.path("tools")) {
                 tools.add(tool);
             }
             if (tools.size() > MAX_LIST_TOOLS) {
-                return ListResult.limit(TOO_MANY_TOOLS);
+                return ListResult.limit(handle, TOO_MANY_TOOLS);
             }
             JsonNode next = result.get("nextCursor");
             if (next == null || next.isNull()) {
                 return ListResult.ready(handle, tools);
             }
             if (!next.isTextual()) {
-                return ListResult.limit(LIST_INCOMPLETE);
+                return ListResult.limit(handle, LIST_INCOMPLETE);
             }
             String nextCursor = next.asText();
             if (nextCursor.isBlank()) {
                 return ListResult.ready(handle, tools);
             }
             if (page == MAX_LIST_PAGES) {
-                return ListResult.limit(TOO_MANY_PAGES);
+                return ListResult.limit(handle, TOO_MANY_PAGES);
             }
             if (!cursors.add(nextCursor)) {
-                return ListResult.limit(CURSOR_STUCK);
+                return ListResult.limit(handle, CURSOR_STUCK);
             }
             cursor = nextCursor;
         }
-        return ListResult.limit(TOO_MANY_PAGES);
+        return ListResult.limit(handle, TOO_MANY_PAGES);
     }
 
     private CallResult toolsListPage(
@@ -384,7 +514,9 @@ final class McpUpstreamSessions implements AutoCloseable {
         McpUpstreamClient.RpcResult response = post(
                 doc, headers, handle.sessionId, handle.protocol, body, id, deadlineNanos, timeoutMs, allowLoopback, false, sink);
         if (response.status() == 404) {
-            handles.remove(key, handle);
+            if (!handle.ephemeral) {
+                handles.remove(key, handle);
+            }
             return CallResult.fail(SessionError.NOT_FOUND, 404, null);
         }
         CallResult failed = transport(response);
@@ -397,7 +529,9 @@ final class McpUpstreamSessions implements AutoCloseable {
         String refreshed = response.sessionId();
         if (refreshed != null && !refreshed.isBlank() && !refreshed.equals(handle.sessionId)) {
             Handle updated = handle.withSession(refreshed);
-            handles.replace(key, handle, updated);
+            if (!handle.ephemeral) {
+                handles.replace(key, handle, updated);
+            }
             handle = updated;
         }
         return CallResult.message(handle, response.message());
@@ -526,9 +660,8 @@ final class McpUpstreamSessions implements AutoCloseable {
         }
     }
 
-    private static long nextId() {
-        long value = System.nanoTime();
-        return value == 0L ? 1L : Math.abs(value);
+    long nextId() {
+        return ids.getAndIncrement();
     }
 
     /** 断开登录时丢掉本机会话。不向上游发 DELETE，下一次调用会重新 initialize。 */
@@ -538,22 +671,29 @@ final class McpUpstreamSessions implements AutoCloseable {
         }
     }
 
-    /** 账号已删除：会话和并发通道都不再保留。通道正在用时留着，用完也只是一个空的 Semaphore。 */
+    /** 账号已删除：会话不再保留；并发通道若无在用引用则立即可回收，正在用时由最后一个释放方回收。 */
     void forget(SessionKey key) {
         if (key == null) {
             return;
         }
         handles.remove(key);
-        Semaphore lane = lanes.get(key);
-        if (lane != null && lane.availablePermits() == permits) {
-            lanes.remove(key, lane);
-        }
+        lanes.computeIfPresent(key, (ignored, existing) -> existing.refs <= 0 ? null : existing);
     }
 
     @Override
     public void close() {
         handles.clear();
+        lanes.clear();
         client.close();
+    }
+
+    private static final class Lane {
+        final Semaphore semaphore;
+        int refs;
+
+        Lane(int permits) {
+            this.semaphore = new Semaphore(permits, true);
+        }
     }
 
     static final class Handle {
@@ -563,18 +703,33 @@ final class McpUpstreamSessions implements AutoCloseable {
         final SemVer version;
         final String serverName;
         final String serverVersion;
+        final long generation;
+        final boolean ephemeral;
+        final AtomicBoolean deleted = new AtomicBoolean();
 
-        Handle(String fingerprint, String sessionId, String protocol, SemVer version, String serverName, String serverVersion) {
+        Handle(
+                String fingerprint,
+                String sessionId,
+                String protocol,
+                SemVer version,
+                String serverName,
+                String serverVersion,
+                long generation,
+                boolean ephemeral
+        ) {
             this.fingerprint = fingerprint;
             this.sessionId = sessionId;
             this.protocol = protocol;
             this.version = version;
             this.serverName = serverName;
             this.serverVersion = serverVersion;
+            this.generation = generation;
+            this.ephemeral = ephemeral;
         }
 
         Handle withSession(String sessionId) {
-            return new Handle(fingerprint, sessionId, protocol, version, serverName, serverVersion);
+            return new Handle(
+                    fingerprint, sessionId, protocol, version, serverName, serverVersion, generation, ephemeral);
         }
     }
 
@@ -633,24 +788,41 @@ final class McpUpstreamSessions implements AutoCloseable {
         }
 
         static ListResult failed(CallResult failure) {
-            return new ListResult(failure == null ? null : failure.handle(), List.of(), failure, null);
+            return failed(failure == null ? null : failure.handle(), failure);
+        }
+
+        static ListResult failed(Handle handle, CallResult failure) {
+            Handle latest = failure != null && failure.handle() != null ? failure.handle() : handle;
+            return new ListResult(latest, List.of(), failure, null);
         }
 
         static ListResult limit(String message) {
-            return new ListResult(null, List.of(), null, message);
+            return limit(null, message);
+        }
+
+        static ListResult limit(Handle handle, String message) {
+            return new ListResult(handle, List.of(), null, message);
         }
     }
 
     static final class Permit implements AutoCloseable {
-        private final Semaphore lane;
+        private final McpUpstreamSessions owner;
+        private final SessionKey key;
+        private final Lane lane;
+        private final AtomicBoolean released = new AtomicBoolean();
 
-        Permit(Semaphore lane) {
+        Permit(McpUpstreamSessions owner, SessionKey key, Lane lane) {
+            this.owner = owner;
+            this.key = key;
             this.lane = lane;
         }
 
         @Override
         public void close() {
-            lane.release();
+            if (released.compareAndSet(false, true)) {
+                lane.semaphore.release();
+                owner.releaseLaneRef(key, lane);
+            }
         }
     }
 

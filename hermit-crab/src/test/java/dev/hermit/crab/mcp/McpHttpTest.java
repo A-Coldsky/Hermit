@@ -535,6 +535,53 @@ class McpHttpTest {
     }
 
     @Test
+    void sseStreamsAreCappedPerSession() throws Exception {
+        try (SessionServer server = SessionServer.open(temp.resolve("sse-cap"), Clock.systemUTC(), 10)) {
+            String key = server.apiKey.plaintext();
+            String session = server.initialize(key);
+            HttpClient sseClient = HttpClient.newBuilder()
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .connectTimeout(Duration.ofSeconds(5))
+                    .build();
+            ArrayList<InputStream> streams = new ArrayList<>();
+            try {
+                for (int i = 0; i < McpSession.MAX_SINKS; i++) {
+                    HttpRequest request = HttpRequest.newBuilder(URI.create(server.base + "/mcp"))
+                            .header("Authorization", "Bearer " + key)
+                            .header("Accept", "text/event-stream")
+                            .header("Mcp-Session-Id", session)
+                            .GET()
+                            .build();
+                    HttpResponse<InputStream> response = sseClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                    assertThat(response.statusCode()).as("stream #" + i).isEqualTo(200);
+                    InputStream body = response.body();
+                    streams.add(body);
+                    // 读到首行确认服务端已登记该 SSE sink。
+                    StringBuilder firstLine = new StringBuilder();
+                    int ch;
+                    while ((ch = body.read()) != -1 && ch != '\n') {
+                        firstLine.append((char) ch);
+                    }
+                    assertThat(firstLine.toString()).startsWith(": open");
+                }
+                Reply excess = server.exchange("GET", key, session, null, Map.of("Accept", "text/event-stream"));
+                assertThat(excess.status()).isEqualTo(429);
+                assertThat(excess.json().path("error").path("code").asInt()).isEqualTo(McpErrors.TOO_MANY_STREAMS_RPC);
+                assertThat(excess.json().path("error").path("data").path("code").asText())
+                        .isEqualTo(McpErrors.TOO_MANY_STREAMS);
+            } finally {
+                server.delete(key, session, null);
+                for (InputStream stream : streams) {
+                    try {
+                        stream.close();
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void originHeaderAllowsLoopbackAndRejectsOthers() throws Exception {
         assertThat(McpTransportPolicy.ALLOW_MISSING_ORIGIN).isTrue();
         try (SessionServer server = SessionServer.open(

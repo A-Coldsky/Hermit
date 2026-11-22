@@ -120,6 +120,8 @@ public final class RuleEngine implements ConchExecutor {
         Map<String, String> credentials = copyStrings(request.accountContext().credentials());
         Map<String, String> config = copyStrings(request.accountContext().config());
         String version = null;
+        SessionKey key = null;
+        Handoff handoff = null;
         try {
             ConchDoc conch = authorizedConch(request, authorized);
             if (conch == null) {
@@ -139,8 +141,7 @@ public final class RuleEngine implements ConchExecutor {
                 return finish(false, null, ErrorCode.INVALID_INPUT, ex.getMessage(), null, null, ex.getMessage(),
                         List.of(), version, request, credentials, List.of(), start);
             }
-            SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
-            Handoff handoff = null;
+            key = new SessionKey(request.origin(), request.conch(), request.account());
             boolean locked;
             if (conch.auth() != null && conch.auth().concurrentReads() && action.mcp().readOnly()) {
                 // 只读能力先拿共享锁；会话不能直接用（没登录、要探活、中途失效）时放开，改走下面的独占锁。
@@ -149,11 +150,11 @@ public final class RuleEngine implements ConchExecutor {
                     locked = sessions.tryLockShared(key, deadline);
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
-                    return internal(request, credentials, List.of(), version, start, ex);
+                    return internal(request, credentials, handoffRedaction(handoff, key), version, start, ex);
                 }
                 if (!locked) {
                     return finish(false, null, ErrorCode.TIMEOUT, "执行超时", null, null, "执行超时",
-                            List.of(), version, request, credentials, List.of(), start);
+                            List.of(), version, request, credentials, handoffRedaction(handoff, key), start);
                 }
                 ExecutionResult result;
                 try {
@@ -171,11 +172,11 @@ public final class RuleEngine implements ConchExecutor {
                 locked = sessions.tryLock(key, deadline);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
-                return internal(request, credentials, List.of(), version, start, ex);
+                return internal(request, credentials, handoffRedaction(handoff, key), version, start, ex);
             }
             if (!locked) {
                 return finish(false, null, ErrorCode.TIMEOUT, "执行超时", null, null, "执行超时",
-                        List.of(), version, request, credentials, List.of(), start);
+                        List.of(), version, request, credentials, handoffRedaction(handoff, key), start);
             }
             try {
                 return locked(request, conch, action, input, credentials, config, key, version, start, deadline,
@@ -184,7 +185,7 @@ public final class RuleEngine implements ConchExecutor {
                 sessions.unlock(key);
             }
         } catch (RuntimeException ex) {
-            return internal(request, credentials, List.of(), version, start, ex);
+            return internal(request, credentials, handoffRedaction(handoff, key), version, start, ex);
         }
     }
 
@@ -308,7 +309,7 @@ public final class RuleEngine implements ConchExecutor {
             if (sessions.loginPaused(key)) {
                 return finish(false, null, ErrorCode.AUTH_FAILED, "该账号已暂停自动登录", null, null,
                         "该账号已暂停自动登录", List.of(), version, request, credentials,
-                        sessions.redactionValues(key), start);
+                        redactionOf(null, key, handoff), start);
             }
             URI base = baseUri(conch, config);
             scope = new LoginScope(conch, input, credentials, config, key, base, deadline);
@@ -325,6 +326,7 @@ public final class RuleEngine implements ConchExecutor {
                 requireStepLoginRefs(scope, action.steps());
                 Attempt first = runAction(action, scope);
                 if (first.lost) {
+                    handoff.seen.addAll(sessions.redactionValues(key));
                     handoff.lost = first;
                     return null;
                 }
@@ -355,20 +357,23 @@ public final class RuleEngine implements ConchExecutor {
             }
             return settle(attempt, action, scope, key, version, request, credentials, start);
         } catch (NeedsExclusive ex) {
+            if (handoff != null && handoff.seen != null) {
+                handoff.seen.addAll(sessions.redactionValues(key));
+            }
             return null;
         } catch (StepFailure ex) {
             Integer index = ex.index < 0 ? null : ex.index;
             return finish(false, null, ex.code, ex.summary, index, ex.type, ex.summary, ex.logs, version, request,
-                    credentials, redactionOf(scope, key), start);
+                    credentials, redactionOf(scope, key, handoff), start);
         } catch (DeadlineExceeded ex) {
             Integer index = ex.index < 0 ? null : ex.index;
             return finish(false, null, ErrorCode.TIMEOUT, "执行超时", index, ex.type, "执行超时", ex.logs, version,
-                    request, credentials, redactionOf(scope, key), start);
+                    request, credentials, redactionOf(scope, key, handoff), start);
         } catch (RuleProblem ex) {
             return finish(false, null, ex.code, ex.summary, null, null, ex.summary, List.of(), version, request,
-                    credentials, redactionOf(scope, key), start);
+                    credentials, redactionOf(scope, key, handoff), start);
         } catch (RuntimeException ex) {
-            return internal(request, credentials, redactionOf(scope, key), version, start, ex);
+            return internal(request, credentials, redactionOf(scope, key, handoff), version, start, ex);
         }
     }
 
@@ -430,9 +435,37 @@ public final class RuleEngine implements ConchExecutor {
         }
     }
 
-    /** 当前会话名单，加上这次调用已经见过的登录值。scope 还没建好时只用会话名单。 */
+    /** 当前会话名单，加上这次调用已经见过的登录值。scope 还没建好时合并共享锁阶段见过的登录值。 */
     private List<String> redactionOf(LoginScope scope, SessionKey key) {
-        return scope == null ? sessions.redactionValues(key) : scope.redactionValues();
+        return redactionOf(scope, key, (Handoff) null);
+    }
+
+    private List<String> redactionOf(LoginScope scope, SessionKey key, Handoff handoff) {
+        if (scope != null) {
+            return scope.redactionValues();
+        }
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (handoff != null && handoff.seen != null) {
+            values.addAll(handoff.seen);
+        }
+        values.addAll(sessions.redactionValues(key));
+        return List.copyOf(values);
+    }
+
+    /** 独占锁未拿到或外层异常时，保留共享锁阶段见过的登录值和当前会话名单；不因等写锁而阻塞。 */
+    private List<String> handoffRedaction(Handoff handoff, SessionKey key) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (handoff != null && handoff.seen != null) {
+            values.addAll(handoff.seen);
+        }
+        if (key != null) {
+            try {
+                values.addAll(sessions.redactionValuesNow(key));
+            } catch (RuntimeException ignored) {
+                // 会话管理器已关闭等情况不影响返回错误，至少保留已见过的登录值。
+            }
+        }
+        return List.copyOf(values);
     }
 
     private void ensureSession(LoginScope scope) {
@@ -1007,7 +1040,7 @@ public final class RuleEngine implements ConchExecutor {
             ConchDoc conch
     ) {
         return runBlock(definitions, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
-                indexBase, hideResponseBody, conch, new Block(), -1, 0);
+                indexBase, hideResponseBody, conch, new Block(), -1, 0, null);
     }
 
     /** 一次 runSteps 里跨 if / repeat 子步骤带着走的状态。 */
@@ -1018,6 +1051,19 @@ public final class RuleEngine implements ConchExecutor {
         Outcome last;
         /** 大于 0 时正在 repeat 的第几轮，写进追踪。 */
         int round;
+    }
+
+    /**
+     * 当前步骤块跑完后紧接着会执行的外层上下文：可能是外层 repeat 的 until 条件，
+     * 以及外层步骤列表里剩下的步骤，用于判断非 2xx 响应是否已被规则显式接住。
+     */
+    private record Continuation(
+            List<Step> steps,
+            int from,
+            Map<String, Object> until,
+            boolean hasNextRound,
+            Continuation parent
+    ) {
     }
 
     /**
@@ -1039,7 +1085,8 @@ public final class RuleEngine implements ConchExecutor {
             ConchDoc conch,
             Block block,
             int fixedIndex,
-            int depth
+            int depth,
+            Continuation continuation
     ) {
         CloseableHttpClient client = sessions.client(key);
         Runnable persist = () -> sessions.persist(key);
@@ -1075,9 +1122,10 @@ public final class RuleEngine implements ConchExecutor {
                     }
                     // 调用记录按步骤下标存，一步只能有一条：子步骤记在另一张表里，外层只留一条。
                     List<StepLog> inner = new ArrayList<>();
+                    Continuation afterFlow = new Continuation(definitions, i + 1, null, false, continuation);
                     try {
                         runFlow(step, at, started, vars, auth, expectPrefix, inner, key, base, deadline, phase,
-                                libraries, hideResponseBody, conch, block, depth);
+                                libraries, hideResponseBody, conch, block, depth, afterFlow);
                     } catch (StepFailure ex) {
                         StepLog failed = ex.logs.isEmpty() ? null : ex.logs.get(ex.logs.size() - 1);
                         logs.add(failed == null
@@ -1085,6 +1133,13 @@ public final class RuleEngine implements ConchExecutor {
                                 : new StepLog(at, failed.type(), elapsed(started), failed.method(), failed.path(),
                                         failed.status(), failed.extractCount()));
                         throw new StepFailure(ex.code, ex.summary, at, ex.type, logs);
+                    } catch (SessionLost ex) {
+                        StepLog failed = inner.isEmpty() ? null : inner.get(inner.size() - 1);
+                        logs.add(failed == null
+                                ? new StepLog(at, step.type(), elapsed(started), null, null, null, null)
+                                : new StepLog(at, failed.type(), elapsed(started), failed.method(), failed.path(),
+                                        failed.status(), failed.extractCount()));
+                        throw ex;
                     }
                     logs.add(new StepLog(at, step.type(), elapsed(started), null, null, null, null));
                     continue;
@@ -1128,7 +1183,7 @@ public final class RuleEngine implements ConchExecutor {
                 block.previousBytes = block.previousRequest ? outcome.bodyBytes() : null;
                 // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
                 // 下标用这一段里的位置：能力步骤的 indexBase 是 0，登录续跑不会进这里。
-                rejectCapabilityStatus(auth, outcome, i, at, step.type(), logs, definitions);
+                rejectCapabilityStatus(auth, outcome, i, at, step.type(), logs, definitions, continuation);
             } catch (StepFailure | SessionLost ex) {
                 // 子步骤已经记过日志和追踪。
                 throw ex;
@@ -1182,7 +1237,8 @@ public final class RuleEngine implements ConchExecutor {
             boolean hideResponseBody,
             ConchDoc conch,
             Block block,
-            int depth
+            int depth,
+            Continuation afterFlow
     ) {
         DevTraceDraft draft = DevTraceScope.current();
         if (FlowSteps.IF.equals(step.type())) {
@@ -1202,7 +1258,7 @@ public final class RuleEngine implements ConchExecutor {
                 draft.add(phase, at, elapsed(started), piece);
             }
             runBlock(chosen, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
-                    0, hideResponseBody, conch, block, at, depth + 1);
+                    0, hideResponseBody, conch, block, at, depth + 1, afterFlow);
             return;
         }
         if (block.round > 0) {
@@ -1229,8 +1285,12 @@ public final class RuleEngine implements ConchExecutor {
                 rounds++;
                 block.round = rounds;
                 vars.put(FlowSteps.LOOP, Map.of("index", rounds));
+                boolean lastRound = rounds >= max;
+                Continuation repeatNext = until == null
+                        ? (lastRound ? afterFlow : new Continuation(body, 0, null, false, null))
+                        : new Continuation(afterFlow.steps(), afterFlow.from(), until, !lastRound, afterFlow.parent());
                 runBlock(body, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
-                        0, hideResponseBody, conch, block, at, depth + 1);
+                        0, hideResponseBody, conch, block, at, depth + 1, repeatNext);
                 if (collect != null) {
                     for (Map.Entry<String, Object> entry : collect.entrySet()) {
                         Object value = StepRunner.lookup(vars, Values.text(entry.getValue()));
@@ -1558,7 +1618,11 @@ public final class RuleEngine implements ConchExecutor {
                 }
                 yield request;
             }
-            default -> Map.of("type", step.type());
+            default -> {
+                LinkedHashMap<String, Object> other = new LinkedHashMap<>();
+                other.put("type", step.type());
+                yield other;
+            }
         };
         // 说明与这次调用错误是同一句。渲染时再打码并截断，这里不附加正文。
         stampFailure(piece, step.type(), summary);
@@ -1566,9 +1630,13 @@ public final class RuleEngine implements ConchExecutor {
         draft.add(phase, index, durationMs, piece);
     }
 
-    /** 提取、set、以及没有抛出位置的脚本。已有 {@code scriptError} 的抛出保持原样。 */
+    /** 提取、set、if、repeat，以及没有抛出位置的脚本。已有 {@code scriptError} 的抛出保持原样。 */
     private static void stampFailure(Map<String, Object> piece, String type, String summary) {
-        if (!"extract".equals(type) && !"set".equals(type) && !"script".equals(type)) {
+        if (!"extract".equals(type)
+                && !"set".equals(type)
+                && !"script".equals(type)
+                && !FlowSteps.IF.equals(type)
+                && !FlowSteps.REPEAT.equals(type)) {
             return;
         }
         piece.put("passed", Boolean.FALSE);
@@ -1691,7 +1759,8 @@ public final class RuleEngine implements ConchExecutor {
             int index,
             String type,
             List<StepLog> logs,
-            List<Step> definitions
+            List<Step> definitions,
+            Continuation continuation
     ) {
         if (auth || outcome.status() == null) {
             return;
@@ -1709,7 +1778,7 @@ public final class RuleEngine implements ConchExecutor {
         if (status >= 300 && status < 400 && !isGet(outcome.method())) {
             return;
         }
-        if (statusExpectationCovers(definitions, position, status)) {
+        if (statusExpectationCovers(definitions, position, status, continuation)) {
             return;
         }
         if (unresolvedLocation(outcome)) {
@@ -1733,21 +1802,35 @@ public final class RuleEngine implements ConchExecutor {
     }
 
     /**
-     * 这次请求之后、下一次 request 之前，是否有 assert.status 覆盖实际状态码。
-     * 字面量数字或数字列表对不上则不算覆盖。含模板等非字面量时无法预判，交给 assert。
+     * 这次请求之后、下一次 request 之前，是否有 assert.status、if.status 或外层 repeat.until.status 覆盖实际状态码。
+     * 字面量数字或数字列表对不上则不算覆盖。含模板等非字面量时无法预判，交给后续步骤。
      */
-    private static boolean statusExpectationCovers(List<Step> definitions, int requestIndex, int actual) {
-        for (int j = requestIndex + 1; j < definitions.size(); j++) {
+    private static boolean statusExpectationCovers(
+            List<Step> definitions,
+            int requestIndex,
+            int actual,
+            Continuation continuation
+    ) {
+        return statusExpectationCoversFrom(definitions, requestIndex + 1, actual, continuation);
+    }
+
+    private static boolean statusExpectationCoversFrom(
+            List<Step> definitions,
+            int startIndex,
+            int actual,
+            Continuation continuation
+    ) {
+        for (int j = startIndex; j < definitions.size(); j++) {
             Step step = definitions.get(j);
             if ("request".equals(step.type())) {
-                break;
+                return false;
             }
             // if 按状态码分支：成立与否都由规则自己处理，不在这里按非 2xx 失败。
             if (FlowSteps.IF.equals(step.type()) && step.def().containsKey("status")) {
                 return true;
             }
             if (FlowSteps.isFlow(step)) {
-                break;
+                return false;
             }
             if (!"assert".equals(step.type()) || !step.def().containsKey("status")) {
                 continue;
@@ -1757,7 +1840,20 @@ public final class RuleEngine implements ConchExecutor {
                 return true;
             }
         }
-        return false;
+        if (continuation == null) {
+            return false;
+        }
+        if (continuation.until() != null && continuation.until().containsKey("status")) {
+            Boolean covered = literalStatusIncludes(continuation.until().get("status"), actual);
+            if (covered == null || covered) {
+                return true;
+            }
+            if (continuation.hasNextRound()) {
+                return false;
+            }
+        }
+        return statusExpectationCoversFrom(
+                continuation.steps(), continuation.from(), actual, continuation.parent());
     }
 
     /** {@code null} 表示不是字面量状态码，渲染后才知道是否匹配。 */

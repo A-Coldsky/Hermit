@@ -140,11 +140,192 @@ class AuthorizedSnapshotTest {
         }
     }
 
+    @Test
+    void invokerRejectsHttpMethodMismatchAndMcpSnapshotViolationsAtomically() {
+        try (CrabDatabase database = new CrabDatabase(new CrabPaths(temp.resolve("invoker-atomic")));
+                SessionManager sessions = new SessionManager()) {
+            CredentialCipher cipher = new CredentialCipher(new byte[32]);
+            AccountStore accounts = new AccountStore(database.dataSource());
+            ConchRegistry registry = new ConchRegistry();
+            ConchDoc postDoc = ConchParser.parse(conchYaml("1.1.0", false, NEW_MARKER));
+            registry.put(postDoc, Origin.OFFICIAL);
+            accounts.create(Origin.OFFICIAL, postDoc.conch(), "alice", Actors.CLI);
+            Invoker invoker = new Invoker(
+                    registry,
+                    accounts,
+                    new CredentialVault(database.dataSource(), cipher),
+                    new ConchConfigStore(database.dataSource()),
+                    new RuleEngine(registry, sessions),
+                    new CallLogStore(database.dataSource(), Clock.systemUTC()),
+                    new IdempotencyStore(database.dataSource(), cipher, Clock.systemUTC()),
+                    (conch, action) -> false);
+            ApiKeyPrincipal full = new ApiKeyPrincipal(
+                    "full", "full", new ApiKeyScope(Set.of(), Set.of(), false, true));
+
+            // Issue 3: HTTP method checked atomically inside Invoker against resolved capability.
+            InvokeOutcome wrongMethod = invoker.invoke(
+                    full,
+                    CONCH,
+                    ACTION,
+                    Map.of(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    null,
+                    dev.hermit.crab.store.CallChannel.HTTP,
+                    "http-method-race",
+                    false,
+                    null,
+                    null,
+                    null,
+                    "GET");
+            assertThat(wrongMethod.status()).isEqualTo(405);
+            assertThat(wrongMethod.allowMethod()).isEqualTo("POST");
+            assertThat(wrongMethod.requestOnly()).isTrue();
+            assertThat(new String(wrongMethod.body(), StandardCharsets.UTF_8))
+                    .contains("INVALID_INPUT")
+                    .contains("这个能力要用 POST 调用。")
+                    .doesNotContain(NEW_MARKER);
+
+            // Issue 5b (1): MCP call rejects unexposed capability with NOT_FOUND.
+            ConchDoc hiddenDoc = ConchParser.parse(conchYaml("1.2.0", true, OLD_MARKER, false, false));
+            registry.put(hiddenDoc, Origin.OFFICIAL);
+            InvokeOutcome hidden = invoker.invoke(
+                    full,
+                    CONCH,
+                    ACTION,
+                    Map.of(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    null,
+                    dev.hermit.crab.store.CallChannel.MCP,
+                    "mcp-hidden",
+                    false,
+                    null,
+                    null,
+                    null,
+                    null);
+            assertThat(hidden.status()).isEqualTo(404);
+            assertThat(new String(hidden.body(), StandardCharsets.UTF_8))
+                    .contains("NOT_FOUND")
+                    .doesNotContain(OLD_MARKER);
+
+            // Issue 5b (2): MCP confirmation against LOCAL cannot confirm an identical OFFICIAL doc.
+            ConchDoc destructiveDoc = ConchParser.parse(conchYaml("1.3.0", false, NEW_MARKER, true, true));
+            registry.put(destructiveDoc, Origin.OFFICIAL);
+            InvokeOutcome originMismatch = invoker.invoke(
+                    full,
+                    CONCH,
+                    ACTION,
+                    Map.of(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    null,
+                    dev.hermit.crab.store.CallChannel.MCP,
+                    "mcp-origin-mismatch",
+                    false,
+                    destructiveDoc,
+                    Origin.LOCAL,
+                    null,
+                    null);
+            assertThat(originMismatch.status()).isEqualTo(409);
+            assertThat(new String(originMismatch.body(), StandardCharsets.UTF_8))
+                    .contains("CONFLICT")
+                    .contains(Invoker.CHANGED_AFTER_CONFIRM)
+                    .doesNotContain(NEW_MARKER);
+
+            // Issue 5b (3): MCP call without elicitation rejects if resolved capability is now destructive.
+            InvokeOutcome unconfirmedDestructive = invoker.invoke(
+                    full,
+                    CONCH,
+                    ACTION,
+                    Map.of(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    null,
+                    dev.hermit.crab.store.CallChannel.MCP,
+                    "mcp-unconfirmed-destructive",
+                    false,
+                    null,
+                    null,
+                    null,
+                    null);
+            assertThat(unconfirmedDestructive.status()).isEqualTo(409);
+            assertThat(new String(unconfirmedDestructive.body(), StandardCharsets.UTF_8))
+                    .contains("CONFLICT")
+                    .contains(Invoker.CHANGED_AFTER_CONFIRM)
+                    .doesNotContain(NEW_MARKER);
+
+            // Matching snapshot + origin succeeds.
+            InvokeOutcome confirmedOk = invoker.invoke(
+                    full,
+                    CONCH,
+                    ACTION,
+                    Map.of(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    null,
+                    dev.hermit.crab.store.CallChannel.MCP,
+                    "mcp-confirmed-ok",
+                    false,
+                    destructiveDoc,
+                    Origin.OFFICIAL,
+                    null,
+                    null);
+            assertThat(confirmedOk.status()).isEqualTo(200);
+            assertThat(new String(confirmedOk.body(), StandardCharsets.UTF_8)).contains(NEW_MARKER);
+        }
+    }
+
+    @Test
+    void localWriteCredentialsDoesNotAcceptFieldsOnlyDeclaredInOfficialStagedUpdate() {
+        try (CrabDatabase database = new CrabDatabase(new CrabPaths(temp.resolve("local-staged")));
+                SessionManager sessions = new SessionManager()) {
+            CredentialCipher cipher = new CredentialCipher(new byte[32]);
+            AccountStore accounts = new AccountStore(database.dataSource());
+            CredentialVault vault = new CredentialVault(database.dataSource(), cipher);
+            ConchConfigStore configStore = new ConchConfigStore(database.dataSource());
+            dev.hermit.crab.store.ApiKeyService apiKeys = new dev.hermit.crab.store.ApiKeyService(database.dataSource());
+            ConchRegistry registry = new ConchRegistry();
+            ConchDoc localDoc = ConchParser.parse(conchYaml("1.0.0", true, OLD_MARKER));
+            ConchDoc stagedOfficial = ConchParser.parse(conchYaml("2.0.0", true, OLD_MARKER)
+                    .replace("credentials: {}", """
+                            credentials:
+                              staged_only:
+                                type: secret
+                                required: true
+                                label: 暂存专用"""));
+            registry.put(localDoc, Origin.LOCAL);
+            accounts.create(Origin.LOCAL, CONCH, "alice", Actors.CONSOLE);
+            ConchAdmin admin = new ConchAdmin(
+                    database.dataSource(),
+                    accounts,
+                    vault,
+                    configStore,
+                    apiKeys,
+                    sessions,
+                    new RuleEngine(registry, sessions),
+                    registry,
+                    dev.hermit.crab.sync.DisabledConches.none());
+            admin.bindStagedDeclarations(name -> CONCH.equals(name) ? Optional.of(stagedOfficial) : Optional.empty());
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> admin.writeCredentials(
+                            Origin.LOCAL, localDoc, "alice", Map.of("staged_only", "secret-val"), Actors.CONSOLE))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("unknown credential field");
+            assertThat(admin.declaresCredential(Origin.LOCAL, localDoc, "staged_only")).isFalse();
+            assertThat(admin.declaresCredential(Origin.OFFICIAL, localDoc, "staged_only")).isTrue();
+        }
+    }
+
     private static ExecutionRequest request(String conch, String action) {
         return new ExecutionRequest("snapshot-auth", Origin.OFFICIAL, conch, action, Map.of(), "alice", EMPTY_ACCOUNT);
     }
 
     private static String conchYaml(String version, boolean readOnly, String value) {
+        return conchYaml(version, readOnly, value, true, false);
+    }
+
+    private static String conchYaml(String version, boolean readOnly, String value, boolean expose, boolean destructive) {
         return """
                 conch: %s
                 version: %s
@@ -159,12 +340,12 @@ class AuthorizedSnapshotTest {
                     title: Inspect
                     description: Synthetic action
                     method: %s
-                    mcp: {read_only: %s}
+                    mcp: {expose: %s, read_only: %s, destructive: %s}
                     steps: []
                     examples: [{input: {}, output: {value: example}}]
                     notes: Synthetic fixture only
                     output:
                       value: {type: string, description: Result, value: '%s'}
-                """.formatted(CONCH, version, readOnly ? "GET" : "POST", readOnly, value);
+                """.formatted(CONCH, version, readOnly ? "GET" : "POST", expose, readOnly, destructive, value);
     }
 }

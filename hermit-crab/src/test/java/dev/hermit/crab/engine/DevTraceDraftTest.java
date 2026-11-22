@@ -2,19 +2,32 @@ package dev.hermit.crab.engine;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.AbstractMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.validate.ConchValidator;
+import dev.hermit.crab.files.FileRoutes;
+import dev.hermit.crab.files.FileScope;
+import dev.hermit.crab.files.FileStage;
+import dev.hermit.crab.files.FileStageSettings;
 import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.secure.Redactor;
+import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.testing.SecretChecks;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -351,6 +364,113 @@ class DevTraceDraftTest {
         assertHas(rendered, business);
         assertHas(rendered, "hello-business");
         assertHas(rendered, "a-b");
+    }
+
+    @Test
+    void masksStagedDownloadTokensInSetAndTraceVariables() {
+        String tokenA = "dlTokenSecretValue1234567890";
+        String tokenB = "secondSecretDownloadToken999";
+        String tokenC = "encodedDownloadSecretToken777";
+        String tokenD = "escapedDownloadSecretToken888";
+        DevTraceDraft draft = new DevTraceDraft(Instant.parse("2026-11-20T00:00:00Z"));
+        LinkedHashMap<String, Object> fileView = new LinkedHashMap<>();
+        fileView.put("fileId", "f_keep_id");
+        fileView.put("url", "http://127.0.0.1:8080" + FileRoutes.DOWNLOAD_PREFIX + tokenA);
+        fileView.put("name", "report.pdf");
+        LinkedHashMap<String, Object> vars = new LinkedHashMap<>();
+        vars.put("file", fileView);
+        vars.put("other", FileRoutes.DOWNLOAD_PREFIX + tokenB);
+        vars.put("encoded", "next=http%3A%2F%2F127.0.0.1%3A8080%2Fapi%2F-%2Ffiles%2F" + tokenC);
+        vars.put("escaped", "\\/api\\/-\\/files\\/" + tokenD);
+        draft.add("action", 1, 2, DevTraceDraft.variablePiece("set", vars));
+
+        String rendered = draft.render(Redactor.of(Set.of()), List.of(), false);
+        assertThat(rendered)
+                .contains("f_keep_id")
+                .contains("report.pdf")
+                .contains(FileRoutes.DOWNLOAD_PREFIX + "***")
+                .doesNotContain(tokenA)
+                .doesNotContain(tokenB)
+                .doesNotContain(tokenC)
+                .doesNotContain(tokenD);
+    }
+
+    @Test
+    void endToEndDownloadKeepsRealUrlInCallResultWhileMaskingDevTrace(@TempDir Path temp) throws Exception {
+        byte[] payload = "PDF-BYTES".getBytes(StandardCharsets.UTF_8);
+        FileStage stage = new FileStage(temp.resolve("files"), Clock.systemUTC(), FileStageSettings.defaults());
+        String yaml = """
+                conch: dl_conch
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.8.0
+                title: 导出
+                description: 说明
+                credentials:
+                  username: { type: text, required: true }
+                  password: { type: secret, required: true }
+                actions:
+                  fetch:
+                    title: 下载
+                    description: 说明
+                    output:
+                      file: { type: object, description: 文件 }
+                      rawUrl: { type: string, description: 链接 }
+                    examples:
+                      - input: {}
+                        output: { file: { fileId: f_1 }, rawUrl: "http://example/file" }
+                    notes: 注意
+                    steps:
+                      - request: { method: GET, path: /files/report.pdf, download: true }
+                      - set: { file: "{{ response.file }}", rawUrl: "{{ response.file.url }}" }
+                """;
+        ConchDoc doc = ConchParser.parse(yaml);
+        assertThat(ConchValidator.validate(doc, ConchValidator.Context.of(CrabVersion.CURRENT)).errors()).isEmpty();
+
+        FileScope previous = FileScope.begin(stage, "key-1", "http://127.0.0.1:18080");
+        AtomicReference<String> traceRef = new AtomicReference<>();
+        try (ScriptedLoopback loop = ScriptedLoopback.start(); SessionManager sessions = new SessionManager()) {
+            loop.reply(ScriptedLoopback.response(200, "application/pdf", payload));
+            ConchRegistry registry = new ConchRegistry();
+            registry.put(doc, Origin.LOCAL);
+            RuleEngine engine = new RuleEngine(registry, sessions);
+            engine.bindDevTraceSink(new DevTraceSink() {
+                @Override
+                public DevTraceDraft open(ExecutionRequest request) {
+                    return new DevTraceDraft(Instant.parse("2026-11-20T00:00:00Z"));
+                }
+
+                @Override
+                public void save(ExecutionRequest request, Instant expiresAt, String body) {
+                    traceRef.set(body);
+                }
+            });
+
+            ExecutionResult result = engine.execute(EngineTestSupport.request(
+                    Origin.LOCAL, "dl_conch", "fetch", "alice", Map.of(),
+                    EngineTestSupport.account("alice", EngineTestSupport.PASSWORD, loop.base())));
+            assertThat(result.success()).as(String.valueOf(result.error())).isTrue();
+
+            Map<?, ?> data = (Map<?, ?>) result.data();
+            Map<?, ?> file = (Map<?, ?>) data.get("file");
+            String fileId = String.valueOf(file.get("fileId"));
+            String url = String.valueOf(file.get("url"));
+            assertThat(url).startsWith("http://127.0.0.1:18080" + FileRoutes.DOWNLOAD_PREFIX);
+            String token = url.substring(url.indexOf(FileRoutes.DOWNLOAD_PREFIX) + FileRoutes.DOWNLOAD_PREFIX.length());
+            assertThat(token).isNotBlank().isNotEqualTo("***");
+            assertThat(data.get("rawUrl")).isEqualTo(url);
+            assertThat(stage.byToken(token)).isPresent();
+            assertThat(stage.read(stage.byToken(token).orElseThrow())).isEqualTo(payload);
+
+            String trace = traceRef.get();
+            assertThat(trace)
+                    .isNotNull()
+                    .contains(fileId)
+                    .contains(FileRoutes.DOWNLOAD_PREFIX + "***")
+                    .doesNotContain(token);
+        } finally {
+            FileScope.restore(previous);
+        }
     }
 
     private static String shaped(int length, int separatorAt, char separator) {

@@ -163,10 +163,10 @@ final class StepRunner {
             }
             break;
         } catch (DeadlineExceeded ex) {
-            // 没写 timeout_ms 时，连接超时也按能力超时报；能力的时间其实还没用完，按 connect 再试。
-            if (retry != null && System.nanoTime() < deadlineNanos && retry.on().contains("connect")
+            if (retry != null && ex.retryReason != null && System.nanoTime() < deadlineNanos
+                    && retry.on().contains(ex.retryReason)
                     && retry.again(retried == null ? 0 : retried.size(), deadlineNanos)) {
-                retried = Retry.note(retried, "connect");
+                retried = Retry.note(retried, ex.retryReason);
                 continue;
             }
             throw ex;
@@ -192,6 +192,12 @@ final class StepRunner {
         }
         }
         dev.hermit.crab.files.StagedFile saved = FileSteps.downloads(spec) ? FileSteps.save(spec, result) : null;
+        if (saved != null) {
+            DevTraceDraft draft = DevTraceScope.current();
+            if (draft != null) {
+                draft.rememberTraceSecret(saved.token());
+            }
+        }
         vars.put("response", FileSteps.view(result, saved));
         if (!capture) {
             return new Outcome(
@@ -504,6 +510,9 @@ final class StepRunner {
             }
             if (ex.status != null) {
                 return reason(ex.status);
+            }
+            if (ex.retryReason != null) {
+                return on.contains(ex.retryReason) ? ex.retryReason : null;
             }
             if (HttpCalls.STEP_TIMEOUT.equals(ex.summary)) {
                 return on.contains("timeout") ? "timeout" : null;

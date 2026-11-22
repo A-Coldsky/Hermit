@@ -15,8 +15,12 @@ import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.mcp.McpAddresses;
@@ -60,9 +64,11 @@ public final class McpOAuth implements AutoCloseable {
     private final KnownSecrets knownSecrets;
     private final Clock clock;
     private final McpOAuthClient client;
+    private final LongSupplier generationSource;
     private final SecureRandom random = new SecureRandom();
     private final ConcurrentHashMap<String, Pending> pending = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Object> refreshLocks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AccountLock> refreshLocks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, TokenVersion> tokenVersions = new ConcurrentHashMap<>();
 
     public McpOAuth(
             CredentialVault vault,
@@ -71,7 +77,7 @@ public final class McpOAuth implements AutoCloseable {
             KnownSecrets knownSecrets,
             Clock clock
     ) {
-        this(vault, sessions, discardUpstream, knownSecrets, clock, new McpOAuthClient());
+        this(vault, sessions, discardUpstream, knownSecrets, clock, new McpOAuthClient(), null);
     }
 
     McpOAuth(
@@ -82,12 +88,25 @@ public final class McpOAuth implements AutoCloseable {
             Clock clock,
             McpOAuthClient client
     ) {
+        this(vault, sessions, discardUpstream, knownSecrets, clock, client, null);
+    }
+
+    McpOAuth(
+            CredentialVault vault,
+            SessionManager sessions,
+            Consumer<SessionKey> discardUpstream,
+            KnownSecrets knownSecrets,
+            Clock clock,
+            McpOAuthClient client,
+            LongSupplier generationSource
+    ) {
         this.vault = vault;
         this.sessions = sessions;
         this.discardUpstream = discardUpstream;
         this.knownSecrets = knownSecrets == null ? KnownSecrets.empty() : knownSecrets;
         this.clock = clock == null ? Clock.systemUTC() : clock;
         this.client = client;
+        this.generationSource = generationSource == null ? new AtomicLong(1)::getAndIncrement : generationSource;
     }
 
     public Start start(Origin origin, ConchDoc doc, String account, String redirectUri, long deadlineNanos) {
@@ -163,8 +182,15 @@ public final class McpOAuth implements AutoCloseable {
         if (!exchange.ok()) {
             return Callback.fail(CALLBACK_FAILED);
         }
-        synchronized (lock(login.origin, login.conch, login.account)) {
-            save(login.origin, login.conch, login.account, exchange.token());
+        boolean saved = withLock(login.origin, login.conch, login.account, () -> {
+            if (!save(login.origin, login.conch, login.account, exchange.token())) {
+                return false;
+            }
+            recordSavedGenerationLocked(login.origin, login.conch, login.account, exchange.token());
+            return true;
+        });
+        if (!saved) {
+            return Callback.fail(CALLBACK_FAILED);
         }
         return Callback.ok(exchange.token().expiresAt());
     }
@@ -174,9 +200,7 @@ public final class McpOAuth implements AutoCloseable {
             return Outcome.fail(ErrorCode.NOT_CONFIGURED, NOT_OAUTH);
         }
         requireAccount(origin, doc.conch(), account);
-        synchronized (lock(origin, doc.conch(), account)) {
-            clearLocked(origin, doc.conch(), account);
-        }
+        withLock(origin, doc.conch(), account, () -> clearLocked(origin, doc.conch(), account));
         return Outcome.success();
     }
 
@@ -204,17 +228,17 @@ public final class McpOAuth implements AutoCloseable {
             Map<String, String> credentials,
             long deadlineNanos
     ) {
-        synchronized (lock(origin, conch, account)) {
+        return withLock(origin, conch, account, () -> {
             Loaded loaded = load(origin, conch, account, credentials);
             if (loaded.token == null) {
                 return Attempt.fail(ErrorCode.NOT_CONFIGURED, McpForwarder.OAUTH_NOT_CONNECTED);
             }
             if (!loaded.token.expiring(clock.instant())) {
                 remember(loaded.token);
-                return Attempt.ok(loaded.token);
+                return Attempt.ok(loaded.token, generationForLocked(origin, conch, account, loaded.token));
             }
             return refreshLocked(origin, conch, account, doc, loaded, null, deadlineNanos);
-        }
+        });
     }
 
     Attempt refreshAfterUnauthorized(
@@ -226,23 +250,45 @@ public final class McpOAuth implements AutoCloseable {
             String rejectedAccess,
             long deadlineNanos
     ) {
-        synchronized (lock(origin, conch, account)) {
+        return withLock(origin, conch, account, () -> {
             Loaded loaded = load(origin, conch, account, credentials);
             if (loaded.token == null) {
                 return Attempt.fail(ErrorCode.NOT_CONFIGURED, McpForwarder.OAUTH_NOT_CONNECTED);
             }
             if (rejectedAccess != null && !rejectedAccess.equals(loaded.token.accessToken())) {
                 remember(loaded.token);
-                return Attempt.ok(loaded.token);
+                return Attempt.ok(loaded.token, generationForLocked(origin, conch, account, loaded.token));
             }
             return refreshLocked(origin, conch, account, doc, loaded, loaded.token.accessToken(), deadlineNanos);
-        }
+        });
     }
 
     public void clear(Origin origin, String conch, String account) {
-        synchronized (lock(origin, conch, account)) {
-            clearLocked(origin, conch, account);
-        }
+        withLock(origin, conch, account, () -> clearLocked(origin, conch, account));
+    }
+
+    /**
+     * 仅当当前保存的访问令牌仍是 {@code rejectedAccess} 时才清理。
+     * 避免并发调用在二次 401 时把其他线程或控制台重连刚刚写入的新令牌删掉。
+     */
+    public void clearIfMatches(Origin origin, String conch, String account, String rejectedAccess) {
+        withLock(origin, conch, account, () -> {
+            if (rejectedAccess == null || rejectedAccess.isBlank()) {
+                clearLocked(origin, conch, account);
+                return;
+            }
+            if (vault == null) {
+                TokenVersion version = tokenVersions.get(lockKey(origin, conch, account));
+                if (version == null || rejectedAccess.equals(version.accessToken())) {
+                    clearLocked(origin, conch, account);
+                }
+                return;
+            }
+            McpOAuthToken current = load(origin, conch, account, Map.of()).token;
+            if (current != null && rejectedAccess.equals(current.accessToken())) {
+                clearLocked(origin, conch, account);
+            }
+        });
     }
 
     public static byte[] page(Callback callback) {
@@ -282,7 +328,7 @@ public final class McpOAuth implements AutoCloseable {
                 return Attempt.fail(ErrorCode.AUTH_FAILED, REJECTED);
             }
             remember(token);
-            return Attempt.ok(token);
+            return Attempt.ok(token, generationForLocked(origin, conch, account, token));
         }
         if (doc == null || doc.upstream() == null || doc.upstream().auth() == null) {
             return Attempt.fail(ErrorCode.NOT_CONFIGURED, NOT_OAUTH);
@@ -305,8 +351,11 @@ public final class McpOAuth implements AutoCloseable {
         if (!exchange.ok()) {
             return failedExchange(origin, conch, account, exchange, loaded);
         }
-        save(origin, conch, account, exchange.token());
-        return Attempt.ok(exchange.token());
+        if (!save(origin, conch, account, exchange.token())) {
+            return Attempt.fail(ErrorCode.ACCOUNT_NOT_FOUND, "没有这个账号。");
+        }
+        long generation = recordSavedGenerationLocked(origin, conch, account, exchange.token());
+        return Attempt.ok(exchange.token(), generation);
     }
 
     private Attempt failedExchange(
@@ -365,15 +414,22 @@ public final class McpOAuth implements AutoCloseable {
         return masked.length() <= MESSAGE_LIMIT ? masked : masked.substring(0, MESSAGE_LIMIT);
     }
 
-    private void save(Origin origin, String conch, String account, McpOAuthToken token) {
+    private boolean save(Origin origin, String conch, String account, McpOAuthToken token) {
         if (vault != null) {
-            vault.write(origin, conch, account, Map.of(McpOAuthToken.FIELD, token.json()), Actors.CONSOLE);
+            try {
+                vault.write(origin, conch, account, Map.of(McpOAuthToken.FIELD, token.json()), Actors.CONSOLE);
+            } catch (AccountNotFoundException ex) {
+                tokenVersions.remove(lockKey(origin, conch, account));
+                return false;
+            }
         }
         sessions.invalidate(new SessionKey(origin, conch, account));
         remember(token);
+        return true;
     }
 
     private void clearLocked(Origin origin, String conch, String account) {
+        tokenVersions.remove(lockKey(origin, conch, account));
         if (vault != null) {
             try {
                 if (vault.fieldNames(origin, conch, account).contains(McpOAuthToken.FIELD)) {
@@ -452,13 +508,72 @@ public final class McpOAuth implements AutoCloseable {
         return login;
     }
 
-    /** 账号已删除时丢掉它的刷新锁，不让这张表随账号增删一直变大。 */
+    /** 账号已删除时在账号锁内清理令牌代数与未完成授权；引用归零后锁项自动回收，不破坏互斥。 */
     void forget(Origin origin, String conch, String account) {
-        refreshLocks.remove(origin.name() + "\0" + conch + "\0" + account);
+        if (origin == null || conch == null || account == null) {
+            return;
+        }
+        pending.entrySet().removeIf(entry -> {
+            Pending item = entry.getValue();
+            return item.origin == origin && item.conch.equals(conch) && item.account.equals(account);
+        });
+        withLock(origin, conch, account, () -> tokenVersions.remove(lockKey(origin, conch, account)));
     }
 
-    private Object lock(Origin origin, String conch, String account) {
-        return refreshLocks.computeIfAbsent(origin.name() + "\0" + conch + "\0" + account, key -> new Object());
+    int lockCount() {
+        return refreshLocks.size();
+    }
+
+    private <T> T withLock(Origin origin, String conch, String account, Supplier<T> action) {
+        String key = lockKey(origin, conch, account);
+        AccountLock lock = refreshLocks.compute(key, (ignored, existing) -> {
+            AccountLock current = existing == null ? new AccountLock() : existing;
+            current.refs++;
+            return current;
+        });
+        try {
+            synchronized (lock) {
+                return action.get();
+            }
+        } finally {
+            refreshLocks.computeIfPresent(key, (ignored, existing) -> {
+                if (existing != lock) {
+                    return existing;
+                }
+                existing.refs--;
+                return existing.refs <= 0 ? null : existing;
+            });
+        }
+    }
+
+    private void withLock(Origin origin, String conch, String account, Runnable action) {
+        withLock(origin, conch, account, () -> {
+            action.run();
+            return null;
+        });
+    }
+
+    private long generationForLocked(Origin origin, String conch, String account, McpOAuthToken token) {
+        String key = lockKey(origin, conch, account);
+        String access = token == null ? null : token.accessToken();
+        TokenVersion current = tokenVersions.get(key);
+        if (current != null && Objects.equals(current.accessToken(), access)) {
+            return current.generation();
+        }
+        long next = current == null ? 0L : generationSource.getAsLong();
+        tokenVersions.put(key, new TokenVersion(access, next));
+        return next;
+    }
+
+    private long recordSavedGenerationLocked(Origin origin, String conch, String account, McpOAuthToken token) {
+        long next = generationSource.getAsLong();
+        tokenVersions.put(lockKey(origin, conch, account),
+                new TokenVersion(token == null ? null : token.accessToken(), next));
+        return next;
+    }
+
+    private static String lockKey(Origin origin, String conch, String account) {
+        return origin.name() + "\0" + conch + "\0" + account;
     }
 
     private String randomToken() {
@@ -560,18 +675,25 @@ public final class McpOAuth implements AutoCloseable {
         }
     }
 
-    record Attempt(McpOAuthToken token, ErrorCode code, String message) {
+    record Attempt(McpOAuthToken token, long generation, ErrorCode code, String message) {
         boolean ok() {
             return code == null && token != null;
         }
 
-        static Attempt ok(McpOAuthToken token) {
-            return new Attempt(token, null, null);
+        static Attempt ok(McpOAuthToken token, long generation) {
+            return new Attempt(token, generation, null, null);
         }
 
         static Attempt fail(ErrorCode code, String message) {
-            return new Attempt(null, code, message);
+            return new Attempt(null, 0L, code, message);
         }
+    }
+
+    private static final class AccountLock {
+        int refs;
+    }
+
+    private record TokenVersion(String accessToken, long generation) {
     }
 
     private record Loaded(McpOAuthToken token, String clientSecret) {

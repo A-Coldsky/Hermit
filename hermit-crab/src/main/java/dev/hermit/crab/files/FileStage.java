@@ -50,6 +50,7 @@ public final class FileStage implements AutoCloseable {
     private final Object capacity = new Object();
     private volatile FileStageSettings settings;
     private long reserved;
+    private int activeSpools;
 
     public FileStage(Path dir, Clock clock, FileStageSettings settings) {
         this.dir = dir;
@@ -93,11 +94,21 @@ public final class FileStage implements AutoCloseable {
     /** 开始收一个文件。内容边到边写盘，{@link Spool#commit} 之前别人看不到它。 */
     public Spool spool() {
         sweep();
-        // 空文件不占字节数，另按个数拦。
-        if (byId.size() >= MAX_FILES) {
-            throw new FileStageException(FULL);
+        // 空文件不占字节数，另按个数拦；正在收的文件也算名额，避免并发越过上限。
+        synchronized (capacity) {
+            if (byId.size() + activeSpools >= MAX_FILES) {
+                throw new FileStageException(FULL);
+            }
+            activeSpools++;
         }
-        return new Spool();
+        try {
+            return new Spool();
+        } catch (Throwable ex) {
+            synchronized (capacity) {
+                activeSpools = Math.max(0, activeSpools - 1);
+            }
+            throw ex;
+        }
     }
 
     /**
@@ -176,8 +187,11 @@ public final class FileStage implements AutoCloseable {
                     now.plus(Duration.ofSeconds(limits.ttlSeconds())),
                     owner,
                     target);
-            byId.put(fileId, file);
-            byToken.put(file.token(), file);
+            synchronized (capacity) {
+                byId.put(fileId, file);
+                byToken.put(file.token(), file);
+                activeSpools = Math.max(0, activeSpools - 1);
+            }
             finished = true;
             return file;
         }
@@ -195,7 +209,10 @@ public final class FileStage implements AutoCloseable {
                     // 反正要删。
                 }
             }
-            release(written);
+            synchronized (capacity) {
+                reserved = Math.max(0, reserved - written);
+                activeSpools = Math.max(0, activeSpools - 1);
+            }
             deleteQuietly(target);
         }
     }
@@ -293,7 +310,11 @@ public final class FileStage implements AutoCloseable {
             if ("base64".equalsIgnoreCase(piece)) {
                 base64 = true;
             } else if (piece.regionMatches(true, 0, "name=", 0, 5)) {
-                name = java.net.URLDecoder.decode(piece.substring(5), java.nio.charset.StandardCharsets.UTF_8);
+                try {
+                    name = java.net.URLDecoder.decode(piece.substring(5), java.nio.charset.StandardCharsets.UTF_8);
+                } catch (IllegalArgumentException ex) {
+                    throw new FileStageException("data URI 文件名编码无效");
+                }
             }
         }
         if (!base64) {
@@ -331,17 +352,14 @@ public final class FileStage implements AutoCloseable {
     }
 
     private void drop(StagedFile file) {
-        if (byId.remove(file.fileId(), file)) {
-            byToken.remove(file.token(), file);
-            release(file.size());
-            deleteQuietly(file.path());
-        }
-    }
-
-    private void release(long bytes) {
         synchronized (capacity) {
-            reserved = Math.max(0, reserved - bytes);
+            if (!byId.remove(file.fileId(), file)) {
+                return;
+            }
+            byToken.remove(file.token(), file);
+            reserved = Math.max(0, reserved - file.size());
         }
+        deleteQuietly(file.path());
     }
 
     private void clearDirectory() {

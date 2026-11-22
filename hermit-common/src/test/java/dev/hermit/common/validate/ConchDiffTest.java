@@ -270,6 +270,89 @@ class ConchDiffTest {
         assertThat(ConchDiff.between(oldDoc, oldDoc).changedActions()).isEmpty();
     }
 
+    @Test
+    void scriptLibraryChangesMarkActionsUsingThemInsideIfAndRepeat() {
+        String actions = """
+                actions:
+                  in_then:
+                    title: 分支内
+                    steps:
+                      - if:
+                          present: ok
+                          then:
+                            - script:
+                                use: [gamma]
+                                code: "return gamma();"
+                  in_else:
+                    title: 否则分支内
+                    steps:
+                      - if:
+                          present: ok
+                          then:
+                            - set: {a: "1"}
+                          else:
+                            - script:
+                                use: [alpha]
+                                code: "return alpha();"
+                  in_repeat:
+                    title: 循环内
+                    steps:
+                      - repeat:
+                          max: 2
+                          steps:
+                            - script:
+                                use: [gamma]
+                                code: "return gamma();"
+                  in_nested:
+                    title: 嵌套内
+                    steps:
+                      - repeat:
+                          max: 2
+                          steps:
+                            - if:
+                                present: ok
+                                then:
+                                  - script:
+                                      use: [alpha]
+                                      code: "return alpha();"
+                  untouched:
+                    title: 未受影响
+                    steps:
+                      - if:
+                          present: ok
+                          then:
+                            - script:
+                                use: [beta]
+                                code: "return beta();"
+                      - repeat:
+                          max: 2
+                          steps:
+                            - script:
+                                use: [beta]
+                                code: "return beta();"
+                """;
+        ConchDoc oldDoc = conch("""
+                scripts:
+                  alpha: "return 1;"
+                  beta: "return 2;"
+                  gamma: "return 3;"
+                """ + actions);
+        ConchDoc newDoc = conch("""
+                scripts:
+                  beta: "return 2;"
+                  gamma: "return 30;"
+                """ + actions);
+
+        ConchDiff diff = ConchDiff.between(oldDoc, newDoc);
+        assertThat(diff.removedScripts()).containsExactly("alpha");
+        assertThat(diff.changedScripts()).containsExactly("gamma");
+        assertThat(diff.changedActions()).containsExactly(
+                new ActionChange("in_then", false, false, true, false, false),
+                new ActionChange("in_else", false, false, true, false, false),
+                new ActionChange("in_repeat", false, false, true, false, false),
+                new ActionChange("in_nested", false, false, true, false, false));
+    }
+
     private static ConchDoc conch(String body) {
         return ConchParser.parse("""
                 conch: legacy_oa

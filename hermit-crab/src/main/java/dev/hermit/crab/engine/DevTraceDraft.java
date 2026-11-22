@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
 
+import dev.hermit.crab.files.FileRoutes;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.secure.Redactor;
 
@@ -46,6 +47,9 @@ public final class DevTraceDraft {
     private static final Pattern HEX_RUN = Pattern.compile("(?<![A-Za-z0-9])[0-9a-fA-F]{32,}(?![A-Za-z0-9])");
     private static final Pattern BASE64_RUN = Pattern.compile("(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{32,}={0,2}(?![A-Za-z0-9+/])");
     private static final Pattern BASE64URL_RUN = Pattern.compile("(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])");
+    private static final Pattern DOWNLOAD_TOKEN = Pattern.compile(
+            "((?:(?i:/|%2f)|\\\\/)api(?:(?i:/|%2f)|\\\\/)-(?:(?i:/|%2f)|\\\\/)files(?:(?i:/|%2f)|\\\\/))[A-Za-z0-9_-]{16,}");
+    private static final String DOWNLOAD_MASK = "$1***";
 
     private final Instant expiresAt;
     private final List<Map<String, Object>> steps = new ArrayList<>();
@@ -85,6 +89,13 @@ public final class DevTraceDraft {
 
     public void rememberDerived(Object value) {
         rememberDerived(value, 0);
+    }
+
+    /** 只在追踪里打码的值（例如暂存区下载令牌），不影响调用返回值。 */
+    public void rememberTraceSecret(String value) {
+        if (value != null && value.length() >= 4 && !"***".equals(value)) {
+            traceDerived.add(value);
+        }
     }
 
     public Set<String> derivedSecrets() {
@@ -381,6 +392,7 @@ public final class DevTraceDraft {
                 return failure;
             }
             Map<String, Object> copy = mutableMap(masked);
+            maskDownloadUrls(copy);
             maskCredentialBodies(copy, mask);
             clipStepErrors(copy);
             limitWireBodies(copy);
@@ -392,6 +404,58 @@ public final class DevTraceDraft {
             LOG.warning("dev trace redaction failed: " + ex.getClass().getName());
             return failure;
         }
+    }
+
+    /** 暂存区下载链接不需要 API Key，追踪里把令牌段替换成 ***，不影响正常调用返回值。 */
+    private static void maskDownloadUrls(Object value) {
+        if (value instanceof Map<?, ?> raw) {
+            @SuppressWarnings("unchecked")
+            Map<Object, Object> map = (Map<Object, Object>) raw;
+            for (Map.Entry<Object, Object> entry : map.entrySet()) {
+                Object item = entry.getValue();
+                if (item instanceof String text) {
+                    String sanitized = maskDownloadUrl(text);
+                    if (!sanitized.equals(text)) {
+                        entry.setValue(sanitized);
+                    }
+                } else {
+                    maskDownloadUrls(item);
+                }
+            }
+            return;
+        }
+        if (value instanceof List<?> raw) {
+            @SuppressWarnings("unchecked")
+            List<Object> list = (List<Object>) raw;
+            for (int i = 0; i < list.size(); i++) {
+                Object item = list.get(i);
+                if (item instanceof String text) {
+                    String sanitized = maskDownloadUrl(text);
+                    if (!sanitized.equals(text)) {
+                        list.set(i, sanitized);
+                    }
+                } else {
+                    maskDownloadUrls(item);
+                }
+            }
+        }
+    }
+
+    private static String maskDownloadUrl(String text) {
+        if (text == null || !containsIgnoreCase(text, "files")) {
+            return text;
+        }
+        return DOWNLOAD_TOKEN.matcher(text).replaceAll(DOWNLOAD_MASK);
+    }
+
+    private static boolean containsIgnoreCase(String text, String needle) {
+        int limit = text.length() - needle.length();
+        for (int i = 0; i <= limit; i++) {
+            if (text.regionMatches(true, i, needle, 0, needle.length())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -35,6 +35,12 @@ class LoginServiceTest {
     @Autowired
     PasswordEncoder passwordEncoder;
 
+    @Autowired
+    dev.hermit.reef.security.JwtSecretStore jwtSecretStore;
+
+    @Autowired
+    dev.hermit.reef.config.ReefProperties reefProperties;
+
     @BeforeEach
     void reset() {
         jdbc.update("DELETE FROM hermit_admin_login_failures");
@@ -77,5 +83,80 @@ class LoginServiceTest {
                 "SELECT username FROM hermit_admin_login_failures ORDER BY id",
                 String.class);
         assertThat(recorded).containsExactly("Admin", "admin ", " admin");
+    }
+
+    @Test
+    void canonicalUsernameIsUsedForJwtAndAuditWhenDbMatchesCaseInsensitively() {
+        List<String> jwtSubjects = new java.util.ArrayList<>();
+        List<String> auditEvents = new java.util.ArrayList<>();
+        AdminAccount canonical = new AdminAccount(
+                1L,
+                "admin",
+                passwordEncoder.encode(TestSecrets.PASSWORD),
+                false,
+                AdminRole.ADMIN,
+                ReefTestConfig.START,
+                3);
+        AdminUsers caseInsensitiveUsers = new AdminUsers(null, null, null, null, null, null, null, null) {
+            @Override
+            public AdminAccount find(String username) {
+                return "admin".equalsIgnoreCase(username) ? canonical : null;
+            }
+        };
+        dev.hermit.reef.audit.AuditService audit = new dev.hermit.reef.audit.AuditService(null, null) {
+            @Override
+            public void record(String actor, dev.hermit.reef.audit.AuditAction action, String conch, String version,
+                    String detail) {
+                auditEvents.add(action.name() + ":" + actor);
+            }
+        };
+        dev.hermit.reef.security.JwtService jwt = new dev.hermit.reef.security.JwtService(
+                jwtSecretStore,
+                reefProperties,
+                java.time.Clock.fixed(ReefTestConfig.START, java.time.ZoneOffset.UTC)) {
+            @Override
+            public dev.hermit.reef.security.IssuedJwt issue(String username, AdminRole role, int tokenVersion) {
+                jwtSubjects.add(username);
+                return super.issue(username, role, tokenVersion);
+            }
+        };
+        org.springframework.transaction.PlatformTransactionManager tx =
+                new org.springframework.transaction.PlatformTransactionManager() {
+                    @Override
+                    public org.springframework.transaction.TransactionStatus getTransaction(
+                            org.springframework.transaction.TransactionDefinition definition) {
+                        return new org.springframework.transaction.support.SimpleTransactionStatus();
+                    }
+
+                    @Override
+                    public void commit(org.springframework.transaction.TransactionStatus status) {
+                    }
+
+                    @Override
+                    public void rollback(org.springframework.transaction.TransactionStatus status) {
+                    }
+                };
+        LoginService service = new LoginService(
+                jdbc,
+                passwordEncoder,
+                jwt,
+                audit,
+                caseInsensitiveUsers,
+                java.time.Clock.fixed(ReefTestConfig.START, java.time.ZoneOffset.UTC),
+                tx);
+
+        assertThat(service.login("ADMIN", "wrong-password")).isEmpty();
+        assertThat(service.login("Unknown", "wrong-password")).isEmpty();
+        java.util.Optional<LoginResponse> response = service.login("ADMIN", TestSecrets.PASSWORD);
+        assertThat(response).isPresent();
+        assertThat(jwtSubjects).containsExactly("admin");
+        String payload = new String(
+                java.util.Base64.getUrlDecoder().decode(response.get().token().split("\\.")[1]),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(payload).contains("\"sub\":\"admin\"");
+        assertThat(auditEvents).containsExactly(
+                "LOGIN_FAILURE:admin",
+                "LOGIN_FAILURE:Unknown",
+                "LOGIN_SUCCESS:admin");
     }
 }

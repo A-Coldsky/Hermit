@@ -183,6 +183,29 @@ public final class Invoker {
         return staged == null ? rawInput : staged;
     }
 
+    /**
+     * 幂等重放前先核对 {@code fileId} 的 API Key 归属，防止另一把 Key 借幂等键读取别人的缓存响应。
+     * 内联 {@code data:} URI 不在这里落盘，缓存未命中后再由 {@link #stageFileInputs} 写入暂存区。
+     */
+    private static void requireOwnedFileIds(Action capability, Map<String, Object> rawInput) {
+        if (capability == null || rawInput == null) {
+            return;
+        }
+        for (Map.Entry<String, dev.hermit.common.model.ParamSpec> entry : capability.input().entrySet()) {
+            if (!entry.getValue().file() || !(rawInput.get(entry.getKey()) instanceof String value)) {
+                continue;
+            }
+            FileScope scope = FileScope.current();
+            if (scope == null) {
+                throw new FileStageException("这台 Crab 没有启用文件暂存区");
+            }
+            if (value.regionMatches(true, 0, "data:", 0, 5)) {
+                continue;
+            }
+            scope.require(value);
+        }
+    }
+
     /** 整个规则包的本机开关。停用的包不论 Key 范围一律拒绝。 */
     public void bindSwitchedOff(java.util.function.Predicate<String> lookup) {
         this.switchedOff = lookup == null ? name -> false : lookup;
@@ -292,11 +315,35 @@ public final class Invoker {
             ConchDoc confirmedAgainst,
             String confirmToken
     ) {
+        return invoke(principal, conch, action, input, account, idempotencyKey, bodySha256, channel, traceId,
+                httpConfirmed, confirmedAgainst, null, confirmToken, null);
+    }
+
+    /**
+     * {@code confirmedOrigin} 与 {@code confirmedAgainst} 配套，防止本地确认去确认同名同内容的正式包。
+     * {@code httpMethod} 由 HTTP 网关传入，在原子读出当前文档后校验 HTTP 方法，消除网关预读与执行之间的 TOCTOU。
+     */
+    public InvokeOutcome invoke(
+            ApiKeyPrincipal principal,
+            String conch,
+            String action,
+            Map<String, Object> input,
+            Optional<String> account,
+            Optional<String> idempotencyKey,
+            String bodySha256,
+            CallChannel channel,
+            String traceId,
+            boolean httpConfirmed,
+            ConchDoc confirmedAgainst,
+            Origin confirmedOrigin,
+            String confirmToken,
+            String httpMethod
+    ) {
         // 这次调用能用的暂存区文件按 API Key 划分，引擎发请求时从线程上取。
         FileScope previous = FileScope.begin(fileStage, principal == null ? null : principal.id(), fileBase);
         try {
             return invokeScoped(principal, conch, action, input, account, idempotencyKey, bodySha256, channel,
-                    traceId, httpConfirmed, confirmedAgainst, confirmToken);
+                    traceId, httpConfirmed, confirmedAgainst, confirmedOrigin, confirmToken, httpMethod);
         } finally {
             FileScope.restore(previous);
         }
@@ -314,28 +361,37 @@ public final class Invoker {
             String traceId,
             boolean httpConfirmed,
             ConchDoc confirmedAgainst,
-            String confirmToken
+            Origin confirmedOrigin,
+            String confirmToken,
+            String httpMethod
     ) {
         if (principal == null || conch == null || action == null || conch.length() > NAME_LIMIT || action.length() > NAME_LIMIT) {
             return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
         }
+        CallChannel recorded = channel == null ? CallChannel.HTTP : channel;
         // 墓碑只表示 Reef 不再分发。包仍在注册表里时，调用继续走后面的权限和能力检查。
         // 注册表里已经没有这份包（旧数据清掉了 current）才返回 CONCH_DISABLED。
         // 已经带着授权快照进入引擎的请求仍执行那份快照（审计 A01）。
         // 文档和来源取自同一个快照：同名的本地包和正式包切换时，不会拿一边的规则配另一边的账号。
         ConchRegistry.Active live = registry.active(conch).orElse(null);
         ConchDoc doc = live == null ? null : live.doc();
+        Origin origin = live == null ? null : live.origin();
         if (doc == null && disabledConches.contains(conch)) {
             return requestOnly(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE);
         }
         if (doc == null && ruleDisabled.test(conch)) {
             return requestOnly(traceId, ErrorCode.CONCH_DISABLED, RULE_DISABLED_CALL);
         }
-        if (confirmedAgainst != null && doc != null && !sameSnapshot(doc, confirmedAgainst)) {
+        if (confirmedAgainst != null && doc != null
+                && (!sameSnapshot(doc, confirmedAgainst)
+                        || (confirmedOrigin != null && origin != confirmedOrigin))) {
             return requestOnly(traceId, ErrorCode.CONFLICT, CHANGED_AFTER_CONFIRM);
         }
         Action capability = doc == null ? null : doc.actions().get(action);
         if (doc == null || capability == null) {
+            return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
+        }
+        if (recorded == CallChannel.MCP && !capability.mcp().expose()) {
             return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
         }
         if (switchedOff.test(conch)) {
@@ -344,7 +400,12 @@ public final class Invoker {
         if (disabled.disabled(conch, action)) {
             return requestOnly(traceId, ErrorCode.CAPABILITY_DISABLED, CAPABILITY_DISABLED_MESSAGE);
         }
-        Origin origin = live.origin();
+        if (recorded == CallChannel.HTTP && httpMethod != null) {
+            String expected = CapabilityHttp.method(capability).name();
+            if (!expected.equals(httpMethod)) {
+                return methodNotAllowed(traceId, expected);
+            }
+        }
         // grantsAllOfficial（all: true，或旧的空 conches 且空 actions）包含本地包。
         // 写了 conches 或 actions 的 Key 仍要求本地包出现在 conches 里。只读由后面的 permits 限制。
         if (origin == Origin.LOCAL && !principal.scope().allowsLocal(conch)) {
@@ -352,6 +413,9 @@ public final class Invoker {
         }
         if (!principal.permits(conch, action, CapabilityHttp.readOnly(capability))) {
             return requestOnly(traceId, ErrorCode.FORBIDDEN, "forbidden");
+        }
+        if (recorded == CallChannel.MCP && capability.effectiveConfirm() && confirmedAgainst == null) {
+            return requestOnly(traceId, ErrorCode.CONFLICT, CHANGED_AFTER_CONFIRM);
         }
         Account resolved;
         try {
@@ -389,7 +453,6 @@ public final class Invoker {
         } catch (InvalidInput ex) {
             return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
         }
-        CallChannel recorded = channel == null ? CallChannel.HTTP : channel;
         if (recorded == CallChannel.HTTP) {
             InvokeOutcome confirm = httpConfirm(doc, capability, httpConfirmed, confirmToken, traceId);
             if (confirm != null) {
@@ -401,8 +464,8 @@ public final class Invoker {
                     principal, doc, origin, action, rawInput, resolved, secrets, merged,
                     idempotencyKey.get(), bodySha256, recorded, traceId);
         }
-        // 文件入参放在确认和幂等重放之后处理：要确认的调用不提前占暂存区，
-        // 已完成的写操作在入参文件过期后仍能取回结果。
+        // 文件入参放在确认之后处理：要确认的调用不提前占暂存区；
+        // 幂等路径会先核对 fileId 归属再查缓存，data URI 在缓存未命中后才落盘。
         try {
             rawInput = stageFileInputs(capability, rawInput);
         } catch (FileStageException ex) {
@@ -425,6 +488,12 @@ public final class Invoker {
             CallChannel channel,
             String traceId
     ) {
+        Action capability = doc.actions().get(action);
+        try {
+            requireOwnedFileIds(capability, input);
+        } catch (FileStageException ex) {
+            return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
+        }
         String lockId = origin.name() + "\0" + doc.conch() + "\0" + account.account() + "\0" + action + "\0" + key;
         CompletableFuture<Void> mine = new CompletableFuture<>();
         while (true) {
@@ -452,7 +521,7 @@ public final class Invoker {
             }
             Map<String, Object> staged;
             try {
-                staged = stageFileInputs(doc.actions().get(action), input);
+                staged = stageFileInputs(capability, input);
             } catch (FileStageException ex) {
                 return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
             }
@@ -734,6 +803,12 @@ public final class Invoker {
         int status = StatusCodes.of(code);
         String json = ApiEnvelope.requestJson(null, code, message, requestId == null ? "" : requestId);
         return new InvokeOutcome(status, ApiJson.bytes(json), null, false, null, true);
+    }
+
+    private static InvokeOutcome methodNotAllowed(String requestId, String expected) {
+        String message = "这个能力要用 " + expected + " 调用。";
+        String json = ApiEnvelope.requestJson(null, ErrorCode.INVALID_INPUT, message, requestId == null ? "" : requestId);
+        return new InvokeOutcome(405, ApiJson.bytes(json), null, false, null, true, expected);
     }
 
     private static InvokeOutcome done(String traceId, ErrorCode code, String message, Object data) {

@@ -175,6 +175,46 @@ class FileStageTest {
                 .isInstanceOf(FileStageException.class);
     }
 
+    @Test
+    void activeSpoolsCountAgainstMaxFilesAndReleaseCleanly() {
+        FileStage stage = new FileStage(temp.resolve("files"), clock, FileStageSettings.defaults());
+        for (int i = 0; i < FileStage.MAX_FILES - 1; i++) {
+            stage.store(new byte[0], "empty-" + i, null, "key-1");
+        }
+        FileStage.Spool pending = stage.spool();
+        assertThatThrownBy(stage::spool)
+                .isInstanceOf(FileStageException.class)
+                .hasMessage(FileStage.FULL);
+        assertThatThrownBy(() -> stage.store(new byte[0], "over", null, "key-1"))
+                .isInstanceOf(FileStageException.class)
+                .hasMessage(FileStage.FULL);
+
+        // 丢弃两次不能把 activeSpools 减成负数，从而放进超出上限的文件。
+        pending.discard();
+        pending.discard();
+
+        FileStage.Spool last = stage.spool();
+        assertThatThrownBy(stage::spool)
+                .isInstanceOf(FileStageException.class)
+                .hasMessage(FileStage.FULL);
+        StagedFile committed = last.commit("last.bin", null, "key-1");
+        assertThat(stage.find(committed.fileId(), "key-1")).isPresent();
+        assertThatThrownBy(stage::spool)
+                .isInstanceOf(FileStageException.class)
+                .hasMessage(FileStage.FULL);
+    }
+
+    @Test
+    void inlineDataUriWithInvalidPercentEncodedNameThrowsFileStageException() {
+        String encoded = Base64.getEncoder().encodeToString(bytes("hello"));
+        assertThatThrownBy(() -> FileStage.inline("data:text/plain;name=%ZZ;base64," + encoded))
+                .isInstanceOf(FileStageException.class)
+                .hasMessage("data URI 文件名编码无效");
+        assertThatThrownBy(() -> FileStage.inline("data:text/plain;name=bad%;base64," + encoded))
+                .isInstanceOf(FileStageException.class)
+                .hasMessage("data URI 文件名编码无效");
+    }
+
     private static byte[] bytes(String text) {
         return text.getBytes(StandardCharsets.UTF_8);
     }

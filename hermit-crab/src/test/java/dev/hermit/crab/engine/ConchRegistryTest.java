@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -216,6 +217,91 @@ class ConchRegistryTest {
                             .filteredOn(issue -> "不能写入保留变量 login".equals(issue.message()))
                             .hasSize(1);
                 });
+    }
+
+    @Test
+    void rejectsWritingReservedLoopVariable() {
+        assertThat(ConchRegistry.RESERVED).contains("loop");
+        ConchRegistry registry = new ConchRegistry();
+        List<ValidationIssue> issues = registry.inspect(ConchParser.parse("""
+                conch: loop_conch
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.9.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                auth:
+                  steps:
+                    - ask:
+                        field: code
+                        prompt: 请输入验证码
+                        into: loop
+                actions:
+                  list_todo:
+                    title: 能力
+                    description: 说明
+                    output:
+                      value: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { value: ok }
+                    notes: 注意
+                    steps:
+                      - set: { loop: x }
+                      - extract:
+                          loop: { jsonpath: "$.x" }
+                      - script:
+                          code: "return 1;"
+                          into: loop
+                """));
+        List<ValidationIssue> reserved = issues.stream()
+                .filter(issue -> ValidationCodes.RESERVED_VARIABLE.equals(issue.code())
+                        && "不能写入保留变量 loop".equals(issue.message()))
+                .toList();
+        assertThat(reserved).extracting(ValidationIssue::path).contains(
+                "auth.steps[0].ask.into",
+                "actions.list_todo.steps[0].loop",
+                "actions.list_todo.steps[1].loop",
+                "actions.list_todo.steps[2].into");
+    }
+
+    @Test
+    void capsReservedStepsRecursionDepth() {
+        StringBuilder steps = new StringBuilder();
+        String indent = "      ";
+        for (int i = 0; i < 10; i++) {
+            steps.append(indent).append("- if:\n");
+            steps.append(indent).append("    present: a\n");
+            steps.append(indent).append("    then:\n");
+            indent += "      ";
+        }
+        steps.append(indent).append("- set: { input: x }\n");
+        String yaml = """
+                conch: deep_conch
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.9.0
+                title: 标题
+                description: 说明
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 能力
+                    description: 说明
+                    output:
+                      value: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { value: ok }
+                    notes: 注意
+                    steps:
+                """ + steps;
+        ConchRegistry registry = new ConchRegistry();
+        List<ValidationIssue> issues = registry.inspect(ConchParser.parse(yaml));
+        assertThat(issues).extracting(ValidationIssue::code)
+                .contains(ValidationCodes.FLOW_STEP)
+                .doesNotContain(ValidationCodes.RESERVED_VARIABLE);
     }
 
     @Test

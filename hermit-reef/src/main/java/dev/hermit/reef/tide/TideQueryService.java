@@ -35,6 +35,7 @@ public class TideQueryService {
     /** 按天汇总时在哪个时区切日。不传 {@code tz} 时按北京时间，北京时间凌晨的调用不再记到前一天。 */
     static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
     static final Duration MAX_SPAN = Duration.ofDays(400);
+    static final int MAX_COMPARE_VERSIONS = 50;
     private static final int RECENT_SUMMARIES = 5;
     private static final int RATE_SCALE = 6;
     private static final int AVG_SCALE = 3;
@@ -187,8 +188,12 @@ public class TideQueryService {
         if (conch == null || conch.isBlank() || versions == null || versions.isBlank()) {
             throw TideErrors.unprocessable();
         }
-        List<String> requested = new ArrayList<>();
-        for (String part : versions.split(",", -1)) {
+        String[] parts = versions.split(",", MAX_COMPARE_VERSIONS + 1);
+        if (parts.length > MAX_COMPARE_VERSIONS) {
+            throw TideErrors.unprocessable();
+        }
+        List<String> requested = new ArrayList<>(parts.length);
+        for (String part : parts) {
             String version = part.trim();
             requireCanonicalVersion(version);
             requested.add(version);

@@ -45,11 +45,11 @@ public final class ConchValidator {
     private static final Set<String> DEFAULT_STEP_TYPES = Set.of(
             "request", "extract", "assert", "set", "script", "ask", "if", "repeat");
     private static final Set<String> BUILTIN_ROOTS = Set.of("input", "response", "now");
-    /** 与 {@code ConchRegistry.RESERVED} 一致；这里只拦 {@code login}，Reef 上传不经过注册表。 */
-    private static final String RESERVED_LOGIN = "login";
-    /** 与 {@code ConchRegistry.RESERVED} 一致。{@code ask.into} 在上传时也要拦住。 */
-    private static final Set<String> RESERVED_NAMES = Set.of(
-            "input", "credential", "config", "response", "now", "login");
+    /** 与 {@code ConchRegistry.RESERVED} 一致；这里拦 {@code login} 和 {@code loop}，Reef 上传不经过注册表。 */
+    private static final Set<String> RESERVED_STEP_NAMES = Set.of("login", FlowSteps.LOOP);
+    /** 与 {@code ConchRegistry.RESERVED} 一致。{@code ask.into} 与 {@code repeat.collect} 在上传时也要拦住。 */
+    static final Set<String> RESERVED_NAMES = Set.of(
+            "input", "credential", "config", "response", "now", "login", FlowSteps.LOOP);
     private static final SemVer LOGIN_MIN_CRAB = SemVer.parse("1.3.0");
     private static final SemVer ASK_MIN_CRAB = SemVer.parse("1.4.0");
     private static final Set<String> ASK_KEYS = Set.of("into", "kind", "label", "hint", "timeout_s");
@@ -206,14 +206,15 @@ public final class ConchValidator {
                         errors,
                         null,
                         authInputs);
-                checkRequestShape("auth.alive_check.request", alive.request(), errors, warnings);
+                checkRequestShape("auth.alive_check.request", alive.request(), errors, warnings,
+                        FlowChecks.strict(doc));
                 if (alive.request() != null && alive.request().containsKey("retry")) {
                     errors.add(issue(ValidationCodes.RETRY, "auth.alive_check.request.retry",
                             "alive_check 不支持 retry"));
                 }
             }
         }
-        checkReservedLogin(doc, errors);
+        checkReservedSteps(doc, errors);
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
             checkAction(
                     entry.getKey(),
@@ -402,6 +403,14 @@ public final class ConchValidator {
     }
 
     private static void checkSteps(List<Step> steps, String path, Context ctx, List<ValidationIssue> errors) {
+        checkSteps(steps, path, ctx, errors, 0);
+    }
+
+    private static void checkSteps(
+            List<Step> steps, String path, Context ctx, List<ValidationIssue> errors, int depth) {
+        if (steps == null) {
+            return;
+        }
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
             if (!ctx.supportedStepTypes().contains(step.type())) {
@@ -410,8 +419,12 @@ public final class ConchValidator {
                         path + "[" + i + "]",
                         "不支持的步骤类型 " + step.type()));
             }
+            if (depth >= FlowSteps.MAX_DEPTH) {
+                continue;
+            }
             for (String key : FlowSteps.branchKeys(step)) {
-                checkSteps(FlowSteps.branch(step, key), path + "[" + i + "]." + step.type() + "." + key, ctx, errors);
+                checkSteps(FlowSteps.branch(step, key), path + "[" + i + "]." + step.type() + "." + key,
+                        ctx, errors, depth + 1);
             }
         }
     }
@@ -421,6 +434,13 @@ public final class ConchValidator {
     }
 
     private static void checkPlainStepList(List<Step> steps, String path, List<ValidationIssue> errors) {
+        checkPlainStepList(steps, path, errors, 0);
+    }
+
+    private static void checkPlainStepList(List<Step> steps, String path, List<ValidationIssue> errors, int depth) {
+        if (steps == null) {
+            return;
+        }
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
             boolean variableNames = "extract".equals(step.type());
@@ -430,8 +450,10 @@ public final class ConchValidator {
                 Map<String, Object> own = new LinkedHashMap<>(FlowSteps.own(step));
                 own.remove("collect");
                 checkPlainMap(typed, own, false, true, errors);
-                for (String key : FlowSteps.branchKeys(step)) {
-                    checkPlainStepList(FlowSteps.branch(step, key), typed + "." + key, errors);
+                if (depth < FlowSteps.MAX_DEPTH) {
+                    for (String key : FlowSteps.branchKeys(step)) {
+                        checkPlainStepList(FlowSteps.branch(step, key), typed + "." + key, errors, depth + 1);
+                    }
                 }
                 continue;
             }
@@ -661,12 +683,16 @@ public final class ConchValidator {
             String path,
             Map<String, Object> request,
             List<ValidationIssue> errors,
-            List<ValidationIssue> warnings
+            List<ValidationIssue> warnings,
+            boolean strict
     ) {
         if (request == null) {
             return;
         }
-        if (warnings != null) {
+        if (strict) {
+            FlowChecks.unknownKeys(path, "request", request.keySet(), REQUEST_KEYS,
+                    ValidationCodes.IGNORED_REQUEST_FIELD, errors);
+        } else if (warnings != null) {
             for (String key : request.keySet()) {
                 if (!REQUEST_KEYS.contains(key)) {
                     warnings.add(issue(
@@ -961,6 +987,9 @@ public final class ConchValidator {
             String typed = path + "[" + i + "]." + step.type();
             if (FlowSteps.isFlow(step)) {
                 FlowChecks.shape(typed, step, nest, errors);
+                if (nest.depth() >= FlowSteps.MAX_DEPTH) {
+                    continue;
+                }
                 boolean repeat = FlowSteps.REPEAT.equals(step.type());
                 if (repeat) {
                     declared.add(FlowSteps.LOOP);
@@ -968,18 +997,14 @@ public final class ConchValidator {
                     checkRefs(typed, FlowSteps.own(step), doc, declared, loginNames, loginVars, usesLogin,
                             errors, warnings, inputFields);
                 }
-                // then 和 else 只跑一个：一个分支里写的变量，另一个分支读不到。
-                Set<String> after = new LinkedHashSet<>(declared);
                 Set<String> before = declared;
-                if (nest.inRepeat() && !repeat) {
-                    // 循环里上一轮走的分支写的变量会留到这一轮，另一个分支读得到。
+                if (repeat && !nest.inRepeat()) {
+                    // 循环里这一轮任意位置写的变量，下一轮都读得到（含 if 之后的步骤和另一分支）。
                     before = new LinkedHashSet<>(declared);
-                    for (String key : FlowSteps.branchKeys(step)) {
-                        checkOrderedSteps(FlowSteps.branch(step, key), typed + "." + key, doc, before,
-                                new LinkedHashSet<>(loginNames), new LinkedHashSet<>(loginVars), new AtomicBoolean(),
-                                new ArrayList<>(), new ArrayList<>(), inputFields, nest.into(false));
-                    }
+                    collectDeclared(FlowSteps.branch(step, "steps"), before, nest.depth() + 1);
                 }
+                // then 和 else 只跑一个：循环外一个分支里写的变量，另一个分支读不到。
+                Set<String> after = new LinkedHashSet<>(declared);
                 for (String key : FlowSteps.branchKeys(step)) {
                     Set<String> inside = new LinkedHashSet<>(before);
                     checkOrderedSteps(FlowSteps.branch(step, key), typed + "." + key, doc, inside, loginNames,
@@ -1000,11 +1025,7 @@ public final class ConchValidator {
                 continue;
             }
             if ("request".equals(step.type())) {
-                checkRequestShape(typed, step.def(), errors, warnings);
-                if (nest.strict()) {
-                    FlowChecks.unknownKeys(typed, "request", step.def().keySet(), REQUEST_KEYS,
-                            ValidationCodes.IGNORED_REQUEST_FIELD, errors);
-                }
+                checkRequestShape(typed, step.def(), errors, warnings, nest.strict());
                 if (step.def().containsKey("retry")) {
                     FlowChecks.retry(typed, step.def(), nest.retryAnyMethod(), errors);
                 }
@@ -1085,6 +1106,27 @@ public final class ConchValidator {
         }
         if ("script".equals(step.type()) && step.def().get("into") instanceof String name && !name.isBlank()) {
             declared.add(name);
+        }
+    }
+
+    private static void collectDeclared(List<Step> steps, Set<String> out, int depth) {
+        if (steps == null) {
+            return;
+        }
+        for (Step step : steps) {
+            if (step == null) {
+                continue;
+            }
+            if (FlowSteps.isFlow(step)) {
+                if (FlowSteps.REPEAT.equals(step.type()) || depth >= FlowSteps.MAX_DEPTH) {
+                    continue;
+                }
+                for (String key : FlowSteps.branchKeys(step)) {
+                    collectDeclared(FlowSteps.branch(step, key), out, depth + 1);
+                }
+                continue;
+            }
+            declare(step, out);
         }
     }
 
@@ -1515,42 +1557,48 @@ public final class ConchValidator {
         loginVars.addAll(auth.cookies().keySet());
     }
 
-    private static void checkReservedLogin(ConchDoc doc, List<ValidationIssue> errors) {
+    private static void checkReservedSteps(ConchDoc doc, List<ValidationIssue> errors) {
         if (doc.auth() != null) {
-            reservedLoginSteps(doc.auth().steps(), "auth.steps", errors);
+            reservedSteps(doc.auth().steps(), "auth.steps", errors, 0);
         }
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
-            reservedLoginSteps(entry.getValue().steps(), "actions." + entry.getKey() + ".steps", errors);
+            reservedSteps(entry.getValue().steps(), "actions." + entry.getKey() + ".steps", errors, 0);
         }
     }
 
-    private static void reservedLoginSteps(List<Step> steps, String path, List<ValidationIssue> errors) {
+    private static void reservedSteps(List<Step> steps, String path, List<ValidationIssue> errors, int depth) {
         if (steps == null) {
             return;
         }
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
-            for (String key : FlowSteps.branchKeys(step)) {
-                reservedLoginSteps(
-                        FlowSteps.branch(step, key), path + "[" + i + "]." + step.type() + "." + key, errors);
+            if (depth < FlowSteps.MAX_DEPTH) {
+                for (String key : FlowSteps.branchKeys(step)) {
+                    reservedSteps(
+                            FlowSteps.branch(step, key), path + "[" + i + "]." + step.type() + "." + key,
+                            errors, depth + 1);
+                }
             }
             if ("script".equals(step.type())) {
-                if (RESERVED_LOGIN.equals(step.def().get("into"))) {
+                Object into = step.def().get("into");
+                if (into instanceof String name && RESERVED_STEP_NAMES.contains(name)) {
                     errors.add(issue(
                             ValidationCodes.RESERVED_VARIABLE,
                             path + "[" + i + "].into",
-                            "不能写入保留变量 login"));
+                            "不能写入保留变量 " + name));
                 }
                 continue;
             }
             if (!"extract".equals(step.type()) && !"set".equals(step.type())) {
                 continue;
             }
-            if (step.def().containsKey(RESERVED_LOGIN)) {
-                errors.add(issue(
-                        ValidationCodes.RESERVED_VARIABLE,
-                        path + "[" + i + "].login",
-                        "不能写入保留变量 login"));
+            for (String name : step.def().keySet()) {
+                if (RESERVED_STEP_NAMES.contains(name)) {
+                    errors.add(issue(
+                            ValidationCodes.RESERVED_VARIABLE,
+                            path + "[" + i + "]." + name,
+                            "不能写入保留变量 " + name));
+                }
             }
         }
     }

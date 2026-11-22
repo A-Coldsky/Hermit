@@ -302,6 +302,41 @@ class ConchRepairTest {
         }
     }
 
+    @Test
+    void repairRequiredConchDroppedByReefBecomesDisabled() throws Exception {
+        try (FakeReef reef = new FakeReef(); OpenCrab crab = OpenCrab.open(temp)) {
+            reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
+            ConchRegistry registry = new ConchRegistry();
+            ConchSync sync = sync(reef, crab, registry);
+            sync.syncOnce();
+            registry.remove("legacy_oa");
+            Files.delete(current(crab));
+            assertThat(outcome(sync.syncOnce(), "legacy_oa").kind()).isEqualTo(OutcomeKind.REPAIR_REQUIRED);
+
+            reef.remove("legacy_oa");
+            SyncReport dropped = sync.syncOnce();
+
+            assertThat(outcome(dropped, "legacy_oa").kind()).isEqualTo(OutcomeKind.DISABLED);
+            assertThat(outcome(dropped, "legacy_oa").reason()).isEqualTo(SyncReasons.DISABLED);
+            assertThat(outcome(dropped, "legacy_oa").version()).isEqualTo("1.0.0");
+            assertThat(sync.disabledConches().contains("legacy_oa")).isTrue();
+            assertThat(sync.disabledConches().version("legacy_oa")).isEqualTo("1.0.0");
+            assertThat(auditCount(crab, "REEF_CONCH_DISABLED")).isEqualTo(1);
+
+            // 再次同步幂等，不重复写审计行；且概览展示已停用而非待修复。
+            SyncReport again = sync.syncOnce();
+            assertThat(auditCount(crab, "REEF_CONCH_DISABLED")).isEqualTo(1);
+            assertThat(outcome(sync.visibleStatus(again), "legacy_oa").kind()).isEqualTo(OutcomeKind.DISABLED);
+            assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
+                    .isInstanceOf(UpdateException.class)
+                    .satisfies(error -> {
+                        UpdateException update = (UpdateException) error;
+                        assertThat(update.code()).isEqualTo(ErrorCode.CONCH_DISABLED);
+                        assertThat(update.getMessage()).isEqualTo(DisabledConches.CALL_MESSAGE);
+                    });
+        }
+    }
+
     private static dev.hermit.crab.runtime.InvokeOutcome invoke(
             OpenCrab crab,
             ConchRegistry registry,

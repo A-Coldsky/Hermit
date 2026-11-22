@@ -162,7 +162,7 @@ final class FlowChecks {
             String child = path + "." + target;
             if (!NAME.matcher(target).matches()) {
                 errors.add(flow(child, "collect 的键是汇总后的变量名，只能用字母、数字和下划线"));
-            } else if (FlowSteps.LOOP.equals(target) || RESERVED.contains(target)) {
+            } else if (ConchValidator.RESERVED_NAMES.contains(target)) {
                 errors.add(ConchValidator.issue(ValidationCodes.RESERVED_VARIABLE, child, "不能写入保留变量 " + target));
             }
             if (!(entry.getValue() instanceof String source) || !VARIABLE.matcher(source).matches()) {
@@ -170,9 +170,6 @@ final class FlowChecks {
             }
         }
     }
-
-    private static final java.util.Set<String> RESERVED = java.util.Set.of(
-            "input", "credential", "config", "response", "now", "login");
 
     private static void condition(String path, Map<String, Object> condition, List<ValidationIssue> errors) {
         for (Map.Entry<String, Object> entry : condition.entrySet()) {

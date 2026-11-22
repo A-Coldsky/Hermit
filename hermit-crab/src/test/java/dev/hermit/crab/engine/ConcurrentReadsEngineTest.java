@@ -11,11 +11,13 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -24,6 +26,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchValidator;
@@ -41,6 +44,7 @@ class ConcurrentReadsEngineTest {
     private final AtomicInteger peak = new AtomicInteger();
     private final AtomicInteger rejected = new AtomicInteger();
     private volatile String valid = "none";
+    private volatile Runnable onRejected;
     private final Object gate = new Object();
 
     @BeforeEach
@@ -56,6 +60,7 @@ class ConcurrentReadsEngineTest {
 
     @AfterEach
     void stop() {
+        onRejected = null;
         server.stop(0);
         serverPool.shutdownNow();
         callers.shutdownNow();
@@ -72,6 +77,10 @@ class ConcurrentReadsEngineTest {
         String cookie = exchange.getRequestHeaders().getFirst("Cookie");
         if (cookie == null || !cookie.contains("sid=" + valid)) {
             rejected.incrementAndGet();
+            Runnable hook = onRejected;
+            if (hook != null) {
+                hook.run();
+            }
             reply(exchange, 401, "{}");
             return;
         }
@@ -181,6 +190,135 @@ class ConcurrentReadsEngineTest {
     }
 
     @Test
+    void exclusiveLockTimeoutAfterSharedAttemptKeepsLoginSecretMasked() throws Exception {
+        peak.set(2);
+        String yaml = conch(true, true, "")
+                .replace("path: /data", "path: \"/data/{{login.token}}\"");
+        try (Fixture fixture = new Fixture(yaml, Duration.ofMillis(500))) {
+            assertThat(fixture.call().success()).isTrue();
+            valid = "revoked";
+            CountDownLatch lockerStarted = new CountDownLatch(1);
+            CountDownLatch releaseLock = new CountDownLatch(1);
+            AtomicReference<Thread> lockerRef = new AtomicReference<>();
+            AtomicReference<Throwable> lockerError = new AtomicReference<>();
+            onRejected = () -> {
+                onRejected = null;
+                Thread locker = new Thread(() -> {
+                    lockerStarted.countDown();
+                    try {
+                        if (fixture.sessions.tryLock(fixture.key(), System.nanoTime() + TimeUnit.SECONDS.toNanos(10))) {
+                            try {
+                                fixture.sessions.markLoggedOut(fixture.key());
+                                releaseLock.await(10, TimeUnit.SECONDS);
+                            } finally {
+                                fixture.sessions.unlock(fixture.key());
+                            }
+                        }
+                    } catch (Throwable ex) {
+                        lockerError.set(ex);
+                    }
+                });
+                lockerRef.set(locker);
+                locker.start();
+                waitUntilWaiting(locker, lockerStarted);
+            };
+            ExecutionResult result;
+            try {
+                result = fixture.call();
+            } finally {
+                releaseLock.countDown();
+                Thread locker = lockerRef.get();
+                if (locker != null) {
+                    locker.join(5_000);
+                }
+            }
+            assertThat(lockerError.get()).isNull();
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.TIMEOUT);
+            assertThat(fixture.trace).contains("/data").doesNotContain("tok-s1");
+        }
+    }
+
+    @Test
+    void exclusiveLockInterruptAfterSharedAttemptKeepsLoginSecretMasked() throws Exception {
+        peak.set(2);
+        String yaml = conch(true, true, "")
+                .replace("path: /data", "path: \"/data/{{login.token}}\"");
+        try (Fixture fixture = new Fixture(yaml)) {
+            assertThat(fixture.call().success()).isTrue();
+            valid = "revoked";
+            CountDownLatch lockerStarted = new CountDownLatch(1);
+            CountDownLatch releaseLock = new CountDownLatch(1);
+            AtomicReference<Thread> callerRef = new AtomicReference<>();
+            AtomicReference<Thread> lockerRef = new AtomicReference<>();
+            AtomicReference<Throwable> lockerError = new AtomicReference<>();
+            AtomicReference<ExecutionResult> resultRef = new AtomicReference<>();
+            onRejected = () -> {
+                onRejected = null;
+                Thread locker = new Thread(() -> {
+                    lockerStarted.countDown();
+                    try {
+                        if (fixture.sessions.tryLock(fixture.key(), System.nanoTime() + TimeUnit.SECONDS.toNanos(10))) {
+                            try {
+                                fixture.sessions.markLoggedOut(fixture.key());
+                                Thread caller = callerRef.get();
+                                if (caller != null) {
+                                    caller.interrupt();
+                                }
+                                releaseLock.await(10, TimeUnit.SECONDS);
+                            } finally {
+                                fixture.sessions.unlock(fixture.key());
+                            }
+                        }
+                    } catch (Throwable ex) {
+                        lockerError.set(ex);
+                    }
+                });
+                lockerRef.set(locker);
+                locker.start();
+                waitUntilWaiting(locker, lockerStarted);
+            };
+            Thread caller = new Thread(() -> {
+                callerRef.set(Thread.currentThread());
+                resultRef.set(fixture.call());
+                Thread.interrupted();
+            });
+            try {
+                caller.start();
+                caller.join(10_000);
+            } finally {
+                releaseLock.countDown();
+                Thread locker = lockerRef.get();
+                if (locker != null) {
+                    locker.join(5_000);
+                }
+            }
+            assertThat(lockerError.get()).isNull();
+            ExecutionResult result = resultRef.get();
+            assertThat(result).isNotNull();
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.INTERNAL);
+            assertThat(fixture.trace).contains("/data").doesNotContain("tok-s1");
+        }
+    }
+
+    private static void waitUntilWaiting(Thread thread, CountDownLatch started) {
+        try {
+            started.await(2, TimeUnit.SECONDS);
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (System.nanoTime() < until) {
+                Thread.State state = thread.getState();
+                if (state == Thread.State.TIMED_WAITING || state == Thread.State.WAITING) {
+                    return;
+                }
+                Thread.sleep(5);
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    @Test
     void exclusiveWorkWaitsForSharedHoldersAndTheOtherWayRound() throws Exception {
         try (Fixture fixture = new Fixture(conch(true, true, ""))) {
             SessionKey key = fixture.key();
@@ -261,10 +399,14 @@ class ConcurrentReadsEngineTest {
         private volatile String trace;
 
         private Fixture(String yaml) {
+            this(yaml, Duration.ofSeconds(20));
+        }
+
+        private Fixture(String yaml, Duration capabilityTimeout) {
             ConchDoc doc = ConchParser.parse(yaml);
             ValidationResult checked = ConchValidator.validate(doc, ConchValidator.Context.of(CrabVersion.CURRENT));
             assertThat(checked.errors()).isEmpty();
-            EngineSettings settings = new EngineSettings(Duration.ofSeconds(20), Duration.ofMinutes(10), 3);
+            EngineSettings settings = new EngineSettings(capabilityTimeout, Duration.ofMinutes(10), 3);
             sessions = new SessionManager(new NopSessionPersistence(), settings, Clock.systemUTC());
             ConchRegistry registry = new ConchRegistry();
             registry.put(doc, Origin.LOCAL);

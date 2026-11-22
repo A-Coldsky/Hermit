@@ -114,7 +114,9 @@ public final class SessionManager implements AutoCloseable {
             state.loginSnapshot.clear();
             state.persisted = null;
             closeClient(state);
-            openClient(state);
+            if (!closed && states.get(key) == state) {
+                openClient(state);
+            }
         } finally {
             state.lock.unlock();
         }
@@ -125,20 +127,29 @@ public final class SessionManager implements AutoCloseable {
      * 删掉的账号各自留着一个连接池。
      */
     public void forget(SessionKey key) {
-        persistence.delete(key);
-        loginSnapshots.delete(key);
-        AccountState state = states.get(key);
-        if (state == null) {
-            pending.discard(key);
-            return;
-        }
-        state.lock.lock();
-        try {
-            pending.discard(key);
-            states.remove(key, state);
-            closeClient(state);
-        } finally {
-            state.lock.unlock();
+        while (true) {
+            AccountState state = states.get(key);
+            if (state == null) {
+                persistence.delete(key);
+                loginSnapshots.delete(key);
+                pending.discard(key);
+                return;
+            }
+            // 进行中的调用可能持有读锁或写锁并在返回前写库；等它放开后再删库和移出状态。
+            state.lock.lock();
+            try {
+                if (states.get(key) != state) {
+                    continue;
+                }
+                persistence.delete(key);
+                loginSnapshots.delete(key);
+                pending.discard(key);
+                states.remove(key, state);
+                closeClient(state);
+                return;
+            } finally {
+                state.lock.unlock();
+            }
         }
     }
 
@@ -255,20 +266,46 @@ public final class SessionManager implements AutoCloseable {
         }
         state.gate.readLock().lock();
         try {
-            LinkedHashSet<String> values = new LinkedHashSet<>();
-            addRedaction(values, seen(state));
-            if (state.cookies != null) {
-                ArrayList<String> jar = new ArrayList<>();
-                for (Cookie cookie : state.cookies.getCookies()) {
-                    jar.add(cookie.getValue());
-                }
-                addRedaction(values, jar);
-            }
-            addRedaction(values, state.loginSnapshot.values());
-            return List.copyOf(values);
+            return collectRedaction(state, true);
         } finally {
             state.gate.readLock().unlock();
         }
+    }
+
+    /**
+     * 非阻塞读取打码名单：等锁超时或被中断时另一线程可能仍持有写锁，不能在这里死等读锁。
+     * 能拿到读锁时与 {@link #redactionValues} 相同；拿不到时仍读出线程安全的已见 Cookie 与 Cookie 罐。
+     */
+    List<String> redactionValuesNow(SessionKey key) {
+        AccountState state = states.get(key);
+        if (state == null) {
+            return List.of();
+        }
+        if (state.gate.readLock().tryLock()) {
+            try {
+                return collectRedaction(state, true);
+            } finally {
+                state.gate.readLock().unlock();
+            }
+        }
+        return collectRedaction(state, false);
+    }
+
+    private static List<String> collectRedaction(AccountState state, boolean locked) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        addRedaction(values, seen(state));
+        BasicCookieStore jar = state.cookies;
+        if (jar != null) {
+            ArrayList<String> cookies = new ArrayList<>();
+            for (Cookie cookie : jar.getCookies()) {
+                cookies.add(cookie.getValue());
+            }
+            addRedaction(values, cookies);
+        }
+        if (locked) {
+            addRedaction(values, state.loginSnapshot.values());
+        }
+        return List.copyOf(values);
     }
 
     void recordAuthSuccess(SessionKey key) {
@@ -428,11 +465,12 @@ public final class SessionManager implements AutoCloseable {
     /** Cookie names only. Values stay in the jar and are not copied here. */
     List<String> cookieNames(SessionKey key) {
         AccountState state = states.get(key);
-        if (state == null || state.cookies == null) {
+        BasicCookieStore jar = state == null ? null : state.cookies;
+        if (jar == null) {
             return List.of();
         }
         ArrayList<String> names = new ArrayList<>();
-        for (Cookie cookie : state.cookies.getCookies()) {
+        for (Cookie cookie : jar.getCookies()) {
             if (cookie.getName() != null) {
                 names.add(cookie.getName());
             }
@@ -443,15 +481,20 @@ public final class SessionManager implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
-        for (AccountState state : states.values()) {
-            state.lock.lock();
-            try {
-                closeClient(state);
-            } finally {
-                state.lock.unlock();
+        while (!states.isEmpty()) {
+            for (Map.Entry<SessionKey, AccountState> entry : states.entrySet()) {
+                SessionKey key = entry.getKey();
+                AccountState state = entry.getValue();
+                state.lock.lock();
+                try {
+                    // 在放开锁之前先移出 states，让等锁线程看到状态已失效，不会拿到已关掉的 client / cookies。
+                    states.remove(key, state);
+                    closeClient(state);
+                } finally {
+                    state.lock.unlock();
+                }
             }
         }
-        states.clear();
     }
 
     private AccountState state(SessionKey key) {
@@ -614,7 +657,7 @@ public final class SessionManager implements AutoCloseable {
         long epoch;
         final Map<String, String> loginSnapshot = new LinkedHashMap<>();
         CloseableHttpClient client;
-        BasicCookieStore cookies;
+        volatile BasicCookieStore cookies;
         /** 上一次写进库里的 Cookie；null 表示库里的内容未知或已被删除。 */
         List<StoredCookie> persisted;
         OutboundTls tls;

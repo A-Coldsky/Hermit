@@ -312,6 +312,33 @@ function itemNamed(title: string): Element | undefined {
   )
 }
 
+describe('if / repeat / retry in the trace', () => {
+  it('子步骤和外层同下标也各占一行，分支、轮次和重试写成中文', async () => {
+    const wrapper = await mountPage(DevTracePanel, {
+      props: {
+        trace: {
+          untrusted: true,
+          note: '',
+          kind: 'http' as const,
+          truncated: false,
+          steps: [
+            { index: 0, phase: 'action', type: 'if', durationMs: 1, conditions: ['contains'], result: true, branch: 'then' },
+            { index: 0, phase: 'action', type: 'request', durationMs: 2, method: 'GET', path: '/a', status: 200, round: 2, retries: [{ attempt: 1, reason: '503' }] },
+            { index: 0, phase: 'action', type: 'repeat', durationMs: 9, rounds: 3, stopped: 'max', incomplete: true, collected: { all_rows: 6 } },
+          ],
+        },
+      },
+    })
+    await flushPromises()
+    expect(wrapper.findAll('.el-collapse-item')).toHaveLength(3)
+    expect(wrapper.text()).toContain('第 2 轮')
+    expect(wrapper.get('[data-test="step-branch"]').text()).toBe('contains：成立，执行 then')
+    expect(wrapper.get('[data-test="step-repeat"]').text()).toBe('3 轮，跑满 max，数据可能不全；all_rows 6 条')
+    expect(wrapper.get('[data-test="step-retries"]').text()).toBe('503')
+    wrapper.unmount()
+  })
+})
+
 function shown(item: Element | undefined): boolean {
   const wrap = item?.querySelector('.el-collapse-item__wrap') as HTMLElement | null
   return Boolean(wrap) && wrap!.style.display !== 'none'

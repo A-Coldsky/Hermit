@@ -5,6 +5,7 @@ import java.io.StringWriter;
 import java.net.URI;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -23,6 +24,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.Step;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
@@ -280,7 +282,7 @@ public final class RuleEngine implements ConchExecutor {
             URI base = baseUri(conch, config);
             scope = new LoginScope(conch, input, credentials, config, key, base, deadline);
             ensureSession(scope);
-            requireLoginRefs(scope, action.steps());
+            requireStepLoginRefs(scope, action.steps());
             Attempt attempt = runAction(action, scope);
             if (attempt.lost) {
                 sessions.markLoggedOut(key);
@@ -288,7 +290,7 @@ public final class RuleEngine implements ConchExecutor {
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
                 ensureSession(scope);
-                requireLoginRefs(scope, action.steps());
+                requireStepLoginRefs(scope, action.steps());
                 attempt = runAction(action, scope);
                 if (attempt.lost) {
                     sessions.markLoggedOut(key);
@@ -904,32 +906,89 @@ public final class RuleEngine implements ConchExecutor {
             boolean hideResponseBody,
             ConchDoc conch
     ) {
+        return runBlock(definitions, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
+                indexBase, hideResponseBody, conch, new Block(), -1, 0);
+    }
+
+    /** 一次 runSteps 里跨 if / repeat 子步骤带着走的状态。 */
+    private static final class Block {
+        boolean deriveNext;
+        byte[] previousBytes;
+        boolean previousRequest;
+        Outcome last;
+        /** 大于 0 时正在 repeat 的第几轮，写进追踪。 */
+        int round;
+    }
+
+    /**
+     * {@code fixedIndex} 不小于 0 时是 if / repeat 的子步骤：日志、追踪和报错都记在外层那一步的下标上。
+     */
+    private Outcome runBlock(
+            List<Step> definitions,
+            Map<String, Object> vars,
+            boolean auth,
+            String expectPrefix,
+            List<StepLog> logs,
+            SessionKey key,
+            URI base,
+            long deadline,
+            String phase,
+            Map<String, String> libraries,
+            int indexBase,
+            boolean hideResponseBody,
+            ConchDoc conch,
+            Block block,
+            int fixedIndex,
+            int depth
+    ) {
         CloseableHttpClient client = sessions.client(key);
         Runnable persist = () -> sessions.persist(key);
         DevTraceDraft draft = DevTraceScope.current();
         boolean capture = draft != null;
         boolean loginPhase = "login".equals(phase);
-        boolean deriveNext = false;
-        byte[] previousBytes = null;
-        boolean previousRequest = false;
-        Outcome last = null;
         try {
         for (int i = 0; i < definitions.size(); i++) {
             Step step = definitions.get(i);
-            int at = indexBase + i;
+            int at = fixedIndex >= 0 ? fixedIndex : indexBase + i;
             if (draft != null) {
                 boolean extractOrScript = "extract".equals(step.type()) || "script".equals(step.type());
-                draft.collectDerived(loginPhase || (deriveNext && extractOrScript), !loginPhase);
+                draft.collectDerived(loginPhase || (block.deriveNext && extractOrScript), !loginPhase);
             }
             if (System.nanoTime() >= deadline) {
                 throw new DeadlineExceeded(at, step.type(), logs);
             }
             long started = System.nanoTime();
             if ("ask".equals(step.type())) {
-                throw pauseForAsk(step, at, vars, previousRequest, previousBytes, logs, started, conch, key, auth);
+                if (fixedIndex >= 0) {
+                    throw new StepFailure(
+                            ErrorCode.RULE_MISMATCH, "ask 不能写在 if 或 repeat 里", at, "ask", logs);
+                }
+                throw pauseForAsk(step, at, vars, block.previousRequest, block.previousBytes, logs, started,
+                        conch, key, auth);
             }
             DevTraceScope.takePending();
             try {
+                if (FlowSteps.isFlow(step)) {
+                    if (depth >= FlowSteps.MAX_DEPTH) {
+                        throw new RuleProblem(ErrorCode.RULE_MISMATCH,
+                                "if / repeat 最多嵌套 " + FlowSteps.MAX_DEPTH + " 层", null, null, null);
+                    }
+                    // 调用记录按步骤下标存，一步只能有一条：子步骤记在另一张表里，外层只留一条。
+                    List<StepLog> inner = new ArrayList<>();
+                    try {
+                        runFlow(step, at, started, vars, auth, expectPrefix, inner, key, base, deadline, phase,
+                                libraries, hideResponseBody, conch, block, depth);
+                    } catch (StepFailure ex) {
+                        StepLog failed = ex.logs.isEmpty() ? null : ex.logs.get(ex.logs.size() - 1);
+                        logs.add(failed == null
+                                ? new StepLog(at, step.type(), elapsed(started), null, null, null, null)
+                                : new StepLog(at, failed.type(), elapsed(started), failed.method(), failed.path(),
+                                        failed.status(), failed.extractCount()));
+                        throw new StepFailure(ex.code, ex.summary, at, ex.type, logs);
+                    }
+                    logs.add(new StepLog(at, step.type(), elapsed(started), null, null, null, null));
+                    continue;
+                }
                 Outcome outcome = steps.run(
                         step,
                         vars,
@@ -941,7 +1000,7 @@ public final class RuleEngine implements ConchExecutor {
                         deadline,
                         capture,
                         libraries);
-                last = outcome;
+                block.last = outcome;
                 if (outcome.capture() != null
                         && "request".equals(step.type())
                         && (hideResponseBody || imageAskFollows(definitions, i))) {
@@ -957,16 +1016,22 @@ public final class RuleEngine implements ConchExecutor {
                         outcome.extractCount()));
                 if (capture && outcome.capture() != null && draft != null) {
                     stampCredential(outcome.capture(), credentialBearingRequest(loginPhase, step));
+                    if (block.round > 0) {
+                        outcome.capture().put("round", block.round);
+                    }
                     draft.add(phase, at, elapsed(started), outcome.capture());
                 }
                 if (!loginPhase && "request".equals(step.type())) {
-                    deriveNext = templates.referencesCredential(step.def());
+                    block.deriveNext = templates.referencesCredential(step.def());
                 }
-                previousRequest = "request".equals(step.type());
-                previousBytes = previousRequest ? outcome.bodyBytes() : null;
+                block.previousRequest = "request".equals(step.type());
+                block.previousBytes = block.previousRequest ? outcome.bodyBytes() : null;
                 // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
                 // 下标用这一段里的位置：能力步骤的 indexBase 是 0，登录续跑不会进这里。
-                rejectCapabilityStatus(auth, outcome, i, step.type(), logs, definitions);
+                rejectCapabilityStatus(auth, outcome, i, at, step.type(), logs, definitions);
+            } catch (StepFailure | SessionLost ex) {
+                // 子步骤已经记过日志和追踪。
+                throw ex;
             } catch (RuleProblem ex) {
                 ErrorCode code = ex.code;
                 String summary = ex.summary;
@@ -988,15 +1053,127 @@ public final class RuleEngine implements ConchExecutor {
                 ErrorCode code = auth ? ErrorCode.AUTH_FAILED : ErrorCode.RULE_MISMATCH;
                 throw new StepFailure(code, summary, at, step.type(), logs);
             } catch (DeadlineExceeded ex) {
-                throw new DeadlineExceeded(at, step.type(), logs);
+                // 子步骤超时的，类型已经是那个子步骤的。
+                throw new DeadlineExceeded(at, ex.index >= 0 ? ex.type : step.type(), logs);
             }
         }
         } finally {
-            if (draft != null) {
+            if (draft != null && fixedIndex < 0) {
                 draft.collectDerived(false);
             }
         }
-        return last;
+        return block.last;
+    }
+
+    /** if：判断后跑 then 或 else。repeat：最多 max 轮，每轮跑 steps、汇总 collect、判断 until。 */
+    private void runFlow(
+            Step step,
+            int at,
+            long started,
+            Map<String, Object> vars,
+            boolean auth,
+            String expectPrefix,
+            List<StepLog> logs,
+            SessionKey key,
+            URI base,
+            long deadline,
+            String phase,
+            Map<String, String> libraries,
+            boolean hideResponseBody,
+            ConchDoc conch,
+            Block block,
+            int depth
+    ) {
+        DevTraceDraft draft = DevTraceScope.current();
+        if (FlowSteps.IF.equals(step.type())) {
+            Map<String, Object> condition = Values.map(templates.render(FlowSteps.condition(step), vars));
+            boolean holds = steps.test(condition, vars, sessions.cookies(key));
+            String branch = holds ? "then" : "else";
+            List<Step> chosen = FlowSteps.branch(step, branch);
+            if (draft != null) {
+                LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
+                piece.put("type", "if");
+                piece.put("conditions", List.copyOf(condition.keySet()));
+                piece.put("result", holds);
+                piece.put("branch", chosen.isEmpty() ? "none" : branch);
+                if (block.round > 0) {
+                    piece.put("round", block.round);
+                }
+                draft.add(phase, at, elapsed(started), piece);
+            }
+            runBlock(chosen, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
+                    0, hideResponseBody, conch, block, at, depth + 1);
+            return;
+        }
+        if (block.round > 0) {
+            throw new RuleProblem(ErrorCode.RULE_MISMATCH, "repeat 里不能再写 repeat", null, null, null);
+        }
+        int max = Math.max(1, Math.min(FlowSteps.REPEAT_MAX, Values.integer(step.def().get("max"), 1)));
+        List<Step> body = FlowSteps.branch(step, "steps");
+        Map<String, Object> collect = Values.map(step.def().get("collect"));
+        Map<String, Object> until = Values.map(step.def().get("until"));
+        LinkedHashMap<String, List<Object>> gathered = new LinkedHashMap<>();
+        if (collect != null) {
+            for (String target : collect.keySet()) {
+                gathered.put(target, new ArrayList<>());
+            }
+        }
+        Map<String, Object> taken = new HashMap<>();
+        int rounds = 0;
+        boolean stopped = false;
+        try {
+            while (rounds < max && !stopped) {
+                if (System.nanoTime() >= deadline) {
+                    throw new DeadlineExceeded(at, "repeat", logs);
+                }
+                rounds++;
+                block.round = rounds;
+                vars.put(FlowSteps.LOOP, Map.of("index", rounds));
+                runBlock(body, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
+                        0, hideResponseBody, conch, block, at, depth + 1);
+                if (collect != null) {
+                    for (Map.Entry<String, Object> entry : collect.entrySet()) {
+                        Object value = StepRunner.lookup(vars, Values.text(entry.getValue()));
+                        // 还是上一轮接过的那个列表：这一轮没有重新写它，不再接一遍。
+                        if (value != null && value == taken.put(entry.getKey(), value)) {
+                            continue;
+                        }
+                        if (value instanceof List<?> list) {
+                            gathered.get(entry.getKey()).addAll(list);
+                        } else if (value != null) {
+                            throw new RuleProblem(ErrorCode.RULE_MISMATCH,
+                                    "collect 的 " + entry.getValue() + " 不是列表。"
+                                            + "列表要用带 each 的 extract 或返回数组的 jsonpath 得到",
+                                    null, null, null);
+                        }
+                    }
+                }
+                if (until != null) {
+                    stopped = steps.test(Values.map(templates.render(until, vars)), vars, sessions.cookies(key));
+                }
+            }
+        } finally {
+            block.round = 0;
+        }
+        // 写了 until 却跑满 max 还没成立：数据可能不全。
+        boolean truncated = until != null && !stopped;
+        vars.putAll(gathered);
+        LinkedHashMap<String, Object> loop = new LinkedHashMap<>();
+        loop.put("index", rounds);
+        loop.put("rounds", rounds);
+        loop.put("truncated", truncated);
+        vars.put(FlowSteps.LOOP, loop);
+        if (draft != null) {
+            LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
+            piece.put("type", "repeat");
+            piece.put("rounds", rounds);
+            piece.put("stopped", stopped ? "until" : "max");
+            piece.put("incomplete", truncated);
+            LinkedHashMap<String, Object> sizes = new LinkedHashMap<>();
+            gathered.forEach((name, list) -> sizes.put(name, list.size()));
+            piece.put("collected", sizes);
+            draft.add(phase, at, elapsed(started), piece);
+        }
     }
 
     private static String undefinedOr(TemplateException ex) {
@@ -1029,6 +1206,19 @@ public final class RuleEngine implements ConchExecutor {
      */
     private void requireLoginRefs(LoginScope scope, Object tree) {
         for (String name : loginNames(tree)) {
+            scope.require(name);
+        }
+    }
+
+    /** 一定会跑的步骤引用的登录名字必须有；if / repeat 里的不提前要求，也不为它重新登录，真用到时缺了再报。 */
+    private void requireStepLoginRefs(LoginScope scope, List<Step> steps) {
+        LinkedHashSet<String> must = new LinkedHashSet<>();
+        for (Step step : steps) {
+            if (!FlowSteps.isFlow(step)) {
+                collectLoginNames(step, must);
+            }
+        }
+        for (String name : must) {
             scope.require(name);
         }
     }
@@ -1397,6 +1587,7 @@ public final class RuleEngine implements ConchExecutor {
     private static void rejectCapabilityStatus(
             boolean auth,
             Outcome outcome,
+            int position,
             int index,
             String type,
             List<StepLog> logs,
@@ -1418,7 +1609,7 @@ public final class RuleEngine implements ConchExecutor {
         if (status >= 300 && status < 400 && !isGet(outcome.method())) {
             return;
         }
-        if (statusExpectationCovers(definitions, index, status)) {
+        if (statusExpectationCovers(definitions, position, status)) {
             return;
         }
         if (unresolvedLocation(outcome)) {
@@ -1449,6 +1640,13 @@ public final class RuleEngine implements ConchExecutor {
         for (int j = requestIndex + 1; j < definitions.size(); j++) {
             Step step = definitions.get(j);
             if ("request".equals(step.type())) {
+                break;
+            }
+            // if 按状态码分支：成立与否都由规则自己处理，不在这里按非 2xx 失败。
+            if (FlowSteps.IF.equals(step.type()) && step.def().containsKey("status")) {
+                return true;
+            }
+            if (FlowSteps.isFlow(step)) {
                 break;
             }
             if (!"assert".equals(step.type()) || !step.def().containsKey("status")) {
@@ -1683,7 +1881,12 @@ public final class RuleEngine implements ConchExecutor {
             return new StepFailure(ErrorCode.AUTH_FAILED, "登录没有建立变量 " + name, -1, "request", List.of());
         }
 
-        private final class LoginView extends AbstractMap<String, Object> {
+        private final class LoginView extends AbstractMap<String, Object> implements StepRunner.Peek {
+            @Override
+            public Object peek(String name) {
+                return lookup(name);
+            }
+
             @Override
             public boolean containsKey(Object key) {
                 return key instanceof String;

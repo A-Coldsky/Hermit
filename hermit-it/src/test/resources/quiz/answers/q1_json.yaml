@@ -1,0 +1,24 @@
+conch: quiz
+version: 1.0.0
+driver: http
+min_crab_version: 1.9.0
+base_url: http://127.0.0.1:18080
+title: 测验
+description: 写规则测验的参考答案。
+credentials: {}
+actions:
+  run:
+    title: 查看状态
+    description: 读取站点状态。
+    idempotent: true
+    steps:
+      - request: {method: GET, path: /api/ping}
+      - extract:
+          state: {jsonpath: "$.state"}
+    output:
+      state: {type: string, description: 站点状态}
+    examples:
+      - input: {}
+        output: {state: ok}
+    notes: 只读。
+    related: []

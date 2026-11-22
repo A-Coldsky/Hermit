@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -31,6 +32,7 @@ import dev.hermit.common.model.McpTool;
 import dev.hermit.common.model.McpUpstream;
 import dev.hermit.common.model.ParamSpec;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.Step;
 import dev.hermit.common.template.TemplateEngine;
 import dev.hermit.common.template.TemplateException;
@@ -41,7 +43,7 @@ import dev.hermit.common.version.SemVer;
 public final class ConchValidator {
 
     private static final Set<String> DEFAULT_STEP_TYPES = Set.of(
-            "request", "extract", "assert", "set", "script", "ask");
+            "request", "extract", "assert", "set", "script", "ask", "if", "repeat");
     private static final Set<String> BUILTIN_ROOTS = Set.of("input", "response", "now");
     /** 与 {@code ConchRegistry.RESERVED} 一致；这里只拦 {@code login}，Reef 上传不经过注册表。 */
     private static final String RESERVED_LOGIN = "login";
@@ -75,7 +77,7 @@ public final class ConchValidator {
     private static final Set<String> SCRIPT_KEYS = Set.of("code", "into", "timeout_ms", "use", "credential");
     private static final Set<String> REQUEST_KEYS = Set.of(
             "method", "path", "url", "query", "headers", "form", "json", "body",
-            "encoding", "follow_redirects", "timeout_ms", "query_style", "multipart", "download");
+            "encoding", "follow_redirects", "timeout_ms", "query_style", "multipart", "download", "retry");
     private static final Set<String> EXTRACT_SELECTORS = Set.of("css", "xpath", "jsonpath", "regex");
     private static final Set<String> EXTRACT_KEYS = Set.of(
             "css", "xpath", "jsonpath", "regex", "attr", "html", "each", "min",
@@ -139,6 +141,7 @@ public final class ConchValidator {
         checkScriptLibraries(doc, errors);
         checkRequestBodyFeatures(doc, errors);
         checkFileFeatures(doc, errors);
+        FlowChecks.version(doc, errors);
         if (mcp) {
             if (doc.minCrabVersion().compareTo(McpLimits.MIN_CRAB_VERSION) < 0) {
                 errors.add(issue(
@@ -169,7 +172,8 @@ public final class ConchValidator {
                     usesLogin,
                     errors,
                     warnings,
-                    authInputs);
+                    authInputs,
+                    Nest.top(false, FlowChecks.strict(doc)));
             AliveCheck alive = doc.auth().aliveCheck();
             if (alive != null) {
                 checkPlainMap("auth.alive_check.request", alive.request(), false, false, errors);
@@ -198,6 +202,10 @@ public final class ConchValidator {
                         null,
                         authInputs);
                 checkRequestShape("auth.alive_check.request", alive.request(), errors, warnings);
+                if (alive.request() != null && alive.request().containsKey("retry")) {
+                    errors.add(issue(ValidationCodes.RETRY, "auth.alive_check.request.retry",
+                            "alive_check 不支持 retry"));
+                }
             }
         }
         checkReservedLogin(doc, errors);
@@ -293,7 +301,8 @@ public final class ConchValidator {
                 usesLogin,
                 errors,
                 warnings,
-                inputFields);
+                inputFields,
+                Nest.top(action.idempotent() || action.mcp().readOnly(), FlowChecks.strict(doc)));
         checkRefs(
                 path + ".output",
                 action.output(),
@@ -396,6 +405,9 @@ public final class ConchValidator {
                         path + "[" + i + "]",
                         "不支持的步骤类型 " + step.type()));
             }
+            for (String key : FlowSteps.branchKeys(step)) {
+                checkSteps(FlowSteps.branch(step, key), path + "[" + i + "]." + step.type() + "." + key, ctx, errors);
+            }
         }
     }
 
@@ -407,7 +419,18 @@ public final class ConchValidator {
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
             boolean variableNames = "extract".equals(step.type());
-            checkPlainMap(path + "[" + i + "]." + step.type(), step.def(), variableNames, "assert".equals(step.type()), errors);
+            String typed = path + "[" + i + "]." + step.type();
+            if (FlowSteps.isFlow(step)) {
+                // collect 两边都是变量名，不是写死的值。
+                Map<String, Object> own = new LinkedHashMap<>(FlowSteps.own(step));
+                own.remove("collect");
+                checkPlainMap(typed, own, false, true, errors);
+                for (String key : FlowSteps.branchKeys(step)) {
+                    checkPlainStepList(FlowSteps.branch(step, key), typed + "." + key, errors);
+                }
+                continue;
+            }
+            checkPlainMap(typed, step.def(), variableNames, "assert".equals(step.type()), errors);
         }
     }
 
@@ -562,7 +585,7 @@ public final class ConchValidator {
         if (steps == null) {
             return false;
         }
-        for (Step step : steps) {
+        for (Step step : FlowSteps.flat(steps)) {
             if (step != null && "script".equals(step.type()) && step.def().containsKey("use")) {
                 return true;
             }
@@ -788,7 +811,8 @@ public final class ConchValidator {
      * 提取形状只警告。这些包今天能发布、能加载，运行到那一步才失败；
      * 做成错误会让已经发布的包在 Reef 上传和 Crab 加载时一起被拒。
      */
-    private static void checkExtractShape(String path, Map<String, Object> variables, List<ValidationIssue> warnings) {
+    private static void checkExtractShape(
+            String path, Map<String, Object> variables, List<ValidationIssue> warnings, List<ValidationIssue> unknown) {
         if (warnings == null || variables == null) {
             return;
         }
@@ -798,16 +822,20 @@ public final class ConchValidator {
                 warnings.add(issue(ValidationCodes.EXTRACT_SPEC, child, "提取规格必须是映射"));
                 continue;
             }
-            checkExtractSpec(child, cast(raw), warnings);
+            checkExtractSpec(child, cast(raw), warnings, unknown);
         }
     }
 
-    private static void checkExtractSpec(String path, Map<String, Object> spec, List<ValidationIssue> warnings) {
+    private static void checkExtractSpec(
+            String path, Map<String, Object> spec, List<ValidationIssue> warnings, List<ValidationIssue> unknown) {
         int selectors = 0;
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
             String key = entry.getKey();
             if (!EXTRACT_KEYS.contains(key)) {
-                warnings.add(issue(ValidationCodes.EXTRACT_FIELD, path + "." + key, "未知的提取字段 " + key));
+                unknown.add(issue(ValidationCodes.EXTRACT_FIELD, path + "." + key,
+                        unknown == warnings
+                                ? "未知的提取字段 " + key
+                                : FlowChecks.unknownMessage("提取字段", key, EXTRACT_KEYS)));
             }
             if (EXTRACT_SELECTORS.contains(key) && entry.getValue() != null) {
                 selectors++;
@@ -836,7 +864,7 @@ public final class ConchValidator {
                 warnings.add(issue(ValidationCodes.EXTRACT_SPEC, child, "提取规格必须是映射"));
                 continue;
             }
-            checkExtractSpec(child, cast(nested), warnings);
+            checkExtractSpec(child, cast(nested), warnings, unknown);
         }
     }
 
@@ -848,14 +876,18 @@ public final class ConchValidator {
         return value instanceof String text && text.contains("{{");
     }
 
-    private static void checkAssertShape(String path, Map<String, Object> spec, List<ValidationIssue> warnings) {
+    private static void checkAssertShape(
+            String path, Map<String, Object> spec, List<ValidationIssue> warnings, List<ValidationIssue> unknown) {
         if (warnings == null || spec == null) {
             return;
         }
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
             String key = entry.getKey();
             if (!ASSERT_KEYS.contains(key)) {
-                warnings.add(issue(ValidationCodes.ASSERT_KEY, path + "." + key, "未知的 assert 键 " + key));
+                unknown.add(issue(ValidationCodes.ASSERT_KEY, path + "." + key,
+                        unknown == warnings
+                                ? "未知的 assert 键 " + key
+                                : FlowChecks.unknownMessage("assert 键", key, ASSERT_KEYS)));
                 continue;
             }
             if ("status".equals(key)) {
@@ -864,7 +896,7 @@ public final class ConchValidator {
         }
     }
 
-    private static void checkStatusLiteral(String path, Object value, List<ValidationIssue> warnings) {
+    static void checkStatusLiteral(String path, Object value, List<ValidationIssue> warnings) {
         if (value instanceof Number) {
             return;
         }
@@ -911,26 +943,80 @@ public final class ConchValidator {
             AtomicBoolean usesLogin,
             List<ValidationIssue> errors,
             List<ValidationIssue> warnings,
-            Set<String> inputFields
+            Set<String> inputFields,
+            Nest nest
     ) {
         if (steps == null) {
             return;
         }
+        // 1.9.0 起的包：拼错的键报错，不再只是警告。旧包保持原样。
+        List<ValidationIssue> unknown = nest.strict() ? errors : warnings;
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
             String typed = path + "[" + i + "]." + step.type();
+            if (FlowSteps.isFlow(step)) {
+                FlowChecks.shape(typed, step, nest, errors);
+                boolean repeat = FlowSteps.REPEAT.equals(step.type());
+                if (repeat) {
+                    declared.add(FlowSteps.LOOP);
+                } else {
+                    checkRefs(typed, FlowSteps.own(step), doc, declared, loginNames, loginVars, usesLogin,
+                            errors, warnings, inputFields);
+                }
+                // then 和 else 只跑一个：一个分支里写的变量，另一个分支读不到。
+                Set<String> after = new LinkedHashSet<>(declared);
+                Set<String> before = declared;
+                if (nest.inRepeat() && !repeat) {
+                    // 循环里上一轮走的分支写的变量会留到这一轮，另一个分支读得到。
+                    before = new LinkedHashSet<>(declared);
+                    for (String key : FlowSteps.branchKeys(step)) {
+                        checkOrderedSteps(FlowSteps.branch(step, key), typed + "." + key, doc, before,
+                                new LinkedHashSet<>(loginNames), new LinkedHashSet<>(loginVars), new AtomicBoolean(),
+                                new ArrayList<>(), new ArrayList<>(), inputFields, nest.into(false));
+                    }
+                }
+                for (String key : FlowSteps.branchKeys(step)) {
+                    Set<String> inside = new LinkedHashSet<>(before);
+                    checkOrderedSteps(FlowSteps.branch(step, key), typed + "." + key, doc, inside, loginNames,
+                            loginVars, usesLogin, errors, warnings, inputFields, nest.into(repeat));
+                    after.addAll(inside);
+                }
+                declared.addAll(after);
+                if (repeat) {
+                    // until 在每一轮的 steps 之后判断，读得到这一轮写的变量。
+                    checkRefs(typed, FlowSteps.own(step), doc, declared, loginNames, loginVars, usesLogin,
+                            errors, warnings, inputFields);
+                }
+                if (repeat && step.def().get("collect") instanceof Map<?, ?> collect) {
+                    for (Object name : collect.keySet()) {
+                        declared.add(String.valueOf(name));
+                    }
+                }
+                continue;
+            }
             if ("request".equals(step.type())) {
                 checkRequestShape(typed, step.def(), errors, warnings);
+                if (nest.strict()) {
+                    FlowChecks.unknownKeys(typed, "request", step.def().keySet(), REQUEST_KEYS,
+                            ValidationCodes.IGNORED_REQUEST_FIELD, errors);
+                }
+                if (step.def().containsKey("retry")) {
+                    FlowChecks.retry(typed, step.def(), nest.retryAnyMethod(), errors);
+                }
             }
             if ("extract".equals(step.type())) {
-                checkExtractShape(typed, step.def(), warnings);
+                checkExtractShape(typed, step.def(), warnings, unknown);
             }
             if ("assert".equals(step.type())) {
-                checkAssertShape(typed, step.def(), warnings);
+                checkAssertShape(typed, step.def(), warnings, unknown);
             }
             boolean declareAsk = false;
             if ("ask".equals(step.type())) {
-                declareAsk = checkAsk(path, i, steps, step, declared, errors);
+                if (nest.depth() > 0) {
+                    errors.add(issue(ValidationCodes.FLOW_STEP, typed, "ask 不能写在 if 或 repeat 里，只能直接写在 auth.steps 下"));
+                } else {
+                    declareAsk = checkAsk(path, i, steps, step, declared, errors);
+                }
             }
             if ("script".equals(step.type())) {
                 checkScriptStep(typed, step, doc.scripts() == null ? Map.of() : doc.scripts(), errors);
@@ -1229,7 +1315,7 @@ public final class ConchValidator {
         return rest.substring(0, cut);
     }
 
-    private static ValidationIssue issue(String code, String path, String message) {
+    static ValidationIssue issue(String code, String path, String message) {
         return new ValidationIssue(code, path, message);
     }
 
@@ -1291,7 +1377,7 @@ public final class ConchValidator {
         if (steps == null) {
             return false;
         }
-        for (Step step : steps) {
+        for (Step step : FlowSteps.flat(steps)) {
             if ("ask".equals(step.type())) {
                 return true;
             }
@@ -1388,7 +1474,15 @@ public final class ConchValidator {
      * loginNames 仍是登录步骤产出的全部名字，供裸 {@code {{sid}}} 继续报原来的错。
      */
     private static void collectLoginVars(Auth auth, Set<String> loginNames, Set<String> loginVars) {
-        for (Step step : auth.steps()) {
+        for (Step step : FlowSteps.flat(auth.steps())) {
+            if ("repeat".equals(step.type()) && step.def().get("collect") instanceof Map<?, ?> collect) {
+                for (Object name : collect.keySet()) {
+                    loginNames.add(String.valueOf(name));
+                    if (templateIdentifier(String.valueOf(name))) {
+                        loginVars.add(String.valueOf(name));
+                    }
+                }
+            }
             if ("extract".equals(step.type()) || "set".equals(step.type())) {
                 for (String name : step.def().keySet()) {
                     loginNames.add(name);
@@ -1431,6 +1525,10 @@ public final class ConchValidator {
         }
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
+            for (String key : FlowSteps.branchKeys(step)) {
+                reservedLoginSteps(
+                        FlowSteps.branch(step, key), path + "[" + i + "]." + step.type() + "." + key, errors);
+            }
             if ("script".equals(step.type())) {
                 if (RESERVED_LOGIN.equals(step.def().get("into"))) {
                     errors.add(issue(
@@ -2043,7 +2141,7 @@ public final class ConchValidator {
         if (steps == null) {
             return false;
         }
-        for (Step step : steps) {
+        for (Step step : FlowSteps.flat(steps)) {
             if ("request".equals(step.type()) && used(step.def().get(key))) {
                 return true;
             }
@@ -2095,7 +2193,7 @@ public final class ConchValidator {
         if (steps == null) {
             return false;
         }
-        for (Step step : steps) {
+        for (Step step : FlowSteps.flat(steps)) {
             if ("request".equals(step.type()) && mapUsesBody(step.def())) {
                 return true;
             }
@@ -2140,7 +2238,7 @@ public final class ConchValidator {
         if (steps == null) {
             return false;
         }
-        for (Step step : steps) {
+        for (Step step : FlowSteps.flat(steps)) {
             if ("script".equals(step.type())) {
                 for (Map.Entry<String, Object> entry : step.def().entrySet()) {
                     if ("code".equals(entry.getKey())
@@ -2209,6 +2307,17 @@ public final class ConchValidator {
             }
         }
         return false;
+    }
+
+    /** 步骤列表所在的位置：嵌套了几层 if / repeat，是否已经在 repeat 里。 */
+    record Nest(int depth, boolean inRepeat, boolean retryAnyMethod, boolean strict) {
+        static Nest top(boolean retryAnyMethod, boolean strict) {
+            return new Nest(0, false, retryAnyMethod, strict);
+        }
+
+        Nest into(boolean repeat) {
+            return new Nest(depth + 1, inRepeat || repeat, retryAnyMethod, strict);
+        }
     }
 
     public record Context(

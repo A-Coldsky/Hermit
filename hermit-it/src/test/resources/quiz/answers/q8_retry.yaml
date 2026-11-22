@@ -1,0 +1,27 @@
+conch: quiz
+version: 1.0.0
+driver: http
+min_crab_version: 1.9.0
+base_url: http://127.0.0.1:18080
+title: 测验
+description: 写规则测验的参考答案。
+credentials: {}
+actions:
+  run:
+    title: 报表合计
+    description: 读取报表合计，系统忙时自动再试。
+    idempotent: true
+    steps:
+      - request:
+          method: GET
+          path: /report
+          retry: {times: 3, delay_ms: 100, on: [503]}
+      - extract:
+          total: {jsonpath: "$.total"}
+    output:
+      total: {type: integer, description: 合计}
+    examples:
+      - input: {}
+        output: {total: 42}
+    notes: 只读。
+    related: []

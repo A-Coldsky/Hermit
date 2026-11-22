@@ -14,6 +14,7 @@ import org.apache.hc.client5.http.cookie.BasicCookieStore;
 import org.apache.hc.client5.http.cookie.Cookie;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.Step;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
@@ -137,6 +138,14 @@ final class StepRunner {
             boolean capture
     ) {
         HttpResult result;
+        Retry retry = Retry.of(spec.get("retry"));
+        if (retry != null) {
+            LinkedHashMap<String, Object> plain = new LinkedHashMap<>(spec);
+            plain.remove("retry");
+            spec = plain;
+        }
+        List<Map<String, Object>> retried = null;
+        while (true) {
         try {
             result = HttpCalls.execute(
                     spec,
@@ -147,17 +156,40 @@ final class StepRunner {
                     deadlineNanos,
                     HttpCalls.sensitiveValues(vars, cookies),
                     bodyIdle);
+            String reason = retry == null ? null : retry.reason(result.status());
+            if (reason != null && retry.again(retried == null ? 0 : retried.size(), deadlineNanos)) {
+                retried = Retry.note(retried, reason);
+                continue;
+            }
+            break;
+        } catch (DeadlineExceeded ex) {
+            // 没写 timeout_ms 时，连接超时也按能力超时报；能力的时间其实还没用完，按 connect 再试。
+            if (retry != null && System.nanoTime() < deadlineNanos && retry.on().contains("connect")
+                    && retry.again(retried == null ? 0 : retried.size(), deadlineNanos)) {
+                retried = Retry.note(retried, "connect");
+                continue;
+            }
+            throw ex;
         } catch (RuleProblem ex) {
+            String reason = retry == null ? null : retry.reason(ex);
+            if (reason != null && retry.again(retried == null ? 0 : retried.size(), deadlineNanos)) {
+                retried = Retry.note(retried, reason);
+                continue;
+            }
             if (capture) {
                 Map<String, Object> piece = DevTraceDraft.requestPiece(
                         spec, ex.method, ex.path, ex.status, ex.responseHeaders, ex.responseBody, ex.wire);
                 if (ex.transport != null) {
                     piece.put("transport", ex.transport);
                 }
+                if (retried != null) {
+                    piece.put("retries", retried);
+                }
                 HttpCalls.attachWarnings(piece, ex.warnings);
                 DevTraceScope.stash(piece);
             }
             throw ex;
+        }
         }
         dev.hermit.crab.files.StagedFile saved = FileSteps.downloads(spec) ? FileSteps.save(spec, result) : null;
         vars.put("response", FileSteps.view(result, saved));
@@ -176,6 +208,9 @@ final class StepRunner {
                 result.wire());
         if (saved != null) {
             piece.put("file", saved.metadata());
+        }
+        if (retried != null) {
+            piece.put("retries", retried);
         }
         HttpCalls.attachWarnings(piece, result.warnings());
         return new Outcome(
@@ -307,6 +342,201 @@ final class StepRunner {
             return new Outcome(null, null, null, null, false);
         }
         return new Outcome(null, null, null, null, false, DevTraceDraft.assertPiece(spec, true));
+    }
+
+    /**
+     * if 和 repeat.until 的判断。写了几个键就要全部成立。和 assert 不同，不成立只返回 false；
+     * 要看响应的键在还没有响应时算规则写错。
+     */
+    boolean test(Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies) {
+        Map<String, Object> response = Values.map(vars.get("response"));
+        for (Map.Entry<String, Object> entry : spec.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if (FlowSteps.RESPONSE_CONDITIONS.contains(key) && (response == null || !response.containsKey("status"))) {
+                fail("判断键 " + key + " 要看响应，但前面还没有 request");
+            }
+            boolean holds = switch (key) {
+                case "status" -> statusIn(value, Values.integer(response.get("status"), -1));
+                case "contains" -> bodyOf(response).contains(Values.text(value));
+                case "not_contains" -> !bodyOf(response).contains(Values.text(value));
+                case "cookie_exists" -> cookies.getCookies().stream()
+                        .anyMatch(cookie -> Values.text(value).equals(cookie.getName()));
+                case "header_exists" -> {
+                    Map<String, Object> headers = Values.map(response.get("headers"));
+                    yield headers != null && headers.containsKey(Values.text(value).toLowerCase(Locale.ROOT));
+                }
+                case "present" -> names(value).stream().allMatch(name -> present(lookup(vars, name)));
+                case "not_present" -> names(value).stream().noneMatch(name -> present(lookup(vars, name)));
+                case "equals" -> pairs(value).entrySet().stream()
+                        .allMatch(pair -> same(lookup(vars, pair.getKey()), pair.getValue()));
+                case "not_equals" -> pairs(value).entrySet().stream()
+                        .noneMatch(pair -> same(lookup(vars, pair.getKey()), pair.getValue()));
+                default -> {
+                    fail("未知的判断键 " + key);
+                    yield false;
+                }
+            };
+            if (!holds) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String bodyOf(Map<String, Object> response) {
+        return response.get("body") == null ? "" : Values.text(response.get("body"));
+    }
+
+    private static boolean statusIn(Object expected, int actual) {
+        if (expected instanceof List<?> list) {
+            return list.stream().anyMatch(item -> statusIn(item, actual));
+        }
+        if (expected instanceof Number number) {
+            return number.intValue() == actual;
+        }
+        try {
+            return expected != null && Integer.parseInt(Values.text(expected).trim()) == actual;
+        } catch (NumberFormatException ex) {
+            throw new RuleProblem(ErrorCode.RULE_MISMATCH, STATUS_NOT_NUMERIC, null, null, null);
+        }
+    }
+
+    private static List<String> names(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(Values::text).toList();
+        }
+        return value == null ? List.of() : List.of(Values.text(value));
+    }
+
+    private static Map<String, Object> pairs(Object value) {
+        Map<String, Object> map = Values.map(value);
+        if (map == null) {
+            fail("equals / not_equals 必须是「变量名: 期望值」的映射");
+        }
+        return map;
+    }
+
+    private static boolean same(Object actual, Object expected) {
+        if (actual == null || expected == null) {
+            return actual == expected;
+        }
+        return Values.text(actual).equals(Values.text(expected));
+    }
+
+    /** null、空字符串、空列表和空映射都算没有。 */
+    static boolean present(Object value) {
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof CharSequence text) {
+            return text.length() > 0;
+        }
+        if (value instanceof java.util.Collection<?> list) {
+            return !list.isEmpty();
+        }
+        if (value instanceof Map<?, ?> map) {
+            return !map.isEmpty();
+        }
+        return true;
+    }
+
+    /** 按 {@code a.b.0.c} 取变量；中途取不到返回 null。 */
+    static Object lookup(Map<String, Object> vars, String path) {
+        Object current = vars;
+        for (String part : path.split("\\.")) {
+            if (current instanceof Peek peek) {
+                current = peek.peek(part);
+            } else if (current instanceof Map<?, ?> map) {
+                current = map.get(part);
+            } else if (current instanceof List<?> list) {
+                try {
+                    int index = Integer.parseInt(part);
+                    current = index >= 0 && index < list.size() ? list.get(index) : null;
+                } catch (NumberFormatException ex) {
+                    return null;
+                }
+            } else {
+                return null;
+            }
+            if (current == null) {
+                return null;
+            }
+        }
+        return current;
+    }
+
+    /** 取不到值时返回 null、不抛错的变量视图（login）。 */
+    interface Peek {
+        Object peek(String name);
+    }
+
+    /** request 的 retry：失败后再试几次、隔多久、哪些失败算。 */
+    record Retry(int times, long delayMillis, List<Object> on) {
+        private static final List<Object> DEFAULT_ON = List.of("timeout", "connect", 502, 503, 504);
+
+        static Retry of(Object raw) {
+            Map<String, Object> map = Values.map(raw);
+            if (map == null) {
+                return null;
+            }
+            int times = Math.max(0, Math.min(FlowSteps.RETRY_TIMES_MAX, Values.integer(map.get("times"), 0)));
+            long delay = Math.max(0, Math.min(FlowSteps.RETRY_DELAY_MAX, Values.integer(map.get("delay_ms"), 0)));
+            List<Object> on = map.get("on") instanceof List<?> list && !list.isEmpty()
+                    ? List.copyOf(list)
+                    : DEFAULT_ON;
+            return new Retry(times, delay, on);
+        }
+
+        String reason(int status) {
+            for (Object item : on) {
+                if (!"timeout".equals(item) && !"connect".equals(item)
+                        && Values.integer(item, -1) == status) {
+                    return Integer.toString(status);
+                }
+            }
+            return null;
+        }
+
+        String reason(RuleProblem ex) {
+            if (ex.code != ErrorCode.UPSTREAM_ERROR) {
+                return null;
+            }
+            if (ex.status != null) {
+                return reason(ex.status);
+            }
+            if (HttpCalls.STEP_TIMEOUT.equals(ex.summary)) {
+                return on.contains("timeout") ? "timeout" : null;
+            }
+            return ex.transport != null && on.contains("connect") ? "connect" : null;
+        }
+
+        /** 还有次数，并且等完间隔之后能力的时间还没用完。 */
+        boolean again(int done, long deadlineNanos) {
+            if (done >= times) {
+                return false;
+            }
+            long left = deadlineNanos - System.nanoTime() - delayMillis * 1_000_000L;
+            if (left <= 0) {
+                return false;
+            }
+            if (delayMillis > 0) {
+                try {
+                    Thread.sleep(delayMillis);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        static List<Map<String, Object>> note(List<Map<String, Object>> retried, String reason) {
+            java.util.ArrayList<Map<String, Object>> all =
+                    retried == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(retried);
+            all.add(Map.of("attempt", all.size() + 1, "reason", reason));
+            return all;
+        }
     }
 
     private static void checkStatus(Object expected, int actual) {

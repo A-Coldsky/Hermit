@@ -37,6 +37,13 @@ class AuthoringGuideTest {
                 .as("先确认功能，再分析 HAR")
                 .isPositive()
                 .isLessThan(guide.indexOf("按时间看 HAR"));
+        int quick = guide.indexOf("## 步骤速查");
+        int har = guide.indexOf("## 从 HAR 写规则");
+        assertThat(quick).as("速查在最前面").isPositive().isLessThan(har);
+        assertThat(guide.substring(quick, har).getBytes(StandardCharsets.UTF_8).length)
+                .as("速查不超过 3 KB")
+                .isLessThanOrEqualTo(3 * 1024);
+        assertThat(guide.substring(quick, har)).contains("- if:", "- repeat:", "retry:", "min_crab_version: 1.9.0");
         assertThat(guide).doesNotContain("](").doesNotContain("github.com");
         assertThat(guide).doesNotContain(
                 "legacy_oa",

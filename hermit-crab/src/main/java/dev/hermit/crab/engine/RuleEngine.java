@@ -1950,9 +1950,9 @@ public final class RuleEngine implements ConchExecutor {
             if (covered == null || covered) {
                 return true;
             }
-            if (continuation.hasNextRound()) {
-                return false;
-            }
+        }
+        if (continuation.hasNextRound()) {
+            return false;
         }
         return statusExpectationCoversFrom(
                 continuation.steps(), continuation.from(), actual, continuation.parent());

@@ -466,6 +466,37 @@ class FlowStepsEngineTest {
     }
 
     @Test
+    void postRepeatStatusAssertDoesNotMaskNonFinalRepeatRoundFailure() {
+        // 非最后一轮、until 没写 status 时，循环外的 assert: {status: 404} 不得吞掉本轮 404。
+        ExecutionResult nonFinal = run(conch("""
+                - set: {done: "no"}
+                - repeat:
+                    max: 3
+                    steps:
+                      - request: {method: GET, path: /gone}
+                    until: {equals: {done: "yes"}}
+                - assert: {status: 404}
+                """, "done: {type: string, description: d}"));
+        assertThat(nonFinal.success()).isFalse();
+        assertThat(nonFinal.error().code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
+        assertThat(hits).containsExactly("GET /gone");
+
+        // 最后一轮结束后必定进入循环外步骤，循环外的 assert: {status: 404} 仍然生效。
+        hits.clear();
+        ExecutionResult finalRound = run(conch("""
+                - set: {done: "no"}
+                - repeat:
+                    max: 1
+                    steps:
+                      - request: {method: GET, path: /gone}
+                    until: {equals: {done: "yes"}}
+                - assert: {status: 404}
+                """, "done: {type: string, description: d}"));
+        assertThat(finalRound.success()).as(message(finalRound)).isTrue();
+        assertThat(hits).containsExactly("GET /gone");
+    }
+
+    @Test
     void sessionLostInsideIfOrRepeatLogsTheFailingInnerRequest() {
         ExecutionResult inIf = run(conch("""
                 - set: {flag: "yes"}

@@ -24,7 +24,7 @@ public final class ConchLocks {
         }
     }
 
-    static Object of(DataSource dataSource, Origin origin, String conch) {
+    public static Object of(DataSource dataSource, Origin origin, String conch) {
         synchronized (LOCKS) {
             ConcurrentHashMap<String, Object> perDatabase = LOCKS.computeIfAbsent(
                     dataSource, key -> new ConcurrentHashMap<>());

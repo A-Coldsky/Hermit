@@ -62,12 +62,19 @@ public final class CrabHttpServer implements AutoCloseable {
     private final Javalin app;
     private final AtomicBoolean started = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private volatile java.util.function.BiFunction<String, String, Optional<Action>> actionLookup;
 
     public CrabHttpServer(CrabRuntime runtime) {
         this.runtime = runtime;
+        this.actionLookup = runtime::enabledAction;
         checkAliases(runtime.config().aliases());
         this.mcp = new McpEndpoint(runtime);
         this.app = build();
+    }
+
+    /** Package-visible for gateway TOCTOU regression tests. */
+    void setActionLookup(java.util.function.BiFunction<String, String, Optional<Action>> lookup) {
+        this.actionLookup = lookup == null ? runtime::enabledAction : lookup;
     }
 
     public void start() {
@@ -220,7 +227,6 @@ public final class CrabHttpServer implements AutoCloseable {
     }
 
     private void handleApi(Context ctx, String conch, String action) throws IOException {
-        Optional<Action> enabled = runtime.enabledAction(conch, action);
         String token = token(ctx);
         if (token == null) {
             GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, UserMessages.MISSING_KEY);
@@ -232,8 +238,26 @@ public final class CrabHttpServer implements AutoCloseable {
             return;
         }
         String method = ctx.method().name();
-        if (enabled.isPresent() && !CapabilityHttp.method(enabled.get()).name().equals(method)) {
-            String expected = CapabilityHttp.method(enabled.get()).name();
+        ApiKeyPrincipal caller = principal.get();
+        Optional<Action> enabled = actionLookup.apply(conch, action);
+        if (enabled.isEmpty()) {
+            // 能力停用或不存在时先走 Invoker 准入探针：保留 404/409/403 优先于正文与幂等键校验，
+            // 同时避免并发重新启用后跳过 POST 正文、Idempotency-Key 和 ?account= 直接执行。
+            if (writeEarlierRejection(ctx, caller, conch, action, method)) {
+                return;
+            }
+            enabled = actionLookup.apply(conch, action);
+            if (enabled.isEmpty()) {
+                if (writeEarlierRejection(ctx, caller, conch, action, method)) {
+                    return;
+                }
+                GatewayResponses.writeError(ctx, 409, ErrorCode.CONFLICT, "能力状态正在切换，请重试。");
+                return;
+            }
+        }
+        Action target = enabled.get();
+        if (!CapabilityHttp.method(target).name().equals(method)) {
+            String expected = CapabilityHttp.method(target).name();
             ctx.header("Allow", expected);
             GatewayResponses.writeError(ctx, 405, ErrorCode.INVALID_INPUT, "这个能力要用 " + expected + " 调用。");
             return;
@@ -243,11 +267,11 @@ public final class CrabHttpServer implements AutoCloseable {
         String bodySha256 = null;
         Optional<String> queryAccount = Optional.empty();
         String selector = "account";
-        if (enabled.isPresent() && CapabilityHttp.method(enabled.get()) == HttpMethod.GET) {
-            selector = accountQueryName(enabled.get(), HttpMethod.GET);
+        if (CapabilityHttp.method(target) == HttpMethod.GET) {
+            selector = accountQueryName(target, HttpMethod.GET);
             queryAccount = queryValue(ctx, selector);
             input = queryInput(ctx, selector);
-        } else if (enabled.isPresent() && CapabilityHttp.method(enabled.get()) == HttpMethod.POST) {
+        } else if (CapabilityHttp.method(target) == HttpMethod.POST) {
             byte[] raw;
             try {
                 raw = RequestBodies.read(ctx.req());
@@ -268,11 +292,10 @@ public final class CrabHttpServer implements AutoCloseable {
                 idempotency = Optional.of(key);
                 bodySha256 = BodyDigests.sha256(raw);
             }
-            selector = accountQueryName(enabled.get(), HttpMethod.POST);
+            selector = accountQueryName(target, HttpMethod.POST);
             queryAccount = queryValue(ctx, selector);
         }
         Optional<String> headerAccount = headerAccount(ctx);
-        ApiKeyPrincipal caller = principal.get();
         if (headerAccount.isPresent() && queryAccount.isPresent() && !headerAccount.get().equals(queryAccount.get())) {
             if (writeEarlierRejection(ctx, caller, conch, action, method)) {
                 return;

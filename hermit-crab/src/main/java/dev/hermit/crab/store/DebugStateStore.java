@@ -44,7 +44,8 @@ public final class DebugStateStore {
 
     public DebugSnapshot setEnabled(boolean enabled, String actor) {
         String checkedActor = Checks.actor(actor);
-        Instant expiresAt = enabled ? clock.instant().plus(WINDOW) : null;
+        Instant now = clock.instant();
+        Instant expiresAt = enabled ? now.plus(WINDOW) : null;
         Transition transition = Db.transaction(dataSource, connection -> {
             Row row = select(connection);
             boolean previous = row != null && row.enabled();
@@ -58,6 +59,7 @@ public final class DebugStateStore {
             }
             ConfigAudit.append(
                     connection,
+                    now,
                     checkedActor,
                     AuditKind.DEBUG_CHANGED,
                     "debug",
@@ -84,6 +86,7 @@ public final class DebugStateStore {
             DevTraceStore.deleteAll(connection);
             ConfigAudit.append(
                     connection,
+                    now,
                     Actors.RETENTION,
                     AuditKind.DEBUG_CHANGED,
                     "debug",

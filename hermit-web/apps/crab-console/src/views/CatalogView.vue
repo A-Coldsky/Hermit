@@ -196,7 +196,7 @@ onMounted(load)
           <template #default="{ row }">
             <ShellSwapLoader v-if="installing === row.conch" compact label="正在换上新壳…" data-test="row-swap" />
             <div v-else class="tags">
-              <el-tag v-if="row.localConflict" type="warning" effect="plain" size="small">与本地规则包同名</el-tag>
+              <el-tag v-if="row.localConflict" type="warning" effect="plain" size="small" data-test="local-active-tag">本机同名的本地包生效中</el-tag>
               <el-tag v-if="row.subscribed" type="success" effect="plain" size="small">已订阅</el-tag>
               <el-tag v-else-if="!row.localConflict" type="info" effect="plain" size="small">未订阅</el-tag>
               <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" data-test="rule-disabled-tag">已停用</el-tag>
@@ -222,13 +222,10 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="操作" width="200" align="right" :fixed="narrow ? false : 'right'">
           <template #default="{ row }">
-            <el-button v-if="row.installed && !row.localConflict && !needsRepair(row)" link type="primary" @click="open(row)">管理</el-button>
+            <el-button v-if="row.installed && !needsRepair(row)" link type="primary" @click="open(row)">管理</el-button>
             <el-button v-if="needsRepair(row)" link type="warning" :loading="busy === row.conch" data-test="repair" @click="repair(row)">修复</el-button>
             <el-button v-else-if="row.updateAvailable" link type="primary" :loading="busy === row.conch" @click="update(row)">更新</el-button>
             <el-button v-if="row.subscribed" link type="danger" :loading="busy === row.conch" @click="unsubscribe(row)">取消订阅</el-button>
-            <el-tooltip v-else-if="row.localConflict" content="本机已有同名本地规则包。删除本地规则包后才能订阅" placement="top">
-              <span><el-button link type="primary" disabled>订阅</el-button></span>
-            </el-tooltip>
             <el-button v-else link type="primary" :loading="busy === row.conch" @click="subscribe(row)">订阅</el-button>
           </template>
         </el-table-column>

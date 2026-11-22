@@ -53,6 +53,7 @@ beforeEach(() => {
 
 describe('Crab 概览', () => {
   it('接入 Agent 卡片给出地址、Key 数和复制按钮', async () => {
+    crab.conches.mockResolvedValue({ conches: [summary({})] })
     crab.apiKeys.mockResolvedValue({ apiKeys: [{ id: 'a', revokedAt: null }, { id: 'b', revokedAt: '2026-01-01T00:00:00Z' }] })
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
@@ -72,7 +73,26 @@ describe('Crab 概览', () => {
     expect(copied).toContain('list_systems')
   })
 
+  it('没有规则包时先引导取得规则包，不让人先去建 Key', async () => {
+    const wrapper = await mountPage(OverviewView)
+    await flushPromises()
+    const first = wrapper.get('[data-test="connect-noconch"]')
+    expect(first.html()).toContain('/catalog')
+    expect(first.html()).toContain('/conches')
+    expect(wrapper.find('[data-test="connect-nokey"]').exists()).toBe(false)
+  })
+
+  it('整包停用的规则包不算进可调用的能力', async () => {
+    crab.conches.mockResolvedValue({
+      conches: [summary({}), summary({ conch: 'stock', capabilityCount: 5, switchedOff: true })],
+    })
+    const wrapper = await mountPage(OverviewView)
+    await flushPromises()
+    expect(wrapper.text()).toContain('3 个可调用的能力')
+  })
+
   it('没有 Key 时提示先创建，读不到 Key 时不显示数量', async () => {
+    crab.conches.mockResolvedValue({ conches: [summary({})] })
     const empty = await mountPage(OverviewView)
     await flushPromises()
     expect(empty.get('[data-test="connect-nokey"]').text()).toContain('还没有 API Key')

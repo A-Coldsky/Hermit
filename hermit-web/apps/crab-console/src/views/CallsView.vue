@@ -208,7 +208,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <el-drawer v-model="drawer.open" size="560px" title="调用详情">
+    <el-drawer v-model="drawer.open" size="min(560px, 100vw)" title="调用详情" data-test="call-drawer">
       <div v-loading="drawer.loading">
         <template v-if="drawer.call">
           <el-alert

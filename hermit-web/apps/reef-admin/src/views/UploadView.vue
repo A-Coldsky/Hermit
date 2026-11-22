@@ -134,6 +134,13 @@ async function discard() {
     discarding.value = false
   }
 }
+
+const STEPS = [
+  { title: '选择 YAML', description: '拖入或点击选择文件' },
+  { title: '确认上传', description: '校验结构、能力和字段并签名' },
+  { title: '待发布', description: '确认差异和警告，不要就丢弃' },
+  { title: '发布', description: '新订阅直接安装，已订阅的 Crab 手动更新' },
+]
 </script>
 
 <template>
@@ -146,11 +153,9 @@ async function discard() {
     </PageHeader>
 
     <el-steps :active="step" finish-status="success" :process-status="failure ? 'error' : 'process'" align-center class="steps">
-      <el-step title="选择 YAML" description="拖入或点击选择文件" />
-      <el-step title="确认上传" description="校验结构、能力和字段并签名" />
-      <el-step title="待发布" description="确认差异和警告，不要就丢弃" />
-      <el-step title="发布" description="新订阅直接安装，已订阅的 Crab 手动更新" />
+      <el-step v-for="item in STEPS" :key="item.title" :title="item.title" :description="item.description" />
     </el-steps>
+    <p v-if="STEPS[step]" class="step-now" data-test="step-now">第 {{ step + 1 }} 步：{{ STEPS[step].description }}</p>
 
     <div class="hm-card">
       <el-upload
@@ -167,7 +172,7 @@ async function discard() {
           <div class="el-upload__tip">支持 .yaml / .yml，单个文件不超过 1 MB</div>
           <div class="el-upload__tip" data-test="local-import-tip">
             Crab 控制台「导出 YAML」得到的本地规则包可以直接上传。上传后由 Reef 校验并签名，发布后订阅了它的 Crab 才会安装。
-            若 Crab 本机仍有同名本地规则包，需要先在那台 Crab 上删除本地规则包再订阅。
+            Crab 本机仍有同名本地规则包时可以直接订阅：两份都保留，原来那份继续生效，在 Crab 的规则包详情页核对版本后切换。
           </div>
         </template>
       </el-upload>
@@ -221,6 +226,26 @@ async function discard() {
 </template>
 
 <style scoped>
+/* 窄屏放不下四段说明：只留标题，当前这一步的说明单独一行。 */
+.step-now {
+  display: none;
+}
+@media (max-width: 640px) {
+  .steps :deep(.el-step__description) {
+    display: none;
+  }
+  .steps :deep(.el-step__title) {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .step-now {
+    display: block;
+    margin: 0 0 12px;
+    font-size: 13px;
+    color: var(--hm-muted);
+    text-align: center;
+  }
+}
 .status {
   margin-top: 10px;
   display: flex;

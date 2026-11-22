@@ -148,8 +148,11 @@ onMounted(load)
           {{ view.usage.files }} 个，共 {{ size(view.usage.bytes) }} / {{ size(view.settings.maxTotalBytes) }}
         </span>
       </div>
+      <p class="hm-scroll-hint">表格可以左右滑动，删除按钮固定在最右侧。</p>
       <el-table :data="view?.files ?? []" empty-text="暂存区是空的">
-        <el-table-column label="文件名" min-width="180" prop="name" />
+        <el-table-column label="文件名" min-width="180">
+          <template #default="{ row }"><span class="file-name" :title="row.name">{{ row.name }}</span></template>
+        </el-table-column>
         <el-table-column label="fileId" min-width="220">
           <template #default="{ row }">
             <button type="button" class="id mono" title="复制 fileId" @click="copyText(row.fileId, 'fileId 已复制')">
@@ -166,7 +169,7 @@ onMounted(load)
         <el-table-column label="到期" width="200">
           <template #default="{ row }"><TimeText :value="row.expiresAt" /></template>
         </el-table-column>
-        <el-table-column label="" width="70" align="right">
+        <el-table-column label="" width="70" align="right" fixed="right">
           <template #default="{ row }">
             <el-button link type="danger" :icon="Delete" :aria-label="`删除 ${row.name}`" @click="remove(row)" />
           </template>
@@ -177,6 +180,14 @@ onMounted(load)
 </template>
 
 <style scoped>
+/* 长文件名最多两行，完整名字在悬停提示里。 */
+.file-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-all;
+}
 .files {
   display: flex;
   flex-direction: column;

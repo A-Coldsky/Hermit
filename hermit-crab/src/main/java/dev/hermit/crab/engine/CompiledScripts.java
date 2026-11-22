@@ -24,6 +24,10 @@ final class CompiledScripts {
 
     /** 与 {@code cx.evaluateString(scope, source, name, 1, null)} 等价。 */
     static Object evaluate(Context cx, Scriptable scope, String source, String name) {
+        // 带标签的模板字面量把 strings 数组记在编译结果上，连同第一次调用的全局对象；这类源码每次重新编译。
+        if (source.indexOf('`') >= 0) {
+            return cx.evaluateString(scope, source, name, 1, null);
+        }
         Script script = compiled(cx, source, name);
         return script == null ? null : script.exec(cx, scope);
     }

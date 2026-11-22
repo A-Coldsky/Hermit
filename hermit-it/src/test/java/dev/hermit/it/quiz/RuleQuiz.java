@@ -132,7 +132,13 @@ final class RuleQuiz {
         String label = "试跑 " + number + "（入参 " + one.input() + "）";
         try (QuizSite site = new QuizSite(); SessionManager sessions = new SessionManager()) {
             ConchRegistry registry = new ConchRegistry();
-            registry.put(ConchParser.parse(yaml.replace(BASE, site.base())), Origin.LOCAL);
+            ConchDoc doc = ConchParser.parse(yaml.replace(BASE, site.base()));
+            // 引擎只发同源请求：base_url 钉在模拟站点上，答案就到不了别的地址。
+            if (!site.base().equals(doc.baseUrl())) {
+                feedback.add("base_url 必须是 " + BASE);
+                return;
+            }
+            registry.put(doc, Origin.LOCAL);
             RuleEngine engine = new RuleEngine(registry, sessions);
             Map<String, Object> input = JSON.convertValue(JSON.readTree(one.input()), JSON.getTypeFactory()
                     .constructMapType(java.util.LinkedHashMap.class, String.class, Object.class));

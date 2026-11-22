@@ -7,6 +7,7 @@ import dev.hermit.common.report.RollbackEvent;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -69,21 +70,10 @@ public class ReportIngestService {
 
     private void upsertCount(ReportBatch batch, CountReport count, Long ownerUserId) {
         Timestamp hour = Timestamp.from(count.hourStart());
-        int updated = jdbc.update(
-                "UPDATE hermit_hourly_counts SET success = ?, failure = ?, avg_millis = ?, p95_millis = ?, "
-                        + "owner_user_id = COALESCE(?, owner_user_id) "
-                        + "WHERE conch = ? AND conch_version = ? AND action = ? AND hour_start = ? AND instance_id = ?",
-                count.success(),
-                count.failure(),
-                count.avgMillis(),
-                count.p95Millis(),
-                ownerUserId,
-                count.conch(),
-                count.conchVersion(),
-                count.action(),
-                hour,
-                batch.instanceId());
-        if (updated == 0) {
+        if (existsCount(batch, count, hour) && updateCount(batch, count, ownerUserId, hour) > 0) {
+            return;
+        }
+        try {
             jdbc.update(
                     "INSERT INTO hermit_hourly_counts (conch, conch_version, action, hour_start, instance_id, success, "
                             + "failure, avg_millis, p95_millis, owner_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -97,7 +87,39 @@ public class ReportIngestService {
                     count.avgMillis(),
                     count.p95Millis(),
                     ownerUserId);
+        } catch (DuplicateKeyException ex) {
+            updateCount(batch, count, ownerUserId, hour);
         }
+    }
+
+    private boolean existsCount(ReportBatch batch, CountReport count, Timestamp hour) {
+        List<Integer> rows = jdbc.queryForList(
+                "SELECT 1 FROM hermit_hourly_counts "
+                        + "WHERE conch = ? AND conch_version = ? AND action = ? AND hour_start = ? AND instance_id = ?",
+                Integer.class,
+                count.conch(),
+                count.conchVersion(),
+                count.action(),
+                hour,
+                batch.instanceId());
+        return !rows.isEmpty();
+    }
+
+    private int updateCount(ReportBatch batch, CountReport count, Long ownerUserId, Timestamp hour) {
+        return jdbc.update(
+                "UPDATE hermit_hourly_counts SET success = ?, failure = ?, avg_millis = ?, p95_millis = ?, "
+                        + "owner_user_id = COALESCE(?, owner_user_id) "
+                        + "WHERE conch = ? AND conch_version = ? AND action = ? AND hour_start = ? AND instance_id = ?",
+                count.success(),
+                count.failure(),
+                count.avgMillis(),
+                count.p95Millis(),
+                ownerUserId,
+                count.conch(),
+                count.conchVersion(),
+                count.action(),
+                hour,
+                batch.instanceId());
     }
 
     private void insertRollback(ReportBatch batch, RollbackEvent event, Instant receivedAt, Long ownerUserId) {

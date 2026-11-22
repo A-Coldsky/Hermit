@@ -94,11 +94,12 @@ public class LoginService {
                         username,
                         Timestamp.from(now));
             }
-            auditService.record(username, AuditAction.LOGIN_FAILURE, null, null, null);
+            auditService.record(user != null ? user.username() : username, AuditAction.LOGIN_FAILURE, null, null, null);
             return Optional.empty();
         }
-        auditService.record(username, AuditAction.LOGIN_SUCCESS, null, null, null);
-        IssuedJwt issued = jwtService.issue(username, user.role(), user.tokenVersion());
+        String canonical = user.username();
+        auditService.record(canonical, AuditAction.LOGIN_SUCCESS, null, null, null);
+        IssuedJwt issued = jwtService.issue(canonical, user.role(), user.tokenVersion());
         return Optional.of(new LoginResponse(issued.token(), issued.expiresAt()));
     }
 

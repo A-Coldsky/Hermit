@@ -1586,6 +1586,11 @@ class ConchApiTest {
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
                     .andExpect(jsonPath("$.error.message").value("资源不存在"));
+            mockMvc.perform(post("/api/admin/conches/{conch}/versions/{version}/publish", alias, version)
+                            .header(HttpHeaders.AUTHORIZATION, bearer()))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
+                    .andExpect(jsonPath("$.error.message").value("资源不存在"));
         }
     }
 

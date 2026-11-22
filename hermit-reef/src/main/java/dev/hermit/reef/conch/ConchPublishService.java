@@ -3,6 +3,7 @@ package dev.hermit.reef.conch;
 import dev.hermit.common.pkg.PackageVerificationException;
 import dev.hermit.common.pkg.ConchPackage;
 import dev.hermit.common.pkg.VerifiedConch;
+import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.version.SemVer;
 import dev.hermit.reef.audit.AuditAction;
 import dev.hermit.reef.audit.AuditService;
@@ -82,7 +83,7 @@ public class ConchPublishService {
     private void rejectIfNotHigher(VersionRow target) {
         VersionRow current = null;
         for (VersionRow row : repository.lockConch(target.conch())) {
-            if (row.current()) {
+            if (row.conch().equals(target.conch()) && row.current()) {
                 current = row;
                 break;
             }
@@ -98,7 +99,7 @@ public class ConchPublishService {
     }
 
     private VersionRow requireRow(String conch, String version) {
-        if (!ConchPaths.singleSegment(conch) || !ConchPaths.singleSegment(version)) {
+        if (!ConchValidator.isConchName(conch) || !ConchPaths.singleSegment(version)) {
             throw notFound();
         }
         SemVer parsed;
@@ -109,7 +110,7 @@ public class ConchPublishService {
         }
         List<VersionRow> rows = repository.lockConch(conch);
         return rows.stream()
-                .filter(row -> row.version().equals(parsed.toString()))
+                .filter(row -> row.conch().equals(conch) && row.version().equals(parsed.toString()))
                 .findFirst()
                 .orElseThrow(ConchPublishService::notFound);
     }

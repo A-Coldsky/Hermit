@@ -154,6 +154,21 @@ class FlowStepsEngineTest {
     }
 
     @Test
+    void ifOnStatusRightAfterARequestSeesANonSuccessStatus() {
+        ExecutionResult result = run(conch("""
+                - request: {method: GET, path: /gone}
+                - if:
+                    status: 404
+                    then:
+                      - set: {found: "no"}
+                    else:
+                      - set: {found: "yes"}
+                """, "found: {type: string, description: f}"));
+        assertThat(result.success()).as(message(result)).isTrue();
+        assertThat(result.data()).isEqualTo(Map.of("found", "no"));
+    }
+
+    @Test
     void repeatCollectsEveryRoundAndStopsOnUntil() {
         ExecutionResult result = run(conch(LIST.formatted(20), LIST_OUTPUT));
         assertThat(result.success()).as(message(result)).isTrue();

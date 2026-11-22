@@ -87,8 +87,23 @@ npm run dev:reef
 | 验收 | [LoginCaptchaAcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/LoginCaptchaAcceptanceTest.java) | 本机图片验证码与短信验证码：409 后在控制台提交，再调用成功；输错、换图或重发、版本更新丢弃旧待输入；验证码和登录令牌不进日志 |
 | 验收 | [RequestEncodingAcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/RequestEncodingAcceptanceTest.java) | 独立 Crab 进程对回环老网关核对请求行：query 与 path 编码、`query_style`、GBK 表单和查询值，开发追踪 `wire` 与线上一致且凭证已打码 |
 | 验收 | [IntranetTlsAcceptanceTest](../hermit-it/src/test/java/dev/hermit/it/IntranetTlsAcceptanceTest.java) | 独立 Crab 进程对回环 HTTPS：私有 CA、自签名指纹、删除信任后立即失效，API Key 不能访问 `/console/api/tls` |
+| 执行 | `FlowStepsEngineTest`、`FlowStepValidationTest` | `if`、`repeat`、`retry`：分支、汇总与截断、再试的条件和追踪；1.9.0 门槛、未知键报错与提示 |
+| 写规则测验 | [RuleQuizTest](../hermit-it/src/test/java/dev/hermit/it/quiz/RuleQuizTest.java) | 9 道题的参考答案在本机模拟站点上得满分，典型写错能被校验或试跑判出来 |
 
 Java 结果位于各模块 `target/surefire-reports/`。2026-10-16 同步到 `48daca7` 后完整 verify：common 41、Reef 97、Crab 170、验收 1，共 309 项 Java 测试，以及 4 个前端测试文件中的 18 项 Vitest 测试均通过，无失败或跳过。没有 JaCoCo 配置，测试条数不是行/分支覆盖率。
+
+## 写规则测验
+
+规则主要由模型来写。测验用来量「只看规则说明的模型，第一次能不能写对」，题面在 `hermit-it/src/test/resources/quiz/<题号>.md`，参考答案在 `quiz/answers/`，站点是测试里的 `QuizSite`。平时的 `verify` 只验证题目和判分本身，不调用模型。
+
+给一个模型打分：
+
+1. 新开一个不带仓库上下文的模型会话，只给它 `docs/conch-reference.md`（等同 `hermit://authoring/guide`）和一道题的题面，让它交一份 `conch.yaml`，存成 `<目录>/<题号>/1.yaml`。
+2. 运行 `./mvnw -pl hermit-it -am test -Dhermit.web.skip=true -Dtest=RuleQuizTest -Dsurefire.failIfNoSpecifiedTests=false -Dquiz.answers=<目录的绝对路径>`。每份答案旁边会写出 `1.feedback.txt`：校验错误，或试跑的输出、请求和期望的差别。
+3. 没通过的题，把 feedback 原样交还给同一个会话，让它改，存成 `2.yaml`，再运行。最多 3 轮。
+4. `<目录>/report.md` 是汇总：第 1 轮校验通过率、第 1 轮试跑正确率、最终正确率和平均轮数。
+
+哪个键错得多，就改它的名字、报错或说明里的例子，再测一遍。改了规则语法或说明的 PR，在说明里写上测验结果和用的模型。
 
 ## 维护方式
 

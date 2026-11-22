@@ -1610,6 +1610,13 @@ public final class RuleEngine implements ConchExecutor {
             if ("request".equals(step.type())) {
                 break;
             }
+            // if 按状态码分支：成立与否都由规则自己处理，不在这里按非 2xx 失败。
+            if (FlowSteps.IF.equals(step.type()) && step.def().containsKey("status")) {
+                return true;
+            }
+            if (FlowSteps.isFlow(step)) {
+                break;
+            }
             if (!"assert".equals(step.type()) || !step.def().containsKey("status")) {
                 continue;
             }

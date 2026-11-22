@@ -313,6 +313,12 @@ public final class RuleEngine implements ConchExecutor {
             URI base = baseUri(conch, config);
             scope = new LoginScope(conch, input, credentials, config, key, base, deadline);
             scope.shared = shared;
+            if (shared) {
+                handoff.seen = scope.seenLogin;
+            } else if (handoff != null && handoff.seen != null) {
+                // 共享锁下那一次读到的登录值：快照可能已被清掉或换掉，它留下的步骤记录和追踪仍要打码。
+                scope.seenLogin.addAll(handoff.seen);
+            }
             boolean lostBefore = handoff != null && handoff.lost != null;
             if (shared) {
                 handoff.epoch = sessions.epoch(key);
@@ -370,6 +376,7 @@ public final class RuleEngine implements ConchExecutor {
     private static final class Handoff {
         private long epoch;
         private Attempt lost;
+        private Set<String> seen;
     }
 
     /** 共享锁下需要登录：放开，改拿独占锁从头跑。只读能力才会走到这里。 */

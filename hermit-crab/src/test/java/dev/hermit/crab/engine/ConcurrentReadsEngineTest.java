@@ -165,6 +165,22 @@ class ConcurrentReadsEngineTest {
     }
 
     @Test
+    void loginValueReadUnderTheSharedLockStaysMaskedAfterTheSessionIsDropped() throws Exception {
+        String yaml = conch(true, true, "")
+                .replace("idempotent: true", "idempotent: false")
+                .replace("path: /data", "path: \"/data/{{login.token}}\"");
+        try (Fixture fixture = new Fixture(yaml)) {
+            assertThat(fixture.call().success()).isTrue();
+            valid = "revoked";
+            ExecutionResult result = fixture.call();
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(dev.hermit.common.error.ErrorCode.SESSION_EXPIRED);
+            assertThat(result.toString()).contains("/data").doesNotContain("tok-s1");
+            assertThat(fixture.trace).contains("/data").doesNotContain("tok-s1");
+        }
+    }
+
+    @Test
     void exclusiveWorkWaitsForSharedHoldersAndTheOtherWayRound() throws Exception {
         try (Fixture fixture = new Fixture(conch(true, true, ""))) {
             SessionKey key = fixture.key();
@@ -242,6 +258,7 @@ class ConcurrentReadsEngineTest {
     private final class Fixture implements AutoCloseable {
         private final SessionManager sessions;
         private final RuleEngine engine;
+        private volatile String trace;
 
         private Fixture(String yaml) {
             ConchDoc doc = ConchParser.parse(yaml);
@@ -252,6 +269,17 @@ class ConcurrentReadsEngineTest {
             ConchRegistry registry = new ConchRegistry();
             registry.put(doc, Origin.LOCAL);
             engine = new RuleEngine(registry, sessions, settings);
+            engine.bindDevTraceSink(new DevTraceSink() {
+                @Override
+                public DevTraceDraft open(ExecutionRequest request) {
+                    return new DevTraceDraft(java.time.Instant.parse("2026-11-18T00:00:00Z"));
+                }
+
+                @Override
+                public void save(ExecutionRequest request, java.time.Instant expiresAt, String body) {
+                    trace = body;
+                }
+            });
         }
 
         private SessionKey key() {

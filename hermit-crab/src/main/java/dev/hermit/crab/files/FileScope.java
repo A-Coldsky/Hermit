@@ -65,6 +65,10 @@ public final class FileScope {
         return stage.store(bytes, name, mime, owner);
     }
 
+    public StagedFile commit(FileStage.Spool spool, String name, String mime) {
+        return spool.commit(name, mime, owner);
+    }
+
     public Map<String, Object> view(StagedFile file) {
         return file.view(baseUrl);
     }

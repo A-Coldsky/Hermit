@@ -72,42 +72,97 @@ public final class FileStage implements AutoCloseable {
     }
 
     public StagedFile store(InputStream in, String name, String mime, String owner) {
+        Spool spool = spool();
+        try {
+            byte[] buffer = new byte[64 * 1024];
+            while (true) {
+                int read = in.read(buffer);
+                if (read < 0) {
+                    break;
+                }
+                spool.write(buffer, 0, read);
+            }
+            return spool.commit(name, mime, owner);
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        } finally {
+            spool.discard();
+        }
+    }
+
+    /** 开始收一个文件。内容边到边写盘，{@link Spool#commit} 之前别人看不到它。 */
+    public Spool spool() {
         sweep();
         // 空文件不占字节数，另按个数拦。
         if (byId.size() >= MAX_FILES) {
             throw new FileStageException(FULL);
         }
-        FileStageSettings limits = settings;
-        String fileId = "f_" + random(12);
-        Path target = dir.resolve(fileId);
-        long written = 0;
-        long held = 0;
-        MessageDigest digest = sha256();
-        boolean done = false;
-        try {
-            Files.createDirectories(dir);
-            try (OutputStream out = Files.newOutputStream(target)) {
-                byte[] buffer = new byte[64 * 1024];
-                while (true) {
-                    int read = in.read(buffer);
-                    if (read < 0) {
-                        break;
-                    }
-                    written += read;
-                    if (written > limits.maxFileBytes()) {
-                        throw new FileStageException(TOO_LARGE);
-                    }
-                    // 按块占用总容量，并发上传不会一起越过上限。
-                    synchronized (capacity) {
-                        if (reserved + read > limits.maxTotalBytes()) {
-                            throw new FileStageException(FULL);
-                        }
-                        reserved += read;
-                    }
-                    held += read;
-                    digest.update(buffer, 0, read);
-                    out.write(buffer, 0, read);
+        return new Spool();
+    }
+
+    /**
+     * 一个还在收的文件。只给一个线程用。没有 {@code commit} 的必须 {@code discard}，
+     * 否则占着的容量和磁盘上的半截文件要等到重启才清。
+     */
+    public final class Spool {
+        private final FileStageSettings limits = settings;
+        private final String fileId = "f_" + random(12);
+        private final Path target = dir.resolve(fileId);
+        private final MessageDigest digest = sha256();
+        private OutputStream out;
+        private long written;
+        private boolean finished;
+
+        private Spool() {
+        }
+
+        public void write(byte[] buffer, int offset, int length) {
+            if (finished) {
+                throw new IllegalStateException("spool is finished");
+            }
+            if (length <= 0) {
+                return;
+            }
+            if (written + length > limits.maxFileBytes()) {
+                throw new FileStageException(TOO_LARGE);
+            }
+            try {
+                if (out == null) {
+                    Files.createDirectories(dir);
+                    out = Files.newOutputStream(target);
                 }
+                // 按块占用总容量，并发上传不会一起越过上限。
+                synchronized (capacity) {
+                    if (reserved + length > limits.maxTotalBytes()) {
+                        throw new FileStageException(FULL);
+                    }
+                    reserved += length;
+                }
+                written += length;
+                digest.update(buffer, offset, length);
+                out.write(buffer, offset, length);
+            } catch (IOException ex) {
+                throw new UncheckedIOException(ex);
+            }
+        }
+
+        public long written() {
+            return written;
+        }
+
+        public StagedFile commit(String name, String mime, String owner) {
+            if (finished) {
+                throw new IllegalStateException("spool is finished");
+            }
+            try {
+                if (out == null) {
+                    Files.createDirectories(dir);
+                    out = Files.newOutputStream(target);
+                }
+                out.close();
+            } catch (IOException ex) {
+                discard();
+                throw new UncheckedIOException(ex);
             }
             Instant now = clock.instant();
             StagedFile file = new StagedFile(
@@ -123,15 +178,25 @@ public final class FileStage implements AutoCloseable {
                     target);
             byId.put(fileId, file);
             byToken.put(file.token(), file);
-            done = true;
+            finished = true;
             return file;
-        } catch (IOException ex) {
-            throw new UncheckedIOException(ex);
-        } finally {
-            if (!done) {
-                release(held);
-                deleteQuietly(target);
+        }
+
+        /** 丢掉没有提交的内容。已经提交或已经丢掉的再调没有效果。 */
+        public void discard() {
+            if (finished) {
+                return;
             }
+            finished = true;
+            if (out != null) {
+                try {
+                    out.close();
+                } catch (IOException ignored) {
+                    // 反正要删。
+                }
+            }
+            release(written);
+            deleteQuietly(target);
         }
     }
 

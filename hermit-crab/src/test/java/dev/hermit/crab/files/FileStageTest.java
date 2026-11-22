@@ -80,6 +80,38 @@ class FileStageTest {
     }
 
     @Test
+    void aSpoolIsInvisibleUntilCommittedAndLeavesNothingWhenDiscarded() throws Exception {
+        Path dir = temp.resolve("files");
+        FileStage stage = new FileStage(dir, clock, new FileStageSettings(60, 1024, 2048));
+        FileStage.Spool spool = stage.spool();
+        spool.write(new byte[600], 0, 600);
+        spool.write(new byte[400], 0, 400);
+        // 收的时候就占容量，别人还看不到。
+        assertThat(stage.usage()).containsEntry("bytes", 1000L).containsEntry("files", 0);
+        assertThatThrownBy(() -> spool.write(new byte[25], 0, 25))
+                .isInstanceOf(FileStageException.class).hasMessage(FileStage.TOO_LARGE);
+        StagedFile file = spool.commit("a.bin", "application/pdf", "key-1");
+        assertThat(file.size()).isEqualTo(1000);
+        assertThat(file.sha256()).isEqualTo(stage.store(new byte[1000], "same.bin", null, "key-1").sha256());
+        assertThat(stage.read(stage.find(file.fileId(), "key-1").orElseThrow())).isEqualTo(new byte[1000]);
+        // 提交之后再 discard 不删文件。
+        spool.discard();
+        assertThat(stage.find(file.fileId(), "key-1")).isPresent();
+        assertThat(stage.usage()).containsEntry("bytes", 2000L).containsEntry("files", 2);
+
+        FileStage.Spool full = stage.spool();
+        full.write(new byte[48], 0, 48);
+        assertThatThrownBy(() -> full.write(new byte[1], 0, 1))
+                .isInstanceOf(FileStageException.class).hasMessage(FileStage.FULL);
+        full.discard();
+        full.discard();
+        assertThat(stage.usage()).containsEntry("bytes", 2000L).containsEntry("files", 2);
+        try (java.util.stream.Stream<Path> entries = Files.list(dir)) {
+            assertThat(entries.count()).isEqualTo(2);
+        }
+    }
+
+    @Test
     void emptyFilesAreLimitedByCount() {
         FileStage stage = new FileStage(temp.resolve("files"), clock, FileStageSettings.defaults());
         for (int i = 0; i < FileStage.MAX_FILES; i++) {

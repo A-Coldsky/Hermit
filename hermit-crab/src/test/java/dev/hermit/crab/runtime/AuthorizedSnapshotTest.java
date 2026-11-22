@@ -164,20 +164,8 @@ class AuthorizedSnapshotTest {
 
             // Issue 3: HTTP method checked atomically inside Invoker against resolved capability.
             InvokeOutcome wrongMethod = invoker.invoke(
-                    full,
-                    CONCH,
-                    ACTION,
-                    Map.of(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    null,
-                    dev.hermit.crab.store.CallChannel.HTTP,
-                    "http-method-race",
-                    false,
-                    null,
-                    null,
-                    null,
-                    "GET");
+                    InvokeRequest.of(full, CONCH, ACTION, Map.of(), "http-method-race")
+                            .httpMethod("GET"));
             assertThat(wrongMethod.status()).isEqualTo(405);
             assertThat(wrongMethod.allowMethod()).isEqualTo("POST");
             assertThat(wrongMethod.requestOnly()).isTrue();
@@ -190,20 +178,8 @@ class AuthorizedSnapshotTest {
             ConchDoc hiddenDoc = ConchParser.parse(conchYaml("1.2.0", true, OLD_MARKER, false, false));
             registry.put(hiddenDoc, Origin.OFFICIAL);
             InvokeOutcome hidden = invoker.invoke(
-                    full,
-                    CONCH,
-                    ACTION,
-                    Map.of(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    null,
-                    dev.hermit.crab.store.CallChannel.MCP,
-                    "mcp-hidden",
-                    false,
-                    null,
-                    null,
-                    null,
-                    null);
+                    InvokeRequest.of(full, CONCH, ACTION, Map.of(), "mcp-hidden")
+                            .channel(dev.hermit.crab.store.CallChannel.MCP));
             assertThat(hidden.status()).isEqualTo(404);
             assertThat(new String(hidden.body(), StandardCharsets.UTF_8))
                     .contains("NOT_FOUND")
@@ -213,20 +189,9 @@ class AuthorizedSnapshotTest {
             ConchDoc destructiveDoc = ConchParser.parse(conchYaml("1.3.0", false, NEW_MARKER, true, true));
             registry.put(destructiveDoc, Origin.OFFICIAL);
             InvokeOutcome originMismatch = invoker.invoke(
-                    full,
-                    CONCH,
-                    ACTION,
-                    Map.of(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    null,
-                    dev.hermit.crab.store.CallChannel.MCP,
-                    "mcp-origin-mismatch",
-                    false,
-                    destructiveDoc,
-                    Origin.LOCAL,
-                    null,
-                    null);
+                    InvokeRequest.of(full, CONCH, ACTION, Map.of(), "mcp-origin-mismatch")
+                            .channel(dev.hermit.crab.store.CallChannel.MCP)
+                            .confirmedAgainst(destructiveDoc, Origin.LOCAL));
             assertThat(originMismatch.status()).isEqualTo(409);
             assertThat(new String(originMismatch.body(), StandardCharsets.UTF_8))
                     .contains("CONFLICT")
@@ -235,20 +200,8 @@ class AuthorizedSnapshotTest {
 
             // Issue 5b (3): MCP call without elicitation rejects if resolved capability is now destructive.
             InvokeOutcome unconfirmedDestructive = invoker.invoke(
-                    full,
-                    CONCH,
-                    ACTION,
-                    Map.of(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    null,
-                    dev.hermit.crab.store.CallChannel.MCP,
-                    "mcp-unconfirmed-destructive",
-                    false,
-                    null,
-                    null,
-                    null,
-                    null);
+                    InvokeRequest.of(full, CONCH, ACTION, Map.of(), "mcp-unconfirmed-destructive")
+                            .channel(dev.hermit.crab.store.CallChannel.MCP));
             assertThat(unconfirmedDestructive.status()).isEqualTo(409);
             assertThat(new String(unconfirmedDestructive.body(), StandardCharsets.UTF_8))
                     .contains("CONFLICT")
@@ -257,20 +210,9 @@ class AuthorizedSnapshotTest {
 
             // Matching snapshot + origin succeeds.
             InvokeOutcome confirmedOk = invoker.invoke(
-                    full,
-                    CONCH,
-                    ACTION,
-                    Map.of(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    null,
-                    dev.hermit.crab.store.CallChannel.MCP,
-                    "mcp-confirmed-ok",
-                    false,
-                    destructiveDoc,
-                    Origin.OFFICIAL,
-                    null,
-                    null);
+                    InvokeRequest.of(full, CONCH, ACTION, Map.of(), "mcp-confirmed-ok")
+                            .channel(dev.hermit.crab.store.CallChannel.MCP)
+                            .confirmedAgainst(destructiveDoc, Origin.OFFICIAL));
             assertThat(confirmedOk.status()).isEqualTo(200);
             assertThat(new String(confirmedOk.body(), StandardCharsets.UTF_8)).contains(NEW_MARKER);
         }

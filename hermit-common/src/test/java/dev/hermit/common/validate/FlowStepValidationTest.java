@@ -237,6 +237,50 @@ class FlowStepValidationTest {
                 """))).as("上一轮的分支写的变量").isEmpty();
     }
 
+    @Test
+    void concurrentReadsParsesNeedsOnePointNineAndStaysOutOfOldPackages() throws Exception {
+        String on = withAuth("1.9.0", "concurrent_reads: true", "mcp: {read_only: true}");
+        dev.hermit.common.model.ConchDoc doc = ConchParser.parse(on);
+        assertThat(doc.auth().concurrentReads()).isTrue();
+        ValidationResult ok = ConchValidator.validate(doc, ConchValidator.Context.of(SemVer.parse("1.9.0")));
+        assertThat(ok.errors()).isEmpty();
+        assertThat(ok.warnings()).noneMatch(w -> w.code().equals(ValidationCodes.CONCURRENT_READS));
+
+        ValidationResult low = ConchValidator.validate(
+                ConchParser.parse(withAuth("1.8.0", "concurrent_reads: true", "mcp: {read_only: true}")),
+                ConchValidator.Context.of(SemVer.parse("1.9.0")));
+        assertThat(low.errors()).anyMatch(e -> e.code().equals(ValidationCodes.MIN_CRAB_VERSION)
+                && e.message().contains("auth.concurrent_reads"));
+
+        ValidationResult unused = ConchValidator.validate(
+                ConchParser.parse(withAuth("1.9.0", "concurrent_reads: true", "")),
+                ConchValidator.Context.of(SemVer.parse("1.9.0")));
+        assertThat(unused.errors()).isEmpty();
+        assertThat(unused.warnings()).anyMatch(w -> w.code().equals(ValidationCodes.CONCURRENT_READS));
+
+        dev.hermit.common.model.ConchDoc off = ConchParser.parse(withAuth("1.8.0", "cookies: {}", ""));
+        assertThat(off.auth().concurrentReads()).isFalse();
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        assertThat(mapper.writeValueAsString(off.auth())).doesNotContain("oncurrent");
+        assertThat(mapper.writeValueAsString(doc.auth())).contains("oncurrent");
+    }
+
+    @Test
+    void concurrentReadsMustBeABoolean() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> ConchParser.parse(withAuth("1.9.0", "concurrent_reads: \"yes\"", "")))
+                .hasMessageContaining("concurrent_reads");
+    }
+
+    private static String withAuth(String min, String line, String extra) {
+        return conch(min, "- request: {method: GET, path: /a}", extra).replace("actions:", """
+                auth:
+                  %s
+                  steps:
+                    - request: {method: GET, path: /login}
+                actions:""".formatted(line));
+    }
+
     private static ValidationResult validate(String min, String steps) {
         return ConchValidator.validate(
                 ConchParser.parse(conch(min, steps, "")), ConchValidator.Context.of(SemVer.parse("1.9.0")));

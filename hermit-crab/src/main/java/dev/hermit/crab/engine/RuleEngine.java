@@ -140,7 +140,32 @@ public final class RuleEngine implements ConchExecutor {
                         List.of(), version, request, credentials, List.of(), start);
             }
             SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
+            Handoff handoff = null;
             boolean locked;
+            if (conch.auth() != null && conch.auth().concurrentReads() && action.mcp().readOnly()) {
+                // 只读能力先拿共享锁；会话不能直接用（没登录、要探活、中途失效）时放开，改走下面的独占锁。
+                handoff = new Handoff();
+                try {
+                    locked = sessions.tryLockShared(key, deadline);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    return internal(request, credentials, List.of(), version, start, ex);
+                }
+                if (!locked) {
+                    return finish(false, null, ErrorCode.TIMEOUT, "执行超时", null, null, "执行超时",
+                            List.of(), version, request, credentials, List.of(), start);
+                }
+                ExecutionResult result;
+                try {
+                    result = locked(request, conch, action, input, credentials, config, key, version, start,
+                            deadline, handoff, true);
+                } finally {
+                    sessions.unlockShared(key);
+                }
+                if (result != null) {
+                    return result;
+                }
+            }
             try {
                 // 等锁时间算进能力总超时。
                 locked = sessions.tryLock(key, deadline);
@@ -153,7 +178,8 @@ public final class RuleEngine implements ConchExecutor {
                         List.of(), version, request, credentials, List.of(), start);
             }
             try {
-                return locked(request, conch, action, input, credentials, config, key, version, start, deadline);
+                return locked(request, conch, action, input, credentials, config, key, version, start, deadline,
+                        handoff, false);
             } finally {
                 sessions.unlock(key);
             }
@@ -270,10 +296,15 @@ public final class RuleEngine implements ConchExecutor {
             SessionKey key,
             String version,
             long start,
-            long deadline
+            long deadline,
+            Handoff handoff,
+            boolean shared
     ) {
         LoginScope scope = null;
         try {
+            if (shared && !sessions.sharedReady(key, conch.auth().aliveCheck() != null)) {
+                return null;
+            }
             if (sessions.loginPaused(key)) {
                 return finish(false, null, ErrorCode.AUTH_FAILED, "该账号已暂停自动登录", null, null,
                         "该账号已暂停自动登录", List.of(), version, request, credentials,
@@ -281,12 +312,31 @@ public final class RuleEngine implements ConchExecutor {
             }
             URI base = baseUri(conch, config);
             scope = new LoginScope(conch, input, credentials, config, key, base, deadline);
+            scope.shared = shared;
+            boolean lostBefore = handoff != null && handoff.lost != null;
+            if (shared) {
+                handoff.epoch = sessions.epoch(key);
+                requireStepLoginRefs(scope, action.steps());
+                Attempt first = runAction(action, scope);
+                if (first.lost) {
+                    handoff.lost = first;
+                    return null;
+                }
+                return settle(first, action, scope, key, version, request, credentials, start);
+            }
+            if (lostBefore) {
+                // 共享锁下那一次已经发现会话失效：别的调用还没重新登录过才登出，这一次算重跑。
+                sessions.markLoggedOutSince(key, handoff.epoch);
+                if (!action.idempotent()) {
+                    return expired(handoff.lost.logs, version, request, credentials, scope, start);
+                }
+            }
             ensureSession(scope);
             requireStepLoginRefs(scope, action.steps());
             Attempt attempt = runAction(action, scope);
             if (attempt.lost) {
                 sessions.markLoggedOut(key);
-                if (!action.idempotent()) {
+                if (!action.idempotent() || lostBefore) {
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
                 ensureSession(scope);
@@ -297,6 +347,49 @@ public final class RuleEngine implements ConchExecutor {
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
             }
+            return settle(attempt, action, scope, key, version, request, credentials, start);
+        } catch (NeedsExclusive ex) {
+            return null;
+        } catch (StepFailure ex) {
+            Integer index = ex.index < 0 ? null : ex.index;
+            return finish(false, null, ex.code, ex.summary, index, ex.type, ex.summary, ex.logs, version, request,
+                    credentials, redactionOf(scope, key), start);
+        } catch (DeadlineExceeded ex) {
+            Integer index = ex.index < 0 ? null : ex.index;
+            return finish(false, null, ErrorCode.TIMEOUT, "执行超时", index, ex.type, "执行超时", ex.logs, version,
+                    request, credentials, redactionOf(scope, key), start);
+        } catch (RuleProblem ex) {
+            return finish(false, null, ex.code, ex.summary, null, null, ex.summary, List.of(), version, request,
+                    credentials, redactionOf(scope, key), start);
+        } catch (RuntimeException ex) {
+            return internal(request, credentials, redactionOf(scope, key), version, start, ex);
+        }
+    }
+
+    /** 共享锁下那一次留给独占锁的话：当时的会话代次，以及发现会话失效的那次尝试。 */
+    private static final class Handoff {
+        private long epoch;
+        private Attempt lost;
+    }
+
+    /** 共享锁下需要登录：放开，改拿独占锁从头跑。只读能力才会走到这里。 */
+    private static final class NeedsExclusive extends RuntimeException {
+        private NeedsExclusive() {
+            super(null, null, false, false);
+        }
+    }
+
+    private ExecutionResult settle(
+            Attempt attempt,
+            Action action,
+            LoginScope scope,
+            SessionKey key,
+            String version,
+            ExecutionRequest request,
+            Map<String, String> credentials,
+            long start
+    ) {
+        try {
             if (attempt.failure != null) {
                 StepFailure failure = attempt.failure;
                 Integer index = failure.index < 0 ? null : failure.index;
@@ -1766,6 +1859,8 @@ public final class RuleEngine implements ConchExecutor {
         private final LinkedHashSet<String> seenLogin = new LinkedHashSet<>();
         private boolean loggingIn;
         private boolean loggedInThisCall;
+        /** 只持有共享锁：不能在这里登录。 */
+        private boolean shared;
 
         private LoginScope(
                 ConchDoc conch,
@@ -1867,6 +1962,9 @@ public final class RuleEngine implements ConchExecutor {
             }
             if (loggingIn || loggedInThisCall) {
                 throw missing(name);
+            }
+            if (shared) {
+                throw new NeedsExclusive();
             }
             login(this);
             if (lookup(name) == null) {

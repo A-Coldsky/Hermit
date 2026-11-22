@@ -52,7 +52,7 @@ public final class ConchParser {
             "upstream_annotations", "schema_sha256", "confirm");
     private static final Set<String> PARAM_KEYS = Set.of(
             "type", "description", "default", "enum", "minimum", "maximum", "items", "required");
-    private static final Set<String> AUTH_KEYS = Set.of("steps", "alive_check", "cookies");
+    private static final Set<String> AUTH_KEYS = Set.of("steps", "alive_check", "cookies", "concurrent_reads");
     private static final Set<String> ALIVE_KEYS = Set.of("request", "expect_not_redirect");
     private static final Set<String> MCP_KEYS = Set.of("expose", "read_only", "destructive");
     private static final Set<String> EXAMPLE_KEYS = Set.of("input", "output");
@@ -265,7 +265,8 @@ public final class ConchParser {
         List<Step> steps = steps(obj.get("steps"), child(path, "steps"));
         AliveCheck alive = alive(obj.get("alive_check"), child(path, "alive_check"));
         Map<String, String> cookies = cookieAliases(obj.get("cookies"), child(path, "cookies"));
-        return new Auth(steps, alive, cookies);
+        boolean concurrentReads = bool(obj.get("concurrent_reads"), child(path, "concurrent_reads"), false);
+        return new Auth(steps, alive, cookies, concurrentReads);
     }
 
     private static Map<String, String> cookieAliases(JsonNode node, String path) {

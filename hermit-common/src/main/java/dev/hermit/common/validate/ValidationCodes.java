@@ -71,6 +71,7 @@ public final class ValidationCodes {
     public static final String FLOW_STEP = "FLOW_STEP";
     /** request 的 {@code retry} 写法不对，或用在了不能重复提交的请求上。阻止保存。 */
     public static final String RETRY = "RETRY";
+    public static final String CONCURRENT_READS = "CONCURRENT_READS";
 
     private ValidationCodes() {
     }

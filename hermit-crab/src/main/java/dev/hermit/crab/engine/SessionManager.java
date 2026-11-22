@@ -15,7 +15,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.cookie.BasicCookieStore;
@@ -106,6 +106,7 @@ public final class SessionManager implements AutoCloseable {
             loginSnapshots.delete(key);
             pending.discard(key);
             state.loggedIn = false;
+            state.epoch++;
             state.lastActive = null;
             state.seenCookieValues.clear();
             state.loginSnapshot.clear();
@@ -173,11 +174,11 @@ public final class SessionManager implements AutoCloseable {
         if (state == null) {
             return false;
         }
-        state.lock.lock();
+        state.gate.readLock().lock();
         try {
             return state.loginPaused;
         } finally {
-            state.lock.unlock();
+            state.gate.readLock().unlock();
         }
     }
 
@@ -187,21 +188,24 @@ public final class SessionManager implements AutoCloseable {
 
     boolean idle(SessionKey key) {
         AccountState state = state(key);
-        if (!state.loggedIn || state.lastActive == null) {
+        Instant last = state.lastActive;
+        if (!state.loggedIn || last == null) {
             return false;
         }
-        return Duration.between(state.lastActive, clock.instant()).compareTo(settings.sessionIdleLimit()) > 0;
+        return Duration.between(last, clock.instant()).compareTo(settings.sessionIdleLimit()) > 0;
     }
 
     void markLoggedIn(SessionKey key) {
         AccountState state = state(key);
         state.loggedIn = true;
+        state.epoch++;
         state.lastActive = clock.instant();
     }
 
     void markLoggedOut(SessionKey key) {
         AccountState state = state(key);
         state.loggedIn = false;
+        state.epoch++;
         state.lastActive = null;
         state.cookies.clear();
         state.loginSnapshot.clear();
@@ -246,10 +250,10 @@ public final class SessionManager implements AutoCloseable {
         if (state == null) {
             return List.of();
         }
-        state.lock.lock();
+        state.gate.readLock().lock();
         try {
             LinkedHashSet<String> values = new LinkedHashSet<>();
-            addRedaction(values, state.seenCookieValues);
+            addRedaction(values, seen(state));
             if (state.cookies != null) {
                 ArrayList<String> jar = new ArrayList<>();
                 for (Cookie cookie : state.cookies.getCookies()) {
@@ -260,7 +264,7 @@ public final class SessionManager implements AutoCloseable {
             addRedaction(values, state.loginSnapshot.values());
             return List.copyOf(values);
         } finally {
-            state.lock.unlock();
+            state.gate.readLock().unlock();
         }
     }
 
@@ -295,11 +299,79 @@ public final class SessionManager implements AutoCloseable {
 
     void persist(SessionKey key) {
         AccountState state = state(key);
-        List<StoredCookie> cookies = dump(state.cookies);
-        for (StoredCookie cookie : cookies) {
-            rememberCookieValue(state.seenCookieValues, cookie.value());
+        // 并行的只读调用各自写库：取罐和写库放在一起，后写的一定是更新的那份。
+        synchronized (state.seenCookieValues) {
+            List<StoredCookie> cookies = dump(state.cookies);
+            for (StoredCookie cookie : cookies) {
+                rememberCookieValue(state.seenCookieValues, cookie.value());
+            }
+            persistence.save(key, List.copyOf(cookies));
         }
-        persistence.save(key, List.copyOf(cookies));
+    }
+
+    private static List<String> seen(AccountState state) {
+        synchronized (state.seenCookieValues) {
+            return List.copyOf(state.seenCookieValues);
+        }
+    }
+
+    /**
+     * 只读能力用的共享锁：和别的只读调用一起持有，登录、作废和其它调用要等它们都放开。
+     * 拿到后还要看 {@link #sharedReady}，会话不能直接用时放开，改走 {@link #tryLock}。
+     */
+    public boolean tryLockShared(SessionKey key, long deadlineNanos) throws InterruptedException {
+        while (true) {
+            AccountState state = states.computeIfAbsent(key, this::newState);
+            long wait = deadlineNanos - System.nanoTime();
+            if (wait <= 0) {
+                return false;
+            }
+            if (!state.gate.readLock().tryLock(wait, TimeUnit.NANOSECONDS)) {
+                return false;
+            }
+            if (states.get(key) == state) {
+                return true;
+            }
+            state.gate.readLock().unlock();
+        }
+    }
+
+    public void unlockShared(SessionKey key) {
+        AccountState state = states.get(key);
+        if (state != null && state.gate.getReadHoldCount() > 0) {
+            state.gate.readLock().unlock();
+        }
+    }
+
+    /** 已登录、没暂停、没有等输入的登录，也不到要跑 alive_check 的时候：共享锁下可以直接跑。 */
+    boolean sharedReady(SessionKey key, boolean hasAliveCheck) {
+        AccountState state = state(key);
+        if (!state.loggedIn || state.loginPaused || pending.current(key) != null) {
+            return false;
+        }
+        return !(hasAliveCheck && idle(key));
+    }
+
+    /** 测试用：清掉登录快照，模拟会话还在、登录变量已经没有的状态。 */
+    void replaceSnapshotForTest(SessionKey key) {
+        AccountState state = states.get(key);
+        state.lock.lock();
+        try {
+            state.loginSnapshot.clear();
+        } finally {
+            state.lock.unlock();
+        }
+    }
+
+    long epoch(SessionKey key) {
+        return state(key).epoch;
+    }
+
+    /** 并行调用发现会话失效后，在独占锁下调用：期间没人重新登录过才登出。 */
+    void markLoggedOutSince(SessionKey key, long epoch) {
+        if (state(key).epoch == epoch) {
+            markLoggedOut(key);
+        }
     }
 
     /** Accounts with state in memory. */
@@ -312,7 +384,7 @@ public final class SessionManager implements AutoCloseable {
         if (state == null) {
             return List.of();
         }
-        return List.copyOf(state.seenCookieValues);
+        return seen(state);
     }
 
     /** Cookie names only. Values stay in the jar and are not copied here. */
@@ -495,15 +567,20 @@ public final class SessionManager implements AutoCloseable {
     }
 
     private static final class AccountState {
-        final ReentrantLock lock = new ReentrantLock(true);
-        final Set<String> seenCookieValues = new LinkedHashSet<>();
+        /** 写锁是原来的账号锁。读锁只给打开 concurrent_reads 的只读能力，持有期间不登录、不清会话。 */
+        final ReentrantReadWriteLock gate = new ReentrantReadWriteLock(true);
+        final ReentrantReadWriteLock.WriteLock lock = gate.writeLock();
+        /** 并行的只读调用会同时写它。 */
+        final Set<String> seenCookieValues = java.util.Collections.synchronizedSet(new LinkedHashSet<>());
+        /** 每次登录、登出、作废加一。并行调用发现会话失效时，用它判断是不是已经有人重新登录过。 */
+        long epoch;
         final Map<String, String> loginSnapshot = new LinkedHashMap<>();
         CloseableHttpClient client;
         BasicCookieStore cookies;
         OutboundTls tls;
         PoolingHttpClientConnectionManager pool;
         boolean loggedIn;
-        Instant lastActive;
+        volatile Instant lastActive;
         int authFailures;
         boolean loginPaused;
     }

@@ -71,7 +71,7 @@ Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里�
 
 业务接口只选用户确认过的功能对应的那一次请求。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
 
-凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.9.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。用了 request 的 `body` 或 `xml_escape` 时，还要不低于 1.7.0，否则 message 为「使用 body 时 min_crab_version 必须不低于 1.7.0」或「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。
+凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`；本地规则包可以与正式包同名，两份各自保留账号、凭证和配置，同一时刻只有一份生效，在控制台切换来源。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.9.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。用了 request 的 `body` 或 `xml_escape` 时，还要不低于 1.7.0，否则 message 为「使用 body 时 min_crab_version 必须不低于 1.7.0」或「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时，还要不低于 1.8.0（`driver: mcp` 的包不能用）。用了步骤 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时，还要不低于 1.9.0；`min_crab_version` 不低于 1.9.0 的包里，request、extract、assert 的未知键是错误（更低的包仍是警告）。
 
 ### 令牌
 
@@ -228,7 +228,7 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.9.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高 |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.9.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时不低于 1.8.0（`driver: mcp` 不能用）。用了 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时不低于 1.9.0；不低于 1.9.0 的包里 request、extract、assert 的未知键是错误（更低的包仍是警告） |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -310,7 +310,7 @@ actions:
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
-`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.7.0，可以载入 1.1.0、1.2.0、1.3.0、1.4.0、1.5.0 和 1.6.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.7.0 时会报高于当前 Crab。请求头模板用了 `xml_escape` 时还要不低于 1.7.0。
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.9.0，可以载入 1.1.0 到 1.9.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.9.0 时会报高于当前 Crab。请求头模板用了 `xml_escape` 时还要不低于 1.7.0。
 
 `GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
@@ -348,7 +348,7 @@ actions:
 
 | 类型 | 示例/能力 |
 | --- | --- |
-| request | method、path/url、query、headers、body/form/json、encoding、follow_redirects、timeout_ms、query_style、retry |
+| request | method、path/url、query、headers、body/form/json/multipart、download、encoding、follow_redirects、timeout_ms、query_style、retry |
 | extract | CSS、XPath、JSONPath、regex；可 each 遍历及 filter 转换 |
 | assert | status、contains、not_contains、cookie_exists、header_exists、not_redirected_to |
 | set | 设置后续步骤/输出使用的变量 |

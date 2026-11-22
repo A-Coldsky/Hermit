@@ -345,7 +345,7 @@ onMounted(load)
               <el-tag :type="outcomeLabels[item.kind ?? '']?.tone ?? 'info'" size="small" effect="plain">
                 {{ outcomeLabels[item.kind ?? '']?.text ?? item.kind }}
               </el-tag>
-              <span class="mono">{{ item.conch }} v{{ item.version }}</span>
+              <span class="mono">{{ item.conch }}{{ item.version ? ` v${item.version}` : '' }}</span>
               <span v-if="item.reason" class="hm-muted">{{ syncReasonLabels[item.reason] ?? item.reason }}</span>
               <router-link v-if="item.kind === 'UPDATE_AVAILABLE'" :to="`/conches/${encodeURIComponent(item.conch)}`">去更新</router-link>
             </li>

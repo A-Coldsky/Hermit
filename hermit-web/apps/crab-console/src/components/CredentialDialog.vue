@@ -14,6 +14,7 @@ const cleared = reactive<Record<string, boolean>>({})
 const stored = ref<string[]>([])
 const loading = ref(false)
 const saving = ref(false)
+let loadSeq = 0
 
 function shownField(field: CredentialField) {
   if (!field.label || field.label === field.name) return field.name
@@ -21,6 +22,7 @@ function shownField(field: CredentialField) {
 }
 
 const keepable = (name: string) => !props.unreadable && stored.value.includes(name)
+const mustRefill = (field: CredentialField) => field.required || stored.value.includes(field.name)
 
 const changes = computed(() => {
   const body: Record<string, string> = {}
@@ -35,26 +37,32 @@ const changes = computed(() => {
 })
 
 watch(open, async (value) => {
+  const seq = ++loadSeq
   if (!value) {
+    loading.value = false
     return
   }
+  stored.value = []
   for (const field of props.fields) {
     values[field.name] = ''
     cleared[field.name] = false
   }
   loading.value = true
   try {
-    stored.value = (await api.credentialNames(props.conch, props.account)).fields
+    const result = await api.credentialNames(props.conch, props.account)
+    if (seq !== loadSeq) return
+    stored.value = result.fields
   } catch (error) {
+    if (seq !== loadSeq) return
     notifyError(error)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 })
 
 async function save() {
   if (props.unreadable) {
-    const empty = props.fields.filter((f) => f.required && !values[f.name]).map((f) => shownField(f))
+    const empty = props.fields.filter((f) => mustRefill(f) && !values[f.name]).map((f) => shownField(f))
     if (empty.length) {
       ElMessage.closeAll()
       ElMessage.warning(`凭证无法解密，需要全部重新填写：${empty.join('、')}`)
@@ -109,11 +117,11 @@ async function save() {
       class="notice"
     />
     <el-form v-loading="loading" label-position="top" @submit.prevent="save">
-      <el-form-item v-for="field in fields" :key="field.name" :required="field.required">
+      <el-form-item v-for="field in fields" :key="field.name" :required="field.required || (!!unreadable && mustRefill(field))">
         <template #label>
           <span>{{ shownField(field) }}</span>
-          <el-tag v-if="unreadable" size="small" type="danger" effect="plain">需重填</el-tag>
-          <el-tag v-else-if="stored.includes(field.name) && !cleared[field.name]" size="small" type="success" effect="plain">已保存</el-tag>
+          <el-tag v-if="unreadable && mustRefill(field)" size="small" type="danger" effect="plain">需重填</el-tag>
+          <el-tag v-else-if="!unreadable && stored.includes(field.name) && !cleared[field.name]" size="small" type="success" effect="plain">已保存</el-tag>
           <el-tag v-else-if="cleared[field.name]" size="small" type="danger" effect="plain">将清除</el-tag>
         </template>
         <div class="row">
@@ -131,7 +139,7 @@ async function save() {
     </el-form>
     <template #footer>
       <el-button @click="open = false">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      <el-button type="primary" :disabled="loading" :loading="saving" @click="save">保存</el-button>
     </template>
   </el-dialog>
 </template>

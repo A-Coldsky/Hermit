@@ -31,6 +31,10 @@ export const stepTypeLabels: Record<string, string> = {
   assert: '断言',
   set: '赋值',
   script: '脚本',
+  if: '条件判断',
+  repeat: '循环',
+  ask: '登录输入',
+  mcp_call: 'MCP 调用',
 }
 
 export const configAuditLabels: Record<string, { text: string; tone: 'success' | 'info' | 'warning' | 'danger' | 'primary' }> = {
@@ -50,6 +54,7 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   FILE_SETTINGS_UPDATED: { text: '修改文件暂存区设置', tone: 'info' },
   DEBUG_CHANGED: { text: '切换调试', tone: 'info' },
   TEST_LOGIN: { text: '测试登录', tone: 'info' },
+  CONSOLE_LOGIN: { text: '控制台登录', tone: 'info' },
   SYNC_REQUESTED: { text: '手动同步', tone: 'info' },
   CREDENTIAL_DECLARATION: { text: '凭证声明变更', tone: 'warning' },
   CONCH_SUBSCRIBED: { text: '订阅规则包', tone: 'success' },

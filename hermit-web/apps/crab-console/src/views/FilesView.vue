@@ -9,6 +9,7 @@ import { api, type FileStageSettings, type FileStageView, type StagedFile } from
 
 const MIB = 1024 * 1024
 const loading = ref(true)
+const loadFailed = ref(false)
 const saving = ref(false)
 const uploading = ref(false)
 const view = ref<FileStageView | null>(null)
@@ -43,7 +44,9 @@ async function load() {
     const loaded = await api.files()
     view.value = { settings: loaded.settings, usage: loaded.usage, files: loaded.files ?? [] }
     fill(loaded.settings)
+    loadFailed.value = false
   } catch (error) {
+    loadFailed.value = true
     notifyError(error)
   } finally {
     loading.value = false
@@ -118,6 +121,17 @@ onMounted(load)
       <input ref="fileInput" type="file" hidden data-test="file-input" @change="picked" />
     </PageHeader>
 
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      :title="view ? '文件暂存区刷新失败，下面是上一次读到的内容' : '文件暂存区读取失败'"
+      data-test="files-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
+
     <div class="hm-card" data-test="file-settings">
       <div class="hm-card-title"><span>设置</span></div>
       <div class="settings-row">
@@ -149,7 +163,8 @@ onMounted(load)
         </span>
       </div>
       <p class="hm-scroll-hint">表格可以左右滑动，删除按钮固定在最右侧。</p>
-      <el-table :data="view?.files ?? []" empty-text="暂存区是空的">
+      <el-table :data="view?.files ?? []">
+        <template #empty>{{ loading ? '' : loadFailed ? '没有读到文件列表' : '暂存区是空的' }}</template>
         <el-table-column label="文件名" min-width="180">
           <template #default="{ row }"><span class="file-name" :title="row.name">{{ row.name }}</span></template>
         </el-table-column>

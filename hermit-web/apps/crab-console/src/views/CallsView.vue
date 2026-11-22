@@ -4,7 +4,7 @@ import { CopyDocument, Refresh } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
-import { copyText, errorCodeLabels, formatTime, millis, notifyError } from '@shared/format'
+import { copyText, errorCodeLabels, errorText, formatTime, millis, notifyError } from '@shared/format'
 import { api, type CallDetail, type CallSummary, type ConchSummary } from '../api'
 import DevTracePanel from '../components/DevTracePanel.vue'
 import TrustJump from '../components/TrustJump.vue'
@@ -15,6 +15,7 @@ const route = useRoute()
 const router = useRouter()
 
 const loading = ref(true)
+const loadFailed = ref(false)
 const calls = ref<CallSummary[]>([])
 const conches = ref<ConchSummary[]>([])
 const filter = reactive({
@@ -25,7 +26,15 @@ const filter = reactive({
   failedOnly: route.query.failed === '1',
 })
 const page = reactive({ current: 1, size: 20 })
-const drawer = reactive({ open: false, loading: false, call: null as CallDetail | null })
+const drawer = reactive({
+  open: false,
+  loading: false,
+  traceId: '',
+  error: '',
+  call: null as CallDetail | null,
+})
+let loadSeq = 0
+let traceSeq = 0
 
 const visible = computed(() => (filter.failedOnly ? calls.value.filter((c) => !c.success) : calls.value))
 const paged = computed(() => visible.value.slice((page.current - 1) * page.size, page.current * page.size))
@@ -42,33 +51,44 @@ const summary = computed(() => {
 const slowest = computed(() => Math.max(1, ...visible.value.map((c) => c.durationMs)))
 
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
-    calls.value = (
-      await api.calls({
-        conch: filter.conch || undefined,
-        action: filter.action.trim() || undefined,
-        channel: filter.channel || undefined,
-        limit: filter.limit,
-      })
-    ).calls
+    const result = await api.calls({
+      conch: filter.conch || undefined,
+      action: filter.action.trim() || undefined,
+      channel: filter.channel || undefined,
+      limit: filter.limit,
+    })
+    if (seq !== loadSeq) return
+    calls.value = result.calls
+    loadFailed.value = false
   } catch (error) {
+    if (seq !== loadSeq) return
+    loadFailed.value = true
     notifyError(error)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
 async function openTrace(traceId: string) {
+  const seq = ++traceSeq
   drawer.open = true
   drawer.loading = true
+  drawer.traceId = traceId
+  drawer.error = ''
   drawer.call = null
   try {
-    drawer.call = await api.call(traceId)
+    const result = await api.call(traceId)
+    if (seq !== traceSeq) return
+    drawer.call = result
   } catch (error) {
+    if (seq !== traceSeq) return
+    drawer.error = errorText(error)
     notifyError(error)
   } finally {
-    drawer.loading = false
+    if (seq === traceSeq) drawer.loading = false
   }
 }
 
@@ -95,17 +115,34 @@ watch(
   (trace) => {
     if (typeof trace === 'string' && trace) {
       void openTrace(trace)
+    } else {
+      traceSeq++
+      drawer.open = false
+      drawer.loading = false
+      drawer.error = ''
+      drawer.call = null
     }
   },
   { immediate: true },
 )
 
 watch(
+  () => route.query.failed,
+  (failed) => {
+    filter.failedOnly = failed === '1'
+  },
+)
+
+watch(
   () => drawer.open,
   (open) => {
-    if (!open && route.query.trace) {
-      const { trace: _trace, ...rest } = route.query
-      void router.replace({ query: rest })
+    if (!open) {
+      traceSeq++
+      drawer.loading = false
+      if (route.query.trace) {
+        const { trace: _trace, ...rest } = route.query
+        void router.replace({ query: rest })
+      }
     }
   },
 )
@@ -130,6 +167,17 @@ onMounted(async () => {
     </PageHeader>
 
     <div class="hm-card">
+      <el-alert
+        v-if="loadFailed"
+        type="error"
+        show-icon
+        :closable="false"
+        class="load-failed"
+        :title="calls.length ? '调用记录刷新失败，下面是上一次读到的内容' : '调用记录读取失败'"
+        data-test="calls-load-failed"
+      >
+        <el-button size="small" :loading="loading" @click="load">重试</el-button>
+      </el-alert>
       <div class="hm-toolbar">
         <el-select v-model="filter.conch" placeholder="全部规则包" clearable class="pick">
           <el-option v-for="s in conches" :key="s.conch" :label="s.conch" :value="s.conch" />
@@ -153,7 +201,7 @@ onMounted(async () => {
       </div>
 
       <el-table v-loading="loading" :data="paged" row-class-name="clickable" @row-click="onRow">
-        <template #empty>{{ loading ? '' : '没有调用记录' }}</template>
+        <template #empty>{{ loading ? '' : loadFailed ? '没有读到调用记录' : '没有调用记录' }}</template>
         <el-table-column label="时间" width="230">
           <template #default="{ row }"><TimeText :value="row.at" /></template>
         </el-table-column>
@@ -210,7 +258,19 @@ onMounted(async () => {
 
     <el-drawer v-model="drawer.open" size="min(560px, 100vw)" title="调用详情" data-test="call-drawer">
       <div v-loading="drawer.loading">
-        <template v-if="drawer.call">
+        <el-alert
+          v-if="drawer.error"
+          type="error"
+          show-icon
+          :closable="false"
+          title="调用详情读取失败"
+          class="notice"
+          data-test="call-drawer-error"
+        >
+          <div>{{ drawer.error }}</div>
+          <el-button size="small" class="retry-btn" :loading="drawer.loading" @click="openTrace(drawer.traceId)">重试</el-button>
+        </el-alert>
+        <template v-else-if="drawer.call">
           <el-alert
             v-if="!drawer.call.success"
             type="error"
@@ -275,6 +335,14 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.load-failed {
+  margin-bottom: 12px;
+}
+
+.retry-btn {
+  margin-top: 8px;
+}
+
 .pick {
   width: 200px;
 }

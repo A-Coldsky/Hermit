@@ -19,7 +19,7 @@
 - `hermit-it`：独立 Reef 进程、Crab 和模拟 OA 的跨模块验收。
 - 前端使用 Vitest + Vue Test Utils + jsdom，`npm test`，也接入 Maven test 阶段。
 - Crab 容器入口为 `deploy/crab-entrypoint.sh`；Compose `client` profile 用于同机部署，`docker-compose.crab.yml` 用于独立客户端。
-- Maven 制品版本 `0.1.0-SNAPSHOT` 与规则兼容版本 `CrabVersion.CURRENT = 1.8.0` 用途不同。1.1.0 起可载入 `driver: mcp`；1.2.0 起可载入脚本库；1.3.0 起可载入 `login` 与非空 `auth.cookies`；1.4.0 起可载入登录步骤 `ask`。1.5.0 起 query 默认按 URL 编码，可用 `query_style: form` 退回。1.6.0 起可载入引号下标；模板里出现引号下标时 `min_crab_version` 必须不低于 1.6.0。1.7.0 起可载入 request 的原始 `body` 和 `xml_escape`；用了其中之一时 `min_crab_version` 必须不低于 1.7.0。headers 里的 Content-Type 覆盖 form/json 默认值不设门槛。1.8.0 起 `driver: http` 可载入 `type: file` 入参、request 的 `multipart` 和 `download`（文件走 Crab 文件暂存区）；用了其中之一时 `min_crab_version` 必须不低于 1.8.0，`driver: mcp` 的包不能用。
+- Maven 制品版本 `0.1.0-SNAPSHOT` 与规则兼容版本 `CrabVersion.CURRENT = 1.9.0` 用途不同。1.1.0 起可载入 `driver: mcp`；1.2.0 起可载入脚本库；1.3.0 起可载入 `login` 与非空 `auth.cookies`；1.4.0 起可载入登录步骤 `ask`。1.5.0 起 query 默认按 URL 编码，可用 `query_style: form` 退回。1.6.0 起可载入引号下标；模板里出现引号下标时 `min_crab_version` 必须不低于 1.6.0。1.7.0 起可载入 request 的原始 `body` 和 `xml_escape`；用了其中之一时 `min_crab_version` 必须不低于 1.7.0。headers 里的 Content-Type 覆盖 form/json 默认值不设门槛。1.8.0 起 `driver: http` 可载入 `type: file` 入参、request 的 `multipart` 和 `download`（文件走 Crab 文件暂存区）；用了其中之一时 `min_crab_version` 必须不低于 1.8.0，`driver: mcp` 的包不能用。1.9.0 起可载入步骤 `if`、`repeat` 和 request 的 `retry`；用了其中之一时 `min_crab_version` 必须不低于 1.9.0，并且不低于 1.9.0 的包里 request、extract、assert 的未知键是错误（更低的包仍是警告）。
 - Conch 指 YAML 规则包。`driver: http` 走步骤引擎。`driver: mcp` 由 Crab 按 Streamable HTTP 转发：`headers` 用请求头模板；`oauth` 在控制台做 PKCE，令牌在凭证库。开发者模式打开时，本地 MCP 包可以试跑，也可以刷新上游 `tools/list`（OAuth 包复用已连接的令牌和 401 后的刷新）。Reef 管理 API 与 Agent 清单从包内读出上游和工具表，不连上游。它不是操作系统命令脚本，也不支持 stdio。
 
 ## 修改入口

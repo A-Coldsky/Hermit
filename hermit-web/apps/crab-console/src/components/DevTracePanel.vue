@@ -14,7 +14,8 @@ const open = ref<number[]>([])
 watch(
   () => props.trace.steps,
   (steps) => {
-    open.value = (steps ?? []).filter((step) => step.wire || step.scriptError).map((step) => step.index)
+    // if / repeat 的子步骤和外层那一步下标相同，展开状态按位置记。
+    open.value = (steps ?? []).flatMap((step, position) => (step.wire || step.scriptError ? [position] : []))
   },
   { immediate: true },
 )
@@ -37,10 +38,25 @@ function rootTransport(trace: DevTrace): DevTraceTransport | null {
 }
 
 function stepTitle(step: DevTraceStep): string {
+  const round = step.round ? ` · 第 ${step.round} 轮` : ''
   if (step.method && step.path) {
-    return `${step.type} · ${step.method} ${step.path}`
+    return `${step.type} · ${step.method} ${step.path}${round}`
   }
-  return step.type
+  return `${step.type}${round}`
+}
+
+function branchText(step: DevTraceStep): string {
+  const result = step.result ? '成立' : '不成立'
+  if (step.branch === 'none') return `${result}，没有要执行的分支`
+  return `${result}，执行 ${step.branch}`
+}
+
+function repeatText(step: DevTraceStep): string {
+  const why = step.stopped === 'until' ? 'until 成立后停止' : '跑满 max'
+  const collected = Object.entries(step.collected ?? {})
+    .map(([name, count]) => `${name} ${count} 条`)
+    .join('、')
+  return `${step.rounds} 轮，${why}${step.incomplete ? '，数据可能不全' : ''}${collected ? `；${collected}` : ''}`
 }
 
 function exchangeTitle(item: DevTraceExchange, index: number): string {
@@ -67,7 +83,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
       </dl>
       <el-empty v-if="!trace.steps?.length" :image-size="48" description="没有步骤正文" />
       <el-collapse v-else v-model="open">
-        <el-collapse-item v-for="step in trace.steps" :key="step.index" :name="step.index">
+        <el-collapse-item v-for="(step, position) in trace.steps" :key="position" :name="position">
           <template #title>
             <span>#{{ step.index }} {{ stepTitle(step) }}</span>
             <el-tag v-if="step.status != null" size="small" :type="step.status >= 400 ? 'danger' : 'success'" effect="plain">
@@ -153,6 +169,18 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
             <template v-if="step.assertions?.length">
               <dt>断言</dt>
               <dd>{{ step.assertions.join('、') }}{{ step.passed === false ? '（未通过）' : '' }}</dd>
+            </template>
+            <template v-if="step.conditions?.length">
+              <dt>判断</dt>
+              <dd data-test="step-branch">{{ step.conditions.join('、') }}：{{ branchText(step) }}</dd>
+            </template>
+            <template v-if="step.rounds != null">
+              <dt>循环</dt>
+              <dd data-test="step-repeat">{{ repeatText(step) }}</dd>
+            </template>
+            <template v-if="step.retries?.length">
+              <dt>重试</dt>
+              <dd data-test="step-retries">{{ step.retries.map((item) => item.reason).join('、') }}</dd>
             </template>
           </dl>
           <TransportBlock v-if="step.transport" :transport="step.transport" />

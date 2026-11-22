@@ -1152,7 +1152,7 @@ public final class RuleEngine implements ConchExecutor {
             piece.put("type", "repeat");
             piece.put("rounds", rounds);
             piece.put("stopped", stopped ? "until" : "max");
-            piece.put("truncated", truncated);
+            piece.put("incomplete", truncated);
             LinkedHashMap<String, Object> sizes = new LinkedHashMap<>();
             gathered.forEach((name, list) -> sizes.put(name, list.size()));
             piece.put("collected", sizes);

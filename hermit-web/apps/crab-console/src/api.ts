@@ -373,6 +373,19 @@ export interface DevTraceStep {
   variables?: DevTraceVariable[]
   assertions?: string[]
   passed?: boolean
+  /** `if`：用到的判断键、结果和走的分支（`then`、`else`，没有可走的分支时 `none`）。 */
+  conditions?: string[]
+  result?: boolean
+  branch?: 'then' | 'else' | 'none'
+  /** `repeat` 结束时：跑了几轮、因为什么停下、是否跑满仍没翻完、每个汇总变量的条数。 */
+  rounds?: number
+  stopped?: 'until' | 'max'
+  incomplete?: boolean
+  collected?: Record<string, number>
+  /** `repeat` 里的子步骤是第几轮，从 1 开始。 */
+  round?: number
+  /** request 重试过时，每次一项。`reason` 是 `timeout`、`connect` 或状态码。 */
+  retries?: { attempt: number; reason: string }[]
   /**
    * 这一步失败、又没有 `scriptError` 时的说明。
    * 与调用错误同一句：已脱敏，超过 8 KiB 时截到 4 KiB。不含响应正文。
@@ -644,6 +657,8 @@ export interface ValidationIssue {
    * `QUERY_STYLE` 和 `REQUEST_BODY` 是错误。
    * 提取和 assert 的形状：`EXTRACT_SPEC`、`EXTRACT_FIELD`、`EXTRACT_OPTIONAL`、
    * `ASSERT_KEY`、`ASSERT_STATUS` 是警告，不阻止保存。
+   * `min_crab_version` 不低于 1.9.0 的包里，`IGNORED_REQUEST_FIELD`、`EXTRACT_FIELD`、`ASSERT_KEY` 是错误。
+   * `FLOW_STEP`（`if` / `repeat` 写法）和 `RETRY`（request 的 `retry`）是错误。
    * `HOSTNAME` 是错误（下划线或非 ASCII 主机名）；`SINGLE_LABEL_HOST` 是警告。
    */
   code: string

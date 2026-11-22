@@ -175,7 +175,7 @@ class FlowStepsEngineTest {
         assertThat(hits).hasSize(2);
         assertThat(((Map<?, ?>) result.data()).get("truncated")).isEqualTo(true);
         assertThat((List<?>) ((Map<?, ?>) result.data()).get("all")).hasSize(4);
-        assertThat(trace).contains("\"stopped\":\"max\"").contains("\"truncated\":true");
+        assertThat(trace).contains("\"stopped\":\"max\"").contains("\"incomplete\":true");
     }
 
     @Test

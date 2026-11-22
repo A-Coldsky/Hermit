@@ -1,5 +1,57 @@
 # 规则包（Conch）参考
 
+## 步骤速查
+
+写规则先看这一节，细节在后面各节。`steps` 是列表，每一项是只有一个键的映射，键就是步骤类型。下面每个例子都可以原样复制。
+
+```yaml
+# request：发请求。path 和 url 二选一；body、form、json 三选一。
+- request: {method: POST, path: /api/search, json: {keyword: "{{input.keyword}}"}}
+
+# assert：检查最近一次响应，不成立就失败。
+- assert: {status: 200, not_contains: "登录超时"}
+
+# extract：从最近一次响应取值，键是变量名。css、xpath、jsonpath、regex 选一种。
+- extract:
+    token: {css: "input[name=token]", attr: value}
+    rows: {css: "tr.item", each: {id: {css: ".id"}, title: {css: ".title"}}}
+    next: {css: "a.next", attr: href, optional: true}
+
+# set：写变量。
+- set: {page_size: "20"}
+
+# script：JavaScript，读 vars，return 的值写进 into。
+- script: {into: total, code: "return vars.rows.length;"}
+
+# if：判断键全部成立跑 then，否则跑 else（可以不写）。
+- if:
+    contains: "请再次确认"
+    then:
+      - request: {method: POST, path: /order/confirm}
+    else:
+      - set: {confirmed: "no"}
+
+# repeat：翻页。最多 max 轮；collect 把每一轮的列表接起来；until 成立就停。
+- repeat:
+    max: 20
+    steps:
+      - request: {method: GET, path: /list, query: {page: "{{loop.index}}"}}
+      - extract:
+          rows: {css: "tr.item", each: {id: {css: ".id"}}}
+          next: {css: "a.next", attr: href, optional: true}
+    collect: {all_rows: rows}
+    until: {not_present: next}
+
+# retry：写在 request 里，只用于 GET、HEAD。
+- request: {method: GET, path: /report, retry: {times: 2, delay_ms: 500}}
+```
+
+- 变量用 `{{名字}}` 引用：`{{input.x}}` 入参，`{{credential.x}}` 凭证，`{{config.x}}` 配置，`{{response.status}}` 最近一次响应。
+- 判断键（`if` 和 `until` 用）：`status`、`contains`、`not_contains`、`cookie_exists`、`header_exists` 看最近一次响应；`equals: {变量名: 值}`、`not_equals`、`present: 变量名`、`not_present` 看变量。变量名直接写，不加 `{{ }}`。没有「或」。
+- 用了 `if`、`repeat`、`retry` 的包写 `min_crab_version: 1.9.0`。写 1.9.0 及以上的包，步骤里不认识的键是错误，报错会列出可用的键。
+- `ask`（等用户输入验证码）只能直接写在 `auth.steps` 下。
+- 写完用 `conch_validate` 校验，再试跑；以校验结果为准。
+
 ## 从 HAR 写规则
 
 Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里，由你分析。这一节只讲怎么把它写成 Hermit 能校验的规则。字段是否合法以校验器为准，后面的字段说明是同一份规则的展开。
@@ -176,7 +228,7 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.8.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高 |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.9.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高 |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -272,16 +324,18 @@ actions:
 
 ## 步骤
 
-每个步骤是一个单键映射，支持六类：
+每个步骤是一个单键映射，支持八类：
 
 | 类型 | 示例/能力 |
 | --- | --- |
-| request | method、path/url、query、headers、body/form/json、encoding、follow_redirects、timeout_ms、query_style |
+| request | method、path/url、query、headers、body/form/json、encoding、follow_redirects、timeout_ms、query_style、retry |
 | extract | CSS、XPath、JSONPath、regex；可 each 遍历及 filter 转换 |
 | assert | status、contains、not_contains、cookie_exists、header_exists、not_redirected_to |
 | set | 设置后续步骤/输出使用的变量 |
 | script | JavaScript，对 vars 运算并 return 结果；可指定 into、use 和 credential。失败时写出抛出说明，位置是「本步脚本」或「脚本库「名字」」的行、列 |
 | ask | 只写在 `auth.steps`。停下来等用户在 Crab 控制台输入验证码 |
+| if | 判断键全部成立时执行 `then`，否则执行 `else`。1.9.0 起 |
+| repeat | 把 `steps` 重复最多 `max` 轮，`collect` 汇总列表，`until` 成立就停。1.9.0 起 |
 
 `ask` 只用于登录。一个登录最多两个。字段只有 `into`、`kind`、`label`，以及可选的 `hint`、`timeout_s`。`into` 是模板标识符，不能是保留名，也不能和前面已经声明的名字重复；后面的登录步骤写 `{{into}}`，能力步骤不能写这个名字，它也不进登录快照。`kind` 是 `image` 或 `code`。`image` 的前一步必须是 `request`，那次响应就是验证码图片：只认 PNG、JPEG、GIF、WebP 的魔数，最大 512 KiB，SVG 和超限都是 `AUTH_FAILED`，不进入等待。`label` 必填。`hint` 可选，UTF-8 不超过 256 字节。`timeout_s` 可选，60 到 900 的整数，缺省 300。未知字段拒绝。用了 `ask` 时 `min_crab_version` 不低于 1.4.0。
 
@@ -298,6 +352,113 @@ path 和 url 在拼接前只编码 URI 里非法的字符：空格、控制字�
 写了 `encoding` 时，JSON 正文按该字符集编码。没有在 headers 里声明 Content-Type 时，`Content-Type` 带上这个 charset。表示不了的字符失败，message 为「json 含有编码无法表示的字符」，不会换成问号。没写 `encoding` 时 JSON 仍是 UTF-8。form 正文在没有声明 Content-Type 时仍是 `application/x-www-form-urlencoded` 加 charset。声明了就用声明的值，字节仍然是原来的 form 或 JSON。
 
 这些不阻止保存：请求上引擎不认识的字段（例如 `attachment`）警告「这个字段不会被发送」；query 或 form 的值用了 `urlencode` 警告「这个值用了 urlencode，发出去时会被再编码一次」；query 字面值里已经有百分号编码警告「字面值里的百分号编码会被再编码一次。需要原样发送时，写进 path。」；path 或 url 字面值里有 `#` 警告「# 后面的内容不会发出去」。`query_style` 不是 `url` 或 `form` 是错误「query_style 只允许 url 或 form」，不能保存。只写了 `query_style` 不必把 `min_crab_version` 抬到 1.5.0：旧 Crab 忽略这个字段，查询串仍是表单编码。需要上面的 URL 编码时，再把下限写成 1.5.0。
+
+### 条件、循环和重试
+
+`if`、`repeat` 和 request 的 `retry` 从 1.9.0 起可用，用了其中之一时 `min_crab_version` 必须不低于 1.9.0。登录步骤和能力步骤都能写。
+
+`min_crab_version` 不低于 1.9.0 的包，request、extract、assert 里不认识的键是错误，不再只是警告；报错写出可用的键，拼写接近时提示「是不是想写 X？」。低于 1.9.0 的包保持原来的警告。
+
+#### if
+
+```yaml
+- request: {method: POST, path: /order/submit, form: {id: "{{input.id}}"}}
+- if:
+    contains: "请再次确认"
+    then:
+      - request: {method: POST, path: /order/confirm, form: {id: "{{input.id}}"}}
+    else:
+      - set: {confirmed: "no"}
+```
+
+判断键和 `then`、`else` 写在同一层。判断键至少一个，写了几个就要全部成立；没有「或」，需要时用 `script` 先算出一个变量再判断。
+
+| 判断键 | 成立的条件 |
+| --- | --- |
+| `status: 200` 或 `status: [200, 302]` | 最近一次响应的状态码是其中之一 |
+| `contains: "文字"` | 最近一次响应的正文含有这段文字 |
+| `not_contains: "文字"` | 正文不含这段文字 |
+| `cookie_exists: 名字` | 会话里有这个 Cookie |
+| `header_exists: 名字` | 最近一次响应有这个响应头 |
+| `equals: {变量名: 值}` | 变量转成文本后等于这个值；可以写多个变量 |
+| `not_equals: {变量名: 值}` | 变量不等于这个值，或没有这个变量 |
+| `present: 变量名` 或 `present: [a, b]` | 变量都有值。null、空字符串、空列表、空映射算没有 |
+| `not_present: 变量名` | 变量都没有值 |
+
+前五个和 `assert` 同名同义，但不成立时不会让调用失败，只是走 `else`。前面还没有 request 就用它们，这一步失败。`equals` 的值和字符串判断键可以写模板；变量名直接写名字，可以带点（`user.id`），不写 `{{ }}`。
+
+`then` 必须是非空的步骤列表，`else` 可以不写。子步骤的写法和外层相同，里面可以再写 `if` 和 `repeat`，最多嵌套 3 层。`ask` 不能写在里面。分支里写的变量在 `if` 之后仍然可用；没走到的分支不写变量，后面要用时先用 `set` 给默认值，或用 `default` 过滤器。
+
+#### repeat
+
+```yaml
+- repeat:
+    max: 20
+    steps:
+      - request: {method: GET, path: /list, query: {page: "{{loop.index}}"}}
+      - extract:
+          rows: {css: "tr.item", each: {id: {css: ".id"}, title: {css: ".title"}}}
+          next: {css: "a.next", attr: href, optional: true}
+    collect: {all_rows: rows}
+    until: {not_present: next}
+```
+
+| 键 | 说明 |
+| --- | --- |
+| `max` | 必填。最多执行的轮数，1 到 100 的整数，直接写数字，不能用模板 |
+| `steps` | 必填。每一轮执行的步骤列表 |
+| `collect` | 可选。`{汇总后的变量名: 每一轮的列表变量名}`。每一轮结束时把右边的列表接到左边；右边没有值时跳过，不是列表时失败 |
+| `until` | 可选。判断键的映射，每一轮结束时判断，成立就停。不写就固定跑 `max` 轮 |
+
+每一轮里 `{{loop.index}}` 是轮次，从 1 开始。`loop` 是保留名，不能用 `set`、`extract`、`collect` 写它。每一轮写的变量会覆盖上一轮的，要留下来的列表写进 `collect`。汇总后的变量在 `repeat` 结束之后才有，循环里面读不到。
+
+`repeat` 结束之后：`{{loop.rounds}}` 是实际跑的轮数；`{{loop.truncated}}` 在写了 `until`、跑满 `max` 仍没成立时是 `true`，这时已经拿到的数据照常返回，调用不失败。数据可能不全时，把它放进输出告诉调用方：
+
+```yaml
+- set: {truncated: "{{loop.truncated}}"}
+```
+
+`repeat` 里不能再写 `repeat`，可以写 `if`。整个循环仍受能力总超时（默认 60 秒）约束，超时时调用失败；翻页多的列表把 `max` 定在一次调用里跑得完的范围内，让调用方用入参传起始页。任何一轮里的步骤失败，整次调用失败。
+
+#### retry
+
+```yaml
+- request:
+    method: GET
+    path: /report
+    retry: {times: 2, delay_ms: 500, on: [timeout, connect, 502, 503, 504]}
+```
+
+| 键 | 说明 |
+| --- | --- |
+| `times` | 必填。失败后再试的次数，1 到 3。`times: 2` 最多一共发 3 次 |
+| `delay_ms` | 可选。两次之间等多久，0 到 5000，默认 0 |
+| `on` | 可选。哪些失败要再试：`timeout`（这一步的 `timeout_ms` 到了）、`connect`（连不上或连接中断）、500 到 599 的状态码（数字）。默认 `[timeout, connect, 502, 503, 504]` |
+
+`retry` 只能写在 GET、HEAD 请求上。会重复提交的请求不能自动再试；能力确实可以重复提交时，在能力上写 `idempotent: true`，这个能力里的其它方法才能写 `retry`。登录步骤里只有 GET、HEAD 能写，`alive_check` 不能写。
+
+次数用完后，按最后一次的结果继续：还是失败就按原来的方式失败。再试之前如果剩下的能力时间不够等 `delay_ms`，不再试。能力总超时到了不算 `timeout`，调用直接失败。连接复用失败时 GET 自动再发一次的行为不变，不占 `times`。
+
+#### 常见写错
+
+| 写错的 | 正确的 |
+| --- | --- |
+| `if: "{{count}} > 0"`（表达式） | `if: {present: rows, then: [...]}`；比较大小用 `script` 先算成变量 |
+| `then` 写在 `if` 外面、和 `if` 并列 | `then`、`else` 和判断键都在 `if:` 下面同一层 |
+| `present: "{{next}}"` | `present: next` |
+| `equals: [state, done]` | `equals: {state: "done"}` |
+| `elif`、`else if` | 在 `else` 里再写一个 `if` |
+| `while`、`for`、`foreach` | `repeat` 加 `until`；停下的条件是「成立就停」，和 while 相反 |
+| `repeat` 不写 `max` | `max` 必填 |
+| `collect: [rows]` 或 `collect: {all_rows: "{{rows}}"}` | `collect: {all_rows: rows}` |
+| 在循环里读 `{{all_rows}}` | 汇总变量在 `repeat` 之后才有 |
+| `{{loop.index}}` 当成从 0 开始 | 从 1 开始；要 0 起的偏移量用 `script` 计算 |
+| `retry: 3` | `retry: {times: 3}` |
+| `retry` 写在步骤外层或能力上 | 写在 `request:` 里面，和 `method` 同一层 |
+| `on: ["503"]` | 状态码写数字：`on: [503]` |
+| POST 上写 `retry` | 只用于 GET、HEAD；能力可以重复提交时写 `idempotent: true` |
+
+开发追踪：`if` 记一条 `conditions`（用到的判断键）、`result` 和 `branch`（`then`、`else`，或没有可走的分支时 `none`）；`repeat` 结束时记一条 `rounds`、`stopped`（`until` 或 `max`）、`incomplete`（等于 `loop.truncated`）和 `collected`（每个汇总变量的条数）。子步骤各自记录，下标是外层那一步的下标，循环里的带 `round`。重试过的 request 带 `retries`，每次一项 `{attempt, reason}`。调用失败时，`failedStepIndex` 是外层那一步的下标，`failedStepType` 是实际失败的子步骤类型。
 
 ### 上传和下载文件
 

@@ -162,10 +162,18 @@ final class HttpCalls {
             mode.bodyLimit = FileSteps.scope().stage().settings().maxFileBytes();
         }
         FILE_MODE.set(mode);
+        HttpResult result = null;
         try {
-            return run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle);
+            result = run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle);
+            return result;
         } finally {
             FILE_MODE.remove();
+            // 收到一半就失败的，或者收完但没有交给调用方的，都不留在暂存区。
+            for (dev.hermit.crab.files.FileStage.Spool spool : mode.spools) {
+                if (result == null || spool != result.spool()) {
+                    spool.discard();
+                }
+            }
         }
     }
 
@@ -175,6 +183,8 @@ final class HttpCalls {
         /** 大于 0 时是 download：响应正文按文件收，不解码成文本。 */
         long bodyLimit;
         String wireBody;
+        /** 这次请求里开始收的文件，包括跟随跳转时前几跳的。 */
+        final ArrayList<dev.hermit.crab.files.FileStage.Spool> spools = new ArrayList<>();
     }
 
     private static HttpResult run(
@@ -613,7 +623,8 @@ final class HttpCalls {
                         redirect,
                         read.bytes(),
                         stepWarnings,
-                        captured.get());
+                        captured.get(),
+                        read.spool());
                 if (read.endedByIdle()) {
                     kept.set(built);
                 }
@@ -822,7 +833,7 @@ final class HttpCalls {
     ) throws IOException {
         if (entity == null) {
             ensureWithinDeadline(deadlineNanos, request);
-            return new BodyBytes(new byte[0], false);
+            return new BodyBytes(new byte[0], false, null);
         }
         FileMode mode = FILE_MODE.get();
         boolean asFile = mode != null && mode.bodyLimit > 0 && status >= 200 && status < 300;
@@ -836,6 +847,16 @@ final class HttpCalls {
         // 只有保持连接又没有长度时，才按相邻读取的空闲截断。
         boolean indefinite = persistent && declared < 0 && !entity.isChunked();
         IdleWatch watch = indefinite ? new IdleWatch(bodyIdle, request) : null;
+        // 文件边读边写进暂存区，不在内存里攒整份；大小和 SHA-256 在写的时候算。
+        dev.hermit.crab.files.FileStage.Spool spool = null;
+        if (asFile) {
+            try {
+                spool = FileSteps.scope().stage().spool();
+            } catch (dev.hermit.crab.files.FileStageException ex) {
+                throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, ex.getMessage(), method, path, status);
+            }
+            mode.spools.add(spool);
+        }
         InputStream in = entity.getContent();
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -862,7 +883,7 @@ final class HttpCalls {
                                     "文件没有收完：上游没有给出长度，传到一半停住了",
                                     method, path, status);
                         }
-                        return new BodyBytes(out.toByteArray(), true);
+                        return new BodyBytes(out.toByteArray(), true, null);
                     }
                     throw ex;
                 }
@@ -870,7 +891,7 @@ final class HttpCalls {
                     watch.disarm();
                 }
                 if (read < 0) {
-                    return new BodyBytes(out.toByteArray(), false);
+                    return new BodyBytes(asFile ? new byte[0] : out.toByteArray(), false, spool);
                 }
                 if (System.nanoTime() >= deadlineNanos) {
                     request.cancel();
@@ -880,7 +901,15 @@ final class HttpCalls {
                 if (total > limit) {
                     throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, tooLarge, method, path, status);
                 }
-                out.write(buffer, 0, read);
+                if (spool == null) {
+                    out.write(buffer, 0, read);
+                    continue;
+                }
+                try {
+                    spool.write(buffer, 0, read);
+                } catch (dev.hermit.crab.files.FileStageException ex) {
+                    throw new RuleProblem(ErrorCode.UPSTREAM_ERROR, ex.getMessage(), method, path, status);
+                }
             }
         } finally {
             if (watch != null) {
@@ -945,7 +974,7 @@ final class HttpCalls {
         }
     }
 
-    private record BodyBytes(byte[] bytes, boolean endedByIdle) {
+    private record BodyBytes(byte[] bytes, boolean endedByIdle, dev.hermit.crab.files.FileStage.Spool spool) {
     }
 
     private static void ensureWithinDeadline(long deadlineNanos, Cancellable request) {
@@ -1462,7 +1491,8 @@ final class HttpCalls {
             String redirect,
             byte[] bodyBytes,
             List<TraceWarning> warnings,
-            Map<String, Object> wire
+            Map<String, Object> wire,
+            dev.hermit.crab.files.FileStage.Spool spool
     ) {
         private HttpResult toResult(boolean sessionLost, List<TraceWarning> all) {
             return new HttpResult(
@@ -1476,7 +1506,8 @@ final class HttpCalls {
                     sessionLost,
                     bodyBytes,
                     List.copyOf(all),
-                    wire);
+                    wire,
+                    spool);
         }
     }
 }
@@ -1492,7 +1523,9 @@ record HttpResult(
         boolean sessionLost,
         byte[] bodyBytes,
         List<TraceWarning> warnings,
-        Map<String, Object> wire
+        Map<String, Object> wire,
+        /** download 收到的文件，还没有提交进暂存区；不是 download 或没有正文时为 null。 */
+        dev.hermit.crab.files.FileStage.Spool spool
 ) {
     Map<String, Object> view() {
         LinkedHashMap<String, Object> view = new LinkedHashMap<>();

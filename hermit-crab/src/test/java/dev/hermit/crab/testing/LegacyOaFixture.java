@@ -71,6 +71,9 @@ public final class LegacyOaFixture implements AutoCloseable {
 
     /** 文件暂存区测试：/files/report.bin 返回这些字节，/files/upload 记下收到的 multipart。 */
     public volatile byte[] fileBytes = new byte[] {0, 1, 2, (byte) 0xff};
+    public volatile boolean fileChunked;
+    /** 不小于 0 时只发这么多字节就断开。 */
+    public volatile int fileCutAfter = -1;
     public volatile String uploadType;
     public volatile byte[] uploadBody;
 
@@ -188,9 +191,18 @@ public final class LegacyOaFixture implements AutoCloseable {
             exchange.getResponseHeaders().add("Content-Type", "application/pdf");
             exchange.getResponseHeaders().add(
                     "Content-Disposition", "attachment; filename*=UTF-8''%E6%8A%A5%E8%A1%A8.pdf");
-            exchange.sendResponseHeaders(200, bytes.length);
+            // 0 是分块编码，没有 Content-Length。
+            exchange.sendResponseHeaders(200, fileChunked ? 0 : bytes.length);
+            int send = fileCutAfter >= 0 ? Math.min(fileCutAfter, bytes.length) : bytes.length;
             try (java.io.OutputStream out = exchange.getResponseBody()) {
-                out.write(bytes);
+                out.write(bytes, 0, send);
+                out.flush();
+                if (send < bytes.length) {
+                    // 声明了长度却提前断开。
+                    exchange.close();
+                }
+            } catch (IOException ignored) {
+                // 提前断开时关闭流会报长度不符，这正是要模拟的情况。
             }
             return;
         }

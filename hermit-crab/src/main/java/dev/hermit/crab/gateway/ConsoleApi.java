@@ -22,6 +22,7 @@ import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.validate.ValidationIssue;
+import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.LoginPause;
 import dev.hermit.crab.runtime.ApiEnvelope;
@@ -164,9 +165,15 @@ final class ConsoleApi {
     private static void conches(CrabRuntime runtime, Context ctx) {
         Map<String, ConchCatalog.Entry> catalog = catalogByName(runtime);
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
-        for (ConchDoc doc : runtime.registry().snapshot().values()) {
-            List<Account> accounts = runtime.admin().listAccounts(doc.conch());
-            boolean loginPaused = loginPaused(runtime, doc, accounts);
+        for (String name : runtime.registry().snapshot().keySet()) {
+            ConchRegistry.Active active = runtime.registry().active(name).orElse(null);
+            if (active == null) {
+                continue;
+            }
+            ConchDoc doc = active.doc();
+            Origin source = active.origin();
+            List<Account> accounts = runtime.admin().listAccounts(source, doc.conch());
+            boolean loginPaused = loginPaused(runtime, source, doc, accounts);
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("conch", doc.conch());
             row.put("version", doc.version().toString());
@@ -175,12 +182,12 @@ final class ConsoleApi {
             row.put("capabilityCount", doc.actions().size());
             row.put("subscribed", runtime.subscribed(doc.conch()));
             row.put("accountCount", accounts.size());
-            row.put("needsConfiguration", needsConfiguration(runtime, doc, accounts, loginPaused));
+            row.put("needsConfiguration", needsConfiguration(runtime, source, doc, accounts, loginPaused));
             row.put("loginPaused", loginPaused);
-            row.put("source", source(runtime, doc.conch()));
+            row.put("source", sourceLabel(source));
             row.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
             putSources(runtime, doc.conch(), row);
-            putReefDisabled(runtime, doc.conch(), row);
+            putReefDisabled(runtime, source, doc.conch(), row);
             putUpdateFields(catalog.get(doc.conch()), row);
             putPrevious(runtime, doc.conch(), row);
             rows.add(row);
@@ -191,8 +198,8 @@ final class ConsoleApi {
 
     private static void conch(CrabRuntime runtime, Context ctx) {
         String name = ctx.pathParam("conch");
-        ConchDoc doc = runtime.registry().find(name).orElse(null);
-        if (doc == null) {
+        ConchRegistry.Active active = runtime.registry().active(name).orElse(null);
+        if (active == null) {
             ConchSync sync = runtime.conchSync();
             ConchSync.UntrustedSignature damaged = sync == null ? null : sync.untrustedSignature(name).orElse(null);
             if (damaged != null) {
@@ -211,21 +218,23 @@ final class ConsoleApi {
             }
             throw new IllegalArgumentException("conch not found");
         }
+        ConchDoc doc = active.doc();
+        Origin source = active.origin();
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", doc.conch());
         body.put("version", doc.version().toString());
         body.put("title", text(doc.title()));
         body.put("description", text(doc.description()));
         putPackageShape(runtime, doc, body);
-        List<Account> accounts = runtime.admin().listAccounts(doc.conch());
-        boolean paused = loginPaused(runtime, doc, accounts);
+        List<Account> accounts = runtime.admin().listAccounts(source, doc.conch());
+        boolean paused = loginPaused(runtime, source, doc, accounts);
         body.put("subscribed", runtime.subscribed(doc.conch()));
-        body.put("needsConfiguration", needsConfiguration(runtime, doc, accounts, paused));
+        body.put("needsConfiguration", needsConfiguration(runtime, source, doc, accounts, paused));
         body.put("loginPaused", paused);
-        body.put("source", source(runtime, doc.conch()));
+        body.put("source", sourceLabel(source));
         body.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
         putSources(runtime, doc.conch(), body);
-        putReefDisabled(runtime, doc.conch(), body);
+        putReefDisabled(runtime, source, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
         putPrevious(runtime, doc.conch(), body);
         body.put("ruleDisabled", false);
@@ -326,7 +335,7 @@ final class ConsoleApi {
     }
 
     private static Map<String, Object> disabledSummary(CrabRuntime runtime, ConchSync.DisabledRule disabled) {
-        List<Account> accounts = runtime.admin().listAccounts(disabled.conch());
+        List<Account> accounts = runtime.admin().listAccounts(Origin.OFFICIAL, disabled.conch());
         ConchCatalog.Entry catalog = catalogByName(runtime).get(disabled.conch());
         LinkedHashMap<String, Object> row = new LinkedHashMap<>();
         row.put("conch", disabled.conch());
@@ -445,12 +454,14 @@ final class ConsoleApi {
     }
 
     private static void accounts(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        ConchDoc doc = active.doc();
+        Origin source = active.origin();
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
-        for (Account account : runtime.admin().listAccounts(doc.conch())) {
-            List<String> missing = runtime.admin().missingCredentials(doc, account.account());
-            boolean unreadable = runtime.admin().credentialsUnreadable(doc.conch(), account.account());
-            boolean paused = runtime.admin().loginPaused(doc.conch(), account.account());
+        for (Account account : runtime.admin().listAccounts(source, doc.conch())) {
+            List<String> missing = runtime.admin().missingCredentials(source, doc, account.account());
+            boolean unreadable = runtime.admin().credentialsUnreadable(source, doc.conch(), account.account());
+            boolean paused = runtime.admin().loginPaused(source, doc.conch(), account.account());
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("name", account.account());
             row.put("default", account.defaultAccount());
@@ -466,50 +477,54 @@ final class ConsoleApi {
             row.put("loginPaused", paused);
             row.put("loginPauseReason", paused ? LoginPause.REASON : null);
             row.put("loginPauseRecovery", paused ? LoginPause.RECOVERY : null);
-            PendingLogins.View loginInput = runtime.admin().loginInput(doc.conch(), account.account());
+            PendingLogins.View loginInput = runtime.admin().loginInput(source, doc.conch(), account.account());
             row.put("loginInputRequired", loginInput != null);
             row.put("loginInputExpiresAt",
                     loginInput == null ? null : DateTimeFormatter.ISO_INSTANT.format(loginInput.expiresAt()));
-            row.put("oauth", oauthStatus(runtime, doc, account.account()));
+            row.put("oauth", oauthStatus(runtime, source, doc, account.account()));
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("accounts", rows));
     }
 
     private static void createAccount(CrabRuntime runtime, Context ctx) throws Exception {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
         String name = requiredText(object(ctx), "name");
-        Account account = runtime.admin().createAccount(doc.conch(), name, Actors.CONSOLE);
+        Account account = runtime.admin().createAccount(active.origin(), active.doc().conch(), name, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("name", account.account(), "default", account.defaultAccount()));
     }
 
     private static void deleteAccount(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
-        runtime.admin().deleteAccount(doc.conch(), ctx.pathParam("account"), Actors.CONSOLE);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        runtime.admin().deleteAccount(active.origin(), active.doc().conch(), ctx.pathParam("account"), Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("deleted", true));
     }
 
     private static void defaultAccount(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
         String name = ctx.pathParam("account");
-        runtime.admin().setDefault(doc.conch(), name, Actors.CONSOLE);
+        runtime.admin().setDefault(active.origin(), active.doc().conch(), name, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("name", name, "default", true));
     }
 
     private static void credentialNames(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        ConchDoc doc = active.doc();
+        Origin source = active.origin();
         String account = ctx.pathParam("account");
-        runtime.admin().requireAccount(doc.conch(), account);
-        ArrayList<String> names = new ArrayList<>(runtime.admin().credentialNames(doc.conch(), account));
+        runtime.admin().requireAccount(source, doc.conch(), account);
+        ArrayList<String> names = new ArrayList<>(runtime.admin().credentialNames(source, doc.conch(), account));
         names.remove(McpOAuthToken.FIELD);
         names.sort(String::compareTo);
         GatewayResponses.writeData(ctx, Map.of("fields", names));
     }
 
     private static void writeCredentials(CrabRuntime runtime, Context ctx) throws Exception {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        ConchDoc doc = active.doc();
+        Origin source = active.origin();
         String account = ctx.pathParam("account");
-        runtime.admin().requireAccount(doc.conch(), account);
+        runtime.admin().requireAccount(source, doc.conch(), account);
         Map<String, String> fields = stringMap(object(ctx));
         if (fields.isEmpty()) {
             List<String> required = DeclaredSettings.missingCredentials(doc, Set.of());
@@ -519,9 +534,9 @@ final class ConsoleApi {
             throw new RequestOnlyException(400, ErrorCode.INVALID_INPUT,
                     CredentialMessages.missing(account, required, doc.credentials()));
         }
-        if (runtime.admin().credentialsUnreadable(doc.conch(), account)) {
+        if (runtime.admin().credentialsUnreadable(source, doc.conch(), account)) {
             ArrayList<String> pending = new ArrayList<>();
-            for (String name : new TreeSet<>(runtime.admin().credentialNames(doc.conch(), account))) {
+            for (String name : new TreeSet<>(runtime.admin().credentialNames(source, doc.conch(), account))) {
                 if (McpOAuthToken.FIELD.equals(name)) {
                     continue;
                 }
@@ -534,7 +549,7 @@ final class ConsoleApi {
                 throw new IllegalArgumentException(CredentialDecryptException.MESSAGE + ": " + String.join(", ", pending));
             }
         }
-        LinkedHashSet<String> present = new LinkedHashSet<>(runtime.admin().credentialNames(doc.conch(), account));
+        LinkedHashSet<String> present = new LinkedHashSet<>(runtime.admin().credentialNames(source, doc.conch(), account));
         for (Map.Entry<String, String> entry : fields.entrySet()) {
             if (entry.getValue().isEmpty()) {
                 present.remove(entry.getKey());
@@ -547,7 +562,7 @@ final class ConsoleApi {
             throw new RequestOnlyException(400, ErrorCode.INVALID_INPUT,
                     CredentialMessages.missing(account, missing, doc.credentials()));
         }
-        runtime.admin().writeCredentials(doc, account, fields, Actors.CONSOLE);
+        runtime.admin().writeCredentials(source, doc, account, fields, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("updated", true));
     }
 
@@ -557,13 +572,15 @@ final class ConsoleApi {
 
     private static void testLogin(CrabRuntime runtime, Context ctx) {
         String name = ctx.pathParam("conch");
-        if (runtime.registry().find(name).isEmpty() && runtime.ruleDisabled(name)) {
+        ConchRegistry.Active live = runtime.registry().active(name).orElse(null);
+        if (live == null && runtime.ruleDisabled(name)) {
             GatewayResponses.writeRequestError(ctx, 409, ErrorCode.CONCH_DISABLED,
                     runtime.localRuleDisabled(name) ? TEST_LOGIN_DISABLED_LOCAL : TEST_LOGIN_DISABLED);
             return;
         }
-        ConchDoc doc = requireConch(runtime, ctx);
-        ExecutionResult result = runtime.admin().testLogin(doc, ctx.pathParam("account"), GatewayResponses.trace(ctx), Actors.CONSOLE);
+        ConchRegistry.Active active = live != null ? live : requireActiveConch(runtime, ctx);
+        ExecutionResult result = runtime.admin().testLogin(
+                active.origin(), active.doc(), ctx.pathParam("account"), GatewayResponses.trace(ctx), Actors.CONSOLE);
         if (result.success()) {
             GatewayResponses.writeData(ctx, result.data());
             return;
@@ -574,8 +591,8 @@ final class ConsoleApi {
     }
 
     private static void loginInput(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
-        PendingLogins.View view = runtime.admin().loginInput(doc.conch(), ctx.pathParam("account"));
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        PendingLogins.View view = runtime.admin().loginInput(active.origin(), active.doc().conch(), ctx.pathParam("account"));
         if (view == null) {
             GatewayResponses.writeRequestError(ctx, 404, ErrorCode.NOT_FOUND, LoginInputMessages.NONE);
             return;
@@ -584,11 +601,13 @@ final class ConsoleApi {
     }
 
     private static void loginInputImage(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        ConchDoc doc = active.doc();
+        Origin source = active.origin();
         String account = ctx.pathParam("account");
-        PendingLogins.Image image = runtime.admin().loginInputImage(doc.conch(), account);
+        PendingLogins.Image image = runtime.admin().loginInputImage(source, doc.conch(), account);
         if (image == null) {
-            PendingLogins.View view = runtime.admin().loginInput(doc.conch(), account);
+            PendingLogins.View view = runtime.admin().loginInput(source, doc.conch(), account);
             GatewayResponses.writeRequestError(
                     ctx,
                     404,
@@ -601,7 +620,7 @@ final class ConsoleApi {
     }
 
     private static void submitLoginInput(CrabRuntime runtime, Context ctx) throws Exception {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
         JsonNode body = object(ctx);
         JsonNode node = body.get("value");
         if (node == null || !node.isTextual()) {
@@ -609,20 +628,22 @@ final class ConsoleApi {
             return;
         }
         ExecutionResult result = runtime.admin().submitLoginInput(
-                doc, ctx.pathParam("account"), GatewayResponses.trace(ctx), node.textValue());
+                active.origin(), active.doc(), ctx.pathParam("account"), GatewayResponses.trace(ctx), node.textValue());
         writeLoginResult(ctx, result);
     }
 
     private static void resendLoginInput(CrabRuntime runtime, Context ctx) throws Exception {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        ConchDoc doc = active.doc();
+        Origin source = active.origin();
         object(ctx);
         ExecutionResult result = runtime.admin().resendLoginInput(
-                doc, ctx.pathParam("account"), GatewayResponses.trace(ctx));
+                source, doc, ctx.pathParam("account"), GatewayResponses.trace(ctx));
         if (!result.success()) {
             writeLoginResult(ctx, result);
             return;
         }
-        PendingLogins.View view = runtime.admin().loginInput(doc.conch(), ctx.pathParam("account"));
+        PendingLogins.View view = runtime.admin().loginInput(source, doc.conch(), ctx.pathParam("account"));
         if (view == null) {
             GatewayResponses.writeData(ctx, Map.of("ok", true));
             return;
@@ -631,8 +652,8 @@ final class ConsoleApi {
     }
 
     private static void abandonLoginInput(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
-        runtime.admin().abandonLoginInput(doc.conch(), ctx.pathParam("account"));
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        runtime.admin().abandonLoginInput(active.origin(), active.doc().conch(), ctx.pathParam("account"));
         GatewayResponses.writeData(ctx, Map.of("abandoned", true));
     }
 
@@ -659,10 +680,10 @@ final class ConsoleApi {
     }
 
     private static void oauthStart(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
         McpOAuth.Start start = runtime.oauth().start(
-                origin(runtime, doc.conch()),
-                doc,
+                active.origin(),
+                active.doc(),
                 ctx.pathParam("account"),
                 redirectUri(ctx),
                 System.nanoTime() + McpOAuth.START_BUDGET_NANOS);
@@ -674,9 +695,9 @@ final class ConsoleApi {
     }
 
     private static void oauthDisconnect(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
         McpOAuth.Outcome outcome = runtime.oauth().disconnect(
-                origin(runtime, doc.conch()), doc, ctx.pathParam("account"));
+                active.origin(), active.doc(), ctx.pathParam("account"));
         if (!outcome.ok()) {
             GatewayResponses.writeError(ctx, StatusCodes.of(outcome.code()), outcome.code(), outcome.message());
             return;
@@ -706,8 +727,8 @@ final class ConsoleApi {
                 McpOAuth.page(callback));
     }
 
-    private static Object oauthStatus(CrabRuntime runtime, ConchDoc doc, String account) {
-        McpOAuth.Status status = runtime.oauth().status(origin(runtime, doc.conch()), doc, account);
+    private static Object oauthStatus(CrabRuntime runtime, Origin source, ConchDoc doc, String account) {
+        McpOAuth.Status status = runtime.oauth().status(source, doc, account);
         if (!status.applicable()) {
             return null;
         }
@@ -732,13 +753,11 @@ final class ConsoleApi {
         return "http://" + host + ":" + port + "/console/oauth/callback";
     }
 
-    private static Origin origin(CrabRuntime runtime, String conch) {
-        return runtime.admin().originOf(conch);
-    }
-
     private static void config(CrabRuntime runtime, Context ctx) {
-        ConchDoc doc = requireConch(runtime, ctx);
-        Map<String, String> stored = runtime.admin().storedConfig(doc.conch());
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        ConchDoc doc = active.doc();
+        Origin source = active.origin();
+        Map<String, String> stored = runtime.admin().storedConfig(source, doc.conch());
         List<String> missing = DeclaredSettings.missingConfig(doc, stored);
         LinkedHashMap<String, Object> fields = new LinkedHashMap<>();
         for (Map.Entry<String, ConfigField> entry : doc.config().entrySet()) {
@@ -758,9 +777,9 @@ final class ConsoleApi {
     }
 
     private static void writeConfig(CrabRuntime runtime, Context ctx) throws Exception {
-        ConchDoc doc = requireConch(runtime, ctx);
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
         // 先全部校验再一次写入：后面某项不合法时，前面的项也不生效。
-        runtime.admin().putConfigs(doc, stringMap(object(ctx)), Actors.CONSOLE);
+        runtime.admin().putConfigs(active.origin(), active.doc(), stringMap(object(ctx)), Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of("updated", true));
     }
 
@@ -1697,16 +1716,19 @@ final class ConsoleApi {
     }
 
     private static String source(CrabRuntime runtime, String conch) {
-        return runtime.registry().origin(conch) == Origin.LOCAL ? "LOCAL" : "REEF";
+        return sourceLabel(runtime.registry().origin(conch));
+    }
+
+    private static String sourceLabel(Origin origin) {
+        return origin == Origin.LOCAL ? "LOCAL" : "REEF";
     }
 
     /**
      * Reef dropped this official conch from the manifest. The installed copy stays in the list.
      * {@code reefDisabledAt} is the first time this Crab recorded the tombstone.
      */
-    private static void putReefDisabled(CrabRuntime runtime, String conch, Map<String, Object> row) {
-        boolean reefDisabled = runtime.registry().origin(conch) != Origin.LOCAL
-                && runtime.disabledConches().contains(conch);
+    private static void putReefDisabled(CrabRuntime runtime, Origin source, String conch, Map<String, Object> row) {
+        boolean reefDisabled = source != Origin.LOCAL && runtime.disabledConches().contains(conch);
         row.put("reefDisabled", reefDisabled);
         row.put("reefDisabledAt", reefDisabled ? runtime.disabledConches().disabledAt(conch) : null);
     }
@@ -1730,34 +1752,34 @@ final class ConsoleApi {
     }
 
     /**
-     * Loaded package, or a verified file the current validator will not load.
+     * Loaded package (with its origin read atomically), or a verified file the current validator will not load.
      * Account and config calls keep working while the package is disabled. The gateway still refuses calls.
      */
-    private static ConchDoc requireConch(CrabRuntime runtime, Context ctx) {
+    private static ConchRegistry.Active requireActiveConch(CrabRuntime runtime, Context ctx) {
         String name = ctx.pathParam("conch");
-        ConchDoc doc = runtime.registry().find(name).orElse(null);
-        if (doc != null) {
-            return doc;
+        ConchRegistry.Active live = runtime.registry().active(name).orElse(null);
+        if (live != null) {
+            return live;
         }
         ConchSync sync = runtime.conchSync();
         if (sync != null) {
-            doc = sync.readableInstalled(name).orElse(null);
+            ConchDoc doc = sync.readableInstalled(name).orElse(null);
             if (doc != null) {
-                return doc;
+                return new ConchRegistry.Active(doc, Origin.OFFICIAL);
             }
         }
         if (runtime.localConches() != null) {
-            doc = runtime.localConches().readableDoc(name).orElse(null);
+            ConchDoc doc = runtime.localConches().readableDoc(name).orElse(null);
             if (doc != null) {
-                return doc;
+                return new ConchRegistry.Active(doc, Origin.LOCAL);
             }
         }
         throw new IllegalArgumentException("conch not found");
     }
 
-    private static boolean loginPaused(CrabRuntime runtime, ConchDoc doc, List<Account> accounts) {
+    private static boolean loginPaused(CrabRuntime runtime, Origin source, ConchDoc doc, List<Account> accounts) {
         for (Account account : accounts) {
-            if (runtime.admin().loginPaused(doc.conch(), account.account())) {
+            if (runtime.admin().loginPaused(source, doc.conch(), account.account())) {
                 return true;
             }
         }
@@ -1770,16 +1792,22 @@ final class ConsoleApi {
      * automatic login paused. An existing account may leave {@code required: false} credentials unset.
      * Account rows do not use this method.
      */
-    private static boolean needsConfiguration(CrabRuntime runtime, ConchDoc doc, List<Account> accounts, boolean loginPaused) {
+    private static boolean needsConfiguration(
+            CrabRuntime runtime,
+            Origin source,
+            ConchDoc doc,
+            List<Account> accounts,
+            boolean loginPaused
+    ) {
         if (accounts.isEmpty() || loginPaused) {
             return true;
         }
-        if (!DeclaredSettings.missingConfig(doc, runtime.admin().storedConfig(doc.conch())).isEmpty()) {
+        if (!DeclaredSettings.missingConfig(doc, runtime.admin().storedConfig(source, doc.conch())).isEmpty()) {
             return true;
         }
         for (Account account : accounts) {
-            if (!runtime.admin().missingCredentials(doc, account.account()).isEmpty()
-                    || runtime.admin().credentialsUnreadable(doc.conch(), account.account())) {
+            if (!runtime.admin().missingCredentials(source, doc, account.account()).isEmpty()
+                    || runtime.admin().credentialsUnreadable(source, doc.conch(), account.account())) {
                 return true;
             }
         }

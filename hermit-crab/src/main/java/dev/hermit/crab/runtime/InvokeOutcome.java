@@ -9,6 +9,7 @@ public final class InvokeOutcome {
     private final boolean replayed;
     private final McpCallPayload mcpCall;
     private final boolean requestOnly;
+    private final String allowMethod;
 
     public InvokeOutcome(int status, byte[] body, String traceId, boolean replayed) {
         this(status, body, traceId, replayed, null);
@@ -26,12 +27,25 @@ public final class InvokeOutcome {
             McpCallPayload mcpCall,
             boolean requestOnly
     ) {
+        this(status, body, traceId, replayed, mcpCall, requestOnly, null);
+    }
+
+    public InvokeOutcome(
+            int status,
+            byte[] body,
+            String traceId,
+            boolean replayed,
+            McpCallPayload mcpCall,
+            boolean requestOnly,
+            String allowMethod
+    ) {
         this.status = status;
         this.body = body;
         this.traceId = traceId;
         this.replayed = replayed;
         this.mcpCall = mcpCall;
         this.requestOnly = requestOnly;
+        this.allowMethod = allowMethod;
     }
 
     public int status() {
@@ -58,6 +72,11 @@ public final class InvokeOutcome {
     /** 上游 MCP 结果。HTTP 回放没有这份实时载荷，信封里的 data 已经够用。 */
     public McpCallPayload mcpCall() {
         return mcpCall;
+    }
+
+    /** 405 时允许的 HTTP 方法名（写入响应头 {@code Allow}），其它响应为 null。 */
+    public String allowMethod() {
+        return allowMethod;
     }
 
     @Override

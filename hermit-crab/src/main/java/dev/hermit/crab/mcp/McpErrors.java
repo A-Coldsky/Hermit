@@ -12,6 +12,8 @@ import io.modelcontextprotocol.spec.ProtocolVersions;
 final class McpErrors {
     /** Server-error range. Auth failures are HTTP 401 plus this JSON-RPC code. */
     static final int AUTH_RPC = -32001;
+    /** Too many concurrent SSE streams on one session. HTTP 429 plus this JSON-RPC code. */
+    static final int TOO_MANY_STREAMS_RPC = -32002;
     /** Disallowed Origin. HTTP 403 plus this JSON-RPC code. */
     static final int ORIGIN_RPC = -32003;
 
@@ -25,6 +27,7 @@ final class McpErrors {
     static final String INVALID_PARAMS = "INVALID_PARAMS";
     static final String METHOD_NOT_FOUND = "METHOD_NOT_FOUND";
     static final String REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE";
+    static final String TOO_MANY_STREAMS = "TOO_MANY_STREAMS";
     static final String NOT_FOUND = "NOT_FOUND";
     static final String INTERNAL = "INTERNAL";
     static final String ORIGIN_REJECTED = "ORIGIN_REJECTED";
@@ -126,6 +129,15 @@ final class McpErrors {
                 REQUEST_TOO_LARGE,
                 "请求体过大。请缩小请求体后重试。",
                 "缩小请求体，使其不超过网关上限。");
+    }
+
+    static Failure tooManyStreams() {
+        return new Failure(
+                429,
+                TOO_MANY_STREAMS_RPC,
+                TOO_MANY_STREAMS,
+                "这个会话同时打开的事件流太多。请关闭闲置连接后再试。",
+                "每个会话最多同时保持 " + McpSession.MAX_SINKS + " 条 GET /mcp 连接，关闭多余连接后再试。");
     }
 
     static Failure devModeClosed() {

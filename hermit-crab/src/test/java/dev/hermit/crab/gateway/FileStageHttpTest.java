@@ -97,6 +97,10 @@ class FileStageHttpTest {
                 assertThat(got.statusCode()).isEqualTo(200);
                 assertThat(got.body()).containsExactly(server.fixture.fileBytes);
                 assertThat(got.headers().firstValue("Content-Disposition").orElse("")).contains("attachment");
+                assertThat(got.headers().firstValue("Content-Security-Policy").orElse(""))
+                        .isEqualTo("default-src 'none'; sandbox");
+                assertThat(got.headers().firstValue("Referrer-Policy").orElse(""))
+                        .isEqualTo("no-referrer");
             }
             // fileId 不是下载凭据。
             assertThat(HttpClient.newHttpClient().send(
@@ -150,10 +154,53 @@ class FileStageHttpTest {
                     "{\"doc\":\"" + mine + "\"}");
             assertThat(denied.status()).isEqualTo(400);
             assertThat(denied.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+
+            // 另一把 Key 不能借相同的 Idempotency-Key 绕过 fileId 归属检查读到缓存响应。
+            String idemFileBody = "{\"doc\":\"" + mine + "\",\"note\":\"idem\"}";
+            TestServer.Reply firstIdem = server.call(
+                    "POST", "/api/file_oa/upload_attachment", key, "alice", "idem-file-owner-1", idemFileBody);
+            assertThat(firstIdem.status()).as(firstIdem.body()).isEqualTo(200);
+            TestServer.Reply hijacked = server.call(
+                    "POST", "/api/file_oa/upload_attachment", other, "alice", "idem-file-owner-1", idemFileBody);
+            assertThat(hijacked.status()).as(hijacked.body()).isEqualTo(400);
+            assertThat(hijacked.json().path("error").path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(hijacked.header("Idempotent-Replayed")).isNull();
+            TestServer.Reply ownerReplay = server.call(
+                    "POST", "/api/file_oa/upload_attachment", key, "alice", "idem-file-owner-1", idemFileBody);
+            assertThat(ownerReplay.status()).as(ownerReplay.body()).isEqualTo(200);
+            assertThat(ownerReplay.header("Idempotent-Replayed")).isEqualTo("true");
+
+            // 内联 data URI 命中幂等缓存时不再重复落盘，不留孤儿暂存文件。
+            long filesBeforeInlineIdem = countFiles(server);
+            String inlineIdemBody = "{\"doc\":\"" + inline + "\",\"note\":\"inline-idem\"}";
+            TestServer.Reply firstInline = server.call(
+                    "POST", "/api/file_oa/upload_attachment", key, "alice", "idem-inline-1", inlineIdemBody);
+            assertThat(firstInline.status()).as(firstInline.body()).isEqualTo(200);
+            long filesAfterFirstInline = countFiles(server);
+            assertThat(filesAfterFirstInline).isEqualTo(filesBeforeInlineIdem + 1);
+            TestServer.Reply replayInline = server.call(
+                    "POST", "/api/file_oa/upload_attachment", key, "alice", "idem-inline-1", inlineIdemBody);
+            assertThat(replayInline.status()).as(replayInline.body()).isEqualTo(200);
+            assertThat(replayInline.header("Idempotent-Replayed")).isEqualTo("true");
+            assertThat(countFiles(server)).isEqualTo(filesAfterFirstInline);
+
             String shared = server.runtime.fileStage()
                     .store("shared".getBytes(StandardCharsets.UTF_8), "c.txt", "text/plain", null).fileId();
             assertThat(server.call("POST", "/api/file_oa/upload_attachment", other, "alice", null,
                     "{\"doc\":\"" + shared + "\"}").status()).isEqualTo(200);
+
+            // 磁盘文件在打开前被删：返回干净的 404 JSON，不携带提前写入的 Content-Disposition 或错误 Content-Length。
+            dev.hermit.crab.files.StagedFile vanished = server.runtime.fileStage()
+                    .store("vanish-payload".getBytes(StandardCharsets.UTF_8), "vanish.txt", "text/plain", null);
+            java.nio.file.Files.delete(vanished.path());
+            HttpResponse<String> missingOnDisk = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create(server.base() + "/api/-/files/" + vanished.token())).build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(missingOnDisk.statusCode()).isEqualTo(404);
+            assertThat(missingOnDisk.headers().firstValue("Content-Disposition")).isEmpty();
+            assertThat(missingOnDisk.headers().firstValue("Content-Type").orElse("")).startsWith("application/json");
+            JsonNode missingJson = new com.fasterxml.jackson.databind.ObjectMapper().readTree(missingOnDisk.body());
+            assertThat(missingJson.path("error").path("code").asText()).isEqualTo("NOT_FOUND");
 
             // 控制台：清单不带下载令牌，可以改设置；超过单文件上限的下载被拒。
             JsonNode listed = server.console("GET", "/console/api/files", null, true).json().path("data");

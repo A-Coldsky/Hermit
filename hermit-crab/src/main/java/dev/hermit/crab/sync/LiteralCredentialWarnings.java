@@ -10,6 +10,7 @@ import java.util.regex.Pattern;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.Auth;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.McpUpstream;
 import dev.hermit.common.model.Step;
 import dev.hermit.common.validate.ValidationIssue;
@@ -35,10 +36,10 @@ final class LiteralCredentialWarnings {
         ArrayList<ValidationIssue> found = new ArrayList<>();
         Auth auth = doc.auth();
         if (auth != null) {
-            scanSteps(auth.steps(), "auth.steps", found);
+            scanSteps(auth.steps(), "auth.steps", found, 0);
         }
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
-            scanSteps(entry.getValue().steps(), "actions." + entry.getKey() + ".steps", found);
+            scanSteps(entry.getValue().steps(), "actions." + entry.getKey() + ".steps", found, 0);
         }
         McpUpstream upstream = doc.upstream();
         if (upstream != null) {
@@ -49,13 +50,44 @@ final class LiteralCredentialWarnings {
         return List.copyOf(found);
     }
 
-    private static void scanSteps(List<Step> steps, String path, List<ValidationIssue> found) {
-        if (steps == null) {
+    private static void scanSteps(List<Step> steps, String path, List<ValidationIssue> found, int depth) {
+        if (steps == null || depth > FlowSteps.MAX_DEPTH + 2) {
             return;
         }
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
             String stepPath = path + "[" + i + "]." + step.type();
+            if (FlowSteps.IF.equals(step.type())) {
+                // if 的判断键和 assert 同名：cookie_exists / header_exists 写的是名称，不是值。
+                walk(stepPath, FlowSteps.condition(step), true, found);
+                for (String branch : FlowSteps.branchKeys(step)) {
+                    scanSteps(FlowSteps.branch(step, branch), stepPath + "." + branch, found, depth + 1);
+                }
+                continue;
+            }
+            if (FlowSteps.REPEAT.equals(step.type())) {
+                Map<String, Object> own = FlowSteps.own(step);
+                for (Map.Entry<String, Object> entry : own.entrySet()) {
+                    // collect 两边都是变量名，不是写死的值。
+                    if ("collect".equals(entry.getKey())) {
+                        continue;
+                    }
+                    String child = stepPath + "." + entry.getKey();
+                    Object value = entry.getValue();
+                    boolean untilCondition = "until".equals(entry.getKey());
+                    if (value instanceof Map<?, ?> nested) {
+                        walk(child, cast(nested), untilCondition, found);
+                    } else if (value instanceof List<?> list) {
+                        walkList(child, entry.getKey(), list, untilCondition, found);
+                    } else {
+                        consider(child, entry.getKey(), value, false, found);
+                    }
+                }
+                for (String branch : FlowSteps.branchKeys(step)) {
+                    scanSteps(FlowSteps.branch(step, branch), stepPath + "." + branch, found, depth + 1);
+                }
+                continue;
+            }
             boolean assertStep = "assert".equals(step.type());
             if ("extract".equals(step.type())) {
                 for (Map.Entry<String, Object> entry : step.def().entrySet()) {

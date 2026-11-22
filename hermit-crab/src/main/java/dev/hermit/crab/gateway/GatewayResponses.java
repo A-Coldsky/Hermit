@@ -64,6 +64,9 @@ final class GatewayResponses {
     }
 
     static void writeOutcome(Context ctx, InvokeOutcome outcome) {
+        if (outcome.allowMethod() != null) {
+            ctx.header("Allow", outcome.allowMethod());
+        }
         write(ctx, outcome.status(), outcome.body(), outcome.traceId(), outcome.replayed(), confirmToken(outcome.body()));
     }
 

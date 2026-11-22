@@ -121,7 +121,8 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         this.templates = templates == null ? new TemplateEngine() : templates;
         this.sessions = new McpUpstreamSessions(new McpUpstreamClient(limits), accounts, concurrency);
         this.oauth = new McpOAuth(
-                vault, accounts, sessions::discard, this.knownSecrets, clock, new McpOAuthClient(limits));
+                vault, accounts, sessions::discard, this.knownSecrets, clock, new McpOAuthClient(limits),
+                sessions::nextGeneration);
     }
 
     /** 账号已删除：丢掉上游会话、并发通道和 OAuth 刷新锁。 */
@@ -143,6 +144,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     public ExecutionResult execute(ExecutionRequest request, ConchDoc authorized) {
         long started = System.nanoTime();
         long deadline = started + capabilityTimeout.toNanos();
+        long callGeneration = sessions.nextGeneration();
         ConchDoc doc = authorized;
         if (doc == null || doc.upstream() == null || !"mcp".equals(doc.driver())) {
             return finish(request, doc, started, false, null, ErrorCode.INTERNAL, "内部错误", null, List.of());
@@ -176,7 +178,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             return finish(request, doc, started, false, null, ErrorCode.TIMEOUT, DEADLINE, null, List.of());
         }
         try {
-            TokenGate gate = freshToken(request, doc, prepared.headers(), deadline, started);
+            TokenGate gate = freshToken(request, doc, prepared.headers(), callGeneration, deadline, started);
             if (gate.denied() != null) {
                 return gate.denied();
             }
@@ -186,6 +188,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
                     key,
                     doc,
                     material(headers),
+                    gate.generation(),
                     headers,
                     action.tool().name(),
                     arguments,
@@ -203,6 +206,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
                         key,
                         doc,
                         material(headers),
+                        again.generation(),
                         headers,
                         action.tool().name(),
                         arguments,
@@ -211,7 +215,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
                         prepared.allowLoopback(),
                         sink(request));
                 if (unauthorized(result)) {
-                    oauth.clear(request.origin(), request.conch(), request.account());
+                    oauth.clearIfMatches(request.origin(), request.conch(), request.account(), bearerAccess(headers));
                     return finish(request, doc, started, false, null, ErrorCode.AUTH_FAILED, McpOAuth.REJECTED, null, List.of());
                 }
             }
@@ -228,6 +232,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     ListOutcome listTools(ExecutionRequest request, ConchDoc doc) {
         long started = System.nanoTime();
         long deadline = started + capabilityTimeout.toNanos();
+        long callGeneration = sessions.nextGeneration();
         if (doc == null || doc.upstream() == null || !"mcp".equals(doc.driver())) {
             return ListOutcome.failed(finish(request, doc, started, false, null, ErrorCode.INTERNAL, "内部错误", null, List.of()));
         }
@@ -251,23 +256,24 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             return ListOutcome.failed(finish(request, doc, started, false, null, ErrorCode.TIMEOUT, DEADLINE, null, List.of()));
         }
         try {
-            TokenGate gate = freshToken(request, doc, prepared.headers(), deadline, started);
+            TokenGate gate = freshToken(request, doc, prepared.headers(), callGeneration, deadline, started);
             if (gate.denied() != null) {
                 return ListOutcome.failed(gate.denied());
             }
             Map<String, String> headers = gate.headers();
             Long timeoutMs = doc.upstream().timeoutMs() == null ? null : doc.upstream().timeoutMs().longValue();
             McpUpstreamSessions.ListResult listed = listOnce(
-                    key, doc, headers, deadline, timeoutMs, prepared.allowLoopback(), sink(request));
+                    key, doc, gate.generation(), headers, deadline, timeoutMs, prepared.allowLoopback(), sink(request));
             if (oauthPackage(doc) && listed.failure() != null && unauthorized(listed.failure())) {
                 TokenGate again = refreshedToken(request, doc, headers, deadline, started);
                 if (again.denied() != null) {
                     return ListOutcome.failed(again.denied());
                 }
                 headers = again.headers();
-                listed = listOnce(key, doc, headers, deadline, timeoutMs, prepared.allowLoopback(), sink(request));
+                listed = listOnce(
+                        key, doc, again.generation(), headers, deadline, timeoutMs, prepared.allowLoopback(), sink(request));
                 if (listed.failure() != null && unauthorized(listed.failure())) {
-                    oauth.clear(request.origin(), request.conch(), request.account());
+                    oauth.clearIfMatches(request.origin(), request.conch(), request.account(), bearerAccess(headers));
                     return ListOutcome.failed(finish(
                             request, doc, started, false, null, ErrorCode.AUTH_FAILED, McpOAuth.REJECTED, null, List.of()));
                 }
@@ -302,13 +308,14 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
     private McpUpstreamSessions.ListResult listOnce(
             SessionKey key,
             ConchDoc doc,
+            long generation,
             Map<String, String> headers,
             long deadline,
             Long timeoutMs,
             boolean allowLoopback,
             McpUpstreamSessions.ExchangeSink sink
     ) {
-        return sessions.list(key, doc, material(headers), headers, deadline, timeoutMs, allowLoopback, sink);
+        return sessions.list(key, doc, material(headers), generation, headers, deadline, timeoutMs, allowLoopback, sink);
     }
 
     private static boolean oauthPackage(ConchDoc doc) {
@@ -324,11 +331,12 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
             ExecutionRequest request,
             ConchDoc doc,
             Map<String, String> headers,
+            long callGeneration,
             long deadline,
             long started
     ) {
         if (!oauthPackage(doc)) {
-            return TokenGate.ready(headers);
+            return TokenGate.ready(headers, callGeneration);
         }
         McpOAuth.Attempt fresh = oauth.ensureFresh(
                 request.origin(),
@@ -340,7 +348,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         if (!fresh.ok()) {
             return TokenGate.deny(finish(request, doc, started, false, null, fresh.code(), fresh.message(), null, List.of()));
         }
-        return TokenGate.ready(authorize(headers, fresh.token()));
+        return TokenGate.ready(authorize(headers, fresh.token()), Math.max(callGeneration, fresh.generation()));
     }
 
     private TokenGate refreshedToken(
@@ -361,7 +369,7 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         if (!again.ok()) {
             return TokenGate.deny(finish(request, doc, started, false, null, again.code(), again.message(), null, List.of()));
         }
-        return TokenGate.ready(authorize(headers, again.token()));
+        return TokenGate.ready(authorize(headers, again.token()), again.generation());
     }
 
     private Prepared prepareUpstream(ExecutionRequest request, ConchDoc doc, long started) {
@@ -794,13 +802,13 @@ public final class McpForwarder implements ConchExecutor, AutoCloseable {
         return List.of();
     }
 
-    private record TokenGate(ExecutionResult denied, Map<String, String> headers) {
+    private record TokenGate(ExecutionResult denied, Map<String, String> headers, long generation) {
         static TokenGate deny(ExecutionResult result) {
-            return new TokenGate(result, Map.of());
+            return new TokenGate(result, Map.of(), 0L);
         }
 
-        static TokenGate ready(Map<String, String> headers) {
-            return new TokenGate(null, headers);
+        static TokenGate ready(Map<String, String> headers, long generation) {
+            return new TokenGate(null, headers, generation);
         }
     }
 

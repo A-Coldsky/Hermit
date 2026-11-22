@@ -22,6 +22,8 @@ final class RuleProblem extends RuntimeException {
     final List<TraceWarning> warnings;
     /** 脚本抛出时的位置和说明。其它失败为 null。 */
     final ScriptFault script;
+    /** 明确的重试原因分类（"connect" 或 "timeout"），未指定时按状态码/摘要/传输字段判定。 */
+    final String retryReason;
 
     RuleProblem(ErrorCode code, String summary, String method, String path, Integer status) {
         this(code, summary, method, path, status, null, null);
@@ -62,7 +64,7 @@ final class RuleProblem extends RuntimeException {
             String responseBody,
             List<TraceWarning> warnings
     ) {
-        this(code, summary, method, path, status, wire, transport, responseHeaders, responseBody, warnings, null);
+        this(code, summary, method, path, status, wire, transport, responseHeaders, responseBody, warnings, null, null);
     }
 
     RuleProblem(
@@ -78,6 +80,23 @@ final class RuleProblem extends RuntimeException {
             List<TraceWarning> warnings,
             ScriptFault script
     ) {
+        this(code, summary, method, path, status, wire, transport, responseHeaders, responseBody, warnings, script, null);
+    }
+
+    RuleProblem(
+            ErrorCode code,
+            String summary,
+            String method,
+            String path,
+            Integer status,
+            Map<String, Object> wire,
+            Map<String, Object> transport,
+            Map<String, String> responseHeaders,
+            String responseBody,
+            List<TraceWarning> warnings,
+            ScriptFault script,
+            String retryReason
+    ) {
         super(summary);
         this.code = code;
         this.summary = summary;
@@ -90,6 +109,7 @@ final class RuleProblem extends RuntimeException {
         this.responseBody = responseBody;
         this.warnings = warnings == null || warnings.isEmpty() ? List.of() : List.copyOf(warnings);
         this.script = script;
+        this.retryReason = retryReason;
     }
 
     RuleProblem withWire(Map<String, Object> captured) {
@@ -98,17 +118,24 @@ final class RuleProblem extends RuntimeException {
         }
         return new RuleProblem(
                 code, summary, method, path, status, captured, transport, responseHeaders, responseBody, warnings,
-                script);
+                script, retryReason);
     }
 
     RuleProblem withExchange(Map<String, String> headers, String body, List<TraceWarning> notices) {
         return new RuleProblem(
-                code, summary, method, path, status, wire, transport, headers, body, notices, script);
+                code, summary, method, path, status, wire, transport, headers, body, notices, script, retryReason);
     }
 
     RuleProblem withScript(ScriptFault fault) {
         return new RuleProblem(
-                code, summary, method, path, status, wire, transport, responseHeaders, responseBody, warnings, fault);
+                code, summary, method, path, status, wire, transport, responseHeaders, responseBody, warnings, fault,
+                retryReason);
+    }
+
+    RuleProblem withRetryReason(String reason) {
+        return new RuleProblem(
+                code, summary, method, path, status, wire, transport, responseHeaders, responseBody, warnings, script,
+                reason);
     }
 
     private static Map<String, String> copyHeaders(Map<String, String> headers) {
@@ -151,10 +178,17 @@ final class DeadlineExceeded extends RuntimeException {
     final int index;
     final String type;
     final List<StepLog> logs;
+    /** 能力 deadline 未到时的内部超时分类（"connect" 或 "timeout"）；真正到达能力 deadline 时为 null。 */
+    final String retryReason;
 
     DeadlineExceeded(int index, String type, List<StepLog> logs) {
+        this(index, type, logs, null);
+    }
+
+    DeadlineExceeded(int index, String type, List<StepLog> logs, String retryReason) {
         this.index = index;
         this.type = type;
         this.logs = logs == null ? List.of() : List.copyOf(logs);
+        this.retryReason = retryReason;
     }
 }

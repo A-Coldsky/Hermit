@@ -11,9 +11,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -50,6 +51,10 @@ public final class McpUpstreamClient implements AutoCloseable {
     static final String ACCEPT = "application/json, text/event-stream";
     /** 读超时在定时取消之后多等的时间，让取消先到并记下原因。 */
     static final long SOCKET_GRACE_MS = 1_000;
+    private static final int REPLY_THREADS = 16;
+    private static final int REPLY_QUEUE = 128;
+    private static final int CANCEL_THREADS = 16;
+    private static final int CANCEL_QUEUE = 128;
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ThreadLocal<Boolean> ALLOW_LOOPBACK = new ThreadLocal<>();
@@ -59,6 +64,7 @@ public final class McpUpstreamClient implements AutoCloseable {
     private final OutboundTls tls;
     private final ScheduledThreadPoolExecutor deadlines;
     private final ExecutorService replies;
+    private final ExecutorService cancellations;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public McpUpstreamClient() {
@@ -76,11 +82,8 @@ public final class McpUpstreamClient implements AutoCloseable {
                 .disableContentCompression()
                 .build();
         this.deadlines = newDeadlineExecutor();
-        this.replies = Executors.newCachedThreadPool(task -> {
-            Thread thread = new Thread(task, "hermit-mcp-reply");
-            thread.setDaemon(true);
-            return thread;
-        });
+        this.replies = newBoundedExecutor(REPLY_THREADS, REPLY_QUEUE, "hermit-mcp-reply");
+        this.cancellations = newBoundedExecutor(CANCEL_THREADS, CANCEL_QUEUE, "hermit-mcp-cancel");
     }
 
     public RpcResult exchange(Post post) {
@@ -116,8 +119,11 @@ public final class McpUpstreamClient implements AutoCloseable {
                 return;
             }
             String reason = upstreamFirst && System.nanoTime() < post.deadlineNanos() ? "upstream" : "deadline";
-            stopped(stop, reason, post);
+            boolean recorded = stop.compareAndSet(null, reason);
             request.cancel();
+            if (recorded && "deadline".equals(reason) && post.notifyCancel() && post.awaitId() != null) {
+                dispatchCancelled(post);
+            }
         }, Math.max(1, cancelAt - System.nanoTime()), TimeUnit.NANOSECONDS);
         ALLOW_LOOPBACK.set(post.allowLoopback());
         try {
@@ -201,6 +207,7 @@ public final class McpUpstreamClient implements AutoCloseable {
             return;
         }
         replies.shutdownNow();
+        cancellations.shutdownNow();
         deadlines.shutdownNow();
         tls.untrack(pool);
         try {
@@ -283,10 +290,13 @@ public final class McpUpstreamClient implements AutoCloseable {
     }
 
     private void replyMethodNotFound(Post post, JsonNode id) {
-        if (id == null || id.isNull()) {
+        if (closed.get() || id == null || id.isNull()) {
             return;
         }
         replies.execute(() -> {
+            if (closed.get()) {
+                return;
+            }
             ObjectNode body = JSON.createObjectNode();
             body.put("jsonrpc", "2.0");
             body.set("id", id.deepCopy());
@@ -315,6 +325,17 @@ public final class McpUpstreamClient implements AutoCloseable {
                 exchange(reply);
             } catch (RuntimeException ignored) {
                 // 反向请求答不上时，原调用会以工具错误或超时结束。
+            }
+        });
+    }
+
+    private void dispatchCancelled(Post post) {
+        if (closed.get() || post.sessionId() == null || post.awaitId() == null) {
+            return;
+        }
+        cancellations.execute(() -> {
+            if (!closed.get()) {
+                sendCancelled(post);
             }
         });
     }
@@ -360,7 +381,7 @@ public final class McpUpstreamClient implements AutoCloseable {
             return;
         }
         if ("deadline".equals(reason) && post.notifyCancel() && post.awaitId() != null) {
-            sendCancelled(post);
+            dispatchCancelled(post);
         }
     }
 
@@ -503,6 +524,23 @@ public final class McpUpstreamClient implements AutoCloseable {
             return thread;
         });
         executor.setRemoveOnCancelPolicy(true);
+        return executor;
+    }
+
+    private static ThreadPoolExecutor newBoundedExecutor(int maxThreads, int queueCapacity, String threadName) {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                maxThreads,
+                maxThreads,
+                60L,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(queueCapacity),
+                task -> {
+                    Thread thread = new Thread(task, threadName);
+                    thread.setDaemon(true);
+                    return thread;
+                },
+                new ThreadPoolExecutor.DiscardPolicy());
+        executor.allowCoreThreadTimeOut(true);
         return executor;
     }
 

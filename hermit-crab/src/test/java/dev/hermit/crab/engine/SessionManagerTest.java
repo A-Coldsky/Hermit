@@ -2,8 +2,12 @@ package dev.hermit.crab.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Clock;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -97,6 +101,168 @@ class SessionManagerTest {
             assertThat(sessions.size()).isZero();
             assertThat(sessions.seenCookieValues(key)).isEmpty();
         }
+    }
+
+    /** 删除账号时，必须等进行中的写锁和读锁都放开后再删会话和登录快照，防止在途调用重新写回。 */
+    @Test
+    void forgetWaitsForExclusiveAndSharedHoldersBeforeDeletingStorage() throws Exception {
+        List<String> events = Collections.synchronizedList(new ArrayList<>());
+        SessionPersistence persistence = new SessionPersistence() {
+            @Override
+            public List<StoredCookie> load(SessionKey key) {
+                return List.of();
+            }
+
+            @Override
+            public void save(SessionKey key, List<StoredCookie> cookies) {
+                events.add("session.save");
+            }
+
+            @Override
+            public void delete(SessionKey key) {
+                events.add("session.delete");
+            }
+        };
+        LoginSnapshotStore snapshots = new LoginSnapshotStore() {
+            @Override
+            public void save(SessionKey key, Map<String, String> snapshot) {
+                events.add("snapshot.save");
+            }
+
+            @Override
+            public Map<String, String> load(SessionKey key) {
+                return Map.of();
+            }
+
+            @Override
+            public void delete(SessionKey key) {
+                events.add("snapshot.delete");
+            }
+        };
+        try (SessionManager sessions = new SessionManager(
+                persistence, snapshots, EngineSettings.defaults(), Clock.systemUTC())) {
+            SessionKey key = new SessionKey(Origin.LOCAL, "forget_order", "alice");
+
+            assertThat(sessions.tryLock(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            CountDownLatch exclusiveStarted = new CountDownLatch(1);
+            Thread forgetExclusive = new Thread(() -> {
+                exclusiveStarted.countDown();
+                sessions.forget(key);
+            });
+            forgetExclusive.start();
+            awaitBlocked(forgetExclusive, exclusiveStarted);
+            assertThat(events).isEmpty();
+            putCookie(sessions, key, "cookie-in-flight");
+            sessions.persist(key);
+            sessions.replaceLoginSnapshot(key, Map.of("token", "tok-1"));
+            assertThat(events).containsExactly("session.save", "snapshot.save");
+            sessions.unlock(key);
+            forgetExclusive.join(10_000);
+            assertThat(events).containsExactly("session.save", "snapshot.save", "session.delete", "snapshot.delete");
+            assertThat(sessions.size()).isZero();
+
+            events.clear();
+            assertThat(sessions.tryLockShared(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            CountDownLatch sharedStarted = new CountDownLatch(1);
+            Thread forgetShared = new Thread(() -> {
+                sharedStarted.countDown();
+                sessions.forget(key);
+            });
+            forgetShared.start();
+            awaitBlocked(forgetShared, sharedStarted);
+            assertThat(events).isEmpty();
+            putCookie(sessions, key, "cookie-shared");
+            sessions.persist(key);
+            assertThat(events).containsExactly("session.save");
+            sessions.unlockShared(key);
+            forgetShared.join(10_000);
+            assertThat(events).containsExactly("session.save", "session.delete", "snapshot.delete");
+            assertThat(sessions.size()).isZero();
+        }
+    }
+
+    /** close 在锁内移出状态，排队等独占锁或共享锁的线程不会醒来看到空的 client 或 cookies。 */
+    @Test
+    void closeRemovesStatesUnderLockSoWaitersNeverSeeNullClientOrCookies() throws Exception {
+        SessionManager sessions = new SessionManager();
+        SessionKey key = new SessionKey(Origin.LOCAL, "close_race", "alice");
+        assertThat(sessions.tryLock(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+
+        CountDownLatch closerStarted = new CountDownLatch(1);
+        Thread closer = new Thread(() -> {
+            closerStarted.countDown();
+            sessions.close();
+        });
+        closer.start();
+        awaitBlocked(closer, closerStarted);
+
+        AtomicReference<Throwable> exclusiveError = new AtomicReference<>();
+        CountDownLatch exclusiveStarted = new CountDownLatch(1);
+        Thread exclusiveWaiter = new Thread(() -> {
+            exclusiveStarted.countDown();
+            try {
+                if (sessions.tryLock(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(10))) {
+                    try {
+                        if (sessions.client(key) == null || sessions.cookies(key) == null) {
+                            exclusiveError.set(new AssertionError("null client/cookies after close"));
+                        }
+                    } finally {
+                        sessions.unlock(key);
+                    }
+                }
+            } catch (Throwable ex) {
+                exclusiveError.set(ex);
+            }
+        });
+        exclusiveWaiter.start();
+        awaitBlocked(exclusiveWaiter, exclusiveStarted);
+
+        AtomicReference<Throwable> sharedError = new AtomicReference<>();
+        CountDownLatch sharedStarted = new CountDownLatch(1);
+        Thread sharedWaiter = new Thread(() -> {
+            sharedStarted.countDown();
+            try {
+                if (sessions.tryLockShared(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(10))) {
+                    try {
+                        if (sessions.client(key) == null || sessions.cookies(key) == null) {
+                            sharedError.set(new AssertionError("null client/cookies after close"));
+                        }
+                    } finally {
+                        sessions.unlockShared(key);
+                    }
+                }
+            } catch (Throwable ex) {
+                sharedError.set(ex);
+            }
+        });
+        sharedWaiter.start();
+        awaitBlocked(sharedWaiter, sharedStarted);
+
+        sessions.unlock(key);
+        closer.join(10_000);
+        exclusiveWaiter.join(10_000);
+        sharedWaiter.join(10_000);
+
+        assertThat(exclusiveError.get())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("会话管理器已关闭");
+        assertThat(sharedError.get())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("会话管理器已关闭");
+        assertThat(sessions.size()).isZero();
+    }
+
+    private static void awaitBlocked(Thread thread, CountDownLatch started) throws InterruptedException {
+        assertThat(started.await(2, TimeUnit.SECONDS)).isTrue();
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (System.nanoTime() < until) {
+            Thread.State state = thread.getState();
+            if (state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING) {
+                return;
+            }
+            Thread.sleep(5);
+        }
+        throw new AssertionError("thread did not block in time: " + thread.getState());
     }
 
     /** Cookie 没变时不再写库；变了、登出了、作废之后都要照常写。 */

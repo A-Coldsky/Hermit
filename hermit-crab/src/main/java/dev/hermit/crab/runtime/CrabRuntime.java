@@ -69,6 +69,7 @@ import dev.hermit.crab.store.Account;
 import dev.hermit.crab.store.AccountNotFoundException;
 import dev.hermit.crab.store.AccountStore;
 import dev.hermit.crab.store.Actors;
+import dev.hermit.crab.store.ApiKeyPrincipal;
 import dev.hermit.crab.store.ApiKeyService;
 import dev.hermit.crab.store.AuditKind;
 import dev.hermit.crab.store.AuditLog;
@@ -556,9 +557,27 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             String apiKeyId,
             ConchDoc confirmedAgainst
     ) {
+        return trialLocal(conch, action, account, input, traceId, apiKeyId, confirmedAgainst, null, confirmedAgainst != null);
+    }
+
+    /**
+     * 原子读出当前生效的本地规则包，核对快照一致、API Key 范围与只读权限，以及破坏性确认。
+     * {@code principal} 为 null 时表示控制台或 CLI 试跑，不检查 API Key 权限与 MCP 确认。
+     */
+    public ExecutionResult trialLocal(
+            String conch,
+            String action,
+            Optional<String> account,
+            Map<String, Object> input,
+            String traceId,
+            String apiKeyId,
+            ConchDoc expectedSnapshot,
+            ApiKeyPrincipal principal,
+            boolean confirmed
+    ) {
         String id = traceId == null || traceId.isBlank() ? UUID.randomUUID().toString() : traceId;
         ConchDoc doc = requireLocalDebug(conch);
-        if (confirmedAgainst != null && !Invoker.sameSnapshot(doc, confirmedAgainst)) {
+        if (expectedSnapshot != null && !Invoker.sameSnapshot(doc, expectedSnapshot)) {
             throw new TrialRejected(409, ErrorCode.CONFLICT, Invoker.CHANGED_AFTER_CONFIRM, true);
         }
         if (!"http".equals(doc.driver()) && !"mcp".equals(doc.driver())) {
@@ -567,6 +586,27 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         Action capability = doc.actions().get(action);
         if (capability == null) {
             throw new TrialRejected(404, ErrorCode.NOT_FOUND, TRIAL_NOT_FOUND, true);
+        }
+        if (principal != null) {
+            boolean readOnly = CapabilityHttp.readOnly(capability);
+            if (!principal.scope().allowsLocal(conch)) {
+                throw new TrialRejected(403, ErrorCode.FORBIDDEN,
+                        "这把 API Key 不能使用本地规则包 " + conch + "。请用全部权限的 Key，或在 conches 里点名这个包的 Key。",
+                        true);
+            }
+            if (principal.scope().readOnlyOnly() && !readOnly) {
+                throw new TrialRejected(403, ErrorCode.FORBIDDEN,
+                        "这把 API Key 只允许调用只读能力。能力 " + action + " 不是只读，已拒绝。",
+                        true);
+            }
+            if (!principal.permits(conch, action, readOnly)) {
+                throw new TrialRejected(403, ErrorCode.FORBIDDEN,
+                        "这把 API Key 不能使用本地规则包 " + conch + "。请用全部权限的 Key，或在 conches 里点名这个包的 Key。",
+                        true);
+            }
+            if (capability.effectiveConfirm() && (!confirmed || expectedSnapshot == null)) {
+                throw new TrialRejected(409, ErrorCode.CONFLICT, Invoker.CHANGED_AFTER_CONFIRM, true);
+            }
         }
         if (conchSwitchedOff(conch)) {
             throw new TrialRejected(409, ErrorCode.CONCH_DISABLED, Invoker.CONCH_SWITCHED_OFF_CALL, true);
@@ -642,11 +682,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     public static final String LOCAL_INACTIVE = "同名的正式规则包正在生效，本地这份没有生效。先在控制台把来源切到本地。";
 
     private ConchDoc requireLocalDebug(String conch) {
-        ConchDoc doc = registry.find(conch).orElse(null);
-        if (doc == null) {
+        ConchRegistry.Active live = registry.active(conch).orElse(null);
+        if (live == null) {
             throw new TrialRejected(404, ErrorCode.NOT_FOUND, TRIAL_NOT_FOUND, true);
         }
-        if (registry.origin(conch) != Origin.LOCAL) {
+        if (live.origin() != Origin.LOCAL) {
             if (registry.has(conch, Origin.LOCAL)) {
                 throw new TrialRejected(409, ErrorCode.CONFLICT, LOCAL_INACTIVE, true);
             }
@@ -655,7 +695,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (!debug.get().enabled()) {
             throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, "先打开开发者模式。", true);
         }
-        return doc;
+        return live.doc();
     }
 
     private ReadyAccount openAccount(ConchDoc doc, Optional<String> account) {
@@ -1148,12 +1188,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      * 已经进入执行的调用不会被打断。
      */
     public void setConchDisabled(String conch, boolean disabled, String actor) {
-        boolean loaded = registry.find(conch).isPresent();
+        ConchRegistry.Active active = registry.active(conch).orElse(null);
+        boolean loaded = active != null;
         if (disabled ? !loaded : !loaded && !conchSwitchedOff.contains(conch)) {
             throw new IllegalArgumentException("conch not found");
         }
-        Origin stored = registry.origin(conch);
-        conchSwitches.setDisabled(stored == null ? Origin.OFFICIAL : stored, conch, disabled, actor);
+        Origin source = active == null ? Origin.OFFICIAL : active.origin();
+        conchSwitches.setDisabled(source, conch, disabled, actor);
         if (disabled) {
             conchSwitchedOff.add(conch);
         } else {
@@ -1246,12 +1287,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     public void setCapabilityDisabled(String conch, String action, boolean disabled, String actor) {
-        ConchDoc doc = registry.find(conch).orElse(null);
-        if (doc == null || !doc.actions().containsKey(action)) {
+        ConchRegistry.Active active = registry.active(conch).orElse(null);
+        if (active == null || !active.doc().actions().containsKey(action)) {
             throw new IllegalArgumentException("capability not found");
         }
-        Origin stored = registry.origin(conch);
-        Origin source = stored == null ? Origin.OFFICIAL : stored;
+        Origin source = active.origin();
         switches.setDisabled(source, conch, action, disabled, actor);
         // 开关在内存里按「包名.能力」生效。同名的另一份留着停用记录时，启用要一起清掉，
         // 否则重启后又被那条记录停用。
@@ -1298,8 +1338,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     public void startBackground() {
-        purgeExpired();
         synchronized (lifecycle) {
+            if (closed.get()) {
+                return;
+            }
+            purgeExpired();
             if (scheduler == null) {
                 scheduler = scheduler("hermit-crab-retention");
                 scheduler.scheduleWithFixedDelay(this::safePurge, 1, 1, TimeUnit.HOURS);
@@ -1321,6 +1364,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
     }
 
+    /** Package-visible for lifecycle race regression tests. */
+    boolean backgroundRunning() {
+        synchronized (lifecycle) {
+            return scheduler != null && !scheduler.isShutdown();
+        }
+    }
+
     /** Starts retention, sync, and report loops. Safe to call once after HTTP is listening. */
     public void startServing() {
         if (closed.get()) {
@@ -1328,6 +1378,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
         prepare();
         synchronized (lifecycle) {
+            if (closed.get()) {
+                throw new IllegalStateException("runtime is closed");
+            }
             if (!serving.compareAndSet(false, true)) {
                 return;
             }

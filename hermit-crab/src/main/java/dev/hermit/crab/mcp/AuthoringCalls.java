@@ -17,6 +17,7 @@ import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchDestinations;
 import dev.hermit.common.validate.ValidationIssue;
+import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.ApiJson;
@@ -228,31 +229,34 @@ final class AuthoringCalls {
             }
             input = copy;
         }
-        if (principal != null && principal.scope().readOnlyOnly() && !readableTrial(conch, action)) {
-            return McpCalls.failAsRequest(attempt, "FORBIDDEN", READ_ONLY_TRIAL_PREFIX + action + " 不是只读，已拒绝。");
-        }
         // 试跑用的是这个包已经保存的账号凭证，和普通调用一样要求范围与确认。
-        ConchDoc local = runtime.registry().origin(conch) == Origin.LOCAL
-                ? runtime.registry().find(conch).orElse(null)
-                : null;
-        Action capability = local == null ? null : local.actions().get(action);
-        if (local != null && principal != null
-                && (!inScope(principal, conch)
-                        || (capability != null
-                                && !principal.permits(conch, action, CapabilityHttp.readOnly(capability))))) {
+        if (principal != null && !inScope(principal, conch)) {
             return McpCalls.failAsRequest(attempt, "FORBIDDEN", notInScope(conch));
         }
-        if (capability != null && capability.effectiveConfirm()) {
-            McpSchema.CallToolResult confirmed = McpCalls.confirm(session, capability, input, account, attempt);
-            if (confirmed != null) {
-                return confirmed;
+        ConchRegistry.Active active = runtime.registry().active(conch).orElse(null);
+        ConchDoc local = active != null && active.origin() == Origin.LOCAL ? active.doc() : null;
+        Action capability = local == null ? null : local.actions().get(action);
+        if (principal != null && capability != null) {
+            boolean readOnly = CapabilityHttp.readOnly(capability);
+            if (principal.scope().readOnlyOnly() && !readOnly) {
+                return McpCalls.failAsRequest(attempt, "FORBIDDEN", READ_ONLY_TRIAL_PREFIX + action + " 不是只读，已拒绝。");
+            }
+            if (!principal.permits(conch, action, readOnly)) {
+                return McpCalls.failAsRequest(attempt, "FORBIDDEN", notInScope(conch));
+            }
+        }
+        boolean confirmed = capability != null && capability.effectiveConfirm();
+        if (confirmed) {
+            McpSchema.CallToolResult confirmedResult = McpCalls.confirm(session, capability, input, account, attempt);
+            if (confirmedResult != null) {
+                return confirmedResult;
             }
         }
         ExecutionResult result;
         try {
             result = runtime.trialLocal(
                     conch, action, account, input, attempt.traceId(), principal == null ? null : principal.id(),
-                    capability != null && capability.effectiveConfirm() ? local : null);
+                    local, principal, confirmed);
         } catch (TrialRejected ex) {
             String message = ex.getMessage();
             if (CredentialMessages.NO_ACCOUNT.equals(message) || "no account configured".equals(message)) {
@@ -310,7 +314,7 @@ final class AuthoringCalls {
         String next = NEXT_ACCOUNT;
         if (Boolean.TRUE.equals(result.replaced())) {
             try {
-                if (!runtime.admin().listAccounts(result.conch()).isEmpty()) {
+                if (!runtime.admin().listAccounts(Origin.LOCAL, result.conch()).isEmpty()) {
                     ConchDoc after = runtime.registry().find(result.conch(), Origin.LOCAL).orElse(null);
                     if (beforeKeys == null || after == null || !beforeKeys.equals(credentialNames(after))) {
                         next = NEXT_LOGIN;
@@ -528,31 +532,12 @@ final class AuthoringCalls {
         return text;
     }
 
-    /**
-     * A missing package or action is left to {@code trialLocal}. Official packages stay on that path too.
-     * Only a loaded local action whose read-only flag is false is rejected here.
-     */
     private static boolean inScope(ApiKeyPrincipal principal, String conch) {
         return principal == null || principal.scope().allowsLocal(conch);
     }
 
     private static String notInScope(String conch) {
         return NOT_IN_SCOPE_PREFIX + conch + NOT_IN_SCOPE_SUFFIX;
-    }
-
-    private boolean readableTrial(String conch, String action) {
-        if (runtime.registry().origin(conch) == Origin.OFFICIAL) {
-            return true;
-        }
-        ConchDoc doc = runtime.registry().find(conch).orElse(null);
-        if (doc == null) {
-            return true;
-        }
-        Action capability = doc.actions().get(action);
-        if (capability == null) {
-            return true;
-        }
-        return CapabilityHttp.readOnly(capability);
     }
 
     private boolean devMode() {

@@ -116,6 +116,85 @@ class McpConnectionBehaviorTest {
         }
     }
 
+    @Test
+    @Timeout(15)
+    void hungCancelNotificationDoesNotDelayConcurrentDeadlineAborts() throws Exception {
+        java.util.concurrent.CopyOnWriteArrayList<Socket> held = new java.util.concurrent.CopyOnWriteArrayList<>();
+        try (ServerSocket server = new ServerSocket()) {
+            server.setReuseAddress(true);
+            server.bind(new InetSocketAddress("127.0.0.1", 0));
+            Thread accept = new Thread(() -> {
+                while (!Thread.currentThread().isInterrupted()) {
+                    try {
+                        Socket socket = server.accept();
+                        held.add(socket);
+                        // 读取请求头后不回包也不关连接，同时挂住原调用和 notifications/cancelled。
+                        Thread reader = new Thread(() -> {
+                            try {
+                                readRequest(socket);
+                            } catch (IOException ignored) {
+                            }
+                        }, "mcp-hang-reader");
+                        reader.setDaemon(true);
+                        reader.start();
+                    } catch (IOException ex) {
+                        return;
+                    }
+                }
+            }, "mcp-hang-accept");
+            accept.setDaemon(true);
+            accept.start();
+
+            int count = 4;
+            java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(count);
+            java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(count);
+            try (McpUpstreamClient client = new McpUpstreamClient()) {
+                long started = System.nanoTime();
+                java.util.List<java.util.concurrent.Future<RpcResult>> futures = new java.util.ArrayList<>();
+                for (int i = 0; i < count; i++) {
+                    long reqId = 10L + i;
+                    futures.add(pool.submit(() -> {
+                        ready.countDown();
+                        go.await();
+                        long dl = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(250);
+                        return client.exchange(new Post(
+                                "POST",
+                                URI.create("http://127.0.0.1:" + server.getLocalPort() + "/mcp"),
+                                Map.of(),
+                                "sess-hang",
+                                "2025-11-25",
+                                ("{\"jsonrpc\":\"2.0\",\"id\":" + reqId + ",\"method\":\"tools/call\",\"params\":{}}")
+                                        .getBytes(StandardCharsets.UTF_8),
+                                reqId,
+                                dl,
+                                null,
+                                true,
+                                true));
+                    }));
+                }
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                go.countDown();
+                for (java.util.concurrent.Future<RpcResult> future : futures) {
+                    RpcResult res = future.get(5, TimeUnit.SECONDS);
+                    assertThat(res.kind()).isEqualTo(RpcKind.DEADLINE);
+                }
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                // 4 条并发调用都必须在接近 250ms 内中止，不能被 2s 的 notifications/cancelled 串行拖住。
+                assertThat(elapsedMs).isLessThan(1_500L);
+            } finally {
+                pool.shutdownNow();
+                accept.interrupt();
+                for (Socket socket : held) {
+                    try {
+                        socket.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
+        }
+    }
+
     private static Post post(String method, String url, byte[] body) {
         return new Post(
                 method,

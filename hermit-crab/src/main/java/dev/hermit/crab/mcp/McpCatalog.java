@@ -104,10 +104,11 @@ final class McpCatalog {
                     .mimeType("text/markdown")
                     .build());
         }
-        for (ConchDoc conch : conches(principal)) {
+        for (ConchRegistry.Active active : conches(principal)) {
+            ConchDoc conch = active.doc();
             resources.add(McpSchema.Resource.builder(guideUri(conch.conch()), conch.conch())
                     .title(conch.title())
-                    .description(localMark(conch.conch(), "由元数据生成的使用指南"))
+                    .description(localMark(active.origin() == Origin.LOCAL, "由元数据生成的使用指南"))
                     .mimeType("text/markdown")
                     .build());
         }
@@ -123,24 +124,28 @@ final class McpCatalog {
             return Optional.empty();
         }
         ConchDoc conch = null;
+        boolean local = false;
         ArrayList<CapabilityRef> actions = new ArrayList<>();
         for (CapabilityRef ref : visible(principal)) {
             if (ref.conch().conch().equals(conchName)) {
                 conch = ref.conch();
+                local = ref.local();
                 actions.add(ref);
             }
         }
         if (conch == null) {
             return Optional.empty();
         }
-        return Optional.of(markdown(conch, actions, local(conch.conch())));
+        return Optional.of(markdown(conch, actions, local));
     }
 
     Map<String, Object> listSystems(ApiKeyPrincipal principal) {
+        List<CapabilityRef> visible = visible(principal);
         ArrayList<Map<String, Object>> systems = new ArrayList<>();
-        for (ConchDoc conch : conches(principal)) {
+        for (ConchRegistry.Active active : conches(visible)) {
+            ConchDoc conch = active.doc();
             int count = 0;
-            for (CapabilityRef ref : visible(principal)) {
+            for (CapabilityRef ref : visible) {
                 if (ref.conch().conch().equals(conch.conch())) {
                     count++;
                 }
@@ -148,7 +153,7 @@ final class McpCatalog {
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("conch", conch.conch());
             row.put("title", conch.title());
-            row.put("description", localMark(conch.conch(), conch.description()));
+            row.put("description", localMark(active.origin() == Origin.LOCAL, conch.description()));
             row.put("capabilities", count);
             systems.add(row);
         }
@@ -181,22 +186,30 @@ final class McpCatalog {
     }
 
     Optional<Map<String, Object>> describe(ApiKeyPrincipal principal, String name) {
-        Optional<CapabilityRef> found = find(principal, name);
-        if (found.isEmpty()) {
+        List<CapabilityRef> visible = visible(principal);
+        CapabilityRef ref = null;
+        if (name != null && !name.isBlank()) {
+            for (CapabilityRef candidate : visible) {
+                if (candidate.toolName().equals(name)) {
+                    ref = candidate;
+                    break;
+                }
+            }
+        }
+        if (ref == null) {
             return Optional.empty();
         }
-        CapabilityRef ref = found.get();
         Action action = ref.action();
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("name", ref.toolName());
         body.put("title", action.title());
-        String description = localMark(ref.conch().conch(), action.description());
+        String description = localMark(ref.local(), action.description());
         if ("mcp".equals(ref.conch().driver())) {
             description = "来源：源站 MCP。" + (description == null ? "" : description);
         }
         body.put("description", description);
         body.put("notes", action.notes());
-        body.put("related", related(ref, visible(principal)));
+        body.put("related", related(ref, visible));
         body.put("readOnly", CapabilityHttp.readOnly(action));
         body.put("idempotent", action.idempotent());
         body.put("inputSchema", action.inputJsonSchema());
@@ -212,29 +225,39 @@ final class McpCatalog {
         return Optional.of(body);
     }
 
-    private List<ConchDoc> conches(ApiKeyPrincipal principal) {
-        LinkedHashMap<String, ConchDoc> conches = new LinkedHashMap<>();
-        for (CapabilityRef ref : visible(principal)) {
-            conches.putIfAbsent(ref.conch().conch(), ref.conch());
+    private List<ConchRegistry.Active> conches(ApiKeyPrincipal principal) {
+        return conches(visible(principal));
+    }
+
+    private static List<ConchRegistry.Active> conches(List<CapabilityRef> visible) {
+        LinkedHashMap<String, ConchRegistry.Active> conches = new LinkedHashMap<>();
+        for (CapabilityRef ref : visible) {
+            conches.putIfAbsent(ref.conch().conch(), new ConchRegistry.Active(ref.conch(), ref.origin()));
         }
         return List.copyOf(conches.values());
     }
 
     private List<CapabilityRef> visible(ApiKeyPrincipal principal) {
         ArrayList<CapabilityRef> found = new ArrayList<>();
-        for (ConchDoc conch : registry.snapshot().values()) {
+        for (String name : registry.snapshot().keySet()) {
+            ConchRegistry.Active active = registry.active(name).orElse(null);
+            if (active == null) {
+                continue;
+            }
+            ConchDoc conch = active.doc();
+            Origin origin = active.origin();
             for (Action action : conch.actions().values()) {
                 if (!action.mcp().expose() || disabled.test(conch.conch(), action.name())) {
                     continue;
                 }
                 // 全范围 Key 列出本地工具。写了 conches 或 actions 的 Key 仍要在 conches 里点名。
-                if (local(conch.conch()) && !principal.scope().allowsLocal(conch.conch())) {
+                if (origin == Origin.LOCAL && !principal.scope().allowsLocal(conch.conch())) {
                     continue;
                 }
                 if (!principal.permits(conch.conch(), action.name(), CapabilityHttp.readOnly(action))) {
                     continue;
                 }
-                found.add(new CapabilityRef(conch, action));
+                found.add(new CapabilityRef(origin, conch, action));
             }
         }
         return found;
@@ -258,7 +281,7 @@ final class McpCatalog {
         boolean mcp = action.tool() != null;
         McpSchema.Tool.Builder builder = McpSchema.Tool.builder(ref.toolName(), withAccount(action))
                 .title(action.title())
-                .description(localMark(ref.conch().conch(), toolDescription(action, related(ref, visible))))
+                .description(localMark(ref.local(), toolDescription(action, related(ref, visible))))
                 .annotations(McpSchema.ToolAnnotations.builder()
                         .readOnlyHint(readOnly)
                         .destructiveHint(action.effectiveDestructive())
@@ -485,12 +508,8 @@ final class McpCatalog {
         return schema;
     }
 
-    private boolean local(String conch) {
-        return registry.origin(conch) == Origin.LOCAL;
-    }
-
-    private String localMark(String conch, String text) {
-        if (!local(conch)) {
+    private static String localMark(boolean local, String text) {
+        if (!local) {
             return text;
         }
         return LOCAL_PREFIX + (text == null ? "" : text);
@@ -530,6 +549,25 @@ final class McpCatalog {
         return List.copyOf(found);
     }
 
+    /**
+     * 判断能力自身是否已经声明了名为 {@code account} 的入参。
+     * HTTP 能力和 MCP 能力的入参结构都投影在 {@link Action#inputJsonSchema()} 的 {@code properties} 里。
+     */
+    static boolean hasAccountParam(Action action) {
+        if (action == null) {
+            return false;
+        }
+        Object raw = action.inputJsonSchema().get("properties");
+        if (raw instanceof Map<?, ?> map) {
+            for (Object key : map.keySet()) {
+                if ("account".equals(String.valueOf(key))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     static Map<String, Object> withAccount(Action action) {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         Object raw = action.inputJsonSchema().get("properties");
@@ -538,7 +576,7 @@ final class McpCatalog {
                 properties.put(String.valueOf(entry.getKey()), entry.getValue());
             }
         }
-        properties.put(properties.containsKey("account") ? "_account" : "account", accountSchema(
+        properties.put(hasAccountParam(action) ? "_account" : "account", accountSchema(
                 "可选。选择该规则包的命名账号，覆盖请求头 X-Hermit-Account。"));
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -742,9 +780,13 @@ final class McpCatalog {
         return value == null || value.isBlank();
     }
 
-    record CapabilityRef(ConchDoc conch, Action action) {
+    record CapabilityRef(Origin origin, ConchDoc conch, Action action) {
         String toolName() {
             return conch.conch() + "__" + action.name();
+        }
+
+        boolean local() {
+            return origin == Origin.LOCAL;
         }
     }
 }

@@ -248,7 +248,7 @@ final class McpCalls {
     ) {
         LinkedHashMap<String, Object> input = new LinkedHashMap<>(arguments);
         // 账号选择不是能力入参。校验前先拿掉，避免被当成未声明字段。
-        String selector = ref.action().input().containsKey("account") ? "_account" : "account";
+        String selector = McpCatalog.hasAccountParam(ref.action()) ? "_account" : "account";
         Object rawAccount = input.remove(selector);
         Optional<String> account = account(headerAccount, rawAccount);
         if (account == null) {
@@ -419,7 +419,7 @@ final class McpCalls {
         if (DevTraceStore.MCP_REFRESH_ACTION.equals(trace.action())) {
             return namesConch;
         }
-        ConchDoc doc = runtime.registry().find(trace.conch()).orElse(null);
+        ConchDoc doc = runtime.registry().find(trace.conch(), Origin.LOCAL).orElse(null);
         Action action = doc == null ? null : doc.actions().get(trace.action());
         if (action == null) {
             return !principal.scope().readOnlyOnly();
@@ -462,7 +462,7 @@ final class McpCalls {
         InvokeOutcome outcome;
         try {
             // MCP 不传 Idempotency-Key。同键回放只在 HTTP POST。
-            // 确认过的调用带上确认时那份规则包：等待期间换了版本就拒绝，不执行没确认过的内容。
+            // 确认过的调用带上确认时那份规则包和来源：等待期间换了版本或来源就拒绝，不执行没确认过的内容。
             outcome = runtime.invoker().invoke(
                     principal,
                     ref.conch().conch(),
@@ -474,7 +474,10 @@ final class McpCalls {
                     CallChannel.MCP,
                     attempt.traceId(),
                     false,
-                    confirmed ? ref.conch() : null);
+                    confirmed ? ref.conch() : null,
+                    confirmed ? ref.origin() : null,
+                    null,
+                    null);
         } catch (RuntimeException ex) {
             return fail(attempt, "INTERNAL", "internal error");
         }

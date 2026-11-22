@@ -1286,6 +1286,153 @@ class AuthoringMcpTest {
         }
     }
 
+    /** Issue 5a: trialLocal 原子核对快照与 Key 权限；窄 Key 试跑未加载或正式包也拒；保存本地包只看本地账号。 */
+    @org.junit.jupiter.api.Test
+    void trialLocalEnforcesSnapshotPrincipalAndLocalAccountGuidance() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("trial-atomic"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String roV1 = readWritePackage("snap_pkg", "1.0.0", "http://127.0.0.1:9");
+            assertThat(server.consoleImport(roV1).statusCode()).isEqualTo(200);
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "snap_pkg", "main", Actors.CONSOLE);
+            dev.hermit.common.model.ConchDoc v1Doc = server.runtime.registry()
+                    .find("snap_pkg", dev.hermit.crab.store.Origin.LOCAL).orElseThrow();
+
+            // 窄 Key 试跑不在范围的包（即使尚未加载或为正式包），应返回 FORBIDDEN。
+            CreatedApiKey narrow = server.runtime.apiKeys().create(
+                    "narrow", new ApiKeyScope(Set.of("mine_only"), Set.of(), false), Actors.CONSOLE);
+            String narrowSession = server.initialize(narrow.plaintext(), false);
+            JsonNode absentDenied = server.rpc(narrow.plaintext(), narrowSession, 2, "tools/call", Map.of(
+                    "name", "conch_trial_run", "arguments", Map.of("conch", "missing_pkg", "action", "show")));
+            assertThat(toolError(absentDenied).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(absentDenied)).isEqualTo(
+                    AuthoringCalls.NOT_IN_SCOPE_PREFIX + "missing_pkg" + AuthoringCalls.NOT_IN_SCOPE_SUFFIX);
+
+            // 即使原本是只读能力，本地快照变动后传入旧快照也必须以 409 CONFLICT 拒绝。
+            String roV2 = roV1.replace("version: 1.0.0", "version: 1.0.1");
+            server.runtime.registry().put(ConchParser.parse(roV2), dev.hermit.crab.store.Origin.LOCAL);
+            dev.hermit.crab.store.ApiKeyPrincipal fullPrincipal =
+                    server.runtime.apiKeys().authenticate(server.key.plaintext()).orElseThrow();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> server.runtime.trialLocal(
+                            "snap_pkg", "show", java.util.Optional.of("main"), Map.of(), "t-snap",
+                            fullPrincipal.id(), v1Doc, fullPrincipal, false))
+                    .isInstanceOf(dev.hermit.crab.runtime.TrialRejected.class)
+                    .satisfies(ex -> {
+                        dev.hermit.crab.runtime.TrialRejected rej = (dev.hermit.crab.runtime.TrialRejected) ex;
+                        assertThat(rej.status()).isEqualTo(409);
+                        assertThat(rej.code()).isEqualTo(dev.hermit.common.error.ErrorCode.CONFLICT);
+                    });
+
+            // 即使 expectedSnapshot 为 null，trialLocal 仍原子校验 principal 范围、只读限制和破坏性确认。
+            dev.hermit.crab.store.ApiKeyPrincipal narrowPrincipal =
+                    server.runtime.apiKeys().authenticate(narrow.plaintext()).orElseThrow();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> server.runtime.trialLocal(
+                            "snap_pkg", "show", java.util.Optional.of("main"), Map.of(), "t-narrow",
+                            narrowPrincipal.id(), null, narrowPrincipal, false))
+                    .isInstanceOf(dev.hermit.crab.runtime.TrialRejected.class)
+                    .satisfies(ex -> assertThat(((dev.hermit.crab.runtime.TrialRejected) ex).code())
+                            .isEqualTo(dev.hermit.common.error.ErrorCode.FORBIDDEN));
+
+            CreatedApiKey roKey = server.runtime.apiKeys().create(
+                    "ro-all", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+            dev.hermit.crab.store.ApiKeyPrincipal roPrincipal =
+                    server.runtime.apiKeys().authenticate(roKey.plaintext()).orElseThrow();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> server.runtime.trialLocal(
+                            "snap_pkg", "save_note", java.util.Optional.of("main"), Map.of(), "t-ro",
+                            roPrincipal.id(), null, roPrincipal, false))
+                    .isInstanceOf(dev.hermit.crab.runtime.TrialRejected.class)
+                    .satisfies(ex -> {
+                        dev.hermit.crab.runtime.TrialRejected rej = (dev.hermit.crab.runtime.TrialRejected) ex;
+                        assertThat(rej.code()).isEqualTo(dev.hermit.common.error.ErrorCode.FORBIDDEN);
+                        assertThat(rej.getMessage()).contains("save_note 不是只读");
+                    });
+
+            assertThat(server.consoleImport(writable("destr_pkg", "1.0.0")).statusCode()).isEqualTo(200);
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "destr_pkg", "main", Actors.CONSOLE);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> server.runtime.trialLocal(
+                            "destr_pkg", "write_note", java.util.Optional.of("main"), Map.of(), "t-unconf",
+                            fullPrincipal.id(), null, fullPrincipal, false))
+                    .isInstanceOf(dev.hermit.crab.runtime.TrialRejected.class)
+                    .satisfies(ex -> assertThat(((dev.hermit.crab.runtime.TrialRejected) ex).code())
+                            .isEqualTo(dev.hermit.common.error.ErrorCode.CONFLICT));
+
+            // 同名正式包生效且有账号，但本地包没有账号时，覆盖保存本地包应提示新建本地账号（NEXT_ACCOUNT）。
+            String dualV1 = LocalConchBehaviorTest.ping("dual_pkg", "1.0.0");
+            server.runtime.registry().put(ConchParser.parse(dualV1), dev.hermit.crab.store.Origin.OFFICIAL);
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.OFFICIAL, "dual_pkg", "prod", Actors.CONSOLE);
+            String fullSession = server.initialize(false);
+            assertThat(structured(server.call(fullSession, "conch_save_local", Map.of("yaml", dualV1)))
+                    .path("ok").asBoolean()).isTrue();
+            String dualV2 = dualV1.replace("version: 1.0.0", "version: 1.0.1");
+            JsonNode replaced = server.call(fullSession, "conch_save_local", Map.of("yaml", dualV2));
+            assertThat(structured(replaced).path("ok").asBoolean()).as(replaced.toString()).isTrue();
+            assertThat(structured(replaced).path("replaced").asBoolean()).isTrue();
+            assertThat(structured(replaced).path("next").asText()).isEqualTo(AuthoringCalls.NEXT_ACCOUNT);
+        }
+    }
+
+    /** Issue 5c: debug_trace 核对 read_only 必须查 Origin.LOCAL，不能被同名生效的 OFFICIAL 只读定义放行。 */
+    @org.junit.jupiter.api.Test
+    void debugTraceUsesLocalReadOnlyNotActiveOfficial() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("dual-trace"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String localWrite = """
+                    conch: dual_trace
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    base_url: http://127.0.0.1:9/
+                    title: 本地写
+                    description: 本地写能力。
+                    credentials: {}
+                    actions:
+                      act:
+                        title: 写操作
+                        description: 本地非只读。
+                        idempotent: false
+                        mcp: {expose: true, read_only: false, destructive: false}
+                        steps:
+                          - set: {message: local-write}
+                        output:
+                          message: {type: string, description: 文本}
+                        examples:
+                          - input: {}
+                            output: {message: local-write}
+                        notes: 无
+                        related: []
+                    """;
+            String officialRead = localWrite
+                    .replace("read_only: false", "read_only: true")
+                    .replace("local-write", "official-read");
+            assertThat(server.consoleImport(localWrite).statusCode()).isEqualTo(200);
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "dual_trace", "main", Actors.CONSOLE);
+            String fullSession = server.initialize(false);
+            JsonNode ran = server.call(fullSession, "conch_trial_run", Map.of("conch", "dual_trace", "action", "act"));
+            assertThat(ran.path("result").path("isError").asBoolean(true)).as(ran.toString()).isFalse();
+            String traceId = structured(ran).path("traceId").asText();
+            assertThat(traceId).isNotBlank();
+
+            // 同名正式包生效，且在正式包里 act 是 read_only: true。
+            server.runtime.registry().put(ConchParser.parse(officialRead), dev.hermit.crab.store.Origin.OFFICIAL);
+            assertThat(server.runtime.registry().activate("dual_trace", dev.hermit.crab.store.Origin.OFFICIAL)).isTrue();
+            assertThat(server.runtime.registry().origin("dual_trace")).isEqualTo(dev.hermit.crab.store.Origin.OFFICIAL);
+
+            CreatedApiKey namedReadOnly = server.runtime.apiKeys().create(
+                    "named-ro", new ApiKeyScope(Set.of("dual_trace"), Set.of(), true), Actors.CONSOLE);
+            String roSession = server.initialize(namedReadOnly.plaintext(), false);
+            JsonNode denied = server.rpc(namedReadOnly.plaintext(), roSession, 2, "tools/call", Map.of(
+                    "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+            assertThat(toolError(denied).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(denied)).isEqualTo(McpCalls.TRACE_DENIED);
+
+            CreatedApiKey namedRw = server.runtime.apiKeys().create(
+                    "named-rw", new ApiKeyScope(Set.of("dual_trace"), Set.of(), false), Actors.CONSOLE);
+            String rwSession = server.initialize(namedRw.plaintext(), false);
+            JsonNode allowed = server.rpc(namedRw.plaintext(), rwSession, 2, "tools/call", Map.of(
+                    "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+            assertThat(allowed.path("result").path("isError").asBoolean(true)).as(allowed.toString()).isFalse();
+        }
+    }
+
     private static String hostYaml(String version, String url) {
         return """
                 conch: host_mcp

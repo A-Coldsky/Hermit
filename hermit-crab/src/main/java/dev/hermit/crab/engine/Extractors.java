@@ -215,10 +215,9 @@ final class Extractors {
         try {
             List<Element> elements;
             if (source.element != null) {
-                elements = source.element.select(selector);
-                if (rewritesDocument(selector)) {
-                    source.forgetParsed();
-                }
+                // :matchText 会把文本节点替换成合成元素，克隆后再查，不动父文档和同行的其它字段。
+                Element target = rewritesDocument(selector) ? source.element.clone() : source.element;
+                elements = target.select(selector);
             } else if (rewritesDocument(selector)) {
                 // :matchText 会往文档里插入合成元素，不能落在各字段共用的那一份上。
                 elements = Jsoup.parse(source.text()).select(selector);
@@ -259,7 +258,12 @@ final class Extractors {
         Object read;
         try {
             if (source.json != null) {
-                read = JsonPath.read(source.json, selector);
+                // 函数（append 等）会就地改对象或数组；带括号的表达式先序列化成独立副本，不动共享 JSON 和 vars。
+                if (selector.indexOf('(') >= 0 && (source.json instanceof Map<?, ?> || source.json instanceof List<?>)) {
+                    read = JsonPath.read(JSON.writeValueAsString(source.json), selector);
+                } else {
+                    read = JsonPath.read(source.json, selector);
+                }
             } else {
                 DocumentContext shared = source.jsonContext();
                 // 函数（append 等）会就地改数组，带括号的表达式各读各的一份。
@@ -269,7 +273,7 @@ final class Extractors {
             throw new PathMissing();
         } catch (InvalidPathException ex) {
             throw problem("JSON 路径无法解析");
-        } catch (RuntimeException ex) {
+        } catch (JsonProcessingException | RuntimeException ex) {
             throw problem("响应不是 JSON");
         }
         boolean indefinite = selector.contains("*")
@@ -972,12 +976,6 @@ final class Extractors {
                 document = Jsoup.parse(element != null ? element.outerHtml() : text());
             }
             return document;
-        }
-
-        /** 元素被就地改过之后，按它的 HTML 解析出来的缓存作废。 */
-        private void forgetParsed() {
-            document = null;
-            dom = null;
         }
 
         private org.w3c.dom.Document dom() {

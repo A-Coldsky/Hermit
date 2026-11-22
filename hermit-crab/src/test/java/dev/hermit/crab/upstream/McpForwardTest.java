@@ -424,6 +424,10 @@ class McpForwardTest {
             JsonNode timed = lab.call("search_customer", Map.of("q", "ada"), null, null);
             assertThat(timed.path("error").path("code").asText()).isEqualTo("TIMEOUT");
             assertThat(timed.path("error").path("message").asText()).isEqualTo(McpForwarder.DEADLINE);
+            long cancelWait = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (upstream.cancels() < 1 && System.nanoTime() < cancelWait) {
+                Thread.sleep(20);
+            }
             assertThat(upstream.cancels()).isEqualTo(1);
         }
         try (Upstream upstream = new Upstream();
@@ -794,6 +798,62 @@ class McpForwardTest {
                 first.join(5_000);
                 second.join(5_000);
             }
+        }
+    }
+
+    @Test
+    void mcpToolWithAccountParameterUsesUnderscoreAccountSelector() throws Exception {
+        try (Upstream upstream = new Upstream();
+                Lab lab = Lab.open(temp.resolve("mcp-account-param"), upstream, 4, 30)) {
+            String yaml = """
+                    conch: vendor_crm
+                    version: 1.0.0
+                    driver: mcp
+                    min_crab_version: 1.1.0
+                    title: 客户系统
+                    description: 含 account 业务入参的 MCP 工具。
+                    credentials:
+                      token: {type: secret, label: 令牌, required: true}
+                    upstream:
+                      url: http://127.0.0.1:%d/mcp
+                      transport: streamable_http
+                      auth: {type: headers}
+                      headers:
+                        Authorization: "Bearer {{credential.token}}"
+                    actions:
+                      lookup_billing:
+                        tool: lookupBilling
+                        title: 查询账单
+                        description: 按业务账号查询。
+                        mcp: {read_only: true}
+                        input_schema:
+                          type: object
+                          properties:
+                            account: {type: string, description: 业务账号}
+                          required: [account]
+                    """.formatted(upstream.port());
+            lab.doc = ConchParser.parse(yaml);
+            lab.install();
+            String bobToken = "bob-upstream-token-999";
+            lab.runtime.admin().createAccount("vendor_crm", "bob", Actors.CLI);
+            lab.runtime.admin().writeCredentials(lab.doc, "bob", Map.of("token", bobToken), Actors.CLI);
+
+            JsonNode listed = lab.mcp("tools/list", null);
+            JsonNode lookup = tool(listed, "vendor_crm__lookup_billing");
+            JsonNode properties = lookup.path("inputSchema").path("properties");
+            assertThat(properties.has("account")).isTrue();
+            assertThat(properties.has("_account")).isTrue();
+
+            JsonNode called = lab.mcp("tools/call", Map.of(
+                    "name", "vendor_crm__lookup_billing",
+                    "arguments", Map.of("account", "biz-acct-42", "_account", "bob")));
+            assertThat(called.path("result").path("isError").asBoolean(true)).as(called.toString()).isFalse();
+            assertThat(upstream.toolHits()).hasSize(1);
+            Hit hit = upstream.toolHits().get(0);
+            assertThat(hit.authorization).isEqualTo("Bearer " + bobToken);
+            JsonNode forwardedArgs = ApiJson.tree(hit.body).path("params").path("arguments");
+            assertThat(forwardedArgs.path("account").asText()).isEqualTo("biz-acct-42");
+            assertThat(forwardedArgs.has("_account")).isFalse();
         }
     }
 

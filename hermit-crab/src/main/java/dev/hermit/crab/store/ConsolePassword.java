@@ -45,6 +45,7 @@ public final class ConsolePassword {
     private final DataSource dataSource;
     private final Clock clock;
     private final SecureRandom random = new SecureRandom();
+    private final Object verifyLock = new Object();
 
     public ConsolePassword(DataSource dataSource, Clock clock) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
@@ -92,11 +93,13 @@ public final class ConsolePassword {
         } finally {
             Arrays.fill(chars, '\0');
         }
-        Db.transaction(dataSource, connection -> {
-            upsert(connection, salt, hash, ITERATIONS, clock.instant());
-            deleteFailures(connection);
-            return null;
-        });
+        synchronized (verifyLock) {
+            Db.transaction(dataSource, connection -> {
+                upsert(connection, salt, hash, ITERATIONS, clock.instant());
+                deleteFailures(connection);
+                return null;
+            });
+        }
         Arrays.fill(hash, (byte) 0);
         Arrays.fill(salt, (byte) 0);
     }
@@ -109,24 +112,26 @@ public final class ConsolePassword {
      */
     public Result verify(String password) {
         String attempt = password == null ? "" : password;
-        return Db.transaction(dataSource, connection -> {
-            Stored stored = select(connection);
-            if (stored == null) {
-                return Result.UNSET;
-            }
-            Instant now = clock.instant();
-            deleteExpired(connection, now);
-            boolean locked = countRecent(connection, now) >= MAX_FAILURES;
-            boolean matches = matches(attempt, stored);
-            if (!matches || locked) {
-                if (!locked) {
-                    insertFailure(connection, now);
+        synchronized (verifyLock) {
+            return Db.transaction(dataSource, connection -> {
+                Stored stored = select(connection);
+                if (stored == null) {
+                    return Result.UNSET;
                 }
-                return Result.REJECTED;
-            }
-            deleteFailures(connection);
-            return Result.ACCEPTED;
-        });
+                Instant now = clock.instant();
+                deleteExpired(connection, now);
+                boolean locked = countRecent(connection, now) >= MAX_FAILURES;
+                boolean matches = matches(attempt, stored);
+                if (!matches || locked) {
+                    if (!locked) {
+                        insertFailure(connection, now);
+                    }
+                    return Result.REJECTED;
+                }
+                deleteFailures(connection);
+                return Result.ACCEPTED;
+            });
+        }
     }
 
     private static boolean matches(String password, Stored stored) {

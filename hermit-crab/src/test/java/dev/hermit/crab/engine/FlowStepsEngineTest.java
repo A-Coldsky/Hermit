@@ -208,6 +208,11 @@ class FlowStepsEngineTest {
                 - repeat:
                     max: 5
                     steps:
+                      - if:
+                          equals: {loop.index: "2"}
+                          present: rows
+                          then:
+                            - set: {kept: "yes"}
                       - request: {method: GET, path: /list, query: {page: "{{loop.index}}"}}
                       - extract:
                           next: {jsonpath: "$.next", optional: true}
@@ -219,8 +224,10 @@ class FlowStepsEngineTest {
                     collect: {all: rows}
                     until: {not_present: next}
                 - set: {rounds: "{{loop.rounds}}", truncated: "{{loop.truncated}}"}
-                """, LIST_OUTPUT));
+                """, LIST_OUTPUT.replaceAll(
+                        "(?m)^(\\s*)rounds: (.*)$", "$1rounds: $2\n$1kept: {type: string, description: k}")));
         assertThat(result.success()).as(message(result)).isTrue();
+        assertThat(((Map<?, ?>) result.data()).get("kept")).as("下一轮读得到上一轮的列表").isEqualTo("yes");
         assertThat(((Map<?, ?>) result.data()).get("all")).isEqualTo(List.of(
                 Map.of("id", "1a"), Map.of("id", "1b"), Map.of("id", "3a"), Map.of("id", "3b")));
     }

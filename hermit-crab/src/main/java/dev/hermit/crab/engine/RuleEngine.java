@@ -5,6 +5,7 @@ import java.io.StringWriter;
 import java.net.URI;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -1117,6 +1118,7 @@ public final class RuleEngine implements ConchExecutor {
                 gathered.put(target, new ArrayList<>());
             }
         }
+        Map<String, Object> taken = new HashMap<>();
         int rounds = 0;
         boolean stopped = false;
         try {
@@ -1127,20 +1129,15 @@ public final class RuleEngine implements ConchExecutor {
                 rounds++;
                 block.round = rounds;
                 vars.put(FlowSteps.LOOP, Map.of("index", rounds));
-                if (collect != null) {
-                    // 这一轮没写的列表不能把上一轮的再接一遍。
-                    for (Object source : collect.values()) {
-                        String name = Values.text(source);
-                        if (name != null && name.indexOf('.') < 0) {
-                            vars.remove(name);
-                        }
-                    }
-                }
                 runBlock(body, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
                         0, hideResponseBody, conch, block, at, depth + 1);
                 if (collect != null) {
                     for (Map.Entry<String, Object> entry : collect.entrySet()) {
                         Object value = StepRunner.lookup(vars, Values.text(entry.getValue()));
+                        // 还是上一轮接过的那个列表：这一轮没有重新写它，不再接一遍。
+                        if (value != null && value == taken.put(entry.getKey(), value)) {
+                            continue;
+                        }
                         if (value instanceof List<?> list) {
                             gathered.get(entry.getKey()).addAll(list);
                         } else if (value != null) {
@@ -1213,57 +1210,16 @@ public final class RuleEngine implements ConchExecutor {
         }
     }
 
-    /** 一定会跑的步骤引用的登录名字必须有；if / repeat 里的只先登录，缺了等真用到再报。 */
+    /** 一定会跑的步骤引用的登录名字必须有；if / repeat 里的不提前要求，也不为它重新登录，真用到时缺了再报。 */
     private void requireStepLoginRefs(LoginScope scope, List<Step> steps) {
         LinkedHashSet<String> must = new LinkedHashSet<>();
-        LinkedHashSet<String> may = new LinkedHashSet<>();
         for (Step step : steps) {
-            if (FlowSteps.isFlow(step)) {
-                flowLoginNames(step, may);
-            } else {
+            if (!FlowSteps.isFlow(step)) {
                 collectLoginNames(step, must);
             }
         }
         for (String name : must) {
             scope.require(name);
-        }
-        may.removeAll(must);
-        for (String name : may) {
-            scope.prepare(name);
-        }
-    }
-
-    private void flowLoginNames(Step step, Set<String> names) {
-        Map<String, Object> own = FlowSteps.own(step);
-        collectLoginNames(own, names);
-        conditionLoginNames(own, names);
-        if (own.get("until") instanceof Map<?, ?> until) {
-            conditionLoginNames(until, names);
-        }
-        for (String key : FlowSteps.branchKeys(step)) {
-            for (Step child : FlowSteps.branch(step, key)) {
-                if (FlowSteps.isFlow(child)) {
-                    flowLoginNames(child, names);
-                } else {
-                    collectLoginNames(child, names);
-                }
-            }
-        }
-    }
-
-    /** present、equals 这些判断键里直接写的变量名。 */
-    private static void conditionLoginNames(Map<?, ?> condition, Set<String> names) {
-        for (String key : FlowSteps.VARIABLE_CONDITIONS) {
-            Object value = condition.get(key);
-            Iterable<?> paths = value instanceof Map<?, ?> map ? map.keySet()
-                    : value instanceof List<?> list ? list
-                    : value == null ? List.of() : List.of(value);
-            for (Object path : paths) {
-                String name = loginField(String.valueOf(path));
-                if (name != null) {
-                    names.add(name);
-                }
-            }
         }
     }
 
@@ -1915,13 +1871,6 @@ public final class RuleEngine implements ConchExecutor {
             login(this);
             if (lookup(name) == null) {
                 throw missing(name);
-            }
-        }
-
-        /** 值还没有、这次调用也没登录过时先登录；登录后仍没有不算失败。 */
-        private void prepare(String name) {
-            if (lookup(name) == null && !loggingIn && !loggedInThisCall) {
-                login(this);
             }
         }
 

@@ -84,6 +84,7 @@ import dev.hermit.crab.store.CallChannel;
 import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.store.DevTraceStore;
 import dev.hermit.crab.store.EncryptedLoginSnapshotStore;
+import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
 import dev.hermit.crab.store.Origin;
@@ -1307,6 +1308,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                         fileStage.sweep();
                     } catch (RuntimeException ex) {
                         LOG.warning("file stage sweep failed: " + ex.getClass().getName());
+                    }
+                }, 1, 1, TimeUnit.MINUTES);
+                scheduler.scheduleWithFixedDelay(() -> {
+                    try {
+                        sessions.closeIdleConnections(OutboundHttp.IDLE_CONNECTION_LIMIT);
+                    } catch (RuntimeException ex) {
+                        LOG.warning("idle connection sweep failed: " + ex.getClass().getName());
                     }
                 }, 1, 1, TimeUnit.MINUTES);
             }

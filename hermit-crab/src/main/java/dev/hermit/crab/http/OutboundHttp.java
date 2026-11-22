@@ -27,6 +27,9 @@ public final class OutboundHttp {
     public static final Duration ENGINE_SOCKET = Duration.ofSeconds(15);
     public static final TimeValue VALIDATE_AFTER_INACTIVITY = TimeValue.ofSeconds(2);
 
+    /** 账号连接池里的连接闲置超过这个时长就关掉，每分钟检查一次。固定值，不进 config.yml。 */
+    public static final Duration IDLE_CONNECTION_LIMIT = Duration.ofMinutes(1);
+
     public static final String BODY_ENDED_BY_IDLE = "body_ended_by_idle";
     public static final String BODY_ENDED_BY_IDLE_MESSAGE =
             "响应保持连接，但没有 Content-Length 或分块编码。空闲超时后已把读到的内容当作正文。";

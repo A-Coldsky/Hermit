@@ -167,6 +167,59 @@ class FileStageHttpTest {
             TestServer.Reply tooLarge = server.call("GET", "/api/file_oa/export_report", key, "alice", null, null);
             assertThat(tooLarge.status()).isNotEqualTo(200);
             assertThat(tooLarge.body()).contains("单文件上限");
+
+            // 没有 Content-Length 的超限文件收到一半才发现：半截文件不留在暂存区，也不占容量。
+            JsonNode before = server.console("GET", "/console/api/files", null, true).json().path("data");
+            long filesOnDisk = countFiles(server);
+            server.fixture.fileChunked = true;
+            TestServer.Reply chunkedTooLarge = server.call(
+                    "GET", "/api/file_oa/export_report", key, "alice", null, null);
+            assertThat(chunkedTooLarge.status()).isNotEqualTo(200);
+            assertThat(chunkedTooLarge.body()).contains("单文件上限");
+            // 声明了长度却提前断开的也一样。
+            server.fixture.fileChunked = false;
+            server.fixture.fileBytes = new byte[1000];
+            server.fixture.fileCutAfter = 400;
+            TestServer.Reply cut = server.call("GET", "/api/file_oa/export_report", key, "alice", null, null);
+            assertThat(cut.status()).isNotEqualTo(200);
+            JsonNode after = server.console("GET", "/console/api/files", null, true).json().path("data");
+            assertThat(after.path("usage")).isEqualTo(before.path("usage"));
+            assertThat(after.path("files").size()).isEqualTo(before.path("files").size());
+            assertThat(countFiles(server)).isEqualTo(filesOnDisk);
+
+            // 分块编码的大文件：字节、大小和摘要都对。
+            server.console("PUT", "/console/api/files/settings",
+                    "{\"ttlSeconds\":600,\"maxFileBytes\":1048576,\"maxTotalBytes\":4194304}", true);
+            byte[] big = new byte[300 * 1024 + 7];
+            new java.util.Random(7).nextBytes(big);
+            server.fixture.fileBytes = big;
+            server.fixture.fileCutAfter = -1;
+            server.fixture.fileChunked = true;
+            TestServer.Reply bigReply = server.call("GET", "/api/file_oa/export_report", key, "alice", null, null);
+            assertThat(bigReply.status()).as(bigReply.body()).isEqualTo(200);
+            JsonNode bigFile = bigReply.json().path("data").path("file");
+            assertThat(bigFile.path("size").asLong()).isEqualTo(big.length);
+            assertThat(server.runtime.fileStage().find(bigFile.path("fileId").asText(), null)
+                    .map(dev.hermit.crab.files.StagedFile::sha256)
+                    .or(() -> server.runtime.fileStage().list().stream()
+                            .filter(f -> f.fileId().equals(bigFile.path("fileId").asText()))
+                            .map(dev.hermit.crab.files.StagedFile::sha256).findFirst())
+                    .orElseThrow()).isEqualTo(java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(big)));
+            assertThat(HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create(bigFile.path("url").asText())).build(),
+                    HttpResponse.BodyHandlers.ofByteArray()).body()).isEqualTo(big);
+            assertThat(countFiles(server)).isEqualTo(filesOnDisk + 1);
+        }
+    }
+
+    private long countFiles(TestServer server) throws Exception {
+        Path dir = temp.resolve("files").resolve("data").resolve("files");
+        if (!java.nio.file.Files.isDirectory(dir)) {
+            return 0;
+        }
+        try (java.util.stream.Stream<Path> entries = java.nio.file.Files.list(dir)) {
+            return entries.count();
         }
     }
 

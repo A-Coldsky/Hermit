@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -26,6 +27,7 @@ import javax.xml.xpath.XPathFactory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import com.jayway.jsonpath.DocumentContext;
 import com.jayway.jsonpath.InvalidPathException;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.PathNotFoundException;
@@ -55,6 +57,10 @@ final class Extractors {
      */
     private static final int MATCH_THREADS = 32;
     private static final ThreadPoolExecutor MATCHES = newMatchPool();
+    /** 工厂的查找比求值贵得多，而且不保证线程安全，所以每个线程留一个。 */
+    private static final ThreadLocal<XPathFactory> XPATH_FACTORY = ThreadLocal.withInitial(XPathFactory::newInstance);
+    private static final ThreadLocal<javax.xml.transform.TransformerFactory> TRANSFORMER_FACTORY =
+            ThreadLocal.withInitial(javax.xml.transform.TransformerFactory::newInstance);
 
     private Extractors() {
     }
@@ -67,6 +73,8 @@ final class Extractors {
             long deadlineNanos
     ) {
         int count = 0;
+        // 同一步骤里多个字段读同一份正文时共用一个来源，HTML、JSON 只解析一次。
+        Sources sources = new Sources();
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
             if (ConchRegistry.RESERVED.contains(entry.getKey())) {
                 throw problem("不能写入保留变量");
@@ -79,11 +87,12 @@ final class Extractors {
             try {
                 value = extractSpec(
                         child,
-                        responseSource(vars, child.get("from") == null),
+                        responseSource(vars, child.get("from") == null, sources),
                         vars,
                         filters,
                         templates,
-                        deadlineNanos);
+                        deadlineNanos,
+                        sources);
             } catch (RuleProblem ex) {
                 // 试跑失败时要能看出是哪个变量、哪条表达式没取到。
                 throw problem("提取 " + entry.getKey() + " 失败：" + ex.summary);
@@ -100,9 +109,12 @@ final class Extractors {
             Map<String, Object> vars,
             FilterRegistry filters,
             TemplateEngine templates,
-            long deadlineNanos
+            long deadlineNanos,
+            Sources sources
     ) {
-        Source source = spec.get("from") == null ? inherited : sourceFrom(Values.text(spec.get("from")), vars);
+        Source source = spec.get("from") == null
+                ? inherited
+                : sourceFrom(Values.text(spec.get("from")), vars, sources);
         String kind = selectorKind(spec);
         String selector = Values.text(spec.get(kind));
         String where = label(kind) + " " + clip(selector);
@@ -134,7 +146,7 @@ final class Extractors {
                     if (child == null) {
                         throw problem("子规格必须是映射");
                     }
-                    row.put(entry.getKey(), extractSpec(child, match, vars, filters, templates, deadlineNanos));
+                    row.put(entry.getKey(), extractSpec(child, match, vars, filters, templates, deadlineNanos, sources));
                 }
                 rows.add(Collections.unmodifiableMap(row));
             }
@@ -201,9 +213,18 @@ final class Extractors {
 
     private static List<Source> css(String selector, Source source) {
         try {
-            List<Element> elements = source.element != null
-                    ? source.element.select(selector)
-                    : Jsoup.parse(source.text()).select(selector);
+            List<Element> elements;
+            if (source.element != null) {
+                elements = source.element.select(selector);
+                if (rewritesDocument(selector)) {
+                    source.forgetParsed();
+                }
+            } else if (rewritesDocument(selector)) {
+                // :matchText 会往文档里插入合成元素，不能落在各字段共用的那一份上。
+                elements = Jsoup.parse(source.text()).select(selector);
+            } else {
+                elements = source.document().select(selector);
+            }
             ArrayList<Source> matches = new ArrayList<>();
             for (Element element : elements) {
                 matches.add(Source.element(element));
@@ -216,14 +237,14 @@ final class Extractors {
         }
     }
 
+    private static boolean rewritesDocument(String selector) {
+        return selector.toLowerCase(Locale.ROOT).contains(":matchtext");
+    }
+
     private static List<Source> xpath(String selector, Source source) {
         try {
-            org.jsoup.nodes.Document document = source.element != null
-                    ? Jsoup.parse(source.element.outerHtml())
-                    : Jsoup.parse(source.text());
-            org.w3c.dom.Document dom = new W3CDom().namespaceAware(false).fromJsoup(document);
-            XPath xpath = XPathFactory.newInstance().newXPath();
-            NodeList nodes = (NodeList) xpath.evaluate(selector, dom, XPathConstants.NODESET);
+            XPath xpath = XPATH_FACTORY.get().newXPath();
+            NodeList nodes = (NodeList) xpath.evaluate(selector, source.dom(), XPathConstants.NODESET);
             ArrayList<Source> matches = new ArrayList<>();
             for (int i = 0; i < nodes.getLength(); i++) {
                 matches.add(Source.node(nodes.item(i)));
@@ -240,12 +261,9 @@ final class Extractors {
             if (source.json != null) {
                 read = JsonPath.read(source.json, selector);
             } else {
-                try {
-                    JSON.readTree(source.text());
-                } catch (JsonProcessingException ex) {
-                    throw problem("响应不是 JSON");
-                }
-                read = JsonPath.read(source.text(), selector);
+                DocumentContext shared = source.jsonContext();
+                // 函数（append 等）会就地改数组，带括号的表达式各读各的一份。
+                read = selector.indexOf('(') < 0 ? shared.read(selector) : JsonPath.read(source.text(), selector);
             }
         } catch (PathNotFoundException ex) {
             throw new PathMissing();
@@ -401,7 +419,7 @@ final class Extractors {
         return match.text == null ? "" : match.text;
     }
 
-    private static Source responseSource(Map<String, Object> vars, boolean required) {
+    private static Source responseSource(Map<String, Object> vars, boolean required, Sources sources) {
         if (!required) {
             return Source.text("");
         }
@@ -410,10 +428,10 @@ final class Extractors {
             throw problem("没有响应");
         }
         Object body = map.get("body");
-        return Source.text(body == null ? "" : String.valueOf(body));
+        return sources.text(body == null ? "" : String.valueOf(body));
     }
 
-    private static Source sourceFrom(String name, Map<String, Object> vars) {
+    private static Source sourceFrom(String name, Map<String, Object> vars, Sources sources) {
         if (!vars.containsKey(name)) {
             throw problem(missingSource(name));
         }
@@ -422,7 +440,7 @@ final class Extractors {
             return Source.text("");
         }
         if (value instanceof String text) {
-            return Source.text(text);
+            return sources.text(text);
         }
         if (value instanceof Map<?, ?> || value instanceof List<?>) {
             return Source.json(value);
@@ -448,8 +466,7 @@ final class Extractors {
 
     private static String outerXml(Node node) {
         try {
-            javax.xml.transform.Transformer transformer = javax.xml.transform.TransformerFactory.newInstance()
-                    .newTransformer();
+            javax.xml.transform.Transformer transformer = TRANSFORMER_FACTORY.get().newTransformer();
             transformer.setOutputProperty(javax.xml.transform.OutputKeys.OMIT_XML_DECLARATION, "yes");
             StringWriter writer = new StringWriter();
             transformer.transform(
@@ -931,11 +948,58 @@ final class Extractors {
         }
     }
 
+    /** 一次 extract 步骤里按文本内容复用来源。变量中途被改写时文本不同，拿到的是另一个来源。 */
+    private static final class Sources {
+        private final Map<String, Source> byText = new java.util.HashMap<>();
+
+        private Source text(String text) {
+            return byText.computeIfAbsent(text, Source::text);
+        }
+    }
+
     private static final class Source {
         private final String text;
         private final Element element;
         private final Node node;
         private final Object json;
+        /** 下面三项是解析结果的缓存，只读不改；解析失败不缓存，下次照样报同一个错。 */
+        private org.jsoup.nodes.Document document;
+        private org.w3c.dom.Document dom;
+        private DocumentContext jsonContext;
+
+        private org.jsoup.nodes.Document document() {
+            if (document == null) {
+                document = Jsoup.parse(element != null ? element.outerHtml() : text());
+            }
+            return document;
+        }
+
+        /** 元素被就地改过之后，按它的 HTML 解析出来的缓存作废。 */
+        private void forgetParsed() {
+            document = null;
+            dom = null;
+        }
+
+        private org.w3c.dom.Document dom() {
+            if (dom == null) {
+                dom = new W3CDom().namespaceAware(false).fromJsoup(document());
+            }
+            return dom;
+        }
+
+        /** 先用 Jackson 判定是不是 JSON，再交给 JsonPath 自己解析，和逐字段解析时的结果一致。 */
+        private DocumentContext jsonContext() {
+            if (jsonContext == null) {
+                String body = text();
+                try {
+                    JSON.readTree(body);
+                } catch (JsonProcessingException ex) {
+                    throw problem("响应不是 JSON");
+                }
+                jsonContext = JsonPath.parse(body);
+            }
+            return jsonContext;
+        }
 
         private Source(String text, Element element, Node node, Object json) {
             this.text = text;

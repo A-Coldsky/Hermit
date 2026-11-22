@@ -115,6 +115,9 @@ final class FileSteps {
     /** 把 2xx 响应的正文存进暂存区，返回 {@code response.file} 的内容；其它状态返回 null。 */
     static StagedFile save(Map<String, Object> spec, HttpResult result) {
         if (result.status() < 200 || result.status() >= 300 || result.bodyBytes() == null) {
+            if (result.spool() != null) {
+                result.spool().discard();
+            }
             return null;
         }
         String name = null;
@@ -129,10 +132,17 @@ final class FileSteps {
             name = pathName(result.url());
         }
         try {
-            return scope().store(result.bodyBytes(), name, result.headers().get("content-type"));
+            String type = result.headers().get("content-type");
+            return result.spool() != null
+                    ? scope().commit(result.spool(), name, type)
+                    : scope().store(result.bodyBytes(), name, type);
         } catch (FileStageException ex) {
             throw new RuleProblem(
                     ErrorCode.UPSTREAM_ERROR, ex.getMessage(), result.method(), result.path(), result.status());
+        } finally {
+            if (result.spool() != null) {
+                result.spool().discard();
+            }
         }
     }
 

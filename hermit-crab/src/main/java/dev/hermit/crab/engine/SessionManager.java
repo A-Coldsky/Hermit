@@ -24,6 +24,8 @@ import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.cookie.BasicClientCookie;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 
+import org.apache.hc.core5.util.TimeValue;
+
 import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.http.StaleConnectionRetry;
 import dev.hermit.crab.tls.OutboundTls;
@@ -109,6 +111,7 @@ public final class SessionManager implements AutoCloseable {
             state.lastActive = null;
             state.seenCookieValues.clear();
             state.loginSnapshot.clear();
+            state.persisted = null;
             closeClient(state);
             openClient(state);
         } finally {
@@ -299,7 +302,42 @@ public final class SessionManager implements AutoCloseable {
         for (StoredCookie cookie : cookies) {
             rememberCookieValue(state.seenCookieValues, cookie.value());
         }
-        persistence.save(key, List.copyOf(cookies));
+        List<StoredCookie> snapshot = List.copyOf(cookies);
+        // 每次上游交换之后都会走到这里；Cookie 没变就不再加密、写库。
+        if (snapshot.equals(state.persisted)) {
+            return;
+        }
+        persistence.save(key, snapshot);
+        state.persisted = snapshot;
+    }
+
+    /**
+     * 关掉每个账号连接池里闲置超过 {@code idle} 的连接和已过期的连接，返回处理过的连接池个数。
+     * 只动空闲连接：借出去的不受影响，Cookie、登录状态和账号锁都不变，下一次调用重新建连。
+     * 不拿账号锁，长调用不会挡住回收。
+     */
+    public int closeIdleConnections(Duration idle) {
+        Objects.requireNonNull(idle, "idle");
+        TimeValue limit = TimeValue.ofMilliseconds(Math.max(0, idle.toMillis()));
+        int pools = 0;
+        for (AccountState state : states.values()) {
+            PoolingHttpClientConnectionManager pool = state.pool;
+            if (pool == null) {
+                continue;
+            }
+            // 连接池自己是线程安全的；这时被 forget 或 invalidate 关掉也只是空操作。
+            pool.closeExpired();
+            pool.closeIdle(limit);
+            pools++;
+        }
+        return pools;
+    }
+
+    /** 这个账号连接池里空闲着的连接数。 */
+    int idleConnections(SessionKey key) {
+        AccountState state = states.get(key);
+        PoolingHttpClientConnectionManager pool = state == null ? null : state.pool;
+        return pool == null ? 0 : pool.getTotalStats().getAvailable();
     }
 
     /** Accounts with state in memory. */
@@ -500,8 +538,10 @@ public final class SessionManager implements AutoCloseable {
         final Map<String, String> loginSnapshot = new LinkedHashMap<>();
         CloseableHttpClient client;
         BasicCookieStore cookies;
+        /** 上一次写进库里的 Cookie；null 表示库里的内容未知或已被删除。 */
+        List<StoredCookie> persisted;
         OutboundTls tls;
-        PoolingHttpClientConnectionManager pool;
+        volatile PoolingHttpClientConnectionManager pool;
         boolean loggedIn;
         Instant lastActive;
         int authFailures;

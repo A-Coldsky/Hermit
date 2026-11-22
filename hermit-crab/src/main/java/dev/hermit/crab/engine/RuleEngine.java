@@ -1341,7 +1341,10 @@ public final class RuleEngine implements ConchExecutor {
                     HttpCalls.clipPublic(HttpCalls.presentUpstream(redactor.redact(summary))));
         }
         Object masked = success ? OutputMask.apply(data, redactor) : null;
-        commitTrace(request, redactor(credentials, cookies, true));
+        // 没有追踪要落库时不必再把所有秘密展开一遍。
+        if (DevTraceScope.current() != null && traceSink != null) {
+            commitTrace(request, redactor(credentials, cookies, true));
+        }
         return new ExecutionResult(
                 success,
                 masked,

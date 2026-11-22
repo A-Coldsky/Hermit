@@ -191,7 +191,7 @@ final class HermitPrelude {
     }
 
     static void install(Context cx, Scriptable scope, Clock clock) {
-        Object created = cx.evaluateString(scope, PRELUDE, "hermit", 1, null);
+        Object created = CompiledScripts.evaluate(cx, scope, PRELUDE, "hermit");
         if (!(created instanceof Scriptable hermit)) {
             throw ScriptRuntime.typeError("denied");
         }
@@ -202,7 +202,7 @@ final class HermitPrelude {
                 "hermit",
                 hermit,
                 ScriptableObject.READONLY | ScriptableObject.PERMANENT);
-        cx.evaluateString(scope, FREEZE, "hermit", 1, null);
+        CompiledScripts.evaluate(cx, scope, FREEZE, "hermit");
     }
 
     private static Scriptable randomBytes(Context cx, Scriptable scope) {

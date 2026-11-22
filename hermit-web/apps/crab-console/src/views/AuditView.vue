@@ -51,7 +51,7 @@ onMounted(load)
 
 <template>
   <div>
-    <PageHeader title="配置审计" description="本机账号、凭证、配置、API Key 和能力开关的变更记录。只记字段名，不记凭证或配置的值">
+    <PageHeader title="配置审计" description="本机账号、凭证、配置、API Key 和能力开关的变更记录。只记字段名，不记凭证或配置的值；保留 180 天">
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
 

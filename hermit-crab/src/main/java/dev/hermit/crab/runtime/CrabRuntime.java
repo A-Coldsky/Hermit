@@ -114,6 +114,7 @@ import dev.hermit.crab.sync.SyncSettings;
 public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate {
     private static final Logger LOG = Logger.getLogger(CrabRuntime.class.getName());
     private static final Duration CALL_LOG_RETENTION = Duration.ofDays(30);
+    private static final Duration CONFIG_AUDIT_RETENTION = Duration.ofDays(180);
 
     private final CrabPaths paths;
     private final CrabConfig config;
@@ -1251,27 +1252,38 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     values.put(entry.getKey(), entry.getValue());
                 }
             }
-            Set<String> existing = new java.util.HashSet<>();
-            for (Account account : accounts.list(Origin.OFFICIAL, conch)) {
-                existing.add(account.account());
-            }
-            boolean hadAccounts = !existing.isEmpty();
+            // 账号、凭证和配置在一个事务里写：中途失败时正式包保持原样。
+            String defaultAccount = localDefault;
+            copiedAccounts = dev.hermit.crab.store.ConchLocks.atomic(
+                    database.dataSource(), Origin.OFFICIAL, conch, () -> {
+                        int written = 0;
+                        Set<String> existing = new java.util.HashSet<>();
+                        for (Account account : accounts.list(Origin.OFFICIAL, conch)) {
+                            existing.add(account.account());
+                        }
+                        boolean hadAccounts = !existing.isEmpty();
+                        for (Map.Entry<String, Map<String, String>> entry : secrets.entrySet()) {
+                            if (!existing.contains(entry.getKey())) {
+                                accounts.create(Origin.OFFICIAL, conch, entry.getKey(), actor);
+                            }
+                            if (!entry.getValue().isEmpty()) {
+                                vault.write(Origin.OFFICIAL, conch, entry.getKey(), entry.getValue(), actor);
+                            }
+                            written++;
+                        }
+                        // 正式包原来没有账号时，默认账号跟本地包一致；原来有账号时不动它的默认账号。
+                        if (!hadAccounts && defaultAccount != null) {
+                            accounts.setDefault(Origin.OFFICIAL, conch, defaultAccount, actor);
+                        }
+                        if (!values.isEmpty()) {
+                            conchConfig.putAll(Origin.OFFICIAL, conch, values, actor);
+                        }
+                        return written;
+                    });
             for (Map.Entry<String, Map<String, String>> entry : secrets.entrySet()) {
-                if (!existing.contains(entry.getKey())) {
-                    accounts.create(Origin.OFFICIAL, conch, entry.getKey(), actor);
-                }
                 if (!entry.getValue().isEmpty()) {
-                    vault.write(Origin.OFFICIAL, conch, entry.getKey(), entry.getValue(), actor);
                     sessions.invalidate(new dev.hermit.crab.engine.SessionKey(Origin.OFFICIAL, conch, entry.getKey()));
                 }
-                copiedAccounts++;
-            }
-            // 正式包原来没有账号时，默认账号跟本地包一致；原来有账号时不动它的默认账号。
-            if (!hadAccounts && localDefault != null) {
-                accounts.setDefault(Origin.OFFICIAL, conch, localDefault, actor);
-            }
-            if (!values.isEmpty()) {
-                conchConfig.putAll(Origin.OFFICIAL, conch, values, actor);
             }
             copiedConfig = values.size();
         }
@@ -1413,6 +1425,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     public void purgeExpired() {
         callLogs.purgeBefore(clock.instant().minus(CALL_LOG_RETENTION));
         idempotency.purgeBefore(clock.instant().minus(IdempotencyStore.TTL));
+        AuditLog.purgeBefore(database.dataSource(), clock.instant().minus(CONFIG_AUDIT_RETENTION));
         debug.expire();
         if (debug.get().enabled()) {
             devTraces.deleteExpired(clock.instant());

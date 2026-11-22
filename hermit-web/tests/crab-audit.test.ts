@@ -51,6 +51,7 @@ describe('Crab 配置审计', () => {
     expect(text).toContain('legacy_oa')
     expect(text).toContain('zhangsan')
     expect(text).toContain('password、username')
+    expect(text).toContain('保留 180 天')
   })
 
   it('按规则包和账号筛选时从第一页查', async () => {

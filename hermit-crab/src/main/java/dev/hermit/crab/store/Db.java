@@ -18,7 +18,43 @@ public final class Db {
         T run(Connection connection) throws SQLException;
     }
 
+    private record Joined(DataSource dataSource, Connection connection) {
+    }
+
+    private static final ThreadLocal<Joined> JOINED = new ThreadLocal<>();
+
+    /**
+     * 把这段代码里对同一个库的所有 {@link #transaction} 并进一个事务：全部成功才提交，任何一步抛出就全部回滚。
+     * 只在当前线程有效。
+     */
+    public static <T> T atomic(DataSource dataSource, java.util.function.Supplier<T> work) {
+        Joined outer = JOINED.get();
+        if (outer != null && outer.dataSource() == dataSource) {
+            return work.get();
+        }
+        return transaction(dataSource, connection -> {
+            JOINED.set(new Joined(dataSource, connection));
+            try {
+                return work.get();
+            } finally {
+                if (outer == null) {
+                    JOINED.remove();
+                } else {
+                    JOINED.set(outer);
+                }
+            }
+        });
+    }
+
     public static <T> T transaction(DataSource dataSource, Work<T> work) {
+        Joined joined = JOINED.get();
+        if (joined != null && joined.dataSource() == dataSource) {
+            try {
+                return work.run(joined.connection());
+            } catch (SQLException ex) {
+                throw new IllegalStateException("database operation failed", ex);
+            }
+        }
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {

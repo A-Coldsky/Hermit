@@ -31,6 +31,7 @@ import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.InvokeOutcome;
+import dev.hermit.crab.runtime.InvokeRequest;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyPrincipal;
 import dev.hermit.crab.store.ApiKeyScope;
@@ -162,17 +163,21 @@ class DevTraceFlowTest {
             CreatedApiKey allKey = runtime.apiKeys().create(
                     "all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
             InvokeOutcome invoked = runtime.invoker().invoke(
-                    new ApiKeyPrincipal(localKey.id(), localKey.name(), localKey.scope()),
-                    "local_echo", "echo", Map.of(), Optional.of("alice"),
-                    Optional.empty(), null, CallChannel.HTTP, "key-trace");
+                    InvokeRequest.of(
+                                    new ApiKeyPrincipal(localKey.id(), localKey.name(), localKey.scope()),
+                                    "local_echo", "echo", Map.of(), "key-trace")
+                            .account(Optional.of("alice"))
+                            .channel(CallChannel.HTTP));
             assertThat(invoked.status()).as(new String(invoked.body(), StandardCharsets.UTF_8)).isEqualTo(200);
             assertThat(runtime.devTraces().find("key-trace")).isPresent();
             assertThat(new String(invoked.body(), StandardCharsets.UTF_8)).doesNotContain("devTrace");
 
             InvokeOutcome officialCall = runtime.invoker().invoke(
-                    new ApiKeyPrincipal(otherKey.id(), otherKey.name(), otherKey.scope()),
-                    "official_ping", "ping", Map.of(), Optional.of("alice"),
-                    Optional.empty(), null, CallChannel.HTTP, "official-trace");
+                    InvokeRequest.of(
+                                    new ApiKeyPrincipal(otherKey.id(), otherKey.name(), otherKey.scope()),
+                                    "official_ping", "ping", Map.of(), "official-trace")
+                            .account(Optional.of("alice"))
+                            .channel(CallChannel.HTTP));
             assertThat(officialCall.status()).isEqualTo(200);
             assertThat(runtime.devTraces().find("official-trace")).isEmpty();
             var officialLog = runtime.callLogs().findByTraceId("official-trace").orElseThrow();

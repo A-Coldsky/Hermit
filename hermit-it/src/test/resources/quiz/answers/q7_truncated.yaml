@@ -1,0 +1,33 @@
+conch: quiz
+version: 1.0.0
+driver: http
+min_crab_version: 1.9.0
+base_url: http://127.0.0.1:18080
+title: 测验
+description: 写规则测验的参考答案。
+credentials: {}
+actions:
+  run:
+    title: 前五页
+    description: 读取前五页并说明是否读完。
+    idempotent: true
+    steps:
+      - repeat:
+          max: 5
+          steps:
+            - request: {method: GET, path: /big, query: {page: "{{loop.index}}"}}
+            - extract:
+                rows: {jsonpath: "$.rows[*]", each: {id: {jsonpath: "$.id"}}}
+                has_more: {jsonpath: "$.has_more"}
+          collect: {all_rows: rows}
+          until: {equals: {has_more: "false"}}
+      - set: {truncated: "{{loop.truncated}}"}
+      - script: {into: count, code: "return vars.all_rows.length;"}
+    output:
+      count: {type: integer, description: 行数}
+      truncated: {type: boolean, description: 是否还有没读的页}
+    examples:
+      - input: {}
+        output: {count: 10, truncated: true}
+    notes: 只读，最多 5 页。
+    related: []

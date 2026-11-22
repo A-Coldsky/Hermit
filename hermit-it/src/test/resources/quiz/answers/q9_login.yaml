@@ -1,0 +1,37 @@
+conch: quiz
+version: 1.0.0
+driver: http
+min_crab_version: 1.9.0
+base_url: http://127.0.0.1:18080
+title: 测验
+description: 写规则测验的参考答案。
+credentials:
+  username: {type: text, label: 用户名, required: true, description: 登录账号}
+  password: {type: secret, label: 密码, required: true, description: 原始密码}
+auth:
+  steps:
+    - request:
+        method: POST
+        path: /login
+        form: {username: "{{credential.username}}", password: "{{credential.password}}"}
+    - assert: {cookie_exists: SID}
+    - if:
+        contains: "请先同意用户协议"
+        then:
+          - request: {method: POST, path: /agree}
+actions:
+  run:
+    title: 我的姓名
+    description: 读取当前账号的姓名。
+    idempotent: true
+    steps:
+      - request: {method: GET, path: /me}
+      - extract:
+          name: {jsonpath: "$.name"}
+    output:
+      name: {type: string, description: 姓名}
+    examples:
+      - input: {}
+        output: {name: 张三}
+    notes: 只读。
+    related: []

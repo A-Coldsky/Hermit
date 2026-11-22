@@ -1,0 +1,33 @@
+conch: quiz
+version: 1.0.0
+driver: http
+min_crab_version: 1.9.0
+base_url: http://127.0.0.1:18080
+title: 测验
+description: 写规则测验的参考答案。
+credentials: {}
+actions:
+  run:
+    title: 通知列表
+    description: 读取通知列表。
+    idempotent: true
+    steps:
+      - request: {method: GET, path: /notices}
+      - extract:
+          items:
+            css: "#notices tr.row"
+            each:
+              id: {css: "td:nth-child(1)"}
+              title: {css: "td:nth-child(2)"}
+    output:
+      items:
+        type: array
+        description: 通知
+        items:
+          id: {type: string, description: 编号}
+          title: {type: string, description: 标题}
+    examples:
+      - input: {}
+        output: {items: [{id: N1, title: 放假通知}]}
+    notes: 只读。
+    related: []

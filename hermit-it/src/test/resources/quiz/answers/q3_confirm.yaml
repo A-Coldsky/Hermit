@@ -1,0 +1,30 @@
+conch: quiz
+version: 1.0.0
+driver: http
+min_crab_version: 1.9.0
+base_url: http://127.0.0.1:18080
+title: 测验
+description: 写规则测验的参考答案。
+credentials: {}
+actions:
+  run:
+    title: 提交订单
+    description: 提交订单，需要时再确认一次。
+    method: POST
+    input:
+      id: {type: string, required: true, description: 单据编号}
+    steps:
+      - request: {method: POST, path: /order/submit, form: {id: "{{input.id}}"}}
+      - if:
+          contains: "请再次确认"
+          then:
+            - request: {method: POST, path: /order/confirm, form: {id: "{{input.id}}"}}
+      - extract:
+          order_no: {jsonpath: "$.order_no"}
+    output:
+      order_no: {type: string, description: 单号}
+    examples:
+      - input: {id: B2}
+        output: {order_no: SO-B2}
+    notes: 会提交订单。
+    related: []

@@ -1,0 +1,34 @@
+conch: quiz
+version: 1.0.0
+driver: http
+min_crab_version: 1.9.0
+base_url: http://127.0.0.1:18080
+title: 测验
+description: 写规则测验的参考答案。
+credentials: {}
+actions:
+  run:
+    title: 全部条目
+    description: 翻页读取全部条目。
+    idempotent: true
+    steps:
+      - repeat:
+          max: 20
+          steps:
+            - request: {method: GET, path: /list, query: {page: "{{loop.index}}"}}
+            - extract:
+                rows: {css: "tr.item", each: {id: {css: ".id"}}}
+                next: {css: "a.next", attr: href, optional: true}
+          collect: {items: rows}
+          until: {not_present: next}
+    output:
+      items:
+        type: array
+        description: 条目
+        items:
+          id: {type: string, description: 编号}
+    examples:
+      - input: {}
+        output: {items: [{id: L11}]}
+    notes: 只读。
+    related: []

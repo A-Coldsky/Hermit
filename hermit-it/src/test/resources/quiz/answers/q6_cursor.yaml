@@ -1,0 +1,35 @@
+conch: quiz
+version: 1.0.0
+driver: http
+min_crab_version: 1.9.0
+base_url: http://127.0.0.1:18080
+title: 测验
+description: 写规则测验的参考答案。
+credentials: {}
+actions:
+  run:
+    title: 全部动态
+    description: 按游标读取全部动态。
+    idempotent: true
+    steps:
+      - set: {cursor: "start"}
+      - repeat:
+          max: 30
+          steps:
+            - request: {method: GET, path: /feed, query: {cursor: "{{cursor}}"}}
+            - extract:
+                rows: {jsonpath: "$.items[*]", each: {id: {jsonpath: "$.id"}}}
+                cursor: {jsonpath: "$.next_cursor", optional: true}
+          collect: {ids: rows}
+          until: {not_present: cursor}
+    output:
+      ids:
+        type: array
+        description: 动态
+        items:
+          id: {type: string, description: 编号}
+    examples:
+      - input: {}
+        output: {ids: [{id: F-start-1}]}
+    notes: 只读。
+    related: []

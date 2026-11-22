@@ -32,7 +32,35 @@ final class Expressions {
     record PathArg(String path) implements Arg {
     }
 
+    /** 规则里的模板串是固定的，解析结果不可变，按原文缓存。解析失败不缓存。 */
+    static final int CACHE_ENTRIES = 4096;
+    private static final int CACHE_TEXT_CHARS = 8192;
+    private static final java.util.concurrent.ConcurrentHashMap<String, Parsed> CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     static Parsed parse(String original) {
+        // 没有表达式的串扫一遍就完，不占缓存。
+        if (original.length() > CACHE_TEXT_CHARS || !original.contains("{{")) {
+            return parseFresh(original);
+        }
+        Parsed cached = CACHE.get(original);
+        if (cached != null) {
+            return cached;
+        }
+        Parsed fresh = parseFresh(original);
+        Parsed parsed = new Parsed(List.copyOf(fresh.segments()), fresh.exact());
+        if (CACHE.size() >= CACHE_ENTRIES) {
+            CACHE.clear();
+        }
+        CACHE.put(original, parsed);
+        return parsed;
+    }
+
+    static int cacheSize() {
+        return CACHE.size();
+    }
+
+    private static Parsed parseFresh(String original) {
         String trimmed = original.trim();
         List<Segment> trimmedSegments = scan(trimmed);
         boolean exact = trimmedSegments.size() == 1 && trimmedSegments.get(0) instanceof Expr;

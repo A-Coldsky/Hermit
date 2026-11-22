@@ -151,7 +151,7 @@ final class ScriptStep {
         HermitPrelude.install(cx, scope, clock);
         Map<String, Object> exposed = withCredential ? copyWithCredential(vars) : copyWithoutCredential(vars);
         ScriptableObject.putProperty(scope, "vars", toJs(cx, scope, exposed, new IdentityHashMap<>()));
-        return cx.evaluateString(scope, PREFIX + code + SUFFIX, "script", 1, null);
+        return CompiledScripts.evaluate(cx, scope, PREFIX + code + SUFFIX, "script");
     }
 
     private static Prelude libraries(Object use, Map<String, String> libraries) {

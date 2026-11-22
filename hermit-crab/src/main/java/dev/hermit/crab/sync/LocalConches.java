@@ -87,7 +87,8 @@ public final class LocalConches {
     private static final DateTimeFormatter HISTORY_STAMP =
             DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS").withZone(ZoneOffset.UTC);
 
-    private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script");
+    private static final Set<String> STEP_TYPES = Set.of(
+            "request", "extract", "assert", "set", "script", "if", "repeat");
 
     private final CrabPaths paths;
     private final ConchRegistry registry;

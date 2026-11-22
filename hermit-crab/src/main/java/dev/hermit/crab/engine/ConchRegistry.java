@@ -26,7 +26,8 @@ public final class ConchRegistry {
     private static final Logger LOG = Logger.getLogger(ConchRegistry.class.getName());
 
     static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now", "login");
-    private static final Set<String> STEP_TYPES = Set.of("request", "extract", "assert", "set", "script", "ask");
+    private static final Set<String> STEP_TYPES = Set.of(
+            "request", "extract", "assert", "set", "script", "ask", "if", "repeat");
 
     /**
      * 每个包名有本地和正式两个槽，同一时刻只有一份生效。
@@ -369,6 +370,10 @@ public final class ConchRegistry {
     private static void reservedSteps(List<Step> steps, String path, List<ValidationIssue> issues) {
         for (int i = 0; i < steps.size(); i++) {
             Step step = steps.get(i);
+            for (String branch : dev.hermit.common.model.FlowSteps.branchKeys(step)) {
+                reservedSteps(dev.hermit.common.model.FlowSteps.branch(step, branch),
+                        path + "[" + i + "]." + step.type() + "." + branch, issues);
+            }
             if ("script".equals(step.type())) {
                 Object into = step.def().get("into");
                 if (into instanceof String name && RESERVED.contains(name)) {

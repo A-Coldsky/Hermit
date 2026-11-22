@@ -100,8 +100,8 @@ class FlowStepsEngineTest {
         assertThat(yes.success()).as(message(yes)).isTrue();
         assertThat(yes.data()).isEqualTo(Map.of("confirmed", "yes"));
         assertThat(hits).containsExactly("GET /order", "POST /confirm");
-        assertThat(yes.stepLogs()).extracting(StepLog::type).containsExactly("request", "if", "request", "set");
-        assertThat(yes.stepLogs()).extracting(StepLog::index).containsExactly(0, 1, 1, 1);
+        assertThat(yes.stepLogs()).extracting(StepLog::type).containsExactly("request", "if");
+        assertThat(yes.stepLogs()).extracting(StepLog::index).containsExactly(0, 1);
         assertThat(trace).contains("\"branch\":\"then\"").contains("\"result\":true");
 
         hits.clear();
@@ -180,6 +180,74 @@ class FlowStepsEngineTest {
                 "rounds", 3,
                 "truncated", false));
         assertThat(trace).contains("\"stopped\":\"until\"").contains("\"rounds\":3").contains("\"round\":2");
+    }
+
+    @Test
+    void callLogKeepsOneEntryPerOuterStep() {
+        ExecutionResult loop = run(conch(LIST.formatted(20), LIST_OUTPUT));
+        assertThat(loop.stepLogs()).extracting(StepLog::index).containsExactly(0, 1);
+        assertThat(loop.stepLogs()).extracting(StepLog::type).containsExactly("repeat", "set");
+
+        ExecutionResult failed = run(conch("""
+                - request: {method: GET, path: /plain}
+                - if:
+                    contains: "已提交"
+                    then:
+                      - set: {seen: "yes"}
+                      - request: {method: GET, path: /gone}
+                """, "seen: {type: string, description: s}"));
+        assertThat(failed.success()).isFalse();
+        assertThat(failed.stepLogs()).extracting(StepLog::index).containsExactly(0, 1);
+        assertThat(failed.stepLogs().get(1).type()).isEqualTo("request");
+        assertThat(failed.stepLogs().get(1).status()).isEqualTo(404);
+    }
+
+    @Test
+    void aRoundThatSkipsTheListDoesNotCollectThePreviousRoundAgain() {
+        ExecutionResult result = run(conch("""
+                - repeat:
+                    max: 5
+                    steps:
+                      - request: {method: GET, path: /list, query: {page: "{{loop.index}}"}}
+                      - extract:
+                          next: {jsonpath: "$.next", optional: true}
+                      - if:
+                          not_equals: {loop.index: "2"}
+                          then:
+                            - extract:
+                                rows: {jsonpath: "$.rows[*]", each: {id: {jsonpath: "$.id"}}}
+                    collect: {all: rows}
+                    until: {not_present: next}
+                - set: {rounds: "{{loop.rounds}}", truncated: "{{loop.truncated}}"}
+                """, LIST_OUTPUT));
+        assertThat(result.success()).as(message(result)).isTrue();
+        assertThat(((Map<?, ?>) result.data()).get("all")).isEqualTo(List.of(
+                Map.of("id", "1a"), Map.of("id", "1b"), Map.of("id", "3a"), Map.of("id", "3b")));
+    }
+
+    @Test
+    void loginVariablesOnlyOneBranchNeedsDoNotFailTheCall() {
+        String yaml = conch("""
+                - if:
+                    present: login.vip
+                    then:
+                      - set: {level: "{{login.vip}}", kind: "is_vip"}
+                    else:
+                      - set: {kind: "not_vip"}
+                """, "kind: {type: string, description: k}").replace("actions:", """
+                auth:
+                  steps:
+                    - request: {method: GET, path: /plain}
+                    - if:
+                        contains: "请再次确认"
+                        then:
+                          - set: {vip: "gold"}
+                        else:
+                          - set: {plain: "normal"}
+                actions:""");
+        ExecutionResult result = run(yaml);
+        assertThat(result.success()).as(message(result)).isTrue();
+        assertThat(result.data()).isEqualTo(Map.of("kind", "not_vip"));
     }
 
     @Test

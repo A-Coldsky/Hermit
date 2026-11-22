@@ -71,7 +71,7 @@ Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里�
 
 业务接口只选用户确认过的功能对应的那一次请求。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
 
-凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.7.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。用了 request 的 `body` 或 `xml_escape` 时，还要不低于 1.7.0，否则 message 为「使用 body 时 min_crab_version 必须不低于 1.7.0」或「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。
+凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.9.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。用了 request 的 `body` 或 `xml_escape` 时，还要不低于 1.7.0，否则 message 为「使用 body 时 min_crab_version 必须不低于 1.7.0」或「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。
 
 ### 令牌
 
@@ -407,7 +407,7 @@ path 和 url 在拼接前只编码 URI 里非法的字符：空格、控制字�
 | --- | --- |
 | `max` | 必填。最多执行的轮数，1 到 100 的整数，直接写数字，不能用模板 |
 | `steps` | 必填。每一轮执行的步骤列表 |
-| `collect` | 可选。`{汇总后的变量名: 每一轮的列表变量名}`。每一轮结束时把右边的列表接到左边；右边没有值时跳过，不是列表时失败 |
+| `collect` | 可选。`{汇总后的变量名: 每一轮的列表变量名}`。每一轮结束时把右边的列表接到左边；这一轮没有写右边的变量时跳过（上一轮的值不会再接一遍），不是列表时失败 |
 | `until` | 可选。判断键的映射，每一轮结束时判断，成立就停。不写就固定跑 `max` 轮 |
 
 每一轮里 `{{loop.index}}` 是轮次，从 1 开始。`loop` 是保留名，不能用 `set`、`extract`、`collect` 写它。每一轮写的变量会覆盖上一轮的，要留下来的列表写进 `collect`。汇总后的变量在 `repeat` 结束之后才有，循环里面读不到。
@@ -458,7 +458,7 @@ path 和 url 在拼接前只编码 URI 里非法的字符：空格、控制字�
 | `on: ["503"]` | 状态码写数字：`on: [503]` |
 | POST 上写 `retry` | 只用于 GET、HEAD；能力可以重复提交时写 `idempotent: true` |
 
-开发追踪：`if` 记一条 `conditions`（用到的判断键）、`result` 和 `branch`（`then`、`else`，或没有可走的分支时 `none`）；`repeat` 结束时记一条 `rounds`、`stopped`（`until` 或 `max`）、`incomplete`（等于 `loop.truncated`）和 `collected`（每个汇总变量的条数）。子步骤各自记录，下标是外层那一步的下标，循环里的带 `round`。重试过的 request 带 `retries`，每次一项 `{attempt, reason}`。调用失败时，`failedStepIndex` 是外层那一步的下标，`failedStepType` 是实际失败的子步骤类型。
+开发追踪：`if` 记一条 `conditions`（用到的判断键）、`result` 和 `branch`（`then`、`else`，或没有可走的分支时 `none`）；`repeat` 结束时记一条 `rounds`、`stopped`（`until` 或 `max`）、`incomplete`（等于 `loop.truncated`）和 `collected`（每个汇总变量的条数）。子步骤各自记录，下标是外层那一步的下标，循环里的带 `round`。调用记录里 `if`、`repeat` 连同子步骤只占一条，类型是 `if` 或 `repeat`，耗时是整步的；子步骤失败时这一条是失败的那个子步骤。重试过的 request 带 `retries`，每次一项 `{attempt, reason}`。调用失败时，`failedStepIndex` 是外层那一步的下标，`failedStepType` 是实际失败的子步骤类型。
 
 ### 上传和下载文件
 

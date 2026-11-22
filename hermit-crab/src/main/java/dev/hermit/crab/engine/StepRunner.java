@@ -162,6 +162,14 @@ final class StepRunner {
                 continue;
             }
             break;
+        } catch (DeadlineExceeded ex) {
+            // 没写 timeout_ms 时，连接超时也按能力超时报；能力的时间其实还没用完，按 connect 再试。
+            if (retry != null && System.nanoTime() < deadlineNanos && retry.on().contains("connect")
+                    && retry.again(retried == null ? 0 : retried.size(), deadlineNanos)) {
+                retried = Retry.note(retried, "connect");
+                continue;
+            }
+            throw ex;
         } catch (RuleProblem ex) {
             String reason = retry == null ? null : retry.reason(ex);
             if (reason != null && retry.again(retried == null ? 0 : retried.size(), deadlineNanos)) {
@@ -437,7 +445,9 @@ final class StepRunner {
     static Object lookup(Map<String, Object> vars, String path) {
         Object current = vars;
         for (String part : path.split("\\.")) {
-            if (current instanceof Map<?, ?> map) {
+            if (current instanceof Peek peek) {
+                current = peek.peek(part);
+            } else if (current instanceof Map<?, ?> map) {
                 current = map.get(part);
             } else if (current instanceof List<?> list) {
                 try {
@@ -454,6 +464,11 @@ final class StepRunner {
             }
         }
         return current;
+    }
+
+    /** 取不到值时返回 null、不抛错的变量视图（login）。 */
+    interface Peek {
+        Object peek(String name);
     }
 
     /** request 的 retry：失败后再试几次、隔多久、哪些失败算。 */

@@ -281,7 +281,7 @@ public final class RuleEngine implements ConchExecutor {
             URI base = baseUri(conch, config);
             scope = new LoginScope(conch, input, credentials, config, key, base, deadline);
             ensureSession(scope);
-            requireLoginRefs(scope, action.steps());
+            requireStepLoginRefs(scope, action.steps());
             Attempt attempt = runAction(action, scope);
             if (attempt.lost) {
                 sessions.markLoggedOut(key);
@@ -289,7 +289,7 @@ public final class RuleEngine implements ConchExecutor {
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
                 ensureSession(scope);
-                requireLoginRefs(scope, action.steps());
+                requireStepLoginRefs(scope, action.steps());
                 attempt = runAction(action, scope);
                 if (attempt.lost) {
                     sessions.markLoggedOut(key);
@@ -972,8 +972,20 @@ public final class RuleEngine implements ConchExecutor {
                         throw new RuleProblem(ErrorCode.RULE_MISMATCH,
                                 "if / repeat 最多嵌套 " + FlowSteps.MAX_DEPTH + " 层", null, null, null);
                     }
-                    runFlow(step, at, started, vars, auth, expectPrefix, logs, key, base, deadline, phase,
-                            libraries, hideResponseBody, conch, block, depth);
+                    // 调用记录按步骤下标存，一步只能有一条：子步骤记在另一张表里，外层只留一条。
+                    List<StepLog> inner = new ArrayList<>();
+                    try {
+                        runFlow(step, at, started, vars, auth, expectPrefix, inner, key, base, deadline, phase,
+                                libraries, hideResponseBody, conch, block, depth);
+                    } catch (StepFailure ex) {
+                        StepLog failed = ex.logs.isEmpty() ? null : ex.logs.get(ex.logs.size() - 1);
+                        logs.add(failed == null
+                                ? new StepLog(at, step.type(), elapsed(started), null, null, null, null)
+                                : new StepLog(at, failed.type(), elapsed(started), failed.method(), failed.path(),
+                                        failed.status(), failed.extractCount()));
+                        throw new StepFailure(ex.code, ex.summary, at, ex.type, logs);
+                    }
+                    logs.add(new StepLog(at, step.type(), elapsed(started), null, null, null, null));
                     continue;
                 }
                 Outcome outcome = steps.run(
@@ -1077,7 +1089,6 @@ public final class RuleEngine implements ConchExecutor {
             boolean holds = steps.test(condition, vars, sessions.cookies(key));
             String branch = holds ? "then" : "else";
             List<Step> chosen = FlowSteps.branch(step, branch);
-            logs.add(new StepLog(at, "if", elapsed(started), null, null, null, null));
             if (draft != null) {
                 LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
                 piece.put("type", "if");
@@ -1116,6 +1127,15 @@ public final class RuleEngine implements ConchExecutor {
                 rounds++;
                 block.round = rounds;
                 vars.put(FlowSteps.LOOP, Map.of("index", rounds));
+                if (collect != null) {
+                    // 这一轮没写的列表不能把上一轮的再接一遍。
+                    for (Object source : collect.values()) {
+                        String name = Values.text(source);
+                        if (name != null && name.indexOf('.') < 0) {
+                            vars.remove(name);
+                        }
+                    }
+                }
                 runBlock(body, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
                         0, hideResponseBody, conch, block, at, depth + 1);
                 if (collect != null) {
@@ -1146,7 +1166,6 @@ public final class RuleEngine implements ConchExecutor {
         loop.put("rounds", rounds);
         loop.put("truncated", truncated);
         vars.put(FlowSteps.LOOP, loop);
-        logs.add(new StepLog(at, "repeat", elapsed(started), null, null, null, null));
         if (draft != null) {
             LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
             piece.put("type", "repeat");
@@ -1191,6 +1210,60 @@ public final class RuleEngine implements ConchExecutor {
     private void requireLoginRefs(LoginScope scope, Object tree) {
         for (String name : loginNames(tree)) {
             scope.require(name);
+        }
+    }
+
+    /** 一定会跑的步骤引用的登录名字必须有；if / repeat 里的只先登录，缺了等真用到再报。 */
+    private void requireStepLoginRefs(LoginScope scope, List<Step> steps) {
+        LinkedHashSet<String> must = new LinkedHashSet<>();
+        LinkedHashSet<String> may = new LinkedHashSet<>();
+        for (Step step : steps) {
+            if (FlowSteps.isFlow(step)) {
+                flowLoginNames(step, may);
+            } else {
+                collectLoginNames(step, must);
+            }
+        }
+        for (String name : must) {
+            scope.require(name);
+        }
+        may.removeAll(must);
+        for (String name : may) {
+            scope.prepare(name);
+        }
+    }
+
+    private void flowLoginNames(Step step, Set<String> names) {
+        Map<String, Object> own = FlowSteps.own(step);
+        collectLoginNames(own, names);
+        conditionLoginNames(own, names);
+        if (own.get("until") instanceof Map<?, ?> until) {
+            conditionLoginNames(until, names);
+        }
+        for (String key : FlowSteps.branchKeys(step)) {
+            for (Step child : FlowSteps.branch(step, key)) {
+                if (FlowSteps.isFlow(child)) {
+                    flowLoginNames(child, names);
+                } else {
+                    collectLoginNames(child, names);
+                }
+            }
+        }
+    }
+
+    /** present、equals 这些判断键里直接写的变量名。 */
+    private static void conditionLoginNames(Map<?, ?> condition, Set<String> names) {
+        for (String key : FlowSteps.VARIABLE_CONDITIONS) {
+            Object value = condition.get(key);
+            Iterable<?> paths = value instanceof Map<?, ?> map ? map.keySet()
+                    : value instanceof List<?> list ? list
+                    : value == null ? List.of() : List.of(value);
+            for (Object path : paths) {
+                String name = loginField(String.valueOf(path));
+                if (name != null) {
+                    names.add(name);
+                }
+            }
         }
     }
 
@@ -1845,11 +1918,23 @@ public final class RuleEngine implements ConchExecutor {
             }
         }
 
+        /** 值还没有、这次调用也没登录过时先登录；登录后仍没有不算失败。 */
+        private void prepare(String name) {
+            if (lookup(name) == null && !loggingIn && !loggedInThisCall) {
+                login(this);
+            }
+        }
+
         private StepFailure missing(String name) {
             return new StepFailure(ErrorCode.AUTH_FAILED, "登录没有建立变量 " + name, -1, "request", List.of());
         }
 
-        private final class LoginView extends AbstractMap<String, Object> {
+        private final class LoginView extends AbstractMap<String, Object> implements StepRunner.Peek {
+            @Override
+            public Object peek(String name) {
+                return lookup(name);
+            }
+
             @Override
             public boolean containsKey(Object key) {
                 return key instanceof String;

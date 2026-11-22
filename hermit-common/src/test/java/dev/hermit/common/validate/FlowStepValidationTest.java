@@ -224,6 +224,17 @@ class FlowStepValidationTest {
                       - set: {b: "{{a}}"}
                 - set: {c: "{{a}}"}
                 """))).singleElement().asString().contains("a");
+        assertThat(messages(validate("1.9.0", """
+                - repeat:
+                    max: 3
+                    steps:
+                      - if:
+                          equals: {loop.index: "1"}
+                          then:
+                            - set: {cursor: "0"}
+                          else:
+                            - set: {cursor: "{{cursor}}1"}
+                """))).as("上一轮的分支写的变量").isEmpty();
     }
 
     private static ValidationResult validate(String min, String steps) {

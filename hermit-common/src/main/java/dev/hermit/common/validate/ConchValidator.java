@@ -965,8 +965,18 @@ public final class ConchValidator {
                 }
                 // then 和 else 只跑一个：一个分支里写的变量，另一个分支读不到。
                 Set<String> after = new LinkedHashSet<>(declared);
+                Set<String> before = declared;
+                if (nest.inRepeat() && !repeat) {
+                    // 循环里上一轮走的分支写的变量会留到这一轮，另一个分支读得到。
+                    before = new LinkedHashSet<>(declared);
+                    for (String key : FlowSteps.branchKeys(step)) {
+                        checkOrderedSteps(FlowSteps.branch(step, key), typed + "." + key, doc, before,
+                                new LinkedHashSet<>(loginNames), new LinkedHashSet<>(loginVars), new AtomicBoolean(),
+                                new ArrayList<>(), new ArrayList<>(), inputFields, nest.into(false));
+                    }
+                }
                 for (String key : FlowSteps.branchKeys(step)) {
-                    Set<String> inside = new LinkedHashSet<>(declared);
+                    Set<String> inside = new LinkedHashSet<>(before);
                     checkOrderedSteps(FlowSteps.branch(step, key), typed + "." + key, doc, inside, loginNames,
                             loginVars, usesLogin, errors, warnings, inputFields, nest.into(repeat));
                     after.addAll(inside);

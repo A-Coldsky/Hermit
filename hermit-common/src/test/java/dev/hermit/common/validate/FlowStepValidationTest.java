@@ -272,6 +272,184 @@ class FlowStepValidationTest {
                 .hasMessageContaining("concurrent_reads");
     }
 
+    @Test
+    void deeplyNestedIfInsideRepeatCompletesQuicklyWithoutBlowup() {
+        StringBuilder nested = new StringBuilder();
+        nested.append("- repeat:\n");
+        nested.append("    max: 2\n");
+        nested.append("    steps:\n");
+        int depth = 30;
+        for (int i = 0; i < depth; i++) {
+            String pad = "  ".repeat(3 + i * 2);
+            nested.append(pad).append("- if:\n");
+            nested.append(pad).append("    present: flag\n");
+            nested.append(pad).append("    else:\n");
+            nested.append(pad).append("      - set: {other: \"1\"}\n");
+            nested.append(pad).append("    then:\n");
+        }
+        nested.append("  ".repeat(3 + depth * 2)).append("- set: {leaf: \"1\"}\n");
+
+        ValidationResult inRepeat = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+                java.time.Duration.ofSeconds(2),
+                () -> validate("1.9.0", nested.toString()));
+        assertThat(messages(inRepeat)).containsExactly("if / repeat 最多嵌套 3 层");
+
+        StringBuilder plainNested = new StringBuilder();
+        for (int i = 0; i < depth; i++) {
+            String pad = "  ".repeat(i * 2);
+            plainNested.append(pad).append("- if:\n");
+            plainNested.append(pad).append("    present: flag\n");
+            plainNested.append(pad).append("    then:\n");
+        }
+        plainNested.append("  ".repeat(depth * 2)).append("- set: {leaf: \"1\"}\n");
+
+        ValidationResult outside = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+                java.time.Duration.ofSeconds(2),
+                () -> validate("1.9.0", plainNested.toString()));
+        assertThat(messages(outside)).containsExactly("if / repeat 最多嵌套 3 层");
+    }
+
+    @Test
+    void repeatCursorPaginationValidatesCleanlyAndStillCatchesUndeclaredNames() {
+        ValidationResult cursor = validate("1.9.0", """
+                - repeat:
+                    max: 5
+                    steps:
+                      - if:
+                          present: cursor
+                          then:
+                            - request: {method: GET, path: /list, query: {cursor: "{{cursor}}"}}
+                          else:
+                            - request: {method: GET, path: /list}
+                      - extract:
+                          rows: {jsonpath: "$.rows"}
+                          cursor: {jsonpath: "$.next_cursor", optional: true}
+                    collect: {all_rows: rows}
+                    until: {not_present: cursor}
+                - set: {out: "{{all_rows}}", rounds: "{{loop.rounds}}", cut: "{{loop.truncated}}"}
+                """);
+        assertThat(cursor.errors()).isEmpty();
+
+        ValidationResult missing = validate("1.9.0", """
+                - repeat:
+                    max: 5
+                    steps:
+                      - request: {method: GET, path: "/list/{{never_written}}"}
+                      - extract:
+                          rows: {jsonpath: "$.rows"}
+                    collect: {all_rows: rows}
+                """);
+        assertThat(missing.errors()).extracting(ValidationIssue::code)
+                .containsExactly(ValidationCodes.UNDECLARED_VARIABLE);
+
+        ValidationResult earlyCollect = validate("1.9.0", """
+                - repeat:
+                    max: 5
+                    steps:
+                      - request: {method: GET, path: "/list/{{all_rows}}"}
+                      - extract:
+                          rows: {jsonpath: "$.rows"}
+                    collect: {all_rows: rows}
+                """);
+        assertThat(earlyCollect.errors()).extracting(ValidationIssue::code)
+                .containsExactly(ValidationCodes.UNDECLARED_VARIABLE);
+    }
+
+    @Test
+    void loopIsReservedForExtractSetScriptAskAndCollectWhileReadableInRepeat() {
+        ValidationResult writes = validate("1.9.0", """
+                - request: {method: GET, path: /list}
+                - extract:
+                    loop: {jsonpath: "$.x"}
+                - set: {loop: "1"}
+                - script:
+                    code: "return 1;"
+                    into: loop
+                - repeat:
+                    max: 2
+                    steps:
+                      - set: {a: "1"}
+                      - if:
+                          present: a
+                          then:
+                            - set: {loop: "2"}
+                    collect: {loop: a}
+                """);
+        assertThat(writes.errors())
+                .filteredOn(issue -> ValidationCodes.RESERVED_VARIABLE.equals(issue.code())
+                        && "不能写入保留变量 loop".equals(issue.message()))
+                .extracting(ValidationIssue::path)
+                .containsExactlyInAnyOrder(
+                        "actions.run.steps[1].loop",
+                        "actions.run.steps[2].loop",
+                        "actions.run.steps[3].into",
+                        "actions.run.steps[4].repeat.steps[1].if.then[0].loop",
+                        "actions.run.steps[4].repeat.collect.loop");
+
+        ValidationResult legacy = validate("1.0.0", """
+                - set: {loop: "1"}
+                """);
+        assertThat(legacy.errors())
+                .extracting(ValidationIssue::code, ValidationIssue::path, ValidationIssue::message)
+                .containsExactly(org.assertj.core.api.Assertions.tuple(
+                        ValidationCodes.RESERVED_VARIABLE,
+                        "actions.run.steps[0].loop",
+                        "不能写入保留变量 loop"));
+
+        ValidationResult read = validate("1.9.0", """
+                - repeat:
+                    max: 3
+                    steps:
+                      - request: {method: GET, path: "/p/{{loop.index}}"}
+                - set: {r: "{{loop.rounds}}", t: "{{loop.truncated}}"}
+                """);
+        assertThat(read.errors()).isEmpty();
+    }
+
+    @Test
+    void unknownRequestKeysAreErrorOnlyInOneNineAndWarningOnlyBelowOneNine() {
+        String step = """
+                - request: {method: GET, path: /a, params: {a: b}}
+                """;
+        ValidationResult strict = validate("1.9.0", step);
+        assertThat(strict.errors()).extracting(ValidationIssue::code)
+                .containsExactly(ValidationCodes.IGNORED_REQUEST_FIELD);
+        assertThat(strict.errors().get(0).message()).contains("未知的 request 键 params");
+        assertThat(strict.warnings()).extracting(ValidationIssue::code)
+                .doesNotContain(ValidationCodes.IGNORED_REQUEST_FIELD);
+
+        ValidationResult legacy = validate("1.8.0", step);
+        assertThat(legacy.errors()).isEmpty();
+        assertThat(legacy.warnings()).extracting(ValidationIssue::code, ValidationIssue::message)
+                .contains(org.assertj.core.api.Assertions.tuple(
+                        ValidationCodes.IGNORED_REQUEST_FIELD, "这个字段不会被发送"));
+
+        String aliveStrictYaml = conch("1.9.0", "- request: {method: GET, path: /a}", "").replace("actions:", """
+                auth:
+                  steps:
+                    - request: {method: GET, path: /login}
+                  alive_check:
+                    request: {method: GET, path: /alive, params: {a: b}}
+                actions:""");
+        ValidationResult aliveStrict = ConchValidator.validate(
+                ConchParser.parse(aliveStrictYaml), ConchValidator.Context.of(SemVer.parse("1.9.0")));
+        assertThat(aliveStrict.errors())
+                .extracting(ValidationIssue::code, ValidationIssue::path)
+                .containsExactly(org.assertj.core.api.Assertions.tuple(
+                        ValidationCodes.IGNORED_REQUEST_FIELD, "auth.alive_check.request.params"));
+        assertThat(aliveStrict.warnings()).extracting(ValidationIssue::code)
+                .doesNotContain(ValidationCodes.IGNORED_REQUEST_FIELD);
+
+        ValidationResult aliveLegacy = ConchValidator.validate(
+                ConchParser.parse(aliveStrictYaml.replace("min_crab_version: 1.9.0", "min_crab_version: 1.8.0")),
+                ConchValidator.Context.of(SemVer.parse("1.9.0")));
+        assertThat(aliveLegacy.errors()).isEmpty();
+        assertThat(aliveLegacy.warnings())
+                .extracting(ValidationIssue::code, ValidationIssue::path, ValidationIssue::message)
+                .contains(org.assertj.core.api.Assertions.tuple(
+                        ValidationCodes.IGNORED_REQUEST_FIELD, "auth.alive_check.request.params", "这个字段不会被发送"));
+    }
+
     private static String withAuth(String min, String line, String extra) {
         return conch(min, "- request: {method: GET, path: /a}", extra).replace("actions:", """
                 auth:

@@ -22,10 +22,12 @@ const route = useRoute()
 const router = useRouter()
 
 const loading = ref(true)
+const loadFailed = ref(false)
 const detail = ref<ConchDetail | null>(null)
 const versions = ref<ConchVersion[]>([])
 const missing = ref(false)
-const tab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'overview')
+const tab = ref(typeof route.query.tab === 'string' && route.query.tab ? route.query.tab : 'overview')
+let loadSeq = 0
 
 const credentialCount = computed(() => Object.keys(detail.value?.credentials ?? {}).length)
 const configCount = computed(() => Object.keys(detail.value?.config ?? {}).length)
@@ -42,37 +44,75 @@ const unpublished = computed(() => {
     return []
   }
   const current = versions.value.find((v) => v.current)
-  return versions.value.filter((v) => !v.current && v.status !== 'PUBLISHED' && (!current || v.uploadedAt > current.uploadedAt))
+  const currentTime = current ? Date.parse(current.uploadedAt) : Number.NaN
+  return versions.value.filter((v) => {
+    if (v.current || v.status === 'PUBLISHED') {
+      return false
+    }
+    if (!current || Number.isNaN(currentTime)) {
+      return true
+    }
+    const uploadedTime = Date.parse(v.uploadedAt)
+    return Number.isNaN(uploadedTime) ? v.uploadedAt > current.uploadedAt : uploadedTime > currentTime
+  })
 })
 
-watch(tab, (value) => void router.replace({ query: { ...route.query, tab: value } }))
+watch(
+  () => route.query.tab,
+  (value) => {
+    const next = typeof value === 'string' && value ? value : 'overview'
+    if (tab.value !== next) {
+      tab.value = next
+    }
+  },
+)
+watch(tab, (value) => {
+  if (route.query.tab !== value) {
+    void router.replace({ query: { ...route.query, tab: value } })
+  }
+})
 
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   missing.value = false
+  loadFailed.value = false
   try {
-    versions.value = await api.versions(props.conch)
+    const list = await api.versions(props.conch)
+    if (seq !== loadSeq) return
+    versions.value = list
   } catch (error) {
+    if (seq !== loadSeq) return
     if (error instanceof ApiError && error.status === 404) {
       missing.value = true
+      versions.value = []
+      detail.value = null
     } else {
+      loadFailed.value = true
       notifyError(error)
     }
     loading.value = false
     return
   }
   try {
-    detail.value = await api.conch(props.conch)
+    const d = await api.conch(props.conch)
+    if (seq !== loadSeq) return
+    detail.value = d
   } catch (error) {
-    detail.value = null
-    if (!(error instanceof ApiError && error.status === 404)) {
+    if (seq !== loadSeq) return
+    if (error instanceof ApiError && error.status === 404) {
+      detail.value = null
+      if (tab.value !== 'stats') {
+        tab.value = 'versions'
+      }
+    } else {
+      loadFailed.value = true
       notifyError(error)
     }
-    if (tab.value !== 'stats') {
-      tab.value = 'versions'
-    }
   } finally {
-    loading.value = false
+    if (seq === loadSeq) {
+      loading.value = false
+    }
   }
 }
 
@@ -84,7 +124,10 @@ function openAvailability() {
 }
 
 async function saveAvailability() {
-  const reason = availability.reason.trim()
+  const reason = availability.reason
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+    .trim()
   if (!reason) {
     ElMessage.warning('请填写原因，会记入审计日志')
     return
@@ -108,7 +151,17 @@ async function saveAvailability() {
   }
 }
 
-watch(() => props.conch, load, { immediate: true })
+watch(
+  () => props.conch,
+  (next, prev) => {
+    if (prev !== undefined && next !== prev) {
+      detail.value = null
+      versions.value = []
+    }
+    void load()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -141,6 +194,18 @@ watch(() => props.conch, load, { immediate: true })
     </el-result>
 
     <template v-else>
+      <el-alert
+        v-if="loadFailed"
+        type="error"
+        show-icon
+        :closable="false"
+        class="notice"
+        :title="detail ? '规则包信息刷新失败，下面是上一次读到的内容' : '规则包信息读取失败'"
+        data-test="conch-load-failed"
+      >
+        <el-button size="small" :loading="loading" @click="load">重试</el-button>
+      </el-alert>
+
       <el-alert v-if="detail?.disabled" type="warning" :closable="false" show-icon class="notice" title="这个规则包已停用">
         <template #default>
           <div>各 Crab 同步后把它标记为「Reef 已停用」：已安装的版本仍可调用，但不会再下载或更新。启用后，Crab 下次同步时取消停用标记，有更高版本时由使用者手动更新。停用期间可以上传新版本，但不能发布。</div>
@@ -168,7 +233,7 @@ watch(() => props.conch, load, { immediate: true })
       </el-alert>
 
       <el-alert
-        v-if="!loading && !detail && versions.length"
+        v-if="!loading && !loadFailed && !detail && versions.length"
         type="info"
         :closable="false"
         show-icon
@@ -196,7 +261,7 @@ watch(() => props.conch, load, { immediate: true })
         </template>
       </el-alert>
 
-      <el-tabs v-model="tab" class="tabs">
+      <el-tabs v-if="!(loadFailed && !detail)" v-model="tab" class="tabs">
         <el-tab-pane label="概况" name="overview" :disabled="!detail">
           <div v-if="detail" class="hm-grid cols-2">
             <div class="hm-card">
@@ -303,7 +368,7 @@ watch(() => props.conch, load, { immediate: true })
         </el-tab-pane>
 
         <el-tab-pane label="运行统计" name="stats" lazy>
-          <ConchStats :conch="conch" :versions="versions" />
+          <ConchStats v-if="!loading && !missing && !loadFailed" :conch="conch" :versions="versions" />
         </el-tab-pane>
       </el-tabs>
     </template>
@@ -380,7 +445,8 @@ watch(() => props.conch, load, { immediate: true })
 
 .counts {
   display: flex;
-  gap: 32px;
+  flex-wrap: wrap;
+  gap: 16px 32px;
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid var(--hm-border);

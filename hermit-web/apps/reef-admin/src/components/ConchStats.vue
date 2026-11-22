@@ -13,10 +13,12 @@ const props = defineProps<{ conch: string; versions: ConchVersion[] }>()
 
 const range = ref('7d')
 const loading = ref(true)
+const loadFailed = ref(false)
 const summary = ref<TideSummary | null>(null)
 const groups = ref<FailureGroup[]>([])
 const compare = ref<VersionStats[]>([])
 const failureVersion = ref('')
+let loadSeq = 0
 
 const published = computed(() => props.versions.filter((v) => v.status === 'PUBLISHED').slice(0, 5))
 const bucket = computed(() => rangeQuery(range.value).bucket)
@@ -25,6 +27,7 @@ const sum = computed(() => totals(summary.value?.series ?? []))
 const actions = computed(() => totalsByAction(summary.value?.series ?? []))
 
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const query = rangeQuery(range.value)
@@ -34,13 +37,19 @@ async function load() {
       api.tideFailures({ conch: props.conch, from: query.from, version: failureVersion.value || undefined }),
       versionList ? api.tideCompare(props.conch, versionList) : Promise.resolve({ conch: props.conch, versions: [] }),
     ])
+    if (seq !== loadSeq) return
     summary.value = s
     groups.value = f.groups
     compare.value = c.versions
+    loadFailed.value = false
   } catch (error) {
+    if (seq !== loadSeq) return
+    loadFailed.value = true
     notifyError(error)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) {
+      loading.value = false
+    }
   }
 }
 
@@ -57,6 +66,17 @@ onMounted(load)
       </el-radio-group>
     </div>
 
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      :title="summary ? '运行统计刷新失败，下面是上一次读到的内容' : '运行统计读取失败'"
+      data-test="stats-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
+
     <div class="hm-grid cols-4">
       <StatCard label="调用次数" :value="sum.calls" :icon="DataLine" />
       <StatCard label="失败次数" :value="sum.failures" :tone="sum.failures ? 'danger' : 'neutral'" :icon="WarningFilled" />
@@ -67,7 +87,7 @@ onMounted(load)
     <div class="hm-grid cols-2">
       <div class="hm-card">
         <div class="hm-card-title"><span>调用趋势</span></div>
-        <BarChart :points="bars" :height="220" :loading="loading" />
+        <BarChart :points="bars" :height="220" :loading="loading || loadFailed" />
       </div>
       <div class="hm-card">
         <div class="hm-card-title">
@@ -75,7 +95,7 @@ onMounted(load)
           <span class="hm-muted small">全部历史累计，最近 5 个已发布版本</span>
         </div>
         <el-table :data="compare">
-          <template #empty>{{ loading ? '' : '还没有已发布版本' }}</template>
+          <template #empty>{{ loading || loadFailed ? '' : '还没有已发布版本' }}</template>
           <el-table-column label="版本" min-width="100">
             <template #default="{ row }"><span class="mono">v{{ row.version }}</span></template>
           </el-table-column>
@@ -96,7 +116,7 @@ onMounted(load)
         <span class="hm-muted small">P95 取各小时 P95 的最大值，是近似值</span>
       </div>
       <el-table :data="actions">
-        <template #empty>{{ loading ? '' : '所选范围内没有调用' }}</template>
+        <template #empty>{{ loading || loadFailed ? '' : '所选范围内没有调用' }}</template>
         <el-table-column label="能力" min-width="160">
           <template #default="{ row }"><span class="mono">{{ row.action }}</span></template>
         </el-table-column>
@@ -121,7 +141,7 @@ onMounted(load)
           <el-option v-for="v in versions" :key="v.version" :label="`v${v.version}`" :value="v.version" />
         </el-select>
       </div>
-      <FailureGroups :groups="groups" :loading="loading" />
+      <FailureGroups :groups="groups" :loading="loading || loadFailed" />
     </div>
   </div>
 </template>

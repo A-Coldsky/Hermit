@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { Expand, Fold, Moon, Sunny } from '@element-plus/icons-vue'
 import type { Component } from 'vue'
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { colorMode, toggleColorMode } from '../color-mode'
+import { useNarrow } from '../narrow'
 import HermitMark from './HermitMark.vue'
 
 export interface NavItem {
@@ -36,9 +37,11 @@ function initialCollapsed(): boolean {
 }
 
 const route = useRoute()
+const drawerMode = useNarrow(DRAWER_QUERY)
 const collapsed = ref(initialCollapsed())
 /** 窄屏下侧栏是抽屉，和桌面端的折叠状态分开记。 */
 const drawerOpen = ref(false)
+const sidebarOpen = computed(() => (drawerMode.value ? drawerOpen.value : !collapsed.value))
 
 watch(collapsed, (value) => {
   try {
@@ -48,21 +51,35 @@ watch(collapsed, (value) => {
   }
 })
 watch(() => route.fullPath, () => (drawerOpen.value = false))
+watch(drawerMode, (narrow) => {
+  if (!narrow) {
+    drawerOpen.value = false
+  }
+})
 
 const activeItem = computed(() =>
   [...props.items]
     .sort((a, b) => b.to.length - a.to.length)
     .find((item) => route.path === item.to || route.path.startsWith(item.to === '/' ? '/__none__' : `${item.to}/`)),
 )
-const active = computed(() => activeItem.value?.to ?? '/')
+const active = computed(() => activeItem.value?.to ?? '')
 
 function toggleSidebar() {
-  if (typeof matchMedia === 'function' && matchMedia(DRAWER_QUERY).matches) {
+  if (drawerMode.value) {
     drawerOpen.value = !drawerOpen.value
     return
   }
   collapsed.value = !collapsed.value
 }
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && drawerOpen.value) {
+    drawerOpen.value = false
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
@@ -81,7 +98,7 @@ function toggleSidebar() {
           :key="item.to"
           :content="item.label"
           placement="right"
-          :disabled="!collapsed || drawerOpen"
+          :disabled="!collapsed || drawerOpen || drawerMode"
           :show-after="200"
         >
           <RouterLink :to="item.to" class="nav-item" :class="{ active: active === item.to }">
@@ -99,11 +116,12 @@ function toggleSidebar() {
         <button
           type="button"
           class="icon-btn"
-          :aria-label="collapsed ? '展开侧栏' : '收起侧栏'"
-          :title="collapsed ? '展开侧栏' : '收起侧栏'"
+          :aria-label="sidebarOpen ? '收起侧栏' : '展开侧栏'"
+          :title="sidebarOpen ? '收起侧栏' : '展开侧栏'"
+          :aria-expanded="sidebarOpen"
           @click="toggleSidebar"
         >
-          <el-icon :size="18"><Expand v-if="collapsed" /><Fold v-else /></el-icon>
+          <el-icon :size="18"><Fold v-if="sidebarOpen" /><Expand v-else /></el-icon>
         </button>
         <span class="section">{{ activeItem?.label }}</span>
         <span class="spacer" />

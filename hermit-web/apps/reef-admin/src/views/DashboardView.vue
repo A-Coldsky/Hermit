@@ -12,6 +12,7 @@ import { alertKindLabels, crabLabel, isoDaysAgo, versionChangeReasons } from '..
 import { toBars, totals } from '../tide'
 
 const loading = ref(true)
+const loadFailed = ref(false)
 const conches = ref<ConchSummary[]>([])
 const tide = ref<TideSummary | null>(null)
 const alerts = ref<Alert[]>([])
@@ -35,8 +36,10 @@ async function load() {
     tide.value = t
     alerts.value = a.alerts
     rollbacks.value = r.events
+    loadFailed.value = false
     void refreshOpenAlerts()
   } catch (error) {
+    loadFailed.value = true
     notifyError(error)
   } finally {
     loading.value = false
@@ -52,6 +55,18 @@ onMounted(load)
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-button v-if="isAdmin" type="primary" :icon="Upload" @click="$router.push('/conches/upload')">上传规则包</el-button>
     </PageHeader>
+
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      class="load-failed"
+      :title="tide ? '概览数据刷新失败，下面是上一次读到的内容' : '概览数据读取失败'"
+      data-test="dashboard-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
 
     <div class="hm-grid cols-4">
       <StatCard label="规则包总数" :value="conches.length" :hint="`已发布 ${published} 个`" :icon="Box" to="/conches" />
@@ -80,7 +95,7 @@ onMounted(load)
           <span>每日调用量</span>
           <router-link to="/tide" class="more">查看 Tide</router-link>
         </div>
-        <BarChart :points="bars" :height="220" :loading="loading" />
+        <BarChart :points="bars" :height="220" :loading="loading || loadFailed" />
       </div>
 
       <div class="hm-card">
@@ -97,10 +112,13 @@ onMounted(load)
             <span class="hm-muted">{{ relativeTime(alert.createdAt) }}</span>
           </li>
         </ul>
-        <div v-else-if="!loading" class="clear">
+        <div v-else-if="!loading && !loadFailed" class="clear">
           <el-icon :size="40" class="ok-icon"><CircleCheckFilled /></el-icon>
           <strong>一切正常</strong>
           <span class="hm-muted">没有需要处理的告警，新告警会在这里出现</span>
+        </div>
+        <div v-else-if="!loading && loadFailed" class="clear">
+          <span class="hm-muted">没有读到告警数据</span>
         </div>
       </div>
     </div>
@@ -108,7 +126,7 @@ onMounted(load)
     <div class="hm-card row">
       <div class="hm-card-title"><span>最近的版本切换</span></div>
       <el-table :data="rollbacks.slice(0, 10)">
-        <template #empty>{{ loading ? '' : '7 天内没有 Crab 切换版本' }}</template>
+        <template #empty>{{ loading || loadFailed ? '' : '7 天内没有 Crab 切换版本' }}</template>
         <el-table-column label="规则包" min-width="160">
           <template #default="{ row }">
             <router-link :to="`/conches/${encodeURIComponent(row.conch)}`" class="mono">{{ row.conch }}</router-link>
@@ -134,6 +152,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.load-failed {
+  margin-bottom: 16px;
+}
+
 .row {
   margin-top: 16px;
 }

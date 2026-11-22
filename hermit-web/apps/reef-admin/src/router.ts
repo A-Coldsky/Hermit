@@ -49,7 +49,11 @@ router.beforeEach(async (to) => {
       try {
         setRole((await api.me()).role)
       } catch {
-        return true
+        if (!signedIn()) {
+          return false
+        }
+        ElMessage.warning({ message: '无法确认当前权限，请稍后再试', grouping: true })
+        return { name: 'dashboard' }
       }
     }
     if (session.role !== 'ADMIN') {

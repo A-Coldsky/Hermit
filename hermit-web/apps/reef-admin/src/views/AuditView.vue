@@ -8,8 +8,10 @@ import { api, type AuditPage } from '../api'
 import { auditActionLabels } from '../labels'
 
 const loading = ref(true)
+const loadFailed = ref(false)
 const query = reactive({ conch: '', page: 1, size: 20 })
 const result = ref<AuditPage>({ items: [], page: 1, size: 20, total: 0 })
+let loadSeq = 0
 
 const actionTone: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'primary'> = {
   LOGIN_SUCCESS: 'info',
@@ -20,13 +22,21 @@ const actionTone: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'pr
 }
 
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
-    result.value = await api.audit({ conch: query.conch.trim() || undefined, page: query.page, size: query.size })
+    const data = await api.audit({ conch: query.conch.trim() || undefined, page: query.page, size: query.size })
+    if (seq !== loadSeq) return
+    result.value = data
+    loadFailed.value = false
   } catch (error) {
+    if (seq !== loadSeq) return
+    loadFailed.value = true
     notifyError(error)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) {
+      loading.value = false
+    }
   }
 }
 
@@ -55,6 +65,18 @@ onMounted(load)
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
 
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      class="load-failed"
+      :title="result.items.length ? '审计日志刷新失败，下面是上一次读到的内容' : '审计日志读取失败'"
+      data-test="audit-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
+
     <div class="hm-card">
       <div class="hm-toolbar">
         <el-input v-model="query.conch" placeholder="按规则包名称筛选" clearable class="search" @keyup.enter="search" @clear="search">
@@ -64,7 +86,7 @@ onMounted(load)
         </el-input>
       </div>
       <el-table v-loading="loading" :data="result.items">
-        <template #empty>{{ loading ? '' : '没有记录' }}</template>
+        <template #empty>{{ loading || loadFailed ? '' : '没有记录' }}</template>
         <el-table-column label="时间" width="230">
           <template #default="{ row }"><TimeText :value="row.at" /></template>
         </el-table-column>
@@ -106,6 +128,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.load-failed {
+  margin-bottom: 16px;
+}
+
 .search {
   max-width: 320px;
 }

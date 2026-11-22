@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { ArrowDown, Bell, Box, DataLine, Document, House, Key, Tickets, User } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PasswordDialog from './components/PasswordDialog.vue'
 import { useRouter } from 'vue-router'
 import AppLayout, { type NavItem } from '@shared/components/AppLayout.vue'
 import { api } from './api'
-import { isAdmin, session, setRole, signOut } from './auth'
+import { isAdmin, session, setRole, signedIn, signOut } from './auth'
 import { openAlerts, refreshOpenAlerts } from './alerts'
 
 const router = useRouter()
 const timer = ref<number>()
+let mounted = true
 
 const passwordOpen = ref(false)
 
@@ -40,14 +42,27 @@ onMounted(async () => {
     const me = await api.me()
     session.user = me.username
     setRole(me.role)
+    if (router.currentRoute.value.meta.admin && me.role !== 'ADMIN') {
+      ElMessage.warning({ message: '没有权限执行这个操作', grouping: true })
+      void router.replace({ name: 'dashboard' })
+    }
   } catch {
     // 401 已在客户端里处理
+    if (!signedIn()) {
+      return
+    }
+  }
+  if (!mounted) {
+    return
   }
   void refreshOpenAlerts()
   timer.value = window.setInterval(() => void refreshOpenAlerts(), 60_000)
 })
 
-onBeforeUnmount(() => window.clearInterval(timer.value))
+onBeforeUnmount(() => {
+  mounted = false
+  window.clearInterval(timer.value)
+})
 
 function logout() {
   signOut()

@@ -15,10 +15,12 @@ import { toBars, totals, totalsByAction } from '../tide'
 const range = ref('7d')
 const conch = ref('')
 const loading = ref(false)
+const loadFailed = ref(false)
 const conches = ref<ConchSummary[]>([])
 const summary = ref<TideSummary | null>(null)
 const groups = ref<FailureGroup[]>([])
 const rollbacks = ref<RollbackEvent[]>([])
+let loadSeq = 0
 
 const bucket = computed(() => rangeQuery(range.value).bucket)
 const bars = computed(() => toBars(summary.value?.series ?? [], bucket.value, summary.value?.from, summary.value?.to))
@@ -27,6 +29,7 @@ const actions = computed(() => totalsByAction(summary.value?.series ?? []))
 const failureTotal = computed(() => groups.value.reduce((n, g) => n + g.count, 0))
 
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const query = rangeQuery(range.value)
@@ -36,13 +39,19 @@ async function load() {
       api.tideFailures({ conch: filter, from: query.from }),
       api.tideRollbacks({ conch: filter, from: query.from }),
     ])
+    if (seq !== loadSeq) return
     summary.value = s
     groups.value = f.groups
     rollbacks.value = r.events
+    loadFailed.value = false
   } catch (error) {
+    if (seq !== loadSeq) return
+    loadFailed.value = true
     notifyError(error)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) {
+      loading.value = false
+    }
   }
 }
 
@@ -69,6 +78,17 @@ watch([range, conch], load, { immediate: true })
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
 
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      :title="summary ? 'Tide 统计刷新失败，下面是上一次读到的内容' : 'Tide 统计读取失败'"
+      data-test="tide-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
+
     <div class="hm-grid cols-4">
       <StatCard label="调用次数" :value="sum.calls" :icon="DataLine" />
       <StatCard label="失败次数" :value="sum.failures" :tone="sum.failures ? 'danger' : 'neutral'" :icon="WarningFilled" />
@@ -81,7 +101,7 @@ watch([range, conch], load, { immediate: true })
         <span>调用趋势</span>
         <span class="hm-muted small">按{{ bucket === 'hour' ? '小时' : '天' }}汇总</span>
       </div>
-      <BarChart :points="bars" :height="240" :loading="loading" />
+      <BarChart :points="bars" :height="240" :loading="loading || loadFailed" />
     </div>
 
     <div class="hm-card">
@@ -90,7 +110,7 @@ watch([range, conch], load, { immediate: true })
         <span class="hm-muted small">P95 取各小时 P95 的最大值，是近似值</span>
       </div>
       <el-table :data="actions" max-height="420">
-        <template #empty>{{ loading ? '' : '所选范围内没有调用' }}</template>
+        <template #empty>{{ loading || loadFailed ? '' : '所选范围内没有调用' }}</template>
         <el-table-column label="规则包" min-width="140">
           <template #default="{ row }">
             <router-link :to="`/conches/${encodeURIComponent(row.conch)}?tab=stats`" class="mono">{{ row.conch }}</router-link>
@@ -118,15 +138,15 @@ watch([range, conch], load, { immediate: true })
     <div class="hm-card">
       <div class="hm-card-title">
         <span>失败下钻</span>
-        <span class="hm-muted small">共 {{ failureTotal }} 条失败样本，按版本、能力、步骤和错误码分组</span>
+        <span class="hm-muted small">共 {{ failureTotal }} 条失败样本，按版本、能力、步骤、错误码和归属分组</span>
       </div>
-      <FailureGroups :groups="groups" :loading="loading" show-conch />
+      <FailureGroups :groups="groups" :loading="loading || loadFailed" show-conch />
     </div>
 
     <div class="hm-card">
       <div class="hm-card-title"><span>版本切换记录</span></div>
       <el-table :data="rollbacks">
-        <template #empty>{{ loading ? '' : '所选范围内没有 Crab 切换版本' }}</template>
+        <template #empty>{{ loading || loadFailed ? '' : '所选范围内没有 Crab 切换版本' }}</template>
         <el-table-column label="规则包" min-width="140">
           <template #default="{ row }"><span class="mono">{{ row.conch }}</span></template>
         </el-table-column>

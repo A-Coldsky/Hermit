@@ -8,6 +8,7 @@ import com.fasterxml.jackson.core.JacksonException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.Step;
 
 /**
@@ -36,18 +37,33 @@ final class LoginSnapshots {
             return snapshot;
         }
         for (int i = 0; i < steps.size(); i++) {
-            Step step = steps.get(i);
+            // if / repeat 里写的变量也算登录变量，下标记在外层那一步上。
+            for (Step step : FlowSteps.flat(List.of(steps.get(i)))) {
+                capture(step, i, vars, snapshot, skipped);
+            }
+        }
+        return snapshot;
+    }
+
+    private static void capture(
+            Step step, int i, Map<String, Object> vars, Map<String, String> snapshot, List<Skipped> skipped) {
+        {
+            if (FlowSteps.REPEAT.equals(step.type()) && step.def().get("collect") instanceof Map<?, ?> collect) {
+                for (Object name : collect.keySet()) {
+                    take(snapshot, String.valueOf(name), vars.get(String.valueOf(name)), i, step.type(), skipped);
+                }
+                return;
+            }
             if ("extract".equals(step.type()) || "set".equals(step.type())) {
                 for (String name : step.def().keySet()) {
                     take(snapshot, name, vars.get(name), i, step.type(), skipped);
                 }
-                continue;
+                return;
             }
             if ("script".equals(step.type()) && step.def().get("into") instanceof String name) {
                 take(snapshot, name, vars.get(name), i, step.type(), skipped);
             }
         }
-        return snapshot;
     }
 
     /** 开发追踪里的那一句。只含变量名。 */

@@ -24,6 +24,28 @@ class TemplateEngineTest {
 
     private final TemplateEngine engine = new TemplateEngine();
 
+    /** 解析结果按原文缓存：同一模板换变量照常求值，错的模板每次都报错，缓存有上限。 */
+    @Test
+    void repeatedTemplatesRenderFromTheCurrentVariables() {
+        String template = "{{user.name | trim}}-{{n}}";
+        assertThat(engine.render(template, Map.of("user", Map.of("name", " ann "), "n", 1))).isEqualTo("ann-1");
+        assertThat(engine.render(template, Map.of("user", Map.of("name", "bob"), "n", 2))).isEqualTo("bob-2");
+        assertThatThrownBy(() -> engine.render(template, Map.of("n", 3))).isInstanceOf(TemplateException.class);
+        assertThat(engine.render(" {{n}} ", Map.of("n", 4))).isEqualTo(4);
+        assertThat(engine.render(" {{n}} ", Map.of("n", "x"))).isEqualTo("x");
+        assertThat(engine.render("a {{n}} ", Map.of("n", 5))).isEqualTo("a 5 ");
+        for (int i = 0; i < 2; i++) {
+            assertThatThrownBy(() -> engine.render("{{n", Map.of("n", 1)))
+                    .isInstanceOf(TemplateException.class)
+                    .hasMessageContaining("}}");
+        }
+        for (int i = 0; i < Expressions.CACHE_ENTRIES + 50; i++) {
+            assertThat(engine.render("k" + i + "={{n}}", Map.of("n", i))).isEqualTo("k" + i + "=" + i);
+        }
+        assertThat(Expressions.cacheSize()).isLessThanOrEqualTo(Expressions.CACHE_ENTRIES);
+        assertThat(engine.referencedPaths(template)).containsExactly("user.name", "n");
+    }
+
     @Test
     void exactExpressionKeepsTheValueAndInterpolationStringifies() {
         List<String> items = List.of("a", "b");

@@ -45,6 +45,12 @@ defineProps<{ groups: FailureGroup[]; showConch?: boolean; loading?: boolean }>(
         <span class="mono hm-muted code">{{ row.errorCode }}</span>
       </template>
     </el-table-column>
+    <el-table-column label="归属" width="120" show-overflow-tooltip>
+      <template #default="{ row }">
+        <span v-if="row.owner">{{ row.owner }}</span>
+        <span v-else class="hm-muted">—</span>
+      </template>
+    </el-table-column>
     <el-table-column prop="count" label="次数" width="80" align="right" sortable />
   </el-table>
 </template>

@@ -91,6 +91,17 @@ describe('文字对比度', () => {
     const text = /--el-button-text-color:\s*(#[0-9a-f]{6})/i.exec(rule![1])![1]
     expect(contrast(resolve('--el-color-primary', dark), text)).toBeGreaterThanOrEqual(4.5)
   })
+
+  it.each([
+    ['主色深色标签', /html\.dark \.el-tag--dark\.el-tag--primary\s*\{([^}]*)\}/, /--el-tag-text-color:\s*(#[0-9a-f]{6})/i],
+    ['单选按钮选中态', /html\.dark \.el-radio-button\s*\{([^}]*)\}/, /--el-radio-button-checked-text-color:\s*(#[0-9a-f]{6})/i],
+    ['分页选中态', /html\.dark \.el-pagination\.is-background \.el-pager li\.is-active\s*\{([^}]*)\}/, /color:\s*(#[0-9a-f]{6})/i],
+  ])('暗色%s的文字对比度不低于 4.5:1', (_label, selector, prop) => {
+    const rule = selector.exec(css)
+    expect(rule).not.toBeNull()
+    const text = prop.exec(rule![1])![1]
+    expect(contrast(resolve('--el-color-primary', dark), text)).toBeGreaterThanOrEqual(4.5)
+  })
 })
 
 describe('暗色语义色', () => {

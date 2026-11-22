@@ -540,3 +540,16 @@ html.dark .el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
   --el-button-active-text-color: #0b1620;
   --el-button-disabled-text-color: rgba(11, 22, 32, 0.6);
 }
+
+/* 暗色主色标签、单选按钮选中态和分页选中态：同样用深色字保证 #14a394 底上的对比度。 */
+html.dark .el-tag--dark.el-tag--primary {
+  --el-tag-text-color: #0b1620;
+}
+
+html.dark .el-radio-button {
+  --el-radio-button-checked-text-color: #0b1620;
+}
+
+html.dark .el-pagination.is-background .el-pager li.is-active {
+  color: #0b1620;
+}

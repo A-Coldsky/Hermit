@@ -173,6 +173,22 @@ describe('同网站的规则包', () => {
     expect(site.text()).not.toContain('erp_orders')
   })
 
+  it('门户自己的包没有认证地址，也列出经它登录的包和告警', async () => {
+    crab.conch.mockResolvedValue(detail({ sameAuth: ['erp_orders'] }))
+    let wrapper = await mountDetail()
+    let notice = wrapper.get('[data-test="same-auth"]')
+    expect(notice.text()).toContain('本机有规则包经这个网站登录')
+    expect(notice.text()).toContain('把它当门户或认证中心')
+    expect(notice.text()).not.toContain('账号密码会提交到那里')
+    expect(notice.findAll('[data-test="same-auth-link"]').map((link) => link.text())).toEqual(['erp_orders'])
+
+    crab.conch.mockResolvedValue(detail({ sameAuth: ['erp_orders'], contendingWith: ['erp_orders'] }))
+    wrapper = await mountDetail()
+    notice = wrapper.get('[data-test="same-auth"]')
+    expect(notice.text()).toContain('可能在和经同一个认证地址登录的规则包互相顶掉登录')
+    expect(notice.text()).toContain('最近 erp_orders 和这个包轮流被对方的登录顶掉')
+  })
+
   it('启用和保存认证地址配置后提示经同一个认证地址登录的包', async () => {
     const warning = vi.spyOn(ElMessage, 'warning')
     crab.conch.mockResolvedValue(detail({ switchedOff: true, site: null }))

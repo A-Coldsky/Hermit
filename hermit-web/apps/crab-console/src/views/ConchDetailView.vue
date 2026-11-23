@@ -64,6 +64,11 @@ const sameSiteContending = computed(() =>
 const sameAuthContending = computed(() =>
   (detail.value?.contendingWith ?? []).filter((name) => detail.value?.sameAuth?.includes(name)),
 )
+const sameAuthTitle = computed(() => {
+  if (sameAuthContending.value.length) return '可能在和经同一个认证地址登录的规则包互相顶掉登录'
+  // 门户或认证中心自己的包：它没有认证地址，是别的包登录时要访问它的网站。
+  return detail.value?.authOrigins?.length ? '登录时还会访问认证地址' : '本机有规则包经这个网站登录'
+})
 const mcp = computed(() => detail.value?.driver === 'mcp')
 const capabilityCount = computed(() => detail.value?.capabilities.length ?? 0)
 const capabilityLabel = computed(() => `${mcp.value ? '工具' : '能力'}（${capabilityCount.value}）`)
@@ -562,22 +567,26 @@ watch(
         </template>
       </el-alert>
       <el-alert
-        v-if="detail.authOrigins?.length"
+        v-if="detail.authOrigins?.length || detail.sameAuth?.length"
         :type="sameAuthContending.length ? 'warning' : 'info'"
         show-icon
         :closable="false"
-        :title="sameAuthContending.length ? '可能在和经同一个认证地址登录的规则包互相顶掉登录' : '登录时还会访问认证地址'"
+        :title="sameAuthTitle"
         data-test="same-auth"
       >
         <template #default>
-          这个规则包的登录步骤除了 {{ detail.site }}，还会访问 {{ detail.authOrigins.join('、') }}（门户或 SSO），账号密码会提交到那里。能力步骤只访问 {{ detail.site }}。
+          <template v-if="detail.authOrigins?.length">
+            这个规则包的登录步骤除了 {{ detail.site }}，还会访问 {{ detail.authOrigins.join('、') }}（门户或 SSO），账号密码会提交到那里。能力步骤只访问 {{ detail.site }}。
+          </template>
           <template v-if="detail.sameAuth?.length">
             本机的
             <template v-for="(name, index) in detail.sameAuth" :key="name">
               <template v-if="index > 0">、</template>
               <router-link :to="`/conches/${encodeURIComponent(name)}`" data-test="same-auth-link">{{ name }}</router-link>
             </template>
-            也经同一个认证地址登录。这些规则包各自登录、各存各的 Cookie，互不共用。
+            <template v-if="detail.authOrigins?.length">也经同一个认证地址登录。</template>
+            <template v-else>登录时也要访问 {{ detail.site }}，把它当门户或认证中心。</template>
+            这些规则包各自登录、各存各的 Cookie，互不共用。
             <template v-if="sameAuthContending.length">
               最近 {{ sameAuthContending.join('、') }} 和这个包轮流被对方的登录顶掉、又重新登录。认证中心同一账号只允许一个会话时会这样。Crab 分不清两边是不是同一个人，所以这只是可能。
             </template>

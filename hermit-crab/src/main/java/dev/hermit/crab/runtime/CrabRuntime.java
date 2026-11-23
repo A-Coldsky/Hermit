@@ -319,7 +319,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         return tlsTrust;
     }
 
-    /** 检测只允许已加载规则的 base_url、MCP 上游和 OAuth 端点，以及 Reef 地址。 */
+    /** 检测只允许已加载规则的 base_url、认证地址、MCP 上游和 OAuth 端点，以及 Reef 地址。 */
     private boolean probeAllowed(String host, int port) {
         return probeTargets().contains(host + ":" + port);
     }
@@ -328,6 +328,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         LinkedHashSet<String> targets = new LinkedHashSet<>();
         for (ConchDoc doc : registry.snapshot().values()) {
             addProbeTarget(targets, doc.baseUrl());
+            // 登录步骤也会连认证地址，那边的证书同样要能检测和信任。
+            for (String origin : AuthOrigins.declared(doc)) {
+                addProbeTarget(targets, origin);
+            }
             McpUpstream upstream = doc.upstream();
             if (upstream == null) {
                 continue;
@@ -341,6 +345,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             if (auth != null) {
                 addProbeTarget(targets, auth.authorizationEndpoint());
                 addProbeTarget(targets, auth.tokenEndpoint());
+            }
+        }
+        for (List<String> origins : authOrigins().values()) {
+            for (String origin : origins) {
+                addProbeTarget(targets, origin);
             }
         }
         addProbeTarget(targets, config.reefUrl());

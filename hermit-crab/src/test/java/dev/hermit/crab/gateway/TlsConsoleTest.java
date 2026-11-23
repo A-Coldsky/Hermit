@@ -275,6 +275,37 @@ class TlsConsoleTest {
         }
     }
 
+    @Test
+    void authOriginCanBeProbedLikeTheBaseUrl() throws Exception {
+        // 登录步骤要连认证地址，它的证书不被信任时也得能在控制台检测、再决定信不信。
+        LabCertificates.Material certs = LabCertificates.generate(temp.resolve("certs"));
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("home"), "HermitTlsAuth-91ab", config);
+             LocalHttps sso = LocalHttps.start(
+                     new X509Certificate[] {certs.leaf(), certs.root()}, certs.leafKey());
+             LocalHttps viaConfig = LocalHttps.start(
+                     new X509Certificate[] {certs.leaf(), certs.root()}, certs.leafKey())) {
+            TestServer.Reply blocked = server.console(
+                    "POST", "/console/api/tls/probe", body("host", "127.0.0.1", "port", sso.port()), true);
+            assertThat(blocked.status()).isEqualTo(400);
+
+            String yaml = LocalConchBehaviorTest.ping("tls_sso", "1.0.0")
+                    .replace("min_crab_version: 1.0.0", "min_crab_version: 1.11.0")
+                    .replace("credentials: {}", """
+                            credentials: {}
+                            config:
+                              sso_url: { type: url, label: 认证中心, default: "%s" }
+                            auth:
+                              origins: ["%s", "{{config.sso_url}}"]
+                              steps:
+                                - request: { method: GET, path: / }""".formatted(viaConfig.url(), sso.url()));
+            server.runtime.registry().put(ConchParser.parse(yaml));
+
+            probeSha(server, sso.port());
+            probeSha(server, viaConfig.port());
+        }
+    }
+
     private static String probeSha(TestServer server, int port) throws Exception {
         TestServer.Reply probed = server.console(
                 "POST", "/console/api/tls/probe", body("host", "127.0.0.1", "port", port), true);

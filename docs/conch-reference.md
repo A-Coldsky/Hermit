@@ -8,7 +8,7 @@
 # request：发请求。path 和 url 二选一；body、form、json 三选一。
 - request: {method: POST, path: /api/search, json: {keyword: "{{input.keyword}}"}}
 
-# assert：检查最近一次响应，不成立就失败。
+# assert：检查最近一次响应（1.12.0 起也支持变量判断键和能力步骤的 on_fail: session_expired），不成立就失败。
 - assert: {status: 200, not_contains: "登录超时"}
 
 # extract：从最近一次响应取值，键是变量名。css、xpath、jsonpath、regex 选一种。
@@ -47,8 +47,8 @@
 ```
 
 - 变量用 `{{名字}}` 引用：`{{input.x}}` 入参，`{{credential.x}}` 凭证，`{{config.x}}` 配置，`{{response.status}}` 最近一次响应。
-- 判断键（`if` 和 `until` 用）：`status`、`contains`、`not_contains`、`cookie_exists`、`header_exists` 看最近一次响应；`equals: {变量名: 值}`、`not_equals`、`present: 变量名`、`not_present` 看变量。变量名直接写，不加 `{{ }}`。没有「或」。
-- 用了 `if`、`repeat`、`retry` 的包写 `min_crab_version: 1.9.0`。写 1.9.0 及以上的包，步骤里不认识的键是错误，报错会列出可用的键。
+- 判断键（`if`、`until` 用；1.12.0 起 `assert` 也支持同一组变量键）：`status`、`contains`、`not_contains`、`cookie_exists`、`header_exists` 看最近一次响应；`equals: {变量名: 值}`、`not_equals`、`present: 变量名`、`not_present` 看变量。变量名直接写，不加 `{{ }}`。没有「或」。
+- 用了 `if`、`repeat`、`retry` 的包写 `min_crab_version: 1.9.0`；用了 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail`/变量判断键写 `1.12.0`。写 1.9.0 及以上的包，步骤里不认识的键是错误，报错会列出可用的键。
 - `ask`（等用户输入验证码）只能直接写在 `auth.steps` 下。
 - 写完用 `conch_validate` 校验，再试跑；以校验结果为准。
 
@@ -71,7 +71,7 @@ Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里�
 
 业务接口只选用户确认过的功能对应的那一次请求。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
 
-凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`；本地规则包可以与正式包同名，两份各自保留账号、凭证和配置，同一时刻只有一份生效，在控制台切换来源。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.11.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。用了 request 的 `body` 或 `xml_escape` 时，还要不低于 1.7.0，否则 message 为「使用 body 时 min_crab_version 必须不低于 1.7.0」或「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时，还要不低于 1.8.0（`driver: mcp` 的包不能用）。用了步骤 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时，还要不低于 1.9.0；`min_crab_version` 不低于 1.9.0 的包里，request、extract、assert 的未知键是错误（更低的包仍是警告）。用了顶层 `groups` 或能力的 `group` 时，还要不低于 1.10.0，否则 message 为「使用能力分组时 min_crab_version 必须不低于 1.10.0」。`driver: http` 用了 `auth.origins` 时，还要不低于 1.11.0（`driver: mcp` 的包不能用）。
+凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`；本地规则包可以与正式包同名，两份各自保留账号、凭证和配置，同一时刻只有一份生效，在控制台切换来源。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.12.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。用了 request 的 `body` 或 `xml_escape` 时，还要不低于 1.7.0，否则 message 为「使用 body 时 min_crab_version 必须不低于 1.7.0」或「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时，还要不低于 1.8.0（`driver: mcp` 的包不能用）。用了步骤 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时，还要不低于 1.9.0；`min_crab_version` 不低于 1.9.0 的包里，request、extract、assert 的未知键是错误（更低的包仍是警告）。用了顶层 `groups` 或能力的 `group` 时，还要不低于 1.10.0，否则 message 为「使用能力分组时 min_crab_version 必须不低于 1.10.0」。`driver: http` 用了 `auth.origins` 时，还要不低于 1.11.0（`driver: mcp` 的包不能用）。`driver: http` 用了 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail`、`equals`、`not_equals`、`present`、`not_present` 时，还要不低于 1.12.0（`driver: mcp` 的包不能用）。
 
 ### 令牌
 
@@ -378,7 +378,7 @@ actions:
 
 - 只有写了 `mcp.read_only: true` 的能力并行。`idempotent: true`、GET 都不算；其它能力照旧独占，要等正在跑的只读调用全部结束，它执行期间只读调用也等着。
 - 并行只发生在会话可以直接用的时候。没登录、登录失败已暂停、有等待输入的 `ask`、空闲超时要跑 `alive_check`、能力引用的 `{{login.名字}}` 取不到，这些情况都改成独占执行，和没打开时一样；同时到达的调用只登录一次。
-- 并行的调用发现会话失效（401/403 或跳回登录页）时，各自改成独占再处理：第一个清会话并重新登录，其余的看到已经重新登录过，直接重跑。能力没写 `idempotent: true` 时仍返回 `SESSION_EXPIRED`，不重跑。
+- 并行的调用发现会话失效（401/403、跳回登录页、命中 `auth.expired_when` 或 `assert` 的 `on_fail: session_expired`）时，各自改成独占再处理：第一个清会话并重新登录，其余的看到已经重新登录过，直接重跑。能力没写 `idempotent: true` 时仍返回 `SESSION_EXPIRED`，不重跑。
 - 并行的调用共用同一个 Cookie 罐。**上游每次响应都换 Cookie 或令牌（滚动会话、一次性 CSRF 令牌）时不要打开**，并行的请求会互相顶掉。只读能力里也不要依赖上一步请求在服务器上留下的状态（例如「先选部门，再查列表」靠服务器会话记住部门），两个调用会串。
 - 没有任何能力写 `mcp.read_only: true` 时是警告 `CONCURRENT_READS`，message 为「没有能力写 mcp.read_only: true，concurrent_reads 不起作用」。`min_crab_version` 低于 1.9.0 是 `MIN_CRAB_VERSION`，message 为「使用 auth.concurrent_reads 时 min_crab_version 必须不低于 1.9.0」。值不是布尔是解析错误。`driver: mcp` 的包不能写 `auth`。
 
@@ -553,6 +553,14 @@ auth:
 
 - 断言条件本身未通过且声明了 `on_fail: session_expired` 时，引擎按会话失效处理（幂等重登重放，非幂等返回 `SESSION_EXPIRED` 且 `failedStepType` 为 `assert`）。规则自身写法错误（如 `status` 非数字或缺少前置 `request`）仍按 `RULE_MISMATCH` 报错，不会引发反复重登。
 
+#### 三处判断键对照
+
+| 位置 | 可用判断键 | 说明 |
+| --- | --- | --- |
+| `auth.expired_when` | `status`、`contains`、`not_contains`、`regex`、`header_exists`、`header_contains`、`json_equals`、`json_not_equals`、`json_exists` | 字面量（不渲染模板）；命中即失效；不作用于 `auth.steps` |
+| `auth.alive_check.expect` | 上述 9 个键 + `cookie_exists` | 字面量（不渲染模板）；全部成立才算会话有效 |
+| `assert`（1.12.0 起） | `status`、`contains`、`not_contains`、`cookie_exists`、`header_exists`、`not_redirected_to`、`equals`、`not_equals`、`present`、`not_present`（+ 能力步骤的 `on_fail: session_expired`） | 支持模板；要校验 JSON 字段可先 `extract` 再用 `equals`/`not_equals` |
+
 ## 步骤
 
 每个步骤是一个单键映射，支持八类：
@@ -611,7 +619,7 @@ path 和 url 在拼接前只编码 URI 里非法的字符：空格、控制字�
 | `not_contains: "文字"` | 正文不含这段文字 |
 | `cookie_exists: 名字` | 会话里有这个 Cookie |
 | `header_exists: 名字` | 最近一次响应有这个响应头 |
-| `equals: {变量名: 值}` | 变量转成文本后等于这个值；可以写多个变量 |
+| `equals: {变量名: 值}` | 变量和期望值都转成文本后相等（`0` 与 `"0"`、`false` 与 `"false"` 均可匹配，JSON 整数转为 `"0"`）；可以写多个变量 |
 | `not_equals: {变量名: 值}` | 变量不等于这个值，或没有这个变量 |
 | `present: 变量名` 或 `present: [a, b]` | 变量都有值。null、空字符串、空列表、空映射算没有 |
 | `not_present: 变量名` | 变量都没有值 |

@@ -228,16 +228,17 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名、分组名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.11.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时不低于 1.8.0（`driver: mcp` 不能用）。用了 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时不低于 1.9.0；不低于 1.9.0 的包里 request、extract、assert 的未知键是错误（更低的包仍是警告）。用了 `groups` 或能力的 `group` 时不低于 1.10.0。`driver: http` 用了 `auth.origins` 时不低于 1.11.0（`driver: mcp` 不能用） |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.12.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时不低于 1.8.0（`driver: mcp` 不能用）。用了 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时不低于 1.9.0；不低于 1.9.0 的包里 request、extract、assert 的未知键是错误（更低的包仍是警告）。用了 `groups` 或能力的 `group` 时不低于 1.10.0。`driver: http` 用了 `auth.origins` 时不低于 1.11.0（`driver: mcp` 不能用）。`driver: http` 用了 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail: session_expired` / 变量断言键（`equals`、`not_equals`、`present`、`not_present`）时不低于 1.12.0（`driver: mcp` 不能用） |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
 | `config` | 可选字段映射；字段支持默认值；不用于保存秘密 |
 | `auth.steps` | 登录步骤；可省略；没有登录步骤也会创建账号会话 |
-| `auth.alive_check` | 请求及 `expect_not_redirect`，空闲超时后检测会话。可以引用 `{{login.名字}}` |
+| `auth.alive_check` | 请求及可选的 `expect_not_redirect`、`expect`（1.12.0 起），空闲超时或共享身份首次接手时检测会话。`request` 可以引用 `{{login.名字}}` |
+| `auth.expired_when` | 可选规则列表（1.12.0 起，最多 16 条）。任意一条命中即按会话失效处理，用于识别 HTTP 200 业务错误码、JS/HTML 登录页、自定义响应头或 419/440/400 等非常规失效响应，见「非 401/403 的会话失效判定」。`min_crab_version` 不低于 1.12.0 |
 | `auth.cookies` | 可选。模板标识符到 Cookie 名，例如 `xsrf: "XSRF-TOKEN"`，之后写 `{{login.xsrf}}`。空映射不要求 1.3.0。非空时 `min_crab_version` 不低于 1.3.0 |
 | `auth.concurrent_reads` | 可选布尔，默认 false。打开后，写了 `mcp.read_only: true` 的能力在同一账号下可以同时执行，见「同一账号的只读能力并行」。`min_crab_version` 不低于 1.9.0 |
-| `auth.origins` | 可选。登录步骤除了 `base_url` 还要访问的认证地址（门户、SSO），最多 4 个，见「门户和 SSO 登录」。非空时 `min_crab_version` 不低于 1.11.0 |
+| `auth.origins` | 可选。登录步骤除了 `base_url` 还要访问的认证地址（门户、SSO），最多 4 个，见「门户和 SSO 登录」。声明时 `min_crab_version` 不低于 1.11.0 |
 | `groups` | 可选。能力分组目录（最多两级），用于 MCP 渐进式发现、Crab 按分组启停、API Key 按分组授权及 OpenAPI 标签，见「能力分组」。非空时 `min_crab_version` 不低于 1.10.0 |
 | `actions` | 能力映射，每个包含输入、步骤、输出和示例等，可选填 `group` 归入已声明的分组 |
 | `health_check` | 目前仅解析/保存，没有自动执行器 |
@@ -349,7 +350,7 @@ actions:
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
-`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.11.0，可以载入 1.1.0 至 1.11.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.11.0 时会报高于当前 Crab。请求头模板用了 `xml_escape` 时还要不低于 1.7.0；使用了 `groups` 或 action 的 `group` 时还要不低于 1.10.0。
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.12.0，可以载入 1.1.0 至 1.12.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.12.0 时会报高于当前 Crab。请求头模板用了 `xml_escape` 时还要不低于 1.7.0；使用了 `groups` 或 action 的 `group` 时还要不低于 1.10.0。
 
 `GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
@@ -358,7 +359,7 @@ actions:
 外部方法：显式 method 优先；否则 `mcp.read_only` 或 `idempotent` 为 true 时选 GET，其余 POST。方法枚举只支持 GET/POST，这与步骤内可配置的上游 HTTP method 不同。
 
 - 权限中的只读仅由 `mcp.read_only` 决定，不能因为 GET 或 idempotent 就推断只读。
-- `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。会话失效包括重定向到 `alive_check.expect_not_redirect` 前缀，以及能力请求返回 HTTP 401/403。重放前清掉登录快照；重新登录成功后换成新快照，重放使用新值。第二次仍失效则 `SESSION_EXPIRED`，快照再次删掉，不再重放。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
+- `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。会话失效包括重定向到 `alive_check.expect_not_redirect` 前缀或 `auth.origins` 认证地址、能力请求返回 HTTP 401/403、命中 `auth.expired_when` 规则（1.12.0 起），以及能力步骤里带 `on_fail: session_expired` 的 `assert` 未通过（1.12.0 起）。重放前清掉登录快照；重新登录成功后换成新快照，重放使用新值。第二次仍失效则 `SESSION_EXPIRED`，快照再次删掉，不再重放。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
 - POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。同键换请求体返回 `IDEMPOTENCY_CONFLICT`。
 - `mcp.expose` 默认 true，read_only/destructive 默认 false。能力工具的 `destructiveHint` 用上一节的有效破坏性。目录元工具 `call_capability` 仍从「非只读且非幂等」计算 `destructiveHint`。需要确认时，HTTP 要同时带 `X-Hermit-Confirm: true` 和与当前规则包一致的 `X-Hermit-Confirm-Token`，Hermit 自己的 MCP 两种模式都走 elicitation。
 
@@ -494,6 +495,64 @@ actions:
 
 测试登录总是先清空身份的 Cookie 再登录，验证的是这个账号自己填的凭证。自动登录暂停跟着账号走，绑定或解除不会解除暂停。
 
+## 非 401/403 的会话失效判定
+
+默认情况下，Crab 只把 HTTP 401/403、重定向到 `alive_check.expect_not_redirect` 前缀以及重定向到 `auth.origins` 认证地址视为会话失效。许多传统 OA、ERP 或前后端分离系统在会话过期时返回 **HTTP 200 加 JSON 业务错误码**、**HTTP 200 的 JS/HTML 跳转登录页**、**自定义响应头**，或 **419 / 440 / 400** 等状态码。从 1.12.0 起可用三项声明覆盖这些场景（任用其一时 `min_crab_version` 必须不低于 `1.12.0`，`driver: mcp` 不能用）：
+
+```yaml
+min_crab_version: 1.12.0
+auth:
+  expired_when:
+    # 列表中任一条命中即视为会话失效；单条内写了多个键时必须全部成立
+    - json_equals: {"$.code": [401, 10001]}
+    - contains: "top.location.href='/login'"
+    - regex: "\"errorCode\"\\s*:\\s*(401|40001)"
+    - status: 400
+      json_equals: {"$.code": "TOKEN_EXPIRED"}
+    - status: [419, 440]
+    - header_exists: X-Session-Expired
+    - header_contains: {content-type: "text/html"}
+      contains: "<form"
+  steps: [...]
+  alive_check:
+    request: {method: GET, path: /api/me}
+    expect:
+      status: 200
+      json_equals: {"$.code": 0}
+      json_exists: "$.data.userId"
+      cookie_exists: SID
+```
+
+### 1. 包级失效规则：`auth.expired_when`
+
+- **作用域**：自动作用于所有能力 `request` 步骤和 `alive_check`，**不作用于 `auth.steps`（登录步骤）**；不影响内置的 401/403 和登录重定向判定。
+- **执行时机**：在能力请求进入 `400 -> INVALID_INPUT`、`extract`、`assert` 以及 `download` 入暂存区**之前**检查；`5xx` 仍按 `UPSTREAM_ERROR` 处理，不能写入 `status`（`status` 只允许 `100` 到 `499` 的整数或其列表）。
+- **防误杀约束**：最多 16 条规则。单条规则不能只写 `2xx` 的 `status`（必须同时搭配 `contains`、`regex`、`json_*` 或 `header_*`）；规则值均为字面量，不走模板渲染，JSON 花括号和正则量词无需转义。非 JSON 响应遇到 `json_*` 条件时直接判为不命中，不会报 `RULE_MISMATCH`。
+- **支持键**：`status`、`contains`、`not_contains`、`regex`（复用提取器的 ReDoS 与 deadline 保护）、`header_exists`（头名忽略大小写）、`header_contains`（映射 `{头名: 子串或子串列表}`，头名与值均忽略大小写）、`json_equals`（映射 `{"$.path": 标量或标量列表}`，数字按数值比较）、`json_not_equals`（仅当响应为 JSON 且路径存在、值不相等时为真）、`json_exists`（`$...` 路径或路径列表，路径存在且值非空）。
+- **`download` 请求**：不扫描流式下载的文件内容，仅检查 `status`、`header_exists` 和 `header_contains`（涉及正文的条件返回不命中）。命中失效时丢弃临时下载流，不写入文件暂存区。
+- **命中效果**：与 401/403 完全一致——清会话、记入交替登录监测、幂等能力自动重登并重放一次、非幂等能力返回 `SESSION_EXPIRED`、支持 `concurrent_reads` 升级独占锁重登；开发追踪会在对应步骤附加 `session_expired` 警告。
+
+### 2. 探活正向预期：`auth.alive_check.expect`
+
+- 支持上述全部 9 个响应条件键，外加 `cookie_exists`（只看会发往 `base_url` 的 Cookie）。`expect` 里的全部键都成立（且未命中 `401/403`、登录重定向或 `auth.expired_when`）才算会话仍有效；任一不成立即触发重新登录。
+- 在共享身份首次接手其它包的 Cookie（`adopting`）与空闲超时探活时同样生效。
+
+### 3. 单接口兜底：`assert` 的 `on_fail: session_expired` 与变量断言
+
+个别接口格式特殊、不适合写进全站 `auth.expired_when` 时，可以在能力步骤的 `assert` 里加 `on_fail: session_expired`（不能写在 `auth.steps`，且同一步至少要写一个断言条件）。同时 1.12.0 为 `assert` 补齐了与 `if` / `repeat.until` 同名同义的变量断言键 `equals`、`not_equals`、`present`、`not_present`（纯变量断言不需要前面有 `request`）：
+
+```yaml
+- request: {method: POST, path: /legacy/xml_rpc, body: "<req/>"}
+- script:
+    into: expired
+    code: "return vars.response.body.indexOf('<err>9001</err>') >= 0;"
+- assert:
+    equals: {expired: false}
+    on_fail: session_expired
+```
+
+- 断言条件本身未通过且声明了 `on_fail: session_expired` 时，引擎按会话失效处理（幂等重登重放，非幂等返回 `SESSION_EXPIRED` 且 `failedStepType` 为 `assert`）。规则自身写法错误（如 `status` 非数字或缺少前置 `request`）仍按 `RULE_MISMATCH` 报错，不会引发反复重登。
+
 ## 步骤
 
 每个步骤是一个单键映射，支持八类：
@@ -502,7 +561,7 @@ actions:
 | --- | --- |
 | request | method、path/url、query、headers、body/form/json/multipart、download、encoding、follow_redirects、timeout_ms、query_style、retry |
 | extract | CSS、XPath、JSONPath、regex；可 each 遍历及 filter 转换 |
-| assert | status、contains、not_contains、cookie_exists、header_exists、not_redirected_to |
+| assert | status、contains、not_contains、cookie_exists、header_exists、not_redirected_to；1.12.0 起另支持 equals、not_equals、present、not_present 及能力步骤的 on_fail: session_expired |
 | set | 设置后续步骤/输出使用的变量 |
 | script | JavaScript，对 vars 运算并 return 结果；可指定 into、use 和 credential。失败时写出抛出说明，位置是「本步脚本」或「脚本库「名字」」的行、列 |
 | ask | 只写在 `auth.steps`。停下来等用户在 Crab 控制台输入验证码 |
@@ -735,7 +794,7 @@ steps:
 
 提取规格必须且只能有一种选择器：`css`、`xpath`、`jsonpath`、`regex`。上面 `sample_oa` 的 `list_todo` 用 `css` 加 `each` 取出表格行。`attr` 取属性，`html` 取内部 HTML，两者不能同时写；都省略时取文本。`regex` 的 `group` 默认 1。模式已经匹配、但没有这一组时，message 是「这个正则没有第 1 组」（其它组号同样写出数字），不带匹配到的文本。`each` 是子规格映射，可配 `min` 要求至少匹配这么多条；没有 `min` 时一条都没匹配到得到空列表，不失败。`optional: true` 时匹配 0 条得到空值，而不是失败。写成 `true` / `false` 以外的值（例如 `"yes"` 或 `1`）只在本来会因 0 条失败时才检查，message 是「optional 必须是 true 或 false」，不写渲染后的值。路径命中时不读 `optional`。`from` 指定从哪个变量读。省略 `from` 用的是上一次 `request` 的正文文本（`response.body`），不是整个 `response`。`response` 是 `{status, body, headers, url, redirect}`，正文在 `body`。`from: response` 再写 `$.items` 读的是这层信封：确定路径没有取到时，message 会加上「来源是对象，正文在 body」，不把对象打出来。路径第一段已经是 `status`、`body`、`headers`、`url` 或 `redirect` 时不加这句。来源变量不存在时带上变量名，例如「来源变量 nope 不存在」；名字里有空格、引号或超过 80 个字符时不把这段原文写进去。`filter` 用和模板一样的过滤器。过滤器失败同样带变量名，例如「提取 name 失败：未知过滤器: nope」，后面这句不含取出的值。request 失败会形成步骤索引、类型和错误摘要。提取失败的摘要写出变量名和截断后的表达式，选择器种类写成「CSS 选择器 / XPath / JSON 路径 / 正则」。例如「提取 todos 失败：CSS 选择器 tr.todo 匹配 0 条」「提取 name 失败：响应不是 JSON（JSON 路径 $.name）」。确定路径没有这个字段是「JSON 路径没有取到」；`*`、`..` 这类不定路径一条都没有仍是「匹配 0 条」。取到 JSON `null` 时变量是空串，条数记 1。非法 CSS、XPath 或正则是 `RULE_MISMATCH`，短原因分别是「选择器无法解析」「XPath 无法解析」「正则无法解析」，步骤下标留在这一步，不附响应正文，也不附解析器原文。表达式超过 80 个字符时截断。持续慢速输出会在能力 deadline 被取消并返回 `TIMEOUT`。TCP 连接一直挂起没有单独回归。打码仍是子串替换：秘密 `json` 不会打掉「JSON 路径」，但表达式里的 `json` 仍会变成 `***`。
 
-发布时会看提取和 assert 的形状。这些都是警告，不阻止保存，已经发布的包仍能加载。提取规格必须是映射，并且必须且只能有一种选择器；否则警告「提取规格必须是映射」「提取规格必须且只能有一种选择器」，`each` 不是映射时警告「each 必须是映射」。不认识的字段警告「未知的提取字段 {键名}」，不写字段的值。认识的键是 `css`、`xpath`、`jsonpath`、`regex`、`attr`、`html`、`each`、`min`、`optional`、`filter`、`from`、`group`。`optional` 的字面量必须是 true 或 false，字符串 `"true"` 也会警告「optional 必须是 true 或 false」；写成 `{{...}}` 时留到运行时。assert 只认识 `status`、`contains`、`not_contains`、`cookie_exists`、`header_exists`、`not_redirected_to`。未知键警告「未知的 assert 键 {键名}」，运行时同一句，不写值。`status` 写成带引号的字符串时警告「status 要写数字，不要加引号」；别的非数字字面量警告「status 要写数字」。含 `{{` 的 status 不在发布时判断。`header_exists` 按小写比较，`Content-Type` 可以命中入库后的 `content-type`。
+发布时会看提取和 assert 的形状。这些都是警告，不阻止保存，已经发布的包仍能加载。提取规格必须是映射，并且必须且只能有一种选择器；否则警告「提取规格必须是映射」「提取规格必须且只能有一种选择器」，`each` 不是映射时警告「each 必须是映射」。不认识的字段警告「未知的提取字段 {键名}」，不写字段的值。认识的键是 `css`、`xpath`、`jsonpath`、`regex`、`attr`、`html`、`each`、`min`、`optional`、`filter`、`from`、`group`。`optional` 的字面量必须是 true 或 false，字符串 `"true"` 也会警告「optional 必须是 true 或 false」；写成 `{{...}}` 时留到运行时。assert 认识 `status`、`contains`、`not_contains`、`cookie_exists`、`header_exists`、`not_redirected_to`，以及 1.12.0 起新增的 `equals`、`not_equals`、`present`、`not_present` 和能力步骤专用的 `on_fail: session_expired`。未知键在 1.9.0 以下包是警告「未知的 assert 键 {键名}」，1.9.0 及以上是错误，运行时同一句，不写值。`status` 写成带引号的字符串时警告「status 要写数字，不要加引号」；别的非数字字面量警告「status 要写数字」。含 `{{` 的 status 不在发布时判断。`header_exists` 按小写比较，`Content-Type` 可以命中入库后的 `content-type`。
 
 ## 模板、输出与脚本
 

@@ -413,9 +413,10 @@ export interface DevTraceWire {
 }
 
 /**
- * 步骤上的跟踪警告。已知 code：`cross_origin`、`secure_cookie`、`cookie_rejected`、`body_ended_by_idle`、`location_unresolved`、`not_text`、`snapshot_skipped`、`shared_session_cleared`。
+ * 步骤上的跟踪警告。已知 code：`cross_origin`、`secure_cookie`、`cookie_rejected`、`body_ended_by_idle`、`location_unresolved`、`not_text`、`snapshot_skipped`、`shared_session_cleared`、`session_expired`。
  * `snapshot_skipped` 挂在产出该变量的登录步骤上，message 只带变量名，不带值。
  * `shared_session_cleared` 表示带着身份里已有的 Cookie 登录没成功，清空后从头登录了一次。
+ * `session_expired` 表示命中 `auth.expired_when`、未通过 `alive_check.expect` 或 `assert.on_fail: session_expired`，按会话失效处理。
  */
 export interface DevTraceWarning {
   code:
@@ -427,6 +428,7 @@ export interface DevTraceWarning {
     | 'not_text'
     | 'snapshot_skipped'
     | 'shared_session_cleared'
+    | 'session_expired'
   message: string
 }
 
@@ -459,6 +461,8 @@ export interface DevTraceStep {
   extractCount?: number
   variables?: DevTraceVariable[]
   assertions?: string[]
+  /** `assert` 写了 `on_fail: session_expired` 时为 `'session_expired'`。 */
+  onFail?: string
   passed?: boolean
   /** `if`：用到的判断键、结果和走的分支（`then`、`else`，没有可走的分支时 `none`）。 */
   conditions?: string[]
@@ -485,7 +489,7 @@ export interface DevTraceStep {
   /** 这一步连不上时的传输失败。没有则为空。 */
   transport?: DevTraceTransport | null
   wire?: DevTraceWire | null
-  /** 重定向、Cookie、空闲结束正文（`body_ended_by_idle`）、未写入登录快照（`snapshot_skipped`）和共享会话清空重来（`shared_session_cleared`）的说明。没有则为空。公开调用结果不含这项。 */
+  /** 重定向、Cookie、空闲结束正文（`body_ended_by_idle`）、未写入登录快照（`snapshot_skipped`）、共享会话清空重来（`shared_session_cleared`）和自定义会话失效命中（`session_expired`）的说明。没有则为空。公开调用结果不含这项。 */
   warnings?: DevTraceWarning[]
 }
 

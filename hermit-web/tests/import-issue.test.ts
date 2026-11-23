@@ -108,6 +108,7 @@ describe('formatImportIssue', () => {
       'GROUP_DEPTH',
       'UNKNOWN_GROUP',
       'EMPTY_GROUP',
+      'SESSION_EXPIRY',
     ]) {
       expect(importIssueLabels[code]).toBeTruthy()
       expect(formatImportIssue({ code, path: 'x', message: 'y' }).label).toBe(importIssueLabels[code])

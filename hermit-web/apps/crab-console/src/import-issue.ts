@@ -79,6 +79,8 @@ export const importIssueLabels: Record<string, string> = {
   UNKNOWN_GROUP: '分组未声明',
   /** 分组及其子分组下没有任何能力。警告，不阻止保存。 */
   EMPTY_GROUP: '分组无能力',
+  /** `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 扩展写法有误。错误，阻止保存。 */
+  SESSION_EXPIRY: '会话失效规则有误',
 }
 
 /**

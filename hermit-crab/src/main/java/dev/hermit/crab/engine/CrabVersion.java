@@ -14,8 +14,10 @@ public final class CrabVersion {
      * 1.9.0 起可以载入步骤 {@code if}、{@code repeat}、request 的 {@code retry} 和 {@code auth.concurrent_reads}。
      * 1.10.0 起可以载入顶层 {@code groups} 与能力 {@code group}（一级与二级目录）。
      * 1.11.0 起可以载入 {@code auth.origins}：登录步骤可以访问声明的认证地址（门户、SSO）。
+     * 1.12.0 起可以载入 {@code auth.expired_when}、{@code auth.alive_check.expect}，
+     * 以及 {@code assert} 的 {@code on_fail: session_expired} 和变量断言键。
      */
-    public static final SemVer CURRENT = SemVer.parse("1.11.0");
+    public static final SemVer CURRENT = SemVer.parse("1.12.0");
 
     private CrabVersion() {
     }

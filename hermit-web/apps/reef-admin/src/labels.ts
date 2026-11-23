@@ -122,6 +122,10 @@ export const issueHints: Record<string, IssueHint> = {
     title: '分组下没有任何能力',
     hint: '这个分组及其子分组里没有归属任何能力，可以删掉或把对应能力的 group 指到这里。不改也能发布。',
   },
+  SESSION_EXPIRY: {
+    title: '会话失效或断言规则写法有误',
+    hint: '检查 auth.expired_when、auth.alive_check.expect 或 assert 的键名与格式（需要 min_crab_version 不低于 1.12.0）。',
+  },
 }
 
 export function isoDaysAgo(days: number): string {

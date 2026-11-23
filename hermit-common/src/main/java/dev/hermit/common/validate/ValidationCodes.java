@@ -100,6 +100,8 @@ public final class ValidationCodes {
      * 登录步骤指向没声明的地址、不带条件就向认证地址提交凭证：警告。
      */
     public static final String AUTH_ORIGIN = "AUTH_ORIGIN";
+    /** {@code auth.expired_when}、{@code auth.alive_check.expect} 或 {@code assert} 的 1.12.0 会话失效/变量断言写法有误。错误，阻止保存。 */
+    public static final String SESSION_EXPIRY = "SESSION_EXPIRY";
 
     private ValidationCodes() {
     }

@@ -346,6 +346,7 @@ Reef 上传时的 `SAME_AUTH` 和 `AUTH_ORIGIN_ADDED` 警告见规则包参考�
 - 成员写了 `alive_check`：第一次被调用时先探活，别的成员登录出来的 Cookie 对它也有效就直接用，不登录。
 - 没写 `alive_check`：第一次被调用时带着身份里已有的 Cookie 跑一次自己的登录步骤。认证中心认得已有的 Cookie 时不会再要密码。
 - 成员的会话失效（401、403、被跳到登录页或认证地址、命中 `auth.expired_when` 或 `assert` 的 `on_fail: session_expired`）：不清别的成员的 Cookie，带着现有 Cookie 重新跑自己的登录步骤。这次登录以 `AUTH_FAILED` 或 `RULE_MISMATCH` 失败时，才清空整个身份的 Cookie，从空白状态再登录一次；上游 5xx（`UPSTREAM_ERROR`）、超时、连不上、等待验证码不清空。清空会记在身份列表的 `lastCleared`（只在内存里）。
+- 带着现有 Cookie 登录成功，同一次调用里能力又被判为会话失效：可能是留着的 Cookie 让登录看似成功，也可能是规则把业务错误写进了 `auth.expired_when`，Crab 分不清。这时清空整个身份的 Cookie，这次调用返回 `SESSION_EXPIRED`，下一次调用从空白状态登录。同一个成员 10 分钟内只这样清空一次；窗口内再遇到只有它自己登出，别的成员的会话和身份的 Cookie 留着，调用仍返回 `SESSION_EXPIRED`。计时只在内存里，重启、修改或测试这个成员的凭证、重新绑定后重新算。窗口内想马上恢复，在控制台对这个账号测试登录。
 
 什么时候清空或离开身份：
 

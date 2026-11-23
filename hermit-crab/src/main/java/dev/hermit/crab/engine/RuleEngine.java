@@ -517,12 +517,13 @@ public final class RuleEngine implements ConchExecutor {
 
     /**
      * 会话失效。绑了身份的账号先不清共用的 Cookie，带着它们重新登录；
-     * 这次调用里已经这样登录过，说明留着的 Cookie 没用，清空整个身份。
+     * 这次调用里已经这样登录过，留着的 Cookie 可能没用，清空整个身份。
+     * 同一个成员短时间内只清一次：规则把业务错误当成失效时清空没有用，不让它反复登出同身份的成员。
      */
     private void loseSession(LoginScope scope) {
         if (scope.reusedCookies) {
             scope.reusedCookies = false;
-            sessions.clearShared(scope.key);
+            sessions.clearSharedAfterRelapse(scope.key);
             return;
         }
         sessions.markLoggedOut(scope.key);

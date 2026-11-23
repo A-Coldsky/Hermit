@@ -368,8 +368,8 @@ onMounted(load)
       >
         <template #title>
           <TimeText :value="identity.lastCleared.at" />：{{ identity.lastCleared.conch }} 的账号
-          {{ identity.lastCleared.account }} 带着已有的 Cookie 登录没有成功，这个身份的 Cookie 被清空，各账号重新登录了一次。
-          经常出现说明这个包的登录步骤只能从空白状态跑通，共用的好处有限。
+          {{ identity.lastCleared.account }} 带着已有的 Cookie 登录没有成功，或登录后马上又被判为会话失效，这个身份的 Cookie 被清空，各账号重新登录了一次。
+          经常出现说明这个包的登录步骤只能从空白状态跑通，或者它把业务错误当成了会话失效，共用的好处有限。
         </template>
       </el-alert>
       <el-table :data="identity.members" empty-text="还没有账号。添加两个以上才有共用的效果">

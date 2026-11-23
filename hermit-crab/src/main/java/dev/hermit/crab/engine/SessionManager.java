@@ -56,8 +56,6 @@ public final class SessionManager implements AutoCloseable {
     private final SharedSessions shared;
     private final ConcurrentMap<String, Jar> jars = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Cleared> cleared = new ConcurrentHashMap<>();
-    /** 成员上一次因为「带着旧 Cookie 登录成功、能力却又失效」清空身份的时间。只在内存里。 */
-    private final ConcurrentMap<SessionKey, Instant> relapseCleared = new ConcurrentHashMap<>();
     /** 绑定变了、状态要重建时带过去的登录失败次数和暂停：换个身份不等于凭证改对了。 */
     private final ConcurrentMap<SessionKey, Failures> carried = new ConcurrentHashMap<>();
     /** 全局单调会话代次，避免状态重建后 concurrent_reads 交接发生 ABA 碰撞。 */
@@ -136,7 +134,6 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public void invalidate(SessionKey key) {
-        relapseCleared.remove(key);
         while (true) {
             AccountState state = states.get(key);
             if (state == null) {
@@ -178,6 +175,7 @@ public final class SessionManager implements AutoCloseable {
                 }
                 bumpInvalidationGen(key);
                 pending.discard(key);
+                state.relapseClearedAt = null;
                 if (state.jar.identity != null) {
                     clearJar(state.jar);
                     if (closed) {
@@ -271,7 +269,6 @@ public final class SessionManager implements AutoCloseable {
      * 它原来的 Cookie 作为身份的初始内容。不同时持有两把锁。
      */
     public void rebound(SessionKey key) {
-        relapseCleared.remove(key);
         Seed seed = null;
         while (true) {
             AccountState state = states.get(key);
@@ -545,25 +542,26 @@ public final class SessionManager implements AutoCloseable {
      * 返回是否清空了。调用方持有账号锁。
      */
     boolean clearSharedAfterRelapse(SessionKey key) {
-        if (state(key).jar.identity == null) {
+        AccountState state = state(key);
+        if (state.jar.identity == null) {
             markLoggedOut(key);
             return false;
         }
         Instant now = clock.instant();
-        Instant last = relapseCleared.get(key);
+        Instant last = state.relapseClearedAt;
         if (last != null && !now.isBefore(last) && now.isBefore(last.plus(RELAPSE_CLEAR_WINDOW))) {
             markLoggedOut(key);
             return false;
         }
-        relapseCleared.put(key, now);
+        state.relapseClearedAt = now;
         clearShared(key);
         return true;
     }
 
     /** 测试登录用：绑了身份的账号清空身份的 Cookie，不记「清空重来」。调用方持有账号锁。 */
     void resetShared(SessionKey key) {
-        relapseCleared.remove(key);
         AccountState state = state(key);
+        state.relapseClearedAt = null;
         if (state.jar.identity != null) {
             clearJar(state.jar);
         }
@@ -601,7 +599,6 @@ public final class SessionManager implements AutoCloseable {
      * 删掉的账号各自留着一个连接池。
      */
     public void forget(SessionKey key) {
-        relapseCleared.remove(key);
         while (true) {
             AccountState state = states.get(key);
             if (state == null) {
@@ -1419,6 +1416,11 @@ public final class SessionManager implements AutoCloseable {
         volatile Instant lastActive;
         volatile int authFailures;
         volatile boolean loginPaused;
+        /**
+         * 上一次因为「带着旧 Cookie 登录成功、能力却又失效」清空身份的时间。只在持有账号锁时读写，
+         * 所以改凭证和测试登录清掉它之后，进行中的调用不会再把它写回来；状态重建（绑定变了、删除账号）时随之丢弃。
+         */
+        Instant relapseClearedAt;
 
         AccountState(Jar jar, long initialEpoch) {
             this.jar = jar;

@@ -200,6 +200,12 @@ class SharedIdentityEngineTest {
         }
         if (user == null && sid != null && path.equals("/weak-home")) {
             // 带着失效的会话 Cookie 来：首页照样回 200，不给新会话。
+            slowEntered.countDown();
+            try {
+                slowRelease.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
             reply(exchange, 200, "{\"value\":\"stale\"}");
             return;
         }
@@ -1000,6 +1006,46 @@ class SharedIdentityEngineTest {
             appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
             assertThat(fixture.call(weak, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
             assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+        }
+    }
+
+    /** 改凭证等着进行中的调用放开锁：那次调用记下的「清过一次」不能留到改完之后。 */
+    @Test
+    void savingCredentialsWhileACallRelapsesStartsTheWindowAgain() throws Exception {
+        SessionKey weak = new SessionKey(Origin.LOCAL, "oa_weak", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", weak, ERP_ALICE);
+        EngineTestSupport.MutableClock clock = new EngineTestSupport.MutableClock();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try (Fixture fixture = new Fixture(shared, clock)) {
+            assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            slowEntered = new CountDownLatch(1);
+            slowRelease = new CountDownLatch(1);
+            Future<ExecutionResult> running = pool.submit(() -> fixture.call(weak, "run"));
+            assertThat(slowEntered.await(10, TimeUnit.SECONDS)).as("调用停在登录步骤里，拿着账号锁").isTrue();
+            Thread saving = new Thread(() -> fixture.sessions.invalidate(weak));
+            saving.start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (saving.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertThat(saving.getState()).as("改凭证在等账号锁").isEqualTo(Thread.State.WAITING);
+            slowRelease.countDown();
+            assertThat(running.get(10, TimeUnit.SECONDS).error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            saving.join(10_000);
+            SessionManager.Cleared first = fixture.sessions.lastCleared("zhang");
+            assertThat(first.by()).isEqualTo(weak);
+
+            assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+            clock.advance(Duration.ofMinutes(1));
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            assertThat(fixture.call(weak, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(fixture.sessions.lastCleared("zhang").at()).as("改完凭证后窗口重新算").isAfter(first.at());
+            assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+        } finally {
+            slowRelease.countDown();
+            pool.shutdownNow();
         }
     }
 

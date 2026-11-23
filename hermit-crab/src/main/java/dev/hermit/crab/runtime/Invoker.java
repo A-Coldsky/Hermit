@@ -102,7 +102,7 @@ public final class Invoker {
     private volatile String fileBase;
     private volatile java.util.function.Predicate<String> switchedOff = name -> false;
     private volatile java.util.function.Function<String, java.util.List<String>> rivals = name -> java.util.List.of();
-    public static final String RIVAL_HINT = "本机另有规则包访问同一网站，可能互相顶掉登录，请到控制台查看。";
+    public static final String RIVAL_HINT = "本机另有规则包访问同一网站或同一个认证中心，可能互相顶掉登录，请到控制台查看。";
 
     public Invoker(
             ConchRegistry registry,
@@ -241,7 +241,7 @@ public final class Invoker {
         }
         String hint = visible.isEmpty()
                 ? RIVAL_HINT
-                : "本机的规则包 " + String.join("、", visible) + " 访问同一网站，可能互相顶掉登录，请到控制台查看。";
+                : "本机的规则包 " + String.join("、", visible) + " 访问同一网站或同一个认证中心，可能互相顶掉登录，请到控制台查看。";
         return (message == null || message.isBlank() ? "" : message + "。") + hint;
     }
 

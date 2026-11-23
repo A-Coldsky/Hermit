@@ -357,7 +357,7 @@ class AuthOriginsEngineTest {
     @Test
     void undeclaredOriginIsNeitherRequestedNorFollowed() {
         // 没声明认证地址：应用把登录送去认证中心，登录步骤停在 302。
-        try (Fixture fixture = new Fixture(cas("[]").replace("min_crab_version: 1.11.0", "min_crab_version: 1.9.0"))) {
+        try (Fixture fixture = new Fixture(cas("").replace("min_crab_version: 1.11.0", "min_crab_version: 1.9.0"))) {
             ExecutionResult result = fixture.call("run");
             assertThat(result.success()).isFalse();
             assertThat(ssoSeen).isEmpty();
@@ -446,7 +446,9 @@ class AuthOriginsEngineTest {
     }
 
     private static String conch(String origins, String steps, String config) {
-        String originBlock = origins.startsWith("[") ? "origins: " + origins : "origins:\n    " + origins;
+        String originBlock = origins == null || origins.isBlank()
+                ? ""
+                : (origins.startsWith("[") ? "  origins: " + origins + "\n" : "  origins:\n    " + origins + "\n");
         return """
                 conch: sso_conch
                 version: 1.0.0
@@ -462,8 +464,7 @@ class AuthOriginsEngineTest {
                   base_url: {type: url, label: 应用地址}
                 %s
                 auth:
-                  %s
-                  steps:
+                %s  steps:
                 %s
                 actions:
                   run:

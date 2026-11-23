@@ -457,6 +457,321 @@ class SessionManagerTest {
         assertThat(json).as("旧版本读不了多出来的字段，没用到时不写").doesNotContain("hostOnly");
     }
 
+    /** H4：状态与当前绑定不一致时，invalidate 必须先迁出旧状态，不能误清旧身份，也不能漏清当前身份。 */
+    @Test
+    void invalidateOnStaleStateRespectsCurrentBindingAndDoesNotWipePreviousIdentity() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        SessionKey erp = new SessionKey(Origin.OFFICIAL, "erp", "alice");
+        shared.bind("id1", alice, erp);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                putCookie(sessions, alice, "shared-cookie-1");
+                sessions.persist(alice);
+            } finally {
+                sessions.unlock(alice);
+            }
+            assertThat(shared.saved.get("id1")).extracting(StoredCookie::value).containsExactly("shared-cookie-1");
+
+            // alice 已经离开 id1，但还没来得及 rebound；此时 invalidate(alice) 不能误清 id1 的 Cookie。
+            shared.unbind(alice);
+            sessions.invalidate(alice);
+            assertThat(shared.saved.get("id1")).extracting(StoredCookie::value).containsExactly("shared-cookie-1");
+
+            // 反向：alice 在独立会话中登录后刚绑进 id1（还没 rebound），此时 invalidate(alice) 必须清掉 id1，
+            // 且不能把刚作废的独立 Cookie 带进 id1。
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                putCookie(sessions, alice, "standalone-stale");
+                sessions.persist(alice);
+            } finally {
+                sessions.unlock(alice);
+            }
+            shared.bind("id1", alice);
+            sessions.invalidate(alice);
+            assertThat(shared.saved.get("id1")).isNull();
+            assertThat(sessions.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.cookies(erp).getCookies()).isEmpty();
+            } finally {
+                sessions.unlock(erp);
+            }
+        }
+    }
+
+    /** M1：绑定变更后 tryLock 已先迁移并建了新会话，迟到的 rebound 不能抹掉新的登录快照和待输入。 */
+    @Test
+    void delayedReboundAfterConcurrentTryLockMigrationDoesNotWipeFreshSession() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        java.util.concurrent.ConcurrentHashMap<SessionKey, Map<String, String>> snapshotsMap =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        LoginSnapshotStore snapshots = new LoginSnapshotStore() {
+            @Override
+            public void save(SessionKey key, Map<String, String> snapshot) {
+                if (snapshot == null || snapshot.isEmpty()) {
+                    snapshotsMap.remove(key);
+                } else {
+                    snapshotsMap.put(key, Map.copyOf(snapshot));
+                }
+            }
+
+            @Override
+            public Map<String, String> load(SessionKey key) {
+                return snapshotsMap.getOrDefault(key, Map.of());
+            }
+
+            @Override
+            public void delete(SessionKey key) {
+                snapshotsMap.remove(key);
+            }
+        };
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), snapshots, shared, EngineSettings.defaults(), Clock.systemUTC())) {
+            // 先作为独立账号登录，留下一份旧 Cookie 和旧快照。
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                putCookie(sessions, alice, "own-cookie-seed");
+                sessions.persist(alice);
+                sessions.replaceLoginSnapshot(alice, Map.of("old", "stale-token"));
+            } finally {
+                sessions.unlock(alice);
+            }
+
+            // 绑到身份 id1，在 rebound 到来前，并发调用先走 tryLock 完成迁移并写入新快照和待输入。
+            shared.bind("id1", alice);
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.shared(alice)).isTrue();
+                assertThat(sessions.loginSnapshot(alice)).as("旧独立快照已在迁移时清掉").isEmpty();
+                assertThat(sessions.cookieValue(alice, "sid", null))
+                        .as("旧独立 Cookie 已带入新身份").isEqualTo("own-cookie-seed");
+                sessions.markLoggedIn(alice);
+                sessions.replaceLoginSnapshot(alice, Map.of("fresh", "new-token"));
+                sessions.pending().store(alice, new PendingLogins.Draft(
+                        "1.0.0", "hash-1", 0, "code", "code", "验证码", null, 300, false, Map.of(), null, null));
+            } finally {
+                sessions.unlock(alice);
+            }
+
+            // 迟到的 rebound 看到状态已与当前绑定一致，不能抹掉新会话。
+            sessions.rebound(alice);
+            assertThat(snapshotsMap.get(alice)).containsEntry("fresh", "new-token");
+            assertThat(sessions.pending().current(alice)).isNotNull();
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.loggedIn(alice)).isTrue();
+                assertThat(sessions.loginSnapshot(alice)).containsEntry("fresh", "new-token");
+            } finally {
+                sessions.unlock(alice);
+            }
+        }
+    }
+
+    /** M1：绑定变更后 tryLockShared 升级写锁迁移必须遵守 deadline 和中断，不能无界阻塞。 */
+    @Test
+    void tryLockSharedBoundsAndInterruptsStaleMigration() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            assertThat(sessions.tryLockShared(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                // 另一线程改了绑定，当前线程仍持有旧状态的读锁：新线程拿到读锁后发现 stale，释放读锁再升级写锁时会被阻塞。
+                shared.bind("id1", alice);
+
+                long start = System.nanoTime();
+                AtomicBoolean timedOut = new AtomicBoolean(true);
+                Thread bounded = new Thread(() -> {
+                    try {
+                        timedOut.set(sessions.tryLockShared(
+                                alice, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(120)));
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+                bounded.start();
+                bounded.join(5_000);
+                assertThat(bounded.isAlive()).isFalse();
+                assertThat(timedOut).isFalse();
+                assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)).isLessThan(3_000L);
+
+                AtomicBoolean interrupted = new AtomicBoolean();
+                CountDownLatch started = new CountDownLatch(1);
+                Thread interruptible = new Thread(() -> {
+                    started.countDown();
+                    try {
+                        sessions.tryLockShared(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(10));
+                    } catch (InterruptedException ex) {
+                        interrupted.set(true);
+                    }
+                });
+                interruptible.start();
+                awaitBlocked(interruptible, started);
+                interruptible.interrupt();
+                interruptible.join(5_000);
+                assertThat(interruptible.isAlive()).isFalse();
+                assertThat(interrupted).isTrue();
+            } finally {
+                sessions.unlockShared(alice);
+            }
+        }
+    }
+
+    /** M2：rebound 往共享罐写入超过 64 个 Cookie 时，与并发读打码名单不抛出 ConcurrentModificationException。 */
+    @Test
+    void concurrentSeedAndRedactionReadDoNotThrowOnSeenCookieValues() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        SessionKey erp = new SessionKey(Origin.OFFICIAL, "erp", "alice");
+        shared.bind("id1", erp);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            assertThat(sessions.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            sessions.unlock(erp);
+
+            AtomicBoolean running = new AtomicBoolean(true);
+            AtomicReference<Throwable> readerError = new AtomicReference<>();
+            Thread reader = new Thread(() -> {
+                while (running.get()) {
+                    try {
+                        sessions.redactionValuesNow(erp);
+                    } catch (Throwable ex) {
+                        readerError.set(ex);
+                        return;
+                    }
+                }
+            });
+            reader.start();
+            try {
+                for (int round = 0; round < 10; round++) {
+                    shared.unbind(alice);
+                    sessions.rebound(alice);
+                    assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+                    try {
+                        for (int i = 0; i < 80; i++) {
+                            BasicClientCookie c = new BasicClientCookie("c" + i, "val-" + round + "-" + i);
+                            c.setDomain("127.0.0.1");
+                            c.setPath("/");
+                            sessions.cookies(alice).addCookie(c);
+                        }
+                    } finally {
+                        sessions.unlock(alice);
+                    }
+                    sessions.clearIdentity("id1");
+                    shared.bind("id1", alice);
+                    sessions.rebound(alice);
+                }
+            } finally {
+                running.set(false);
+                reader.join(5_000);
+            }
+            assertThat(readerError.get()).isNull();
+        }
+    }
+
+    /** Low：clearIdentity 在内存没有罐时不新建 Jar；closeIdleConnections 也回收无成员状态的身份罐空闲连接。 */
+    @Test
+    void clearIdentityDoesNotEagerlyAllocateJarAndCloseIdleSweepsOrphanIdentityJars() throws Exception {
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            byte[] body = "ok".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        MemoryShared shared = new MemoryShared();
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            shared.save("cold-id", List.of(
+                    new StoredCookie("sid", "cold-cookie", "127.0.0.1", "/", null, false, false, true)));
+            sessions.clearIdentity("cold-id");
+            assertThat(shared.saved.get("cold-id")).isNull();
+            assertThat(sessions.identityJarCount()).as("未载入内存的身份清空后不该新建连接池").isZero();
+
+            SessionKey alice = new SessionKey(Origin.LOCAL, "idle_shared", "alice");
+            shared.bind("warm-id", alice);
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(get(sessions, alice, url)).isEqualTo("ok");
+                assertThat(sessions.idleConnections(alice)).isEqualTo(1);
+            } finally {
+                sessions.unlock(alice);
+            }
+            // 唯一成员的账号状态被移除，但身份罐仍在内存里：closeIdleConnections 仍应扫到它。
+            sessions.forget(alice);
+            assertThat(sessions.size()).isZero();
+            assertThat(sessions.identityJarCount()).isEqualTo(1);
+            Thread.sleep(20);
+            assertThat(sessions.closeIdleConnections(java.time.Duration.ofMillis(1))).isEqualTo(1);
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.idleConnections(alice)).isZero();
+            } finally {
+                sessions.unlock(alice);
+            }
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    private static final class MemoryShared implements SharedSessions {
+        private final java.util.concurrent.ConcurrentHashMap<SessionKey, String> bound =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        private final java.util.concurrent.ConcurrentHashMap<String, List<StoredCookie>> saved =
+                new java.util.concurrent.ConcurrentHashMap<>();
+
+        void bind(String identity, SessionKey... keys) {
+            for (SessionKey key : keys) {
+                bound.put(key, identity);
+            }
+        }
+
+        void unbind(SessionKey key) {
+            bound.remove(key);
+        }
+
+        @Override
+        public String identityOf(SessionKey key) {
+            return bound.get(key);
+        }
+
+        @Override
+        public List<SessionKey> members(String identity) {
+            ArrayList<SessionKey> members = new ArrayList<>();
+            bound.forEach((key, id) -> {
+                if (id.equals(identity)) {
+                    members.add(key);
+                }
+            });
+            return members;
+        }
+
+        @Override
+        public List<StoredCookie> load(String identity) {
+            return saved.getOrDefault(identity, List.of());
+        }
+
+        @Override
+        public void save(String identity, List<StoredCookie> cookies) {
+            saved.put(identity, List.copyOf(cookies));
+        }
+
+        @Override
+        public void delete(String identity) {
+            saved.remove(identity);
+        }
+    }
+
     private static void putCookie(SessionManager sessions, SessionKey key, String value) {
         BasicClientCookie cookie = new BasicClientCookie("sid", value);
         cookie.setDomain("127.0.0.1");

@@ -44,6 +44,7 @@ import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchDestinations;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.DuplicateActions;
+import dev.hermit.common.validate.DuplicateGroups;
 import dev.hermit.common.validate.DuplicateScripts;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
@@ -446,16 +447,22 @@ public final class LocalConches {
 
     public List<FileResult> reload(String actor) {
         String checked = actor(actor);
+        ArrayList<String> deleted = new ArrayList<>();
+        List<FileResult> results;
         synchronized (lock) {
-            return scan(checked, true);
+            results = scan(checked, true, deleted);
         }
+        for (String conch : deleted) {
+            onDeleted.accept(conch, checked);
+        }
+        return results;
     }
 
     /** Startup load. A bad file is logged and skipped. Nothing is written to the audit log. */
     public void loadStartup() {
         synchronized (lock) {
             try {
-                scan(null, false);
+                scan(null, false, null);
             } catch (RuntimeException ex) {
                 LOG.warning("local conch directory was not loaded: " + ex.getClass().getName());
             }
@@ -672,9 +679,11 @@ public final class LocalConches {
         return bytes;
     }
 
-    private List<FileResult> scan(String actor, boolean auditChanges) {
+    private List<FileResult> scan(String actor, boolean auditChanges, List<String> deletedOut) {
         Path root = paths.localConches().toAbsolutePath().normalize();
+        Map<String, ConchDoc> beforeDocs = localDocs();
         Map<String, String> beforeVersions = localVersions();
+        Set<String> beforeBroken = Set.copyOf(broken.keySet());
         ArrayList<FileResult> results = new ArrayList<>();
         LinkedHashMap<String, ConchDoc> loaded = new LinkedHashMap<>();
         LinkedHashMap<String, BrokenLocal> nextBroken = new LinkedHashMap<>();
@@ -683,7 +692,7 @@ public final class LocalConches {
                 String name = path.getFileName().toString();
                 return !name.startsWith(".") && name.endsWith(SUFFIX);
             }).sorted().toList()) {
-                results.add(loadFile(root, child, loaded, nextBroken));
+                results.add(loadFile(root, child, beforeDocs, loaded, nextBroken));
             }
         } catch (IOException ex) {
             throw new IllegalStateException("local conch directory was not listed");
@@ -695,9 +704,23 @@ public final class LocalConches {
                         + " lines=" + RuleDisabled.lines(result.issues()));
             }
         }
-        dropMissing(loaded.keySet());
+        List<String> removed = dropMissing(loaded.keySet());
         broken.clear();
         broken.putAll(nextBroken);
+        if (deletedOut != null && actor != null) {
+            java.util.LinkedHashSet<String> gone = new java.util.LinkedHashSet<>();
+            for (String conch : removed) {
+                if (!broken.containsKey(conch)) {
+                    gone.add(conch);
+                }
+            }
+            for (String conch : beforeBroken) {
+                if (!loaded.containsKey(conch) && !broken.containsKey(conch)) {
+                    gone.add(conch);
+                }
+            }
+            deletedOut.addAll(gone);
+        }
         if (auditChanges && actor != null) {
             Map<String, String> afterVersions = localVersions();
             for (Map.Entry<String, String> entry : afterVersions.entrySet()) {
@@ -717,6 +740,7 @@ public final class LocalConches {
     private FileResult loadFile(
             Path root,
             Path child,
+            Map<String, ConchDoc> beforeDocs,
             Map<String, ConchDoc> loaded,
             Map<String, BrokenLocal> nextBroken
     ) {
@@ -765,35 +789,45 @@ public final class LocalConches {
                     List.of(),
                     nextBroken);
         }
-        synchronized (ConchFileLocks.of(parsed.doc().conch())) {
+        String conch = parsed.doc().conch();
+        ConchDoc before = beforeDocs.get(conch);
+        boolean widened = before != null && !ConchDestinations.between(before, parsed.doc()).sameBoundary();
+        synchronized (ConchFileLocks.of(conch)) {
             try {
-                rejectClash(parsed.doc().conch());
+                rejectClash(conch);
             } catch (LocalConchException ex) {
-                String reason = readReason(fileName, parsed.doc().conch(), ex.getMessage());
-                if (registry.origin(parsed.doc().conch()) != Origin.OFFICIAL) {
+                String reason = readReason(fileName, conch, ex.getMessage());
+                if (registry.origin(conch) != Origin.OFFICIAL) {
                     rememberBroken(stem, fileName, reason, nextBroken);
                 }
-                return failed(fileName, parsed.doc().conch(), parsed.doc().version().toString(),
-                        issue("CONFLICT", parsed.doc().conch(), reason));
+                return failed(fileName, conch, parsed.doc().version().toString(),
+                        issue("CONFLICT", conch, reason));
+            }
+            if (widened) {
+                onWidened.accept(conch);
+                widenedGap.run();
             }
             try {
                 registry.put(parsed.doc(), Origin.LOCAL, allowEmptyMcpActions());
             } catch (ConchRejectedException ex) {
                 List<ValidationIssue> located = ImportIssueLines.locate(new String(raw, StandardCharsets.UTF_8), ex.issues());
-                String reason = readReason(fileName, parsed.doc().conch(), RuleDisabled.explain(located));
+                String reason = readReason(fileName, conch, RuleDisabled.explain(located));
                 rememberBroken(stem, fileName, reason, true, nextBroken);
                 return new FileResult(
                         fileName,
-                        shownConch(stem, parsed.doc().conch()),
+                        shownConch(stem, conch),
                         parsed.doc().version().toString(),
                         false,
                         failureIssues("INVALID_INPUT", fileName, reason, located));
             }
+            if (widened) {
+                onWidened.accept(conch);
+            }
         }
-        nextBroken.remove(parsed.doc().conch());
-        loaded.put(parsed.doc().conch(), parsed.doc());
+        nextBroken.remove(conch);
+        loaded.put(conch, parsed.doc());
         List<ValidationIssue> warnings = parsed.warnings();
-        return new FileResult(fileName, parsed.doc().conch(), parsed.doc().version().toString(), true, warnings);
+        return new FileResult(fileName, conch, parsed.doc().version().toString(), true, warnings);
     }
 
     private FileResult reject(
@@ -868,7 +902,7 @@ public final class LocalConches {
         return Files.exists(yamlPath(conch), LinkOption.NOFOLLOW_LINKS);
     }
 
-    private void dropMissing(java.util.Set<String> kept) {
+    private List<String> dropMissing(java.util.Set<String> kept) {
         ArrayList<String> stale = new ArrayList<>();
         for (var entry : registry.snapshot().entrySet()) {
             if (registry.origin(entry.getKey()) == Origin.LOCAL && !kept.contains(entry.getKey())) {
@@ -878,6 +912,17 @@ public final class LocalConches {
         for (String conch : stale) {
             registry.remove(conch);
         }
+        return stale;
+    }
+
+    private Map<String, ConchDoc> localDocs() {
+        LinkedHashMap<String, ConchDoc> docs = new LinkedHashMap<>();
+        for (Map.Entry<String, ConchDoc> entry : registry.snapshot().entrySet()) {
+            if (registry.origin(entry.getKey()) == Origin.LOCAL) {
+                docs.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return docs;
     }
 
     private Map<String, String> localVersions() {
@@ -1120,10 +1165,11 @@ public final class LocalConches {
                 && errorPaths.contains(issue.path()));
         List<ValidationIssue> locatedWarnings = ImportIssueLines.locate(yaml, warnings);
         List<ValidationIssue> structural = registry.inspect(doc, allowEmpty);
-        // 解析时同名能力或脚本库只留下一个，要回到 YAML 节点上找。Reef 上传用同一条规则，本地不能先放过。
+        // 解析时同名能力、脚本库或分组只留下一个，要回到 YAML 节点上找。Reef 上传用同一条规则，本地不能先放过。
         ArrayList<ValidationIssue> duplicates = new ArrayList<>();
         duplicates.addAll(DuplicateActions.find(yaml));
         duplicates.addAll(DuplicateScripts.find(yaml));
+        duplicates.addAll(DuplicateGroups.find(yaml));
         if (!structural.isEmpty() || !duplicates.isEmpty()) {
             ArrayList<ValidationIssue> errors = new ArrayList<>(duplicates);
             errors.addAll(ImportIssueLines.locate(yaml, structural));

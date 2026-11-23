@@ -127,7 +127,13 @@ public final class Identities {
 
     /** 删掉身份：成员都回到各自独立的会话，要重新登录。 */
     public void delete(String id, String actor) {
-        List<SessionKey> members = store.delete(id, actor);
+        List<SessionKey> members;
+        synchronized (judging) {
+            members = store.delete(id, actor);
+            for (SessionKey member : members) {
+                seen.remove(member);
+            }
+        }
         for (SessionKey member : members) {
             sessions.rebound(member);
         }
@@ -181,6 +187,7 @@ public final class Identities {
         boolean linked = false;
         boolean others = false;
         boolean peerUsesLogin = false;
+        boolean mixesLocalAndOfficial = false;
         for (SessionKey member : identity.members()) {
             if (member.equals(key)) {
                 continue;
@@ -191,6 +198,10 @@ public final class Identities {
                         List.of(), List.of());
             }
             others = true;
+            if ((origin == Origin.LOCAL && member.origin() == Origin.OFFICIAL)
+                    || (origin == Origin.OFFICIAL && member.origin() == Origin.LOCAL)) {
+                mixesLocalAndOfficial = true;
+            }
             ArrayList<String> common = new ArrayList<>(addresses(member.origin(), member.conch()));
             common.retainAll(mine);
             linked |= !common.isEmpty();
@@ -203,6 +214,9 @@ public final class Identities {
                     "这个包和身份里现有的成员没有相同的地址（站点或认证地址），共用 Cookie 没有意义", peers, List.of());
         }
         ArrayList<String> warnings = new ArrayList<>();
+        if (mixesLocalAndOfficial) {
+            warnings.add("其中包含未经过 Reef 签名的本地规则包，绑定后会与正式规则包共用这份登录 Cookie，请确认本地规则可信。");
+        }
         for (Peer peer : peers) {
             if (peer.credentials() == Credentials.DIFFERENT) {
                 warnings.add("和 " + peer.member().conch() + " 的账号 " + peer.member().account()
@@ -220,12 +234,17 @@ public final class Identities {
 
     /** 绑定。条件不满足时抛 {@link IllegalArgumentException}，消息就是原因。 */
     public Check bind(String id, Origin origin, String conch, String account, String actor) {
-        Check check = check(id, origin, conch, account);
-        if (!check.allowed()) {
-            throw new IllegalArgumentException(check.problem());
-        }
         SessionKey key = new SessionKey(origin, conch, account);
+        Check check;
         synchronized (judging) {
+            check = check(id, origin, conch, account);
+            if (!check.allowed()) {
+                throw new IllegalArgumentException(check.problem());
+            }
+            if (id.equals(store.identityOf(key))) {
+                seen.put(key, addresses(origin, conch));
+                return check;
+            }
             store.bind(id, key, actor);
             seen.put(key, addresses(origin, conch));
         }
@@ -272,15 +291,34 @@ public final class Identities {
             }
             for (Identity identity : store.list()) {
                 LinkedHashMap<SessionKey, Set<String>> present = new LinkedHashMap<>();
+                ArrayList<SessionKey> invalidMembers = new ArrayList<>();
+                boolean hasMissingPackage = false;
                 for (SessionKey member : identity.members()) {
+                    ConchDoc doc = registry.find(member.conch(), member.origin()).orElse(null);
+                    if (doc == null) {
+                        hasMissingPackage = true;
+                        break;
+                    }
                     Set<String> mine = addresses(member.origin(), member.conch());
-                    if (!mine.isEmpty()) {
+                    if (mine.isEmpty()) {
+                        invalidMembers.add(member);
+                    } else {
                         present.put(member, mine);
                     }
                 }
                 // 有成员的包这会儿不在本机（启动时还没载入、文件读不出来、被 Reef 撤下）：它可能正是
                 // 把另外两个成员连起来的那一个，这个身份先不动，等它回来再判断。记下的地址也不动。
-                if (present.size() < identity.members().size()) {
+                if (hasMissingPackage) {
+                    continue;
+                }
+                for (SessionKey member : invalidMembers) {
+                    String id = detach(member, REASON_ADDRESS_CHANGED, actor);
+                    if (id != null) {
+                        detached.put(member, id);
+                        left.add(member);
+                    }
+                }
+                if (present.isEmpty()) {
                     continue;
                 }
                 List<List<SessionKey>> groups = groups(present);
@@ -309,8 +347,8 @@ public final class Identities {
                         String id = detach(member, REASON_ADDRESS_CHANGED, actor);
                         if (id != null) {
                             detached.put(member, id);
+                            left.add(member);
                         }
-                        left.add(member);
                     }
                 }
             }

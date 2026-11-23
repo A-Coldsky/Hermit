@@ -327,6 +327,67 @@ class SameSiteHttpTest {
         }
     }
 
+    /** M11：还没填 base_url 但已有生效 auth.origins 的包，也能和共享认证中心的其它包互相列在 sameAuth 里。 */
+    @Test
+    void sameAuthMatchesPackagesWithAuthOriginsEvenWithoutBaseUrl() throws Exception {
+        String ssoOrigin = "http://sso.local:8443";
+        Map<String, String> sites = Map.of(
+                "app_a", siteUrl,
+                "portal", ssoOrigin);
+        Map<String, List<String>> auth = Map.of(
+                "app_a", List.of(ssoOrigin),
+                "app_unset", List.of(ssoOrigin),
+                "app_unset_b", List.of(ssoOrigin));
+        assertThat(CrabRuntime.sameAuth("app_unset", sites, auth))
+                .containsExactly("app_a", "app_unset_b", "portal");
+        assertThat(CrabRuntime.sameAuth("app_a", sites, auth))
+                .containsExactly("app_unset", "app_unset_b", "portal");
+        assertThat(CrabRuntime.sameAuth("portal", sites, auth))
+                .containsExactly("app_a", "app_unset", "app_unset_b");
+
+        installBehindSso("app_a", siteUrl, "\"" + ssoOrigin + "\"");
+        install("portal_pkg", ssoOrigin, false);
+        ConchDoc unset = ConchParser.parse("""
+                conch: app_unset
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.11.0
+                title: 待配站点
+                description: 站点由本机配置提供，认证中心已声明。
+                credentials:
+                  password: { type: secret, label: 密码, required: true }
+                config:
+                  base_url: { type: url, label: 站点, required: true }
+                auth:
+                  origins: ["%s"]
+                  steps:
+                    - request:
+                        method: POST
+                        url: %s/sso-login
+                        form: { password: "{{credential.password}}" }
+                actions:
+                  read:
+                    title: 读
+                    description: 读一条数据。
+                    idempotent: true
+                    mcp: { expose: true, read_only: true }
+                    steps:
+                      - request: { method: GET, path: /data }
+                      - set: { message: seen }
+                    output:
+                      message: { type: string, description: 文本, value: seen }
+                    examples:
+                      - input: {}
+                        output: { message: seen }
+                    notes: 无
+                    related: []
+                """.formatted(ssoOrigin, ssoOrigin));
+        runtime.registry().put(unset);
+        assertThat(names(detail("app_unset").path("sameAuth"))).containsExactly("app_a", "portal_pkg");
+        assertThat(names(detail("app_a").path("sameAuth"))).containsExactly("app_unset", "portal_pkg");
+        assertThat(names(detail("portal_pkg").path("sameAuth"))).containsExactly("app_a", "app_unset");
+    }
+
     private void installBehindSso(String name, String baseUrl, String origin) {
         String login = origin.contains("config.") ? "\"{{config.sso_url}}/sso-login\"" : origin.replace("\"", "") + "/sso-login";
         ConchDoc doc = ConchParser.parse("""

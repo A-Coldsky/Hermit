@@ -117,6 +117,7 @@ class ConchUploadTransaction {
             return warnings;
         }
         ArrayList<ValidationIssue> all = new ArrayList<>(warnings);
+        int hits = 0;
         List<VersionRow> published = new ArrayList<>(repository.listCurrent());
         published.sort(Comparator.comparing(VersionRow::conch));
         for (VersionRow row : published) {
@@ -132,13 +133,27 @@ class ConchUploadTransaction {
             }
             for (String site : SiteAddress.declared(other)) {
                 if (sites.contains(site)) {
-                    all.add(new ValidationIssue(ValidationCodes.SAME_SITE, "base_url", sameSiteMessage(other, site), null));
+                    // 警告随版本存进一列 TEXT，条数要有上限。
+                    if (++hits <= SAME_SITE_LISTED) {
+                        all.add(new ValidationIssue(
+                                ValidationCodes.SAME_SITE, "base_url", sameSiteMessage(other, site), null));
+                    }
                     break;
                 }
             }
         }
+        if (hits > SAME_SITE_LISTED) {
+            all.add(new ValidationIssue(
+                    ValidationCodes.SAME_SITE,
+                    "base_url",
+                    "另有 " + (hits - SAME_SITE_LISTED) + " 个已发布的规则包也访问同一网站，这里不逐个列出。",
+                    null));
+        }
         return List.copyOf(all);
     }
+
+    /** 逐个写出的同网站规则包上限，按包名顺序取前几个；其余只报个数。 */
+    static final int SAME_SITE_LISTED = 5;
 
     static String sameSiteMessage(ConchDoc other, String site) {
         StringBuilder text = new StringBuilder("已发布的规则包 ").append(other.conch());

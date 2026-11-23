@@ -127,6 +127,24 @@ class ConchSameSiteUploadTest {
         assertThat(sameSite(upload(yaml("oa_port", "1.0.0", "https://oa.corp.com:8443", null)))).isEmpty();
     }
 
+    @Test
+    void manySameSitePackagesAreListedUpToALimit() throws Exception {
+        // 警告随版本存进一列 TEXT：同网站的包再多，也只逐个写前 5 个，其余合成一条。
+        for (int index = 1; index <= 7; index++) {
+            upload(yaml("crm_" + index, "1.0.0", "https://crm.corp.com", null));
+            publish("crm_" + index, "1.0.0");
+        }
+        List<JsonNode> hits = sameSite(upload(yaml("crm_new", "1.0.0", "https://crm.corp.com", null)));
+        assertThat(hits).hasSize(6);
+        for (int index = 1; index <= 5; index++) {
+            assertThat(hits.get(index - 1).path("message").asText()).contains("crm_" + index + "（");
+        }
+        assertThat(hits.get(5).path("message").asText())
+                .contains("另有 2 个")
+                .doesNotContain("crm_6")
+                .doesNotContain("crm_7");
+    }
+
     private static List<JsonNode> sameSite(JsonNode data) {
         ArrayList<JsonNode> hits = new ArrayList<>();
         for (JsonNode warning : data.path("warnings")) {

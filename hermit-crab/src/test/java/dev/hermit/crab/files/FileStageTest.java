@@ -215,6 +215,29 @@ class FileStageTest {
                 .hasMessage("data URI 文件名编码无效");
     }
 
+    @Test
+    void consoleTrialOwnerFilesStayIsolatedFromApiKeysWhileSharedConsoleUploadsRemainVisible() {
+        FileStage stage = new FileStage(temp.resolve("trial-owner"), clock, FileStageSettings.defaults());
+        StagedFile trialFile = stage.store(bytes("trial-only"), "trial.bin", "application/octet-stream",
+                FileStage.CONSOLE_TRIAL_OWNER);
+        StagedFile consoleShared = stage.store(bytes("shared"), "shared.txt", "text/plain", null);
+        StagedFile keyFile = stage.store(bytes("key-only"), "key.txt", "text/plain", "key-1");
+
+        // 控制台试跑产生的文件只有 CONSOLE_TRIAL_OWNER 可按 fileId 访问，任何真实 API Key 和 null 都拿不到。
+        assertThat(stage.find(trialFile.fileId(), FileStage.CONSOLE_TRIAL_OWNER)).isPresent();
+        assertThat(stage.find(trialFile.fileId(), "key-1")).isEmpty();
+        assertThat(stage.find(trialFile.fileId(), "key-2")).isEmpty();
+        assertThat(stage.find(trialFile.fileId(), null)).isEmpty();
+        assertThat(stage.byToken(trialFile.token())).isPresent();
+
+        // 控制台显式上传的文件（owner == null）对所有 API Key 和试跑均可见。
+        assertThat(stage.find(consoleShared.fileId(), "key-1")).isPresent();
+        assertThat(stage.find(consoleShared.fileId(), FileStage.CONSOLE_TRIAL_OWNER)).isPresent();
+
+        // 真实 API Key 上传的文件对试跑不可见。
+        assertThat(stage.find(keyFile.fileId(), FileStage.CONSOLE_TRIAL_OWNER)).isEmpty();
+    }
+
     private static byte[] bytes(String text) {
         return text.getBytes(StandardCharsets.UTF_8);
     }

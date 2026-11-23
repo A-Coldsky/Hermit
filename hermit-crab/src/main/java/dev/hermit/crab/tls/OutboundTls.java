@@ -33,6 +33,7 @@ public final class OutboundTls {
     private final AtomicReference<TrustSnapshot> snapshot = new AtomicReference<>();
     private final AtomicReference<HostPins> pins = new AtomicReference<>(HostPins.NONE);
     private final CopyOnWriteArraySet<PoolingHttpClientConnectionManager> pools = new CopyOnWriteArraySet<>();
+    private final Object updateLock = new Object();
 
     private OutboundTls(java.nio.file.Path caDir, boolean systemTrust) {
         DelegatingTrustManager trustManager = new DelegatingTrustManager(snapshot);
@@ -129,23 +130,27 @@ public final class OutboundTls {
     }
 
     public void setPins(HostPins next) {
-        HostPins updated = next == null ? HostPins.NONE : next;
-        pins.set(updated);
-        TrustSnapshot previous = snapshot.get();
-        TrustSnapshot replacement = previous.withPins(updated);
-        snapshot.set(replacement);
-        if (removedTrust(previous, replacement)) {
-            dropIdleSessions();
+        synchronized (updateLock) {
+            HostPins updated = next == null ? HostPins.NONE : next;
+            pins.set(updated);
+            TrustSnapshot previous = snapshot.get();
+            TrustSnapshot replacement = previous.withPins(updated);
+            snapshot.set(replacement);
+            if (removedTrust(previous, replacement)) {
+                dropIdleSessions();
+            }
         }
     }
 
     public void reload(java.nio.file.Path caDir, boolean systemTrust) {
-        TrustSnapshot previous = snapshot.get();
-        TrustSnapshot replacement = TrustSnapshot.load(caDir, systemTrust, pins.get());
-        snapshot.set(replacement);
-        logProblems(replacement);
-        if (removedTrust(previous, replacement)) {
-            dropIdleSessions();
+        synchronized (updateLock) {
+            TrustSnapshot previous = snapshot.get();
+            TrustSnapshot replacement = TrustSnapshot.load(caDir, systemTrust, pins.get());
+            snapshot.set(replacement);
+            logProblems(replacement);
+            if (removedTrust(previous, replacement)) {
+                dropIdleSessions();
+            }
         }
     }
 
@@ -169,6 +174,10 @@ public final class OutboundTls {
                 pools.remove(pool);
             }
         }
+        // TLS 1.3 的 NewSessionTicket 可能在优雅关闭空闲连接时才被读入会话缓存，
+        // 关完连接后再清一次会话上下文，避免下一次建连凭刚落入的票据恢复已撤回的信任。
+        invalidate(context.getClientSessionContext());
+        invalidate(context.getServerSessionContext());
     }
 
     private static void invalidate(SSLSessionContext sessions) {

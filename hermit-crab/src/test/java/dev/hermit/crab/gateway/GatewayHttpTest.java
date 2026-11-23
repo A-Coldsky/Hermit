@@ -625,6 +625,329 @@ class GatewayHttpTest {
         }
     }
 
+    @Test
+    void idempotencyIsIsolatedByApiKeyAndSkipsDeadDownloadLinks() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("idem-key-iso"), PASSWORD, config)) {
+            server.configureAccount("alice");
+            String keyA = server.apiKey.plaintext();
+            String keyB = server.runtime.admin().createApiKey(
+                    "second-key", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CLI).plaintext();
+
+            int listsBefore = server.fixture.count("GET", "/todo/list.aspx");
+            TestServer.Reply firstA = server.call(
+                    "POST", "/api/legacy_oa/save_note", keyA, "alice", "shared-idem-1", "{\"text\":\"from-a\"}");
+            assertThat(firstA.status()).isEqualTo(200);
+            assertThat(firstA.header("Idempotent-Replayed")).isNull();
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(listsBefore + 1);
+
+            // 另一把 API Key 使用相同的 Idempotency-Key 必须完全隔离：既不回放 keyA 的响应也不产生 409 冲突。
+            TestServer.Reply firstB = server.call(
+                    "POST", "/api/legacy_oa/save_note", keyB, "alice", "shared-idem-1", "{\"text\":\"from-b\"}");
+            assertThat(firstB.status()).as(firstB.body()).isEqualTo(200);
+            assertThat(firstB.header("Idempotent-Replayed")).isNull();
+            assertThat(firstB.json().path("traceId").asText()).isNotEqualTo(firstA.json().path("traceId").asText());
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(listsBefore + 2);
+
+            // 各自重试同一请求体仍正常回放自己的缓存。
+            TestServer.Reply replayA = server.call(
+                    "POST", "/api/legacy_oa/save_note", keyA, "alice", "shared-idem-1", "{\"text\":\"from-a\"}");
+            assertThat(replayA.status()).isEqualTo(200);
+            assertThat(replayA.header("Idempotent-Replayed")).isEqualTo("true");
+            assertThat(replayA.body()).isEqualTo(firstA.body());
+
+            TestServer.Reply replayB = server.call(
+                    "POST", "/api/legacy_oa/save_note", keyB, "alice", "shared-idem-1", "{\"text\":\"from-b\"}");
+            assertThat(replayB.status()).isEqualTo(200);
+            assertThat(replayB.header("Idempotent-Replayed")).isEqualTo("true");
+            assertThat(replayB.body()).isEqualTo(firstB.body());
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(listsBefore + 2);
+
+            // 含 download: true 的 POST 动作：暂存文件仍存活时回放，文件被清掉/过期后不返回死链接而重新执行。
+            server.runtime.registry().put(ConchParser.parse("""
+                    conch: dl_idem
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.8.0
+                    base_url: "%s"
+                    title: 下载幂等
+                    description: 测试 POST 下载幂等。
+                    credentials: {}
+                    actions:
+                      export_post:
+                        title: 导出
+                        description: 导出报表。
+                        method: POST
+                        steps:
+                          - request: { method: GET, path: /files/report.bin, download: true }
+                          - set: { file: "{{ response.file }}" }
+                        output:
+                          file: { type: object, description: 报表文件 }
+                        examples:
+                          - input: {}
+                            output: { file: { fileId: f_1 } }
+                        notes: 测试
+                    """.formatted(server.fixture.baseUrl())));
+            server.runtime.admin().createAccount("dl_idem", "alice", Actors.CLI);
+
+            TestServer.Reply dl1 = server.call("POST", "/api/dl_idem/export_post", keyA, "alice", "dl-k1", "{}");
+            assertThat(dl1.status()).as(dl1.body()).isEqualTo(200);
+            String fileId1 = dl1.json().path("data").path("file").path("fileId").asText();
+            assertThat(fileId1).startsWith("f_");
+
+            TestServer.Reply dlReplay = server.call("POST", "/api/dl_idem/export_post", keyA, "alice", "dl-k1", "{}");
+            assertThat(dlReplay.status()).isEqualTo(200);
+            assertThat(dlReplay.header("Idempotent-Replayed")).isEqualTo("true");
+            assertThat(dlReplay.json().path("data").path("file").path("fileId").asText()).isEqualTo(fileId1);
+
+            assertThat(server.runtime.fileStage().delete(fileId1)).isTrue();
+            TestServer.Reply dlFresh = server.call("POST", "/api/dl_idem/export_post", keyA, "alice", "dl-k1", "{}");
+            assertThat(dlFresh.status()).as(dlFresh.body()).isEqualTo(200);
+            assertThat(dlFresh.header("Idempotent-Replayed")).isNull();
+            String fileId2 = dlFresh.json().path("data").path("file").path("fileId").asText();
+            assertThat(fileId2).startsWith("f_").isNotEqualTo(fileId1);
+            assertThat(server.runtime.fileStage().find(fileId2, server.apiKey.id())).isPresent();
+        }
+    }
+
+    @Test
+    void uploadFileRejectsReadOnlyKeysAndPublicBaseBlocksForeignHostHeader() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("files-hardening"), PASSWORD, config)) {
+            String readOnlyKey = server.runtime.admin().createApiKey(
+                    "ro-upload", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CLI).plaintext();
+            java.net.http.HttpResponse<String> denied = server.http.send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(server.base() + "/api/-/files?name=ro.txt"))
+                            .header("Authorization", "Bearer " + readOnlyKey)
+                            .header("Content-Type", "text/plain")
+                            .POST(java.net.http.HttpRequest.BodyPublishers.ofString("hello"))
+                            .build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(denied.statusCode()).isEqualTo(403);
+            assertThat(denied.body()).contains("FORBIDDEN").contains(CrabHttpServer.READ_ONLY_UPLOAD);
+            assertThat(server.runtime.fileStage().list()).isEmpty();
+
+            // 伪造外部 Host 头不能投毒下载链接。
+            String payload = "safe-bytes";
+            String rawReq = "POST /api/-/files?name=host.txt HTTP/1.1\r\n"
+                    + "Host: attacker.example:9999\r\n"
+                    + "Authorization: Bearer " + server.apiKey.plaintext() + "\r\n"
+                    + "Content-Type: text/plain\r\n"
+                    + "Content-Length: " + payload.length() + "\r\n"
+                    + "Connection: close\r\n\r\n"
+                    + payload;
+            String rawResp;
+            try (java.net.Socket socket = new java.net.Socket("127.0.0.1", server.server.port())) {
+                socket.setSoTimeout(5000);
+                socket.getOutputStream().write(rawReq.getBytes(StandardCharsets.UTF_8));
+                rawResp = new String(socket.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            }
+            assertThat(rawResp).startsWith("HTTP/1.1 200");
+            assertThat(rawResp).doesNotContain("attacker.example");
+            assertThat(rawResp).contains(server.runtime.fileBase() + "/api/-/files/");
+
+            // resolvePublicBase 边界覆盖：显式 public_url 优先，回环与配置监听主机放行，非法/外部/重复 Host 回退。
+            assertThat(CrabHttpServer.resolvePublicBase(
+                    CrabConfig.defaults().withListen("0.0.0.0", 7777),
+                    "http://127.0.0.1:7777",
+                    "http",
+                    List.of("attacker.example:7777")))
+                    .isEqualTo("http://127.0.0.1:7777");
+            assertThat(CrabHttpServer.resolvePublicBase(
+                    CrabConfig.defaults().withListen("192.168.1.10", 7777),
+                    "http://192.168.1.10:7777",
+                    "http",
+                    List.of("192.168.1.10:7777")))
+                    .isEqualTo("http://192.168.1.10:7777");
+            assertThat(CrabHttpServer.resolvePublicBase(
+                    CrabConfig.defaults().withListen("127.0.0.1", 7777),
+                    "http://127.0.0.1:7777",
+                    "http",
+                    List.of("localhost:9000")))
+                    .isEqualTo("http://localhost:9000");
+            assertThat(CrabHttpServer.resolvePublicBase(
+                    CrabConfig.defaults().withListen("127.0.0.1", 7777),
+                    "http://127.0.0.1:7777",
+                    "http",
+                    List.of("127.0.0.1:7777", "attacker.example")))
+                    .isEqualTo("http://127.0.0.1:7777");
+        }
+    }
+
+    @Test
+    void openApiFiltersByApiKeyAndRejectsUnauthenticatedNonLoopbackRequests() throws Exception {
+        CrabConfig config = CrabConfig.defaults()
+                .withListen("127.0.0.1", 0)
+                .withAliases(Map.of("/todo", "legacy_oa.list_todo", "/notes", "legacy_oa.save_note"));
+        try (TestServer server = TestServer.open(temp.resolve("openapi-scope"), PASSWORD, config)) {
+            server.runtime.registry().put(ConchParser.parse("""
+                    conch: grouped_oa
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.10.0
+                    base_url: "http://127.0.0.1:9"
+                    title: 分组系统
+                    description: 测试 OpenAPI 过滤。
+                    credentials: {}
+                    groups:
+                      hr:
+                        title: 人事管理
+                      admin:
+                        title: 系统管理
+                    actions:
+                      list_staff:
+                        group: hr
+                        title: 查员工
+                        description: 只读。
+                        idempotent: true
+                        mcp: { read_only: true }
+                        steps:
+                          - set: { ok: true }
+                        output:
+                          ok: { type: boolean, description: 结果 }
+                        examples:
+                          - input: {}
+                            output: { ok: true }
+                        notes: 无
+                      wipe_all:
+                        group: admin
+                        title: 清空
+                        description: 写操作。
+                        method: POST
+                        mcp: { read_only: false }
+                        steps:
+                          - set: { ok: true }
+                        output:
+                          ok: { type: boolean, description: 结果 }
+                        examples:
+                          - input: {}
+                            output: { ok: true }
+                        notes: 无
+                    """));
+            server.runtime.registry().put(ConchParser.parse("""
+                    conch: local_pkg
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    base_url: "http://127.0.0.1:9"
+                    title: 本地包
+                    description: 仅点名可见。
+                    credentials: {}
+                    actions:
+                      ping:
+                        title: 探测
+                        description: 只读。
+                        idempotent: true
+                        mcp: { read_only: true }
+                        steps:
+                          - set: { ok: true }
+                        output:
+                          ok: { type: boolean, description: 结果 }
+                        examples:
+                          - input: {}
+                            output: { ok: true }
+                        notes: 无
+                    """), dev.hermit.crab.store.Origin.LOCAL);
+
+            // 1) 回环无 Key 保持兼容返回全量目录。
+            TestServer.Reply loopbackAll = server.call("GET", "/openapi.json", null, null, null, null);
+            assertThat(loopbackAll.status()).isEqualTo(200);
+            assertThat(loopbackAll.body())
+                    .contains("/api/legacy_oa/save_note")
+                    .contains("/api/grouped_oa/list_staff")
+                    .contains("/api/grouped_oa/wipe_all")
+                    .contains("/api/local_pkg/ping");
+
+            // 2) 带无效 Key 即使在回环也返回 401。
+            TestServer.Reply invalidKey = server.call("GET", "/openapi.json", "hk_invalid_token", null, null, null);
+            assertThat(invalidKey.status()).isEqualTo(401);
+            assertThat(invalidKey.json().path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
+
+            // 3) 只读 Key 只看得到只读能力与只读别名。
+            String roKey = server.runtime.admin().createApiKey(
+                    "ro-openapi", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CLI).plaintext();
+            TestServer.Reply roOpenApi = server.call("GET", "/openapi.json", roKey, null, null, null);
+            assertThat(roOpenApi.status()).isEqualTo(200);
+            assertThat(roOpenApi.body())
+                    .contains("/api/legacy_oa/list_todo")
+                    .contains("\"/todo\"")
+                    .contains("/api/grouped_oa/list_staff")
+                    .contains("/api/local_pkg/ping")
+                    .doesNotContain("/api/legacy_oa/save_note")
+                    .doesNotContain("\"/notes\"")
+                    .doesNotContain("/api/grouped_oa/wipe_all")
+                    .doesNotContain("系统管理");
+
+            // 4) 分组窄 Key 只看到授权分组、标签，不泄漏未授权分组和未点名的本地包。
+            String hrKey = server.runtime.admin().createApiKey(
+                    "hr-openapi",
+                    ApiKeyScope.explicit(false, Set.of("grouped_oa"), Set.of("grouped_oa:hr"), Set.of(), false),
+                    Actors.CLI).plaintext();
+            TestServer.Reply hrOpenApi = server.call("GET", "/openapi.json", hrKey, null, null, null);
+            assertThat(hrOpenApi.status()).isEqualTo(200);
+            assertThat(hrOpenApi.body())
+                    .contains("/api/grouped_oa/list_staff")
+                    .contains("人事管理")
+                    .doesNotContain("/api/grouped_oa/wipe_all")
+                    .doesNotContain("系统管理")
+                    .doesNotContain("/api/legacy_oa/")
+                    .doesNotContain("/api/local_pkg/");
+        }
+
+        // 5) 非回环远端请求未带 Key 返回 401；带有效 Key 返回 200 并按范围过滤。
+        String nonLoopback = findNonLoopbackIpv4();
+        if (nonLoopback != null) {
+            CrabConfig remoteConfig = CrabConfig.defaults().withListen(nonLoopback, 0);
+            try (dev.hermit.crab.runtime.CrabRuntime remoteRuntime = dev.hermit.crab.runtime.CrabRuntime.open(
+                    new dev.hermit.crab.store.CrabPaths(temp.resolve("openapi-remote")), remoteConfig, name -> null);
+                 CrabHttpServer remoteServer = new CrabHttpServer(remoteRuntime)) {
+                remoteRuntime.registry().put(ConchParser.parse(TestServer.conchYaml()));
+                String roKey = remoteRuntime.admin().createApiKey(
+                        "remote-ro", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CLI).plaintext();
+                remoteServer.start();
+                java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
+                String url = "http://" + nonLoopback + ":" + remoteServer.port() + "/openapi.json";
+
+                java.net.http.HttpResponse<String> unauth = http.send(
+                        java.net.http.HttpRequest.newBuilder(java.net.URI.create(url)).GET().build(),
+                        java.net.http.HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                assertThat(unauth.statusCode()).isEqualTo(401);
+                assertThat(unauth.body()).contains("AUTH_FAILED");
+
+                java.net.http.HttpResponse<String> authed = http.send(
+                        java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
+                                .header("Authorization", "Bearer " + roKey)
+                                .GET()
+                                .build(),
+                        java.net.http.HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                assertThat(authed.statusCode()).isEqualTo(200);
+                assertThat(authed.body())
+                        .contains("/api/legacy_oa/list_todo")
+                        .doesNotContain("/api/legacy_oa/save_note");
+            }
+        }
+    }
+
+    private static String findNonLoopbackIpv4() throws Exception {
+        java.util.Enumeration<java.net.NetworkInterface> nics = java.net.NetworkInterface.getNetworkInterfaces();
+        while (nics != null && nics.hasMoreElements()) {
+            java.net.NetworkInterface nic = nics.nextElement();
+            if (!nic.isUp() || nic.isLoopback()) {
+                continue;
+            }
+            java.util.Enumeration<java.net.InetAddress> addresses = nic.getInetAddresses();
+            while (addresses.hasMoreElements()) {
+                java.net.InetAddress address = addresses.nextElement();
+                if (address instanceof java.net.Inet4Address
+                        && !address.isLoopbackAddress()
+                        && !address.isAnyLocalAddress()) {
+                    return address.getHostAddress();
+                }
+            }
+        }
+        return null;
+    }
+
     private static void callSave(TestServer server, CountDownLatch start, AtomicReference<TestServer.Reply> target) {
         try {
             start.await();

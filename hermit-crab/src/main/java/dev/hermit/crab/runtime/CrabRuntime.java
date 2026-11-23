@@ -94,6 +94,7 @@ import dev.hermit.crab.store.EncryptedLoginSnapshotStore;
 import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
+import dev.hermit.crab.store.Identity;
 import dev.hermit.crab.store.IdentityStore;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.store.ConchConfigStore;
@@ -295,6 +296,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 paths, registry.scoped(Origin.LOCAL), database.dataSource(), () -> debug.get().enabled(), clock);
         this.localConches.onWidened(this::clearWidenedSessions);
         this.localConches.onDeleted((name, actor) -> identities.packageRemoved(Origin.LOCAL, name, actor));
+        this.localConches.onBoundCheck(conch -> identities.hasBoundLocal(conch));
         this.admin.bindOriginFallback(name -> localConches.occupies(name) ? Origin.LOCAL : null);
         this.admin.bindAccountRemoved(mcpForwarder::forgetAccount);
         this.admin.bindIdentities(identities);
@@ -442,7 +444,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     /** 地址范围扩大的本地覆盖：先丢掉待输入登录，再清每个账号的会话和登录快照。 */
     private void clearWidenedSessions(String conch) {
-        sessions.pending().discardConch(conch);
+        sessions.pending().discardConch(Origin.LOCAL, conch);
         // 先离开身份：新地址不该拿到别的包登录出来的 Cookie，也不该因为它清掉别的成员的会话。
         identities.widened(conch);
         for (Account account : accounts.list(Origin.LOCAL, conch)) {
@@ -646,6 +648,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                         "这把 API Key 不能使用本地规则包 " + conch + "。请用全部权限的 Key，或在 conches 里点名这个包的 Key。",
                         true);
             }
+            if (!capability.mcp().expose()) {
+                throw new TrialRejected(403, ErrorCode.FORBIDDEN,
+                        "能力 " + action + " 未对 MCP 暴露，不能通过 MCP 试跑。",
+                        true);
+            }
             if (capability.effectiveConfirm() && (!confirmed || expectedSnapshot == null)) {
                 throw new TrialRejected(409, ErrorCode.CONFLICT, Invoker.CHANGED_AFTER_CONFIRM, true);
             }
@@ -671,7 +678,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 ready.account(),
                 new MappedAccount(ready.secrets(), ready.config()));
         ExecutionResult result;
-        FileScope previous = FileScope.begin(fileStage, apiKeyId, fileBase());
+        String fileOwner = apiKeyId == null ? FileStage.CONSOLE_TRIAL_OWNER : apiKeyId;
+        FileScope previous = FileScope.begin(fileStage, fileOwner, fileBase());
         try {
             if (!"mcp".equals(doc.driver())) {
                 try {
@@ -853,12 +861,39 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 throw new IllegalStateException("reef.public_key is required to verify installed conches");
             }
             localConches.loadStartup();
+            reconcileMissingLocalMembers();
             return new LoadReport(List.of(), List.of());
         }
         paths.conches();
         LoadReport official = InstalledConches.loadAll(paths, reefKey, registry.scoped(Origin.OFFICIAL));
         localConches.loadStartup();
+        reconcileMissingLocalMembers();
         return official;
+    }
+
+    /** 启动载入本地包后，把已离线删除的本地包成员从共享身份中解绑，避免它永久挡住同身份其余成员的 revalidate。 */
+    private void reconcileMissingLocalMembers() {
+        LinkedHashSet<String> missing = new LinkedHashSet<>();
+        for (Identity identity : identities.list()) {
+            for (SessionKey member : identity.members()) {
+                if (member.origin() != Origin.LOCAL) {
+                    continue;
+                }
+                String conch = member.conch();
+                if (registry.find(conch, Origin.LOCAL).isEmpty()
+                        && !localConches.occupies(conch)
+                        && !localConches.hasYamlFile(conch)) {
+                    missing.add(conch);
+                }
+            }
+        }
+        if (missing.isEmpty()) {
+            return;
+        }
+        for (String conch : missing) {
+            identities.packageRemoved(Origin.LOCAL, conch, Actors.SYNC);
+        }
+        identities.revalidate(Actors.SYNC);
     }
 
     public LocalConches localConches() {
@@ -1475,12 +1510,16 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                         }
                         return written;
                     });
+            copiedConfig = values.size();
+            if (copiedConfig > 0) {
+                // 先让新 base_url 搬家的账号离开旧共享身份，再清它自己的会话，避免误清旧身份里其它成员的共享会话。
+                identities.revalidate(actor);
+            }
             for (Map.Entry<String, Map<String, String>> entry : secrets.entrySet()) {
                 if (!entry.getValue().isEmpty()) {
                     sessions.invalidate(new dev.hermit.crab.engine.SessionKey(Origin.OFFICIAL, conch, entry.getKey()));
                 }
             }
-            copiedConfig = values.size();
         }
         boolean changed = registry.origin(conch) != origin;
         if (!registry.activate(conch, origin)) {
@@ -1488,9 +1527,6 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
         if (changed || copied) {
             conchSources.audit(conch, origin, copied, actor);
-        }
-        if (copied && copiedConfig > 0) {
-            identities.revalidate(actor);
         }
         notifyCatalogListeners();
         return new SourceSwitch(conch, origin, copied, copiedAccounts, copiedConfig);
@@ -1721,7 +1757,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     message,
                     result.durationMillis(),
                     apiKeyId,
-                    CallChannel.CONSOLE), result.stepLogs());
+                    apiKeyId != null ? CallChannel.MCP : CallChannel.CONSOLE), result.stepLogs());
         } catch (RuntimeException ex) {
             LOG.warning("call log failed: " + ex.getClass().getName());
         }

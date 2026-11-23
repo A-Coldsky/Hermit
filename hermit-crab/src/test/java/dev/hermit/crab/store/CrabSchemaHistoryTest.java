@@ -42,6 +42,9 @@ class CrabSchemaHistoryTest {
             statement.execute("RUNSCRIPT FROM '" + script.toAbsolutePath() + "' CHARSET 'UTF-8'");
             statement.executeUpdate("INSERT INTO accounts (origin, conch, account, is_default, created_at) "
                     + "VALUES ('official', 'oa', 'alice', TRUE, CURRENT_TIMESTAMP)");
+            statement.executeUpdate("INSERT INTO idempotency "
+                    + "(origin, conch, account, action, \"key\", created_at, response_json, body_sha256) "
+                    + "VALUES ('OFFICIAL', 'oa', 'alice', 'save_note', 'legacy-k1', CURRENT_TIMESTAMP, X'010203', 'abcd1234')");
         }
 
         List<String> upgraded;
@@ -68,6 +71,26 @@ class CrabSchemaHistoryTest {
                         assertThat(rows.getInt(1)).as(table).isZero();
                     }
                 }
+                // 22：存量 idempotency 行保留且 api_key_id 回填为 ''；不同 api_key_id 同键共存不冲突。
+                try (ResultSet rows = statement.executeQuery(
+                        "SELECT api_key_id, body_sha256 FROM idempotency WHERE \"key\" = 'legacy-k1'")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getString(1)).isEmpty();
+                    assertThat(rows.getString(2)).isEqualTo("abcd1234");
+                }
+                assertThat(statement.executeUpdate("INSERT INTO idempotency "
+                        + "(origin, conch, account, action, api_key_id, \"key\", created_at, response_json, body_sha256) "
+                        + "VALUES ('OFFICIAL', 'oa', 'alice', 'save_note', 'key-a', 'shared-k', CURRENT_TIMESTAMP, X'01', 'aaa')"))
+                        .isEqualTo(1);
+                assertThat(statement.executeUpdate("INSERT INTO idempotency "
+                        + "(origin, conch, account, action, api_key_id, \"key\", created_at, response_json, body_sha256) "
+                        + "VALUES ('OFFICIAL', 'oa', 'alice', 'save_note', 'key-b', 'shared-k', CURRENT_TIMESTAMP, X'02', 'bbb')"))
+                        .isEqualTo(1);
+                try (ResultSet rows = statement.executeQuery(
+                        "SELECT COUNT(*) FROM idempotency WHERE \"key\" = 'shared-k'")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getInt(1)).isEqualTo(2);
+                }
             }
         }
         List<String> fresh;
@@ -75,7 +98,8 @@ class CrabSchemaHistoryTest {
             fresh = shape(database);
         }
 
-        assertThat(upgraded).contains("version 16", "version 17", "version 18", "version 19", "version 20", "version 21");
+        assertThat(upgraded).contains(
+                "version 16", "version 17", "version 18", "version 19", "version 20", "version 21", "version 22");
         assertThat(upgraded)
                 .as("已发布的库升级后和全新安装的结构不一致：已发布的升级步骤不能就地改，结构变化请新增版本")
                 .containsExactlyElementsOf(fresh);

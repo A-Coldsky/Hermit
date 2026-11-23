@@ -471,12 +471,22 @@ class AuthoringMcpTest {
             assertThat(traceId).isNotBlank();
             assertThat(hits).hasValue(1);
 
+            // 另一把点名了该本地包的 Key 也不能通过 debug_trace 读取别把 Key 的 conch_trial_run 追踪。
             CreatedApiKey named = server.runtime.apiKeys().create(
                     "named", new ApiKeyScope(Set.of("trial_ping"), Set.of(), false), Actors.CONSOLE);
             String namedSession = server.initialize(named.plaintext(), false);
-            JsonNode seen = server.rpc(named.plaintext(), namedSession, 2, "tools/call", Map.of(
+            JsonNode crossKeyDenied = server.rpc(named.plaintext(), namedSession, 2, "tools/call", Map.of(
                     "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
-            assertThat(seen.path("result").path("isError").asBoolean(true)).isFalse();
+            assertThat(toolError(crossKeyDenied).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(crossKeyDenied)).isEqualTo(McpCalls.TRACE_DENIED);
+
+            // 真控制台试跑（apiKeyId == null）产生的追踪仍可被点名了该本地包的 Key 读取。
+            dev.hermit.crab.engine.ExecutionResult consoleRan = server.runtime.trialLocal(
+                    "trial_ping", "ping", java.util.Optional.of("main"), Map.of(), "console-trial-ping");
+            assertThat(consoleRan.success()).isTrue();
+            JsonNode seen = server.rpc(named.plaintext(), namedSession, 3, "tools/call", Map.of(
+                    "name", "debug_trace", "arguments", Map.of("traceId", consoleRan.traceId())));
+            assertThat(seen.path("result").path("isError").asBoolean(true)).as(seen.toString()).isFalse();
             JsonNode trace = ApiJson.tree(seen.path("result").path("content").get(0).path("text").asText());
             assertThat(trace.path("note").asText()).contains("正文已脱敏").isNotEqualTo(AuthoringCalls.UNTRUSTED);
 
@@ -1406,10 +1416,16 @@ class AuthoringMcpTest {
             assertThat(server.consoleImport(localWrite).statusCode()).isEqualTo(200);
             server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "dual_trace", "main", Actors.CONSOLE);
             String fullSession = server.initialize(false);
-            JsonNode ran = server.call(fullSession, "conch_trial_run", Map.of("conch", "dual_trace", "action", "act"));
-            assertThat(ran.path("result").path("isError").asBoolean(true)).as(ran.toString()).isFalse();
-            String traceId = structured(ran).path("traceId").asText();
-            assertThat(traceId).isNotBlank();
+            JsonNode mcpRan = server.call(fullSession, "conch_trial_run", Map.of("conch", "dual_trace", "action", "act"));
+            assertThat(mcpRan.path("result").path("isError").asBoolean(true)).as(mcpRan.toString()).isFalse();
+            String mcpTraceId = structured(mcpRan).path("traceId").asText();
+            assertThat(mcpTraceId).isNotBlank();
+
+            // 控制台试跑（apiKeyId == null）产生的追踪供点名该本地包的 Key 读取，校验其按本地包 read_only 判权。
+            dev.hermit.crab.engine.ExecutionResult consoleRan = server.runtime.trialLocal(
+                    "dual_trace", "act", java.util.Optional.of("main"), Map.of(), "console-dual-trace");
+            assertThat(consoleRan.success()).isTrue();
+            String traceId = consoleRan.traceId();
 
             // 同名正式包生效，且在正式包里 act 是 read_only: true。
             server.runtime.registry().put(ConchParser.parse(officialRead), dev.hermit.crab.store.Origin.OFFICIAL);
@@ -1430,6 +1446,12 @@ class AuthoringMcpTest {
             JsonNode allowed = server.rpc(namedRw.plaintext(), rwSession, 2, "tools/call", Map.of(
                     "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(allowed.path("result").path("isError").asBoolean(true)).as(allowed.toString()).isFalse();
+
+            // 其他 Key 通过 conch_trial_run 产生的追踪对 namedRw 保持不可见。
+            JsonNode otherKeyDenied = server.rpc(namedRw.plaintext(), rwSession, 3, "tools/call", Map.of(
+                    "name", "debug_trace", "arguments", Map.of("traceId", mcpTraceId)));
+            assertThat(toolError(otherKeyDenied).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(otherKeyDenied)).isEqualTo(McpCalls.TRACE_DENIED);
         }
     }
 

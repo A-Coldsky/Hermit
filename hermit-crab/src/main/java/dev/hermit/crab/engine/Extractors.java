@@ -53,7 +53,7 @@ final class Extractors {
      * 一次 {@code Matcher.find} 不看能力 deadline，也不响应中断。可能回溯很久的匹配放到这组守护线程上，
      * 调用方只等到 deadline：到点就按超时返回，账号锁由 {@code RuleEngine} 的 finally 放开。
      * 卡住的那次 find 继续占着一个池槽，直到自己返回。池没有等待队列，满了立刻按超时失败，
-     * 不为每次提取新建线程。没有量词或只有一个量词的正则仍在调用线程上匹配。
+     * 不为每次提取新建线程。只有不含任何量词且不含反向引用的简单正则仍在调用线程上匹配。
      */
     private static final int MATCH_THREADS = 32;
     private static final ThreadPoolExecutor MATCHES = newMatchPool();
@@ -310,6 +310,11 @@ final class Extractors {
         return scanBounded(pattern, group, text, deadlineNanos);
     }
 
+    /** 供测试断言正则是否允许直接在调用线程执行。 */
+    static boolean callerSafeRegex(String selector) {
+        return RegexShape.callerSafe(selector);
+    }
+
     /** 按与提取步骤相同的超时与回溯保护判断正则是否命中正文。 */
     static boolean regexFind(String selector, String text, long deadlineNanos) {
         Pattern pattern;
@@ -320,18 +325,18 @@ final class Extractors {
         }
         String input = text == null ? "" : text;
         if (RegexShape.callerSafe(selector)) {
-            ensureDeadline(deadlineNanos);
+            ensureDeadline(deadlineNanos, "request");
             boolean matched = pattern.matcher(input).find();
-            ensureDeadline(deadlineNanos);
+            ensureDeadline(deadlineNanos, "request");
             return matched;
         }
-        ensureDeadline(deadlineNanos);
+        ensureDeadline(deadlineNanos, "request");
         Future<Boolean> pending;
         try {
             pending = MATCHES.submit(() -> {
-                ensureDeadline(deadlineNanos);
+                ensureDeadline(deadlineNanos, "request");
                 boolean matched = pattern.matcher(input).find();
-                ensureDeadline(deadlineNanos);
+                ensureDeadline(deadlineNanos, "request");
                 return matched;
             });
         } catch (RejectedExecutionException ex) {
@@ -353,24 +358,24 @@ final class Extractors {
     }
 
     private static List<Source> scan(Pattern pattern, int group, String text, long deadlineNanos) {
-        ensureDeadline(deadlineNanos);
+        ensureDeadline(deadlineNanos, "extract");
         Matcher matcher = pattern.matcher(text);
         ArrayList<Source> matches = new ArrayList<>();
         while (matcher.find()) {
             // 一次 find 返回之后再看时间。卡住的那一次 find 靠外层的等待上限结束。
-            ensureDeadline(deadlineNanos);
+            ensureDeadline(deadlineNanos, "extract");
             if (group < 0 || group > matcher.groupCount()) {
                 throw problem("这个正则没有第 " + group + " 组");
             }
             String captured = matcher.group(group);
             matches.add(Source.text(captured == null ? "" : captured));
         }
-        ensureDeadline(deadlineNanos);
+        ensureDeadline(deadlineNanos, "extract");
         return matches;
     }
 
     private static List<Source> scanBounded(Pattern pattern, int group, String text, long deadlineNanos) {
-        ensureDeadline(deadlineNanos);
+        ensureDeadline(deadlineNanos, "extract");
         Future<List<Source>> pending;
         try {
             pending = MATCHES.submit(() -> scan(pattern, group, text, deadlineNanos));
@@ -397,9 +402,9 @@ final class Extractors {
         }
     }
 
-    private static void ensureDeadline(long deadlineNanos) {
+    private static void ensureDeadline(long deadlineNanos, String stepType) {
         if (System.nanoTime() >= deadlineNanos) {
-            throw new DeadlineExceeded(-1, "extract", List.of());
+            throw new DeadlineExceeded(-1, stepType, List.of());
         }
     }
 
@@ -694,7 +699,7 @@ final class Extractors {
 
     /**
      * 分不清会不会在一次 find 里耗过 deadline 时，交给带超时的匹配。
-     * 嵌套量词、量词作用在含 {@code |} 的组上、以及两个以上会回溯的量词，都走线程池。
+     * 含任意量词（包括单量词，如 {@code .*X} 在长正文上可能以 O(N^2) 阻塞）或反向引用的正则，都走线程池。
      */
     private static final class RegexShape {
 
@@ -712,10 +717,7 @@ final class Extractors {
                 if (shape.index != pattern.length()) {
                     return false;
                 }
-                if (node.risky || node.quantifiers > 1) {
-                    return false;
-                }
-                return true;
+                return node.quantifiers == 0 && !node.risky;
             } catch (RuntimeException ex) {
                 return false;
             }
@@ -871,7 +873,7 @@ final class Extractors {
                 throw fail();
             }
             if (possessive) {
-                return atom;
+                return new Shape(atom.quantifiers + 1, atom.alternation, atom.risky);
             }
             boolean nested = atom.quantifiers > 0 || atom.alternation || atom.risky;
             return new Shape(atom.quantifiers + 1, atom.alternation, nested);
@@ -907,6 +909,9 @@ final class Extractors {
                 throw fail();
             }
             char current = pattern.charAt(index++);
+            if (current >= '1' && current <= '9') {
+                return Shape.RISKY;
+            }
             if (current == 'Q') {
                 int end = pattern.indexOf("\\E", index);
                 if (end < 0) {
@@ -925,16 +930,19 @@ final class Extractors {
                 index = end + 1;
                 return Shape.LEAF;
             }
-            if (current == 'k' && index < pattern.length()) {
-                char quote = pattern.charAt(index);
-                if (quote == '<' || quote == '\'') {
-                    char end = quote == '<' ? '>' : '\'';
-                    int closeAt = pattern.indexOf(end, index + 1);
-                    if (closeAt < 0) {
-                        throw fail();
+            if (current == 'k') {
+                if (index < pattern.length()) {
+                    char quote = pattern.charAt(index);
+                    if (quote == '<' || quote == '\'') {
+                        char end = quote == '<' ? '>' : '\'';
+                        int closeAt = pattern.indexOf(end, index + 1);
+                        if (closeAt < 0) {
+                            throw fail();
+                        }
+                        index = closeAt + 1;
                     }
-                    index = closeAt + 1;
                 }
+                return Shape.RISKY;
             }
             return Shape.LEAF;
         }
@@ -972,6 +980,7 @@ final class Extractors {
 
     private record Shape(int quantifiers, boolean alternation, boolean risky) {
         private static final Shape LEAF = new Shape(0, false, false);
+        private static final Shape RISKY = new Shape(0, false, true);
 
         private static Shape seq(Shape left, Shape right) {
             return new Shape(

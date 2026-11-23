@@ -1,6 +1,7 @@
 package dev.hermit.crab.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -28,9 +29,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.crab.config.CrabConfig;
+import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
@@ -39,6 +42,8 @@ import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.Origin;
+import dev.hermit.crab.sync.LocalConchException;
+import dev.hermit.crab.sync.LocalConches;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -624,6 +629,188 @@ class IdentityHttpTest {
         assertThat(runtime.identities().identityOf(localKey)).isNull();
         assertThat(runtime.identities().identityOf(officialKey)).isEqualTo(id);
         assertThat(console("GET", "/console/api/audit?limit=50", null).toString()).contains("address_widened");
+    }
+
+    /** 已绑定共享身份的本地包执行同边界 replaceIfSameBoundary 必须拒绝，确认覆盖后自动移出共享身份且保留同身份正式包会话。 */
+    @Test
+    void boundLocalSameBoundaryOverwriteRequiresConfirmAndKeepsOfficialPeerSession() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        runtime.localConches().importBytes(yaml("pkg_local", siteUrl, true).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+        ConchDoc localDoc = runtime.registry().find("pkg_local", Origin.LOCAL).orElseThrow();
+        runtime.admin().createAccount(Origin.LOCAL, "pkg_local", "default", Actors.CLI);
+        runtime.admin().writeCredentials(
+                Origin.LOCAL, localDoc, "default", Map.of("username", "zhangsan", "password", PASSWORD), Actors.CLI);
+
+        String id = runtime.identities().create("混绑覆盖", Actors.CLI).id();
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+        runtime.identities().bind(id, Origin.LOCAL, "pkg_local", "default", Actors.CLI);
+        SessionKey officialKey = new SessionKey(Origin.OFFICIAL, "pkg_a", "default");
+        SessionKey localKey = new SessionKey(Origin.LOCAL, "pkg_local", "default");
+
+        // 建立共享会话：正式包登录一次，本地包复用同一份会话。
+        read("pkg_a");
+        read("pkg_local");
+        assertThat(logins.get()).isEqualTo(1);
+
+        runtime.debug().setEnabled(true, Actors.CONSOLE);
+        byte[] sameBoundaryV2 = yaml("pkg_local", siteUrl, true)
+                .replace("version: 1.0.0", "version: 1.0.1")
+                .getBytes(StandardCharsets.UTF_8);
+
+        assertThatThrownBy(() -> runtime.localConches().replaceIfSameBoundary(sameBoundaryV2, Actors.MCP, "agent"))
+                .isInstanceOf(LocalConchException.class)
+                .satisfies(ex -> {
+                    LocalConchException lce = (LocalConchException) ex;
+                    assertThat(lce.code()).isEqualTo(ErrorCode.CONFLICT);
+                    assertThat(lce.replaceConch()).isEqualTo("pkg_local");
+                });
+        assertThat(runtime.registry().find("pkg_local", Origin.LOCAL).orElseThrow().version().toString())
+                .isEqualTo("1.0.0");
+        assertThat(runtime.identities().identityOf(localKey)).isEqualTo(id);
+
+        LocalConches.PendingOverwrite pending = runtime.localConches()
+                .stagePending(sameBoundaryV2, Actors.MCP, "agent")
+                .orElseThrow();
+        runtime.localConches().confirmPending("pkg_local", pending.sha256(), Actors.CONSOLE, true);
+
+        assertThat(runtime.registry().find("pkg_local", Origin.LOCAL).orElseThrow().version().toString())
+                .isEqualTo("1.0.1");
+        assertThat(runtime.identities().identityOf(localKey))
+                .as("确认覆盖后本地包应自动移出共享身份").isNull();
+        assertThat(runtime.identities().identityOf(officialKey)).isEqualTo(id);
+
+        // 同身份的正式包会话必须保留，不需要重新登录；已移出身份的本地包需独立登录。
+        read("pkg_a");
+        assertThat(logins.get()).as("同身份正式包会话不应被清掉").isEqualTo(1);
+        read("pkg_local");
+        assertThat(logins.get()).as("移出身份后的本地包应独立登录").isEqualTo(2);
+
+        // 即使此前勾选了开发者模式自动确认，重新绑定共享身份后 applyIfGranted 也必须拒绝静默覆盖。
+        runtime.identities().bind(id, Origin.LOCAL, "pkg_local", "default", Actors.CONSOLE);
+        byte[] sameBoundaryV3 = yaml("pkg_local", siteUrl, true)
+                .replace("version: 1.0.0", "version: 1.0.2")
+                .getBytes(StandardCharsets.UTF_8);
+        assertThat(runtime.localConches().applyIfGranted(sameBoundaryV3, Actors.MCP, "agent")).isEmpty();
+        assertThat(runtime.registry().find("pkg_local", Origin.LOCAL).orElseThrow().version().toString())
+                .isEqualTo("1.0.1");
+    }
+
+    /** ConchAdmin.testLogin 缺凭证提前失败时，不得误清同身份其他成员的共享会话。 */
+    @Test
+    void testLoginWithMissingCredentialsDoesNotClearSharedPeerSession() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        ConchDoc docB = doc("pkg_b", siteUrl);
+        runtime.registry().put(docB);
+        runtime.admin().createAccount(Origin.OFFICIAL, "pkg_b", "default", Actors.CLI);
+
+        String id = runtime.identities().create("缺凭证", Actors.CLI).id();
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_b", "default", Actors.CLI);
+
+        read("pkg_a");
+        assertThat(logins.get()).isEqualTo(1);
+
+        ExecutionResult missing = runtime.admin().testLogin(
+                Origin.OFFICIAL, docB, "default", "trace-missing-cred", Actors.CONSOLE);
+        assertThat(missing.success()).isFalse();
+        assertThat(missing.error().code()).isEqualTo(ErrorCode.NOT_CONFIGURED);
+
+        // pkg_a 的共享会话必须仍然有效，不应因 pkg_b 缺凭证的 testLogin 而重登。
+        read("pkg_a");
+        assertThat(logins.get()).as("缺凭证 testLogin 不应误清同伴共享会话").isEqualTo(1);
+
+        // 补齐凭证后执行 testLogin 才真正作废并重新登录。
+        runtime.admin().writeCredentials(
+                Origin.OFFICIAL, docB, "default", Map.of("username", "zhangsan", "password", PASSWORD), Actors.CONSOLE);
+        ExecutionResult ok = runtime.admin().testLogin(
+                Origin.OFFICIAL, docB, "default", "trace-filled-cred", Actors.CONSOLE);
+        assertThat(ok.success()).isTrue();
+        assertThat(logins.get()).isEqualTo(2);
+    }
+
+    /** 离线删除本地包文件重启后自动清理孤立 LOCAL 成员，不冻住同身份其余成员的 revalidate；损坏文件仍保留绑定。 */
+    @Test
+    void offlineDeletedLocalPackageIsCleanedOnRestartWithoutFreezingRevalidate() throws Exception {
+        for (String name : java.util.List.of("local_a", "local_b", "local_gone", "local_broken")) {
+            runtime.localConches().importBytes(yaml(name, siteUrl, true).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            ConchDoc localDoc = runtime.registry().find(name, Origin.LOCAL).orElseThrow();
+            runtime.admin().createAccount(Origin.LOCAL, name, "default", Actors.CLI);
+            runtime.admin().writeCredentials(
+                    Origin.LOCAL, localDoc, "default", Map.of("username", "zhangsan", "password", PASSWORD), Actors.CLI);
+        }
+
+        String id1 = runtime.identities().create("重启清理", Actors.CLI).id();
+        runtime.identities().bind(id1, Origin.LOCAL, "local_a", "default", Actors.CLI);
+        runtime.identities().bind(id1, Origin.LOCAL, "local_b", "default", Actors.CLI);
+        runtime.identities().bind(id1, Origin.LOCAL, "local_gone", "default", Actors.CLI);
+
+        String id2 = runtime.identities().create("损坏保留", Actors.CLI).id();
+        runtime.identities().bind(id2, Origin.LOCAL, "local_broken", "default", Actors.CLI);
+
+        Path goneFile = runtime.paths().localConches().resolve("local_gone.yaml");
+        Path brokenFile = runtime.paths().localConches().resolve("local_broken.yaml");
+
+        server.close();
+        server = null;
+        runtime.close();
+        runtime = null;
+
+        Files.delete(goneFile);
+        Files.writeString(brokenFile, ":\n");
+
+        open();
+        runtime.loadInstalledConches();
+
+        SessionKey aKey = new SessionKey(Origin.LOCAL, "local_a", "default");
+        SessionKey bKey = new SessionKey(Origin.LOCAL, "local_b", "default");
+        SessionKey goneKey = new SessionKey(Origin.LOCAL, "local_gone", "default");
+        SessionKey brokenKey = new SessionKey(Origin.LOCAL, "local_broken", "default");
+
+        assertThat(runtime.identities().identityOf(goneKey))
+                .as("离线删除的本地包成员应在启动时自动解绑").isNull();
+        assertThat(runtime.identities().identityOf(aKey)).isEqualTo(id1);
+        assertThat(runtime.identities().identityOf(bKey)).isEqualTo(id1);
+        assertThat(runtime.identities().identityOf(brokenKey))
+                .as("磁盘上仍存在但语法损坏的本地包应保留绑定").isEqualTo(id2);
+        assertThat(console("GET", "/console/api/audit?limit=50", null).toString()).contains("package_removed");
+
+        // 其余成员的 revalidate 未被冻住：local_b 改 base_url 搬家后立即解绑，local_a 留在原身份。
+        ConchDoc localB = runtime.registry().find("local_b", Origin.LOCAL).orElseThrow();
+        runtime.admin().putConfig(Origin.LOCAL, localB, "base_url", elsewhereUrl, Actors.CONSOLE);
+        assertThat(runtime.identities().identityOf(bKey))
+                .as("孤立成员已清理，搬家的成员应能被 revalidate 正常解绑").isNull();
+        assertThat(runtime.identities().identityOf(aKey)).isEqualTo(id1);
+    }
+
+    /** switchSource(copy=true) 复制了新的 base_url 和凭证时，先 revalidate 搬家再 invalidate，不误清旧共享身份。 */
+    @Test
+    void switchSourceCopyRevalidatesBeforeInvalidatingSoMovingAccountDoesNotWipeOldIdentity() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        install("pkg_b", siteUrl, "zhangsan");
+        String id = runtime.identities().create("切源搬家", Actors.CLI).id();
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_b", "default", Actors.CLI);
+
+        read("pkg_a");
+        assertThat(logins.get()).isEqualTo(1);
+
+        runtime.localConches().importBytes(yaml("pkg_b", siteUrl, true).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+        ConchDoc localB = runtime.registry().find("pkg_b", Origin.LOCAL).orElseThrow();
+        runtime.admin().createAccount(Origin.LOCAL, "pkg_b", "default", Actors.CLI);
+        runtime.admin().writeCredentials(
+                Origin.LOCAL, localB, "default", Map.of("username", "zhangsan", "password", "Updated-Pass-99"), Actors.CLI);
+        runtime.admin().putConfig(Origin.LOCAL, localB, "base_url", elsewhereUrl, Actors.CLI);
+
+        CrabRuntime.SourceSwitch switched = runtime.switchSource("pkg_b", Origin.OFFICIAL, true, Actors.CONSOLE);
+        assertThat(switched.copied()).isTrue();
+        assertThat(switched.accounts()).isEqualTo(1);
+        assertThat(switched.configKeys()).isEqualTo(1);
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_b", "default"))).isNull();
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default"))).isEqualTo(id);
+
+        // pkg_a 在旧共享身份中的会话必须保留，未被复制凭证时的 invalidate 误清。
+        read("pkg_a");
+        assertThat(logins.get()).as("搬家账号复制凭证后不应误清旧共享身份会话").isEqualTo(1);
     }
 
     private static void await(CyclicBarrier barrier) {

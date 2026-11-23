@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.charset.UnsupportedCharsetException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -300,7 +301,6 @@ final class HttpCalls {
             }
         }
         Set<String> secrets = sensitive == null ? Set.of() : sensitive;
-        boolean lost = false;
         int hops = 0;
         boolean stripSecrets = false;
         while (true) {
@@ -320,9 +320,11 @@ final class HttpCalls {
                     idle,
                     stripSecrets ? secrets : null);
             warnings.addAll(exchange.warnings);
+            // 能力步骤和探活被送去登录页（命中 expect_not_redirect）：会话已经失效，不再跟随过去，
+            // 避免把登录页写入临时 spool 或被登录页的 5xx 掩盖会话失效。
             if (expectPrefix != null && isRedirect(exchange.status)
                     && pathHasPrefix(exchange.redirect, target, expectPrefix)) {
-                lost = true;
+                return exchange.toResult(true, warnings);
             }
             // 能力步骤和探活被送去认证地址：会话已经失效。写没写 follow_redirects 都一样，
             // 也不跟过去（同主机 http 升 https 的那种也不跟）：能力步骤不访问认证地址，
@@ -334,14 +336,14 @@ final class HttpCalls {
                 if (exchange.status >= 500) {
                     throw upstreamFailure(exchange, warnings);
                 }
-                return exchange.toResult(lost, warnings);
+                return exchange.toResult(false, warnings);
             }
             URI next;
             try {
                 next = target.resolve(exchange.redirect);
             } catch (IllegalArgumentException ex) {
                 warnings.add(new TraceWarning(TraceWarning.LOCATION_UNRESOLVED, LOCATION_WARNING));
-                return exchange.toResult(lost, warnings);
+                return exchange.toResult(false, warnings);
             }
             boolean same = sameOrigin(target, next);
             boolean upgrade = httpUpgrade(target, next);
@@ -351,17 +353,14 @@ final class HttpCalls {
                 warnings.add(new TraceWarning(
                         TraceWarning.CROSS_ORIGIN,
                         "跳转到不同源 " + originText(next) + "，未跟随"));
-                return exchange.toResult(lost, warnings);
+                return exchange.toResult(false, warnings);
             }
             if (authHop && (exchange.status == 307 || exchange.status == 308)) {
                 // 307、308 要把原来的正文原样重发，正文里可能有密码，不发到另一个主机。
                 warnings.add(new TraceWarning(
                         TraceWarning.CROSS_ORIGIN,
                         exchange.status + " 跳转到不同源 " + originText(next) + " 要重发请求正文，未跟随"));
-                return exchange.toResult(lost, warnings);
-            }
-            if (expectPrefix != null && pathStarts(next, expectPrefix)) {
-                lost = true;
+                return exchange.toResult(false, warnings);
             }
             if (hops >= MAX_REDIRECTS) {
                 throw new RuleProblem(
@@ -513,11 +512,29 @@ final class HttpCalls {
         return clipUtf8(text, UPSTREAM_BODY_LIMIT);
     }
 
+    /** 为按需取值的变量视图（如 login）提供全部已知敏感值，避免空 entrySet 漏掉跨源头剥离。 */
+    interface SecretSource {
+        Collection<String> knownValues();
+    }
+
     static Set<String> sensitiveValues(Map<String, Object> vars, CookieStore cookies) {
+        return sensitiveValues(vars, cookies, List.of());
+    }
+
+    static Set<String> sensitiveValues(
+            Map<String, Object> vars,
+            CookieStore cookies,
+            Collection<String> extraSecrets
+    ) {
         LinkedHashSet<String> raw = new LinkedHashSet<>();
         if (vars != null) {
             collectSecrets(raw, vars.get("credential"), 0);
-            collectSecrets(raw, vars.get("login"), 0);
+            Object login = vars.get("login");
+            if (login instanceof SecretSource source) {
+                collectSecrets(raw, source.knownValues(), 0);
+            } else {
+                collectSecrets(raw, login, 0);
+            }
         }
         raw.addAll(CallSecrets.current());
         DevTraceDraft draft = DevTraceScope.current();
@@ -529,6 +546,9 @@ final class HttpCalls {
             for (Cookie cookie : cookies.getCookies()) {
                 collectSecrets(raw, cookie.getValue(), 0);
             }
+        }
+        if (extraSecrets != null) {
+            collectSecrets(raw, extraSecrets, 0);
         }
         LinkedHashSet<String> expanded = new LinkedHashSet<>();
         for (String secret : raw) {
@@ -619,7 +639,8 @@ final class HttpCalls {
         // responseTimeout 只限制相邻读取的空闲。持续慢速输出不会触发它，到能力 deadline 时取消请求，
         // 才能打断已经阻塞在 InputStream.read 上的线程。没写 timeout_ms 时，这段空闲上限就是剩余 deadline。
         Cancellable cancellable = request;
-        ScheduledFuture<?> cancellation = scheduleCancellation(cancellable, deadlineNanos);
+        AtomicBoolean deadlineFired = new AtomicBoolean();
+        ScheduledFuture<?> cancellation = scheduleCancellation(cancellable, deadlineNanos, deadlineFired);
         final byte[] requestBody = body;
         AtomicReference<Map<String, Object>> captured = new AtomicReference<>();
         AtomicReference<Exchange> kept = new AtomicReference<>();
@@ -643,6 +664,7 @@ final class HttpCalls {
                         path,
                         status,
                         deadlineNanos,
+                        deadlineFired,
                         cancellable,
                         bodyIdle,
                         persistent(response));
@@ -672,13 +694,14 @@ final class HttpCalls {
                         read.bytes(),
                         stepWarnings,
                         captured.get(),
-                        read.spool());
+                        read.spool(),
+                        file);
                 if (read.endedByIdle()) {
                     kept.set(built);
                 }
                 return built;
             });
-            if (System.nanoTime() >= deadlineNanos) {
+            if (pastDeadline(deadlineNanos, deadlineFired)) {
                 cancellable.cancel();
                 throw new DeadlineExceeded(-1, "request", List.of());
             }
@@ -689,7 +712,7 @@ final class HttpCalls {
             throw ex.withWire(captured.get());
         } catch (IOException ex) {
             Exchange done = kept.get();
-            if (done != null && System.nanoTime() < deadlineNanos) {
+            if (done != null && !pastDeadline(deadlineNanos, deadlineFired)) {
                 return done;
             }
             Map<String, Object> wire = captured.get() != null
@@ -699,7 +722,10 @@ final class HttpCalls {
             if (stageError != null) {
                 throw new RuleProblem(ErrorCode.INVALID_INPUT, stageError.getMessage(), method, path, null, wire);
             }
-            if (System.nanoTime() >= deadlineNanos) {
+            // 到期取消线程在调用 cancel() 前已置位 deadlineFired：即使读超时与取消线程在边界上竞态，
+            // HttpRequestRetryExec 把 SocketTimeoutException 改写成 RequestFailedException("Request aborted")，
+            // 这里仍按能力超时返回，不误判成上游传输错误。
+            if (pastDeadline(deadlineNanos, deadlineFired)) {
                 cancellable.cancel();
                 throw new DeadlineExceeded(-1, "request", List.of());
             }
@@ -730,12 +756,16 @@ final class HttpCalls {
         return null;
     }
 
-    private static ScheduledFuture<?> scheduleCancellation(Cancellable cancellable, long deadlineNanos) {
+    private static ScheduledFuture<?> scheduleCancellation(
+            Cancellable cancellable, long deadlineNanos, AtomicBoolean deadlineFired) {
         long delayNanos = deadlineNanos - System.nanoTime();
         if (delayNanos < 0) {
             delayNanos = 0;
         }
-        return DEADLINES.schedule(() -> cancellable.cancel(), delayNanos, TimeUnit.NANOSECONDS);
+        return DEADLINES.schedule(() -> {
+            deadlineFired.set(true);
+            cancellable.cancel();
+        }, delayNanos, TimeUnit.NANOSECONDS);
     }
 
     private static void applyHeaders(
@@ -891,12 +921,13 @@ final class HttpCalls {
             String path,
             int status,
             long deadlineNanos,
+            AtomicBoolean deadlineFired,
             Cancellable request,
             Duration bodyIdle,
             boolean persistent
     ) throws IOException {
         if (entity == null) {
-            ensureWithinDeadline(deadlineNanos, request);
+            ensureWithinDeadline(deadlineNanos, deadlineFired, request);
             return new BodyBytes(new byte[0], false, null);
         }
         FileMode mode = FILE_MODE.get();
@@ -927,7 +958,7 @@ final class HttpCalls {
             byte[] buffer = new byte[8192];
             long total = 0;
             while (true) {
-                ensureWithinDeadline(deadlineNanos, request);
+                ensureWithinDeadline(deadlineNanos, deadlineFired, request);
                 if (watch != null) {
                     watch.arm();
                 }
@@ -935,7 +966,7 @@ final class HttpCalls {
                 try {
                     read = in.read(buffer);
                 } catch (IOException ex) {
-                    if (System.nanoTime() >= deadlineNanos) {
+                    if (pastDeadline(deadlineNanos, deadlineFired)) {
                         request.cancel();
                         throw new DeadlineExceeded(-1, "request", List.of());
                     }
@@ -957,7 +988,7 @@ final class HttpCalls {
                 if (read < 0) {
                     return new BodyBytes(asFile ? new byte[0] : out.toByteArray(), false, spool);
                 }
-                if (System.nanoTime() >= deadlineNanos) {
+                if (pastDeadline(deadlineNanos, deadlineFired)) {
                     request.cancel();
                     throw new DeadlineExceeded(-1, "request", List.of());
                 }
@@ -1041,8 +1072,12 @@ final class HttpCalls {
     private record BodyBytes(byte[] bytes, boolean endedByIdle, dev.hermit.crab.files.FileStage.Spool spool) {
     }
 
-    private static void ensureWithinDeadline(long deadlineNanos, Cancellable request) {
-        if (System.nanoTime() >= deadlineNanos) {
+    private static boolean pastDeadline(long deadlineNanos, AtomicBoolean deadlineFired) {
+        return (deadlineFired != null && deadlineFired.get()) || System.nanoTime() - deadlineNanos >= 0;
+    }
+
+    private static void ensureWithinDeadline(long deadlineNanos, AtomicBoolean deadlineFired, Cancellable request) {
+        if (pastDeadline(deadlineNanos, deadlineFired)) {
             request.cancel();
             throw new DeadlineExceeded(-1, "request", List.of());
         }
@@ -1398,8 +1433,8 @@ final class HttpCalls {
             }
             return;
         }
-        if (value instanceof List<?> list) {
-            for (Object item : list) {
+        if (value instanceof Collection<?> items) {
+            for (Object item : items) {
                 collectSecrets(into, item, depth + 1);
             }
         }
@@ -1590,7 +1625,8 @@ final class HttpCalls {
             byte[] bodyBytes,
             List<TraceWarning> warnings,
             Map<String, Object> wire,
-            dev.hermit.crab.files.FileStage.Spool spool
+            dev.hermit.crab.files.FileStage.Spool spool,
+            boolean downloaded
     ) {
         private HttpResult toResult(boolean sessionLost, List<TraceWarning> all) {
             return new HttpResult(
@@ -1605,7 +1641,8 @@ final class HttpCalls {
                     bodyBytes,
                     List.copyOf(all),
                     wire,
-                    spool);
+                    spool,
+                    downloaded);
         }
     }
 }
@@ -1623,8 +1660,28 @@ record HttpResult(
         List<TraceWarning> warnings,
         Map<String, Object> wire,
         /** download 收到的文件，还没有提交进暂存区；不是 download 或没有正文时为 null。 */
-        dev.hermit.crab.files.FileStage.Spool spool
+        dev.hermit.crab.files.FileStage.Spool spool,
+        /** 本次 2xx 响应按 download 处理（未解码为文本；即使 204 无实体时 spool 为 null 也为 true）。 */
+        boolean downloaded
 ) {
+    HttpResult(
+            int status,
+            String url,
+            String method,
+            String path,
+            Map<String, String> headers,
+            String body,
+            String redirect,
+            boolean sessionLost,
+            byte[] bodyBytes,
+            List<TraceWarning> warnings,
+            Map<String, Object> wire,
+            dev.hermit.crab.files.FileStage.Spool spool
+    ) {
+        this(status, url, method, path, headers, body, redirect, sessionLost, bodyBytes, warnings, wire, spool,
+                spool != null);
+    }
+
     Map<String, Object> view() {
         LinkedHashMap<String, Object> view = new LinkedHashMap<>();
         view.put("status", status);

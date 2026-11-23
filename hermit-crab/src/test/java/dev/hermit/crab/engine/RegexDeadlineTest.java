@@ -103,6 +103,50 @@ class RegexDeadlineTest {
         assertThat(vars).doesNotContainKey("bit");
     }
 
+    @Test
+    void singleQuantifierAndBackreferenceRegexesAreNotCallerSafe() {
+        assertThat(Extractors.callerSafeRegex("abc")).isTrue();
+        assertThat(Extractors.callerSafeRegex("login|signin")).isTrue();
+        assertThat(Extractors.callerSafeRegex("^token=[0-9]$")).isTrue();
+
+        assertThat(Extractors.callerSafeRegex(".*X")).isFalse();
+        assertThat(Extractors.callerSafeRegex("[a-z]+X")).isFalse();
+        assertThat(Extractors.callerSafeRegex(".*+X")).isFalse();
+        assertThat(Extractors.callerSafeRegex("a{2}")).isFalse();
+        assertThat(Extractors.callerSafeRegex("(a)\\1")).isFalse();
+        assertThat(Extractors.callerSafeRegex("(a)\\9")).isFalse();
+        assertThat(Extractors.callerSafeRegex("(?<g>a)\\k<g>")).isFalse();
+    }
+
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    void deadlineExceededCarriesRequestForRegexFindAndExtractForExtractors() {
+        assertThatThrownBy(() -> Extractors.regexFind("abc", "abc", System.nanoTime() - 1))
+                .isInstanceOf(DeadlineExceeded.class)
+                .satisfies(ex -> assertThat(((DeadlineExceeded) ex).type).isEqualTo("request"));
+
+        assertThatThrownBy(() -> Extractors.regexFind(".*X", "abc", System.nanoTime() - 1))
+                .isInstanceOf(DeadlineExceeded.class)
+                .satisfies(ex -> assertThat(((DeadlineExceeded) ex).type).isEqualTo("request"));
+
+        assertThatThrownBy(() -> Extractors.apply(
+                Map.of("code", Map.of("regex", "abc", "group", 0)),
+                response("abc"),
+                filters,
+                templates,
+                System.nanoTime() - 1))
+                .isInstanceOf(DeadlineExceeded.class)
+                .satisfies(ex -> assertThat(((DeadlineExceeded) ex).type).isEqualTo("extract"));
+
+        String payload = "a".repeat(BACKTRACK_AS) + "!";
+        long started = System.nanoTime();
+        assertThatThrownBy(() -> Extractors.regexFind(
+                "((a+)+)+$", payload, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(150)))
+                .isInstanceOf(DeadlineExceeded.class)
+                .satisfies(ex -> assertThat(((DeadlineExceeded) ex).type).isEqualTo("request"));
+        assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)).isLessThan(1_000L);
+    }
+
     private static Map<String, Object> response(String body) {
         Map<String, Object> vars = new LinkedHashMap<>();
         vars.put("response", Map.of("body", body));

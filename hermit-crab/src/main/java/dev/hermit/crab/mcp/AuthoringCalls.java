@@ -112,6 +112,12 @@ final class AuthoringCalls {
                     attempt.traceId());
         }
         // 和正式包同名也可以保存：本地这份先不生效，在控制台切换来源后才被调用。
+        // 但不允许窄范围 Key 抢注已有正式包的同名本地副本。
+        if (!runtime.localConches().occupies(checked.conch())
+                && officialExists(checked.conch())
+                && !canSaveExisting(principal, checked.conch())) {
+            return McpCalls.failAsRequest(attempt, "FORBIDDEN", officialShadowDenied(checked.conch()));
+        }
         ConchDoc beforeDoc = runtime.registry().find(checked.conch(), Origin.LOCAL).orElse(null);
         Set<String> beforeKeys = beforeDoc == null ? null : credentialNames(beforeDoc);
         try {
@@ -136,14 +142,17 @@ final class AuthoringCalls {
                     return importFailure(same, attempt);
                 }
             }
-            try {
-                Optional<LocalConches.ImportResult> granted =
-                        runtime.localConches().applyIfGranted(raw, Actors.MCP, keyName);
-                if (granted.isPresent()) {
-                    return saved(granted.get(), beforeKeys);
+            boolean boundIdentity = runtime.identities().hasBoundLocal(ex.replaceConch());
+            if (!boundIdentity) {
+                try {
+                    Optional<LocalConches.ImportResult> granted =
+                            runtime.localConches().applyIfGranted(raw, Actors.MCP, keyName);
+                    if (granted.isPresent()) {
+                        return saved(granted.get(), beforeKeys);
+                    }
+                } catch (LocalConchException granted) {
+                    return importFailure(granted, attempt);
                 }
-            } catch (LocalConchException granted) {
-                return importFailure(granted, attempt);
             }
             if (!devMode()) {
                 return McpCalls.fail(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
@@ -154,7 +163,8 @@ final class AuthoringCalls {
             boolean canElicit = session != null && session.supportsElicitation() && session.streaming();
             if (canElicit) {
                 String baseSha = runtime.localConches().diskSha(ex.replaceConch());
-                McpSchema.CallToolResult confirmed = confirmOverwrite(session, ex.replaceConch(), before, after, attempt);
+                McpSchema.CallToolResult confirmed = confirmOverwrite(
+                        session, ex.replaceConch(), before, after, boundIdentity, attempt);
                 if (confirmed != null) {
                     return confirmed;
                 }
@@ -180,19 +190,31 @@ final class AuthoringCalls {
                     }
                 }
             }
-            return McpCalls.failAsRequest(attempt, "CONFIRM_REQUIRED", confirmRequiredMessage(boundary));
+            boundIdentity = boundIdentity || runtime.identities().hasBoundLocal(ex.replaceConch());
+            return McpCalls.failAsRequest(attempt, "CONFIRM_REQUIRED", confirmRequiredMessage(boundary, boundIdentity));
         }
     }
 
     static String confirmRequiredMessage(ConchDestinations.Boundary boundary) {
+        return confirmRequiredMessage(boundary, false);
+    }
+
+    static String confirmRequiredMessage(ConchDestinations.Boundary boundary, boolean boundIdentity) {
+        if (boundIdentity && boundary.sameBoundary()) {
+            return "该本地规则包已绑定共享身份，覆盖需要用户到 Crab 控制台确认，确认覆盖后会自动将其移出共享身份。请把这句话转告用户，不要换包名重新保存。";
+        }
         String list;
         if (boundary.addedDestinations().isEmpty() && !boundary.undetermined() && boundary.authChanged()) {
             list = "认证方式有变化";
         } else {
             list = ConchDestinations.describe(boundary);
         }
-        return "这次修改让规则包访问新的地址 " + list
+        String base = "这次修改让规则包访问新的地址 " + list
                 + "，需要用户到 Crab 控制台确认。请把这句话转告用户，不要换包名重新保存。";
+        if (boundIdentity) {
+            return "该本地规则包已绑定共享身份，覆盖需要用户到 Crab 控制台确认，确认覆盖后会自动将其移出共享身份。" + base;
+        }
+        return base;
     }
 
     McpSchema.CallToolResult trial(
@@ -358,21 +380,26 @@ final class AuthoringCalls {
             String conch,
             ConchDoc before,
             ConchDoc after,
+            boolean boundIdentity,
             McpCalls.Attempt attempt
     ) {
         if (session == null || !session.supportsElicitation() || !session.streaming()) {
             return McpCalls.failAsRequest(
-                    attempt, "CONFIRM_REQUIRED", confirmRequiredMessage(ConchDestinations.between(before, after)));
+                    attempt,
+                    "CONFIRM_REQUIRED",
+                    confirmRequiredMessage(ConchDestinations.between(before, after), boundIdentity));
         }
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", Map.of(
                 "confirm", Map.of("type", "boolean", "description", "确认覆盖这个本地规则包")));
+        String prompt = LocalConches.overwriteConfirm(conch, before, after);
+        if (boundIdentity) {
+            prompt = prompt + "\n注意：该本地规则包已绑定共享身份，确认覆盖后会自动将其移出共享身份。";
+        }
         JsonNode answer;
         try {
-            answer = session.elicit(McpSchema.ElicitFormRequest.builder(
-                    LocalConches.overwriteConfirm(conch, before, after),
-                    schema).build());
+            answer = session.elicit(McpSchema.ElicitFormRequest.builder(prompt, schema).build());
         } catch (TimeoutException ex) {
             return McpCalls.fail(attempt, "TIMEOUT", McpCalls.CONFIRM_TIMEOUT);
         } catch (InterruptedException ex) {
@@ -553,6 +580,20 @@ final class AuthoringCalls {
         ApiKeyScope scope = principal.scope();
         return scope.grantsAllOfficial()
                 || (scope.conches().contains(conch) && scope.groups().isEmpty() && scope.actions().isEmpty());
+    }
+
+    private boolean officialExists(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return false;
+        }
+        return runtime.registry().has(conch, Origin.OFFICIAL)
+                || runtime.disabledConches().contains(conch)
+                || runtime.subscribed(conch);
+    }
+
+    private static String officialShadowDenied(String conch) {
+        return "这把 API Key 没有正式规则包 " + conch
+                + " 的完整权限，不能创建同名本地规则包。请用全部权限的 Key，或在 conches 里点名该包且不限分组与能力的 Key。";
     }
 
     private static String notInScope(String conch) {

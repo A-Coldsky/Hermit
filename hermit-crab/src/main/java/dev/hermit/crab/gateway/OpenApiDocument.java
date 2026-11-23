@@ -12,30 +12,48 @@ import dev.hermit.common.model.CapabilityGroups;
 import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
 import dev.hermit.crab.runtime.CrabRuntime;
+import dev.hermit.crab.store.ApiKeyPrincipal;
+import dev.hermit.crab.store.Origin;
 
 /**
  * OpenAPI 3.1 for enabled capabilities. Disabled capabilities and aliases that point at them
- * are omitted. Aliases are extra paths; their operation ids end in {@code __alias}.
+ * are omitted. When an {@link ApiKeyPrincipal} is supplied, only capabilities allowed by that
+ * key ({@code allowsLocal} and {@code permits}) and their group tags are exposed. Aliases are
+ * extra paths; their operation ids end in {@code __alias}.
  */
 public final class OpenApiDocument {
     private OpenApiDocument() {
     }
 
     public static byte[] bytes(CrabRuntime runtime, int port) {
-        return ApiJson.bytes(ApiJson.write(document(runtime, port)));
+        return bytes(runtime, port, null);
+    }
+
+    public static byte[] bytes(CrabRuntime runtime, int port, ApiKeyPrincipal principal) {
+        return ApiJson.bytes(ApiJson.write(document(runtime, port, principal)));
     }
 
     public static Map<String, Object> document(CrabRuntime runtime, int port) {
+        return document(runtime, port, null);
+    }
+
+    public static Map<String, Object> document(CrabRuntime runtime, int port, ApiKeyPrincipal principal) {
         LinkedHashMap<String, Object> paths = new LinkedHashMap<>();
         LinkedHashSet<String> operationIds = new LinkedHashSet<>();
         LinkedHashMap<String, String> listedAliases = new LinkedHashMap<>();
         LinkedHashMap<String, String> declaredTags = new LinkedHashMap<>();
-        for (ConchDoc doc : runtime.registry().snapshot().values()) {
+        for (String name : runtime.registry().snapshot().keySet()) {
+            ConchRegistry.Active active = runtime.registry().active(name).orElse(null);
+            if (active == null) {
+                continue;
+            }
+            ConchDoc doc = active.doc();
             for (Action action : doc.actions().values()) {
-                if (runtime.disabled(doc.conch(), action.name())) {
+                if (!visible(runtime, active, action, principal)) {
                     continue;
                 }
                 String operationId = doc.conch() + "__" + action.name();
@@ -53,9 +71,10 @@ public final class OpenApiDocument {
             }
             String conch = alias.getValue().substring(0, dot);
             String actionName = alias.getValue().substring(dot + 1);
-            ConchDoc doc = runtime.registry().find(conch).orElse(null);
+            ConchRegistry.Active active = runtime.registry().active(conch).orElse(null);
+            ConchDoc doc = active == null ? null : active.doc();
             Action action = doc == null ? null : doc.actions().get(actionName);
-            if (action == null || runtime.disabled(conch, actionName)) {
+            if (!visible(runtime, active, action, principal)) {
                 continue;
             }
             String operationId = unique(conch + "__" + actionName + "__alias", operationIds);
@@ -86,6 +105,28 @@ public final class OpenApiDocument {
                 "bearer", Map.of("type", "http", "scheme", "bearer"))));
         root.put("x-hermit-aliases", listedAliases);
         return root;
+    }
+
+    private static boolean visible(
+            CrabRuntime runtime,
+            ConchRegistry.Active active,
+            Action action,
+            ApiKeyPrincipal principal
+    ) {
+        if (active == null || action == null) {
+            return false;
+        }
+        String conch = active.doc().conch();
+        if (runtime.disabled(conch, action.name())) {
+            return false;
+        }
+        if (principal == null) {
+            return true;
+        }
+        if (active.origin() == Origin.LOCAL && !principal.scope().allowsLocal(conch)) {
+            return false;
+        }
+        return principal.permits(conch, action.name(), action.group(), CapabilityHttp.readOnly(action));
     }
 
     private static String groupTag(ConchDoc doc, Action action, Map<String, String> declaredTags) {

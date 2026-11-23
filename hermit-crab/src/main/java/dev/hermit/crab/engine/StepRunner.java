@@ -3,11 +3,13 @@ package dev.hermit.crab.engine;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.cookie.BasicCookieStore;
@@ -145,6 +147,27 @@ final class StepRunner {
             List<Map<String, Object>> expiredWhen,
             boolean auth
     ) {
+        return run(step, vars, expectPrefix, client, afterExchange, cookies, base, deadlineNanos, capture, libraries,
+                reach, expiredWhen, auth, List.of(), null);
+    }
+
+    Outcome run(
+            Step step,
+            Map<String, Object> vars,
+            String expectPrefix,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            BasicCookieStore cookies,
+            URI base,
+            long deadlineNanos,
+            boolean capture,
+            Map<String, String> libraries,
+            AuthReach reach,
+            List<Map<String, Object>> expiredWhen,
+            boolean auth,
+            Collection<String> extraSecrets,
+            Set<String> taintedVars
+    ) {
         Object rendered = "script".equals(step.type())
                 ? renderScript(step.def(), vars)
                 : templates.render(step.def(), vars);
@@ -155,11 +178,11 @@ final class StepRunner {
         return switch (step.type()) {
             case "request" -> request(
                     spec, vars, cookies, expectPrefix, client, afterExchange, base, deadlineNanos, capture, reach,
-                    auth ? List.of() : expiredWhen);
-            case "extract" -> extract(spec, vars, deadlineNanos, capture);
+                    auth ? List.of() : expiredWhen, extraSecrets);
+            case "extract" -> extract(spec, step.def(), vars, deadlineNanos, capture, auth, taintedVars);
             case "assert" -> check(spec, vars, cookies, base, capture, !auth);
-            case "set" -> set(spec, vars, capture);
-            case "script" -> script(spec, vars, deadlineNanos, capture, libraries);
+            case "set" -> set(spec, step.def(), vars, capture, auth, taintedVars);
+            case "script" -> script(spec, vars, deadlineNanos, capture, libraries, auth, taintedVars);
             default -> throw new RuleProblem(
                     ErrorCode.RULE_MISMATCH, "不支持的步骤类型 " + step.type(), null, null, null);
         };
@@ -189,7 +212,8 @@ final class StepRunner {
             long deadlineNanos,
             boolean capture,
             AuthReach reach,
-            List<Map<String, Object>> expiredWhen
+            List<Map<String, Object>> expiredWhen,
+            Collection<String> extraSecrets
     ) {
         HttpResult result;
         Retry retry = Retry.of(spec.get("retry"));
@@ -208,11 +232,14 @@ final class StepRunner {
                     base,
                     expectPrefix,
                     deadlineNanos,
-                    HttpCalls.sensitiveValues(vars, cookies),
+                    HttpCalls.sensitiveValues(vars, cookies, extraSecrets),
                     bodyIdle,
                     reach);
             String reason = retry == null ? null : retry.reason(result.status());
             if (reason != null && retry.again(retried == null ? 0 : retried.size(), deadlineNanos)) {
+                if (result.spool() != null) {
+                    result.spool().discard();
+                }
                 retried = Retry.note(retried, reason);
                 continue;
             }
@@ -317,12 +344,30 @@ final class StepRunner {
 
     private Outcome extract(
             Map<String, Object> spec,
+            Map<String, Object> rawDef,
             Map<String, Object> vars,
             long deadlineNanos,
-            boolean capture
+            boolean capture,
+            boolean auth,
+            Set<String> taintedVars
     ) {
         Map<String, Object> before = capture ? new LinkedHashMap<>(vars) : null;
         int count = Extractors.apply(spec, vars, filters, templates, deadlineNanos);
+        if (!auth && taintedVars != null) {
+            Set<String> taintedBefore = taintedVars.isEmpty() ? Set.of() : Set.copyOf(taintedVars);
+            for (Map.Entry<String, Object> entry : spec.entrySet()) {
+                String key = entry.getKey();
+                Map<String, Object> child = Values.map(entry.getValue());
+                Object rawChild = rawDef == null ? null : rawDef.get(key);
+                if (extractReadsLoginOrTainted(child, taintedBefore)
+                        || referencesLoginOrTainted(rawChild, taintedBefore)) {
+                    CallSecrets.remember(vars.get(key));
+                    taintedVars.add(key);
+                } else {
+                    taintedVars.remove(key);
+                }
+            }
+        }
         if (!capture) {
             return new Outcome(null, null, null, count, false);
         }
@@ -332,12 +377,32 @@ final class StepRunner {
                 DevTraceDraft.extractPiece(spec, count, extracted));
     }
 
-    private Outcome set(Map<String, Object> spec, Map<String, Object> vars, boolean capture) {
+    private Outcome set(
+            Map<String, Object> spec,
+            Map<String, Object> rawDef,
+            Map<String, Object> vars,
+            boolean capture,
+            boolean auth,
+            Set<String> taintedVars
+    ) {
+        Set<String> taintedBefore = taintedVars == null || taintedVars.isEmpty() ? Set.of() : Set.copyOf(taintedVars);
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
-            if (ConchRegistry.RESERVED.contains(entry.getKey())) {
+            String key = entry.getKey();
+            if (ConchRegistry.RESERVED.contains(key)) {
                 throw new RuleProblem(ErrorCode.RULE_MISMATCH, "不能写入保留变量", null, null, null);
             }
-            vars.put(entry.getKey(), entry.getValue());
+            vars.put(key, entry.getValue());
+            if (!auth) {
+                Object rawValue = rawDef == null ? null : rawDef.get(key);
+                if (referencesLoginOrTainted(rawValue, taintedBefore)) {
+                    CallSecrets.remember(entry.getValue());
+                    if (taintedVars != null) {
+                        taintedVars.add(key);
+                    }
+                } else if (taintedVars != null) {
+                    taintedVars.remove(key);
+                }
+            }
         }
         rememberDerived(spec);
         if (!capture) {
@@ -351,14 +416,22 @@ final class StepRunner {
             Map<String, Object> vars,
             long deadlineNanos,
             boolean capture,
-            Map<String, String> libraries
+            Map<String, String> libraries,
+            boolean auth,
+            Set<String> taintedVars
     ) {
         boolean mask = Boolean.TRUE.equals(spec.get("credential"));
-        Map<String, Object> before = (capture || mask) ? new LinkedHashMap<>(vars) : null;
-        Outcome outcome = scripts.run(spec, vars, deadlineNanos, libraries);
-        Map<String, Object> produced = changed(before, vars);
+        boolean trackChanges = capture || mask || (!auth && taintedVars != null && !taintedVars.isEmpty());
+        Map<String, Object> before = trackChanges ? new LinkedHashMap<>(vars) : null;
+        Set<String> hidden = (!auth && taintedVars != null && !taintedVars.isEmpty())
+                ? Set.copyOf(taintedVars)
+                : Set.of();
+        Outcome outcome = scripts.run(spec, vars, deadlineNanos, libraries, hidden);
+        Map<String, Object> produced = trackChanges ? changed(before, vars) : Map.of();
         if (mask) {
             CallSecrets.remember(produced);
+        } else if (!auth && taintedVars != null && !produced.isEmpty()) {
+            taintedVars.removeAll(produced.keySet());
         }
         rememberDerived(produced);
         if (!capture) {
@@ -366,6 +439,77 @@ final class StepRunner {
         }
         return new Outcome(outcome.method(), outcome.path(), outcome.status(), outcome.extractCount(),
                 outcome.sessionLost(), DevTraceDraft.variablePiece("script", produced));
+    }
+
+    private boolean referencesLoginOrTainted(Object rawNode, Set<String> taintedVars) {
+        if (rawNode == null) {
+            return false;
+        }
+        Set<String> paths;
+        try {
+            paths = templates.referencedPaths(rawNode);
+        } catch (RuntimeException ex) {
+            return false;
+        }
+        for (String path : paths) {
+            if (referencesName(path, "login") || referencesAny(path, taintedVars)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean extractReadsLoginOrTainted(Map<String, Object> spec, Set<String> tainted) {
+        if (spec == null) {
+            return false;
+        }
+        Object from = spec.get("from");
+        if (from != null) {
+            String source = Values.text(from);
+            if ("login".equals(source) || (tainted != null && tainted.contains(source))) {
+                return true;
+            }
+        }
+        Object filter = spec.get("filter");
+        if (filter instanceof String chain && !chain.isBlank()
+                && referencesLoginOrTainted("{{_ | " + chain + "}}", tainted)) {
+            return true;
+        }
+        Map<String, Object> each = Values.map(spec.get("each"));
+        if (each != null) {
+            for (Object item : each.values()) {
+                if (extractReadsLoginOrTainted(Values.map(item), tainted)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    static boolean referencesAny(String path, Set<String> names) {
+        if (path == null || names == null || names.isEmpty()) {
+            return false;
+        }
+        for (String name : names) {
+            if (referencesName(path, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean referencesName(String path, String name) {
+        if (path == null || name == null || name.isEmpty()) {
+            return false;
+        }
+        if (path.equals(name)) {
+            return true;
+        }
+        if (path.length() > name.length() && path.startsWith(name)) {
+            char next = path.charAt(name.length());
+            return next == '.' || next == '[';
+        }
+        return false;
     }
 
     private static void rememberDerived(Object value) {

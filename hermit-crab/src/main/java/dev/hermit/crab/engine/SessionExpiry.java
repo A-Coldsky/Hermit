@@ -171,8 +171,7 @@ final class SessionExpiry {
         if (!view.hasTextBody() || !(expected instanceof Map<?, ?> map) || map.isEmpty()) {
             return false;
         }
-        DocumentContext doc = view.json();
-        if (doc == null) {
+        if (view.json() == null) {
             return false;
         }
         for (Map.Entry<?, ?> entry : map.entrySet()) {
@@ -182,7 +181,7 @@ final class SessionExpiry {
             }
             Object actual;
             try {
-                actual = doc.read(expr);
+                actual = view.readJson(expr);
             } catch (PathNotFoundException ex) {
                 return false;
             } catch (InvalidPathException ex) {
@@ -190,8 +189,7 @@ final class SessionExpiry {
             } catch (RuntimeException ex) {
                 return false;
             }
-            boolean matched = matchesScalarOrList(actual, entry.getValue());
-            if (wantEqual ? !matched : matched) {
+            if (!matchesJsonPredicate(actual, entry.getValue(), wantEqual)) {
                 return false;
             }
         }
@@ -202,8 +200,7 @@ final class SessionExpiry {
         if (!view.hasTextBody()) {
             return false;
         }
-        DocumentContext doc = view.json();
-        if (doc == null) {
+        if (view.json() == null) {
             return false;
         }
         List<?> paths = expected instanceof List<?> list ? list : List.of(expected);
@@ -216,7 +213,7 @@ final class SessionExpiry {
             }
             Object actual;
             try {
-                actual = doc.read(raw.trim());
+                actual = view.readJson(raw.trim());
             } catch (PathNotFoundException ex) {
                 return false;
             } catch (InvalidPathException ex) {
@@ -224,11 +221,50 @@ final class SessionExpiry {
             } catch (RuntimeException ex) {
                 return false;
             }
-            if (!StepRunner.present(actual)) {
+            if (actual instanceof List<?> list) {
+                if (list.stream().noneMatch(StepRunner::present)) {
+                    return false;
+                }
+            } else if (!StepRunner.present(actual)) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static boolean matchesJsonPredicate(Object actual, Object expected, boolean wantEqual) {
+        if (actual instanceof Map<?, ?>) {
+            return false;
+        }
+        if (actual instanceof List<?> list) {
+            if (list.isEmpty()) {
+                return false;
+            }
+            if (wantEqual) {
+                for (Object elem : list) {
+                    if (elem instanceof Map<?, ?> || elem instanceof List<?>) {
+                        continue;
+                    }
+                    if (matchesScalarOrList(elem, expected)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            boolean sawScalar = false;
+            for (Object elem : list) {
+                if (elem instanceof Map<?, ?> || elem instanceof List<?>) {
+                    continue;
+                }
+                sawScalar = true;
+                if (matchesScalarOrList(elem, expected)) {
+                    return false;
+                }
+            }
+            return sawScalar;
+        }
+        boolean matched = matchesScalarOrList(actual, expected);
+        return wantEqual ? matched : !matched;
     }
 
     private static boolean matchesScalarOrList(Object actual, Object expected) {
@@ -291,6 +327,7 @@ final class SessionExpiry {
         private final URI base;
         private boolean jsonParsed;
         private DocumentContext jsonDoc;
+        private String jsonText;
 
         private ResponseView(HttpResult result, BasicCookieStore cookies, URI base) {
             this.result = result;
@@ -315,11 +352,20 @@ final class SessionExpiry {
         }
 
         private boolean hasTextBody() {
-            return result.spool() == null;
+            return !result.downloaded() && result.spool() == null;
         }
 
         private String body() {
             return result.body() == null ? "" : result.body();
+        }
+
+        private Object readJson(String expr) {
+            DocumentContext doc = json();
+            if (expr.indexOf('(') >= 0) {
+                // 函数（append 等）会就地改数组或对象；带括号的表达式单独解析，不污染共享文档。
+                return JsonPath.parse(jsonText).read(expr);
+            }
+            return doc.read(expr);
         }
 
         private DocumentContext json() {
@@ -340,8 +386,10 @@ final class SessionExpiry {
             }
             try {
                 jsonDoc = JsonPath.parse(text);
+                jsonText = text;
             } catch (RuntimeException ignored) {
                 jsonDoc = null;
+                jsonText = null;
             }
             return jsonDoc;
         }

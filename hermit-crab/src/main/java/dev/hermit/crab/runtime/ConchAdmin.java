@@ -3,6 +3,7 @@ package dev.hermit.crab.runtime;
 import java.time.Clock;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -230,12 +231,15 @@ public final class ConchAdmin {
     public void putConfig(Origin source, ConchDoc doc, String key, String value, String actor) {
         ConfigField field = doc.config().get(key);
         DeclaredSettings.checkConfigValue(field, value);
+        String beforeBase = "base_url".equals(key) ? effectiveBaseUrl(source, doc) : null;
         if (value.isEmpty()) {
             config.delete(source, doc.conch(), key, actor);
         } else {
             config.put(source, doc.conch(), key, value, actor);
         }
-        addressesMayHaveChanged(doc.conch(), actor);
+        boolean baseUrlChanged = "base_url".equals(key)
+                && !Objects.equals(beforeBase, effectiveBaseUrl(source, doc));
+        addressesMayHaveChanged(source, doc.conch(), baseUrlChanged, actor);
     }
 
     /** 先校验每一项，全部合法才在一个事务里写入。空串表示删除该项。 */
@@ -247,15 +251,31 @@ public final class ConchAdmin {
         for (Map.Entry<String, String> entry : values.entrySet()) {
             DeclaredSettings.checkConfigValue(doc.config().get(entry.getKey()), entry.getValue());
         }
+        boolean touchesBase = values.containsKey("base_url");
+        String beforeBase = touchesBase ? effectiveBaseUrl(source, doc) : null;
         config.putAll(source, doc.conch(), values, actor);
-        addressesMayHaveChanged(doc.conch(), actor);
+        boolean baseUrlChanged = touchesBase
+                && !Objects.equals(beforeBase, effectiveBaseUrl(source, doc));
+        addressesMayHaveChanged(source, doc.conch(), baseUrlChanged, actor);
     }
 
-    /** 改了配置，包的站点或认证地址可能变了：不再和身份里其它成员有相同地址的账号离开身份。 */
-    private void addressesMayHaveChanged(String conch, String actor) {
+    private String effectiveBaseUrl(Origin source, ConchDoc doc) {
+        return DeclaredSettings.mergedConfig(doc, config.all(source, doc.conch())).get("base_url");
+    }
+
+    /**
+     * 改了配置，包的站点或认证地址可能变了：先让不再有相同地址的账号离开身份，
+     * 若 base_url 变化，再清理该包账号自己的登录状态和登录快照，不误清同一身份里未变地址的其它成员。
+     */
+    private void addressesMayHaveChanged(Origin source, String conch, boolean baseUrlChanged, String actor) {
         Identities bound = identities;
         if (bound != null) {
             bound.revalidate(actor);
+        }
+        if (baseUrlChanged) {
+            for (Account account : accounts.list(source, conch)) {
+                sessions.clearAccountLogin(new SessionKey(source, conch, account.account()));
+            }
         }
     }
 
@@ -267,8 +287,11 @@ public final class ConchAdmin {
         if (!doc.config().containsKey(key)) {
             throw new IllegalArgumentException("unknown config field");
         }
+        String beforeBase = "base_url".equals(key) ? effectiveBaseUrl(source, doc) : null;
         config.delete(source, doc.conch(), key, actor);
-        addressesMayHaveChanged(doc.conch(), actor);
+        boolean baseUrlChanged = "base_url".equals(key)
+                && !Objects.equals(beforeBase, effectiveBaseUrl(source, doc));
+        addressesMayHaveChanged(source, doc.conch(), baseUrlChanged, actor);
     }
 
     public ExecutionResult testLogin(ConchDoc doc, String account, String traceId, String actor) {
@@ -278,7 +301,6 @@ public final class ConchAdmin {
     public ExecutionResult testLogin(Origin source, ConchDoc doc, String account, String traceId, String actor) {
         Account resolved = requireAccount(source, doc.conch(), account);
         SessionKey key = new SessionKey(source, doc.conch(), resolved.account());
-        sessions.invalidate(key);
         AuditLog.record(
                 dataSource,
                 clock.instant(),
@@ -302,6 +324,7 @@ public final class ConchAdmin {
         } catch (CredentialDecryptException ex) {
             return failed(doc, traceId, CredentialDecryptException.MESSAGE);
         }
+        sessions.invalidate(key);
         ExecutionRequest request = new ExecutionRequest(
                 traceId,
                 source,

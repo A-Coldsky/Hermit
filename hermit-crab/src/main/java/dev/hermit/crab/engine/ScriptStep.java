@@ -95,8 +95,18 @@ final class ScriptStep {
             long capabilityDeadlineNanos,
             Map<String, String> libraries
     ) {
+        return run(spec, vars, capabilityDeadlineNanos, libraries, Set.of());
+    }
+
+    Outcome run(
+            Map<String, Object> spec,
+            Map<String, Object> vars,
+            long capabilityDeadlineNanos,
+            Map<String, String> libraries,
+            Set<String> hiddenVars
+    ) {
         try {
-            return execute(spec, vars, capabilityDeadlineNanos, libraries);
+            return execute(spec, vars, capabilityDeadlineNanos, libraries, hiddenVars);
         } catch (RuleProblem | DeadlineExceeded ex) {
             throw ex;
         } catch (ScriptTimeExceeded ex) {
@@ -115,7 +125,8 @@ final class ScriptStep {
             Map<String, Object> spec,
             Map<String, Object> vars,
             long capabilityDeadlineNanos,
-            Map<String, String> libraries
+            Map<String, String> libraries,
+            Set<String> hiddenVars
     ) {
         rejectUnknown(spec);
         boolean withCredential = credential(spec.get("credential"));
@@ -130,7 +141,7 @@ final class ScriptStep {
         long scriptDeadline = deadline(now, timeoutMs);
         windows.set(new Window(scriptDeadline, capabilityDeadlineNanos, allocated()));
         try {
-            Object raw = factory.call(cx -> evaluate(cx, prelude.source + code, vars, withCredential));
+            Object raw = factory.call(cx -> evaluate(cx, prelude.source + code, vars, withCredential, hiddenVars));
             Object converted = fromJs(raw, new IdentityHashMap<>());
             enforceSize(converted);
             apply(into, converted, vars);
@@ -146,10 +157,18 @@ final class ScriptStep {
         }
     }
 
-    private Object evaluate(Context cx, String code, Map<String, Object> vars, boolean withCredential) {
+    private Object evaluate(
+            Context cx,
+            String code,
+            Map<String, Object> vars,
+            boolean withCredential,
+            Set<String> hiddenVars
+    ) {
         Scriptable scope = newScope(cx);
         HermitPrelude.install(cx, scope, clock);
-        Map<String, Object> exposed = withCredential ? copyWithCredential(vars) : copyWithoutCredential(vars);
+        Map<String, Object> exposed = withCredential
+                ? copyWithCredential(vars)
+                : copyWithoutCredential(vars, hiddenVars);
         ScriptableObject.putProperty(scope, "vars", toJs(cx, scope, exposed, new IdentityHashMap<>()));
         return CompiledScripts.evaluate(cx, scope, PREFIX + code + SUFFIX, "script");
     }
@@ -236,11 +255,13 @@ final class ScriptStep {
         }
     }
 
-    private static Map<String, Object> copyWithoutCredential(Map<String, Object> vars) {
+    private static Map<String, Object> copyWithoutCredential(Map<String, Object> vars, Set<String> hiddenVars) {
         LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : vars.entrySet()) {
-            if (!"credential".equals(entry.getKey()) && !"login".equals(entry.getKey())) {
-                copy.put(entry.getKey(), entry.getValue());
+            String key = entry.getKey();
+            if (!"credential".equals(key) && !"login".equals(key)
+                    && (hiddenVars == null || !hiddenVars.contains(key))) {
+                copy.put(key, entry.getValue());
             }
         }
         return copy;

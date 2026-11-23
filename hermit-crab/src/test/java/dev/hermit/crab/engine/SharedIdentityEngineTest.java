@@ -8,9 +8,11 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import dev.hermit.common.template.FilterRegistry;
 import dev.hermit.common.template.TemplateEngine;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,10 +23,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import org.apache.hc.client5.http.cookie.BasicCookieStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -72,6 +78,9 @@ class SharedIdentityEngineTest {
     private final List<String> stamps = new CopyOnWriteArrayList<>();
     /** 认证中心收到认不出的 TGC 时报错，而不是给登录页。 */
     private volatile boolean staleTgcIsAnError;
+    /** 认证中心临时返回 503（验证 P1-S2 不应清空全身份 Cookie）。 */
+    private volatile boolean sso503;
+    private final List<String> ssoGetHeaders = new CopyOnWriteArrayList<>();
     private volatile CountDownLatch slowEntered = new CountDownLatch(1);
     private volatile CountDownLatch slowRelease = new CountDownLatch(0);
 
@@ -122,6 +131,15 @@ class SharedIdentityEngineTest {
         String tgc = cookie(exchange, "TGC");
         seen.add("sso " + exchange.getRequestMethod() + " tgc=" + tgc
                 + " sid=" + cookie(exchange, "sidA") + cookie(exchange, "sidB"));
+        if ("GET".equals(exchange.getRequestMethod())) {
+            ssoGetHeaders.add("frozen=" + exchange.getRequestHeaders().getFirst("X-Frozen")
+                    + " otp=" + exchange.getRequestHeaders().getFirst("X-Otp")
+                    + " plain=" + exchange.getRequestHeaders().getFirst("X-Plain"));
+        }
+        if (sso503) {
+            reply(exchange, 503, "service unavailable");
+            return;
+        }
         if (exchange.getRequestMethod().equals("POST")) {
             String user = body.contains("username=bob") ? "bob" : "alice";
             if (!body.contains("password=S3cret%21pwd")) {
@@ -659,6 +677,105 @@ class SharedIdentityEngineTest {
         }
     }
 
+    /** P1-S3：探活接手（adopting）不应标 reusedCookies，首轮动作失效时先留着 TGC 换票，不清空全身份 Cookie。 */
+    @Test
+    void adoptingThroughLooseAliveCheckDoesNotWipeSharedIdentityOnFirstActionExpiry() {
+        SessionKey loose = new SessionKey(Origin.LOCAL, "oa_loose_ping", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, ERP_ALICE, loose);
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(OA_ALICE, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+
+            // 仅让 OA 应用会话失效，认证中心 TGC 与 ERP 会话仍有效；loose 首次调用靠 /loose-ping 探活接手。
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            assertThat(fixture.value(loose, "run")).isEqualTo("oa:ALICE");
+            assertThat(passwordLogins.get()).as("应用会话过期只换票据，不应清空全身份重交密码").isEqualTo(1);
+            assertThat(fixture.sessions.lastCleared("zhang")).isNull();
+            assertThat(shared.saved.get("zhang")).extracting(StoredCookie::name).contains("TGC", "sidA", "sidB");
+
+            int ticketsBefore = tickets.get();
+            assertThat(fixture.value(ERP_ALICE, "run")).as("ERP 会话仍有效").isEqualTo("erp:ALICE");
+            assertThat(tickets.get()).isEqualTo(ticketsBefore);
+        }
+    }
+
+    /** P1-S2：共享 Cookie 登录遇认证中心 5xx 时，不再清空整个身份的 Cookie。 */
+    @Test
+    void upstream5xxDuringSharedCookieLoginDoesNotClearIdentity() {
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, ERP_ALICE);
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(OA_ALICE, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+
+            appSessions.keySet().removeIf(value -> value.startsWith("erp-"));
+            sso503 = true;
+            ExecutionResult failed = fixture.call(ERP_ALICE, "run");
+            assertThat(failed.success()).isFalse();
+            assertThat(failed.error().code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
+            assertThat(fixture.sessions.lastCleared("zhang")).as("5xx 是上游故障，不能清空全身份 Cookie").isNull();
+            assertThat(shared.saved.get("zhang")).extracting(StoredCookie::name).contains("TGC", "sidA");
+
+            int ticketsBefore = tickets.get();
+            assertThat(fixture.value(OA_ALICE, "run")).as("OA 会话未受影响").isEqualTo("oa:ALICE");
+            assertThat(tickets.get()).isEqualTo(ticketsBefore);
+        }
+    }
+
+    /** P1-S1：跨源 authHop 跳转必须剥离含 login 已知值（seenLogin/snapshot）与历史 Cookie 的自定义头。 */
+    @Test
+    void crossOriginAuthHopStripsHeadersContainingKnownLoginAndSeenCookieSecrets() {
+        Set<String> gathered = HttpCalls.sensitiveValues(
+                Map.of("login", (HttpCalls.SecretSource) () -> List.of("snap-secret-1")),
+                new BasicCookieStore(),
+                List.of("old-cookie-val-2"));
+        assertThat(gathered).contains("snap-secret-1", "old-cookie-val-2");
+
+        SessionKey askHop = new SessionKey(Origin.LOCAL, "oa_ask_hop", "alice");
+        MemoryShared shared = new MemoryShared();
+        try (Fixture fixture = new Fixture(shared)) {
+            ExecutionResult paused = fixture.call(askHop, "run");
+            assertThat(paused.success()).isFalse();
+            assertThat(paused.error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+
+            ssoGetHeaders.clear();
+            ExecutionResult resumed = fixture.engine.continueLogin(
+                    fixture.request(askHop, "run"), "otp-secret-8899");
+            assertThat(resumed.success()).as(String.valueOf(resumed.error())).isTrue();
+            assertThat(ssoGetHeaders)
+                    .isNotEmpty()
+                    .allSatisfy(line -> assertThat(line).isEqualTo("frozen=null otp=null plain=keep-me"));
+        }
+    }
+
+    /** P3-1：开发追踪的 session.cookieNames 按当前规则包 base_url 过滤，不混入同身份其它主机的 Cookie。 */
+    @Test
+    void devTraceCookieNamesOnlyIncludesCookiesForThisConchBaseHost() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, ERP_ALICE);
+        AtomicReference<String> traceBody = new AtomicReference<>();
+        try (Fixture fixture = new Fixture(shared)) {
+            fixture.engine.bindDevTraceSink(new DevTraceSink() {
+                @Override
+                public DevTraceDraft open(ExecutionRequest request) {
+                    return new DevTraceDraft(Instant.parse("2026-11-23T01:00:00Z"));
+                }
+
+                @Override
+                public void save(ExecutionRequest request, Instant expiresAt, String body) {
+                    traceBody.set(body);
+                }
+            });
+            assertThat(fixture.value(OA_ALICE, "run")).isEqualTo("oa:ALICE");
+            JsonNode cookieNames = new ObjectMapper().readTree(traceBody.get()).at("/session/cookieNames");
+            List<String> names = new ArrayList<>();
+            cookieNames.forEach(node -> names.add(node.asText()));
+            assertThat(names).contains("sidA").doesNotContain("TGC");
+        }
+    }
+
     /** 给 conch() 的规则加上：只读能力、登录时等验证码、登录时取一个变量并在能力里用。 */
     private static String readOnly(String yaml) {
         return yaml.replace("    idempotent: true\n", "    idempotent: true\n    mcp: {expose: true, read_only: true}\n");
@@ -669,6 +786,21 @@ class SharedIdentityEngineTest {
                 "    - request: {method: GET, path: /home, follow_redirects: true}\n",
                 "    - ask: {into: code, kind: code, label: 验证码, timeout_s: 60}\n"
                         + "    - request: {method: GET, path: /home, follow_redirects: true}\n");
+    }
+
+    private static String asksForCodeWithHeaders(String yaml) {
+        return yaml.replace(
+                "    - request: {method: GET, path: /home, follow_redirects: true}\n",
+                "    - set: {carry_val: \"frozen-secret-val-9\"}\n"
+                        + "    - ask: {into: code, kind: code, label: 验证码, timeout_s: 60}\n"
+                        + "    - request:\n"
+                        + "        method: GET\n"
+                        + "        path: /home\n"
+                        + "        follow_redirects: true\n"
+                        + "        headers:\n"
+                        + "          X-Frozen: \"{{carry_val}}\"\n"
+                        + "          X-Otp: \"{{code}}\"\n"
+                        + "          X-Plain: \"keep-me\"\n");
     }
 
     private static String extractsStamp(String yaml) {
@@ -839,6 +971,7 @@ class SharedIdentityEngineTest {
                     readOnly(conch("oa_reads_loose_ping", oaUrl,
                             "  concurrent_reads: true\n  alive_check:\n    request: {method: GET, path: /loose-ping}\n")),
                     asksForCode(conch("oa_ask", oaUrl, "")),
+                    asksForCodeWithHeaders(conch("oa_ask_hop", oaUrl, "")),
                     extractsStamp(conch("oa_vars", oaUrl, "")),
                     extractsStamp(conch("oa_alive_vars", oaUrl,
                             "  alive_check:\n    request: {method: GET, path: /ping-stamp, query: {stamp: \"{{login.stamp}}\"}}\n")),

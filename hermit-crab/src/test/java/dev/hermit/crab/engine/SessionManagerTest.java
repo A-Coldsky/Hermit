@@ -2,16 +2,19 @@ package dev.hermit.crab.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.net.URI;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.hc.client5.http.cookie.Cookie;
 import org.apache.hc.client5.http.impl.cookie.BasicClientCookie;
 import org.junit.jupiter.api.Test;
 
@@ -188,14 +191,6 @@ class SessionManagerTest {
         SessionKey key = new SessionKey(Origin.LOCAL, "close_race", "alice");
         assertThat(sessions.tryLock(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
 
-        CountDownLatch closerStarted = new CountDownLatch(1);
-        Thread closer = new Thread(() -> {
-            closerStarted.countDown();
-            sessions.close();
-        });
-        closer.start();
-        awaitBlocked(closer, closerStarted);
-
         AtomicReference<Throwable> exclusiveError = new AtomicReference<>();
         CountDownLatch exclusiveStarted = new CountDownLatch(1);
         Thread exclusiveWaiter = new Thread(() -> {
@@ -237,6 +232,14 @@ class SessionManagerTest {
         });
         sharedWaiter.start();
         awaitBlocked(sharedWaiter, sharedStarted);
+
+        CountDownLatch closerStarted = new CountDownLatch(1);
+        Thread closer = new Thread(() -> {
+            closerStarted.countDown();
+            sessions.close();
+        });
+        closer.start();
+        awaitBlocked(closer, closerStarted);
 
         sessions.unlock(key);
         closer.join(10_000);
@@ -724,11 +727,573 @@ class SessionManagerTest {
         }
     }
 
+    /** 共享身份双成员并发 close() 时，等待线程看到 IllegalStateException 而不会拿到 null client/cookies 或抛出 NPE。 */
+    @Test
+    void sharedIdentityConcurrentCloseThrowsIllegalStateWithoutNpe() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        SessionKey erp = new SessionKey(Origin.OFFICIAL, "erp", "alice");
+        shared.bind("id1", alice, erp);
+        SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC());
+
+        // 先让两个成员都在 states 里指向同一只共享 Jar。
+        assertThat(sessions.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+        sessions.unlock(erp);
+        assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+
+        AtomicReference<Throwable> erpExclusiveError = new AtomicReference<>();
+        CountDownLatch erpExclusiveStarted = new CountDownLatch(1);
+        Thread erpExclusiveWaiter = new Thread(() -> {
+            erpExclusiveStarted.countDown();
+            try {
+                if (sessions.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(10))) {
+                    try {
+                        if (sessions.client(erp) == null || sessions.cookies(erp) == null) {
+                            erpExclusiveError.set(new AssertionError("null client/cookies for peer after close"));
+                        }
+                    } finally {
+                        sessions.unlock(erp);
+                    }
+                }
+            } catch (Throwable ex) {
+                erpExclusiveError.set(ex);
+            }
+        });
+        erpExclusiveWaiter.start();
+        awaitBlocked(erpExclusiveWaiter, erpExclusiveStarted);
+
+        AtomicReference<Throwable> erpSharedError = new AtomicReference<>();
+        CountDownLatch erpSharedStarted = new CountDownLatch(1);
+        Thread erpSharedWaiter = new Thread(() -> {
+            erpSharedStarted.countDown();
+            try {
+                if (sessions.tryLockShared(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(10))) {
+                    try {
+                        if (sessions.client(erp) == null || sessions.cookies(erp) == null) {
+                            erpSharedError.set(new AssertionError("null client/cookies for shared peer after close"));
+                        }
+                    } finally {
+                        sessions.unlockShared(erp);
+                    }
+                }
+            } catch (Throwable ex) {
+                erpSharedError.set(ex);
+            }
+        });
+        erpSharedWaiter.start();
+        awaitBlocked(erpSharedWaiter, erpSharedStarted);
+
+        CountDownLatch closerStarted = new CountDownLatch(1);
+        Thread closer = new Thread(() -> {
+            closerStarted.countDown();
+            sessions.close();
+        });
+        closer.start();
+        awaitBlocked(closer, closerStarted);
+
+        sessions.unlock(alice);
+        closer.join(10_000);
+        erpExclusiveWaiter.join(10_000);
+        erpSharedWaiter.join(10_000);
+        assertThat(closer.isAlive()).isFalse();
+        assertThat(erpExclusiveWaiter.isAlive()).isFalse();
+        assertThat(erpSharedWaiter.isAlive()).isFalse();
+        assertThat(erpExclusiveError.get())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("会话管理器已关闭");
+        assertThat(erpSharedError.get())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("会话管理器已关闭");
+        assertThat(sessions.size()).isZero();
+        assertThat(sessions.identityJarCount()).isZero();
+
+        // 多轮并发竞态：双成员同时加锁访问 client/cookies 与 close() 交错执行，绝不出现 NPE。
+        for (int round = 0; round < 20; round++) {
+            MemoryShared raceShared = new MemoryShared();
+            raceShared.bind("id1", alice, erp);
+            SessionManager race = new SessionManager(
+                    new NopSessionPersistence(), new NopLoginSnapshotStore(), raceShared,
+                    EngineSettings.defaults(), Clock.systemUTC());
+            assertThat(race.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            race.unlock(alice);
+            assertThat(race.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            race.unlock(erp);
+
+            CyclicBarrier start = new CyclicBarrier(3);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            Thread aliceWorker = new Thread(() -> {
+                try {
+                    start.await(5, TimeUnit.SECONDS);
+                    for (int i = 0; i < 50; i++) {
+                        if (race.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))) {
+                            try {
+                                if (race.client(alice) == null || race.cookies(alice) == null
+                                        || race.cookies(alice).getCookies() == null) {
+                                    failure.compareAndSet(null, new AssertionError("null client/cookies for alice"));
+                                    return;
+                                }
+                            } finally {
+                                race.unlock(alice);
+                            }
+                        }
+                    }
+                } catch (IllegalStateException ex) {
+                    if (!"会话管理器已关闭".equals(ex.getMessage())) {
+                        failure.compareAndSet(null, ex);
+                    }
+                } catch (Throwable ex) {
+                    failure.compareAndSet(null, ex);
+                }
+            });
+            Thread erpWorker = new Thread(() -> {
+                try {
+                    start.await(5, TimeUnit.SECONDS);
+                    for (int i = 0; i < 50; i++) {
+                        if (race.tryLockShared(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))) {
+                            try {
+                                if (race.client(erp) == null || race.cookies(erp) == null
+                                        || race.cookies(erp).getCookies() == null) {
+                                    failure.compareAndSet(null, new AssertionError("null client/cookies for erp"));
+                                    return;
+                                }
+                            } finally {
+                                race.unlockShared(erp);
+                            }
+                        }
+                    }
+                } catch (IllegalStateException ex) {
+                    if (!"会话管理器已关闭".equals(ex.getMessage())) {
+                        failure.compareAndSet(null, ex);
+                    }
+                } catch (Throwable ex) {
+                    failure.compareAndSet(null, ex);
+                }
+            });
+            Thread raceCloser = new Thread(() -> {
+                try {
+                    start.await(5, TimeUnit.SECONDS);
+                    race.close();
+                } catch (Throwable ex) {
+                    failure.compareAndSet(null, ex);
+                }
+            });
+            aliceWorker.start();
+            erpWorker.start();
+            raceCloser.start();
+            aliceWorker.join(10_000);
+            erpWorker.join(10_000);
+            raceCloser.join(10_000);
+            assertThat(aliceWorker.isAlive()).isFalse();
+            assertThat(erpWorker.isAlive()).isFalse();
+            assertThat(raceCloser.isAlive()).isFalse();
+            assertThat(failure.get()).isNull();
+            assertThat(race.size()).isZero();
+            assertThat(race.identityJarCount()).isZero();
+        }
+    }
+
+    /** concurrent_reads 跨 rebound 后全局 epoch 单调递增，迟到的旧 epoch 不会发生 ABA 碰撞而误登出新会话。 */
+    @Test
+    void epochStaysStrictlyMonotonicAcrossReboundPreventingAbaLogout() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            long epoch1;
+            try {
+                sessions.markLoggedIn(alice);
+                epoch1 = sessions.epoch(alice);
+            } finally {
+                sessions.unlock(alice);
+            }
+
+            // 模拟 concurrent_reads 在共享锁下记下失效前的 epoch。
+            assertThat(sessions.tryLockShared(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            long observedEpoch;
+            try {
+                assertThat(sessions.sharedReady(alice, false)).isTrue();
+                observedEpoch = sessions.epoch(alice);
+            } finally {
+                sessions.unlockShared(alice);
+            }
+            assertThat(observedEpoch).isEqualTo(epoch1);
+
+            // 期间账号绑入共享身份并 rebound 重建状态，再重新登录一次：新 epoch 必须严格大于旧 epoch。
+            shared.bind("id1", alice);
+            sessions.rebound(alice);
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            long epoch2;
+            try {
+                long afterRebound = sessions.epoch(alice);
+                assertThat(afterRebound).isGreaterThan(observedEpoch);
+                sessions.markLoggedIn(alice);
+                epoch2 = sessions.epoch(alice);
+                assertThat(epoch2).isGreaterThan(afterRebound);
+                assertThat(sessions.markLoggedOutSince(alice, observedEpoch))
+                        .as("跨 rebound 后旧 epoch 不得命中新会话").isFalse();
+                assertThat(sessions.loggedIn(alice)).isTrue();
+            } finally {
+                sessions.unlock(alice);
+            }
+
+            // 再次解绑并 rebound：epoch 继续单调递增，只有匹配当前 epoch 时才会登出。
+            shared.unbind(alice);
+            sessions.rebound(alice);
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                long afterUnbind = sessions.epoch(alice);
+                assertThat(afterUnbind).isGreaterThan(epoch2);
+                sessions.markLoggedIn(alice);
+                long epoch3 = sessions.epoch(alice);
+                assertThat(epoch3).isGreaterThan(afterUnbind);
+                assertThat(sessions.markLoggedOutSince(alice, epoch2)).isFalse();
+                assertThat(sessions.loggedIn(alice)).isTrue();
+                assertThat(sessions.markLoggedOutSince(alice, epoch3)).isTrue();
+                assertThat(sessions.loggedIn(alice)).isFalse();
+            } finally {
+                sessions.unlock(alice);
+            }
+        }
+    }
+
+    /** loginPaused 直接读 volatile 字段，不阻塞在共享 jar.gate.writeLock() 上。 */
+    @Test
+    void loginPausedDoesNotBlockOnSharedJarWriteLock() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        SessionKey erp = new SessionKey(Origin.OFFICIAL, "erp", "alice");
+        shared.bind("id1", alice, erp);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            assertThat(sessions.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                sessions.recordAuthFailure(erp);
+                sessions.recordAuthFailure(erp);
+                sessions.recordAuthFailure(erp);
+            } finally {
+                sessions.unlock(erp);
+            }
+
+            // 持有共享罐写锁期间，另一线程读取两个成员的 loginPaused 都应立刻返回。
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                AtomicBoolean alicePaused = new AtomicBoolean(true);
+                AtomicBoolean erpPaused = new AtomicBoolean(false);
+                Thread reader = new Thread(() -> {
+                    alicePaused.set(sessions.loginPaused(alice));
+                    erpPaused.set(sessions.loginPaused(erp));
+                });
+                reader.start();
+                reader.join(2_000);
+                assertThat(reader.isAlive()).as("loginPaused 不应被共享写锁阻塞").isFalse();
+                assertThat(alicePaused).isFalse();
+                assertThat(erpPaused).isTrue();
+
+                sessions.recordAuthFailure(alice);
+                sessions.recordAuthFailure(alice);
+                sessions.recordAuthFailure(alice);
+                AtomicBoolean alicePausedAfter = new AtomicBoolean(false);
+                Thread readerAfter = new Thread(() -> alicePausedAfter.set(sessions.loginPaused(alice)));
+                readerAfter.start();
+                readerAfter.join(2_000);
+                assertThat(readerAfter.isAlive()).isFalse();
+                assertThat(alicePausedAfter).isTrue();
+            } finally {
+                sessions.unlock(alice);
+            }
+        }
+    }
+
+    /** clearIdentityIfEmpty 等锁期间有新成员绑入身份时，复查成员表后不得误清身份会话。 */
+    @Test
+    void clearIdentityIfEmptyKeepsSessionWhenNewMemberBindsConcurrently() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        SessionKey bob = new SessionKey(Origin.OFFICIAL, "erp", "bob");
+        shared.bind("id1", alice);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            putCookie(sessions, alice, "shared-cookie-live");
+            sessions.markLoggedIn(alice);
+            sessions.persist(alice);
+
+            // alice 离开后成员表暂时为空，clearIdentityIfEmpty 进入并阻塞在共享罐写锁上。
+            shared.unbind(alice);
+            CountDownLatch cleanerStarted = new CountDownLatch(1);
+            Thread cleaner = new Thread(() -> {
+                cleanerStarted.countDown();
+                sessions.clearIdentityIfEmpty("id1");
+            });
+            cleaner.start();
+            awaitBlocked(cleaner, cleanerStarted);
+
+            // 在 cleaner 拿到写锁前，新成员 bob 绑入同一个身份。
+            shared.bind("id1", bob);
+            sessions.unlock(alice);
+            cleaner.join(10_000);
+            assertThat(cleaner.isAlive()).isFalse();
+
+            assertThat(shared.saved.get("id1")).extracting(StoredCookie::value).containsExactly("shared-cookie-live");
+            assertThat(sessions.identityJarCount()).isEqualTo(1);
+            assertThat(sessions.tryLock(bob, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.cookieValue(bob, "sid", null)).isEqualTo("shared-cookie-live");
+                assertThat(sessions.sharesCookies(bob)).isTrue();
+            } finally {
+                sessions.unlock(bob);
+            }
+
+            // 真正没有任何成员后，clearIdentityIfEmpty 才清空并移出身份罐。
+            shared.unbind(bob);
+            sessions.rebound(bob);
+            sessions.clearIdentityIfEmpty("id1");
+            assertThat(shared.saved.get("id1")).isNull();
+            assertThat(sessions.identityJarCount()).isZero();
+        }
+    }
+
+    /** seedIdentity 遭遇并发 invalidate（同身份成员或自身）时，不得把旧密码 Cookie 复活进共享罐。 */
+    @Test
+    void seedIdentityDoesNotResurrectStaleCookieAfterConcurrentInvalidate() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        SessionKey erp = new SessionKey(Origin.OFFICIAL, "erp", "alice");
+        shared.bind("id1", erp);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            // 1) 并发 clearJar（invalidate 同身份成员）完成后，迟到的 seedIdentity 不能复活旧 Cookie。
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                putCookie(sessions, alice, "old-password-cookie");
+                sessions.markLoggedIn(alice);
+                sessions.persist(alice);
+            } finally {
+                sessions.unlock(alice);
+            }
+
+            assertThat(sessions.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            shared.bind("id1", alice);
+            CountDownLatch reboundStarted = new CountDownLatch(1);
+            Thread rebounder = new Thread(() -> {
+                reboundStarted.countDown();
+                sessions.rebound(alice);
+            });
+            rebounder.start();
+            awaitBlocked(rebounder, reboundStarted);
+
+            // 主线程持有共享罐写锁时重入 invalidate(erp)，递增所有成员的 invalidationGen 并清空共享罐。
+            sessions.invalidate(erp);
+            sessions.unlock(erp);
+            rebounder.join(10_000);
+            assertThat(rebounder.isAlive()).isFalse();
+
+            assertThat(shared.saved.get("id1")).isNull();
+            assertThat(shared.saveHistory).isEmpty();
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.cookies(alice).getCookies()).isEmpty();
+                assertThat(sessions.sharesCookies(alice)).isFalse();
+            } finally {
+                sessions.unlock(alice);
+            }
+
+            // 2) 直接并发 invalidate(alice) 递增 invalidationGen 后，先醒来的 seedIdentity 也不得短暂写入旧 Cookie。
+            shared.unbind(alice);
+            sessions.rebound(alice);
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                putCookie(sessions, alice, "old-password-cookie-2");
+                sessions.markLoggedIn(alice);
+                sessions.persist(alice);
+            } finally {
+                sessions.unlock(alice);
+            }
+
+            assertThat(sessions.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            shared.bind("id1", alice);
+            CountDownLatch rebound2Started = new CountDownLatch(1);
+            Thread rebounder2 = new Thread(() -> {
+                rebound2Started.countDown();
+                sessions.rebound(alice);
+            });
+            rebounder2.start();
+            awaitBlocked(rebounder2, rebound2Started);
+
+            CountDownLatch invalidateStarted = new CountDownLatch(1);
+            Thread invalidator = new Thread(() -> {
+                invalidateStarted.countDown();
+                sessions.invalidate(alice);
+            });
+            invalidator.start();
+            awaitBlocked(invalidator, invalidateStarted);
+
+            sessions.unlock(erp);
+            rebounder2.join(10_000);
+            invalidator.join(10_000);
+            assertThat(rebounder2.isAlive()).isFalse();
+            assertThat(invalidator.isAlive()).isFalse();
+            assertThat(shared.saved.get("id1")).isNull();
+            assertThat(shared.saveHistory).isEmpty();
+        }
+    }
+
+    /** cookieNames(key, base) 按 AuthReach.readable 过滤他域 Cookie 与 HTTP 不可发送的共享 Secure Cookie。 */
+    @Test
+    void cookieNamesFiltersOutOtherDomainAndHttpInaccessibleSecureCookies() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        shared.bind("id1", alice);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                BasicClientCookie oaHost = new BasicClientCookie("oa_host", "val-oa-host");
+                oaHost.setDomain("oa.corp.example");
+                oaHost.setPath("/");
+                sessions.cookies(alice).addCookie(oaHost);
+
+                BasicClientCookie corpWide = new BasicClientCookie("corp_wide", "val-corp-wide");
+                corpWide.setDomain("corp.example");
+                corpWide.setAttribute(Cookie.DOMAIN_ATTR, "corp.example");
+                corpWide.setPath("/");
+                sessions.cookies(alice).addCookie(corpWide);
+
+                BasicClientCookie corpSecure = new BasicClientCookie("corp_sec", "val-corp-sec");
+                corpSecure.setDomain("corp.example");
+                corpSecure.setAttribute(Cookie.DOMAIN_ATTR, "corp.example");
+                corpSecure.setPath("/");
+                corpSecure.setSecure(true);
+                sessions.cookies(alice).addCookie(corpSecure);
+
+                BasicClientCookie ssoOnly = new BasicClientCookie("sso_only", "val-sso-only");
+                ssoOnly.setDomain("sso.other.example");
+                ssoOnly.setPath("/");
+                sessions.cookies(alice).addCookie(ssoOnly);
+
+                assertThat(sessions.cookieNames(alice, URI.create("https://oa.corp.example/app")))
+                        .containsExactlyInAnyOrder("oa_host", "corp_wide", "corp_sec");
+                assertThat(sessions.cookieNames(alice, URI.create("http://oa.corp.example/app")))
+                        .containsExactlyInAnyOrder("oa_host", "corp_wide");
+                assertThat(sessions.cookieNames(alice, URI.create("https://erp.corp.example/")))
+                        .containsExactlyInAnyOrder("corp_wide", "corp_sec");
+                assertThat(sessions.cookieNames(alice, URI.create("https://evilcorp.example/")))
+                        .isEmpty();
+                assertThat(sessions.cookieNames(alice, null))
+                        .containsExactlyInAnyOrder("oa_host", "corp_wide", "corp_sec", "sso_only");
+                assertThat(sessions.cookieNames(alice))
+                        .containsExactlyInAnyOrder("oa_host", "corp_wide", "corp_sec", "sso_only");
+            } finally {
+                sessions.unlock(alice);
+            }
+        }
+    }
+
+    /** 仅存登录前 ask Cookie 而未 markLoggedIn 时，sharesCookies 返回 false；登录后才返回 true。 */
+    @Test
+    void sharesCookiesIsFalseUntilLoggedInEvenWithPreLoginCookies() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        SessionKey alice = new SessionKey(Origin.OFFICIAL, "oa", "alice");
+        SessionKey erp = new SessionKey(Origin.OFFICIAL, "erp", "alice");
+        shared.bind("id1", alice, erp);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), shared,
+                EngineSettings.defaults(), Clock.systemUTC())) {
+            // 1) 成员在 ask 暂停前收到登录前 Cookie 并持久化，但尚未 markLoggedIn。
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                putCookie(sessions, alice, "prelogin-captcha-cookie");
+                sessions.pending().store(alice, new PendingLogins.Draft(
+                        "1.0.0", "hash-pre", 0, "code", "image", "验证码", null, 300, true, Map.of(), null, null));
+                sessions.persist(alice);
+                assertThat(sessions.cookies(alice).getCookies()).isNotEmpty();
+                assertThat(sessions.sharesCookies(alice)).isFalse();
+            } finally {
+                sessions.unlock(alice);
+            }
+
+            assertThat(sessions.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.cookies(erp).getCookies()).isNotEmpty();
+                assertThat(sessions.sharesCookies(erp)).isFalse();
+            } finally {
+                sessions.unlock(erp);
+            }
+
+            // 2) 任一成员 markLoggedIn 后，整个共享身份进入已建立状态。
+            assertThat(sessions.tryLock(alice, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                sessions.markLoggedIn(alice);
+                assertThat(sessions.sharesCookies(alice)).isTrue();
+            } finally {
+                sessions.unlock(alice);
+            }
+
+            assertThat(sessions.tryLock(erp, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.sharesCookies(erp)).isTrue();
+                sessions.clearShared(erp);
+                putCookie(sessions, erp, "prelogin-after-clear");
+                assertThat(sessions.sharesCookies(erp)).isFalse();
+            } finally {
+                sessions.unlock(erp);
+            }
+
+            // 3) 独立账号仅在登录前拿到 Cookie（未 loggedIn）就绑进新身份，rebound 播种后 sharesCookies 仍为 false。
+            SessionKey unlogged = new SessionKey(Origin.OFFICIAL, "oa", "bob");
+            SessionKey unloggedPeer = new SessionKey(Origin.OFFICIAL, "erp", "bob");
+            assertThat(sessions.tryLock(unlogged, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                putCookie(sessions, unlogged, "bob-prelogin-cookie");
+            } finally {
+                sessions.unlock(unlogged);
+            }
+            shared.bind("id2", unlogged, unloggedPeer);
+            sessions.rebound(unlogged);
+            assertThat(sessions.tryLock(unloggedPeer, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.cookieValue(unloggedPeer, "sid", null)).isEqualTo("bob-prelogin-cookie");
+                assertThat(sessions.sharesCookies(unloggedPeer)).isFalse();
+            } finally {
+                sessions.unlock(unloggedPeer);
+            }
+
+            // 4) 对照：已 markLoggedIn 的独立账号绑进新身份后，rebound 播种的会话 sharesCookies 为 true。
+            SessionKey logged = new SessionKey(Origin.OFFICIAL, "oa", "carol");
+            SessionKey loggedPeer = new SessionKey(Origin.OFFICIAL, "erp", "carol");
+            assertThat(sessions.tryLock(logged, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                putCookie(sessions, logged, "carol-session-cookie");
+                sessions.markLoggedIn(logged);
+            } finally {
+                sessions.unlock(logged);
+            }
+            shared.bind("id3", logged, loggedPeer);
+            sessions.rebound(logged);
+            assertThat(sessions.tryLock(loggedPeer, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                assertThat(sessions.cookieValue(loggedPeer, "sid", null)).isEqualTo("carol-session-cookie");
+                assertThat(sessions.sharesCookies(loggedPeer)).isTrue();
+            } finally {
+                sessions.unlock(loggedPeer);
+            }
+        }
+    }
+
     private static final class MemoryShared implements SharedSessions {
         private final java.util.concurrent.ConcurrentHashMap<SessionKey, String> bound =
                 new java.util.concurrent.ConcurrentHashMap<>();
         private final java.util.concurrent.ConcurrentHashMap<String, List<StoredCookie>> saved =
                 new java.util.concurrent.ConcurrentHashMap<>();
+        private final List<List<StoredCookie>> saveHistory = Collections.synchronizedList(new ArrayList<>());
 
         void bind(String identity, SessionKey... keys) {
             for (SessionKey key : keys) {
@@ -763,7 +1328,9 @@ class SessionManagerTest {
 
         @Override
         public void save(String identity, List<StoredCookie> cookies) {
-            saved.put(identity, List.copyOf(cookies));
+            List<StoredCookie> copy = List.copyOf(cookies);
+            saved.put(identity, copy);
+            saveHistory.add(copy);
         }
 
         @Override

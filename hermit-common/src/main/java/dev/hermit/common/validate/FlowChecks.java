@@ -216,9 +216,12 @@ final class FlowChecks {
                 errors.add(ConchValidator.issue(code, child + "." + name,
                         key + " 的键是变量名，直接写名字，不要写 {{ }}"));
             }
-            if (pair.getValue() instanceof Map<?, ?> || pair.getValue() instanceof List<?>) {
+            Object expected = pair.getValue();
+            if (expected instanceof Map<?, ?> || expected instanceof List<?>
+                    || (expected instanceof Double d && !Double.isFinite(d))
+                    || (expected instanceof Float f && !Float.isFinite(f))) {
                 errors.add(ConchValidator.issue(code, child + "." + name,
-                        key + " 的期望值必须是字符串、数字或布尔值"));
+                        key + " 的期望值必须是字符串、有限数字或布尔值"));
             }
         }
     }

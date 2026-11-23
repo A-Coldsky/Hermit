@@ -335,6 +335,24 @@ describe('本地包历史', () => {
     confirm.mockRestore()
   })
 
+  it('回退后有同网站的规则包时提示一次', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const warning = vi.spyOn(ElMessage, 'warning')
+    crab.conches.mockResolvedValue({ conches: [localConch()] })
+    crab.localConchHistory.mockResolvedValue({ history: [newer] })
+    crab.restoreLocalConch.mockResolvedValue({ conch: 'local_ping', version: '1.1.0', sameSite: ['oa_base'] })
+    const wrapper = await mountPage(ConchesView)
+    await flushPromises()
+
+    await wrapper.get('[data-test="restore"]').trigger('click')
+    await flushPromises()
+
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(warning.mock.calls[0][0])).toContain('oa_base')
+    confirm.mockRestore()
+    warning.mockRestore()
+  })
+
   it('取消回退不调用接口', async () => {
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
     const error = vi.spyOn(ElMessage, 'error')

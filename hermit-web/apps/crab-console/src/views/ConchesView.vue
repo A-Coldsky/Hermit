@@ -382,8 +382,9 @@ async function restoreHistory(conch: string, entry: LocalConchHistoryEntry) {
   const key = restoreKey(conch, entry.id)
   acting.value = key
   try {
-    await api.restoreLocalConch(conch, entry.id)
+    const done = await api.restoreLocalConch(conch, entry.id)
     ElMessage.success(`已回退 ${conch} 到 v${entry.version}`)
+    notifySameSite(conch, done.sameSite)
     await load()
   } catch (error) {
     notifyError(error)

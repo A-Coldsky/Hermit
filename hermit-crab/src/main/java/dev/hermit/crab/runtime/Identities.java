@@ -9,6 +9,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Pattern;
 
 import dev.hermit.common.http.AuthOrigins;
@@ -73,6 +75,10 @@ public final class Identities {
     private static final Pattern LOGIN_REF = Pattern.compile("\\{\\{[^}]*\\blogin\\.");
 
     private final IdentityStore store;
+    /**
+     * 各成员的包上一次判断时的地址，只在内存里。启动载入时每放进一个包都会判断一次，全部载入后就记齐了。
+     */
+    private final ConcurrentMap<SessionKey, Set<String>> seen = new ConcurrentHashMap<>();
     private final SessionManager sessions;
     private final ConchRegistry registry;
     private final ConchConfigStore conchConfig;
@@ -217,6 +223,7 @@ public final class Identities {
         }
         SessionKey key = new SessionKey(origin, conch, account);
         store.bind(id, key, actor);
+        seen.put(key, addresses(origin, conch));
         sessions.rebound(key);
         return check;
     }
@@ -252,13 +259,6 @@ public final class Identities {
      * 包不在本机的成员不动（退订保留账号和凭证，也保留绑定）。返回离开的成员。
      */
     public List<SessionKey> revalidate(String actor) {
-        return revalidate(actor, null);
-    }
-
-    /**
-     * {@code changed} 是刚改过配置的包：成员分成互不相连的几组、大小又一样时，留下不含它的那一组。
-     */
-    public List<SessionKey> revalidate(String actor, String changed) {
         ArrayList<SessionKey> left = new ArrayList<>();
         if (!store.anyBound()) {
             return left;
@@ -278,15 +278,20 @@ public final class Identities {
             }
             List<List<SessionKey>> groups = groups(present);
             if (groups.size() < 2) {
+                seen.putAll(present);
                 continue;
             }
-            // 一个身份只有一份 Cookie：留下最大的一组，其余的都离开。
+            // 一个身份只有一份 Cookie：留下最大的一组，其余的都离开。一样大时留下地址没变的那一组：
+            // 谁动了看地址本身，不看是哪一次通知带来的，通知的先后和同名的两份都不会判错。
             List<SessionKey> kept = groups.get(0);
             for (List<SessionKey> group : groups) {
                 if (group.size() > kept.size()
-                        || (group.size() == kept.size() && touches(kept, changed) && !touches(group, changed))) {
+                        || (group.size() == kept.size() && moved(group, present) < moved(kept, present))) {
                     kept = group;
                 }
+            }
+            for (SessionKey member : kept) {
+                seen.put(member, present.get(member));
             }
             for (List<SessionKey> group : groups) {
                 if (group == kept) {
@@ -301,16 +306,16 @@ public final class Identities {
         return left;
     }
 
-    private static boolean touches(List<SessionKey> group, String conch) {
-        if (conch == null) {
-            return false;
-        }
+    /** 这一组里地址和上次判断时不一样的成员数。没记过的（刚启动）不算动过。 */
+    private int moved(List<SessionKey> group, Map<SessionKey, Set<String>> present) {
+        int count = 0;
         for (SessionKey member : group) {
-            if (member.conch().equals(conch)) {
-                return true;
+            Set<String> before = seen.get(member);
+            if (before != null && !before.equals(present.get(member))) {
+                count++;
             }
         }
-        return false;
+        return count;
     }
 
     /** 按「有一个地址相同」连起来的各组成员。 */
@@ -337,6 +342,7 @@ public final class Identities {
 
     private boolean leave(SessionKey key, String reason, String actor) {
         String id = store.unbind(key, reason, actor);
+        seen.remove(key);
         if (id == null) {
             return false;
         }

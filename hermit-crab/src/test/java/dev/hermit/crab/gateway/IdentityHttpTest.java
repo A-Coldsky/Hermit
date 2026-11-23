@@ -259,6 +259,45 @@ class IdentityHttpTest {
     }
 
     @Test
+    void theMemberWhoseAddressMovedLeavesWhicheverNotificationArrivesFirst() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        install("pkg_b", siteUrl, "zhangsan");
+        String id = console("POST", "/console/api/identities", "{\"name\":\"张三\"}").path("id").asText();
+        bind(id, "pkg_a");
+        bind(id, "pkg_b");
+
+        // pkg_b 的新版本换了网站，通知还没发出；这时另一个线程上 pkg_a 原样重新载入，它的通知先到。
+        try (dev.hermit.crab.engine.ConchRegistry.Hold ignored = runtime.registry().hold()) {
+            runtime.registry().put(doc("pkg_b", elsewhereUrl));
+            Thread other = new Thread(() -> runtime.registry().put(doc("pkg_a", siteUrl)));
+            other.start();
+            other.join();
+        }
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default")))
+                .as("地址没变的成员留下").isEqualTo(id);
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_b", "default"))).isNull();
+    }
+
+    @Test
+    void whenTheLocalCopyOfASameNamePackageMovesTheOfficialCopyStays() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        ConchDoc local = doc("pkg_a", siteUrl);
+        runtime.registry().put(local, Origin.LOCAL);
+        runtime.admin().createAccount(Origin.LOCAL, "pkg_a", "default", Actors.CLI);
+        runtime.admin().writeCredentials(
+                Origin.LOCAL, local, "default", Map.of("username", "zhangsan", "password", PASSWORD), Actors.CLI);
+        String id = console("POST", "/console/api/identities", "{\"name\":\"张三\"}").path("id").asText();
+        // 本地那份先绑：两边一样大时排在前面的不该因此占便宜。
+        runtime.identities().bind(id, Origin.LOCAL, "pkg_a", "default", Actors.CLI);
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+
+        runtime.registry().put(doc("pkg_a", elsewhereUrl), Origin.LOCAL);
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default")))
+                .as("正式包那份的地址没变").isEqualTo(id);
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.LOCAL, "pkg_a", "default"))).isNull();
+    }
+
+    @Test
     void aVersionThatIsPutBackBeforeItIsCommittedDoesNotUnbindAnyone() throws Exception {
         install("pkg_a", siteUrl, "zhangsan");
         install("pkg_b", siteUrl, "zhangsan");

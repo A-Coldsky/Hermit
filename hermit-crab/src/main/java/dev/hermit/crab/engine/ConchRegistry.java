@@ -92,7 +92,7 @@ public final class ConchRegistry {
         final AtomicReference<State> state = new AtomicReference<>(State.EMPTY);
         final List<Listener> listeners = new CopyOnWriteArrayList<>();
         final List<Consumer<String>> removals = new CopyOnWriteArrayList<>();
-        final ThreadLocal<LinkedHashSet<String>> held = new ThreadLocal<>();
+        final ThreadLocal<boolean[]> held = new ThreadLocal<>();
         final Object writeLock = new Object();
         volatile Selections selections;
     }
@@ -148,28 +148,24 @@ public final class ConchRegistry {
 
     public interface Listener {
         void changed();
-
-        /** 带上变了的包名；默认不关心是哪个包。 */
-        default void changed(String conch) {
-            changed();
-        }
     }
 
     /**
-     * 关闭之前，这个线程上的增、换、删先不通知；关闭时每个变过的包通知一次，听到通知时看到的是最后的结果。
-     * 换版本要先放进注册表再写指针，写失败会放回旧的那份：中间那一下不该让人看见。嵌套时由最外层通知。
+     * 关闭之前，这个线程上的增、换、删先不通知；有过变化的话关闭时通知一次，听到通知时看到的是最后的结果。
+     * 换版本要先放进注册表再写指针，写失败会放回旧的那份：中间那一下不该让这个线程通知出去。
+     * 嵌套时由最外层通知。别的线程的通知不受影响。
      */
     public Hold hold() {
         if (shared.held.get() != null) {
             return () -> {
             };
         }
-        LinkedHashSet<String> names = new LinkedHashSet<>();
-        shared.held.set(names);
+        boolean[] dirty = {false};
+        shared.held.set(dirty);
         return () -> {
             shared.held.remove();
-            for (String name : names) {
-                changed(name);
+            if (dirty[0]) {
+                changed();
             }
         };
     }
@@ -309,11 +305,11 @@ public final class ConchRegistry {
         if (dropped) {
             removed(conch);
         }
-        LinkedHashSet<String> held = shared.held.get();
+        boolean[] held = shared.held.get();
         if (held != null) {
-            held.add(conch);
+            held[0] = true;
         } else {
-            changed(conch);
+            changed();
         }
     }
 
@@ -365,10 +361,10 @@ public final class ConchRegistry {
         }
     }
 
-    private void changed(String conch) {
+    private void changed() {
         for (Listener listener : shared.listeners) {
             try {
-                listener.changed(conch);
+                listener.changed();
             } catch (RuntimeException ex) {
                 LOG.warning("conch registry listener failed: " + ex.getClass().getName());
             }

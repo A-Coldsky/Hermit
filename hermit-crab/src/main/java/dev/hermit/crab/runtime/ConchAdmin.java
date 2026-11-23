@@ -237,7 +237,7 @@ public final class ConchAdmin {
     private void addressesMayHaveChanged(String conch, String actor) {
         Identities bound = identities;
         if (bound != null) {
-            bound.revalidate(actor, conch);
+            bound.revalidate(actor);
         }
     }
 

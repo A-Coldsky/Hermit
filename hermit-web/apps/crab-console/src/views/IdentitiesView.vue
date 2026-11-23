@@ -26,10 +26,15 @@ const adding = reactive({
   saving: false,
 })
 
-/** 能绑定的包：driver: http，并且不是已经在这个身份里的包。 */
+/**
+ * 能绑定的包：driver: http，并且生效的这一份不是已经在这个身份里的包。
+ * 同名的正式包和本地包是两份，账号各算各的：一份在身份里，切到另一份后还能把另一份绑进来。
+ */
 const candidates = computed(() => {
-  const taken = new Set((adding.identity?.members ?? []).map((member) => member.conch))
-  return conches.value.filter((conch) => conch.driver !== 'mcp' && !taken.has(conch.conch))
+  const taken = new Set((adding.identity?.members ?? []).map((member) => `${member.origin}/${member.conch}`))
+  return conches.value.filter(
+    (conch) => conch.driver !== 'mcp' && !taken.has(`${conch.source === 'LOCAL' ? 'LOCAL' : 'OFFICIAL'}/${conch.conch}`),
+  )
 })
 
 const credentialText: Record<string, { text: string; type: 'success' | 'warning' | 'info' }> = {

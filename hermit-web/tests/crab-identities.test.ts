@@ -43,9 +43,9 @@ describe('身份页面', () => {
     crab.identities.mockResolvedValue({ identities: [identity] })
     crab.conches.mockResolvedValue({
       conches: [
-        { conch: 'oa_leave', title: '请假', driver: 'http' },
-        { conch: 'oa_expense', title: '报销', driver: 'http' },
-        { conch: 'wiki_mcp', title: '知识库', driver: 'mcp' },
+        { conch: 'oa_leave', title: '请假', driver: 'http', source: 'REEF' },
+        { conch: 'oa_expense', title: '报销', driver: 'http', source: 'REEF' },
+        { conch: 'wiki_mcp', title: '知识库', driver: 'mcp', source: 'REEF' },
       ],
     })
     crab.accounts.mockResolvedValue({ accounts: [{ name: 'zhangsan', default: true }] })
@@ -115,6 +115,20 @@ describe('身份页面', () => {
     await vm.confirmAdd()
     await flushPromises()
     expect(crab.bindIdentityMember).toHaveBeenCalledWith('abc123', 'oa_expense', 'zhangsan')
+    wrapper.unmount()
+  })
+
+  it('同名的另一份生效时可以绑进同一个身份', async () => {
+    // 身份里的是正式包那一份；现在生效的是同名的本地包，它的账号是另一套。
+    crab.conches.mockResolvedValue({
+      conches: [{ conch: 'oa_leave', title: '请假', driver: 'http', source: 'LOCAL' }],
+    })
+    const wrapper = await mountPage(IdentitiesView, { attach: true })
+    await flushPromises()
+    await wrapper.find('[data-test="identity-add"]').trigger('click')
+    await flushPromises()
+    const vm = wrapper.vm as unknown as { candidates: { conch: string }[] }
+    expect(vm.candidates.map((conch) => conch.conch)).toEqual(['oa_leave'])
     wrapper.unmount()
   })
 

@@ -56,9 +56,22 @@ async function load() {
   }
 }
 
+const NAME_MAX = 64
+
+/** 名字为什么不能用；能用时是空串。和 Crab 的检查一样按去掉首尾空白之后的长度算。 */
+function nameProblem(value: string | null | undefined): string {
+  const name = (value ?? '').trim()
+  if (!name) return '名字不能为空'
+  if (name.length > NAME_MAX) return `名字最多 ${NAME_MAX} 个字符，现在是 ${name.length} 个`
+  return ''
+}
+
+// 没输入时不提示，只是不能点「新建」。
+const newNameProblem = computed(() => (newName.value.trim() ? nameProblem(newName.value) : ''))
+
 async function create() {
   const name = newName.value.trim()
-  if (!name) return
+  if (nameProblem(name)) return
   creating.value = true
   try {
     await api.createIdentity(name)
@@ -78,7 +91,7 @@ async function rename(identity: Identity) {
       inputValue: identity.name,
       confirmButtonText: '保存',
       cancelButtonText: '取消',
-      inputValidator: (value) => (value && value.trim() ? true : '名字不能为空'),
+      inputValidator: (value) => nameProblem(value) || true,
     })
     name = String(answer.value).trim()
   } catch {
@@ -200,15 +213,17 @@ onMounted(load)
       <div class="create-row">
         <el-input
           v-model="newName"
-          maxlength="64"
           placeholder="例如：OA · 张三"
+          aria-label="身份名字"
+          :aria-invalid="newNameProblem ? 'true' : undefined"
           data-test="identity-name"
           @keyup.enter="create"
         />
-        <el-button type="primary" :icon="Plus" :loading="creating" :disabled="!newName.trim()" data-test="identity-create" @click="create">
+        <el-button type="primary" :icon="Plus" :loading="creating" :disabled="!!nameProblem(newName)" data-test="identity-create" @click="create">
           新建
         </el-button>
       </div>
+      <p v-if="newNameProblem" class="name-problem" role="alert" data-test="identity-name-problem">{{ newNameProblem }}</p>
       <ul class="hm-muted hint">
         <li>一个身份代表一个人。两个人的账号不要绑到同一个身份，否则会用错的人的登录去操作。</li>
         <li>每个包仍用自己填的凭证和自己的登录步骤；凭证、登录返回的值、验证码各包分开保存。</li>
@@ -220,7 +235,7 @@ onMounted(load)
 
     <div v-for="identity in identities" :key="identity.id" class="hm-card" data-test="identity-card">
       <div class="hm-card-title">
-        <span>{{ identity.name }}</span>
+        <span class="name">{{ identity.name }}</span>
         <span class="actions">
           <el-button link :icon="Edit" :aria-label="`${identity.name} 改名`" @click="rename(identity)">改名</el-button>
           <el-button link type="primary" :icon="Plus" data-test="identity-add" @click="openAdd(identity)">添加账号</el-button>
@@ -340,6 +355,18 @@ onMounted(load)
   display: flex;
   gap: 12px;
   max-width: 480px;
+}
+
+.name-problem {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--el-color-danger);
+}
+
+/* 名字可以是 64 个不带空格的字符：在卡片里折行，不把页面撑宽。 */
+.name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .hint {

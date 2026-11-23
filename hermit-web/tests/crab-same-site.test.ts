@@ -86,6 +86,9 @@ describe('同网站的规则包', () => {
     expect(notice.text()).toContain('本机还有规则包访问同一个网站')
     expect(notice.text()).toContain('https://oa.corp.com:443')
     expect(notice.text()).toContain('各自登录')
+    // 绑了身份的账号是共用的：这句话只说没绑的，并指到「身份」页。
+    expect(notice.text()).toContain('没绑到同一个身份的账号各自登录')
+    expect(notice.get('[data-test="identity-link"]').attributes('href')).toBe('/identities')
     expect(notice.text()).not.toContain('轮流被对方的登录顶掉')
     const links = notice.findAll('[data-test="same-site-link"]')
     expect(links.map((link) => link.text())).toEqual(['oa_base', 'oa_hr'])

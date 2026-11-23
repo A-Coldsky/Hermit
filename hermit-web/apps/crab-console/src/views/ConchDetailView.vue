@@ -557,7 +557,7 @@ watch(
             <template v-if="index > 0">、</template>
             <router-link :to="`/conches/${encodeURIComponent(name)}`" data-test="same-site-link">{{ name }}</router-link>
           </template>
-          也访问 {{ detail.site }}。这些规则包各自登录、各存各的 Cookie，互不共用。
+          也访问 {{ detail.site }}。没绑到同一个身份的账号各自登录、各存各的 Cookie，互不共用；同一个人的账号可以在<router-link to="/identities" data-test="identity-link">身份</router-link>里绑到一起共用。
           <template v-if="sameSiteContending.length">
             最近 {{ sameSiteContending.join('、') }} 和这个包轮流被对方的登录顶掉、又重新登录。同一个网站账号只允许一个会话时会这样：可以让两个包使用不同的网站账号，或只保留其中一个包。Crab 分不清两边是不是同一个人，所以这只是可能。
           </template>
@@ -586,7 +586,7 @@ watch(
             </template>
             <template v-if="detail.authOrigins?.length">也经同一个认证地址登录。</template>
             <template v-else>登录时也要访问 {{ detail.site }}，把它当门户或认证中心。</template>
-            这些规则包各自登录、各存各的 Cookie，互不共用。
+            没绑到同一个身份的账号各自登录、各存各的 Cookie，互不共用；同一个人的账号可以在<router-link to="/identities" data-test="identity-link">身份</router-link>里绑到一起共用。
             <template v-if="sameAuthContending.length">
               最近 {{ sameAuthContending.join('、') }} 和这个包轮流被对方的登录顶掉、又重新登录。认证中心同一账号只允许一个会话时会这样。Crab 分不清两边是不是同一个人，所以这只是可能。
             </template>

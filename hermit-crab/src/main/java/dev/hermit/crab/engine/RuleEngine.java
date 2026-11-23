@@ -289,6 +289,9 @@ public final class RuleEngine implements ConchExecutor {
                 URI base = baseUri(conch, config);
                 scope = new LoginScope(
                         conch, request.rawInput(), credentials, config, key, base, deadline);
+                // 测试登录要验证的是这个账号自己的凭证：排队的成员可能在调用方清空之后又登录过，
+                // 带着它的 Cookie 认证中心不会再要密码。拿到锁之后再清一次，从空白登录。
+                sessions.resetShared(key);
                 login(scope);
                 return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
                         credentials, scope.redactionValues(), start);
@@ -977,11 +980,18 @@ public final class RuleEngine implements ConchExecutor {
         login(scope, null, null, true);
     }
 
-    /** 超时、连不上、等待输入不是「留着的 Cookie 没用」，不值得清空重来。 */
+    /**
+     * 超时、连不上、等待输入不是「留着的 Cookie 没用」，不值得清空重来。连不上和单步超时也报
+     * {@code UPSTREAM_ERROR}，要看失败的那一步有没有拿到 HTTP 响应。
+     */
     private static boolean retriesFromScratch(StepFailure failure) {
-        return failure.code == ErrorCode.AUTH_FAILED
-                || failure.code == ErrorCode.RULE_MISMATCH
-                || failure.code == ErrorCode.UPSTREAM_ERROR;
+        if (failure.code == ErrorCode.AUTH_FAILED || failure.code == ErrorCode.RULE_MISMATCH) {
+            return true;
+        }
+        if (failure.code != ErrorCode.UPSTREAM_ERROR || failure.logs.isEmpty()) {
+            return false;
+        }
+        return failure.logs.get(failure.logs.size() - 1).status() != null;
     }
 
     /**

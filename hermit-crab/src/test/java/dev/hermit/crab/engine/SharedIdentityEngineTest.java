@@ -336,6 +336,114 @@ class SharedIdentityEngineTest {
     }
 
     @Test
+    void anAuthCentreThatCannotBeReachedDoesNotCostTheOtherMembersTheirSessions() {
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, ERP_ALICE);
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(OA_ALICE, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+
+            // ERP 的会话过期，它去认证中心换票据时认证中心连不上：没有哪个响应说留着的 Cookie 没用。
+            appSessions.keySet().removeIf(value -> value.startsWith("erp-"));
+            sso.stop(0);
+            ExecutionResult failed = fixture.call(ERP_ALICE, "run");
+            assertThat(failed.success()).isFalse();
+            assertThat(failed.error().code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
+            assertThat(fixture.sessions.lastCleared("zhang")).as("连不上不清空身份的 Cookie").isNull();
+            assertThat(shared.saved.get("zhang")).extracting(StoredCookie::name).contains("TGC", "sidA");
+            int before = tickets.get();
+            assertThat(fixture.value(OA_ALICE, "run")).as("OA 的会话还在，不用找认证中心").isEqualTo("oa:ALICE");
+            assertThat(tickets.get()).isEqualTo(before);
+        }
+    }
+
+    @Test
+    void testingALoginChecksThatAccountsOwnPasswordEvenWhenAPeerIsLoggedIn() {
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, ERP_ALICE);
+        try (Fixture fixture = new Fixture(shared)) {
+            // ERP 已经登录，认证中心的 Cookie 在共用的罐里：带着它 OA 不交密码也能换到票据。
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            fixture.password = "Wrong-pass-9";
+            ExecutionResult tested = fixture.engine.testLogin(fixture.request(OA_ALICE, "run"));
+            assertThat(tested.success()).as("测试登录验证的是这个账号填的密码").isFalse();
+            assertThat(tested.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+
+            fixture.password = EngineTestSupport.PASSWORD;
+            int before = passwordLogins.get();
+            ExecutionResult again = fixture.engine.testLogin(fixture.request(OA_ALICE, "run"));
+            assertThat(again.success()).as(String.valueOf(again.error())).isTrue();
+            assertThat(passwordLogins.get()).as("从空白登录，交了一次密码").isEqualTo(before + 1);
+        }
+    }
+
+    @Test
+    void clearingTheIdentityDropsACodeAnotherMemberWasWaitingFor() {
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ASK, ERP_ALICE);
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.call(OA_ASK, "run").error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+            assertThat(fixture.sessions.pending().current(OA_ASK)).isNotNull();
+
+            // ERP 改了凭证：整个身份的 Cookie 清空，OA 那次走到一半的登录带的 Cookie 也没了。
+            fixture.sessions.invalidate(ERP_ALICE);
+            assertThat(fixture.sessions.pending().current(OA_ASK)).as("旧的验证码接不下去，不再等").isNull();
+            assertThat(fixture.call(OA_ASK, "run").error().code()).as("下一次调用从头登录，重新要验证码")
+                    .isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+        }
+    }
+
+    @Test
+    void aPausedAccountStaysPausedWhenItLeavesOrJoinsAnIdentity() {
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, ERP_ALICE);
+        try (Fixture fixture = new Fixture(shared)) {
+            fixture.password = "Wrong-pass-9";
+            for (int i = 0; i < 3; i++) {
+                assertThat(fixture.call(OA_ALICE, "run").error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            }
+            assertThat(fixture.sessions.loginPaused(OA_ALICE)).isTrue();
+            int before = passwordLogins.get();
+
+            // 解除绑定：凭证没改，暂停还在，不会再拿同一个错密码去试。
+            shared.unbind(OA_ALICE);
+            fixture.sessions.rebound(OA_ALICE);
+            assertThat(fixture.sessions.loginPaused(OA_ALICE)).isTrue();
+            assertThat(fixture.sessions.authFailures(OA_ALICE)).isEqualTo(3);
+            assertThat(fixture.call(OA_ALICE, "run").success()).isFalse();
+
+            // 绑定变了但还没人通知会话管理器：下一次调用自己发现，暂停同样带过去。
+            shared.bind("li", OA_ALICE);
+            assertThat(fixture.call(OA_ALICE, "run").success()).isFalse();
+            assertThat(fixture.sessions.loginPaused(OA_ALICE)).isTrue();
+            assertThat(passwordLogins.get()).as("暂停期间没有再去登录").isEqualTo(before);
+        }
+    }
+
+    @Test
+    void aMemberOnPlainHttpCannotReadASecureCookieAnotherMemberBroughtIn() throws Exception {
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, ERP_ALICE);
+        // 同一个主机上 https 的成员留下的 Secure Cookie，和一个普通 Cookie。
+        shared.save("zhang", List.of(
+                new StoredCookie("secureOnly", "s3cure-value", "127.0.0.1", "/", null, true, false, true),
+                new StoredCookie("plain", "plain-value", "127.0.0.1", "/", null, false, false, true)));
+        try (Fixture fixture = new Fixture(shared)) {
+            java.net.URI http = java.net.URI.create(oaUrl);
+            assertThat(fixture.sessions.tryLock(OA_ALICE, System.nanoTime() + Duration.ofSeconds(5).toNanos())).isTrue();
+            try {
+                assertThat(fixture.sessions.cookieValue(OA_ALICE, "plain", http)).isEqualTo("plain-value");
+                assertThat(fixture.sessions.cookieValue(OA_ALICE, "secureOnly", http))
+                        .as("http 的请求不会带 Secure Cookie，共用的罐里也不让按名字读").isNull();
+                assertThat(fixture.sessions.cookieValue(
+                        OA_ALICE, "secureOnly", java.net.URI.create("https://127.0.0.1"))).isEqualTo("s3cure-value");
+            } finally {
+                fixture.sessions.unlock(OA_ALICE);
+            }
+        }
+    }
+
+    @Test
     void loginFailuresPauseOnlyTheMemberThatFailed() {
         MemoryShared shared = new MemoryShared();
         shared.bind("zhang", OA_ALICE, ERP_ALICE);

@@ -50,6 +50,8 @@ public final class SessionManager implements AutoCloseable {
     private final SharedSessions shared;
     private final ConcurrentMap<String, Jar> jars = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Cleared> cleared = new ConcurrentHashMap<>();
+    /** 绑定变了、状态要重建时带过去的登录失败次数和暂停：换个身份不等于凭证改对了。 */
+    private final ConcurrentMap<SessionKey, Failures> carried = new ConcurrentHashMap<>();
     private volatile boolean closed;
 
     public SessionManager() {
@@ -165,6 +167,7 @@ public final class SessionManager implements AutoCloseable {
                     continue;
                 }
                 own = state.jar.identity == null && state.jar.cookies != null ? dump(state.jar.cookies) : List.of();
+                carry(key, state);
                 states.remove(key, state);
                 if (state.jar.identity == null) {
                     closeClient(state.jar);
@@ -197,10 +200,24 @@ public final class SessionManager implements AutoCloseable {
         }
     }
 
+    private record Failures(int count, boolean paused) {
+    }
+
+    /** 调用方持有这份状态的锁，随后把它移出 {@link #states}。 */
+    private void carry(SessionKey key, AccountState state) {
+        if (state.authFailures > 0 || state.loginPaused) {
+            carried.put(key, new Failures(state.authFailures, state.loginPaused));
+        }
+    }
+
     /** 测试用：这个账号连续登录失败了几次。 */
     int authFailures(SessionKey key) {
         AccountState state = states.get(key);
-        return state == null ? 0 : state.authFailures;
+        if (state == null) {
+            Failures kept = carried.get(key);
+            return kept == null ? 0 : kept.count();
+        }
+        return state.authFailures;
     }
 
     /** 清空一个身份的 Cookie，成员都算登出。等进行中的调用放开锁之后才清。 */
@@ -267,6 +284,14 @@ public final class SessionManager implements AutoCloseable {
         clearJar(state.jar);
     }
 
+    /** 测试登录用：绑了身份的账号清空身份的 Cookie，不记「清空重来」。调用方持有账号锁。 */
+    void resetShared(SessionKey key) {
+        AccountState state = state(key);
+        if (state.jar.identity != null) {
+            clearJar(state.jar);
+        }
+    }
+
     private void clearJar(Jar jar) {
         if (jar.cookies != null) {
             jar.cookies.clear();
@@ -285,6 +310,8 @@ public final class SessionManager implements AutoCloseable {
         }
         for (SessionKey member : members) {
             loginSnapshots.delete(member);
+            // 等着验证码的登录是带着刚清掉的 Cookie 走到一半的，接不下去了：下一次调用从头登录。
+            pending.discard(member);
         }
         shared.delete(jar.identity);
         jar.persisted = null;
@@ -301,6 +328,7 @@ public final class SessionManager implements AutoCloseable {
                 persistence.delete(key);
                 loginSnapshots.delete(key);
                 pending.discard(key);
+                carried.remove(key);
                 return;
             }
             // 进行中的调用可能持有读锁或写锁并在返回前写库；等它放开后再删库和移出状态。
@@ -313,6 +341,7 @@ public final class SessionManager implements AutoCloseable {
                 loginSnapshots.delete(key);
                 pending.discard(key);
                 states.remove(key, state);
+                carried.remove(key);
                 // 身份的罐留给其它成员。
                 if (state.jar.identity == null) {
                     closeClient(state.jar);
@@ -338,8 +367,12 @@ public final class SessionManager implements AutoCloseable {
                 return true;
             }
             // 等锁期间被 forget 了，或绑定变了：这份状态不能再用，换新的再等。
-            if (states.remove(key, state) && state.jar.identity == null) {
-                closeClient(state.jar);
+            if (states.get(key) == state) {
+                carry(key, state);
+                states.remove(key, state);
+                if (state.jar.identity == null) {
+                    closeClient(state.jar);
+                }
             }
             state.lock.unlock();
         }
@@ -360,7 +393,8 @@ public final class SessionManager implements AutoCloseable {
     public boolean loginPaused(SessionKey key) {
         AccountState state = states.get(key);
         if (state == null) {
-            return false;
+            Failures kept = carried.get(key);
+            return kept != null && kept.paused();
         }
         state.gate.readLock().lock();
         try {
@@ -427,8 +461,11 @@ public final class SessionManager implements AutoCloseable {
         if (name == null || state.jar.cookies == null) {
             return null;
         }
+        // 共用的罐里可能有别的成员从 https 拿到的 Secure Cookie：base_url 是 http 的成员请求里不会带它，
+        // 也就不能按名字读出来。没绑身份的账号罐里只有自己的 Cookie，照旧。
+        boolean plain = state.jar.identity != null && base != null && !"https".equalsIgnoreCase(base.getScheme());
         for (Cookie cookie : state.jar.cookies.getCookies()) {
-            if (name.equals(cookie.getName()) && AuthReach.sentTo(cookie, base)) {
+            if (name.equals(cookie.getName()) && AuthReach.sentTo(cookie, base) && !(plain && cookie.isSecure())) {
                 return cookie.getValue();
             }
         }
@@ -736,6 +773,11 @@ public final class SessionManager implements AutoCloseable {
         }
         if (snapshot != null) {
             state.loginSnapshot.putAll(snapshot);
+        }
+        Failures kept = carried.remove(key);
+        if (kept != null) {
+            state.authFailures = kept.count();
+            state.loginPaused = kept.paused();
         }
         return state;
     }

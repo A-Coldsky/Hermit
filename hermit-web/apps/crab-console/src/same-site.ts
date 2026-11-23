@@ -6,14 +6,14 @@ export interface SitePeers {
   sameAuth?: string[] | null
 }
 
-/** 同一网站的其它已启用规则包。只是提示：各自登录，不共用 Cookie。 */
+/** 同一网站的其它已启用规则包。只是提示：没绑到同一个身份的账号各自登录，不共用 Cookie。 */
 export function sameSiteText(names: string[]): string {
-  return `${names.join('、')} 和它访问同一个网站。各自登录、互不共用；网站只允许一个会话时会互相顶掉登录。`
+  return `${names.join('、')} 和它访问同一个网站。没绑到同一个身份的账号各自登录、互不共用；网站只允许一个会话时会互相顶掉登录。`
 }
 
 /** 经同一个认证地址（门户、SSO）登录的其它已启用规则包。只是提示：各自在认证中心登录一次。 */
 export function sameAuthText(names: string[]): string {
-  return `${names.join('、')} 和它经同一个认证地址登录。各自登录、互不共用；认证中心只允许一个会话时会互相顶掉登录。`
+  return `${names.join('、')} 和它经同一个认证地址登录。没绑到同一个身份的账号各自登录、互不共用；认证中心只允许一个会话时会互相顶掉登录。`
 }
 
 /** 订阅、导入、启用、改地址之后当场提示一次。没有这样的包时不出声。 */

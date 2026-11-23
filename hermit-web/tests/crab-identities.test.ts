@@ -82,6 +82,36 @@ describe('身份页面', () => {
     expect(crab.identities).toHaveBeenCalledTimes(2)
   })
 
+  it('新建时名字超过 64 个字符：不截断，说明原因，不能新建', async () => {
+    const wrapper = await mountPage(IdentitiesView)
+    await flushPromises()
+    const input = wrapper.find('input[data-test="identity-name"]')
+    expect(input.attributes('maxlength')).toBeUndefined()
+    expect(wrapper.find('[data-test="identity-name-problem"]').exists()).toBe(false)
+
+    await input.setValue('W'.repeat(65))
+    expect((input.element as HTMLInputElement).value).toHaveLength(65)
+    expect(wrapper.get('[data-test="identity-name-problem"]').text()).toBe('名字最多 64 个字符，现在是 65 个')
+    expect(wrapper.get('[data-test="identity-create"]').attributes('disabled')).toBeDefined()
+    await input.trigger('keyup.enter')
+    await flushPromises()
+    expect(crab.createIdentity).not.toHaveBeenCalled()
+
+    // 首尾空白不算长度，和 Crab 的检查一致。
+    await input.setValue(` ${'W'.repeat(64)} `)
+    expect(wrapper.find('[data-test="identity-name-problem"]').exists()).toBe(false)
+    await wrapper.find('[data-test="identity-create"]').trigger('click')
+    await flushPromises()
+    expect(crab.createIdentity).toHaveBeenCalledWith('W'.repeat(64))
+  })
+
+  it('身份名字放在可以折行的元素里', async () => {
+    const wrapper = await mountPage(IdentitiesView)
+    await flushPromises()
+    const title = wrapper.get('[data-test="identity-card"] .hm-card-title .name')
+    expect(title.text()).not.toBe('')
+  })
+
   it('添加账号：先检查，登录名不一样时警告，确认后才绑定', async () => {
     crab.checkIdentityMember.mockResolvedValue({
       allowed: true,

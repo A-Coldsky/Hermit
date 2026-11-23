@@ -19,6 +19,7 @@ import { unsubscribeMessage } from '../copy'
 import { canRollback, previousBlockedNote } from '../previous'
 import { repairConch, updateConch } from '../update'
 import { disabledReasonOnly } from '../disabled'
+import { notifySameSite } from '../same-site'
 
 const props = defineProps<{ conch: string }>()
 const route = useRoute()
@@ -290,8 +291,9 @@ async function setEnabled(enabled: boolean) {
   }
   working.value = true
   try {
-    await api.setConchEnabled(props.conch, enabled)
+    const done = await api.setConchEnabled(props.conch, enabled)
     ElMessage.success(enabled ? '已启用规则包' : '已停用规则包')
+    if (enabled) notifySameSite(props.conch, done.sameSite)
     await load()
   } catch (error) {
     notifyError(error)
@@ -338,6 +340,7 @@ async function applySource(target: 'LOCAL' | 'REEF', copy: boolean) {
           ? `已切到正式包，复制了 ${done.copiedAccounts} 个账号、${done.copiedConfigKeys} 项配置`
           : '已切到正式包，没有复制凭证和配置',
     )
+    notifySameSite(props.conch, done.sameSite)
     void refreshPending()
     await load()
   } catch (error) {
@@ -527,6 +530,28 @@ watch(
             data-test="source-to-local"
             @click="switchSource('LOCAL')"
           >切到本地包</el-button>
+        </template>
+      </el-alert>
+      <el-alert
+        v-if="detail.sameSite?.length"
+        :type="detail.contendingWith?.length ? 'warning' : 'info'"
+        show-icon
+        :closable="false"
+        :title="detail.contendingWith?.length ? '可能在和同网站的规则包互相顶掉登录' : '本机还有规则包访问同一个网站'"
+        data-test="same-site"
+      >
+        <template #default>
+          <template v-for="(name, index) in detail.sameSite" :key="name">
+            <template v-if="index > 0">、</template>
+            <router-link :to="`/conches/${encodeURIComponent(name)}`" data-test="same-site-link">{{ name }}</router-link>
+          </template>
+          也访问 {{ detail.site }}。这些规则包各自登录、各存各的 Cookie，互不共用。
+          <template v-if="detail.contendingWith?.length">
+            最近 {{ detail.contendingWith.join('、') }} 和这个包轮流被对方的登录顶掉、又重新登录。同一个网站账号只允许一个会话时会这样：可以让两个包使用不同的网站账号，或只保留其中一个包。Crab 分不清两边是不是同一个人，所以这只是可能。
+          </template>
+          <template v-else>
+            如果网站同一账号只允许一个会话，轮流调用时会互相顶掉登录，表现为调用变慢或返回「会话已失效」。
+          </template>
         </template>
       </el-alert>
       <el-alert

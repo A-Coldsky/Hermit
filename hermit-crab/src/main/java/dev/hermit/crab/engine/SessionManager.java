@@ -414,10 +414,12 @@ public final class SessionManager implements AutoCloseable {
     }
 
     /** 并行调用发现会话失效后，在独占锁下调用：期间没人重新登录过才登出。 */
-    void markLoggedOutSince(SessionKey key, long epoch) {
+    boolean markLoggedOutSince(SessionKey key, long epoch) {
         if (state(key).epoch == epoch) {
             markLoggedOut(key);
+            return true;
         }
+        return false;
     }
 
     /**

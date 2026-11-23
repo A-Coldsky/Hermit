@@ -49,6 +49,11 @@ export interface ConchSummary {
   reefDisabled: boolean
   /** 整个规则包在本机被停用：所有能力不可调用，也不出现在 MCP 和 OpenAPI 里。未载入的包没有这个字段。 */
   switchedOff?: boolean
+  /**
+   * 本机其它已启用、实际访问同一网站（协议、主机、端口相同）的规则包名，已排序。
+   * 按生效的 `base_url` 判断，配置里填的优先。只是提示：它们各自登录，不共用 Cookie。
+   */
+  sameSite?: string[]
   /** 本机同名本地包的版本，没有为 null。和 reefVersion 都有值时，两份同名，只有 source 那份生效。 */
   localVersion?: string | null
   /** 本机同名正式包的版本，没有为 null。 */
@@ -100,8 +105,27 @@ export interface CapabilityState {
   group?: string | null
 }
 
+/**
+ * 两个同网站的规则包可能在互相顶掉登录：10 分钟内各自被对方登录顶掉、交替出现 3 轮。
+ * 只在内存里，Crab 重启后清空；最近一次达到阈值 24 小时后不再显示。
+ */
+export interface SessionContention {
+  /** `scheme://host:port` */
+  site: string
+  /** 两个包名，已排序。 */
+  conches: string[]
+  /** 最近一次达到阈值的时间，ISO-8601。 */
+  lastAt: string
+}
+
 export interface ConchDetail {
   conch: string
+  /** 实际访问的站点 `scheme://host:port`。`driver: mcp`、已停用或地址读不出时为 null。 */
+  site?: string | null
+  /** 见 {@link ConchSummary.sameSite}。 */
+  sameSite?: string[]
+  /** `sameSite` 里可能正在和它互相顶掉登录的包，见 {@link SessionContention}。 */
+  contendingWith?: string[]
   /** 已加载版本。签名损坏且未载入时为 null，不表示已安装。 */
   version: string | null
   title: string
@@ -680,6 +704,8 @@ export interface LocalImportResult {
   conch: string
   version: string
   replaced: boolean
+  /** 导入后本机其它已启用的同网站规则包，见 {@link ConchSummary.sameSite}。 */
+  sameSite?: string[]
   /**
    * 不阻止保存。控制台给这些代码加短中文：`IGNORED_REQUEST_FIELD`（未知字段不会发送）、
    * `DOUBLE_ENCODE`（`query` / `form` 用了 `urlencode`）、`PERCENT_ENCODED`（`query` 字面值里已有 `%xx`）、
@@ -836,6 +862,8 @@ export interface SubscriptionOutcome {
 export interface SubscriptionResult {
   conch: string
   subscribed: boolean
+  /** 订阅后本机其它已启用的同网站规则包，见 {@link ConchSummary.sameSite}。 */
+  sameSite?: string[]
   outcome: SubscriptionOutcome | null
 }
 
@@ -943,7 +971,7 @@ export const api = {
   changePassword: (current: string, next: string) =>
     http.post<{ ok: true }>(`${base}/session/password`, { current, next }),
 
-  conches: () => http.get<{ conches: ConchSummary[] }>(`${base}/conches`),
+  conches: () => http.get<{ conches: ConchSummary[]; contention?: SessionContention[] }>(`${base}/conches`),
   conch: (conch: string) => http.get<ConchDetail>(conchPath(conch)),
 
   accounts: (conch: string) => http.get<{ accounts: Account[] }>(`${conchPath(conch)}/accounts`),
@@ -987,15 +1015,15 @@ export const api = {
 
   config: (conch: string) => http.get<{ fields: Record<string, ConfigValue> }>(`${conchPath(conch)}/config`),
   writeConfig: (conch: string, values: Record<string, string>) =>
-    http.put<{ updated: boolean }>(`${conchPath(conch)}/config`, values),
+    http.put<{ updated: boolean; sameSite?: string[] }>(`${conchPath(conch)}/config`, values),
 
   /** 启用或停用整个规则包。停用后所有 Key 都不能调用，凭证、账号和配置不动。 */
   setConchEnabled: (conch: string, enabled: boolean) =>
-    http.post<{ conch: string; switchedOff: boolean }>(`${conchPath(conch)}/${enabled ? 'enable' : 'disable'}`),
+    http.post<{ conch: string; switchedOff: boolean; sameSite?: string[] }>(`${conchPath(conch)}/${enabled ? 'enable' : 'disable'}`),
 
   /** 同名的本地包和正式包之间切换生效的那份。copy 只在切到 REEF 时有效：复制本地包的账号、凭证和配置。 */
   setConchSource: (conch: string, source: 'LOCAL' | 'REEF', copy = false) =>
-    http.post<{ conch: string; source: 'LOCAL' | 'REEF'; copied: boolean; copiedAccounts: number; copiedConfigKeys: number }>(
+    http.post<{ conch: string; source: 'LOCAL' | 'REEF'; copied: boolean; copiedAccounts: number; copiedConfigKeys: number; sameSite?: string[] }>(
       `${conchPath(conch)}/source`,
       source === 'REEF' ? { source, copy } : { source },
     ),

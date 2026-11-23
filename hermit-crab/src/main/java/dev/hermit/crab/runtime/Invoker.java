@@ -101,6 +101,8 @@ public final class Invoker {
     private volatile FileStage fileStage;
     private volatile String fileBase;
     private volatile java.util.function.Predicate<String> switchedOff = name -> false;
+    private volatile java.util.function.Function<String, java.util.List<String>> rivals = name -> java.util.List.of();
+    public static final String RIVAL_HINT = "本机另有规则包访问同一网站，可能互相顶掉登录，请到控制台查看。";
 
     public Invoker(
             ConchRegistry registry,
@@ -209,6 +211,54 @@ public final class Invoker {
     /** 整个规则包的本机开关。停用的包不论 Key 范围一律拒绝。 */
     public void bindSwitchedOff(java.util.function.Predicate<String> lookup) {
         this.switchedOff = lookup == null ? name -> false : lookup;
+    }
+
+    /** 和某个包可能在互相顶掉登录的其它包名。会话失效的报错据此加一句提示。 */
+    public void bindRivals(java.util.function.Function<String, java.util.List<String>> lookup) {
+        this.rivals = lookup == null ? name -> java.util.List.of() : lookup;
+    }
+
+    /**
+     * 会话失效、又有同网站的包可能在互相顶掉登录时，在报错后面加一句。
+     * 只写出这把 Key 自己能调用的包名；一个都不能调用时不出现包名。
+     */
+    private String withRivalHint(ApiKeyPrincipal principal, String conch, String message) {
+        java.util.List<String> names;
+        try {
+            names = rivals.apply(conch);
+        } catch (RuntimeException ex) {
+            return message;
+        }
+        if (names == null || names.isEmpty()) {
+            return message;
+        }
+        java.util.ArrayList<String> visible = new java.util.ArrayList<>();
+        for (String name : names) {
+            if (callable(principal, name)) {
+                visible.add(name);
+            }
+        }
+        String hint = visible.isEmpty()
+                ? RIVAL_HINT
+                : "本机的规则包 " + String.join("、", visible) + " 访问同一网站，可能互相顶掉登录，请到控制台查看。";
+        return (message == null || message.isBlank() ? "" : message + "。") + hint;
+    }
+
+    private boolean callable(ApiKeyPrincipal principal, String conch) {
+        ConchRegistry.Active active = registry.active(conch).orElse(null);
+        if (active == null) {
+            return false;
+        }
+        if (active.origin() == Origin.LOCAL && !principal.scope().allowsLocal(conch)) {
+            return false;
+        }
+        for (Map.Entry<String, Action> entry : active.doc().actions().entrySet()) {
+            Action capability = entry.getValue();
+            if (principal.permits(conch, entry.getKey(), capability.group(), CapabilityHttp.readOnly(capability))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 包不在注册表里时，用它分清「已停用」和「不存在」。 */
@@ -592,7 +642,11 @@ public final class Invoker {
             return done(traceId, null, null, httpData, payload);
         }
         Object errorData = payload != null && payload.upstreamToolError() ? payload.httpData() : null;
-        return done(traceId, result.error().code(), result.error().message(), errorData, payload);
+        String message = result.error().message();
+        if (result.error().code() == ErrorCode.SESSION_EXPIRED) {
+            message = withRivalHint(principal, doc.conch(), message);
+        }
+        return done(traceId, result.error().code(), message, errorData, payload);
     }
 
     private ExecutionResult executeAuthorized(ExecutionRequest request, ConchDoc doc, String traceId) {

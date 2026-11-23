@@ -28,6 +28,7 @@ import {
   type PendingLocalOverwrite,
   type ValidationIssue,
 } from '../api'
+import { notifySameSite, sameSiteText } from '../same-site'
 import LocalHistoryList from '../components/LocalHistoryList.vue'
 import { formatImportIssue } from '../import-issue'
 import { refreshPending } from '../status'
@@ -126,6 +127,7 @@ async function upload(file: File, confirm: boolean) {
     } else {
       ElMessage.success(`${verb}本地规则包 ${result.conch} v${result.version}`)
     }
+    notifySameSite(result.conch, result.sameSite)
     await load()
   } catch (error) {
     const conflict = confirm ? null : overwriteConflict(error)
@@ -313,8 +315,9 @@ async function confirmPending(row: PendingLocalOverwrite) {
   acting.value = key
   pendingConflicts[conch] = ''
   try {
-    await api.confirmPendingOverwrite(conch, row.sha256, rememberChoice[conch] === true)
+    const done = await api.confirmPendingOverwrite(conch, row.sha256, rememberChoice[conch] === true)
     ElMessage.success(`已确认覆盖 ${conch} ${versionLabel(row.toVersion)}`)
+    notifySameSite(conch, done.sameSite)
     await load()
   } catch (error) {
     if (error instanceof ApiError && error.status === 409) {
@@ -546,6 +549,9 @@ onMounted(load)
               <el-tag v-if="row.localVersion && row.reefVersion" type="info" effect="plain" size="small" class="local" data-test="two-sources-tag">{{ row.source === 'LOCAL' ? '另有同名正式包' : '另有同名本地包' }}</el-tag>
               <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
               <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
+              <el-tooltip v-if="row.sameSite?.length" :content="`${sameSiteText(row.sameSite)}`" placement="top">
+                <el-tag type="info" effect="plain" size="small" class="local" data-test="same-site-tag">同网站 {{ row.sameSite.length }} 个包</el-tag>
+              </el-tooltip>
               <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
               <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
             </strong>

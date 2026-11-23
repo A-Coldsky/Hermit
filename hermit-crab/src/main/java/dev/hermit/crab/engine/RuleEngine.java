@@ -20,6 +20,7 @@ import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.http.HostNames;
+import dev.hermit.common.http.SiteAddress;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
@@ -58,6 +59,7 @@ public final class RuleEngine implements ConchExecutor {
     private final StepRunner steps;
     /** HTTP body capture. Null leaves execution unchanged. JSON-RPC traces are not written here. */
     private DevTraceSink traceSink;
+    private volatile SessionContention contention;
 
     public RuleEngine(ConchRegistry registry, SessionManager sessions) {
         this(registry, sessions, EngineSettings.defaults());
@@ -89,6 +91,25 @@ public final class RuleEngine implements ConchExecutor {
      */
     public void bindDevTraceSink(DevTraceSink sink) {
         this.traceSink = sink;
+    }
+
+    /** 同网站的规则包互相顶掉登录的计数。没绑定时不记。 */
+    public void bindContention(SessionContention contention) {
+        this.contention = contention;
+    }
+
+    private void noteLogin(LoginScope scope) {
+        SessionContention sink = contention;
+        if (sink != null) {
+            sink.loggedIn(SiteAddress.of(scope.base), scope.key);
+        }
+    }
+
+    private void noteLost(URI base, SessionKey key) {
+        SessionContention sink = contention;
+        if (sink != null) {
+            sink.lost(SiteAddress.of(base), key);
+        }
     }
 
     public ExecutionResult execute(ExecutionRequest request) {
@@ -334,7 +355,9 @@ public final class RuleEngine implements ConchExecutor {
             }
             if (lostBefore) {
                 // 共享锁下那一次已经发现会话失效：别的调用还没重新登录过才登出，这一次算重跑。
-                sessions.markLoggedOutSince(key, handoff.epoch);
+                if (sessions.markLoggedOutSince(key, handoff.epoch)) {
+                    noteLost(base, key);
+                }
                 if (!action.idempotent()) {
                     return expired(handoff.lost.logs, version, request, credentials, scope, start);
                 }
@@ -344,6 +367,7 @@ public final class RuleEngine implements ConchExecutor {
             Attempt attempt = runAction(action, scope);
             if (attempt.lost) {
                 sessions.markLoggedOut(key);
+                noteLost(base, key);
                 if (!action.idempotent() || lostBefore) {
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
@@ -352,6 +376,7 @@ public final class RuleEngine implements ConchExecutor {
                 attempt = runAction(action, scope);
                 if (attempt.lost) {
                     sessions.markLoggedOut(key);
+                    noteLost(base, key);
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
             }
@@ -966,6 +991,7 @@ public final class RuleEngine implements ConchExecutor {
                 }
                 scope.replaceSnapshot(snapshot);
                 sessions.markLoggedIn(scope.key);
+                noteLogin(scope);
                 sessions.recordAuthSuccess(scope.key);
                 if (draft != null) {
                     draft.login(true, true);

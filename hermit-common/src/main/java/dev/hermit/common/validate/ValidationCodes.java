@@ -3,6 +3,11 @@ package dev.hermit.common.validate;
 public final class ValidationCodes {
 
     public static final String CONCH_NAME = "CONCH_NAME";
+    /**
+     * Reef 上传时：已发布的另一个规则包访问同一网站。警告，不阻止上传。
+     * 只比较包里写的地址，每台 Crab 另填的地址由 Crab 控制台提示。
+     */
+    public static final String SAME_SITE = "SAME_SITE";
     public static final String ACTION_NAME = "ACTION_NAME";
     public static final String DRIVER = "DRIVER";
     public static final String MISSING_TITLE = "MISSING_TITLE";

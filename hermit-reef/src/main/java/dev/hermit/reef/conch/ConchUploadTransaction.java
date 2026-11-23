@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.http.SiteAddress;
 import dev.hermit.common.validate.ConchDiff;
+import dev.hermit.common.validate.ValidationCodes;
+import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.version.SemVer;
 import dev.hermit.reef.audit.AuditAction;
 import dev.hermit.reef.audit.AuditService;
@@ -14,7 +17,10 @@ import dev.hermit.reef.web.ReefErrorCode;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,7 +66,8 @@ class ConchUploadTransaction {
             throw conflict(ConchUploadService.VERSION_NOT_GREATER);
         }
         JsonNode diff = diffAgainstCurrent(existing, doc);
-        String validationJson = json(prepared.warnings());
+        List<ValidationIssue> warnings = withSameSite(prepared.warnings(), doc);
+        String validationJson = json(warnings);
         String diffJson = json(diff);
         boolean wrote = false;
         try {
@@ -87,7 +94,7 @@ class ConchUploadTransaction {
                     validationJson,
                     diffJson);
             auditService.record(actor, AuditAction.UPLOAD, conch, version, null);
-            return new UploadResponse(conch, version, prepared.warnings(), diff);
+            return new UploadResponse(conch, version, warnings, diff);
         } catch (RuntimeException ex) {
             if (wrote) {
                 storage.deleteYaml(conch, version);
@@ -97,6 +104,62 @@ class ConchUploadTransaction {
             }
             throw ex;
         }
+    }
+
+    /**
+     * 已发布的其它规则包里，包内地址和这次上传的包指向同一网站的，各加一条警告。
+     * 两个包可能出自互不知道对方的作者；同一台 Crab 同时启用它们时各自登录。
+     * 读不出来的旧包跳过，不影响上传。
+     */
+    private List<ValidationIssue> withSameSite(List<ValidationIssue> warnings, ConchDoc uploaded) {
+        Set<String> sites = SiteAddress.declared(uploaded);
+        if (sites.isEmpty()) {
+            return warnings;
+        }
+        ArrayList<ValidationIssue> all = new ArrayList<>(warnings);
+        List<VersionRow> published = new ArrayList<>(repository.listCurrent());
+        published.sort(Comparator.comparing(VersionRow::conch));
+        for (VersionRow row : published) {
+            if (row.conch().equals(uploaded.conch())) {
+                continue;
+            }
+            ConchDoc other;
+            try {
+                other = ConchParser.parse(new String(storage.readYaml(row.conch(), row.version()),
+                        StandardCharsets.UTF_8));
+            } catch (RuntimeException ex) {
+                continue;
+            }
+            for (String site : SiteAddress.declared(other)) {
+                if (sites.contains(site)) {
+                    all.add(new ValidationIssue(ValidationCodes.SAME_SITE, "base_url", sameSiteMessage(other, site), null));
+                    break;
+                }
+            }
+        }
+        return List.copyOf(all);
+    }
+
+    static String sameSiteMessage(ConchDoc other, String site) {
+        StringBuilder text = new StringBuilder("已发布的规则包 ").append(other.conch());
+        boolean titled = other.title() != null && !other.title().isBlank();
+        boolean owned = other.owner() != null && !other.owner().isBlank();
+        if (titled || owned) {
+            text.append("（");
+            if (titled) {
+                text.append(other.title());
+            }
+            if (owned) {
+                text.append(titled ? "，" : "").append("维护者 ").append(other.owner());
+            }
+            text.append("）");
+        } else {
+            text.append(' ');
+        }
+        return text.append("也访问 ").append(site)
+                .append("。同一台 Crab 同时启用这两个包时各自登录；网站只允许一个会话时会互相顶掉。")
+                .append("可以考虑把能力加进已有的包。")
+                .toString();
     }
 
     private JsonNode diffAgainstCurrent(List<VersionRow> existing, ConchDoc uploaded) {

@@ -254,6 +254,7 @@ Reef 业务表、索引、唯一约束和检查约束都以 `hermit_` 开头，F
 | CLI 报数据库占用 | serve 已持有 H2；使用本机控制台 API 或停止 serve 后操作 |
 | 启动打印 `database operation failed` 和下一行路径 | 看下一行根因。Windows 盘符路径应是 `C:/...`，不能是 `/C:/...`。数据目录路径含分号时，这一行是「数据目录路径含有分号，无法打开本地数据库。」，不会去连 H2 |
 | `RULE_MISMATCH` | 通过 traceId 查步骤信息，核对页面选择器/输出。已安装版本保持不动，用更高版本修复后再手动更新 |
+| `SESSION_EXPIRED` 反复出现，或调用时快时慢 | 概览页有没有「同一网站的两个规则包可能在互相顶掉登录」。有的话，网站多半同一账号只允许一个会话：让两个包使用不同的网站账号，或只保留一个包。Crab 不会让两个包共用登录 |
 | 上游 HTTP 400，或会话 401/403 | 分别是 `INVALID_INPUT` 与 `SESSION_EXPIRED`。核对参数或凭证；页面结构变化才是 `RULE_MISMATCH` |
 
 Reef 日志：`docker compose logs -f reef` 或 Java 进程输出。Crab 日志查看进程输出与控制台调用详情；同机容器用 `docker compose --profile client logs -f crab`，独立容器用 `docker compose -f docker-compose.crab.yml logs -f crab`。不要把敏感配置直接附入问题报告。

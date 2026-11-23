@@ -209,7 +209,20 @@ class ConchSameSiteUploadTest {
                 "hr_sso", "1.0.0", "https://hr.corp.com", "{{config.sso_url}}", "https://sso.corp.com/"));
         assertThat(coded(configured, "SAME_AUTH")).hasSize(2);
         assertThat(coded(configured, "AUTH_ORIGIN_ADDED").get(0).path("message").asText())
-                .contains("配置项 sso_url 填的地址");
+                .contains("配置项 sso_url 填的地址（默认 https://sso.corp.com:443）");
+        publish("hr_sso", "1.0.0");
+        // 同一个配置项、默认值没变：不提示。默认值换了主机：没另填的 Crab 会把凭证交到新地址，要提示。
+        assertThat(coded(upload(ssoYaml(
+                "hr_sso", "1.1.0", "https://hr.corp.com", "{{config.sso_url}}", "https://SSO.corp.com:443/cas")),
+                "AUTH_ORIGIN_ADDED")).isEmpty();
+        JsonNode redirected = upload(ssoYaml(
+                "hr_sso", "1.2.0", "https://hr.corp.com", "{{config.sso_url}}", "https://login2.corp.com"));
+        assertThat(coded(redirected, "AUTH_ORIGIN_ADDED").get(0).path("message").asText())
+                .contains("配置项 sso_url 填的地址（默认 https://login2.corp.com:443）")
+                .contains("当前发布的版本没有");
+        // 只是去掉默认值：还是那个配置项，不算新增。
+        assertThat(coded(upload(ssoYaml("hr_sso", "1.3.0", "https://hr.corp.com", "{{config.sso_url}}", "")),
+                "AUTH_ORIGIN_ADDED")).isEmpty();
         JsonNode blank = upload(ssoYaml("crm_sso", "1.0.0", "https://crm.corp.com", "{{config.sso_url}}", ""));
         assertThat(coded(blank, "SAME_AUTH")).isEmpty();
 

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.http.AuthOrigins;
 import dev.hermit.common.http.SiteAddress;
@@ -20,8 +21,10 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -122,11 +125,15 @@ class ConchUploadTransaction {
         }
         Set<String> before = previous == null || previous.auth() == null
                 ? Set.of()
-                : authEntries(previous);
+                : authEntries(previous).keySet();
         ArrayList<String> added = new ArrayList<>();
-        for (String entry : authEntries(uploaded)) {
-            if (!before.contains(entry)) {
-                added.add(entry);
+        for (Map.Entry<String, String> entry : authEntries(uploaded).entrySet()) {
+            String key = entry.getKey();
+            // 去掉默认值不算新增：还是同一个配置项，只是不再替使用者填地址。
+            boolean dropsDefault = key.startsWith("config:") && key.endsWith("=")
+                    && before.stream().anyMatch(known -> known.startsWith(key));
+            if (!before.contains(key) && !dropsDefault) {
+                added.add(entry.getValue());
             }
         }
         if (added.isEmpty()) {
@@ -143,18 +150,27 @@ class ConchUploadTransaction {
         return List.copyOf(all);
     }
 
-    /** 认证地址逐项写成给人看的文字：字面量规范成 scheme://host:port，配置引用写出配置项名。 */
-    private static Set<String> authEntries(ConchDoc doc) {
-        LinkedHashSet<String> entries = new LinkedHashSet<>();
+    /**
+     * 认证地址逐项：键用来和上一个版本比较，值是给人看的文字。字面量规范成 scheme://host:port；
+     * 配置引用写出配置项名，有默认值时把默认地址也写出来并算进键里，
+     * 因为没另填这个配置项的 Crab 用的就是默认值，默认值换了主机等于认证地址换了。
+     */
+    private static Map<String, String> authEntries(ConchDoc doc) {
+        LinkedHashMap<String, String> entries = new LinkedHashMap<>();
         for (String entry : doc.auth().origins()) {
             String name = AuthOrigins.configName(entry);
             if (name != null) {
-                entries.add("配置项 " + name + " 填的地址");
+                ConfigField field = doc.config().get(name);
+                String fallback = field != null && field.defaultValue() instanceof String text
+                        ? SiteAddress.of(text)
+                        : null;
+                entries.put("config:" + name + "=" + (fallback == null ? "" : fallback),
+                        "配置项 " + name + " 填的地址" + (fallback == null ? "" : "（默认 " + fallback + "）"));
                 continue;
             }
             String site = SiteAddress.of(entry);
             if (site != null) {
-                entries.add(site);
+                entries.put(site, site);
             }
         }
         return entries;

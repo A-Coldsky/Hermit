@@ -36,6 +36,8 @@ public final class FileStage implements AutoCloseable {
     public static final int INLINE_LIMIT = 256 * 1024;
     /** 暂存区里最多同时放这么多个文件。 */
     public static final int MAX_FILES = 10_000;
+    /** 控制台/CLI 本地试跑时使用的归属标记：隔离真实 API Key，同时仍可读控制台显式上传（owner 为 null）的文件。 */
+    public static final String CONSOLE_TRIAL_OWNER = "__console_trial__";
     public static final String TOO_LARGE = "文件超过暂存区的单文件上限";
     public static final String FULL = "文件暂存区已满，等已有文件过期后再试，或在 Crab 控制台调大总容量";
     public static final String MISSING = "文件不存在、已过期，或不属于这个 API Key";

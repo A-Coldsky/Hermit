@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import dev.hermit.crab.config.CrabConfig;
+import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.InvokeOutcome;
 import dev.hermit.crab.store.Actors;
@@ -27,6 +28,7 @@ import dev.hermit.crab.store.ApiKeyPrincipal;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.CreatedApiKey;
+import dev.hermit.crab.store.Origin;
 
 /**
  * 地址扩大的覆盖在 {@code registry.put} 之前清会话，成功后再清一次。
@@ -367,6 +369,134 @@ class LocalConchReplaceSessionTest {
             assertThat(next.status()).as(body(next)).isEqualTo(200);
             assertThat(newLogins).hasValue(1);
             assertThat(newPings).hasValue(1);
+        } finally {
+            oldHost.stop(0);
+            newHost.stop(0);
+        }
+    }
+
+    /** 本地包先因语法损坏进入 broken 状态，修复并扩大地址边界后 reload 必须仍触发 onWidened 清会话与解绑身份。 */
+    @Test
+    void reloadFixingBrokenLocalConchWithWidenedBoundaryTriggersOnWidened() throws Exception {
+        HttpServer oldHost = server();
+        HttpServer newHost = server();
+        AtomicInteger oldLogins = new AtomicInteger();
+        AtomicInteger newLogins = new AtomicInteger();
+        AtomicInteger newPings = new AtomicInteger();
+        oldHost.createContext("/", exchange -> {
+            if ("/login".equals(exchange.getRequestURI().getPath())) {
+                oldLogins.incrementAndGet();
+                exchange.getResponseHeaders().add("Set-Cookie", "sid=old-cookie-value; Path=/");
+            }
+            byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        newHost.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            if ("/login".equals(path)) {
+                newLogins.incrementAndGet();
+                exchange.getResponseHeaders().add("Set-Cookie", "sid=new-cookie-value; Path=/");
+            } else if ("/ping".equals(path)) {
+                newPings.incrementAndGet();
+                String cookie = exchange.getRequestHeaders().getFirst("Cookie");
+                if (cookie != null && cookie.contains("old-cookie-value")) {
+                    exchange.sendResponseHeaders(500, -1);
+                    exchange.close();
+                    return;
+                }
+            }
+            byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        oldHost.start();
+        newHost.start();
+        int oldPort = oldHost.getAddress().getPort();
+        int newPort = newHost.getAddress().getPort();
+        try {
+            // 1. 独立本地包：先损坏再修复并扩大边界，reload 必须触发 onWidened 清掉旧会话与登录快照。
+            try (CrabRuntime runtime = CrabRuntime.open(
+                    new CrabPaths(temp.resolve("reload-broken")), CrabConfig.defaults(), name -> null)) {
+                runtime.localConches().importBytes(flight("1.0.0", oldPort).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+                runtime.admin().createAccount("flight", "ada", Actors.CLI);
+                ApiKeyPrincipal principal = principal(runtime);
+                assertThat(invoke(runtime, principal, "trace-old").status()).isEqualTo(200);
+                assertThat(oldLogins).hasValue(1);
+                assertThat(loginRows(runtime)).isEqualTo(1);
+                assertThat(sessionRows(runtime)).isEqualTo(1);
+
+                java.nio.file.Path file = runtime.paths().localConches().resolve("flight.yaml");
+                java.nio.file.Files.writeString(file, ":\n");
+                runtime.localConches().reload(Actors.CLI);
+                assertThat(runtime.registry().find("flight", Origin.LOCAL)).isEmpty();
+                assertThat(runtime.localConches().occupies("flight")).isTrue();
+                assertThat(loginRows(runtime)).isEqualTo(1);
+                assertThat(sessionRows(runtime)).isEqualTo(1);
+
+                java.nio.file.Files.writeString(file, flight("1.0.1", newPort));
+                runtime.localConches().reload(Actors.CLI);
+
+                assertThat(runtime.registry().find("flight", Origin.LOCAL).orElseThrow().baseUrl())
+                        .contains(":" + newPort);
+                assertThat(loginRows(runtime)).isZero();
+                assertThat(sessionRows(runtime)).isZero();
+
+                InvokeOutcome next = invoke(runtime, principal, "trace-new");
+                assertThat(next.status()).as(body(next)).isEqualTo(200);
+                assertThat(newLogins).hasValue(1);
+                assertThat(newPings).hasValue(1);
+            }
+
+            // 2. 绑了共享身份的本地包：先损坏（保留绑定）再修复并扩大边界，reload 触发 onWidened 将其移出身份且保留同伴会话。
+            try (CrabRuntime runtime = CrabRuntime.open(
+                    new CrabPaths(temp.resolve("reload-broken-shared")), CrabConfig.defaults(), name -> null)) {
+                runtime.localConches().importBytes(flight("1.0.0", oldPort).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+                runtime.localConches().importBytes(
+                        flight("1.0.0", oldPort).replace("conch: flight", "conch: wing").getBytes(StandardCharsets.UTF_8),
+                        Actors.CLI);
+                runtime.admin().createAccount(Origin.LOCAL, "flight", "ada", Actors.CLI);
+                runtime.admin().createAccount(Origin.LOCAL, "wing", "ada", Actors.CLI);
+                String id = runtime.identities().create("共享", Actors.CLI).id();
+                runtime.identities().bind(id, Origin.LOCAL, "flight", "ada", Actors.CLI);
+                runtime.identities().bind(id, Origin.LOCAL, "wing", "ada", Actors.CLI);
+
+                ApiKeyPrincipal principal = principal(runtime);
+                assertThat(invoke(runtime, principal, "trace-shared-flight").status()).isEqualTo(200);
+                InvokeOutcome wingInit = runtime.invoker().invoke(
+                        principal, "wing", "ping", java.util.Map.of(), Optional.of("ada"), Optional.empty(), "trace-wing-1");
+                assertThat(wingInit.status()).as(body(wingInit)).isEqualTo(200);
+                int loginsBeforeBreak = oldLogins.get();
+                assertThat(loginRows(runtime)).isEqualTo(1);
+
+                SessionKey flightKey = new SessionKey(Origin.LOCAL, "flight", "ada");
+                SessionKey wingKey = new SessionKey(Origin.LOCAL, "wing", "ada");
+                java.nio.file.Path file = runtime.paths().localConches().resolve("flight.yaml");
+                java.nio.file.Files.writeString(file, ":\n");
+                runtime.localConches().reload(Actors.CLI);
+                assertThat(runtime.registry().find("flight", Origin.LOCAL)).isEmpty();
+                assertThat(runtime.identities().identityOf(flightKey)).isEqualTo(id);
+
+                java.nio.file.Files.writeString(file, flight("1.0.1", newPort));
+                runtime.localConches().reload(Actors.CLI);
+
+                assertThat(runtime.identities().identityOf(flightKey))
+                        .as("从 broken 修复并扩边界后应自动移出共享身份").isNull();
+                assertThat(runtime.identities().identityOf(wingKey)).isEqualTo(id);
+                assertThat(loginRows(runtime)).isZero();
+
+                InvokeOutcome wingAfter = runtime.invoker().invoke(
+                        principal, "wing", "ping", java.util.Map.of(), Optional.of("ada"), Optional.empty(), "trace-wing-2");
+                assertThat(wingAfter.status()).as(body(wingAfter)).isEqualTo(200);
+                assertThat(oldLogins).as("同伴在共享身份里的会话不应被误清").hasValue(loginsBeforeBreak);
+
+                InvokeOutcome flightAfter = invoke(runtime, principal, "trace-flight-after");
+                assertThat(flightAfter.status()).as(body(flightAfter)).isEqualTo(200);
+                assertThat(newLogins).hasValue(2);
+                assertThat(newPings).hasValue(2);
+            }
         } finally {
             oldHost.stop(0);
             newHost.stop(0);

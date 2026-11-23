@@ -145,7 +145,7 @@ public final class ConchParser {
 
     private static GroupDef group(String name, JsonNode node, String path, int depth) {
         ObjectNode obj = object(node, path);
-        if (depth >= 1 && obj.has("children") && !obj.get("children").isNull()) {
+        if (depth >= 1 && obj.has("children")) {
             throw new ConchParseException(child(path, "children"), "分组最多支持两层，子分组不能再包含 children");
         }
         rejectUnknown(obj, path, GROUP_KEYS);

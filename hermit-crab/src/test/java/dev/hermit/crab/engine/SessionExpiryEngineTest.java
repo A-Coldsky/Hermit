@@ -52,6 +52,7 @@ class SessionExpiryEngineTest {
     private final AtomicInteger loginCount = new AtomicInteger();
     private final AtomicInteger aliveCount = new AtomicInteger();
     private final AtomicInteger actionHits = new AtomicInteger();
+    private final AtomicInteger loginPageHits = new AtomicInteger();
     private final AtomicReference<String> validSession = new AtomicReference<>("s1");
     private volatile String expiryMode = "json_200";
     private volatile String aliveMode = "json_ok";
@@ -88,8 +89,20 @@ class SessionExpiryEngineTest {
             write(exchange, 200, "application/json", "{\"code\":0,\"hint\":\"请重新登录\"}");
             return;
         }
+        if ("/login_token".equals(path)) {
+            int n = loginCount.incrementAndGet();
+            String next = "s" + n;
+            validSession.set(next);
+            exchange.getResponseHeaders().add("Set-Cookie", "SID=" + next + "; Path=/");
+            write(exchange, 200, "application/json", "{\"code\":0,\"token\":\"secret-login-tok-" + n + "\"}");
+            return;
+        }
         if ("/api/me".equals(path)) {
             aliveCount.incrementAndGet();
+            if ("slow_regex_body".equals(aliveMode)) {
+                write(exchange, 200, "text/plain; charset=utf-8", "a".repeat(26) + "!");
+                return;
+            }
             if (!authed) {
                 if ("html_200".equals(aliveMode)) {
                     write(exchange, 200, "text/html; charset=utf-8", "<script>top.location.href='/login'</script>");
@@ -99,6 +112,26 @@ class SessionExpiryEngineTest {
                 return;
             }
             write(exchange, 200, "application/json", "{\"code\":0,\"data\":{\"userId\":\"u1\"}}");
+            return;
+        }
+        if ("/login-page".equals(path)) {
+            loginPageHits.incrementAndGet();
+            write(exchange, 500, "text/html; charset=utf-8", "<html>login page crashed</html>");
+            return;
+        }
+        if ("/api/redir-login".equals(path)) {
+            int hit = actionHits.incrementAndGet();
+            if (!authed || (expireOnce && hit == 1)) {
+                if (expireOnce && hit == 1) {
+                    validSession.set("invalidated");
+                }
+                exchange.getResponseHeaders().add("Location", "/login-page");
+                exchange.sendResponseHeaders(302, -1);
+                exchange.close();
+                return;
+            }
+            exchange.getResponseHeaders().add("Content-Disposition", "attachment; filename=\"redir.pdf\"");
+            write(exchange, 200, "application/pdf", "%PDF-1.4 ok");
             return;
         }
         if ("/api/download".equals(path)) {
@@ -121,6 +154,7 @@ class SessionExpiryEngineTest {
             return;
         }
         if ("/api/html_ok".equals(path)) {
+            actionHits.incrementAndGet();
             write(exchange, 200, "text/html; charset=utf-8", "<html><body><h1>工作台</h1></body></html>");
             return;
         }
@@ -149,6 +183,8 @@ class SessionExpiryEngineTest {
             }
             switch (expiryMode) {
                 case "json_200" -> write(exchange, 200, "application/json", "{\"code\":10001,\"msg\":\"登录超时\"}");
+                case "json_list_expired" -> write(exchange, 200, "application/json",
+                        "{\"errors\":[{\"code\":401},{\"code\":99}]}");
                 case "js_redirect_200" -> write(exchange, 200, "text/html; charset=utf-8",
                         "<html><script>top.location.href='/login?next=/items'</script></html>");
                 case "header_200" -> {
@@ -752,6 +788,326 @@ class SessionExpiryEngineTest {
             assertThat(afterIdle.success()).isTrue();
             assertThat(aliveCount.get()).isEqualTo(1);
             assertThat(loginCount.get()).isEqualTo(loginsBefore + 1);
+        }
+    }
+
+    @Test
+    void non2xxAnd400ReachAssertOnFailAndIfHandlersAndJsonListExpiredWhen() {
+        String yaml = """
+                conch: demo_p02
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.12.0
+                base_url: %s
+                title: 非2xx与400判定
+                description: 验证400与非2xx可进入assert(on_fail)和if
+                credentials: {}
+                auth:
+                  expired_when:
+                    - json_equals: {"$.errors[*].code": 401}
+                  steps:
+                    - request: {method: POST, path: /login}
+                    - assert: {status: 200, cookie_exists: SID}
+                actions:
+                  assert_status_on_fail:
+                    title: 断言状态失效
+                    description: assert(on_fail)接住400与419
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - request: {method: GET, path: /api/items}
+                      - assert: {status: 200, on_fail: session_expired}
+                      - extract: {items: {jsonpath: "$.items"}}
+                    output: {items: {type: array, description: 列表}}
+                    examples: [{input: {}, output: {items: []}}]
+                    notes: 测试
+                    related: []
+                  if_handles_400:
+                    title: 分支接住400
+                    description: if status 400不被提前拦截
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - request: {method: GET, path: /api/bad_param}
+                      - set: {handled: "no"}
+                      - if:
+                          status: 400
+                          then:
+                            - set: {handled: "yes"}
+                    output: {handled: {type: string, description: 处理结果}}
+                    examples: [{input: {}, output: {handled: yes}}]
+                    notes: 测试
+                    related: []
+                  if_contains_assert_on_fail:
+                    title: 无请求if内含失效断言
+                    description: 无request的if内部assert(on_fail)接住400
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - request: {method: GET, path: /api/items}
+                      - if:
+                          contains: "TOKEN_EXPIRED"
+                          then:
+                            - assert: {not_contains: "TOKEN_EXPIRED", on_fail: session_expired}
+                      - extract: {items: {jsonpath: "$.items"}}
+                    output: {items: {type: array, description: 列表}}
+                    examples: [{input: {}, output: {items: []}}]
+                    notes: 测试
+                    related: []
+                  if_no_request_then_status_assert:
+                    title: 无请求if之后的状态断言
+                    description: 跨过无request的if扫描后续assert.status
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - request: {method: GET, path: /api/bad_param}
+                      - if:
+                          contains: "NEVER_MATCH"
+                          then:
+                            - set: {flag: "1"}
+                      - assert: {status: [200, 400]}
+                    output: {ok: {type: string, description: ok, value: ok}}
+                    examples: [{input: {}, output: {ok: ok}}]
+                    notes: 测试
+                    related: []
+                """.formatted(base);
+        ConchDoc doc = parseAndValidate(yaml);
+
+        for (String mode : List.of("status_400_expired", "status_419", "json_list_expired")) {
+            loginCount.set(0);
+            actionHits.set(0);
+            expiryMode = mode;
+            expireOnce = true;
+            try (SessionManager sessions = new SessionManager()) {
+                ExecutionResult res = execute(newEngine(sessions, doc), doc, "assert_status_on_fail");
+                assertThat(res.success()).as("mode=" + mode + " err=" + res.error()).isTrue();
+                assertThat(asMap(res)).containsEntry("items", List.of("t1", "t2"));
+                assertThat(loginCount.get()).as("mode=" + mode).isEqualTo(2);
+            }
+        }
+
+        // 无 request 的 if 内含 assert(on_fail: session_expired)：400 放行并触发重登重放
+        loginCount.set(0);
+        actionHits.set(0);
+        expiryMode = "status_400_expired";
+        expireOnce = true;
+        try (SessionManager sessions = new SessionManager()) {
+            RuleEngine engine = newEngine(sessions, doc);
+            ExecutionResult viaIf = execute(engine, doc, "if_contains_assert_on_fail");
+            assertThat(viaIf.success()).as(String.valueOf(viaIf.error())).isTrue();
+            assertThat(asMap(viaIf)).containsEntry("items", List.of("t1", "t2"));
+            assertThat(loginCount.get()).isEqualTo(2);
+
+            // if: {status: 400} 接住 400
+            ExecutionResult handled400 = execute(engine, doc, "if_handles_400");
+            assertThat(handled400.success()).as(String.valueOf(handled400.error())).isTrue();
+            assertThat(asMap(handled400)).containsEntry("handled", "yes");
+
+            // 跨过不含 request 的 if，由后续 assert: {status: [200, 400]} 接住 400
+            ExecutionResult afterIf = execute(engine, doc, "if_no_request_then_status_assert");
+            assertThat(afterIf.success()).as(String.valueOf(afterIf.error())).isTrue();
+        }
+    }
+
+    @Test
+    void loginTaintedSetAndExtractCannotFlowIntoOrdinaryScriptOrLeakUnmasked() {
+        String yaml = """
+                conch: demo_p01
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.12.0
+                base_url: %s
+                title: 登录值防绕过
+                description: set和extract派生的login值不得流入普通script或绕过脱敏
+                credentials: {}
+                auth:
+                  steps:
+                    - request: {method: POST, path: /login_token}
+                    - assert: {status: 200, cookie_exists: SID}
+                    - extract: {tok: {jsonpath: "$.token"}}
+                actions:
+                  probe:
+                    title: 探测
+                    description: 测试login变量污染传播
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - set:
+                          alias: "{{login.tok}}"
+                          encoded_val: "{{login.tok | base64}}"
+                      - set:
+                          alias2: "p-{{alias}}"
+                      - request: {method: GET, path: /api/html_ok}
+                      - extract:
+                          from_tainted: {from: alias, regex: "(.*)"}
+                          from_filter: {regex: "(NEVER_MATCH)", optional: true, filter: "default(login.tok)"}
+                      - script:
+                          into: seen
+                          code: "return [typeof vars.login, typeof vars.alias, typeof vars.alias2, typeof vars.from_tainted, typeof vars.from_filter].join('|');"
+                    output:
+                      seen: {type: string, description: 脚本可见性}
+                      leaked: {type: string, description: 脱敏测试, value: "{{encoded_val}}"}
+                    examples: [{input: {}, output: {seen: "undefined|undefined|undefined|undefined|undefined", leaked: "***"}}]
+                    notes: 测试
+                    related: []
+                """.formatted(base);
+        ConchDoc doc = parseAndValidate(yaml);
+        try (SessionManager sessions = new SessionManager()) {
+            RuleEngine engine = newEngine(sessions, doc);
+            ExecutionResult res = execute(engine, doc, "probe");
+            assertThat(res.success()).as(String.valueOf(res.error())).isTrue();
+            assertThat(asMap(res)).containsEntry("seen", "undefined|undefined|undefined|undefined|undefined");
+            String b64 = java.util.Base64.getEncoder()
+                    .encodeToString("secret-login-tok-1".getBytes(StandardCharsets.UTF_8));
+            assertThat(String.valueOf(asMap(res).get("leaked"))).doesNotContain(b64).isEqualTo("***");
+        }
+    }
+
+    @Test
+    void expectNotRedirectStopsImmediatelyWithoutFollowingToLoginPage(@TempDir Path temp) {
+        String yaml = """
+                conch: demo_redir_stop
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.12.0
+                base_url: %s
+                title: 跳转即停
+                description: 命中expect_not_redirect时不继续跟随到登录页
+                credentials: {}
+                auth:
+                  steps:
+                    - request: {method: POST, path: /login}
+                    - assert: {status: 200, cookie_exists: SID}
+                  alive_check:
+                    request: {method: GET, path: /api/me}
+                    expect_not_redirect: /login-page
+                actions:
+                  export_redir:
+                    title: 导出
+                    description: 带follow_redirects的下载遇登录跳转立即重登
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - request: {method: GET, path: /api/redir-login, follow_redirects: true, download: true}
+                    output: {file: {type: file, description: 文件, value: "{{response.file}}"}}
+                    examples: [{input: {}, output: {file: {fileId: "f1", name: "a.pdf", size: 1, mime: "application/pdf", sha256: "0", url: "/api/-/files/x"}}}]
+                    notes: 测试
+                    related: []
+                """.formatted(base);
+        ConchDoc doc = parseAndValidate(yaml);
+        FileStage stage = new FileStage(temp.resolve("files"), Clock.systemUTC(), FileStageSettings.defaults());
+        expireOnce = true;
+        FileScope prev = FileScope.begin(stage, "k1", "");
+        try (SessionManager sessions = new SessionManager()) {
+            ExecutionResult res = execute(newEngine(sessions, doc), doc, "export_redir");
+            assertThat(res.success()).as(String.valueOf(res.error())).isTrue();
+            assertThat(loginCount.get()).isEqualTo(2);
+            assertThat(loginPageHits.get()).as("命中 expect_not_redirect 后不能继续请求 /login-page").isZero();
+            assertThat(stage.list()).hasSize(1);
+            assertThat(stage.list().get(0).name()).isEqualTo("redir.pdf");
+        } finally {
+            FileScope.restore(prev);
+        }
+    }
+
+    @Test
+    void aliveCheckExpectTimeoutStillRecordsFailedAliveCheckTrace() throws Exception {
+        String yaml = """
+                conch: demo_alive_timeout
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.12.0
+                base_url: %s
+                title: 探活超时记账
+                description: alive_check.expect正则超时仍写入失败探活追踪
+                credentials: {}
+                auth:
+                  steps:
+                    - request: {method: POST, path: /login}
+                    - assert: {status: 200, cookie_exists: SID}
+                  alive_check:
+                    request: {method: GET, path: /api/me}
+                    expect:
+                      status: 200
+                      regex: "((a+)+)+$"
+                actions:
+                  ping:
+                    title: 查询
+                    description: 普通请求
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - request: {method: GET, path: /api/html_ok}
+                    output: {ok: {type: string, description: ok, value: ok}}
+                    examples: [{input: {}, output: {ok: ok}}]
+                    notes: 测试
+                    related: []
+                """.formatted(base);
+        ConchDoc doc = parseAndValidate(yaml);
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-23T00:00:00Z"));
+        EngineSettings settings = new EngineSettings(Duration.ofMillis(250), Duration.ofSeconds(5), 3);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), SharedSessions.none(), settings, clock)) {
+            RuleEngine engine = newEngine(sessions, settings, doc);
+            assertThat(execute(engine, doc, "ping").success()).isTrue();
+
+            aliveMode = "slow_regex_body";
+            clock.advance(Duration.ofSeconds(30));
+            ExecutionResult timedOut = execute(engine, doc, "ping");
+            assertThat(timedOut.success()).isFalse();
+            assertThat(timedOut.error().code()).isEqualTo(ErrorCode.TIMEOUT);
+            assertThat(timedOut.error().failedStepType()).isEqualTo("request");
+            JsonNode trace = JSON.readTree(lastTrace);
+            assertThat(trace.at("/session/aliveCheckRan").asBoolean()).isTrue();
+            assertThat(trace.at("/session/aliveCheckOk").asBoolean()).isFalse();
+        }
+    }
+
+    @Test
+    void emptyAuthStepsFailsWithSessionExpiredWhenAliveCheckFails() {
+        String yaml = """
+                conch: demo_empty_auth
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.12.0
+                base_url: %s
+                title: 无登录步骤探活失败
+                description: auth.steps为空且alive_check失败时直接返回SESSION_EXPIRED
+                credentials: {}
+                auth:
+                  alive_check:
+                    request: {method: GET, path: /api/me}
+                    expect:
+                      status: 200
+                      json_equals: {"$.code": 0}
+                actions:
+                  ping:
+                    title: 查询
+                    description: 普通请求
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - request: {method: GET, path: /api/html_ok}
+                    output: {ok: {type: string, description: ok, value: ok}}
+                    examples: [{input: {}, output: {ok: ok}}]
+                    notes: 测试
+                    related: []
+                """.formatted(base);
+        ConchDoc doc = parseAndValidate(yaml);
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-23T00:00:00Z"));
+        EngineSettings settings = new EngineSettings(Duration.ofSeconds(10), Duration.ofSeconds(5), 3);
+        try (SessionManager sessions = new SessionManager(
+                new NopSessionPersistence(), new NopLoginSnapshotStore(), SharedSessions.none(), settings, clock)) {
+            RuleEngine engine = newEngine(sessions, settings, doc);
+            assertThat(execute(engine, doc, "ping").success()).isTrue();
+            int hitsBefore = actionHits.get();
+
+            clock.advance(Duration.ofSeconds(30));
+            ExecutionResult expired = execute(engine, doc, "ping");
+            assertThat(expired.success()).isFalse();
+            assertThat(expired.error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(actionHits.get()).as("探活失败且无登录步骤时不应继续执行能力步骤").isEqualTo(hitsBefore);
+            assertThat(sessions.loggedIn(new SessionKey(Origin.LOCAL, "demo_empty_auth", "default"))).isFalse();
         }
     }
 

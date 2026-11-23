@@ -204,15 +204,19 @@ class SameSiteHttpTest {
                 .isEqualTo("会话已失效。" + Invoker.RIVAL_HINT)
                 .doesNotContain("pkg_b");
 
-        // 带 Idempotency-Key 的结果按键缓存，会原样回放给别的 Key：全部权限的 Key 也不写包名。
+        // schema 22 起 Idempotency-Key 按 API Key 隔离：同一 Key 重放命中自己的缓存，另一把 Key 同键不会重放前一把 Key 的响应。
         assertThat(call("GET", "/api/pkg_a/read", all).status).isEqualTo(200);
         assertThat(call("GET", "/api/pkg_b/read", all).status).isEqualTo(200);
         Reply keyed = call("POST", "/api/pkg_a/write", all, "same-site-1");
         assertThat(keyed.json.path("error").path("message").asText())
                 .isEqualTo("会话已失效。" + Invoker.RIVAL_HINT);
-        Reply replayed = call("POST", "/api/pkg_a/write", narrow, "same-site-1");
-        assertThat(replayed.json.path("error").path("message").asText())
+        Reply sameKeyReplay = call("POST", "/api/pkg_a/write", all, "same-site-1");
+        assertThat(sameKeyReplay.json.path("error").path("message").asText())
                 .isEqualTo("会话已失效。" + Invoker.RIVAL_HINT);
+        // narrow 使用相同 Idempotency-Key 不再命中 all 的缓存，而是独立执行（前次已清会话，因此重新登录并成功）。
+        Reply isolatedOtherKey = call("POST", "/api/pkg_a/write", narrow, "same-site-1");
+        assertThat(isolatedOtherKey.status).isEqualTo(200);
+        assertThat(isolatedOtherKey.json.path("success").asBoolean()).isTrue();
 
         // 对方的能力都被停用时，这把 Key 实际调用不了它，也不写包名。
         assertThat(call("GET", "/api/pkg_a/read", all).status).isEqualTo(200);

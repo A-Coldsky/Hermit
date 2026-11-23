@@ -1,8 +1,12 @@
 package dev.hermit.crab.gateway;
 
 import java.io.IOException;
+import java.net.URI;
+import java.util.Collections;
+import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,6 +45,7 @@ import io.javalin.http.HttpResponseException;
  * envelope as capability calls and do not echo the request path.
  */
 public final class CrabHttpServer implements AutoCloseable {
+    static final String READ_ONLY_UPLOAD = "这把 API Key 只允许调用只读能力，不能上传暂存文件。";
     private static final Logger LOG = Logger.getLogger(CrabHttpServer.class.getName());
     /**
      * 不是合法账号名。头和查询参数冲突时用它走一遍 Invoker：权限、能力停用和未加载墓碑会先返回；
@@ -129,10 +134,7 @@ public final class CrabHttpServer implements AutoCloseable {
         // 先于 /api/{conch}/{action} 注册；规则包名以小写字母开头，不会是 "-"。
         http.post(FileRoutes.UPLOAD, this::uploadFile);
         http.get(FileRoutes.DOWNLOAD_PREFIX + "{token}", this::downloadFile);
-        http.get("/openapi.json", ctx -> {
-            byte[] body = OpenApiDocument.bytes(runtime, http.port());
-            GatewayResponses.write(ctx, 200, body, GatewayResponses.trace(ctx), false);
-        });
+        http.get("/openapi.json", ctx -> openApi(ctx, http.port()));
         route(http, "/api/{conch}/{action}", ctx -> handleApi(ctx, ctx.pathParam("conch"), ctx.pathParam("action")));
         for (Map.Entry<String, String> alias : runtime.config().aliases().entrySet()) {
             int dot = alias.getValue().indexOf('.');
@@ -162,17 +164,153 @@ public final class CrabHttpServer implements AutoCloseable {
         return http;
     }
 
-    /** 下载链接的前缀：配置了 server.public_url 就用它，否则用请求里的 Host。 */
+    /**
+     * OpenAPI 分级保护：
+     * 带了 API Key 时必须有效且只返回该 Key 权限范围内的能力与标签；
+     * 未带 Key 时仅回环连接兼容返回全量目录，非回环远端请求一律 401。
+     */
+    private void openApi(Context ctx, int listenPort) {
+        String token = token(ctx);
+        if (token != null) {
+            Optional<ApiKeyPrincipal> principal = runtime.apiKeys().authenticate(token);
+            if (principal.isEmpty()) {
+                GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, UserMessages.INVALID_KEY);
+                return;
+            }
+            byte[] body = OpenApiDocument.bytes(runtime, listenPort, principal.get());
+            GatewayResponses.write(ctx, 200, body, GatewayResponses.trace(ctx), false);
+            return;
+        }
+        if (!Loopback.address(ctx.req().getRemoteAddr())) {
+            GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, UserMessages.MISSING_KEY);
+            return;
+        }
+        byte[] body = OpenApiDocument.bytes(runtime, listenPort);
+        GatewayResponses.write(ctx, 200, body, GatewayResponses.trace(ctx), false);
+    }
+
+    /**
+     * 下载链接的前缀：配置了 server.public_url 就用它；否则只接受主机部分属于配置监听主机、
+     * 本机回环或 {@code runtime.fileBase()} 的单个合法 Host 头，其余回退 {@code runtime.fileBase()}。
+     */
     private String publicBase(Context ctx) {
-        String configured = runtime.config().publicUrl();
+        Enumeration<String> headers = ctx.req().getHeaders("Host");
+        List<String> hosts = headers == null ? List.of() : Collections.list(headers);
+        return resolvePublicBase(runtime.config(), runtime.fileBase(), ctx.scheme(), hosts);
+    }
+
+    static String resolvePublicBase(CrabConfig config, String fallbackBase, String scheme, List<String> hostHeaders) {
+        String configured = config.publicUrl();
         if (configured != null) {
             return configured;
         }
-        String host = ctx.header("Host");
-        if (host == null || !host.matches("[A-Za-z0-9.:\\-\\[\\]]{1,255}")) {
+        if (hostHeaders == null || hostHeaders.size() != 1) {
+            return fallbackBase;
+        }
+        String raw = hostHeaders.get(0);
+        if (raw == null) {
+            return fallbackBase;
+        }
+        String trimmed = raw.trim();
+        String hostName = parseHostHeaderName(trimmed);
+        if (hostName == null || !isTrustedHost(hostName, config.serverHost(), fallbackBase)) {
+            return fallbackBase;
+        }
+        String effectiveScheme = "https".equalsIgnoreCase(scheme) ? "https" : "http";
+        return effectiveScheme + "://" + trimmed;
+    }
+
+    private static String parseHostHeaderName(String header) {
+        if (header.isEmpty() || !header.matches("[A-Za-z0-9.:\\-\\[\\]]{1,255}")) {
             return null;
         }
-        return ctx.scheme() + "://" + host;
+        String host;
+        if (header.startsWith("[")) {
+            int end = header.indexOf(']');
+            if (end <= 1) {
+                return null;
+            }
+            if (!validPortSuffix(header.substring(end + 1))) {
+                return null;
+            }
+            host = header.substring(1, end);
+        } else {
+            int colon = header.indexOf(':');
+            if (colon >= 0) {
+                if (header.indexOf(':', colon + 1) >= 0 || !validPortSuffix(header.substring(colon))) {
+                    return null;
+                }
+                host = header.substring(0, colon);
+            } else {
+                host = header;
+            }
+        }
+        if (host.isEmpty()) {
+            return null;
+        }
+        return normalizeHostName(host);
+    }
+
+    private static boolean validPortSuffix(String suffix) {
+        if (suffix.isEmpty()) {
+            return true;
+        }
+        if (suffix.charAt(0) != ':' || suffix.length() < 2 || suffix.length() > 6) {
+            return false;
+        }
+        int port = 0;
+        for (int i = 1; i < suffix.length(); i++) {
+            char c = suffix.charAt(i);
+            if (c < '0' || c > '9') {
+                return false;
+            }
+            port = port * 10 + (c - '0');
+        }
+        return port >= 1 && port <= 65535;
+    }
+
+    private static boolean isTrustedHost(String hostName, String listenHost, String fallbackBase) {
+        if ("localhost".equals(hostName)
+                || "127.0.0.1".equals(hostName)
+                || "::1".equals(hostName)
+                || "0:0:0:0:0:0:0:1".equals(hostName)) {
+            return true;
+        }
+        String configuredListen = normalizeHostName(listenHost);
+        if (configuredListen != null
+                && !"0.0.0.0".equals(configuredListen)
+                && !"::".equals(configuredListen)
+                && !"0:0:0:0:0:0:0:0".equals(configuredListen)
+                && configuredListen.equals(hostName)) {
+            return true;
+        }
+        String fallbackHost = uriHost(fallbackBase);
+        return fallbackHost != null && fallbackHost.equals(hostName);
+    }
+
+    private static String uriHost(String url) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        try {
+            return normalizeHostName(URI.create(url.trim()).getHost());
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private static String normalizeHostName(String host) {
+        if (host == null) {
+            return null;
+        }
+        String value = host.trim().toLowerCase(Locale.ROOT);
+        if (value.startsWith("[") && value.endsWith("]") && value.length() > 2) {
+            value = value.substring(1, value.length() - 1);
+        }
+        while (value.endsWith(".")) {
+            value = value.substring(0, value.length() - 1);
+        }
+        return value.isEmpty() ? null : value;
     }
 
     /** 请求体就是文件内容。文件只有这把 Key 能在调用里使用。 */
@@ -185,6 +323,10 @@ public final class CrabHttpServer implements AutoCloseable {
         Optional<ApiKeyPrincipal> principal = runtime.apiKeys().authenticate(token);
         if (principal.isEmpty()) {
             GatewayResponses.writeError(ctx, 401, ErrorCode.AUTH_FAILED, UserMessages.INVALID_KEY);
+            return;
+        }
+        if (principal.get().scope().readOnlyOnly()) {
+            GatewayResponses.writeError(ctx, 403, ErrorCode.FORBIDDEN, READ_ONLY_UPLOAD);
             return;
         }
         try {

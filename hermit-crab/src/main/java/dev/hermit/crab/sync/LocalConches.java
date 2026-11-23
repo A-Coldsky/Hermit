@@ -31,6 +31,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -89,7 +90,7 @@ public final class LocalConches {
             DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS").withZone(ZoneOffset.UTC);
 
     private static final Set<String> STEP_TYPES = Set.of(
-            "request", "extract", "assert", "set", "script", "if", "repeat");
+            "request", "extract", "assert", "set", "script", "ask", "if", "repeat");
 
     private final CrabPaths paths;
     private final ConchRegistry registry;
@@ -110,6 +111,7 @@ public final class LocalConches {
     };
     private volatile java.util.function.BiConsumer<String, String> onDeleted = (name, actor) -> {
     };
+    private volatile Predicate<String> boundToIdentity = conch -> false;
     /** 第一次清会话返回之后、写文件之前。测试在这个窗口里插入登录。生产路径是空操作。 */
     private volatile Runnable widenedGap = () -> {
     };
@@ -162,6 +164,11 @@ public final class LocalConches {
         } : listener;
     }
 
+    /** 检查本地包是否有任意账号绑到了共享身份。已绑共享身份的包覆盖前必须确认，确认后自动移出共享身份。 */
+    public void onBoundCheck(Predicate<String> check) {
+        this.boundToIdentity = check == null ? conch -> false : check;
+    }
+
     /** 测试用：第一次清会话返回之后、写文件之前。 */
     void widenedGap(Runnable hook) {
         this.widenedGap = hook == null ? () -> {
@@ -195,7 +202,7 @@ public final class LocalConches {
     }
 
     /**
-     * 已有本地包且目的地没有扩大时直接覆盖。扩大了则抛 {@link LocalConchException#replaceRequired(String)}，
+     * 已有本地包且目的地没有扩大、也没有绑定共享身份时直接覆盖。否则抛 {@link LocalConchException#replaceRequired(String)}，
      * 不写文件。判断和写入在同一把锁里。
      */
     public ImportResult replaceIfSameBoundary(byte[] raw, String actor, String keyName) {
@@ -209,7 +216,8 @@ public final class LocalConches {
                 return writeUnlocked(raw, checked, false, ReplaceOptions.none());
             }
             ConchDoc before = readableDoc(conch).orElse(null);
-            if (!ConchDestinations.between(before, parsed.doc()).sameBoundary()) {
+            if (boundToIdentity.test(conch)
+                    || !ConchDestinations.between(before, parsed.doc()).sameBoundary()) {
                 throw LocalConchException.replaceRequired(conch);
             }
             return writeUnlocked(raw, checked, true, new ReplaceOptions(null, keyName, null));
@@ -217,7 +225,7 @@ public final class LocalConches {
     }
 
     /**
-     * 地址扩大、客户端不能当场确认时记下一条待确认覆盖。已经是同一边界，或包已经不在了，返回 empty，不写文件。
+     * 地址扩大或已绑定共享身份、客户端不能当场确认时记下一条待确认覆盖。已经是同一边界且未绑身份，或包已经不在了，返回 empty，不写文件。
      */
     public Optional<PendingOverwrite> stagePending(byte[] raw, String actor, String submittedBy) {
         String checked = actor(actor);
@@ -231,7 +239,7 @@ public final class LocalConches {
             }
             ConchDoc before = readableDoc(conch).orElse(null);
             ConchDestinations.Boundary boundary = ConchDestinations.between(before, parsed.doc());
-            if (boundary.sameBoundary()) {
+            if (boundary.sameBoundary() && !boundToIdentity.test(conch)) {
                 return Optional.empty();
             }
             byte[] disk = readIfRegular(conch);
@@ -324,7 +332,7 @@ public final class LocalConches {
 
     /**
      * 这个包在本次开发者模式里已被控制台授权时，在同一把锁里走与确认相同的校验、大小、摘要和路径检查，
-     * 并写入历史。没有授权，或开发者模式已经关掉时返回 empty，不写文件。
+     * 并写入历史。没有授权、开发者模式已经关掉，或包已绑定共享身份时返回 empty，不写文件。
      * 校验失败抛出，授权还在，文件不动。
      */
     public Optional<ImportResult> applyIfGranted(byte[] raw, String actor, String keyName) {
@@ -336,8 +344,9 @@ public final class LocalConches {
                 return Optional.empty();
             }
             Parsed parsed = parse(raw);
-            OverrideGrant grant = grants.get(parsed.doc().conch());
-            if (grant == null) {
+            String conch = parsed.doc().conch();
+            OverrideGrant grant = grants.get(conch);
+            if (grant == null || boundToIdentity.test(conch)) {
                 return Optional.empty();
             }
             return Optional.of(writeUnlocked(
@@ -534,6 +543,18 @@ public final class LocalConches {
         }
     }
 
+    /** 磁盘上是否还存在这个包对应的本地 yaml 文件（含损坏或符号链接文件）。 */
+    public boolean hasYamlFile(String conch) {
+        if (conch == null) {
+            return false;
+        }
+        try {
+            return Files.exists(yamlPath(conch), LinkOption.NOFOLLOW_LINKS);
+        } catch (LocalConchException ex) {
+            return false;
+        }
+    }
+
     public Export export(String conch) {
         synchronized (lock) {
             if (registry.origin(conch) == Origin.LOCAL) {
@@ -692,7 +713,7 @@ public final class LocalConches {
                 String name = path.getFileName().toString();
                 return !name.startsWith(".") && name.endsWith(SUFFIX);
             }).sorted().toList()) {
-                results.add(loadFile(root, child, beforeDocs, loaded, nextBroken));
+                results.add(loadFile(root, child, beforeDocs, beforeBroken, loaded, nextBroken));
             }
         } catch (IOException ex) {
             throw new IllegalStateException("local conch directory was not listed");
@@ -741,6 +762,7 @@ public final class LocalConches {
             Path root,
             Path child,
             Map<String, ConchDoc> beforeDocs,
+            Set<String> beforeBroken,
             Map<String, ConchDoc> loaded,
             Map<String, BrokenLocal> nextBroken
     ) {
@@ -791,7 +813,8 @@ public final class LocalConches {
         }
         String conch = parsed.doc().conch();
         ConchDoc before = beforeDocs.get(conch);
-        boolean widened = before != null && !ConchDestinations.between(before, parsed.doc()).sameBoundary();
+        boolean widened = (before != null && !ConchDestinations.between(before, parsed.doc()).sameBoundary())
+                || (before == null && beforeBroken.contains(conch));
         synchronized (ConchFileLocks.of(conch)) {
             try {
                 rejectClash(conch);
@@ -1014,7 +1037,8 @@ public final class LocalConches {
                 backupId = backup(doc.conch(), version, previous);
             }
             boolean widened = replaced && !boundary.sameBoundary();
-            if (widened) {
+            boolean clearSessions = replaced && (widened || boundToIdentity.test(doc.conch()));
+            if (clearSessions) {
                 onWidened.accept(doc.conch());
                 widenedGap.run();
             }
@@ -1028,7 +1052,7 @@ public final class LocalConches {
                 restore(file, previous, existed);
                 throw ex;
             }
-            if (widened) {
+            if (clearSessions) {
                 onWidened.accept(doc.conch());
             }
             if (dropUpstreamSecrets(before, doc, existed)) {

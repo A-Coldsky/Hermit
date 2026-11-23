@@ -174,4 +174,99 @@ class ConsoleHttpTest {
                     .isEqualTo("Reef 已停用该规则包，本机没有可调用的副本。");
         }
     }
+
+    @Test
+    void deleteSessionLogsOutAndExpiresCookie() throws Exception {
+        try (TestServer server = TestServer.open(
+                temp.resolve("logout"), PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
+            String consolePassword = "console-logout-secret";
+            server.runtime.consolePassword().set(consolePassword);
+
+            // 未登录直接登出被 401 拒绝，不能清掉别人正在用的会话。
+            assertThat(server.console("DELETE", "/console/api/session", null, true).status()).isEqualTo(401);
+
+            TestServer.Reply login = server.console(
+                    "POST", "/console/api/session", "{\"password\":\"" + consolePassword + "\"}", true);
+            assertThat(login.status()).isEqualTo(200);
+            String setCookie = login.header("Set-Cookie");
+            assertThat(setCookie).contains("hermit_console=");
+            String token = setCookie.substring("hermit_console=".length(), setCookie.indexOf(';'));
+
+            java.net.http.HttpResponse<String> authed = server.http.send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(server.base() + "/console/api/debug"))
+                            .header("X-Hermit-Console", "1")
+                            .header("Cookie", "hermit_console=" + token)
+                            .GET()
+                            .build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(authed.statusCode()).isEqualTo(200);
+
+            java.net.http.HttpResponse<String> loggedOut = server.http.send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(server.base() + "/console/api/session"))
+                            .header("X-Hermit-Console", "1")
+                            .header("Cookie", "hermit_console=" + token)
+                            .DELETE()
+                            .build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(loggedOut.statusCode()).isEqualTo(200);
+            assertThat(loggedOut.body()).contains("\"ok\":true");
+            assertThat(loggedOut.headers().firstValue("Set-Cookie").orElse(""))
+                    .contains("hermit_console=").contains("Max-Age=0").contains("HttpOnly").contains("SameSite=Strict");
+
+            java.net.http.HttpResponse<String> afterLogout = server.http.send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(server.base() + "/console/api/debug"))
+                            .header("X-Hermit-Console", "1")
+                            .header("Cookie", "hermit_console=" + token)
+                            .GET()
+                            .build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(afterLogout.statusCode()).isEqualTo(401);
+
+            java.net.http.HttpResponse<String> probe = server.http.send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(server.base() + "/console/api/session"))
+                            .header("X-Hermit-Console", "1")
+                            .header("Cookie", "hermit_console=" + token)
+                            .GET()
+                            .build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(probe.statusCode()).isEqualTo(200);
+            assertThat(dev.hermit.crab.runtime.ApiJson.tree(probe.body())
+                    .path("data").path("authenticated").asBoolean()).isFalse();
+        }
+    }
+
+    @Test
+    void bindIdentityMemberValidatesOptionalExpectedOrigin() throws Exception {
+        try (TestServer server = TestServer.open(
+                temp.resolve("expected-origin"), PASSWORD, CrabConfig.defaults().withListen("127.0.0.1", 0))) {
+            server.configureAccount("alice");
+            server.runtime.registry().put(server.conch, dev.hermit.crab.store.Origin.LOCAL);
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "legacy_oa", "alice", Actors.CONSOLE);
+            assertThat(server.runtime.registry().origin("legacy_oa")).isEqualTo(dev.hermit.crab.store.Origin.OFFICIAL);
+
+            TestServer.Reply created = server.console("POST", "/console/api/identities", "{\"name\":\"OA\"}", true);
+            assertThat(created.status()).isEqualTo(200);
+            String id = created.json().path("data").path("id").asText();
+
+            // expectedOrigin 与当前生效来源不一致返回 409 CONFLICT。
+            TestServer.Reply mismatch = server.console("POST", "/console/api/identities/" + id + "/members",
+                    "{\"conch\":\"legacy_oa\",\"account\":\"alice\",\"confirm\":true,\"expectedOrigin\":\"LOCAL\"}", true);
+            assertThat(mismatch.status()).isEqualTo(409);
+            assertThat(mismatch.json().path("error").path("code").asText()).isEqualTo("CONFLICT");
+
+            // 非法 expectedOrigin 返回 400。
+            TestServer.Reply invalid = server.console("POST", "/console/api/identities/" + id + "/members",
+                    "{\"conch\":\"legacy_oa\",\"account\":\"alice\",\"confirm\":true,\"expectedOrigin\":\"OTHER\"}", true);
+            assertThat(invalid.status()).isEqualTo(400);
+
+            // 匹配 expectedOrigin 成功绑定；省略 expectedOrigin 仍向后兼容。
+            TestServer.Reply matched = server.console("POST", "/console/api/identities/" + id + "/members",
+                    "{\"conch\":\"legacy_oa\",\"account\":\"alice\",\"confirm\":true,\"expectedOrigin\":\"OFFICIAL\"}", true);
+            assertThat(matched.status()).as(matched.body()).isEqualTo(200);
+
+            TestServer.Reply compat = server.console("POST", "/console/api/identities/" + id + "/members",
+                    "{\"conch\":\"legacy_oa\",\"account\":\"alice\",\"confirm\":true}", true);
+            assertThat(compat.status()).as(compat.body()).isEqualTo(200);
+        }
+    }
 }

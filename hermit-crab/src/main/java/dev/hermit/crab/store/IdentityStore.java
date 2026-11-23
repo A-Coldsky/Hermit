@@ -137,6 +137,13 @@ public final class IdentityStore implements SharedSessions {
         return null;
     }
 
+    public boolean exists(String id) {
+        if (id == null) {
+            return false;
+        }
+        return Db.transaction(dataSource, connection -> exists(connection, id));
+    }
+
     public Identity create(String name, String actor) {
         String checked = name(name);
         String checkedActor = Checks.actor(actor);

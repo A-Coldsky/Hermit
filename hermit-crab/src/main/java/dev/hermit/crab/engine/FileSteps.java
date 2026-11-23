@@ -132,10 +132,13 @@ final class FileSteps {
                 "multipart/form-data\n" + String.join("\n", summary));
     }
 
-    /** 把 2xx 响应的正文存进暂存区，返回 {@code response.file} 的内容；其它状态返回 null。 */
+    /** 把 2xx 响应的正文存进暂存区，返回 {@code response.file} 的内容；其它状态或 204 无正文返回 null。 */
     static StagedFile save(Map<String, Object> spec, HttpResult result) {
         try {
-            if (result.status() < 200 || result.status() >= 300 || result.bodyBytes() == null) {
+            if (result.status() < 200 || result.status() >= 300 || result.status() == 204 || result.bodyBytes() == null) {
+                return null;
+            }
+            if (result.downloaded() && result.spool() == null) {
                 return null;
             }
             String name = null;
@@ -150,9 +153,13 @@ final class FileSteps {
                 name = pathName(result.url());
             }
             String type = result.headers().get("content-type");
-            return result.spool() != null
-                    ? scope().commit(result.spool(), name, type)
-                    : scope().store(result.bodyBytes(), name, type);
+            FileScope current = scope();
+            StagedFile saved = result.spool() != null
+                    ? current.commit(result.spool(), name, type)
+                    : current.store(result.bodyBytes(), name, type);
+            current.recordCommitted(saved.fileId());
+            current.recordToken(saved.token());
+            return saved;
         } catch (FileStageException ex) {
             throw new RuleProblem(
                     ErrorCode.UPSTREAM_ERROR, ex.getMessage(), result.method(), result.path(), result.status());

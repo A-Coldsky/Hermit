@@ -1,6 +1,7 @@
 package dev.hermit.crab.runtime;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -19,8 +20,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.Step;
+import dev.hermit.crab.files.FileRoutes;
 import dev.hermit.crab.files.FileScope;
 import dev.hermit.crab.files.FileStage;
 import dev.hermit.crab.files.FileStageException;
@@ -450,7 +454,9 @@ public final class Invoker {
         } catch (FileStageException ex) {
             return requestOnly(traceId, ErrorCode.INVALID_INPUT, ex.getMessage());
         }
-        String lockId = origin.name() + "\0" + doc.conch() + "\0" + account.account() + "\0" + action + "\0" + key;
+        String apiKeyId = principal == null ? "" : principal.id();
+        String lockId = origin.name() + "\0" + doc.conch() + "\0" + account.account()
+                + "\0" + action + "\0" + apiKeyId + "\0" + key;
         CompletableFuture<Void> mine = new CompletableFuture<>();
         while (true) {
             CompletableFuture<Void> running = idempotencyInFlight.putIfAbsent(lockId, mine);
@@ -467,13 +473,20 @@ public final class Invoker {
             }
         }
         try {
+            boolean downloads = hasDownloadStep(capability);
+            Duration maxAge = downloads ? downloadCacheTtl() : IdempotencyStore.TTL;
             Optional<IdempotencyStore.Cached> stored = idempotency.findFresh(
-                    origin, doc.conch(), account.account(), action, key);
+                    origin, doc.conch(), account.account(), action, apiKeyId, key, maxAge);
             if (stored.isPresent()) {
-                if (!sameBody(stored.get().bodySha256(), bodySha256)) {
-                    return requestOnly(traceId, ErrorCode.IDEMPOTENCY_CONFLICT, IDEMPOTENCY_CONFLICT);
+                if (downloads && !stagedFilesLive(stored.get().envelope(), apiKeyId)) {
+                    // 下载产物已到期、被删除或重启清空：不回放死链接，清掉旧缓存后重新执行。
+                    idempotency.delete(origin, doc.conch(), account.account(), action, apiKeyId, key);
+                } else {
+                    if (!sameBody(stored.get().bodySha256(), bodySha256)) {
+                        return requestOnly(traceId, ErrorCode.IDEMPOTENCY_CONFLICT, IDEMPOTENCY_CONFLICT);
+                    }
+                    return replay(stored.get().envelope());
                 }
-                return replay(stored.get().envelope());
             }
             Map<String, Object> staged;
             try {
@@ -489,6 +502,7 @@ public final class Invoker {
                         doc.conch(),
                         account.account(),
                         action,
+                        apiKeyId,
                         key,
                         new String(outcome.body(), java.nio.charset.StandardCharsets.UTF_8),
                         bodySha256);
@@ -498,6 +512,99 @@ public final class Invoker {
             idempotencyInFlight.remove(lockId, mine);
             mine.complete(null);
         }
+    }
+
+    private static boolean hasDownloadStep(Action capability) {
+        if (capability == null || capability.steps().isEmpty()) {
+            return false;
+        }
+        for (Step step : FlowSteps.flat(capability.steps())) {
+            if ("request".equals(step.type())) {
+                Object download = step.def().get("download");
+                if (Boolean.TRUE.equals(download) || download instanceof Map<?, ?>) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private Duration downloadCacheTtl() {
+        FileStage stage = fileStage;
+        if (stage == null || stage.settings() == null) {
+            return IdempotencyStore.TTL;
+        }
+        Duration fileTtl = Duration.ofSeconds(stage.settings().ttlSeconds());
+        return fileTtl.compareTo(IdempotencyStore.TTL) < 0 ? fileTtl : IdempotencyStore.TTL;
+    }
+
+    private boolean stagedFilesLive(String envelopeJson, String apiKeyId) {
+        JsonNode root;
+        try {
+            root = ApiJson.tree(envelopeJson);
+        } catch (RuntimeException ex) {
+            return false;
+        }
+        JsonNode data = root.get("data");
+        if (data == null || data.isNull()) {
+            return true;
+        }
+        return stagedNodeLive(data, apiKeyId);
+    }
+
+    private boolean stagedNodeLive(JsonNode node, String apiKeyId) {
+        if (node == null || node.isNull()) {
+            return true;
+        }
+        if (node.isTextual()) {
+            String text = node.asText();
+            int idx = text.indexOf(FileRoutes.DOWNLOAD_PREFIX);
+            if (idx >= 0) {
+                String rest = text.substring(idx + FileRoutes.DOWNLOAD_PREFIX.length());
+                int end = 0;
+                while (end < rest.length() && isUrlTokenChar(rest.charAt(end))) {
+                    end++;
+                }
+                String token = rest.substring(0, end);
+                if (!token.isEmpty() && (fileStage == null || fileStage.byToken(token).isEmpty())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                if (!stagedNodeLive(child, apiKeyId)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (node.isObject()) {
+            JsonNode fileIdNode = node.get("fileId");
+            if (fileIdNode != null && fileIdNode.isTextual()) {
+                String id = fileIdNode.asText();
+                if (id.startsWith("f_") && id.length() > 2
+                        && (fileStage == null || fileStage.find(id, apiKeyId).isEmpty())) {
+                    return false;
+                }
+            }
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                if (!stagedNodeLive(fields.next().getValue(), apiKeyId)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return true;
+    }
+
+    private static boolean isUrlTokenChar(char c) {
+        return (c >= 'A' && c <= 'Z')
+                || (c >= 'a' && c <= 'z')
+                || (c >= '0' && c <= '9')
+                || c == '-' || c == '_';
     }
 
     /** Same instance, or the same content reloaded (records compare by value). */

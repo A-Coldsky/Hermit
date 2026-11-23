@@ -47,9 +47,7 @@ public final class ConchValidator {
     private static final Set<String> DEFAULT_STEP_TYPES = Set.of(
             "request", "extract", "assert", "set", "script", "ask", "if", "repeat");
     private static final Set<String> BUILTIN_ROOTS = Set.of("input", "response", "now");
-    /** 与 {@code ConchRegistry.RESERVED} 一致；这里拦 {@code login} 和 {@code loop}，Reef 上传不经过注册表。 */
-    private static final Set<String> RESERVED_STEP_NAMES = Set.of("login", FlowSteps.LOOP);
-    /** 与 {@code ConchRegistry.RESERVED} 一致。{@code ask.into} 与 {@code repeat.collect} 在上传时也要拦住。 */
+    /** 与 {@code ConchRegistry.RESERVED} 一致。{@code set}/{@code extract}/{@code script.into}/{@code ask.into}/{@code repeat.collect} 均禁止写入。 */
     static final Set<String> RESERVED_NAMES = Set.of(
             "input", "credential", "config", "response", "now", "login", FlowSteps.LOOP);
     private static final SemVer LOGIN_MIN_CRAB = SemVer.parse("1.3.0");
@@ -58,6 +56,9 @@ public final class ConchValidator {
     private static final int ASK_HINT_BYTES = 256;
     private static final int COOKIE_NAME_LIMIT = 256;
     private static final Pattern HEADER_BEARER = Pattern.compile("(?i)bearer\\s+[A-Za-z0-9._~+/=-]{8,}");
+    private static final Pattern CONDITION_AUTH_SCHEME = Pattern.compile(
+            "(?i)\\b(?:bearer|basic)\\s+[A-Za-z0-9._~+/=-]{8,}");
+    private static final int CONDITION_SECRET_MIN_LEN = 24;
     private static final List<String> SECRET_KEYS = List.of(
             "password", "passwd", "pwd", "secret", "token", "otp", "apikey", "api_key",
             "authorization", "cookie");
@@ -218,7 +219,7 @@ public final class ConchValidator {
                             "alive_check 不支持 retry"));
                 }
             }
-            SessionExpiryChecks.check(doc, errors);
+            SessionExpiryChecks.check(doc, errors, warnings);
         }
         checkReservedSteps(doc, errors);
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
@@ -561,15 +562,33 @@ public final class ConchValidator {
             boolean assertStep,
             List<ValidationIssue> errors
     ) {
+        checkPlainMap(path, map, keysAreVariableNames, assertStep, false, errors);
+    }
+
+    private static void checkPlainMap(
+            String path,
+            Map<String, Object> map,
+            boolean keysAreVariableNames,
+            boolean assertStep,
+            boolean inConditionEquality,
+            List<ValidationIssue> errors
+    ) {
         for (Map.Entry<String, Object> entry : map.entrySet()) {
-            String childPath = path + "." + entry.getKey();
+            String key = entry.getKey();
+            String childPath = path + "." + key;
             Object value = entry.getValue();
+            boolean equalityMap = inConditionEquality
+                    || (assertStep && ("equals".equals(key) || "not_equals".equals(key)));
             if (value instanceof Map<?, ?> nested) {
-                checkPlainMap(childPath, cast(nested), false, assertStep, errors);
+                checkPlainMap(childPath, cast(nested), false, assertStep, equalityMap, errors);
             } else if (value instanceof List<?> list) {
-                checkPlainList(childPath, entry.getKey(), list, keysAreVariableNames, assertStep, errors);
-            } else if (!keysAreVariableNames && !exemptAssertKey(assertStep, entry.getKey())) {
-                checkScalar(childPath, entry.getKey(), value, errors);
+                checkPlainList(childPath, key, list, keysAreVariableNames, assertStep, inConditionEquality, errors);
+            } else if (!keysAreVariableNames && !exemptAssertKey(assertStep, key)) {
+                if (inConditionEquality) {
+                    checkConditionScalar(childPath, key, value, errors);
+                } else {
+                    checkScalar(childPath, key, value, errors);
+                }
             }
         }
     }
@@ -580,19 +599,53 @@ public final class ConchValidator {
             List<?> list,
             boolean parentKeySkipped,
             boolean assertStep,
+            boolean inConditionEquality,
             List<ValidationIssue> errors
     ) {
         for (int i = 0; i < list.size(); i++) {
             Object value = list.get(i);
             String childPath = path + "[" + i + "]";
             if (value instanceof Map<?, ?> nested) {
-                checkPlainMap(childPath, cast(nested), false, assertStep, errors);
+                checkPlainMap(childPath, cast(nested), false, assertStep, inConditionEquality, errors);
             } else if (value instanceof List<?> nested) {
-                checkPlainList(childPath, parentKey, nested, parentKeySkipped, assertStep, errors);
+                checkPlainList(childPath, parentKey, nested, parentKeySkipped, assertStep, inConditionEquality, errors);
             } else if (!parentKeySkipped && !exemptAssertKey(assertStep, parentKey)) {
-                checkScalar(childPath, parentKey, value, errors);
+                if (inConditionEquality) {
+                    checkConditionScalar(childPath, parentKey, value, errors);
+                } else {
+                    checkScalar(childPath, parentKey, value, errors);
+                }
             }
         }
+    }
+
+    /**
+     * assert / if / repeat.until 的 equals / not_equals 里经常拿变量名和短状态字面量比较
+     * （例如 token_status: "valid"、cookie_state: "expired"），避免把这些短状态误判为明文凭证；
+     * 明显的 Bearer/Basic 认证串或敏感变量名对应的超长无空白串仍拦住。
+     */
+    private static void checkConditionScalar(String path, String key, Object value, List<ValidationIssue> errors) {
+        if (!(value instanceof String text) || text.isEmpty() || text.contains("{{")) {
+            return;
+        }
+        boolean authScheme = CONDITION_AUTH_SCHEME.matcher(text).find();
+        boolean longSecret = suspicious(key) && text.length() >= CONDITION_SECRET_MIN_LEN && !hasWhitespace(text);
+        if (!authScheme && !longSecret) {
+            return;
+        }
+        errors.add(issue(
+                ValidationCodes.PLAINTEXT_CREDENTIAL,
+                path,
+                "疑似明文凭证。把它声明成凭证字段，不要写进规则。"));
+    }
+
+    private static boolean hasWhitespace(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            if (Character.isWhitespace(text.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void checkScalar(String path, String key, Object value, List<ValidationIssue> errors) {
@@ -1027,17 +1080,34 @@ public final class ConchValidator {
         SessionExpiryChecks.checkAssertExtras(path, spec, inAuth, errors);
     }
 
-    static void checkStatusLiteral(String path, Object value, List<ValidationIssue> warnings) {
+    static void checkStatusLiteral(String path, Object value, List<ValidationIssue> issues) {
+        checkStatusLiteral(path, value, issues, false);
+    }
+
+    private static void checkStatusLiteral(
+            String path, Object value, List<ValidationIssue> issues, boolean inList) {
+        if (value instanceof Integer || value instanceof Long) {
+            long code = ((Number) value).longValue();
+            if (code < 100 || code > 599) {
+                issues.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 必须是 100 到 599 的整数"));
+            }
+            return;
+        }
         if (value instanceof Number) {
+            issues.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 必须是 100 到 599 的整数"));
             return;
         }
         if (value instanceof List<?> list) {
+            if (inList) {
+                issues.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 列表不能嵌套"));
+                return;
+            }
             if (list.isEmpty()) {
-                warnings.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 要写数字"));
+                issues.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 要写数字"));
                 return;
             }
             for (int i = 0; i < list.size(); i++) {
-                checkStatusLiteral(path + "[" + i + "]", list.get(i), warnings);
+                checkStatusLiteral(path + "[" + i + "]", list.get(i), issues, true);
             }
             return;
         }
@@ -1045,10 +1115,10 @@ public final class ConchValidator {
             return;
         }
         if (value instanceof String) {
-            warnings.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 要写数字，不要加引号"));
+            issues.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 要写数字，不要加引号"));
             return;
         }
-        warnings.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 要写数字"));
+        issues.add(issue(ValidationCodes.ASSERT_STATUS, path, "status 要写数字"));
     }
 
     private static boolean validTimeout(Object value) {
@@ -1681,7 +1751,7 @@ public final class ConchValidator {
             }
             if ("script".equals(step.type())) {
                 Object into = step.def().get("into");
-                if (into instanceof String name && RESERVED_STEP_NAMES.contains(name)) {
+                if (into instanceof String name && RESERVED_NAMES.contains(name)) {
                     errors.add(issue(
                             ValidationCodes.RESERVED_VARIABLE,
                             path + "[" + i + "].into",
@@ -1693,7 +1763,7 @@ public final class ConchValidator {
                 continue;
             }
             for (String name : step.def().keySet()) {
-                if (RESERVED_STEP_NAMES.contains(name)) {
+                if (RESERVED_NAMES.contains(name)) {
                     errors.add(issue(
                             ValidationCodes.RESERVED_VARIABLE,
                             path + "[" + i + "]." + name,
@@ -1774,6 +1844,9 @@ public final class ConchValidator {
         }
         if (!doc.healthCheck().isEmpty()) {
             errors.add(issue(ValidationCodes.MCP_UPSTREAM, "health_check", "driver 为 mcp 时不能写 health_check"));
+        }
+        if (doc.scripts() != null && !doc.scripts().isEmpty()) {
+            errors.add(issue(ValidationCodes.MCP_UPSTREAM, "scripts", "driver 为 mcp 时不能写 scripts"));
         }
         if (doc.upstream() == null) {
             errors.add(issue(ValidationCodes.MCP_UPSTREAM, "upstream", "缺少 upstream"));
@@ -2272,7 +2345,7 @@ public final class ConchValidator {
         }
     }
 
-    private static boolean usesRequestKey(ConchDoc doc, String key) {
+    static boolean usesRequestKey(ConchDoc doc, String key) {
         if (doc.auth() != null) {
             if (stepsUseKey(doc.auth().steps(), key)) {
                 return true;
@@ -2283,7 +2356,7 @@ public final class ConchValidator {
             }
         }
         for (Action action : doc.actions().values()) {
-            if (stepsUseKey(action.steps(), key)) {
+            if (action != null && stepsUseKey(action.steps(), key)) {
                 return true;
             }
         }

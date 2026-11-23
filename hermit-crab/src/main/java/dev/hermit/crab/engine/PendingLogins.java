@@ -11,6 +11,7 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.crab.store.Origin;
 
 /**
  * 进程内的待输入登录。每个 {@code (origin, conch, account)} 至多一条。
@@ -155,6 +156,13 @@ public final class PendingLogins {
             return;
         }
         rows.keySet().removeIf(key -> conch.equals(key.conch()));
+    }
+
+    public synchronized void discardConch(Origin origin, String conch) {
+        if (origin == null || conch == null) {
+            return;
+        }
+        rows.keySet().removeIf(key -> origin == key.origin() && conch.equals(key.conch()));
     }
 
     public synchronized int size() {

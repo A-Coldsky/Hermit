@@ -96,8 +96,10 @@ public final class SessionExpiryChecks {
         }
     }
 
+    private static final Set<String> NON_BODY_EXPIRED_KEYS = Set.of("status", "header_exists", "header_contains");
+
     /** 检查 {@code auth.expired_when} 与 {@code auth.alive_check.expect} 的写法。 */
-    static void check(ConchDoc doc, List<ValidationIssue> errors) {
+    static void check(ConchDoc doc, List<ValidationIssue> errors, List<ValidationIssue> warnings) {
         Auth auth = doc.auth();
         if (auth == null) {
             return;
@@ -106,6 +108,8 @@ public final class SessionExpiryChecks {
         if (rules.size() > MAX_EXPIRED_RULES) {
             errors.add(expiry("auth.expired_when", "expired_when 最多写 " + MAX_EXPIRED_RULES + " 条规则"));
         }
+        boolean hasNonEmptyExpiredRule = false;
+        boolean hasNonBodyExpiredRule = false;
         for (int i = 0; i < rules.size(); i++) {
             String path = "auth.expired_when[" + i + "]";
             Map<String, Object> rule = rules.get(i);
@@ -113,9 +117,19 @@ public final class SessionExpiryChecks {
                 errors.add(expiry(path, "expired_when 的每一项至少要写一个判断键，例如 json_equals: {\"$.code\": 401}"));
                 continue;
             }
+            hasNonEmptyExpiredRule = true;
+            if (NON_BODY_EXPIRED_KEYS.containsAll(rule.keySet())) {
+                hasNonBodyExpiredRule = true;
+            }
             FlowChecks.unknownKeys(path, "expired_when", rule.keySet(), EXPIRED_KEYS,
                     ValidationCodes.SESSION_EXPIRY, errors);
             checkResponseRule(path, rule, true, errors);
+        }
+        if (warnings != null && hasNonEmptyExpiredRule && !hasNonBodyExpiredRule
+                && ConchValidator.usesRequestKey(doc, "download")) {
+            warnings.add(expiry("auth.expired_when",
+                    "规则包含 download 请求，但 auth.expired_when 全是依赖响应正文的规则；"
+                            + "download 的 2xx 响应不会扫描正文，建议补充 header_contains、header_exists 或非 2xx status 规则"));
         }
         AliveCheck alive = auth.aliveCheck();
         if (alive != null && !alive.expect().isEmpty()) {
@@ -179,9 +193,15 @@ public final class SessionExpiryChecks {
             Object value = entry.getValue();
             switch (key) {
                 case "status" -> parsedStatuses = checkStatus(child, value, errors);
-                case "contains", "not_contains", "header_exists", "cookie_exists" -> {
+                case "contains", "not_contains" -> {
                     hasNonStatusKey = true;
                     if (!(value instanceof String text) || text.isEmpty()) {
+                        errors.add(expiry(child, key + " 必须是非空字符串"));
+                    }
+                }
+                case "header_exists", "cookie_exists" -> {
+                    hasNonStatusKey = true;
+                    if (!(value instanceof String text) || text.isBlank()) {
                         errors.add(expiry(child, key + " 必须是非空字符串"));
                     }
                 }
@@ -302,8 +322,8 @@ public final class SessionExpiryChecks {
         for (Map.Entry<?, ?> entry : map.entrySet()) {
             String expr = entry.getKey() == null ? "" : String.valueOf(entry.getKey()).trim();
             String child = path + "." + expr;
-            if (!validJsonPathPrefix(expr)) {
-                errors.add(expiry(child, key + " 的键必须是以 $ 开头的 JSONPath，例如 $.code"));
+            if (!validJsonPath(expr)) {
+                errors.add(expiry(child, key + " 的键必须是以 $ 开头的有效 JSONPath，例如 $.code"));
                 continue;
             }
             Object expected = entry.getValue();
@@ -326,27 +346,169 @@ public final class SessionExpiryChecks {
     private static void checkJsonExists(String path, Object value, List<ValidationIssue> errors) {
         if (value instanceof List<?> list) {
             if (list.isEmpty()) {
-                errors.add(expiry(path, "json_exists 必须是以 $ 开头的 JSONPath 或非空列表"));
+                errors.add(expiry(path, "json_exists 必须是以 $ 开头的有效 JSONPath 或非空列表"));
                 return;
             }
             for (int i = 0; i < list.size(); i++) {
-                if (!(list.get(i) instanceof String text) || !validJsonPathPrefix(text.trim())) {
-                    errors.add(expiry(path + "[" + i + "]", "json_exists 的每一项必须是以 $ 开头的 JSONPath，例如 $.data.user"));
+                if (!(list.get(i) instanceof String text) || !validJsonPath(text.trim())) {
+                    errors.add(expiry(path + "[" + i + "]", "json_exists 的每一项必须是以 $ 开头的有效 JSONPath，例如 $.data.user"));
                 }
             }
             return;
         }
-        if (!(value instanceof String text) || !validJsonPathPrefix(text.trim())) {
-            errors.add(expiry(path, "json_exists 必须是以 $ 开头的 JSONPath（或多个组成的列表），例如 $.data.user"));
+        if (!(value instanceof String text) || !validJsonPath(text.trim())) {
+            errors.add(expiry(path, "json_exists 必须是以 $ 开头的有效 JSONPath（或多个组成的列表），例如 $.data.user"));
         }
     }
 
-    private static boolean validJsonPathPrefix(String expr) {
+    static boolean validJsonPath(String expr) {
         if (expr == null || expr.length() < 2 || expr.charAt(0) != '$') {
             return false;
         }
+        int len = expr.length();
         char second = expr.charAt(1);
-        return second == '.' || second == '[';
+        if (second != '.' && second != '[') {
+            return false;
+        }
+        int i = 1;
+        while (i < len) {
+            char c = expr.charAt(i);
+            if (c == '.') {
+                i++;
+                if (i < len && expr.charAt(i) == '.') {
+                    i++;
+                }
+                if (i >= len) {
+                    return false;
+                }
+                char next = expr.charAt(i);
+                if (next == '.') {
+                    return false;
+                }
+                if (next == '[') {
+                    // 允许 "$..['code']" / "$..[0]"，拒绝单点紧接 "["。
+                    if (expr.charAt(i - 2) != '.') {
+                        return false;
+                    }
+                    continue;
+                }
+                if (Character.isWhitespace(next) || next == ']' || next == ')' || next == '(') {
+                    return false;
+                }
+                int segStart = i;
+                int parenDepth = 0;
+                char quote = 0;
+                while (i < len) {
+                    char ch = expr.charAt(i);
+                    if (quote != 0) {
+                        if (ch == '\\' && i + 1 < len) {
+                            i += 2;
+                            continue;
+                        }
+                        if (ch == quote) {
+                            quote = 0;
+                        }
+                        i++;
+                        continue;
+                    }
+                    if (ch == '\'' || ch == '"') {
+                        quote = ch;
+                        i++;
+                        continue;
+                    }
+                    if (ch == '(') {
+                        parenDepth++;
+                        i++;
+                        continue;
+                    }
+                    if (ch == ')') {
+                        if (parenDepth == 0) {
+                            return false;
+                        }
+                        parenDepth--;
+                        i++;
+                        continue;
+                    }
+                    if (parenDepth == 0 && (ch == '.' || ch == '[')) {
+                        break;
+                    }
+                    if (parenDepth == 0 && (ch == ']' || Character.isWhitespace(ch))) {
+                        return false;
+                    }
+                    i++;
+                }
+                if (quote != 0 || parenDepth != 0 || i == segStart) {
+                    return false;
+                }
+            } else if (c == '[') {
+                i++;
+                int contentStart = i;
+                int bracketDepth = 1;
+                int parenDepth = 0;
+                char quote = 0;
+                boolean hasNonSpace = false;
+                while (i < len && bracketDepth > 0) {
+                    char ch = expr.charAt(i);
+                    if (quote != 0) {
+                        if (ch == '\\' && i + 1 < len) {
+                            i += 2;
+                            continue;
+                        }
+                        if (ch == quote) {
+                            quote = 0;
+                        }
+                        hasNonSpace = true;
+                        i++;
+                        continue;
+                    }
+                    if (ch == '\'' || ch == '"') {
+                        quote = ch;
+                        hasNonSpace = true;
+                        i++;
+                        continue;
+                    }
+                    if (ch == '[') {
+                        bracketDepth++;
+                        hasNonSpace = true;
+                        i++;
+                        continue;
+                    }
+                    if (ch == ']') {
+                        bracketDepth--;
+                        if (bracketDepth == 0) {
+                            i++;
+                            break;
+                        }
+                        i++;
+                        continue;
+                    }
+                    if (ch == '(') {
+                        parenDepth++;
+                        hasNonSpace = true;
+                        i++;
+                        continue;
+                    }
+                    if (ch == ')') {
+                        if (parenDepth == 0) {
+                            return false;
+                        }
+                        parenDepth--;
+                        i++;
+                        continue;
+                    }
+                    if (!Character.isWhitespace(ch)) {
+                        hasNonSpace = true;
+                    }
+                    i++;
+                }
+                if (bracketDepth != 0 || parenDepth != 0 || quote != 0 || i - 1 == contentStart || !hasNonSpace) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isJsonScalar(Object value) {

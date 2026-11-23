@@ -234,6 +234,98 @@ class SessionExpiryValidationTest {
                 .doesNotContain("\"expect\":");
     }
 
+    @Test
+    void jsonPathSyntaxAndBlankHeaderOrCookieNamesAreValidated() {
+        for (String bad : List.of("$.", "$..", "$.[0]", "$[]", "$[0", "$.a b")) {
+            assertThat(SessionExpiryChecks.validJsonPath(bad)).as(bad).isFalse();
+            ValidationResult res = validate(conch("1.12.0",
+                    "  expired_when:\n    - json_equals: {\"" + bad + "\": 401}\n",
+                    "- request: {method: GET, path: /a}\n"));
+            assertThat(res.errors())
+                    .as(bad)
+                    .anyMatch(i -> ValidationCodes.SESSION_EXPIRY.equals(i.code()));
+        }
+        for (String good : List.of(
+                "$..['code']",
+                "$.data[0].code",
+                "$.items[?(@.status == 'expired')].id",
+                "$['err-code']")) {
+            assertThat(SessionExpiryChecks.validJsonPath(good)).as(good).isTrue();
+        }
+        assertThat(validate(conch("1.12.0",
+                "  expired_when:\n    - header_exists: \"   \"\n",
+                "- request: {method: GET, path: /a}\n")).errors())
+                .anyMatch(i -> ValidationCodes.SESSION_EXPIRY.equals(i.code()));
+        assertThat(validate(conch("1.12.0",
+                "  alive_check:\n    request: {method: GET, path: /me}\n    expect: {cookie_exists: \"  \"}\n",
+                "- request: {method: GET, path: /a}\n")).errors())
+                .anyMatch(i -> ValidationCodes.SESSION_EXPIRY.equals(i.code()));
+    }
+
+    @Test
+    void downloadWithBodyOnlyExpiredWhenWarnsUntilHeaderOrStatusRuleAdded() {
+        ValidationResult bodyOnly = validate(conch("1.12.0",
+                "  expired_when:\n    - contains: \"请重新登录\"\n",
+                "- request: {method: GET, path: /file, download: true}\n"));
+        assertThat(bodyOnly.errors()).isEmpty();
+        assertThat(bodyOnly.warnings())
+                .anyMatch(i -> ValidationCodes.SESSION_EXPIRY.equals(i.code())
+                        && i.message().contains("download"));
+
+        ValidationResult withHeader = validate(conch("1.12.0",
+                "  expired_when:\n    - contains: \"请重新登录\"\n    - header_contains: {content-type: \"text/html\"}\n",
+                "- request: {method: GET, path: /file, download: true}\n"));
+        assertThat(withHeader.errors()).isEmpty();
+        assertThat(withHeader.warnings())
+                .noneMatch(i -> ValidationCodes.SESSION_EXPIRY.equals(i.code()));
+    }
+
+    @Test
+    void conditionEqualityAllowsShortStatusValuesOnSensitiveVarNamesButBlocksSecrets() {
+        ValidationResult shortStatus = validate(conch("1.12.0", "", """
+                  - request: {method: GET, path: /a}
+                  - extract: {token_status: {jsonpath: "$.status"}}
+                  - assert:
+                      equals: {token_status: "valid"}
+                      not_equals: {token_status: "expired"}
+                """));
+        assertThat(shortStatus.errors()).isEmpty();
+
+        ValidationResult bearerLeak = validate(conch("1.12.0", "", """
+                  - request: {method: GET, path: /a}
+                  - extract: {state: {jsonpath: "$.status"}}
+                  - assert:
+                      equals: {state: "Bearer secret_token_123456"}
+                """));
+        assertThat(bearerLeak.errors())
+                .anyMatch(i -> ValidationCodes.PLAINTEXT_CREDENTIAL.equals(i.code()));
+
+        ValidationResult longSecret = validate(conch("1.12.0", "", """
+                  - request: {method: GET, path: /a}
+                  - extract: {token_value: {jsonpath: "$.tok"}}
+                  - assert:
+                      equals: {token_value: "abcdefghijklmnopqrstuvwx"}
+                """));
+        assertThat(longSecret.errors())
+                .anyMatch(i -> ValidationCodes.PLAINTEXT_CREDENTIAL.equals(i.code()));
+    }
+
+    @Test
+    void flowStatusRejectsOutOfRangeFloatAndNestedLists() {
+        for (String statusExpr : List.of("99", "600", "200.5", "[[200]]")) {
+            ValidationResult res = validate(conch("1.12.0", "", """
+                      - request: {method: GET, path: /a}
+                      - if:
+                          status: %s
+                          then:
+                            - set: {ok: "yes"}
+                    """.formatted(statusExpr)));
+            assertThat(res.errors())
+                    .as("status=" + statusExpr)
+                    .anyMatch(i -> ValidationCodes.ASSERT_STATUS.equals(i.code()));
+        }
+    }
+
     private static ValidationResult validate(String yaml) {
         return ConchValidator.validate(ConchParser.parse(yaml), ConchValidator.Context.of(V112));
     }

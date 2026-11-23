@@ -113,6 +113,11 @@ public final class Identities {
         return store.identityOf(key);
     }
 
+    /** 这个本地包有没有任意账号绑到了身份。不查库。 */
+    public boolean hasBoundLocal(String conch) {
+        return conch != null && !store.boundAccounts(Origin.LOCAL, conch).isEmpty();
+    }
+
     public SessionManager.Cleared lastCleared(String identity) {
         return sessions.lastCleared(identity);
     }
@@ -297,7 +302,7 @@ public final class Identities {
                     ConchDoc doc = registry.find(member.conch(), member.origin()).orElse(null);
                     if (doc == null) {
                         hasMissingPackage = true;
-                        break;
+                        continue;
                     }
                     Set<String> mine = addresses(member.origin(), member.conch());
                     if (mine.isEmpty()) {
@@ -306,11 +311,8 @@ public final class Identities {
                         present.put(member, mine);
                     }
                 }
-                // 有成员的包这会儿不在本机（启动时还没载入、文件读不出来、被 Reef 撤下）：它可能正是
-                // 把另外两个成员连起来的那一个，这个身份先不动，等它回来再判断。记下的地址也不动。
-                if (hasMissingPackage) {
-                    continue;
-                }
+                // 已载入但不再有站点地址的成员（例如变成 driver: mcp 或清空了 base_url）直接解绑，
+                // 即使同身份还有别的成员的包暂时不在本机，也不让它们继续留在身份里。
                 for (SessionKey member : invalidMembers) {
                     String id = detach(member, REASON_ADDRESS_CHANGED, actor);
                     if (id != null) {
@@ -318,7 +320,9 @@ public final class Identities {
                         left.add(member);
                     }
                 }
-                if (present.isEmpty()) {
+                // 有成员的包这会儿不在本机（启动时还没载入、文件读不出来、被 Reef 撤下）：它可能正是
+                // 把另外两个成员连起来的那一个，其余成员的连通性先不动，等它回来再判断。记下的地址也不动。
+                if (hasMissingPackage || present.isEmpty()) {
                     continue;
                 }
                 List<List<SessionKey>> groups = groups(present);
@@ -412,9 +416,7 @@ public final class Identities {
     /** 解除绑定之后会话这一半：要等这个账号正在跑的调用，不在 {@link #judging} 里做。 */
     private void settle(SessionKey key, String id) {
         sessions.rebound(key);
-        if (store.members(id).isEmpty()) {
-            sessions.clearIdentity(id);
-        }
+        sessions.clearIdentityIfEmpty(id);
     }
 
     private boolean hasAccount(Origin origin, String conch, String account) {
@@ -466,10 +468,16 @@ public final class Identities {
         return values;
     }
 
-    /** 能力步骤或 auth.cookies 里用了登录步骤留下的值。 */
+    /** 能力步骤、探活请求或 auth.cookies 里用了登录步骤留下的值。 */
     private static boolean usesLoginValues(ConchDoc doc) {
-        if (doc.auth() != null && !doc.auth().cookies().isEmpty()) {
-            return true;
+        if (doc.auth() != null) {
+            if (!doc.auth().cookies().isEmpty()) {
+                return true;
+            }
+            if (doc.auth().aliveCheck() != null
+                    && LOGIN_REF.matcher(String.valueOf(doc.auth().aliveCheck().request())).find()) {
+                return true;
+            }
         }
         for (Action action : doc.actions().values()) {
             for (Step step : action.steps()) {

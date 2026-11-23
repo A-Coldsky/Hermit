@@ -83,6 +83,10 @@ import dev.hermit.common.validate.ConchValidator;
  * three start empty and nothing is backfilled: an account without a row in
  * {@code identity_members} keeps its own session in {@code sessions}, as before.
  * Later versions must not edit {@link #applyV21}.
+ * Version 22 adds {@code idempotency.api_key_id} (NOT NULL DEFAULT '') and rebuilds the primary
+ * key as {@code (origin, conch, account, action, api_key_id, "key")} so idempotency cache entries
+ * are isolated per API key. Existing rows receive {@code ''} without conflict and expire naturally
+ * under the 24-hour TTL. Later versions must not edit {@link #applyV22}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Crab has been released with versions 1–15. Version 16 is
@@ -252,6 +256,12 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 21)) {
                 applyV21(connection);
                 insertVersion(connection, 21);
+            }
+            // Do not gate version 22 on MAX(version), and do not rewrite applyV2/applyV10.
+            // Existing rows receive api_key_id = '' without conflict and expire after TTL.
+            if (!applied(connection, 22)) {
+                applyV22(connection);
+                insertVersion(connection, 22);
             }
             return null;
         });
@@ -767,6 +777,48 @@ public final class CrabDatabase implements AutoCloseable {
                     PRIMARY KEY (identity_id)
                 )
                 """);
+    }
+
+    /**
+     * 幂等缓存按 API Key 隔离：给 {@code idempotency} 增加 {@code api_key_id} 并纳入联合主键。
+     * 已有行得到空字符串 {@code ''}，互不冲突，按原 24 小时 TTL 自然过期。
+     * 每一步都按当前表结构幂等执行，避免 H2 DDL 自动提交后进程中途中断导致重启升级失败。
+     */
+    private static void applyV22(Connection connection) throws SQLException {
+        execute(connection, "ALTER TABLE idempotency ADD COLUMN IF NOT EXISTS api_key_id VARCHAR(64) NOT NULL DEFAULT ''");
+        List<String> pkColumns = primaryKeyColumns(connection, "IDEMPOTENCY");
+        if (pkColumns.equals(List.of("ORIGIN", "CONCH", "ACCOUNT", "ACTION", "API_KEY_ID", "key"))) {
+            return;
+        }
+        if (!pkColumns.isEmpty()) {
+            execute(connection, "ALTER TABLE idempotency DROP PRIMARY KEY");
+        }
+        execute(connection, """
+                ALTER TABLE idempotency ADD PRIMARY KEY (origin, conch, account, action, api_key_id, "key")
+                """);
+    }
+
+    private static List<String> primaryKeyColumns(Connection connection, String tableName) throws SQLException {
+        List<String> columns = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT k.COLUMN_NAME
+                FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS c
+                JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+                  ON k.CONSTRAINT_SCHEMA = c.CONSTRAINT_SCHEMA
+                 AND k.CONSTRAINT_NAME = c.CONSTRAINT_NAME
+                WHERE c.TABLE_SCHEMA = 'PUBLIC'
+                  AND c.TABLE_NAME = ?
+                  AND c.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                ORDER BY k.ORDINAL_POSITION
+                """)) {
+            statement.setString(1, tableName);
+            try (ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    columns.add(rows.getString(1));
+                }
+            }
+        }
+        return columns;
     }
 
     private static void applyV19(Connection connection) throws SQLException {

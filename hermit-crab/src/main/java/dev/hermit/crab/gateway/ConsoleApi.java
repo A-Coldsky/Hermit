@@ -95,6 +95,7 @@ final class ConsoleApi {
     static void register(io.javalin.Javalin app, CrabRuntime runtime) {
         get(app, "/console/api/session", ctx -> session(runtime, ctx));
         post(app, "/console/api/session", ctx -> login(runtime, ctx));
+        delete(app, "/console/api/session", ctx -> logout(runtime, ctx));
         post(app, "/console/api/session/password", ctx -> changePassword(runtime, ctx));
         get(app, "/console/api/conches", ctx -> conches(runtime, ctx));
         get(app, "/console/api/conches/{conch}", ctx -> conch(runtime, ctx));
@@ -646,7 +647,7 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, checkBody(check));
     }
 
-    /** 绑定要使用者点名确认：没带 {@code confirm: true} 的请求不执行。 */
+    /** 绑定要使用者点名确认：没带 {@code confirm: true} 的请求不执行。可选 {@code expectedOrigin} 防来源切换竞态。 */
     private static void bindIdentityMember(CrabRuntime runtime, Context ctx) throws Exception {
         JsonNode body = object(ctx);
         String conch = requiredText(body, "conch");
@@ -654,9 +655,29 @@ final class ConsoleApi {
         if (!bool(body, "confirm", false)) {
             throw new IllegalArgumentException("confirm is required");
         }
+        Origin active = memberOrigin(runtime, conch);
+        Origin expected = optionalOrigin(body, "expectedOrigin");
+        if (expected != null && expected != active) {
+            throw new RequestOnlyException(409, ErrorCode.CONFLICT, "规则包当前生效来源已变化，请重新检查后再绑定。");
+        }
         Identities.Check check = runtime.identities().bind(
-                ctx.pathParam("id"), memberOrigin(runtime, conch), conch, account, Actors.CONSOLE);
+                ctx.pathParam("id"), active, conch, account, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, checkBody(check));
+    }
+
+    private static Origin optionalOrigin(JsonNode body, String field) {
+        JsonNode node = body.get(field);
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (!node.isTextual() || node.textValue().isBlank()) {
+            throw new IllegalArgumentException(field + " must be LOCAL or OFFICIAL");
+        }
+        try {
+            return Origin.valueOf(node.textValue().trim());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException(field + " must be LOCAL or OFFICIAL");
+        }
     }
 
     private static void unbindIdentityMember(CrabRuntime runtime, Context ctx) {
@@ -1277,6 +1298,13 @@ final class ConsoleApi {
                 GatewayResponses.writeData(ctx, Map.of("ok", true));
             }
         }
+    }
+
+    private static void logout(CrabRuntime runtime, Context ctx) {
+        runtime.consoleSessions().clear();
+        ctx.header("Set-Cookie", ConsoleSessions.COOKIE
+                + "=; Max-Age=0; Path=/console; HttpOnly; SameSite=Strict");
+        GatewayResponses.writeData(ctx, Map.of("ok", true));
     }
 
     private static void changePassword(CrabRuntime runtime, Context ctx) throws Exception {

@@ -421,7 +421,8 @@ final class McpCalls {
 
     /**
      * Local traces only. A named key still has to list the conch. A call recorded under another
-     * API key stays hidden, except a console-channel trial, which named keys could already read.
+     * API key always stays hidden; only a true console/CLI trial ({@code apiKeyId == null}) can
+     * be read by another key that names the local conch.
      * A full-scope key can read the local trial it started with {@code conch_trial_run}.
      * Official traces are not local and stay hidden.
      */
@@ -436,17 +437,19 @@ final class McpCalls {
             return false;
         }
         if (detail != null && detail.call().apiKeyId() != null
-                && !detail.call().apiKeyId().equals(principal.id())
-                && !(namesConch && "CONSOLE".equals(detail.call().channel()))) {
+                && !detail.call().apiKeyId().equals(principal.id())) {
             return false;
         }
+        boolean fullPackageReadWrite = !principal.scope().readOnlyOnly()
+                && principal.scope().groups().isEmpty()
+                && principal.scope().actions().isEmpty();
         if (DevTraceStore.MCP_REFRESH_ACTION.equals(trace.action())) {
-            return namesConch;
+            return namesConch && fullPackageReadWrite;
         }
         ConchDoc doc = runtime.registry().find(trace.conch(), Origin.LOCAL).orElse(null);
         Action action = doc == null ? null : doc.actions().get(trace.action());
         if (action == null) {
-            return !principal.scope().readOnlyOnly();
+            return fullPackageReadWrite;
         }
         return principal.permits(trace.conch(), trace.action(), action.group(), CapabilityHttp.readOnly(action));
     }
@@ -456,7 +459,9 @@ final class McpCalls {
         if (detail == null || principal.scope() == null || !principal.scope().grantsAllOfficial()) {
             return false;
         }
-        return "CONSOLE".equals(detail.call().channel()) && principal.id().equals(detail.call().apiKeyId());
+        String channel = detail.call().channel();
+        return ("CONSOLE".equals(channel) || "MCP".equals(channel))
+                && principal.id().equals(detail.call().apiKeyId());
     }
 
     private static String longestConchPrefix(String toolName, Set<String> conches) {

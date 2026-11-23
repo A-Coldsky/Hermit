@@ -1,6 +1,7 @@
 package dev.hermit.crab.engine;
 
 import java.io.IOException;
+import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -15,6 +16,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
@@ -40,6 +42,8 @@ public final class SessionManager implements AutoCloseable {
 
     /** 已见 Cookie 值去重后的上限；超出时按加入顺序丢掉最早的值。 */
     private static final int MAX_SEEN_COOKIE_VALUES = 64;
+    /** 按 SessionKey 分段串行化无状态建新/迁移清理的条带锁数量；绝不与 Jar 锁反序嵌套。 */
+    private static final int KEY_STRIPES = 64;
 
     private final SessionPersistence persistence;
     private final LoginSnapshotStore loginSnapshots;
@@ -52,6 +56,11 @@ public final class SessionManager implements AutoCloseable {
     private final ConcurrentMap<String, Cleared> cleared = new ConcurrentHashMap<>();
     /** 绑定变了、状态要重建时带过去的登录失败次数和暂停：换个身份不等于凭证改对了。 */
     private final ConcurrentMap<SessionKey, Failures> carried = new ConcurrentHashMap<>();
+    /** 全局单调会话代次，避免状态重建后 concurrent_reads 交接发生 ABA 碰撞。 */
+    private final AtomicLong epochSeq = new AtomicLong();
+    /** 按账号的作废代次：invalidate 或 clearIdentity 时递增，阻止过期的 seedIdentity 复活旧 Cookie。 */
+    private final ConcurrentHashMap<SessionKey, AtomicLong> invalidationGen = new ConcurrentHashMap<>();
+    private final Object[] keyGates = new Object[KEY_STRIPES];
     private volatile boolean closed;
 
     public SessionManager() {
@@ -88,6 +97,9 @@ public final class SessionManager implements AutoCloseable {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.pending = new PendingLogins(this.clock);
+        for (int i = 0; i < keyGates.length; i++) {
+            keyGates[i] = new Object();
+        }
     }
 
     public PendingLogins pending() {
@@ -99,13 +111,23 @@ public final class SessionManager implements AutoCloseable {
     }
 
     public void resetLoginPause(SessionKey key) {
-        AccountState state = states.computeIfAbsent(key, this::newState);
-        state.lock.lock();
-        try {
-            state.loginPaused = false;
-            state.authFailures = 0;
-        } finally {
-            state.lock.unlock();
+        while (true) {
+            AccountState state = ensureState(key);
+            state.lock.lock();
+            try {
+                if (closed) {
+                    throw new IllegalStateException("会话管理器已关闭");
+                }
+                if (states.get(key) != state) {
+                    continue;
+                }
+                state.loginPaused = false;
+                state.authFailures = 0;
+                carried.remove(key);
+                return;
+            } finally {
+                state.lock.unlock();
+            }
         }
     }
 
@@ -113,18 +135,29 @@ public final class SessionManager implements AutoCloseable {
         while (true) {
             AccountState state = states.get(key);
             if (state == null) {
-                persistence.delete(key);
-                loginSnapshots.delete(key);
-                pending.discard(key);
-                String identity = shared.identityOf(key);
-                if (identity != null) {
-                    // 绑了身份的账号：凭证变了，整个身份的 Cookie 都不能再用。
-                    clearIdentity(identity);
+                String identity;
+                synchronized (keyGate(key)) {
+                    state = states.get(key);
+                    if (state == null) {
+                        bumpInvalidationGen(key);
+                        persistence.delete(key);
+                        loginSnapshots.delete(key);
+                        pending.discard(key);
+                        identity = shared.identityOf(key);
+                    } else {
+                        identity = null;
+                    }
                 }
-                if (states.get(key) == null) {
-                    return;
+                if (state == null) {
+                    if (identity != null) {
+                        // 绑了身份的账号：凭证变了，整个身份的 Cookie 都不能再用。
+                        clearIdentity(identity);
+                    }
+                    if (states.get(key) == null) {
+                        return;
+                    }
+                    continue;
                 }
-                continue;
             }
             // 进行中的调用持有这把锁，并且会在返回前把 Cookie 再写回库。
             // 清空必须发生在它放开锁之后，下一次调用和重启才不会带回旧会话。
@@ -138,21 +171,86 @@ public final class SessionManager implements AutoCloseable {
                     evictStaleUnderLock(key, state);
                     continue;
                 }
+                bumpInvalidationGen(key);
                 pending.discard(key);
                 if (state.jar.identity != null) {
                     clearJar(state.jar);
+                    if (closed) {
+                        states.remove(key, state);
+                    }
                     return;
                 }
                 persistence.delete(key);
                 loginSnapshots.delete(key);
                 state.loggedIn = false;
-                state.epoch++;
+                state.epoch = epochSeq.incrementAndGet();
                 state.lastActive = null;
                 state.seenCookieValues.clear();
                 state.loginSnapshot.clear();
                 state.jar.persisted = null;
                 closeClient(state.jar);
-                if (!closed && states.get(key) == state) {
+                if (closed) {
+                    states.remove(key, state);
+                } else if (states.get(key) == state) {
+                    openClient(state.jar);
+                }
+                return;
+            } finally {
+                state.lock.unlock();
+            }
+        }
+    }
+
+    /**
+     * 只清这一个账号自己的登录状态、登录快照和待输入登录。
+     * 未绑身份时同时清掉它的独立 Cookie；已绑身份时不碰共享罐，避免误清同一身份里地址未变的其它成员。
+     */
+    public void clearAccountLogin(SessionKey key) {
+        while (true) {
+            AccountState state = states.get(key);
+            if (state == null) {
+                synchronized (keyGate(key)) {
+                    state = states.get(key);
+                    if (state == null) {
+                        bumpInvalidationGen(key);
+                        if (shared.identityOf(key) == null) {
+                            persistence.delete(key);
+                        }
+                        loginSnapshots.delete(key);
+                        pending.discard(key);
+                        return;
+                    }
+                }
+            }
+            state.lock.lock();
+            try {
+                if (states.get(key) != state) {
+                    continue;
+                }
+                if (stale(key, state)) {
+                    evictStaleUnderLock(key, state);
+                    continue;
+                }
+                bumpInvalidationGen(key);
+                pending.discard(key);
+                loginSnapshots.delete(key);
+                state.loggedIn = false;
+                state.epoch = epochSeq.incrementAndGet();
+                state.lastActive = null;
+                state.loginSnapshot.clear();
+                if (state.jar.identity != null) {
+                    if (closed) {
+                        states.remove(key, state);
+                    }
+                    return;
+                }
+                persistence.delete(key);
+                state.seenCookieValues.clear();
+                state.jar.persisted = null;
+                closeClient(state.jar);
+                if (closed) {
+                    states.remove(key, state);
+                } else if (states.get(key) == state) {
                     openClient(state.jar);
                 }
                 return;
@@ -168,15 +266,23 @@ public final class SessionManager implements AutoCloseable {
      * 它原来的 Cookie 作为身份的初始内容。不同时持有两把锁。
      */
     public void rebound(SessionKey key) {
-        List<StoredCookie> own = null;
+        Seed seed = null;
         while (true) {
             AccountState state = states.get(key);
             if (state == null) {
-                own = persistence.load(key);
-                persistence.delete(key);
-                loginSnapshots.delete(key);
-                pending.discard(key);
-                break;
+                synchronized (keyGate(key)) {
+                    state = states.get(key);
+                    if (state == null) {
+                        long gen = invalidationGen(key);
+                        List<StoredCookie> own = persistence.load(key);
+                        boolean established = own != null && !own.isEmpty() && pending.current(key) == null;
+                        persistence.delete(key);
+                        loginSnapshots.delete(key);
+                        pending.discard(key);
+                        seed = own == null || own.isEmpty() ? null : new Seed(own, established, gen);
+                        break;
+                    }
+                }
             }
             state.lock.lock();
             try {
@@ -187,19 +293,23 @@ public final class SessionManager implements AutoCloseable {
                     // 状态已经和当前绑定一致（例如已被并发调用先迁移好），不再抹掉它的新会话。
                     return;
                 }
-                own = evictStaleUnderLock(key, state);
+                seed = evictStaleUnderLock(key, state);
                 break;
             } finally {
                 state.lock.unlock();
             }
         }
-        seedIdentity(key, own);
+        if (seed != null) {
+            seedIdentity(key, seed);
+        }
     }
 
     /** 调用方持有 {@code state.lock}，且已确认 {@code states.get(key) == state} 并与当前绑定不再一致。 */
-    private List<StoredCookie> evictStaleUnderLock(SessionKey key, AccountState state) {
+    private Seed evictStaleUnderLock(SessionKey key, AccountState state) {
+        long gen = invalidationGen(key);
         List<StoredCookie> own = state.jar.identity == null && state.jar.cookies != null
                 ? dump(state.jar.cookies) : List.of();
+        boolean established = state.jar.identity == null && state.loggedIn;
         persistence.delete(key);
         loginSnapshots.delete(key);
         pending.discard(key);
@@ -208,26 +318,32 @@ public final class SessionManager implements AutoCloseable {
         if (state.jar.identity == null) {
             closeClient(state.jar);
         }
-        return own;
+        return own.isEmpty() ? null : new Seed(own, established, gen);
     }
 
-    private void seedIdentity(SessionKey key, List<StoredCookie> own) {
+    private void seedIdentity(SessionKey key, Seed seed) {
         String identity = shared.identityOf(key);
-        if (identity == null || own == null || own.isEmpty() || closed) {
+        if (identity == null || seed == null || seed.cookies().isEmpty() || closed) {
+            return;
+        }
+        if (invalidationGen(key) != seed.gen()) {
             return;
         }
         Jar jar = jars.computeIfAbsent(identity, this::sharedJar);
         jar.gate.writeLock().lock();
         try {
-            seedIdentityUnderLock(identity, jar, own);
+            seedIdentityUnderLock(key, identity, jar, seed);
         } finally {
             jar.gate.writeLock().unlock();
         }
     }
 
-    private boolean seedIdentity(SessionKey key, List<StoredCookie> own, long deadlineNanos) throws InterruptedException {
+    private boolean seedIdentity(SessionKey key, Seed seed, long deadlineNanos) throws InterruptedException {
         String identity = shared.identityOf(key);
-        if (identity == null || own == null || own.isEmpty() || closed) {
+        if (identity == null || seed == null || seed.cookies().isEmpty() || closed) {
+            return true;
+        }
+        if (invalidationGen(key) != seed.gen()) {
             return true;
         }
         Jar jar = jars.computeIfAbsent(identity, this::sharedJar);
@@ -236,25 +352,42 @@ public final class SessionManager implements AutoCloseable {
             return false;
         }
         try {
-            seedIdentityUnderLock(identity, jar, own);
+            seedIdentityUnderLock(key, identity, jar, seed);
             return true;
         } finally {
             jar.gate.writeLock().unlock();
         }
     }
 
-    private void seedIdentityUnderLock(String identity, Jar jar, List<StoredCookie> own) {
+    private void seedIdentityUnderLock(SessionKey key, String identity, Jar jar, Seed seed) {
+        if (closed || !identity.equals(shared.identityOf(key))) {
+            if (jars.get(identity) == jar
+                    && (closed || (shared.members(identity).isEmpty() && !hasStateForJar(jar)))) {
+                jars.remove(identity, jar);
+                closeClient(jar);
+            }
+            return;
+        }
+        if (invalidationGen(key) != seed.gen()) {
+            return;
+        }
         if (jars.get(identity) == jar && jar.cookies != null && jar.cookies.getCookies().isEmpty()) {
             synchronized (jar.seenCookieValues) {
-                for (StoredCookie cookie : own) {
+                for (StoredCookie cookie : seed.cookies()) {
                     addCookie(jar.cookies, cookie);
                     rememberCookieValue(jar.seenCookieValues, cookie.value());
                 }
+            }
+            if (seed.established()) {
+                jar.sessionEstablished = true;
             }
             List<StoredCookie> snapshot = List.copyOf(dump(jar.cookies));
             shared.save(identity, snapshot);
             jar.persisted = snapshot;
         }
+    }
+
+    private record Seed(List<StoredCookie> cookies, boolean established, long gen) {
     }
 
     private record Failures(int count, boolean paused) {
@@ -286,6 +419,7 @@ public final class SessionManager implements AutoCloseable {
             Jar jar = jars.get(identity);
             if (jar == null || closed) {
                 for (SessionKey member : shared.members(identity)) {
+                    bumpInvalidationGen(member);
                     loginSnapshots.delete(member);
                     pending.discard(member);
                 }
@@ -302,6 +436,45 @@ public final class SessionManager implements AutoCloseable {
                     continue;
                 }
                 clearJar(jar);
+                return;
+            } finally {
+                jar.gate.writeLock().unlock();
+            }
+        }
+    }
+
+    /**
+     * 身份已经没有成员时清空它的 Cookie 并移除、关掉连接池；拿写锁后复查成员表，避免并发新绑进来的成员被误清。
+     */
+    public void clearIdentityIfEmpty(String identity) {
+        if (identity == null) {
+            return;
+        }
+        while (true) {
+            Jar jar = jars.get(identity);
+            if (jar == null || closed) {
+                if (!shared.members(identity).isEmpty()) {
+                    return;
+                }
+                shared.delete(identity);
+                cleared.remove(identity);
+                if (closed || jars.get(identity) == null) {
+                    return;
+                }
+                continue;
+            }
+            jar.gate.writeLock().lock();
+            try {
+                if (jars.get(identity) != jar) {
+                    continue;
+                }
+                if (!shared.members(identity).isEmpty()) {
+                    return;
+                }
+                clearJar(jar);
+                cleared.remove(identity);
+                jars.remove(identity, jar);
+                closeClient(jar);
                 return;
             } finally {
                 jar.gate.writeLock().unlock();
@@ -338,10 +511,11 @@ public final class SessionManager implements AutoCloseable {
         return state(key).jar.identity != null;
     }
 
-    /** 共用的罐里已经有 Cookie：这次登录带着它们跑，不从空白开始。调用方持有账号锁。 */
+    /** 共用的罐里已经有已建立会话的 Cookie：这次登录带着它们跑，不从空白开始。调用方持有账号锁。 */
     boolean sharesCookies(SessionKey key) {
         Jar jar = state(key).jar;
-        return jar.identity != null && jar.cookies != null && !jar.cookies.getCookies().isEmpty();
+        return jar.identity != null && jar.sessionEstablished
+                && jar.cookies != null && !jar.cookies.getCookies().isEmpty();
     }
 
     /**
@@ -370,6 +544,7 @@ public final class SessionManager implements AutoCloseable {
         if (jar.cookies != null) {
             jar.cookies.clear();
         }
+        jar.sessionEstablished = false;
         LinkedHashSet<SessionKey> members = new LinkedHashSet<>(shared.members(jar.identity));
         for (Map.Entry<SessionKey, AccountState> entry : states.entrySet()) {
             AccountState member = entry.getValue();
@@ -377,12 +552,13 @@ public final class SessionManager implements AutoCloseable {
                 continue;
             }
             member.loggedIn = false;
-            member.epoch++;
+            member.epoch = epochSeq.incrementAndGet();
             member.lastActive = null;
             member.loginSnapshot.clear();
             members.add(entry.getKey());
         }
         for (SessionKey member : members) {
+            bumpInvalidationGen(member);
             loginSnapshots.delete(member);
             // 等着验证码的登录是带着刚清掉的 Cookie 走到一半的，接不下去了：下一次调用从头登录。
             pending.discard(member);
@@ -399,11 +575,17 @@ public final class SessionManager implements AutoCloseable {
         while (true) {
             AccountState state = states.get(key);
             if (state == null) {
-                persistence.delete(key);
-                loginSnapshots.delete(key);
-                pending.discard(key);
-                carried.remove(key);
-                return;
+                synchronized (keyGate(key)) {
+                    state = states.get(key);
+                    if (state == null) {
+                        bumpInvalidationGen(key);
+                        persistence.delete(key);
+                        loginSnapshots.delete(key);
+                        pending.discard(key);
+                        carried.remove(key);
+                        return;
+                    }
+                }
             }
             // 进行中的调用可能持有读锁或写锁并在返回前写库；等它放开后再删库和移出状态。
             state.lock.lock();
@@ -411,6 +593,7 @@ public final class SessionManager implements AutoCloseable {
                 if (states.get(key) != state) {
                     continue;
                 }
+                bumpInvalidationGen(key);
                 persistence.delete(key);
                 loginSnapshots.delete(key);
                 pending.discard(key);
@@ -429,7 +612,10 @@ public final class SessionManager implements AutoCloseable {
 
     public boolean tryLock(SessionKey key, long deadlineNanos) throws InterruptedException {
         while (true) {
-            AccountState state = states.computeIfAbsent(key, this::newState);
+            if (closed) {
+                throw new IllegalStateException("会话管理器已关闭");
+            }
+            AccountState state = ensureState(key);
             long wait = deadlineNanos - System.nanoTime();
             if (wait <= 0) {
                 return false;
@@ -437,19 +623,23 @@ public final class SessionManager implements AutoCloseable {
             if (!state.lock.tryLock(wait, TimeUnit.NANOSECONDS)) {
                 return false;
             }
+            if (closed) {
+                state.lock.unlock();
+                throw new IllegalStateException("会话管理器已关闭");
+            }
             if (states.get(key) == state && !stale(key, state)) {
                 return true;
             }
             // 等锁期间被 forget 了，或绑定变了：这份状态不能再用，换新的再等。
-            List<StoredCookie> own = null;
+            Seed seed = null;
             try {
                 if (states.get(key) == state) {
-                    own = evictStaleUnderLock(key, state);
+                    seed = evictStaleUnderLock(key, state);
                 }
             } finally {
                 state.lock.unlock();
             }
-            if (own != null && !own.isEmpty() && !seedIdentity(key, own, deadlineNanos)) {
+            if (seed != null && !seedIdentity(key, seed, deadlineNanos)) {
                 return false;
             }
         }
@@ -464,21 +654,16 @@ public final class SessionManager implements AutoCloseable {
 
     /**
      * Whether automatic login is paused. Absent session state means the account has not failed
-     * login in this process, so it is not paused. The read takes the account lock; callers that
-     * already hold it re-enter safely.
+     * login in this process, so it is not paused. Reads volatile state without blocking on the
+     * account lock.
      */
     public boolean loginPaused(SessionKey key) {
         AccountState state = states.get(key);
-        if (state == null) {
-            Failures kept = carried.get(key);
-            return kept != null && kept.paused();
-        }
-        state.gate.readLock().lock();
-        try {
+        if (state != null) {
             return state.loginPaused;
-        } finally {
-            state.gate.readLock().unlock();
         }
+        Failures kept = carried.get(key);
+        return kept != null && kept.paused();
     }
 
     boolean loggedIn(SessionKey key) {
@@ -497,14 +682,17 @@ public final class SessionManager implements AutoCloseable {
     void markLoggedIn(SessionKey key) {
         AccountState state = state(key);
         state.loggedIn = true;
-        state.epoch++;
+        state.epoch = epochSeq.incrementAndGet();
         state.lastActive = clock.instant();
+        if (state.jar.identity != null) {
+            state.jar.sessionEstablished = true;
+        }
     }
 
     void markLoggedOut(SessionKey key) {
         AccountState state = state(key);
         state.loggedIn = false;
-        state.epoch++;
+        state.epoch = epochSeq.incrementAndGet();
         state.lastActive = null;
         // 共用的 Cookie 不清：别的成员和认证中心的登录还在里面，这个成员带着它们重新登录。
         if (state.jar.identity == null) {
@@ -533,7 +721,7 @@ public final class SessionManager implements AutoCloseable {
      * Cookie 罐里同名的值，只看会发往 {@code base} 主机的。没有则为 null。空字符串算有值。
      * {@code base} 为 null 时不按主机筛。
      */
-    String cookieValue(SessionKey key, String name, java.net.URI base) {
+    String cookieValue(SessionKey key, String name, URI base) {
         AccountState state = state(key);
         if (name == null || state.jar.cookies == null) {
             return null;
@@ -662,7 +850,10 @@ public final class SessionManager implements AutoCloseable {
      */
     public boolean tryLockShared(SessionKey key, long deadlineNanos) throws InterruptedException {
         while (true) {
-            AccountState state = states.computeIfAbsent(key, this::newState);
+            if (closed) {
+                throw new IllegalStateException("会话管理器已关闭");
+            }
+            AccountState state = ensureState(key);
             long wait = deadlineNanos - System.nanoTime();
             if (wait <= 0) {
                 return false;
@@ -670,10 +861,17 @@ public final class SessionManager implements AutoCloseable {
             if (!state.gate.readLock().tryLock(wait, TimeUnit.NANOSECONDS)) {
                 return false;
             }
+            if (closed) {
+                state.gate.readLock().unlock();
+                throw new IllegalStateException("会话管理器已关闭");
+            }
             if (states.get(key) == state && !stale(key, state)) {
                 return true;
             }
             state.gate.readLock().unlock();
+            if (closed) {
+                throw new IllegalStateException("会话管理器已关闭");
+            }
             if (states.get(key) != state) {
                 continue;
             }
@@ -685,15 +883,19 @@ public final class SessionManager implements AutoCloseable {
             if (!state.lock.tryLock(wait, TimeUnit.NANOSECONDS)) {
                 return false;
             }
-            List<StoredCookie> own = null;
+            if (closed) {
+                state.lock.unlock();
+                throw new IllegalStateException("会话管理器已关闭");
+            }
+            Seed seed = null;
             try {
                 if (states.get(key) == state && stale(key, state)) {
-                    own = evictStaleUnderLock(key, state);
+                    seed = evictStaleUnderLock(key, state);
                 }
             } finally {
                 state.lock.unlock();
             }
-            if (own != null && !own.isEmpty() && !seedIdentity(key, own, deadlineNanos)) {
+            if (seed != null && !seedIdentity(key, seed, deadlineNanos)) {
                 return false;
             }
         }
@@ -804,6 +1006,11 @@ public final class SessionManager implements AutoCloseable {
 
     /** Cookie names only. Values stay in the jar and are not copied here. */
     List<String> cookieNames(SessionKey key) {
+        return cookieNames(key, null);
+    }
+
+    /** 只返回会发往 {@code base} 主机的 Cookie 名；{@code base} 为 null 时不过滤。 */
+    List<String> cookieNames(SessionKey key, URI base) {
         AccountState state = states.get(key);
         BasicCookieStore jar = state == null ? null : state.jar.cookies;
         if (jar == null) {
@@ -811,7 +1018,7 @@ public final class SessionManager implements AutoCloseable {
         }
         ArrayList<String> names = new ArrayList<>();
         for (Cookie cookie : jar.getCookies()) {
-            if (cookie.getName() != null) {
+            if (cookie.getName() != null && (base == null || AuthReach.readable(cookie, base, jar))) {
                 names.add(cookie.getName());
             }
         }
@@ -823,27 +1030,79 @@ public final class SessionManager implements AutoCloseable {
         closed = true;
         while (!states.isEmpty()) {
             for (Map.Entry<SessionKey, AccountState> entry : states.entrySet()) {
-                SessionKey key = entry.getKey();
                 AccountState state = entry.getValue();
-                state.lock.lock();
+                Jar jar = state.jar;
+                jar.gate.writeLock().lock();
                 try {
-                    // 在放开锁之前先移出 states，让等锁线程看到状态已失效，不会拿到已关掉的 client / cookies。
-                    states.remove(key, state);
-                    closeClient(state.jar);
+                    // 在放开锁之前一次性移出所有共用这只罐的状态及罐本身，
+                    // 让等锁线程看到状态已失效，不会拿到已关掉的 client / cookies。
+                    for (Map.Entry<SessionKey, AccountState> member : states.entrySet()) {
+                        if (member.getValue().jar == jar) {
+                            states.remove(member.getKey(), member.getValue());
+                        }
+                    }
+                    if (jar.identity != null) {
+                        jars.remove(jar.identity, jar);
+                    }
+                    closeClient(jar);
                 } finally {
-                    state.lock.unlock();
+                    jar.gate.writeLock().unlock();
                 }
             }
         }
-        for (Jar jar : jars.values()) {
-            jar.gate.writeLock().lock();
-            try {
-                closeClient(jar);
-            } finally {
-                jar.gate.writeLock().unlock();
+        while (!jars.isEmpty()) {
+            for (Map.Entry<String, Jar> entry : jars.entrySet()) {
+                String identity = entry.getKey();
+                Jar jar = entry.getValue();
+                jar.gate.writeLock().lock();
+                try {
+                    for (Map.Entry<SessionKey, AccountState> member : states.entrySet()) {
+                        if (member.getValue().jar == jar) {
+                            states.remove(member.getKey(), member.getValue());
+                        }
+                    }
+                    jars.remove(identity, jar);
+                    closeClient(jar);
+                } finally {
+                    jar.gate.writeLock().unlock();
+                }
             }
         }
-        jars.clear();
+    }
+
+    private Object keyGate(SessionKey key) {
+        return keyGates[(key.hashCode() & 0x7fffffff) % KEY_STRIPES];
+    }
+
+    private long invalidationGen(SessionKey key) {
+        AtomicLong counter = invalidationGen.get(key);
+        return counter == null ? 0L : counter.get();
+    }
+
+    private void bumpInvalidationGen(SessionKey key) {
+        invalidationGen.computeIfAbsent(key, ignored -> new AtomicLong()).incrementAndGet();
+    }
+
+    private boolean hasStateForJar(Jar jar) {
+        for (AccountState state : states.values()) {
+            if (state.jar == jar) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void dropOrphanJar(String identity, Jar jar) {
+        jar.gate.writeLock().lock();
+        try {
+            if (jars.get(identity) == jar
+                    && (closed || (shared.members(identity).isEmpty() && !hasStateForJar(jar)))) {
+                jars.remove(identity, jar);
+                closeClient(jar);
+            }
+        } finally {
+            jar.gate.writeLock().unlock();
+        }
     }
 
     private AccountState state(SessionKey key) {
@@ -862,36 +1121,95 @@ public final class SessionManager implements AutoCloseable {
         return identity != null && jars.get(identity) != state.jar;
     }
 
-    private AccountState newState(SessionKey key) {
-        if (closed) {
-            throw new IllegalStateException("会话管理器已关闭");
+    private AccountState ensureState(SessionKey key) {
+        AccountState existing = states.get(key);
+        if (existing != null) {
+            return existing;
         }
-        String identity = shared.identityOf(key);
-        Jar jar = identity == null ? privateJar(key) : jars.computeIfAbsent(identity, this::sharedJar);
-        AccountState state = new AccountState(jar);
-        // 绑了身份的成员总是从「未登录」开始：罐里的 Cookie 是不是对它有效，要探活或登录一次才知道。
-        if (identity == null && !jar.cookies.getCookies().isEmpty()) {
-            state.loggedIn = true;
-            state.lastActive = Instant.EPOCH;
-        }
-        Map<String, String> snapshot;
-        try {
-            snapshot = loginSnapshots.load(key);
-        } catch (RuntimeException ex) {
-            if (identity == null) {
-                closeClient(jar);
+        synchronized (keyGate(key)) {
+            existing = states.get(key);
+            if (existing != null) {
+                return existing;
             }
-            throw ex;
+            Failures kept = carried.get(key);
+            AccountState created = newState(key, kept);
+            states.put(key, created);
+            if (kept != null) {
+                carried.remove(key, kept);
+            }
+            if (closed) {
+                created.lock.lock();
+                try {
+                    if (created.jar.identity == null) {
+                        states.remove(key, created);
+                        closeClient(created.jar);
+                    } else {
+                        for (Map.Entry<SessionKey, AccountState> member : states.entrySet()) {
+                            if (member.getValue().jar == created.jar) {
+                                states.remove(member.getKey(), member.getValue());
+                            }
+                        }
+                        if (jars.remove(created.jar.identity, created.jar)) {
+                            closeClient(created.jar);
+                        }
+                    }
+                } finally {
+                    created.lock.unlock();
+                }
+                throw new IllegalStateException("会话管理器已关闭");
+            }
+            return created;
         }
-        if (snapshot != null) {
-            state.loginSnapshot.putAll(snapshot);
+    }
+
+    private AccountState newState(SessionKey key, Failures kept) {
+        while (true) {
+            if (closed) {
+                throw new IllegalStateException("会话管理器已关闭");
+            }
+            String identity = shared.identityOf(key);
+            Jar jar = identity == null ? privateJar(key) : jars.computeIfAbsent(identity, this::sharedJar);
+            if (identity != null && (closed || !identity.equals(shared.identityOf(key)))) {
+                dropOrphanJar(identity, jar);
+                if (closed) {
+                    throw new IllegalStateException("会话管理器已关闭");
+                }
+                continue;
+            }
+            AccountState state = new AccountState(jar, epochSeq.incrementAndGet());
+            // 绑了身份的成员总是从「未登录」开始：罐里的 Cookie 是不是对它有效，要探活或登录一次才知道。
+            if (identity == null && !jar.cookies.getCookies().isEmpty()) {
+                state.loggedIn = true;
+                state.lastActive = Instant.EPOCH;
+            }
+            Map<String, String> snapshot;
+            try {
+                snapshot = loginSnapshots.load(key);
+            } catch (RuntimeException ex) {
+                if (identity == null) {
+                    closeClient(jar);
+                } else if (closed || !identity.equals(shared.identityOf(key))) {
+                    dropOrphanJar(identity, jar);
+                }
+                throw ex;
+            }
+            if (closed) {
+                if (identity == null) {
+                    closeClient(jar);
+                } else {
+                    dropOrphanJar(identity, jar);
+                }
+                throw new IllegalStateException("会话管理器已关闭");
+            }
+            if (snapshot != null) {
+                state.loginSnapshot.putAll(snapshot);
+            }
+            if (kept != null) {
+                state.authFailures = kept.count();
+                state.loginPaused = kept.paused();
+            }
+            return state;
         }
-        Failures kept = carried.remove(key);
-        if (kept != null) {
-            state.authFailures = kept.count();
-            state.loginPaused = kept.paused();
-        }
-        return state;
     }
 
     private Jar privateJar(SessionKey key) {
@@ -902,7 +1220,11 @@ public final class SessionManager implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("会话管理器已关闭");
         }
-        return fill(new Jar(identity), () -> shared.load(identity));
+        Jar jar = fill(new Jar(identity), () -> shared.load(identity));
+        if (!jar.cookies.getCookies().isEmpty()) {
+            jar.sessionEstablished = true;
+        }
+        return jar;
     }
 
     private Jar fill(Jar jar, java.util.function.Supplier<List<StoredCookie>> load) {
@@ -1042,6 +1364,8 @@ public final class SessionManager implements AutoCloseable {
         final Set<String> seenCookieValues = java.util.Collections.synchronizedSet(new LinkedHashSet<>());
         CloseableHttpClient client;
         volatile BasicCookieStore cookies;
+        /** 是否已由任一成员完成登录、从持久化加载或从已登录成员播种；防止 ask 暂停期写入的登录前 Cookie 误导同身份其它成员。 */
+        volatile boolean sessionEstablished;
         /** 上一次写进库里的 Cookie；null 表示库里的内容未知或已被删除。 */
         List<StoredCookie> persisted;
         OutboundTls tls;
@@ -1058,19 +1382,20 @@ public final class SessionManager implements AutoCloseable {
         final ReentrantReadWriteLock gate;
         final ReentrantReadWriteLock.WriteLock lock;
         final Set<String> seenCookieValues;
-        /** 每次登录、登出、作废加一。并行调用发现会话失效时，用它判断是不是已经有人重新登录过。 */
+        /** 全局单调会话代次。并行调用发现会话失效时，用它判断是不是已经有人重新登录过。 */
         long epoch;
         final Map<String, String> loginSnapshot = new LinkedHashMap<>();
         boolean loggedIn;
         volatile Instant lastActive;
-        int authFailures;
-        boolean loginPaused;
+        volatile int authFailures;
+        volatile boolean loginPaused;
 
-        AccountState(Jar jar) {
+        AccountState(Jar jar, long initialEpoch) {
             this.jar = jar;
             this.gate = jar.gate;
             this.lock = jar.gate.writeLock();
             this.seenCookieValues = jar.seenCookieValues;
+            this.epoch = initialEpoch;
         }
     }
 }

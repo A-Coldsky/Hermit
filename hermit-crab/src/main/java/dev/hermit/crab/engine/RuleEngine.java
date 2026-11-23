@@ -563,10 +563,31 @@ public final class RuleEngine implements ConchExecutor {
                     false, ex.transport, ex.warnings);
             throw ex;
         }
+        List<TraceWarning> aliveWarnings = new ArrayList<>(result.warnings());
         boolean aliveOk = !(result.sessionLost() || result.status() == 401 || result.status() == 403);
+        if (aliveOk && auth != null && !auth.expiredWhen().isEmpty()) {
+            int matched = SessionExpiry.matchExpired(
+                    auth.expiredWhen(), result, sessions.cookies(scope.key), scope.base, scope.deadline);
+            if (matched >= 0) {
+                aliveOk = false;
+                aliveWarnings.add(new TraceWarning(
+                        TraceWarning.SESSION_EXPIRED,
+                        "命中 auth.expired_when 第 " + (matched + 1) + " 条规则，按会话失效处理"));
+            }
+        }
+        if (aliveOk && !alive.expect().isEmpty()) {
+            String failed = SessionExpiry.firstUnmetExpect(
+                    alive.expect(), result, sessions.cookies(scope.key), scope.base, scope.deadline);
+            if (failed != null) {
+                aliveOk = false;
+                aliveWarnings.add(new TraceWarning(
+                        TraceWarning.SESSION_EXPIRED,
+                        "未通过 alive_check.expect（" + failed + "），按会话失效处理"));
+            }
+        }
         recordAlive(spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
-                result.wire(), started, aliveOk, null, result.warnings());
-        if (result.sessionLost() || result.status() == 401 || result.status() == 403) {
+                result.wire(), started, aliveOk, null, aliveWarnings);
+        if (!aliveOk) {
             if (!adopting) {
                 sessions.markLoggedOut(scope.key);
             }
@@ -1100,7 +1121,7 @@ public final class RuleEngine implements ConchExecutor {
         Map<String, Object> vars = baseVars(scope);
         try {
             runSteps(action.steps(), vars, false, expectPrefix(scope.conch), logs, scope.key, scope.base,
-                    scope.reach(false), scope.deadline, "action", scope.conch.scripts());
+                    scope.reach(false), scope.deadline, "action", scope.conch.scripts(), 0, false, scope.conch);
             return Attempt.ok(vars, logs);
         } catch (SessionLost ex) {
             return Attempt.lost(logs);
@@ -1259,7 +1280,9 @@ public final class RuleEngine implements ConchExecutor {
                         deadline,
                         capture,
                         libraries,
-                        reach);
+                        reach,
+                        auth ? List.of() : expiredWhenOf(conch),
+                        auth);
                 block.last = outcome;
                 if (outcome.capture() != null
                         && "request".equals(step.type())
@@ -1869,11 +1892,14 @@ public final class RuleEngine implements ConchExecutor {
             List<Step> definitions,
             Continuation continuation
     ) {
-        if (auth || outcome.status() == null) {
+        if (auth) {
             return;
         }
         if (lostSession(outcome)) {
             throw new SessionLost();
+        }
+        if (outcome.status() == null) {
+            return;
         }
         int status = outcome.status();
         if (status == 400) {
@@ -2011,6 +2037,13 @@ public final class RuleEngine implements ConchExecutor {
             return null;
         }
         return conch.auth().aliveCheck().expectNotRedirect();
+    }
+
+    private static List<Map<String, Object>> expiredWhenOf(ConchDoc conch) {
+        if (conch == null || conch.auth() == null) {
+            return List.of();
+        }
+        return conch.auth().expiredWhen();
     }
 
     private static Map<String, String> copyStrings(Map<String, String> source) {

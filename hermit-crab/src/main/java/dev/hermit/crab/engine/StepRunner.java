@@ -44,6 +44,21 @@ final class StepRunner {
     static final String REDIRECT_FORBIDDEN =
             "响应被重定向到了规则不允许的地址。请核对登录是否仍有效，或上游跳转是否改版。";
 
+    static final String EQUALS_MISMATCH =
+            "变量值与规则要求不一致。请核对上游返回是否变化，或更新规则中的断言条件。";
+
+    static final String NOT_EQUALS_MISMATCH =
+            "变量值命中了规则不允许的值。请核对上游返回，或更新规则中的排除条件。";
+
+    static final String PRESENT_MISSING =
+            "规则要求的变量没有值。请核对前面的提取或上游返回是否变化。";
+
+    static final String NOT_PRESENT_FOUND =
+            "规则不允许出现的变量存在值。请核对上游返回，或更新规则中的断言条件。";
+
+    private static final java.util.Set<String> ASSERT_RESPONSE_KEYS = java.util.Set.of(
+            "status", "contains", "not_contains", "cookie_exists", "header_exists", "not_redirected_to");
+
     private final TemplateEngine templates;
     private final FilterRegistry filters;
     private final ScriptStep scripts;
@@ -95,7 +110,7 @@ final class StepRunner {
             Map<String, String> libraries
     ) {
         return run(step, vars, expectPrefix, client, afterExchange, cookies, base, deadlineNanos, capture, libraries,
-                AuthReach.NONE);
+                AuthReach.NONE, List.of(), false);
     }
 
     Outcome run(
@@ -111,6 +126,25 @@ final class StepRunner {
             Map<String, String> libraries,
             AuthReach reach
     ) {
+        return run(step, vars, expectPrefix, client, afterExchange, cookies, base, deadlineNanos, capture, libraries,
+                reach, List.of(), false);
+    }
+
+    Outcome run(
+            Step step,
+            Map<String, Object> vars,
+            String expectPrefix,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            BasicCookieStore cookies,
+            URI base,
+            long deadlineNanos,
+            boolean capture,
+            Map<String, String> libraries,
+            AuthReach reach,
+            List<Map<String, Object>> expiredWhen,
+            boolean auth
+    ) {
         Object rendered = "script".equals(step.type())
                 ? renderScript(step.def(), vars)
                 : templates.render(step.def(), vars);
@@ -120,9 +154,10 @@ final class StepRunner {
         }
         return switch (step.type()) {
             case "request" -> request(
-                    spec, vars, cookies, expectPrefix, client, afterExchange, base, deadlineNanos, capture, reach);
+                    spec, vars, cookies, expectPrefix, client, afterExchange, base, deadlineNanos, capture, reach,
+                    auth ? List.of() : expiredWhen);
             case "extract" -> extract(spec, vars, deadlineNanos, capture);
-            case "assert" -> check(spec, vars, cookies, base, capture);
+            case "assert" -> check(spec, vars, cookies, base, capture, !auth);
             case "set" -> set(spec, vars, capture);
             case "script" -> script(spec, vars, deadlineNanos, capture, libraries);
             default -> throw new RuleProblem(
@@ -153,7 +188,8 @@ final class StepRunner {
             URI base,
             long deadlineNanos,
             boolean capture,
-            AuthReach reach
+            AuthReach reach,
+            List<Map<String, Object>> expiredWhen
     ) {
         HttpResult result;
         Retry retry = Retry.of(spec.get("retry"));
@@ -210,7 +246,37 @@ final class StepRunner {
             throw ex;
         }
         }
-        dev.hermit.crab.files.StagedFile saved = FileSteps.downloads(spec) ? FileSteps.save(spec, result) : null;
+        boolean sessionLost = result.sessionLost();
+        List<TraceWarning> allWarnings = result.warnings();
+        if (!sessionLost && expiredWhen != null && !expiredWhen.isEmpty()) {
+            try {
+                int matched = SessionExpiry.matchExpired(expiredWhen, result, cookies, base, deadlineNanos);
+                if (matched >= 0) {
+                    sessionLost = true;
+                    java.util.ArrayList<TraceWarning> merged = new java.util.ArrayList<>(allWarnings);
+                    merged.add(new TraceWarning(
+                            TraceWarning.SESSION_EXPIRED,
+                            "命中 auth.expired_when 第 " + (matched + 1) + " 条规则，按会话失效处理"));
+                    allWarnings = List.copyOf(merged);
+                }
+            } catch (RuntimeException ex) {
+                if (result.spool() != null) {
+                    result.spool().discard();
+                }
+                throw ex;
+            }
+        }
+        dev.hermit.crab.files.StagedFile saved = null;
+        if (FileSteps.downloads(spec)) {
+            if (sessionLost) {
+                // 会话失效的下载响应不入文件暂存区，避免把登录页或报错内容当附件保存。
+                if (result.spool() != null) {
+                    result.spool().discard();
+                }
+            } else {
+                saved = FileSteps.save(spec, result);
+            }
+        }
         if (saved != null) {
             DevTraceDraft draft = DevTraceScope.current();
             if (draft != null) {
@@ -224,9 +290,9 @@ final class StepRunner {
                     result.path(),
                     result.status(),
                     null,
-                    result.sessionLost(),
+                    sessionLost,
                     result.bodyBytes(),
-                    result.warnings());
+                    allWarnings);
         }
         Map<String, Object> piece = DevTraceDraft.requestPiece(
                 spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
@@ -237,16 +303,16 @@ final class StepRunner {
         if (retried != null) {
             piece.put("retries", retried);
         }
-        HttpCalls.attachWarnings(piece, result.warnings());
+        HttpCalls.attachWarnings(piece, allWarnings);
         return new Outcome(
                 result.method(),
                 result.path(),
                 result.status(),
                 null,
-                result.sessionLost(),
+                sessionLost,
                 piece,
                 result.bodyBytes(),
-                result.warnings());
+                allWarnings);
     }
 
     private Outcome extract(
@@ -327,42 +393,108 @@ final class StepRunner {
     }
 
     private Outcome check(
-            Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies, URI base, boolean capture) {
-        Object response = vars.get("response");
-        Map<String, Object> map = Values.map(response);
-        if (map == null || !map.containsKey("status")) {
+            Map<String, Object> spec,
+            Map<String, Object> vars,
+            BasicCookieStore cookies,
+            URI base,
+            boolean capture,
+            boolean allowSessionExpired
+    ) {
+        boolean sessionExpiredOnFail = false;
+        if (spec.containsKey("on_fail")) {
+            Object mode = spec.get("on_fail");
+            if (!(mode instanceof String text) || !"session_expired".equals(text)) {
+                fail("on_fail 目前只支持 session_expired");
+            }
+            sessionExpiredOnFail = allowSessionExpired;
+        }
+        boolean needsResponse = false;
+        for (String key : spec.keySet()) {
+            if (ASSERT_RESPONSE_KEYS.contains(key)) {
+                needsResponse = true;
+                break;
+            }
+        }
+        Map<String, Object> map = Values.map(vars.get("response"));
+        if (needsResponse && (map == null || !map.containsKey("status"))) {
             throw new RuleProblem(ErrorCode.RULE_MISMATCH, "没有响应", null, null, null);
         }
-        int status = Values.integer(map.get("status"), -1);
-        String body = map.get("body") == null ? "" : Values.text(map.get("body"));
-        String redirect = map.get("redirect") == null ? null : Values.text(map.get("redirect"));
-        String url = map.get("url") == null ? "" : Values.text(map.get("url"));
-        Map<String, Object> headers = Values.map(map.get("headers"));
+        int status = map == null ? -1 : Values.integer(map.get("status"), -1);
+        String body = map == null || map.get("body") == null ? "" : Values.text(map.get("body"));
+        String redirect = map == null || map.get("redirect") == null ? null : Values.text(map.get("redirect"));
+        String url = map == null || map.get("url") == null ? "" : Values.text(map.get("url"));
+        Map<String, Object> headers = map == null ? null : Values.map(map.get("headers"));
         if (headers == null) {
             headers = Map.of();
         }
-        for (Map.Entry<String, Object> entry : spec.entrySet()) {
-            switch (entry.getKey()) {
-                case "status" -> checkStatus(entry.getValue(), status);
-                case "contains" -> {
-                    if (!body.contains(Values.text(entry.getValue()))) {
-                        fail(CONTAINS_MISMATCH);
+        try {
+            for (Map.Entry<String, Object> entry : spec.entrySet()) {
+                switch (entry.getKey()) {
+                    case "on_fail" -> {
+                        // 修饰键已在上面校验。
                     }
-                }
-                case "not_contains" -> {
-                    if (body.contains(Values.text(entry.getValue()))) {
-                        fail(NOT_CONTAINS_MISMATCH);
+                    case "status" -> checkStatus(entry.getValue(), status);
+                    case "contains" -> {
+                        if (!body.contains(Values.text(entry.getValue()))) {
+                            assertFail(CONTAINS_MISMATCH);
+                        }
                     }
-                }
-                case "cookie_exists" -> checkCookie(Values.text(entry.getValue()), cookies, base);
-                case "header_exists" -> checkHeader(Values.text(entry.getValue()), headers);
-                case "not_redirected_to" -> {
-                    if (redirectedTo(redirect, url, Values.text(entry.getValue()))) {
-                        fail(REDIRECT_FORBIDDEN);
+                    case "not_contains" -> {
+                        if (body.contains(Values.text(entry.getValue()))) {
+                            assertFail(NOT_CONTAINS_MISMATCH);
+                        }
                     }
+                    case "cookie_exists" -> checkCookie(Values.text(entry.getValue()), cookies, base);
+                    case "header_exists" -> checkHeader(Values.text(entry.getValue()), headers);
+                    case "not_redirected_to" -> {
+                        if (redirectedTo(redirect, url, Values.text(entry.getValue()))) {
+                            assertFail(REDIRECT_FORBIDDEN);
+                        }
+                    }
+                    case "equals" -> {
+                        for (Map.Entry<String, Object> pair : pairs(entry.getValue()).entrySet()) {
+                            if (!same(lookup(vars, pair.getKey()), pair.getValue())) {
+                                assertFail(EQUALS_MISMATCH);
+                            }
+                        }
+                    }
+                    case "not_equals" -> {
+                        for (Map.Entry<String, Object> pair : pairs(entry.getValue()).entrySet()) {
+                            if (same(lookup(vars, pair.getKey()), pair.getValue())) {
+                                assertFail(NOT_EQUALS_MISMATCH);
+                            }
+                        }
+                    }
+                    case "present" -> {
+                        for (String name : names(entry.getValue())) {
+                            if (!present(lookup(vars, name))) {
+                                assertFail(PRESENT_MISSING);
+                            }
+                        }
+                    }
+                    case "not_present" -> {
+                        for (String name : names(entry.getValue())) {
+                            if (present(lookup(vars, name))) {
+                                assertFail(NOT_PRESENT_FOUND);
+                            }
+                        }
+                    }
+                    default -> fail("未知的 assert 键 " + entry.getKey());
                 }
-                default -> fail("未知的 assert 键 " + entry.getKey());
             }
+        } catch (AssertionFailed ex) {
+            if (sessionExpiredOnFail) {
+                TraceWarning warning = new TraceWarning(
+                        TraceWarning.SESSION_EXPIRED,
+                        "断言未通过（on_fail: session_expired），按会话失效处理");
+                if (!capture) {
+                    return new Outcome(null, null, null, null, true, null, null, List.of(warning));
+                }
+                Map<String, Object> piece = DevTraceDraft.assertPiece(spec, false);
+                HttpCalls.attachWarnings(piece, List.of(warning));
+                return new Outcome(null, null, null, null, true, piece, null, List.of(warning));
+            }
+            fail(ex.summary);
         }
         if (!capture) {
             return new Outcome(null, null, null, null, false);
@@ -572,7 +704,7 @@ final class StepRunner {
             if (number.intValue() == actual) {
                 return;
             }
-            fail(statusMismatch(expected, actual));
+            assertFail(statusMismatch(expected, actual));
         }
         if (expected instanceof java.util.List<?> list) {
             boolean numbers = !list.isEmpty();
@@ -590,7 +722,10 @@ final class StepRunner {
                 return;
             }
             // 列表里夹着非数字时，不能把那些渲染结果写进「期望 …」。有数字命中时上面已经通过。
-            fail(numbers ? statusMismatch(expected, actual) : STATUS_NOT_NUMERIC);
+            if (numbers) {
+                assertFail(statusMismatch(expected, actual));
+            }
+            fail(STATUS_NOT_NUMERIC);
         }
         fail(STATUS_NOT_NUMERIC);
     }
@@ -623,7 +758,7 @@ final class StepRunner {
 
     private static void checkCookie(String name, BasicCookieStore cookies, URI base) {
         if (!hasCookie(name, cookies, base)) {
-            fail(COOKIE_MISSING_SUMMARY);
+            assertFail(COOKIE_MISSING_SUMMARY);
         }
     }
 
@@ -639,7 +774,7 @@ final class StepRunner {
 
     private static void checkHeader(String name, Map<String, Object> headers) {
         if (!headers.containsKey(name.toLowerCase(Locale.ROOT))) {
-            fail(HEADER_MISSING);
+            assertFail(HEADER_MISSING);
         }
     }
 
@@ -664,6 +799,20 @@ final class StepRunner {
 
     private static void fail(String summary) {
         throw new RuleProblem(ErrorCode.RULE_MISMATCH, summary, null, null, null);
+    }
+
+    private static void assertFail(String summary) {
+        throw new AssertionFailed(summary);
+    }
+
+    /** 断言条件本身未通过（区别于规则写错的 RuleProblem），供 on_fail: session_expired 转换。 */
+    private static final class AssertionFailed extends RuntimeException {
+        private final String summary;
+
+        private AssertionFailed(String summary) {
+            super(summary, null, false, false);
+            this.summary = summary;
+        }
     }
 }
 

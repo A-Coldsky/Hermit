@@ -320,7 +320,18 @@ public final class DevTraceDraft {
     public static Map<String, Object> assertPiece(Map<String, Object> spec, boolean passed) {
         LinkedHashMap<String, Object> piece = new LinkedHashMap<>();
         piece.put("type", "assert");
-        piece.put("assertions", spec == null ? List.of() : List.copyOf(spec.keySet()));
+        ArrayList<String> keys = new ArrayList<>();
+        if (spec != null) {
+            for (String key : spec.keySet()) {
+                if (!"on_fail".equals(key)) {
+                    keys.add(key);
+                }
+            }
+        }
+        piece.put("assertions", List.copyOf(keys));
+        if (spec != null && spec.get("on_fail") instanceof String onFail && !onFail.isBlank()) {
+            piece.put("onFail", onFail);
+        }
         piece.put("passed", passed);
         return piece;
     }

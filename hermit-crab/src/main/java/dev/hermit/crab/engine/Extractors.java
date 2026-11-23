@@ -310,6 +310,48 @@ final class Extractors {
         return scanBounded(pattern, group, text, deadlineNanos);
     }
 
+    /** 按与提取步骤相同的超时与回溯保护判断正则是否命中正文。 */
+    static boolean regexFind(String selector, String text, long deadlineNanos) {
+        Pattern pattern;
+        try {
+            pattern = Pattern.compile(selector);
+        } catch (PatternSyntaxException ex) {
+            throw problem("正则无法解析");
+        }
+        String input = text == null ? "" : text;
+        if (RegexShape.callerSafe(selector)) {
+            ensureDeadline(deadlineNanos);
+            boolean matched = pattern.matcher(input).find();
+            ensureDeadline(deadlineNanos);
+            return matched;
+        }
+        ensureDeadline(deadlineNanos);
+        Future<Boolean> pending;
+        try {
+            pending = MATCHES.submit(() -> {
+                ensureDeadline(deadlineNanos);
+                boolean matched = pattern.matcher(input).find();
+                ensureDeadline(deadlineNanos);
+                return matched;
+            });
+        } catch (RejectedExecutionException ex) {
+            throw new DeadlineExceeded(-1, "request", List.of());
+        }
+        long left = Math.max(0, deadlineNanos - System.nanoTime());
+        try {
+            return pending.get(left, TimeUnit.NANOSECONDS);
+        } catch (TimeoutException ex) {
+            pending.cancel(false);
+            throw new DeadlineExceeded(-1, "request", List.of());
+        } catch (InterruptedException ex) {
+            pending.cancel(false);
+            Thread.currentThread().interrupt();
+            throw new DeadlineExceeded(-1, "request", List.of());
+        } catch (ExecutionException ex) {
+            throw unwrap(ex);
+        }
+    }
+
     private static List<Source> scan(Pattern pattern, int group, String text, long deadlineNanos) {
         ensureDeadline(deadlineNanos);
         Matcher matcher = pattern.matcher(text);

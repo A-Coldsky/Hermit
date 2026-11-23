@@ -85,7 +85,8 @@ public final class ConchValidator {
             "css", "xpath", "jsonpath", "regex", "attr", "html", "each", "min",
             "optional", "filter", "from", "group");
     private static final Set<String> ASSERT_KEYS = Set.of(
-            "status", "contains", "not_contains", "cookie_exists", "header_exists", "not_redirected_to");
+            "status", "contains", "not_contains", "cookie_exists", "header_exists", "not_redirected_to",
+            "on_fail", "equals", "not_equals", "present", "not_present");
     private static final Pattern PERCENT_BYTE = Pattern.compile("%[0-9A-Fa-f]{2}");
 
     private ConchValidator() {
@@ -144,6 +145,7 @@ public final class ConchValidator {
         checkRequestBodyFeatures(doc, errors);
         checkFileFeatures(doc, errors);
         FlowChecks.version(doc, errors);
+        SessionExpiryChecks.version(doc, errors);
         checkGroups(doc, errors, warnings);
         if (doc.auth() != null && doc.auth().concurrentReads()
                 && doc.actions().values().stream().noneMatch(a -> a != null && a.mcp().readOnly())) {
@@ -181,7 +183,7 @@ public final class ConchValidator {
                     errors,
                     warnings,
                     authInputs,
-                    Nest.top(false, FlowChecks.strict(doc)));
+                    Nest.top(false, FlowChecks.strict(doc), true));
             AliveCheck alive = doc.auth().aliveCheck();
             if (alive != null) {
                 checkPlainMap("auth.alive_check.request", alive.request(), false, false, errors);
@@ -216,6 +218,7 @@ public final class ConchValidator {
                             "alive_check 不支持 retry"));
                 }
             }
+            SessionExpiryChecks.check(doc, errors);
         }
         checkReservedSteps(doc, errors);
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
@@ -398,7 +401,7 @@ public final class ConchValidator {
                 errors,
                 warnings,
                 inputFields,
-                Nest.top(action.idempotent() || action.mcp().readOnly(), FlowChecks.strict(doc)));
+                Nest.top(action.idempotent() || action.mcp().readOnly(), FlowChecks.strict(doc), false));
         checkRefs(
                 path + ".output",
                 action.output(),
@@ -998,7 +1001,13 @@ public final class ConchValidator {
     }
 
     private static void checkAssertShape(
-            String path, Map<String, Object> spec, List<ValidationIssue> warnings, List<ValidationIssue> unknown) {
+            String path,
+            Map<String, Object> spec,
+            boolean inAuth,
+            List<ValidationIssue> warnings,
+            List<ValidationIssue> unknown,
+            List<ValidationIssue> errors
+    ) {
         if (warnings == null || spec == null) {
             return;
         }
@@ -1015,6 +1024,7 @@ public final class ConchValidator {
                 checkStatusLiteral(path + ".status", entry.getValue(), warnings);
             }
         }
+        SessionExpiryChecks.checkAssertExtras(path, spec, inAuth, errors);
     }
 
     static void checkStatusLiteral(String path, Object value, List<ValidationIssue> warnings) {
@@ -1124,7 +1134,7 @@ public final class ConchValidator {
                 checkExtractShape(typed, step.def(), warnings, unknown);
             }
             if ("assert".equals(step.type())) {
-                checkAssertShape(typed, step.def(), warnings, unknown);
+                checkAssertShape(typed, step.def(), nest.inAuth(), warnings, unknown, errors);
             }
             boolean declareAsk = false;
             if ("ask".equals(step.type())) {
@@ -2452,14 +2462,14 @@ public final class ConchValidator {
         return false;
     }
 
-    /** 步骤列表所在的位置：嵌套了几层 if / repeat，是否已经在 repeat 里。 */
-    record Nest(int depth, boolean inRepeat, boolean retryAnyMethod, boolean strict) {
-        static Nest top(boolean retryAnyMethod, boolean strict) {
-            return new Nest(0, false, retryAnyMethod, strict);
+    /** 步骤列表所在的位置：嵌套了几层 if / repeat，是否已经在 repeat 里，以及是否在登录步骤里。 */
+    record Nest(int depth, boolean inRepeat, boolean retryAnyMethod, boolean strict, boolean inAuth) {
+        static Nest top(boolean retryAnyMethod, boolean strict, boolean inAuth) {
+            return new Nest(0, false, retryAnyMethod, strict, inAuth);
         }
 
         Nest into(boolean repeat) {
-            return new Nest(depth + 1, inRepeat || repeat, retryAnyMethod, strict);
+            return new Nest(depth + 1, inRepeat || repeat, retryAnyMethod, strict, inAuth);
         }
     }
 

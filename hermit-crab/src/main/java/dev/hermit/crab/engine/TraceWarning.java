@@ -19,4 +19,6 @@ record TraceWarning(String code, String message) {
     static final String SNAPSHOT_SKIPPED = "snapshot_skipped";
     /** 带着身份里已有的 Cookie 登录没成功，清空后从头登录了一次。 */
     static final String SHARED_SESSION_CLEARED = "shared_session_cleared";
+    /** 命中 auth.expired_when、未通过 alive_check.expect 或 assert on_fail: session_expired，按会话失效处理。 */
+    static final String SESSION_EXPIRED = "session_expired";
 }

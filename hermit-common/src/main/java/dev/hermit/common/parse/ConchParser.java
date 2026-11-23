@@ -54,8 +54,9 @@ public final class ConchParser {
     private static final Set<String> GROUP_KEYS = Set.of("title", "description", "children");
     private static final Set<String> PARAM_KEYS = Set.of(
             "type", "description", "default", "enum", "minimum", "maximum", "items", "required");
-    private static final Set<String> AUTH_KEYS = Set.of("steps", "alive_check", "cookies", "concurrent_reads", "origins");
-    private static final Set<String> ALIVE_KEYS = Set.of("request", "expect_not_redirect");
+    private static final Set<String> AUTH_KEYS = Set.of(
+            "steps", "alive_check", "cookies", "concurrent_reads", "origins", "expired_when");
+    private static final Set<String> ALIVE_KEYS = Set.of("request", "expect_not_redirect", "expect");
     private static final Set<String> MCP_KEYS = Set.of("expose", "read_only", "destructive");
     private static final Set<String> EXAMPLE_KEYS = Set.of("input", "output");
     private static final Set<String> UPSTREAM_KEYS = Set.of(
@@ -308,7 +309,29 @@ public final class ConchParser {
         boolean concurrentReads = bool(obj.get("concurrent_reads"), child(path, "concurrent_reads"), false);
         boolean originsDeclared = obj.has("origins");
         List<String> origins = stringList(obj.get("origins"), child(path, "origins"));
-        return new Auth(steps, alive, cookies, concurrentReads, origins, originsDeclared);
+        boolean expiredWhenDeclared = obj.has("expired_when");
+        List<Map<String, Object>> expiredWhen = expiredWhen(obj.get("expired_when"), child(path, "expired_when"));
+        return new Auth(steps, alive, cookies, concurrentReads, origins, originsDeclared,
+                expiredWhen, expiredWhenDeclared);
+    }
+
+    private static List<Map<String, Object>> expiredWhen(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return List.of();
+        }
+        if (!node.isArray()) {
+            throw new ConchParseException(path, "必须是列表");
+        }
+        ArrayList<Map<String, Object>> rules = new ArrayList<>();
+        for (int i = 0; i < node.size(); i++) {
+            JsonNode item = node.get(i);
+            String itemPath = path + "[" + i + "]";
+            if (item == null || !item.isObject()) {
+                throw new ConchParseException(itemPath, "必须是映射");
+            }
+            rules.add(castMap(toTree(item, itemPath)));
+        }
+        return rules;
     }
 
     private static Map<String, String> cookieAliases(JsonNode node, String path) {
@@ -344,7 +367,16 @@ public final class ConchParser {
             requestMap = castMap(toTree(request, child(path, "request")));
         }
         String expect = text(obj.get("expect_not_redirect"), child(path, "expect_not_redirect"));
-        return new AliveCheck(requestMap, expect);
+        boolean expectDeclared = obj.has("expect");
+        JsonNode expectNode = obj.get("expect");
+        Map<String, Object> expectMap = Map.of();
+        if (expectNode != null && !expectNode.isNull() && !expectNode.isMissingNode()) {
+            if (!expectNode.isObject()) {
+                throw new ConchParseException(child(path, "expect"), "必须是映射");
+            }
+            expectMap = castMap(toTree(expectNode, child(path, "expect")));
+        }
+        return new AliveCheck(requestMap, expect, expectMap, expectDeclared);
     }
 
     private static Map<String, Action> actions(JsonNode node, String path) {

@@ -41,7 +41,14 @@ final class FlowChecks {
             Map.entry("attempts", "times"), Map.entry("retries", "times"), Map.entry("max_attempts", "times"),
             Map.entry("delay", "delay_ms"), Map.entry("backoff", "delay_ms"), Map.entry("interval", "delay_ms"),
             Map.entry("wait_ms", "delay_ms"), Map.entry("statuses", "on"), Map.entry("status", "on"),
-            Map.entry("codes", "on"));
+            Map.entry("codes", "on"),
+            Map.entry("jsonpath", "json_equals"), Map.entry("json", "json_equals"),
+            Map.entry("json_eq", "json_equals"), Map.entry("json_ne", "json_not_equals"),
+            Map.entry("json_present", "json_exists"),
+            Map.entry("header", "header_exists"), Map.entry("headers", "header_contains"),
+            Map.entry("header_equals", "header_contains"), Map.entry("header_eq", "header_contains"),
+            Map.entry("pattern", "regex"), Map.entry("match", "regex"),
+            Map.entry("on_failure", "on_fail"));
 
     private FlowChecks() {
     }
@@ -183,23 +190,8 @@ final class FlowChecks {
                         errors.add(flow(child, key + " 必须是非空字符串"));
                     }
                 }
-                case "present", "not_present" -> variables(child, key, value, errors);
-                case "equals", "not_equals" -> {
-                    if (!(value instanceof Map<?, ?> map) || map.isEmpty()) {
-                        errors.add(flow(child, key + " 必须是「变量名: 期望值」的映射，例如 "
-                                + key + ": {state: \"done\"}"));
-                        break;
-                    }
-                    for (Map.Entry<?, ?> pair : map.entrySet()) {
-                        String name = String.valueOf(pair.getKey());
-                        if (!VARIABLE.matcher(name).matches()) {
-                            errors.add(flow(child + "." + name, key + " 的键是变量名，直接写名字，不要写 {{ }}"));
-                        }
-                        if (pair.getValue() instanceof Map<?, ?> || pair.getValue() instanceof List<?>) {
-                            errors.add(flow(child + "." + name, key + " 的期望值必须是字符串、数字或布尔值"));
-                        }
-                    }
-                }
+                case "present", "not_present", "equals", "not_equals" ->
+                        checkVariableCondition(child, key, value, ValidationCodes.FLOW_STEP, errors);
                 default -> {
                     // 未知的键已经报过。
                 }
@@ -207,14 +199,38 @@ final class FlowChecks {
         }
     }
 
-    private static void variables(String path, String key, Object value, List<ValidationIssue> errors) {
+    static void checkVariableCondition(
+            String child, String key, Object value, String code, List<ValidationIssue> errors) {
+        if ("present".equals(key) || "not_present".equals(key)) {
+            variables(child, key, value, code, errors);
+            return;
+        }
+        if (!(value instanceof Map<?, ?> map) || map.isEmpty()) {
+            errors.add(ConchValidator.issue(code, child, key + " 必须是「变量名: 期望值」的映射，例如 "
+                    + key + ": {state: \"done\"}"));
+            return;
+        }
+        for (Map.Entry<?, ?> pair : map.entrySet()) {
+            String name = String.valueOf(pair.getKey());
+            if (!VARIABLE.matcher(name).matches()) {
+                errors.add(ConchValidator.issue(code, child + "." + name,
+                        key + " 的键是变量名，直接写名字，不要写 {{ }}"));
+            }
+            if (pair.getValue() instanceof Map<?, ?> || pair.getValue() instanceof List<?>) {
+                errors.add(ConchValidator.issue(code, child + "." + name,
+                        key + " 的期望值必须是字符串、数字或布尔值"));
+            }
+        }
+    }
+
+    private static void variables(String path, String key, Object value, String code, List<ValidationIssue> errors) {
         List<?> names = value instanceof List<?> list ? list : java.util.Collections.singletonList(value);
         if (names.isEmpty()) {
-            errors.add(flow(path, key + " 要写变量名"));
+            errors.add(ConchValidator.issue(code, path, key + " 要写变量名"));
         }
         for (Object name : names) {
             if (!(name instanceof String text) || !VARIABLE.matcher(text).matches()) {
-                errors.add(flow(path, key + " 要直接写变量名（多个时写成列表），不要写 {{ }}，例如 "
+                errors.add(ConchValidator.issue(code, path, key + " 要直接写变量名（多个时写成列表），不要写 {{ }}，例如 "
                         + key + ": next_page"));
                 return;
             }

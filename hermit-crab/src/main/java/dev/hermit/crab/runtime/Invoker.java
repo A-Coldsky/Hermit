@@ -221,8 +221,9 @@ public final class Invoker {
     /**
      * 会话失效、又有同网站的包可能在互相顶掉登录时，在报错后面加一句。
      * 只写出这把 Key 自己能调用的包名；一个都不能调用时不出现包名。
+     * 带 Idempotency-Key 的调用结果会按键缓存、回放给别的 Key，所以一律不写包名。
      */
-    private String withRivalHint(ApiKeyPrincipal principal, String conch, String message) {
+    private String withRivalHint(ApiKeyPrincipal principal, String conch, String message, boolean shared) {
         java.util.List<String> names;
         try {
             names = rivals.apply(conch);
@@ -234,7 +235,7 @@ public final class Invoker {
         }
         java.util.ArrayList<String> visible = new java.util.ArrayList<>();
         for (String name : names) {
-            if (callable(principal, name)) {
+            if (!shared && callable(principal, name)) {
                 visible.add(name);
             }
         }
@@ -254,6 +255,9 @@ public final class Invoker {
         }
         for (Map.Entry<String, Action> entry : active.doc().actions().entrySet()) {
             Action capability = entry.getValue();
+            if (disabled.disabled(conch, entry.getKey())) {
+                continue;
+            }
             if (principal.permits(conch, entry.getKey(), capability.group(), CapabilityHttp.readOnly(capability))) {
                 return true;
             }
@@ -644,7 +648,7 @@ public final class Invoker {
         Object errorData = payload != null && payload.upstreamToolError() ? payload.httpData() : null;
         String message = result.error().message();
         if (result.error().code() == ErrorCode.SESSION_EXPIRED) {
-            message = withRivalHint(principal, doc.conch(), message);
+            message = withRivalHint(principal, doc.conch(), message, idempotencyKey.isPresent());
         }
         return done(traceId, result.error().code(), message, errorData, payload);
     }

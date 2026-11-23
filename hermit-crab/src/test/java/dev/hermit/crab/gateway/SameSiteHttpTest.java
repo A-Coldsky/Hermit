@@ -203,6 +203,25 @@ class SameSiteHttpTest {
         assertThat(hidden.json.path("error").path("message").asText())
                 .isEqualTo("会话已失效。" + Invoker.RIVAL_HINT)
                 .doesNotContain("pkg_b");
+
+        // 带 Idempotency-Key 的结果按键缓存，会原样回放给别的 Key：全部权限的 Key 也不写包名。
+        assertThat(call("GET", "/api/pkg_a/read", all).status).isEqualTo(200);
+        assertThat(call("GET", "/api/pkg_b/read", all).status).isEqualTo(200);
+        Reply keyed = call("POST", "/api/pkg_a/write", all, "same-site-1");
+        assertThat(keyed.json.path("error").path("message").asText())
+                .isEqualTo("会话已失效。" + Invoker.RIVAL_HINT);
+        Reply replayed = call("POST", "/api/pkg_a/write", narrow, "same-site-1");
+        assertThat(replayed.json.path("error").path("message").asText())
+                .isEqualTo("会话已失效。" + Invoker.RIVAL_HINT);
+
+        // 对方的能力都被停用时，这把 Key 实际调用不了它，也不写包名。
+        assertThat(call("GET", "/api/pkg_a/read", all).status).isEqualTo(200);
+        assertThat(call("GET", "/api/pkg_b/read", all).status).isEqualTo(200);
+        runtime.setCapabilityDisabled("pkg_b", "read", true, Actors.CLI);
+        runtime.setCapabilityDisabled("pkg_b", "write", true, Actors.CLI);
+        Reply disabled = call("POST", "/api/pkg_a/write", all);
+        assertThat(disabled.json.path("error").path("message").asText())
+                .isEqualTo("会话已失效。" + Invoker.RIVAL_HINT);
     }
 
     @Test
@@ -267,10 +286,17 @@ class SameSiteHttpTest {
     }
 
     private Reply call(String method, String path, String key) throws Exception {
+        return call(method, path, key, null);
+    }
+
+    private Reply call(String method, String path, String key, String idempotencyKey) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(crab + path))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + key)
                 .header("Content-Type", "application/json");
+        if (idempotencyKey != null) {
+            builder.header("Idempotency-Key", idempotencyKey);
+        }
         builder.method(method, "GET".equals(method)
                 ? HttpRequest.BodyPublishers.noBody()
                 : HttpRequest.BodyPublishers.ofString("{}"));

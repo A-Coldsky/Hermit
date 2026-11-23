@@ -145,6 +145,19 @@ class ConchSameSiteUploadTest {
                 .doesNotContain("crm_7");
     }
 
+    @Test
+    void longTitlesAreCutShortInTheWarning() throws Exception {
+        // 标题没有长度上限，几条警告加起来不能撑破 validation_json 这一列。
+        upload(yaml("crm_long", "1.0.0", "https://crm.corp.com", null)
+                .replaceFirst("(?m)^title: .*$", "title: " + "长".repeat(30_000)));
+        publish("crm_long", "1.0.0");
+        List<JsonNode> hits = sameSite(upload(yaml("crm_new", "1.0.0", "https://crm.corp.com", null)));
+        assertThat(hits).hasSize(1);
+        String message = hits.get(0).path("message").asText();
+        assertThat(message).contains("crm_long（" + "长".repeat(60) + "…");
+        assertThat(message.length()).isLessThan(400);
+    }
+
     private static List<JsonNode> sameSite(JsonNode data) {
         ArrayList<JsonNode> hits = new ArrayList<>();
         for (JsonNode warning : data.path("warnings")) {

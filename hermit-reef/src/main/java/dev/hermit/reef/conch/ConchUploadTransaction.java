@@ -155,6 +155,15 @@ class ConchUploadTransaction {
     /** 逐个写出的同网站规则包上限，按包名顺序取前几个；其余只报个数。 */
     static final int SAME_SITE_LISTED = 5;
 
+    /** 标题和维护者没有长度上限，写进警告前截短。 */
+    private static String clip(String text) {
+        String trimmed = text.strip();
+        int end = trimmed.offsetByCodePoints(0, Math.min(SAME_SITE_TEXT, trimmed.codePointCount(0, trimmed.length())));
+        return end < trimmed.length() ? trimmed.substring(0, end) + "…" : trimmed;
+    }
+
+    static final int SAME_SITE_TEXT = 60;
+
     static String sameSiteMessage(ConchDoc other, String site) {
         StringBuilder text = new StringBuilder("已发布的规则包 ").append(other.conch());
         boolean titled = other.title() != null && !other.title().isBlank();
@@ -162,10 +171,10 @@ class ConchUploadTransaction {
         if (titled || owned) {
             text.append("（");
             if (titled) {
-                text.append(other.title());
+                text.append(clip(other.title()));
             }
             if (owned) {
-                text.append(titled ? "，" : "").append("维护者 ").append(other.owner());
+                text.append(titled ? "，" : "").append("维护者 ").append(clip(other.owner()));
             }
             text.append("）");
         } else {

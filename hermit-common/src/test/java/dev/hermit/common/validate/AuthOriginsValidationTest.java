@@ -182,13 +182,51 @@ class AuthOriginsValidationTest {
         ConchDoc configured = ConchParser.parse(yaml("1.11.0", "origins: [\"{{config.sso_url}}\"]", login,
                 "sso_url: { type: url, label: 认证中心, default: \"https://login.example\" }", ""));
         ConchDestinations.Boundary viaConfig = ConchDestinations.between(before, configured);
-        assertThat(viaConfig.undetermined()).isFalse();
+        assertThat(viaConfig.sameBoundary()).isFalse();
         assertThat(viaConfig.addedDestinations()).containsExactly("https://login.example:443");
+        // 两个版本引用同一个配置项、默认值也没变：范围没变，也不算无法静态确定。
+        ConchDestinations.Boundary kept = ConchDestinations.between(configured, configured);
+        assertThat(kept.sameBoundary()).isTrue();
+        assertThat(kept.undetermined()).isFalse();
 
         // 没声明成认证地址的配置项拼出来的主机，仍然是无法静态确定。
         ConchDoc loose = ConchParser.parse(yaml("1.11.0", "cookies: {}", login,
                 "sso_url: { type: url, label: 认证中心 }", ""));
         assertThat(ConchDestinations.between(before, loose).undetermined()).isTrue();
+    }
+
+    @Test
+    void anAddressOnlyMentionedBeforeStillWidensWhenLoginStartsReachingIt() {
+        // 旧版本只在表单值里提到过认证中心，请求发不过去；新版本把它声明成认证地址，凭证才会发到那里。
+        String mention = """
+                - request:
+                    method: POST
+                    path: /login
+                    form: { service: "https://sso.example/cas", u: "{{credential.username}}" }
+                """;
+        ConchDoc mentioned = ConchParser.parse(yaml("1.11.0", "cookies: {}", mention, "", ""));
+        ConchDoc declared = ConchParser.parse(yaml("1.11.0", "origins: [\"https://sso.example\"]", GUARDED, "", ""));
+        ConchDestinations.Boundary promoted = ConchDestinations.between(mentioned, declared);
+        assertThat(promoted.sameBoundary()).isFalse();
+        assertThat(promoted.addedDestinations()).containsExactly("https://sso.example:443");
+
+        // base_url 搬到旧版本只提到过的地址上，同理。
+        ConchDoc moved = ConchParser.parse(yaml("1.11.0", "cookies: {}", "- request: { method: GET, path: / }", "", "")
+                .replace("base_url: https://app.example", "base_url: https://sso.example"));
+        ConchDestinations.Boundary rebased = ConchDestinations.between(mentioned, moved);
+        assertThat(rebased.sameBoundary()).isFalse();
+        assertThat(rebased.addedDestinations()).containsExactly("https://sso.example:443");
+
+        // 新引用一个没有默认值的配置项当认证地址：地址是这台 Crab 上填的值，按无法静态确定处理。
+        ConchDoc plain = ConchParser.parse(yaml("1.11.0", "cookies: {}", "- request: { method: GET, path: / }",
+                "sso_url: { type: url, label: 认证中心 }", ""));
+        ConchDoc referenced = ConchParser.parse(yaml("1.11.0", "origins: [\"{{config.sso_url}}\"]",
+                "- request: { method: GET, path: / }", "sso_url: { type: url, label: 认证中心 }", ""));
+        ConchDestinations.Boundary viaConfig = ConchDestinations.between(plain, referenced);
+        assertThat(viaConfig.sameBoundary()).isFalse();
+        assertThat(viaConfig.undetermined()).isTrue();
+        assertThat(ConchDestinations.between(referenced, referenced).sameBoundary()).isTrue();
+        assertThat(ConchDestinations.between(referenced, plain).sameBoundary()).isTrue();
     }
 
     private static ValidationResult validate(String yaml) {

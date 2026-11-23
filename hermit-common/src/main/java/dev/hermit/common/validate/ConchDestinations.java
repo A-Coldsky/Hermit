@@ -20,6 +20,10 @@ import dev.hermit.common.model.Step;
  * {@code auth.origins} 里的认证地址计入：字面量直接算，引用配置项的算它的默认值。
  * 新集合是旧集合的子集，且两边都能静态确定、MCP 认证类型没变，才是同一边界。
  *
+ * <p>集合里有两类地址：请求真正能发过去的（{@code base_url}、认证地址、MCP 上游和它的认证端点），
+ * 和只是在步骤文本里出现过的。旧版本只在文本里提到过的地址，新版本把它变成能发请求的地址，
+ * 同样算扩大：凭证从这一版起才会发到那里。新引用一个配置项当认证地址也算。
+ *
  * <p>OAuth 的 issuer 和 registration 目前不是包字段，发现到的端点仍由上游允许主机在运行时拦住。
  * {@code allowed_hosts} 本身不计入这个集合。{@code health_check} 没有执行链，不计入。
  */
@@ -45,13 +49,19 @@ public final class ConchDestinations {
         }
         Analysis previous = analyze(before);
         boolean authChanged = !java.util.Objects.equals(previous.authType, next.authType);
+        // 新引用的配置项：地址是这台 Crab 上填的值，静态看不出来。
+        boolean newAuthConfig = !previous.authConfig.containsAll(next.authConfig);
+        boolean undetermined = previous.undetermined || next.undetermined || newAuthConfig;
         boolean same = !authChanged
-                && !previous.undetermined
-                && !next.undetermined
-                && previous.destinations.containsAll(next.destinations);
+                && !undetermined
+                && previous.destinations.containsAll(next.destinations)
+                && previous.reachable.containsAll(next.reachable);
         TreeSet<Destination> added = new TreeSet<>(next.destinations);
         added.removeAll(previous.destinations);
-        return new Boundary(same, texts(added), previous.undetermined || next.undetermined, authChanged);
+        TreeSet<Destination> promoted = new TreeSet<>(next.reachable);
+        promoted.removeAll(previous.reachable);
+        added.addAll(promoted);
+        return new Boundary(same, texts(added), undetermined, authChanged);
     }
 
     /** 用顿号连接新增地址。有无法静态确定的部分时另加一句；两边都空时也用那句。 */
@@ -68,23 +78,23 @@ public final class ConchDestinations {
 
     private static Analysis analyze(ConchDoc doc) {
         Analysis analysis = new Analysis();
-        analysis.take(doc.baseUrl(), true);
+        analysis.reach(doc.baseUrl());
         ConfigField configured = doc.config().get("base_url");
         if (configured != null && configured.defaultValue() instanceof String text) {
-            analysis.take(text, true);
+            analysis.reach(text);
         }
         if (doc.auth() != null) {
             for (String origin : doc.auth().origins()) {
                 String name = AuthOrigins.configName(origin);
                 if (name == null) {
-                    analysis.take(origin, true);
+                    analysis.reach(origin);
                     continue;
                 }
                 // 引用配置项：地址由这台 Crab 的使用者填，和 config.base_url 一样只算默认值。
                 analysis.authConfig.add(name);
                 ConfigField field = doc.config().get(name);
                 if (field != null && field.defaultValue() instanceof String text) {
-                    analysis.take(text, true);
+                    analysis.reach(text);
                 }
             }
             for (Step step : doc.auth().steps()) {
@@ -103,11 +113,11 @@ public final class ConchDestinations {
             analysis.take(source, false);
         }
         if (doc.upstream() != null) {
-            analysis.take(doc.upstream().url(), true);
+            analysis.reach(doc.upstream().url());
             McpAuth auth = doc.upstream().auth();
             if (auth != null) {
-                analysis.take(auth.authorizationEndpoint(), true);
-                analysis.take(auth.tokenEndpoint(), true);
+                analysis.reach(auth.authorizationEndpoint());
+                analysis.reach(auth.tokenEndpoint());
                 analysis.authType = auth.type() == null || auth.type().isBlank() ? null : auth.type();
             }
         }
@@ -123,9 +133,10 @@ public final class ConchDestinations {
     }
 
     /**
-     * @param sameBoundary 新目的地是旧目的地的子集（含相等），且没有无法静态确定的地址，认证类型也没变
-     * @param addedDestinations 新出现的 {@code scheme://host:port}，已排序
-     * @param undetermined 任一侧有 scheme 或主机里的模板，或旧文档读不出来
+     * @param sameBoundary 新目的地是旧目的地的子集（含相等），请求能发过去的地址也没有变多，
+     *                     且没有无法静态确定的地址，认证类型也没变
+     * @param addedDestinations 新出现的，或从这一版起请求才能发过去的 {@code scheme://host:port}，已排序
+     * @param undetermined 任一侧有 scheme 或主机里的模板，旧文档读不出来，或新版本新引用了配置项当认证地址
      * @param authChanged MCP {@code auth.type} 发生变化。HTTP 包两侧都是 null
      */
     public record Boundary(
@@ -153,10 +164,25 @@ public final class ConchDestinations {
 
     private static final class Analysis {
         private final TreeSet<Destination> destinations = new TreeSet<>();
+        /** 请求真正能发过去的地址，是 {@link #destinations} 的子集。 */
+        private final TreeSet<Destination> reachable = new TreeSet<>();
         private boolean undetermined;
         private String authType;
         /** auth.origins 引用的配置项。以它开头的地址已经算在认证地址里，不算无法静态确定。 */
         private final Set<String> authConfig = new TreeSet<>();
+
+        /** 包声明的目标地址：计入集合，并记成请求能发过去的。 */
+        private void reach(String value) {
+            take(value, true);
+            if (value == null || value.isBlank() || templatedOrigin(value.trim()) || !startsWithHttp(value.trim())) {
+                return;
+            }
+            McpAddresses.ParseResult parsed = McpAddresses.parse(value.trim());
+            if (parsed.ok()) {
+                McpAddresses.Parsed url = parsed.url();
+                reachable.add(new Destination(url.scheme(), url.host(), url.port()));
+            }
+        }
 
         private void walk(Object node) {
             if (node instanceof Map<?, ?> map) {

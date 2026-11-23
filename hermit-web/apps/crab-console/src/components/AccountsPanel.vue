@@ -557,6 +557,11 @@ async function disconnect(account: Account) {
         <template #default="{ row }">
           <span class="mono strong">{{ row.name }}</span>
           <el-tag v-if="row.default" size="small" class="tag">默认</el-tag>
+          <router-link v-if="row.identity" to="/identities" class="identity" data-test="account-identity">
+            <el-tag size="small" type="info" effect="plain" class="tag" :title="`和身份「${row.identity.name}」里的其它账号共用 Cookie`">
+              身份：{{ row.identity.name }}
+            </el-tag>
+          </router-link>
         </template>
       </el-table-column>
       <el-table-column label="凭证" min-width="200">

@@ -45,7 +45,7 @@
 - 秘密放 `credentials`；`config` 不允许 `type: secret`。
 - 保持验签、哈希、路径与大小限制；Reef 公钥是规则信任根。原生 Java 连接 Reef 或加载已安装正式规则时需预配公钥；容器首次运行可使用挂载公钥，或用管理员登录取得公钥，修改时保持这个初始化边界清晰。
 - 输出脱敏替换已知凭证/Cookie 的字符串值及其 URL 编码形式，以及登录步骤、能力步骤里从凭证换来的值（extract，以及凭证请求之后的 script；能力步骤的 set 除外）。长度需至少 4 个字符。不能假定敏感字段名、短秘密或其它派生值会自动屏蔽，详见规则包（Conch）参考。
-- 账号/会话按 `(origin, conch, account)` 隔离；HTTP/MCP 调用共用 `Invoker`，不得绕过权限和能力禁用检查。
+- 账号/会话按 `(origin, conch, account)` 隔离；使用者在控制台把几个 `driver: http` 包的账号绑到同一个身份后，这些账号共用 Cookie、HTTP 客户端和账号锁（`identities`、`identity_members`、`identity_sessions`，schema 21，三张表从空开始、不回填），凭证、登录变量、验证码等待、登录失败计数和探活仍按账号，不同身份之间不共用。只有控制台能绑定，绑定要求地址有交集并带 `confirm`。HTTP/MCP 调用共用 `Invoker`，不得绕过权限和能力禁用检查。
 - 规则快照/权限修改需检查审计 A01 的版本切换竞态。
 - Reef 和 Crab 已经投产。生产基线：Reef Flyway V1–V7（V1 含 `hermit_admin_login_failures` 的自增主键），Crab `schema_version` 1–19（16 是 `session_login`，不回填；17 是 `tls_trusted_hosts`；18 是 `conch_switches`，空表，存量规则包保持启用；19 是 `conch_active_origin`，空表，没有记录时正式包生效；冻结的升级起点仍是 `schema/crab-v15.sql`）。已发布的迁移和升级步骤一律不改，结构变化只新增更高版本，并写清它对存量数据的效果（新列默认值、旧行回填、约束在已有数据上能否成立）。Flyway 校验已执行迁移的校验和，就地改过的迁移会让生产 Reef 起不来；Crab 就地改旧步骤只影响新装，已有客户端拿不到。Reef 的 `MigrationHistoryTest` 钉住已合入迁移的哈希并从 V7 带数据升级，新迁移合入时追加哈希、补上数据效果断言；Crab 的 `CrabSchemaHistoryTest` 从冻结的已发布结构（`schema/crab-v15.sql`）升级，结果须与全新安装一致，发布新版本时另存一份快照。需要按库现状判断的变更用 Java 迁移，并在 H2 和 MySQL 8.4 上验证。Crab 建表与升级在 `CrabDatabase`，不使用 Flyway。
 - Crab 文件暂存区（`dev.hermit.crab.files`）：文件在 `$HERMIT_HOME/data/files`，重启清空、到期删除，不进数据库；设置在 `file_stage_settings`（schema 20，空表用默认值 1 小时、50 MiB、1 GiB）。`fileId` 只有创建它的 API Key 能用，控制台上传的所有 Key 可用；下载链接 `/api/-/files/{token}` 不要 Key。追踪、调用记录和上报只记文件名、大小、类型和 SHA-256；输出脱敏不扫描文件内容。

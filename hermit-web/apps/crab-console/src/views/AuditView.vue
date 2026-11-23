@@ -5,7 +5,7 @@ import { onMounted, reactive, ref } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { notifyError } from '@shared/format'
 import { api, type ConfigAuditPage } from '../api'
-import { actorLabels, configAuditLabels, originLabels } from '../labels'
+import { actorLabels, auditFieldText, configAuditLabels, originLabels } from '../labels'
 
 const loading = ref(true)
 const loaded = ref(false)
@@ -90,7 +90,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="涉及字段" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
-            <span v-if="row.fields.length" class="mono">{{ row.fields.join('、') }}</span>
+            <span v-if="row.fields.length" class="mono">{{ row.fields.map((field: string) => auditFieldText(row.action, field)).join('、') }}</span>
             <span v-else class="hm-muted">—</span>
           </template>
         </el-table-column>

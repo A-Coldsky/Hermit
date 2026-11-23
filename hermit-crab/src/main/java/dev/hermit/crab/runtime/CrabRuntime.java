@@ -94,6 +94,7 @@ import dev.hermit.crab.store.EncryptedLoginSnapshotStore;
 import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
+import dev.hermit.crab.store.IdentityStore;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.store.ConchConfigStore;
 import dev.hermit.crab.store.ConsolePassword;
@@ -136,6 +137,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final ConchRegistry registry = new ConchRegistry();
     private final EngineSettings settings;
     private final SessionManager sessions;
+    private final Identities identities;
     private final RuleEngine engine;
     private final McpForwarder mcpForwarder;
     private final CallLogStore callLogs;
@@ -222,11 +224,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.conchConfig = new ConchConfigStore(database.dataSource());
         this.apiKeys = new ApiKeyService(database.dataSource());
         this.settings = config.engineSettings();
+        IdentityStore identityStore = new IdentityStore(database.dataSource(), cipher);
         this.sessions = new SessionManager(
                 new EncryptedSessionPersistence(database.dataSource(), cipher),
                 new EncryptedLoginSnapshotStore(database.dataSource(), cipher),
+                identityStore,
                 settings,
                 clock);
+        this.identities = new Identities(identityStore, sessions, registry, conchConfig, accounts, vault);
         this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
         this.contention = new SessionContention(clock);
         this.engine.bindContention(contention);
@@ -288,8 +293,12 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.localConches = new LocalConches(
                 paths, registry.scoped(Origin.LOCAL), database.dataSource(), () -> debug.get().enabled(), clock);
         this.localConches.onWidened(this::clearWidenedSessions);
+        this.localConches.onDeleted((name, actor) -> identities.packageRemoved(Origin.LOCAL, name, actor));
         this.admin.bindOriginFallback(name -> localConches.occupies(name) ? Origin.LOCAL : null);
         this.admin.bindAccountRemoved(mcpForwarder::forgetAccount);
+        this.admin.bindIdentities(identities);
+        // 包换了版本、切了来源：和身份里其它成员不再有相同地址的账号离开身份。
+        this.registry.addListener(() -> identities.revalidate(Actors.SYNC));
         this.instanceId = InstanceIds.loadOrCreate(paths);
         Path caDir = this.config.tlsCaDir() == null
                 ? paths.trustCa()
@@ -427,6 +436,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     /** 地址范围扩大的本地覆盖：先丢掉待输入登录，再清每个账号的会话和登录快照。 */
     private void clearWidenedSessions(String conch) {
         sessions.pending().discardConch(conch);
+        // 先离开身份：新地址不该拿到别的包登录出来的 Cookie，也不该因为它清掉别的成员的会话。
+        identities.widened(conch);
         for (Account account : accounts.list(Origin.LOCAL, conch)) {
             sessions.invalidate(new SessionKey(Origin.LOCAL, conch, account.account()));
         }
@@ -488,6 +499,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public Invoker invoker() {
         return invoker;
+    }
+
+    public Identities identities() {
+        return identities;
     }
 
     public ConchAdmin admin() {
@@ -1128,10 +1143,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         prepare();
         if (conchSync != null) {
             conchSync.unsubscribe(conch, actor);
-            return;
+        } else {
+            SubscriptionCommands.unsubscribe(
+                    null, paths, registry.scoped(Origin.OFFICIAL), disabledConches, subscriptions, database.dataSource(),
+                    conch, actor);
         }
-        SubscriptionCommands.unsubscribe(
-                null, paths, registry.scoped(Origin.OFFICIAL), disabledConches, subscriptions, database.dataSource(), conch, actor);
+        // 正式包不在了：它的账号离开身份。同名的本地包不受影响。
+        identities.packageRemoved(Origin.OFFICIAL, conch, actor);
     }
 
     public Optional<SyncReport> syncOnce(String requestedBy) {

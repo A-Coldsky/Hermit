@@ -107,6 +107,8 @@ public final class LocalConches {
     private final LinkedHashMap<String, OverrideGrant> grants = new LinkedHashMap<>();
     private volatile Consumer<String> onWidened = name -> {
     };
+    private volatile java.util.function.BiConsumer<String, String> onDeleted = (name, actor) -> {
+    };
     /** 第一次清会话返回之后、写文件之前。测试在这个窗口里插入登录。生产路径是空操作。 */
     private volatile Runnable widenedGap = () -> {
     };
@@ -150,6 +152,12 @@ public final class LocalConches {
      */
     public void onWidened(Consumer<String> listener) {
         this.onWidened = listener == null ? name -> {
+        } : listener;
+    }
+
+    /** 本地包被使用者删掉之后调用，参数是包名和操作者。放开本地包的锁之后才调用。 */
+    public void onDeleted(java.util.function.BiConsumer<String, String> listener) {
+        this.onDeleted = listener == null ? (name, actor) -> {
         } : listener;
     }
 
@@ -483,6 +491,7 @@ public final class LocalConches {
                 audit(checked, AuditKind.LOCAL_CONCH_DELETED, conch, doc == null ? "" : doc.version().toString());
             }
         }
+        onDeleted.accept(conch, checked);
     }
 
     /** Loaded local packages and broken files whose stem is a legal package name, sorted by name. */

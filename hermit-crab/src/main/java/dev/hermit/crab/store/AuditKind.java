@@ -64,5 +64,14 @@ public enum AuditKind {
     /** A host:port leaf fingerprint was saved. Detail has the host, port and sha256. */
     TLS_HOST_TRUSTED,
     /** A host:port fingerprint was removed. Detail has the host and port. */
-    TLS_HOST_REMOVED
+    TLS_HOST_REMOVED,
+    /** 建了一个身份。target 是身份 id，detail 有名称。 */
+    IDENTITY_CREATED,
+    IDENTITY_RENAMED,
+    /** 删掉身份，成员回到各自的会话。detail 有成员个数。 */
+    IDENTITY_DELETED,
+    /** 一个账号绑到身份，从此和其它成员共用 Cookie。detail 的 member 是「来源/包/账号」。 */
+    IDENTITY_BOUND,
+    /** 一个账号离开身份。不是使用者手动解除时 detail 有 reason。 */
+    IDENTITY_UNBOUND
 }

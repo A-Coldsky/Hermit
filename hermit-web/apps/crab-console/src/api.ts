@@ -208,9 +208,53 @@ export interface ConchDetail {
   fixHint?: string | null
 }
 
+/** 身份里的一个成员：某个规则包（某个来源那一份）的一个账号。 */
+export interface IdentityMember {
+  origin: 'OFFICIAL' | 'LOCAL'
+  conch: string
+  account: string
+  /** 包不在本机时为 null。 */
+  title: string | null
+  /** 包不在本机（被撤下、文件读不出来）时为 false：绑定留着，这个成员现在不会被调用。 */
+  installed: boolean
+  /** 同名的另一份（本地包或正式包）在生效时为 false。 */
+  active: boolean
+  /** 这个包会访问的地址：站点加认证地址。 */
+  addresses: string[]
+}
+
+/** 一个身份：某个网站或认证中心上的某个人。成员共用一份 Cookie，调用排队执行。 */
+export interface Identity {
+  id: string
+  name: string
+  createdAt: string
+  members: IdentityMember[]
+  /** 最近一次「带着已有 Cookie 登录没成功、清空重来」。只在内存里，重启后为 null。 */
+  lastCleared: { at: string; conch: string; account: string } | null
+}
+
+/** 绑定前的检查结果。凭证只比较文本类型的字段，不返回值。 */
+export interface IdentityCheck {
+  allowed: boolean
+  /** 不能绑定的原因；能绑定时为 null。 */
+  problem: string | null
+  peers: {
+    origin: string
+    conch: string
+    account: string
+    /** 和这个成员相同的地址。 */
+    addresses: string[]
+    /** SAME：有相同的文本凭证值；DIFFERENT：都填了但没有相同的；UNKNOWN：比不出来。 */
+    credentials: 'SAME' | 'DIFFERENT' | 'UNKNOWN'
+  }[]
+  warnings: string[]
+}
+
 export interface Account {
   name: string
   default: boolean
+  /** 绑到的身份；没绑为 null。 */
+  identity?: { id: string; name: string } | null
   /** 该账号缺必填凭证，或已存凭证无法用当前主密钥解密。没有账号、自动登录暂停都不计入这里。 */
   needsConfiguration: boolean
   missingFields: string[]
@@ -1086,6 +1130,21 @@ export const api = {
   reef: () => http.get<ReefConnection>(`${base}/reef`),
   /** 导入引导 JSON。服务端会先连 Reef 校验令牌，再热更新本进程。 */
   importReefBootstrap: (body: unknown) => http.post<ReefConnection>(`${base}/reef/bootstrap`, body),
+
+  identities: () => http.get<{ identities: Identity[] }>(`${base}/identities`),
+  createIdentity: (name: string) => http.post<Identity>(`${base}/identities`, { name }),
+  renameIdentity: (id: string, name: string) => http.put<{ renamed: boolean }>(`${base}/identities/${seg(id)}`, { name }),
+  deleteIdentity: (id: string) => http.del<{ deleted: boolean }>(`${base}/identities/${seg(id)}`),
+  /** 只检查，不绑定。 */
+  checkIdentityMember: (id: string, conch: string, account: string) =>
+    http.post<IdentityCheck>(`${base}/identities/${seg(id)}/check`, { conch, account }),
+  /** 绑定要使用者确认过，所以总是带 confirm。 */
+  bindIdentityMember: (id: string, conch: string, account: string) =>
+    http.post<IdentityCheck>(`${base}/identities/${seg(id)}/members`, { conch, account, confirm: true }),
+  unbindIdentityMember: (id: string, member: { origin: string; conch: string; account: string }) =>
+    http.del<{ unbound: boolean }>(
+      `${base}/identities/${seg(id)}/members/${seg(member.origin)}/${seg(member.conch)}/${seg(member.account)}`,
+    ),
 
   files: () => http.get<FileStageView>(`${base}/files`),
   /** 请求体就是文件内容。上传的文件所有 API Key 都能用，返回里的 fileId 填进能力的文件参数。 */

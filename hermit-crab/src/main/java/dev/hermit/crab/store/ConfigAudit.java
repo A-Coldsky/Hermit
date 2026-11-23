@@ -31,7 +31,8 @@ final class ConfigAudit {
               AND (? IS NULL
                 OR (kind IN (
                         'ACCOUNT_CREATED', 'ACCOUNT_DELETED', 'DEFAULT_CHANGED',
-                        'CREDENTIALS_WRITTEN', 'TEST_LOGIN')
+                        'CREDENTIALS_WRITTEN', 'TEST_LOGIN',
+                        'IDENTITY_BOUND', 'IDENTITY_UNBOUND')
                     AND (LENGTH(target) - LENGTH(REPLACE(target, '/', ''))) = 2
                     AND RIGHT(target, LENGTH('/' || ?)) = ('/' || ?)
                     AND (LEFT(target, LENGTH('OFFICIAL/')) = 'OFFICIAL/'
@@ -128,14 +129,14 @@ final class ConfigAudit {
                 view.origin(),
                 view.conch(),
                 view.account(),
-                fieldNames(resultSet.getString("detail"), view.capability()));
+                fieldNames(resultSet.getString("detail"), view.capability(), kind != null && kind.startsWith("IDENTITY_")));
     }
 
     /**
      * Names only. Unknown JSON keys, non-strings, and the raw detail text are dropped, including
      * when detail is not JSON.
      */
-    private static List<String> fieldNames(String detail, String capability) {
+    private static List<String> fieldNames(String detail, String capability, boolean identity) {
         TreeSet<String> names = new TreeSet<>();
         addName(names, capability);
         JsonNode object = Json.object(detail);
@@ -146,6 +147,12 @@ final class ConfigAudit {
             addNames(names, object.get("removed"));
             addText(names, object.get("from"));
             addText(names, object.get("to"));
+            if (identity) {
+                // 身份的名字，以及自动解除时的原因。
+                addText(names, object.get("identity"));
+                addText(names, object.get("name"));
+                addText(names, object.get("reason"));
+            }
             JsonNode key = object.get("key");
             if (key != null && key.isTextual()) {
                 addName(names, key.textValue());
@@ -234,7 +241,9 @@ final class ConfigAudit {
                 || AuditKind.ACCOUNT_DELETED.name().equals(kind)
                 || AuditKind.DEFAULT_CHANGED.name().equals(kind)
                 || AuditKind.CREDENTIALS_WRITTEN.name().equals(kind)
-                || AuditKind.TEST_LOGIN.name().equals(kind);
+                || AuditKind.TEST_LOGIN.name().equals(kind)
+                || AuditKind.IDENTITY_BOUND.name().equals(kind)
+                || AuditKind.IDENTITY_UNBOUND.name().equals(kind);
     }
 
     private static boolean capabilityKind(String kind) {

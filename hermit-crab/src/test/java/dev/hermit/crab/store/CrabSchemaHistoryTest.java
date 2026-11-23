@@ -61,6 +61,13 @@ class CrabSchemaHistoryTest {
                     assertThat(rows.next()).isTrue();
                     assertThat(rows.getInt(1)).isZero();
                 }
+                // 21：身份的三张表都是空的，升级前的账号没有绑定，仍各用各的会话。
+                for (String table : List.of("identities", "identity_members", "identity_sessions")) {
+                    try (ResultSet rows = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
+                        assertThat(rows.next()).isTrue();
+                        assertThat(rows.getInt(1)).as(table).isZero();
+                    }
+                }
             }
         }
         List<String> fresh;
@@ -68,7 +75,7 @@ class CrabSchemaHistoryTest {
             fresh = shape(database);
         }
 
-        assertThat(upgraded).contains("version 16", "version 17", "version 18", "version 19", "version 20");
+        assertThat(upgraded).contains("version 16", "version 17", "version 18", "version 19", "version 20", "version 21");
         assertThat(upgraded)
                 .as("已发布的库升级后和全新安装的结构不一致：已发布的升级步骤不能就地改，结构变化请新增版本")
                 .containsExactlyElementsOf(fresh);

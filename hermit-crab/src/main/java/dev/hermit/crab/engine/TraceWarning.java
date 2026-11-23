@@ -17,4 +17,6 @@ record TraceWarning(String code, String message) {
      * 登录仍然成功，正式调用也不报错。
      */
     static final String SNAPSHOT_SKIPPED = "snapshot_skipped";
+    /** 带着身份里已有的 Cookie 登录没成功，清空后从头登录了一次。 */
+    static final String SHARED_SESSION_CLEARED = "shared_session_cleared";
 }

@@ -78,6 +78,11 @@ import dev.hermit.common.validate.ConchValidator;
  * limit and the total limit). It starts empty, and an empty table means the defaults apply
  * (1 hour, 50 MiB, 1 GiB). Staged files themselves are not in the database.
  * Later versions must not edit {@link #applyV20}.
+ * Version 21 adds {@code identities}, {@code identity_members} and {@code identity_sessions}
+ * (accounts of different packages that the user bound to one identity share its cookies). All
+ * three start empty and nothing is backfilled: an account without a row in
+ * {@code identity_members} keeps its own session in {@code sessions}, as before.
+ * Later versions must not edit {@link #applyV21}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Crab has been released with versions 1–15. Version 16 is
@@ -241,6 +246,12 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 20)) {
                 applyV20(connection);
                 insertVersion(connection, 20);
+            }
+            // Do not gate version 21 on MAX(version), and do not rewrite applyV20. No backfill:
+            // the three tables start empty and every account keeps its own session.
+            if (!applied(connection, 21)) {
+                applyV21(connection);
+                insertVersion(connection, 21);
             }
             return null;
         });
@@ -719,6 +730,41 @@ public final class CrabDatabase implements AutoCloseable {
                     max_total_bytes BIGINT NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
                     PRIMARY KEY (id)
+                )
+                """);
+    }
+
+    /**
+     * 身份：使用者把不同规则包的账号绑到一起，共用一份 Cookie 和一把锁。
+     * {@code identity_members} 一个账号最多一行；同一个身份下一个包最多一个账号。
+     * {@code identity_sessions} 是这个身份的 Cookie，加密方式和 {@code sessions} 相同。
+     */
+    private static void applyV21(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS identities (
+                    id VARCHAR(64) NOT NULL,
+                    name VARCHAR(128) NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    PRIMARY KEY (id)
+                )
+                """);
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS identity_members (
+                    origin VARCHAR(16) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
+                    account VARCHAR(64) NOT NULL,
+                    identity_id VARCHAR(64) NOT NULL,
+                    bound_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    PRIMARY KEY (origin, conch, account),
+                    CONSTRAINT identity_members_one_per_conch UNIQUE (identity_id, origin, conch)
+                )
+                """);
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS identity_sessions (
+                    identity_id VARCHAR(64) NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    PRIMARY KEY (identity_id)
                 )
                 """);
     }

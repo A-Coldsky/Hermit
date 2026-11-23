@@ -630,7 +630,7 @@ final class StepRunner {
     /** 只看会发往 base_url 主机的 Cookie。认证地址上的同名 Cookie 不算。 */
     private static boolean hasCookie(String name, BasicCookieStore cookies, URI base) {
         for (Cookie cookie : cookies.getCookies()) {
-            if (name.equals(cookie.getName()) && AuthReach.sentTo(cookie, base)) {
+            if (name.equals(cookie.getName()) && AuthReach.readable(cookie, base, cookies)) {
                 return true;
             }
         }

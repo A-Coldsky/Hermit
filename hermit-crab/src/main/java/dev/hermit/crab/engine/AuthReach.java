@@ -5,6 +5,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import org.apache.hc.client5.http.cookie.Cookie;
+import org.apache.hc.client5.http.cookie.CookieStore;
 import org.apache.hc.core5.net.InetAddressUtils;
 
 import dev.hermit.common.http.HostNames;
@@ -46,8 +47,19 @@ record AuthReach(Set<String> origins, boolean login) {
     /**
      * 这个 Cookie 会不会发往 {@code base_url} 的主机，判断方式和 Cookie 罐一致：主机相同，
      * 或者 Cookie 写了 Domain 且主机是它的子域。规则按名字读 Cookie 时只看这些，
-     * 认证地址上的 Cookie 读不到。不看路径和 Secure。
+     * 认证地址上的 Cookie 读不到。不看路径；Secure 只在共用的罐里看。
+     * {@code cookie_exists} 和按名字取值都走这里，两边看到的一样。
      */
+    static boolean readable(Cookie cookie, URI base, CookieStore jar) {
+        // 共用的罐里可能有别的成员从 https 拿到的 Secure Cookie：base_url 是 http 的成员请求里不会带它，
+        // 也就不算有、不能按名字读。没绑身份的账号罐里只有自己的 Cookie，照旧不看 Secure。
+        if (jar instanceof SharedCookieStore && cookie.isSecure()
+                && base != null && !"https".equalsIgnoreCase(base.getScheme())) {
+            return false;
+        }
+        return sentTo(cookie, base);
+    }
+
     static boolean sentTo(Cookie cookie, URI base) {
         if (base == null || cookie.getDomain() == null) {
             return true;

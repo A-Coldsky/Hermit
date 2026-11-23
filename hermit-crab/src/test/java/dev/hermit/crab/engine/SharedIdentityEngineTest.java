@@ -11,6 +11,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import dev.hermit.common.template.FilterRegistry;
+import dev.hermit.common.template.TemplateEngine;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -437,6 +439,15 @@ class SharedIdentityEngineTest {
                         .as("http 的请求不会带 Secure Cookie，共用的罐里也不让按名字读").isNull();
                 assertThat(fixture.sessions.cookieValue(
                         OA_ALICE, "secureOnly", java.net.URI.create("https://127.0.0.1"))).isEqualTo("s3cure-value");
+                // cookie_exists 和按名字取值看到的一样：不会走进「有这个 Cookie」的分支又取不到值。
+                FilterRegistry filters = FilterRegistry.defaults();
+                StepRunner runner = new StepRunner(new TemplateEngine(filters), filters);
+                var jar = fixture.sessions.cookies(OA_ALICE);
+                Map<String, Object> vars = Map.of("response", Map.of("status", 200));
+                assertThat(runner.test(Map.of("cookie_exists", "plain"), vars, jar, http)).isTrue();
+                assertThat(runner.test(Map.of("cookie_exists", "secureOnly"), vars, jar, http)).isFalse();
+                assertThat(runner.test(Map.of("cookie_exists", "secureOnly"), vars,
+                        jar, java.net.URI.create("https://127.0.0.1"))).isTrue();
             } finally {
                 fixture.sessions.unlock(OA_ALICE);
             }

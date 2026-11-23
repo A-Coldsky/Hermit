@@ -461,11 +461,8 @@ public final class SessionManager implements AutoCloseable {
         if (name == null || state.jar.cookies == null) {
             return null;
         }
-        // 共用的罐里可能有别的成员从 https 拿到的 Secure Cookie：base_url 是 http 的成员请求里不会带它，
-        // 也就不能按名字读出来。没绑身份的账号罐里只有自己的 Cookie，照旧。
-        boolean plain = state.jar.identity != null && base != null && !"https".equalsIgnoreCase(base.getScheme());
         for (Cookie cookie : state.jar.cookies.getCookies()) {
-            if (name.equals(cookie.getName()) && AuthReach.sentTo(cookie, base) && !(plain && cookie.isSecure())) {
+            if (name.equals(cookie.getName()) && AuthReach.readable(cookie, base, state.jar.cookies)) {
                 return cookie.getValue();
             }
         }
@@ -835,7 +832,7 @@ public final class SessionManager implements AutoCloseable {
                 0);
         state.tls = tls;
         state.pool = pool;
-        state.cookies = new BasicCookieStore();
+        state.cookies = state.identity == null ? new BasicCookieStore() : new SharedCookieStore();
         state.client = HttpClients.custom()
                 .setConnectionManager(pool)
                 .setDefaultCookieStore(state.cookies)

@@ -76,9 +76,12 @@ public final class Identities {
 
     private final IdentityStore store;
     /**
-     * 各成员的包上一次判断时的地址，只在内存里。启动载入时每放进一个包都会判断一次，全部载入后就记齐了。
+     * 各成员的包在身份上一次「成员都在、连成一组」时的地址，只在内存里。启动载入时每放进一个包都会判断一次，
+     * 全部载入后就记齐了。读地址和写这张表都在 {@link #judging} 里：两个线程同时判断时，后写的一定是更新的地址。
      */
     private final ConcurrentMap<SessionKey, Set<String>> seen = new ConcurrentHashMap<>();
+    /** 只包住读地址、读写绑定和 {@link #seen}；等账号锁的 {@code sessions.rebound} 在外面做。 */
+    private final Object judging = new Object();
     private final SessionManager sessions;
     private final ConchRegistry registry;
     private final ConchConfigStore conchConfig;
@@ -222,8 +225,10 @@ public final class Identities {
             throw new IllegalArgumentException(check.problem());
         }
         SessionKey key = new SessionKey(origin, conch, account);
-        store.bind(id, key, actor);
-        seen.put(key, addresses(origin, conch));
+        synchronized (judging) {
+            store.bind(id, key, actor);
+            seen.put(key, addresses(origin, conch));
+        }
         sessions.rebound(key);
         return check;
     }
@@ -260,49 +265,57 @@ public final class Identities {
      */
     public List<SessionKey> revalidate(String actor) {
         ArrayList<SessionKey> left = new ArrayList<>();
-        if (!store.anyBound()) {
-            return left;
-        }
-        for (Identity identity : store.list()) {
-            // 有成员的包这会儿不在本机（启动时还没载入、文件读不出来、被 Reef 撤下）：它可能正是
-            // 把另外两个成员连起来的那一个，这个身份先不动，等它回来再判断。
-            LinkedHashMap<SessionKey, Set<String>> present = new LinkedHashMap<>();
-            for (SessionKey member : identity.members()) {
-                Set<String> mine = addresses(member.origin(), member.conch());
-                if (!mine.isEmpty()) {
-                    present.put(member, mine);
+        LinkedHashMap<SessionKey, String> detached = new LinkedHashMap<>();
+        synchronized (judging) {
+            if (!store.anyBound()) {
+                return left;
+            }
+            for (Identity identity : store.list()) {
+                LinkedHashMap<SessionKey, Set<String>> present = new LinkedHashMap<>();
+                for (SessionKey member : identity.members()) {
+                    Set<String> mine = addresses(member.origin(), member.conch());
+                    if (!mine.isEmpty()) {
+                        present.put(member, mine);
+                    }
                 }
-            }
-            if (present.size() < 2 || present.size() < identity.members().size()) {
-                continue;
-            }
-            List<List<SessionKey>> groups = groups(present);
-            if (groups.size() < 2) {
-                seen.putAll(present);
-                continue;
-            }
-            // 一个身份只有一份 Cookie：留下最大的一组，其余的都离开。一样大时留下地址没变的那一组：
-            // 谁动了看地址本身，不看是哪一次通知带来的，通知的先后和同名的两份都不会判错。
-            List<SessionKey> kept = groups.get(0);
-            for (List<SessionKey> group : groups) {
-                if (group.size() > kept.size()
-                        || (group.size() == kept.size() && moved(group, present) < moved(kept, present))) {
-                    kept = group;
-                }
-            }
-            for (SessionKey member : kept) {
-                seen.put(member, present.get(member));
-            }
-            for (List<SessionKey> group : groups) {
-                if (group == kept) {
+                // 有成员的包这会儿不在本机（启动时还没载入、文件读不出来、被 Reef 撤下）：它可能正是
+                // 把另外两个成员连起来的那一个，这个身份先不动，等它回来再判断。记下的地址也不动。
+                if (present.size() < identity.members().size()) {
                     continue;
                 }
-                for (SessionKey member : group) {
-                    leave(member, REASON_ADDRESS_CHANGED, actor);
-                    left.add(member);
+                List<List<SessionKey>> groups = groups(present);
+                if (groups.size() < 2) {
+                    // 只有一个成员时也记：它自己换了地址之后再有人加入，不该还拿旧地址当「上次」。
+                    seen.putAll(present);
+                    continue;
+                }
+                // 一个身份只有一份 Cookie：留下最大的一组，其余的都离开。一样大时留下地址没变的那一组：
+                // 谁动了看地址本身，不看是哪一次通知带来的，通知的先后和同名的两份都不会判错。
+                List<SessionKey> kept = groups.get(0);
+                for (List<SessionKey> group : groups) {
+                    if (group.size() > kept.size()
+                            || (group.size() == kept.size() && moved(group, present) < moved(kept, present))) {
+                        kept = group;
+                    }
+                }
+                for (SessionKey member : kept) {
+                    seen.put(member, present.get(member));
+                }
+                for (List<SessionKey> group : groups) {
+                    if (group == kept) {
+                        continue;
+                    }
+                    for (SessionKey member : group) {
+                        String id = detach(member, REASON_ADDRESS_CHANGED, actor);
+                        if (id != null) {
+                            detached.put(member, id);
+                        }
+                        left.add(member);
+                    }
                 }
             }
         }
+        detached.forEach(this::settle);
         return left;
     }
 
@@ -341,16 +354,29 @@ public final class Identities {
     }
 
     private boolean leave(SessionKey key, String reason, String actor) {
-        String id = store.unbind(key, reason, actor);
-        seen.remove(key);
+        String id = detach(key, reason, actor);
         if (id == null) {
             return false;
         }
+        settle(key, id);
+        return true;
+    }
+
+    /** 解除绑定这一半：只动库和记下的地址。返回原来的身份，本来就没绑时是 null。 */
+    private String detach(SessionKey key, String reason, String actor) {
+        synchronized (judging) {
+            String id = store.unbind(key, reason, actor);
+            seen.remove(key);
+            return id;
+        }
+    }
+
+    /** 解除绑定之后会话这一半：要等这个账号正在跑的调用，不在 {@link #judging} 里做。 */
+    private void settle(SessionKey key, String id) {
         sessions.rebound(key);
         if (store.members(id).isEmpty()) {
             sessions.clearIdentity(id);
         }
-        return true;
     }
 
     private boolean hasAccount(Origin origin, String conch, String account) {

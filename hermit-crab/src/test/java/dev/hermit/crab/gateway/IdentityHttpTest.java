@@ -279,6 +279,23 @@ class IdentityHttpTest {
     }
 
     @Test
+    void aLoneMemberThatMovedEarlierIsNotBlamedWhenALaterMemberMoves() throws Exception {
+        install("pkg_a", elsewhereUrl, "zhangsan");
+        install("pkg_b", siteUrl, "zhangsan");
+        String id = console("POST", "/console/api/identities", "{\"name\":\"张三\"}").path("id").asText();
+        bind(id, "pkg_b");
+        // 身份里只有 pkg_b 时它换了网站，之后 pkg_a 才加入。
+        runtime.registry().put(doc("pkg_b", elsewhereUrl));
+        bind(id, "pkg_a");
+
+        // 这回换网站的是 pkg_a：pkg_b 上一次换地址是加入之前的事，不该算它也动过。
+        runtime.registry().put(doc("pkg_a", siteUrl));
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_b", "default")))
+                .as("这次没动的成员留下").isEqualTo(id);
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default"))).isNull();
+    }
+
+    @Test
     void whenTheLocalCopyOfASameNamePackageMovesTheOfficialCopyStays() throws Exception {
         install("pkg_a", siteUrl, "zhangsan");
         ConchDoc local = doc("pkg_a", siteUrl);

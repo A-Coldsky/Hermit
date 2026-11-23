@@ -298,7 +298,18 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.admin.bindAccountRemoved(mcpForwarder::forgetAccount);
         this.admin.bindIdentities(identities);
         // 包换了版本、切了来源：和身份里其它成员不再有相同地址的账号离开身份。
-        this.registry.addListener(() -> identities.revalidate(Actors.SYNC));
+        this.registry.addListener(new ConchRegistry.Listener() {
+            @Override
+            public void changed() {
+                identities.revalidate(Actors.SYNC);
+            }
+
+            @Override
+            public void changed(String conch) {
+                // 带上是哪个包变了：两边一样大时，留下没变的那一边。
+                identities.revalidate(Actors.SYNC, conch);
+            }
+        });
         this.instanceId = InstanceIds.loadOrCreate(paths);
         Path caDir = this.config.tlsCaDir() == null
                 ? paths.trustCa()

@@ -563,6 +563,10 @@ class ConchSyncTest {
             ConchRegistry registry = new ConchRegistry();
             ConchSync sync = sync(reef, crab, registry, Optional.empty(), Clock.systemUTC());
             sync.syncOnce();
+            // 听注册表变化的人（MCP 工具表、身份绑定的重判）每次听到时看到的版本。
+            java.util.List<String> heard = new java.util.concurrent.CopyOnWriteArrayList<>();
+            registry.addListener(() -> heard.add(
+                    registry.find("legacy_oa").map(doc -> doc.version().toString()).orElse("gone")));
 
             Path current = crab.paths.conches().resolve("legacy_oa").resolve("current");
             Files.delete(current);
@@ -573,6 +577,7 @@ class ConchSyncTest {
             assertThatThrownBy(() -> sync.update("legacy_oa", Actors.CONSOLE))
                     .isInstanceOf(UpdateException.class)
                     .hasMessage(SyncReasons.CURRENT_WRITE_FAILED);
+            assertThat(heard).as("没装成的 1.0.1 没有被通知出去").isNotEmpty().containsOnly("1.0.0");
             assertThat(registry.find("legacy_oa").orElseThrow().version().toString()).isEqualTo("1.0.0");
             assertThat(crab.vault.decryptForExecution(Origin.OFFICIAL, "legacy_oa", "alice"))
                     .containsEntry("password", SECRET);

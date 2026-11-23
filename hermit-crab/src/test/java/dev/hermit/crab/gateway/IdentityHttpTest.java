@@ -245,6 +245,37 @@ class IdentityHttpTest {
     }
 
     @Test
+    void aNewVersionThatMovesToAnotherSiteLeavesWhileTheUnchangedMemberStays() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        install("pkg_b", siteUrl, "zhangsan");
+        String id = console("POST", "/console/api/identities", "{\"name\":\"张三\"}").path("id").asText();
+        bind(id, "pkg_a");
+        bind(id, "pkg_b");
+
+        // 同步装上 pkg_a 的新版本，它换了网站。两边各剩一个成员：走的是变了的那个，不是排在后面的那个。
+        runtime.registry().put(doc("pkg_a", elsewhereUrl));
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default"))).isNull();
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_b", "default"))).isEqualTo(id);
+    }
+
+    @Test
+    void aVersionThatIsPutBackBeforeItIsCommittedDoesNotUnbindAnyone() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        install("pkg_b", siteUrl, "zhangsan");
+        String id = console("POST", "/console/api/identities", "{\"name\":\"张三\"}").path("id").asText();
+        bind(id, "pkg_a");
+        bind(id, "pkg_b");
+
+        // 换版本时先放进注册表再写指针；指针写失败会把旧版本放回去。成败定下来之前不重判绑定。
+        try (dev.hermit.crab.engine.ConchRegistry.Hold ignored = runtime.registry().hold()) {
+            runtime.registry().put(doc("pkg_a", elsewhereUrl));
+            runtime.registry().put(doc("pkg_a", siteUrl));
+        }
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default"))).isEqualTo(id);
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_b", "default"))).isEqualTo(id);
+    }
+
+    @Test
     void packagesWithoutAliveCheckLogInOnceEachAndThenStopReplacingEachOther() throws Exception {
         install("pkg_a", siteUrl, "zhangsan", false);
         install("pkg_b", siteUrl, "zhangsan", false);

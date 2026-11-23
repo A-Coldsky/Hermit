@@ -18,6 +18,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 public final class UrlComponents {
 
+    private static final java.util.regex.Pattern IPV6_AUTHORITY =
+            java.util.regex.Pattern.compile("(?:[A-Za-z][A-Za-z0-9+.-]*:)?//\\[[0-9A-Fa-f:.]+]");
     private static final char[] HEX = "0123456789ABCDEF".toCharArray();
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -88,7 +90,7 @@ public final class UrlComponents {
      */
     public static URI resolve(URI base, String reference, Charset charset) {
         Objects.requireNonNull(base, "base");
-        URI ref = URI.create(normalize(reference, charset));
+        URI ref = URI.create(normalizeReference(reference, charset));
         if (ref.isAbsolute()) {
             return ref;
         }
@@ -102,6 +104,20 @@ public final class UrlComponents {
             return base.resolve(ref);
         }
         return resolvePreservingEmpty(base, ref, refPath);
+    }
+
+    /**
+     * 绝对地址的主机是 IPv6 字面量（{@code http://[fd00::10]:8080/login}）时，主机两边的方括号是
+     * 地址的一部分，不编码；其余部分照常 {@link #normalize(String, Charset)}。
+     */
+    private static String normalizeReference(String reference, Charset charset) {
+        if (reference != null) {
+            java.util.regex.Matcher literal = IPV6_AUTHORITY.matcher(reference);
+            if (literal.lookingAt()) {
+                return literal.group() + normalize(reference.substring(literal.end()), charset);
+            }
+        }
+        return normalize(reference, charset);
     }
 
     /** 按字符集编码。表示不了的字符抛出 {@link Unencodable}，不替换成 {@code ?}。 */

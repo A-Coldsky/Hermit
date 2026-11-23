@@ -75,6 +75,21 @@ class UrlComponentsTest {
     }
 
     @Test
+    void ipv6LiteralHostKeepsItsBrackets() {
+        URI base = URI.create("http://[fd00::10]:8080/app/");
+        URI absolute = UrlComponents.resolve(base, "http://[fd00::20]:9000/login?next=a b[0]", StandardCharsets.UTF_8);
+        assertThat(absolute.getHost()).isEqualTo("[fd00::20]");
+        assertThat(absolute.getPort()).isEqualTo(9000);
+        assertThat(absolute.getRawPath()).isEqualTo("/login");
+        assertThat(absolute.getRawQuery()).isEqualTo("next=a%20b%5B0%5D");
+        assertThat(UrlComponents.resolve(base, "//[fd00::20]/x", StandardCharsets.UTF_8).getHost())
+                .isEqualTo("[fd00::20]");
+        // 相对路径里的方括号照旧编码。
+        assertThat(UrlComponents.resolve(base, "list[0]", StandardCharsets.UTF_8).toString())
+                .isEqualTo("http://[fd00::10]:8080/app/list%5B0%5D");
+    }
+
+    @Test
     void jsonEscapeMatchesJacksonStringContents() {
         assertThat(UrlComponents.jsonEscape("ab\"cd")).isEqualTo("ab\\\"cd");
         assertThat(UrlComponents.jsonEscape("a\\b")).isEqualTo("a\\\\b");

@@ -129,6 +129,28 @@ class AuthOriginsValidationTest {
     }
 
     @Test
+    void templateInThePathDoesNotHideAnAuthOriginInACapabilityStep() {
+        // 主机是写死的认证地址，只有路径里有模板：运行时每次都会被拒绝，上传时就要报出来。
+        ValidationResult result = validate(yaml("1.11.0", "origins: [\"https://sso.example\"]", GUARDED, "",
+                "- request: { method: GET, url: \"https://sso.example/users/{{input.id}}?q={{input.q}}\" }"));
+        assertThat(result.errors()).anySatisfy(issue -> {
+            assertThat(issue.code()).isEqualTo(ValidationCodes.AUTH_ORIGIN);
+            assertThat(issue.path()).isEqualTo("actions.ping.steps[0].request.url");
+        });
+        // 登录步骤里没声明的主机同样认得出来，说明里写得出地址。
+        ValidationResult undeclared = validate(yaml("1.11.0", "origins: [\"https://sso.example\"]",
+                "- request: { method: GET, url: \"https://other.example/a/{{credential.username}}\" }", "", ""));
+        assertThat(undeclared.warnings()).anySatisfy(issue -> {
+            assertThat(issue.code()).isEqualTo(ValidationCodes.AUTH_ORIGIN);
+            assertThat(issue.message()).contains("https://other.example:443");
+        });
+        // 主机本身是模板的仍然不判断。
+        ValidationResult unknown = validate(yaml("1.11.0", "origins: [\"https://sso.example\"]", GUARDED, "",
+                "- request: { method: GET, url: \"https://{{input.host}}/users\" }"));
+        assertThat(unknown.errors()).noneMatch(issue -> issue.code().equals(ValidationCodes.AUTH_ORIGIN));
+    }
+
+    @Test
     void mcpPackagesCannotDeclareAuthOrigins() {
         ConchDoc doc = ConchParser.parse("""
                 conch: remote_tools

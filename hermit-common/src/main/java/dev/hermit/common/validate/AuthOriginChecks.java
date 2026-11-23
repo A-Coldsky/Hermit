@@ -20,6 +20,8 @@ import dev.hermit.common.model.Step;
  */
 final class AuthOriginChecks {
 
+    /** 绝对地址开头的 scheme://authority。 */
+    private static final Pattern ORIGIN = Pattern.compile("[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*");
     private static final Pattern CREDENTIAL = Pattern.compile("\\{\\{[^}]*\\bcredential\\.");
 
     private AuthOriginChecks() {
@@ -149,7 +151,7 @@ final class AuthOriginChecks {
             Target target = scope.target(url);
             if (target == Target.OTHER) {
                 warnings.add(ConchValidator.issue(ValidationCodes.AUTH_ORIGIN, typed + "." + key,
-                        "指向 " + SiteAddress.of(url) + "，既不是 base_url 也不在 auth.origins 里，运行时会被拒绝。"
+                        "指向 " + site(url) + "，既不是 base_url 也不在 auth.origins 里，运行时会被拒绝。"
                                 + "登录要访问门户或 SSO 时，把它的 scheme://host[:port] 写进 auth.origins"));
             } else if (target == Target.AUTH && !conditional && CREDENTIAL.matcher(String.valueOf(step.def())).find()) {
                 warnings.add(ConchValidator.issue(ValidationCodes.AUTH_ORIGIN, typed,
@@ -200,6 +202,15 @@ final class AuthOriginChecks {
 
     private enum Target { BASE, AUTH, OTHER, UNKNOWN }
 
+    /** 地址的 {@code scheme://host:port}。相对路径、主机里有模板的读不出来，返回 null。 */
+    private static String site(String url) {
+        java.util.regex.Matcher origin = ORIGIN.matcher(url.trim());
+        if (!origin.lookingAt() || origin.group().contains("{{")) {
+            return null;
+        }
+        return SiteAddress.of(origin.group());
+    }
+
     private record Scope(Set<String> declared, Set<String> names, Set<String> bases) {
 
         /** 相对路径和读不出地址的模板算 UNKNOWN，不在这里判断。 */
@@ -208,10 +219,8 @@ final class AuthOriginChecks {
             if (name != null) {
                 return names.contains(name) ? Target.AUTH : Target.UNKNOWN;
             }
-            if (url.contains("{{") && originTemplated(url)) {
-                return Target.UNKNOWN;
-            }
-            String site = SiteAddress.of(url);
+            // 只看 scheme://host[:port]：路径、查询里的模板不影响请求发到哪个主机。
+            String site = site(url);
             if (site == null) {
                 return Target.UNKNOWN;
             }
@@ -219,22 +228,6 @@ final class AuthOriginChecks {
                 return Target.BASE;
             }
             return declared.contains(site) ? Target.AUTH : Target.OTHER;
-        }
-
-        private static boolean originTemplated(String url) {
-            int start = url.indexOf("://");
-            if (start < 0) {
-                return true;
-            }
-            int end = url.length();
-            for (int i = start + 3; i < url.length(); i++) {
-                char c = url.charAt(i);
-                if (c == '/' || c == '?' || c == '#') {
-                    end = i;
-                    break;
-                }
-            }
-            return url.substring(0, end).contains("{{");
         }
     }
 }

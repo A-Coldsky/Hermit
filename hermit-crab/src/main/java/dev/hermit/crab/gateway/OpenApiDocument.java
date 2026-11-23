@@ -8,6 +8,8 @@ import java.util.Map;
 import java.util.Set;
 
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.CapabilityGroups;
+import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.runtime.ApiJson;
@@ -30,6 +32,7 @@ public final class OpenApiDocument {
         LinkedHashMap<String, Object> paths = new LinkedHashMap<>();
         LinkedHashSet<String> operationIds = new LinkedHashSet<>();
         LinkedHashMap<String, String> listedAliases = new LinkedHashMap<>();
+        LinkedHashMap<String, String> declaredTags = new LinkedHashMap<>();
         for (ConchDoc doc : runtime.registry().snapshot().values()) {
             for (Action action : doc.actions().values()) {
                 if (runtime.disabled(doc.conch(), action.name())) {
@@ -37,9 +40,10 @@ public final class OpenApiDocument {
                 }
                 String operationId = doc.conch() + "__" + action.name();
                 operationIds.add(operationId);
+                String tag = groupTag(doc, action, declaredTags);
                 paths.put("/api/" + doc.conch() + "/" + action.name(), Map.of(
                         CapabilityHttp.method(action).name().toLowerCase(),
-                        operation(action, operationId, false)));
+                        operation(action, operationId, false, tag)));
             }
         }
         for (Map.Entry<String, String> alias : runtime.config().aliases().entrySet()) {
@@ -55,15 +59,28 @@ public final class OpenApiDocument {
                 continue;
             }
             String operationId = unique(conch + "__" + actionName + "__alias", operationIds);
+            String tag = groupTag(doc, action, declaredTags);
             paths.put(alias.getKey(), Map.of(
                     CapabilityHttp.method(action).name().toLowerCase(),
-                    operation(action, operationId, true)));
+                    operation(action, operationId, true, tag)));
             listedAliases.put(alias.getKey(), alias.getValue());
         }
         LinkedHashMap<String, Object> root = new LinkedHashMap<>();
         root.put("openapi", "3.1.0");
         root.put("info", Map.of("title", "Hermit Crab", "version", "0.1.0"));
         root.put("servers", List.of(Map.of("url", serverUrl(runtime.config().serverHost(), port))));
+        if (!declaredTags.isEmpty()) {
+            ArrayList<Map<String, Object>> tags = new ArrayList<>(declaredTags.size());
+            for (Map.Entry<String, String> entry : declaredTags.entrySet()) {
+                LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+                item.put("name", entry.getKey());
+                if (entry.getValue() != null && !entry.getValue().isBlank()) {
+                    item.put("description", entry.getValue());
+                }
+                tags.add(item);
+            }
+            root.put("tags", tags);
+        }
         root.put("paths", paths);
         root.put("components", Map.of("securitySchemes", Map.of(
                 "bearer", Map.of("type", "http", "scheme", "bearer"))));
@@ -71,11 +88,26 @@ public final class OpenApiDocument {
         return root;
     }
 
-    private static Map<String, Object> operation(Action action, String operationId, boolean alias) {
+    private static String groupTag(ConchDoc doc, Action action, Map<String, String> declaredTags) {
+        if (doc == null || action == null || action.group() == null || action.group().isBlank()) {
+            return null;
+        }
+        String tag = CapabilityGroups.displayTitle(doc, action.group());
+        if (!declaredTags.containsKey(tag)) {
+            GroupDef def = CapabilityGroups.find(doc, action.group());
+            declaredTags.put(tag, def == null ? null : def.description());
+        }
+        return tag;
+    }
+
+    private static Map<String, Object> operation(Action action, String operationId, boolean alias, String tag) {
         LinkedHashMap<String, Object> operation = new LinkedHashMap<>();
         operation.put("operationId", operationId);
         operation.put("summary", action.title() == null ? "" : action.title());
         operation.put("description", description(action));
+        if (tag != null && !tag.isBlank()) {
+            operation.put("tags", List.of(tag));
+        }
         operation.put("security", List.of(Map.of("bearer", List.of())));
         HttpMethod method = CapabilityHttp.method(action);
         operation.put("parameters", parameters(action, method));

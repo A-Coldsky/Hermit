@@ -24,7 +24,9 @@ import dev.hermit.common.mcp.ToolSnapshots;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
+import dev.hermit.common.model.CapabilityGroups;
 import dev.hermit.common.model.ConfigField;
+import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.model.McpAuth;
 import dev.hermit.common.model.McpServerInfo;
 import dev.hermit.common.model.McpSnapshot;
@@ -142,6 +144,7 @@ public final class ConchValidator {
         checkRequestBodyFeatures(doc, errors);
         checkFileFeatures(doc, errors);
         FlowChecks.version(doc, errors);
+        checkGroups(doc, errors, warnings);
         if (doc.auth() != null && doc.auth().concurrentReads()
                 && doc.actions().values().stream().noneMatch(a -> a != null && a.mcp().readOnly())) {
             warnings.add(issue(ValidationCodes.CONCURRENT_READS, "auth.concurrent_reads",
@@ -245,6 +248,92 @@ public final class ConchValidator {
             checkLiteralHost("config.base_url.default", configuredBase.defaultValue(), errors, warnings);
         }
         return new ValidationResult(errors, warnings);
+    }
+
+    private static void checkGroups(ConchDoc doc, List<ValidationIssue> errors, List<ValidationIssue> warnings) {
+        if (!CapabilityGroups.usesGroups(doc)) {
+            return;
+        }
+        if (doc.minCrabVersion().compareTo(CapabilityGroups.MIN_CRAB_VERSION) < 0) {
+            errors.add(issue(
+                    ValidationCodes.MIN_CRAB_VERSION,
+                    "min_crab_version",
+                    "使用 groups 或能力 group 时 min_crab_version 必须不低于 1.10.0"));
+        }
+        for (Map.Entry<String, GroupDef> entry : doc.groups().entrySet()) {
+            String name = entry.getKey();
+            GroupDef group = entry.getValue();
+            String path = "groups." + name;
+            if (!NAME.matcher(name).matches()) {
+                errors.add(issue(ValidationCodes.GROUP_NAME, path, "分组名不符合 ^[a-z][a-z0-9_]{1,63}$"));
+            }
+            if (group == null || blank(group.title())) {
+                errors.add(issue(ValidationCodes.MISSING_TITLE, path + ".title", "分组缺少 title"));
+            }
+            if (group == null) {
+                continue;
+            }
+            for (Map.Entry<String, GroupDef> childEntry : group.children().entrySet()) {
+                String childName = childEntry.getKey();
+                GroupDef child = childEntry.getValue();
+                String childPath = path + ".children." + childName;
+                if (!NAME.matcher(childName).matches()) {
+                    errors.add(issue(ValidationCodes.GROUP_NAME, childPath, "子分组名不符合 ^[a-z][a-z0-9_]{1,63}$"));
+                }
+                if (child == null || blank(child.title())) {
+                    errors.add(issue(ValidationCodes.MISSING_TITLE, childPath + ".title", "子分组缺少 title"));
+                }
+                if (child != null && !child.children().isEmpty()) {
+                    errors.add(issue(ValidationCodes.GROUP_DEPTH, childPath + ".children", "分组最多支持两层"));
+                }
+            }
+        }
+        LinkedHashSet<String> used = new LinkedHashSet<>();
+        for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
+            Action action = entry.getValue();
+            if (action == null || action.group() == null) {
+                continue;
+            }
+            String actionPath = "actions." + entry.getKey() + ".group";
+            String ref = action.group();
+            if (ref.isBlank()) {
+                errors.add(issue(ValidationCodes.UNKNOWN_GROUP, actionPath, "group 不能为空字符串；不分组请省略该字段"));
+                continue;
+            }
+            int firstSlash = ref.indexOf('/');
+            if (firstSlash >= 0 && ref.indexOf('/', firstSlash + 1) >= 0) {
+                errors.add(issue(ValidationCodes.UNKNOWN_GROUP, actionPath, "分组最多支持两层，不能指向 " + ref));
+                continue;
+            }
+            if (!CapabilityGroups.hasGroup(doc, ref)) {
+                errors.add(issue(ValidationCodes.UNKNOWN_GROUP, actionPath, "group 指向未声明的分组 " + ref));
+                continue;
+            }
+            used.add(ref);
+            if (firstSlash > 0) {
+                used.add(ref.substring(0, firstSlash));
+            }
+        }
+        for (Map.Entry<String, GroupDef> entry : doc.groups().entrySet()) {
+            String name = entry.getKey();
+            GroupDef group = entry.getValue();
+            if (!used.contains(name)) {
+                warnings.add(issue(ValidationCodes.EMPTY_GROUP, "groups." + name, "分组 " + name + " 下没有任何能力"));
+                continue;
+            }
+            if (group == null) {
+                continue;
+            }
+            for (String childName : group.children().keySet()) {
+                String full = name + "/" + childName;
+                if (!used.contains(full)) {
+                    warnings.add(issue(
+                            ValidationCodes.EMPTY_GROUP,
+                            "groups." + name + ".children." + childName,
+                            "子分组 " + full + " 下没有任何能力"));
+                }
+            }
+        }
     }
 
     private static void checkAction(

@@ -23,7 +23,8 @@ public record Action(
         String notes,
         List<String> related,
         McpHints mcp,
-        McpTool tool
+        McpTool tool,
+        String group
 ) {
     public Action {
         if (name == null || name.isEmpty()) {

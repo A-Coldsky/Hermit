@@ -5,10 +5,12 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.Example;
+import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.model.McpHints;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.validate.ValidationIssue;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -112,10 +114,26 @@ record McpView(boolean expose, boolean readOnly, boolean destructive) {
     }
 }
 
+record GroupView(
+        String name,
+        String title,
+        String description,
+        List<GroupView> children) {
+
+    static GroupView from(GroupDef group) {
+        ArrayList<GroupView> children = new ArrayList<>(group.children().size());
+        for (GroupDef child : group.children().values()) {
+            children.add(new GroupView(child.name(), child.title(), child.description(), List.of()));
+        }
+        return new GroupView(group.name(), group.title(), group.description(), List.copyOf(children));
+    }
+}
+
 record CapabilityView(
         String name,
         String title,
         String description,
+        String group,
         String effectiveMethod,
         Map<String, Object> inputJsonSchema,
         Map<String, Object> outputJsonSchema,
@@ -129,6 +147,7 @@ record CapabilityView(
                 action.name(),
                 action.title(),
                 action.description(),
+                action.group(),
                 action.effectiveMethod().name(),
                 action.inputJsonSchema(),
                 action.outputJsonSchema(),
@@ -154,6 +173,7 @@ record ConchDetail(
         String changelog,
         Map<String, CredentialDeclaration> credentials,
         Map<String, ConfigDeclaration> config,
+        List<GroupView> groups,
         Map<String, CapabilityView> actions,
         boolean disabled,
         Instant disabledAt,
@@ -171,6 +191,10 @@ record ConchDetail(
         }
         Map<String, ConfigDeclaration> config = new java.util.LinkedHashMap<>();
         doc.config().forEach((name, field) -> config.put(name, ConfigDeclaration.from(field)));
+        ArrayList<GroupView> groups = new ArrayList<>(doc.groups().size());
+        for (GroupDef group : doc.groups().values()) {
+            groups.add(GroupView.from(group));
+        }
         Map<String, CapabilityView> actions = new java.util.LinkedHashMap<>();
         doc.actions().forEach((name, action) -> actions.put(name, CapabilityView.from(action)));
         McpPackageView.Projection mcp = McpPackageView.of(doc);
@@ -188,6 +212,7 @@ record ConchDetail(
                 doc.changelog(),
                 credentials,
                 config,
+                List.copyOf(groups),
                 actions,
                 availability != null && availability.disabled(),
                 availability != null && availability.disabled() ? availability.disabledAt() : null,
@@ -235,6 +260,7 @@ record SnapshotView(
 record ToolView(
         String name,
         String upstreamName,
+        String group,
         boolean readOnly,
         boolean destructive,
         boolean confirm,

@@ -19,6 +19,7 @@
 | `capabilities.disabled` | `[]` | `conch.action` 列表，与数据库禁用状态取并集 |
 | `aliases` | `{}` | URL 路径 → `conch.action`；不可占用 api/console/mcp/openapi 路径 |
 | `mcp.allowed_origins` | `[]` | 额外允许访问 `/mcp` 的浏览器 Origin。没有 `Origin` 的客户端仍允许。本机源站见下方 |
+| `mcp.direct_limit` | `40` | 整数 0–500。`/mcp` 直接暴露工具的可见能力数量上限；可见能力超过此值时自动切换为目录模式（`list_systems`、`search_capabilities`、`describe_capability`、`call_capability`）。设为 `0` 时强制使用目录模式，适合按分组渐进式加载 |
 | `engine.capability_timeout_seconds` | `60` | 正整数。能力执行的总 deadline，到点返回 `TIMEOUT`。未写步骤 `timeout_ms` 时，有长度或分块的上游空闲读也停在这个 deadline，不再先用 15 秒。规则写了更短的 `timeout_ms` 时，空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。持续慢速输出会在 deadline 被取消。TCP 连接超时见 `engine.connect_timeout_ms` |
 | `engine.session_idle_minutes` | `10` | 空闲超过此阈值且配置 alive_check 时检测会话 |
 | `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；只有测试登录成功才解除，失败不会清掉暂停 |
@@ -57,6 +58,7 @@ engine:
   max_header_count: 500
 mcp:
   allowed_origins: []
+  direct_limit: 40
 tls:
   system_trust: true
   ca_dir: trust/ca
@@ -68,7 +70,7 @@ tls:
 
 规则 HTTP、MCP 转发和 MCP OAuth 的连接池在借出闲置超过 2 秒的连接前，会先确认它还活着。这个间隔是固定的，不写在 `config.yml` 里。规则 HTTP 每个账号的连接池每分钟检查一次，关掉闲置超过 1 分钟的连接和已过期的连接；Cookie、登录状态不受影响，下一次调用重新建连，这个时长同样是固定的。GET、HEAD、OPTIONS 只有在这条连接已经完成过请求、又遇到对端没有响应或连接重置时，才换一条连接再试一次。新建立的连接上的重置不重试。POST 和其他方法、503 和超时都不重试。OAuth 仍关闭自动重试。
 
-`mcp.allowed_origins` 是 `/mcp` 的额外 Origin 允许列表，默认空。每一项必须是绝对的 `http` 或 `https` 源站，不能带路径、查询、用户信息或片段；写错会拒绝启动。没有 `Origin` 头的客户端仍然允许。本机始终允许 `http://127.0.0.1:<实际监听端口>`、`http://localhost:<实际监听端口>` 和 `http://[::1]:<实际监听端口>`，以及 `http://<server.host>:<实际监听端口>`。`server.host` 为 `0.0.0.0` 或 `::` 时不把通配地址当成源站；从局域网浏览器打开时，把浏览器地址栏对应的源站写进这个列表。反向代理的 `https://` 源站同样写在这里。比较时忽略 scheme 和主机的大小写，80 和 443 可以省略。请求如何被拒绝见[接口参考](api.md)的 MCP 一节。缺 `Origin` 是否拒绝、以及 `initialize` 遇到不认识的 `protocolVersion` 是协商还是拒绝，由 `McpTransportPolicy` 里的两个常量决定，当前分别是允许和协商。
+`mcp.allowed_origins` 是 `/mcp` 的额外 Origin 允许列表，默认空。每一项必须是绝对的 `http` 或 `https` 源站，不能带路径、查询、用户信息或片段；写错会拒绝启动。没有 `Origin` 头的客户端仍然允许。本机始终允许 `http://127.0.0.1:<实际监听端口>`、`http://localhost:<实际监听端口>` 和 `http://[::1]:<实际监听端口>`，以及 `http://<server.host>:<实际监听端口>`。`server.host` 为 `0.0.0.0` 或 `::` 时不把通配地址当成源站；从局域网浏览器打开时，把浏览器地址栏对应的源站写进这个列表。反向代理的 `https://` 源站同样写在这里。比较时忽略 scheme 和主机的大小写，80 和 443 可以省略。请求如何被拒绝见[接口参考](api.md)的 MCP 一节。缺 `Origin` 是否拒绝、以及 `initialize` 遇到不认识的 `protocolVersion` 是协商还是拒绝，由 `McpTransportPolicy` 里的两个常量决定，当前分别是允许和协商。`mcp.direct_limit` 默认 `40`，合法范围 `0` 到 `500`；超出范围或非整数拒绝启动。设为 `0` 时 `/mcp` 始终使用目录模式（`list_systems` / `search_capabilities` / `describe_capability` / `call_capability`），避免在一次 `tools/list` 里注入过多工具 schema。
 
 ## 内网 HTTPS
 

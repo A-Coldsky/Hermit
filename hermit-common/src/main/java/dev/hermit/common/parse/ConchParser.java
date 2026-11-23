@@ -23,6 +23,7 @@ import dev.hermit.common.model.Auth;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.Example;
+import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.common.model.McpAuth;
 import dev.hermit.common.model.McpHints;
@@ -41,7 +42,7 @@ public final class ConchParser {
     private static final Set<String> TOP_LEVEL = Set.of(
             "conch", "connector", "version", "driver", "min_crab_version", "min_agent_version",
             "base_url", "title", "description", "owner", "tags", "changelog", "credentials",
-            "config", "auth", "actions", "health_check", "upstream", "tools", "snapshot", "scripts");
+            "config", "auth", "actions", "health_check", "upstream", "tools", "snapshot", "scripts", "groups");
     private static final Set<String> FIELD_TYPES = Set.of("text", "secret", "select", "url");
     private static final Set<String> CREDENTIAL_KEYS = Set.of("type", "label", "required", "description", "options");
     private static final Set<String> CONFIG_KEYS = Set.of(
@@ -49,7 +50,8 @@ public final class ConchParser {
     private static final Set<String> ACTION_KEYS = Set.of(
             "title", "description", "method", "input", "output", "steps", "idempotent",
             "examples", "notes", "related", "mcp", "tool", "input_schema", "output_schema",
-            "upstream_annotations", "schema_sha256", "confirm");
+            "upstream_annotations", "schema_sha256", "confirm", "group");
+    private static final Set<String> GROUP_KEYS = Set.of("title", "description", "children");
     private static final Set<String> PARAM_KEYS = Set.of(
             "type", "description", "default", "enum", "minimum", "maximum", "items", "required");
     private static final Set<String> AUTH_KEYS = Set.of("steps", "alive_check", "cookies", "concurrent_reads");
@@ -113,9 +115,45 @@ public final class ConchParser {
         ToolFilter tools = toolFilter(node.get("tools"), "tools");
         McpSnapshot snapshot = snapshot(node.get("snapshot"), "snapshot");
         Map<String, String> scripts = scripts(node);
+        Map<String, GroupDef> groups = groups(node.get("groups"), "groups", 0);
         return new ConchDoc(
                 conch, version, driver, minCrabVersion, baseUrl, title, description, owner, tags,
-                changelog, credentials, config, auth, actions, healthCheck, upstream, tools, snapshot, scripts);
+                changelog, credentials, config, auth, actions, healthCheck, upstream, tools, snapshot, scripts, groups);
+    }
+
+    private static Map<String, GroupDef> groups(JsonNode node, String path, int depth) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return Map.of();
+        }
+        if (!node.isObject()) {
+            throw new ConchParseException(path, "必须是映射");
+        }
+        LinkedHashMap<String, GroupDef> groups = new LinkedHashMap<>();
+        node.properties().forEach(entry -> {
+            String name = entry.getKey();
+            if (name == null || name.isEmpty()) {
+                throw new ConchParseException(path, "分组名不能为空");
+            }
+            String childPath = child(path, name);
+            groups.put(name, group(name, entry.getValue(), childPath, depth));
+        });
+        return groups;
+    }
+
+    private static GroupDef group(String name, JsonNode node, String path, int depth) {
+        ObjectNode obj = object(node, path);
+        if (depth >= 1 && obj.has("children") && !obj.get("children").isNull()) {
+            throw new ConchParseException(child(path, "children"), "分组最多支持两层，子分组不能再包含 children");
+        }
+        rejectUnknown(obj, path, GROUP_KEYS);
+        Map<String, GroupDef> children = depth == 0
+                ? groups(obj.get("children"), child(path, "children"), depth + 1)
+                : Map.of();
+        return new GroupDef(
+                name,
+                text(obj.get("title"), child(path, "title")),
+                text(obj.get("description"), child(path, "description")),
+                children);
     }
 
     private static Map<String, String> scripts(ObjectNode node) {
@@ -336,7 +374,8 @@ public final class ConchParser {
                 text(obj.get("notes"), child(path, "notes")),
                 relatedNames(obj, path),
                 mcp(obj.get("mcp"), child(path, "mcp")),
-                mcpTool(obj, path));
+                mcpTool(obj, path),
+                text(obj.get("group"), child(path, "group")));
     }
 
     private static HttpMethod method(JsonNode node, String path) {

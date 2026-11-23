@@ -72,6 +72,7 @@ final class McpPackageView {
             rows.add(new ToolView(
                     action.name(),
                     tool.name(),
+                    action.group(),
                     action.mcp().readOnly(),
                     action.effectiveDestructive(),
                     action.effectiveConfirm(),

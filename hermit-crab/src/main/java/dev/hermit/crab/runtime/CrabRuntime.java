@@ -600,7 +600,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                         "这把 API Key 只允许调用只读能力。能力 " + action + " 不是只读，已拒绝。",
                         true);
             }
-            if (!principal.permits(conch, action, readOnly)) {
+            if (!principal.permits(conch, action, capability.group(), readOnly)) {
                 throw new TrialRejected(403, ErrorCode.FORBIDDEN,
                         "这把 API Key 不能使用本地规则包 " + conch + "。请用全部权限的 Key，或在 conches 里点名这个包的 Key。",
                         true);
@@ -1318,6 +1318,54 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             switchDisabled.remove(key);
         }
         notifyCatalogListeners();
+    }
+
+    /**
+     * 按分组批量启停能力。一级分组同时包含其直属能力与所有下属二级子分组的能力；
+     * 底层写入现有能力开关表，不新增数据库表，操作后仍可单独切换某个能力。
+     */
+    public List<String> setGroupDisabled(String conch, String groupPath, boolean disabled, String actor) {
+        ConchRegistry.Active active = registry.active(conch).orElse(null);
+        if (active == null) {
+            throw new IllegalArgumentException("conch not found");
+        }
+        ConchDoc doc = active.doc();
+        if (!dev.hermit.common.model.CapabilityGroups.hasGroup(doc, groupPath)) {
+            throw new IllegalArgumentException("group not found");
+        }
+        List<Action> matched = dev.hermit.common.model.CapabilityGroups.actionsInGroup(doc, groupPath);
+        ArrayList<String> actionNames = new ArrayList<>(matched.size());
+        for (Action action : matched) {
+            actionNames.add(action.name());
+        }
+        if (actionNames.isEmpty()) {
+            return List.of();
+        }
+        Origin source = active.origin();
+        switches.setDisabledBatch(source, conch, actionNames, disabled, actor);
+        Origin other = source == Origin.LOCAL ? Origin.OFFICIAL : Origin.LOCAL;
+        if (!disabled) {
+            Set<String> otherDisabled = switches.disabledKeys(other);
+            ArrayList<String> clearOther = new ArrayList<>();
+            for (String action : actionNames) {
+                if (otherDisabled.contains(conch + "." + action)) {
+                    clearOther.add(action);
+                }
+            }
+            if (!clearOther.isEmpty()) {
+                switches.setDisabledBatch(other, conch, clearOther, false, actor);
+            }
+        }
+        for (String action : actionNames) {
+            String key = conch + "." + action;
+            if (disabled) {
+                switchDisabled.add(key);
+            } else {
+                switchDisabled.remove(key);
+            }
+        }
+        notifyCatalogListeners();
+        return List.copyOf(actionNames);
     }
 
     /** MCP tool-list notifications when a capability switch changes. */

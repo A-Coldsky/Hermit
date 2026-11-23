@@ -71,7 +71,7 @@ public final class McpEndpoint {
     McpEndpoint(CrabRuntime runtime, Clock clock, Duration idleLimit, int maxSessions) {
         this.runtime = runtime;
         this.catalog = new McpCatalog(runtime.registry(), runtime::disabled,
-                () -> runtime.debug().get().enabled());
+                () -> runtime.debug().get().enabled(), runtime.config().mcpDirectLimit());
         this.calls = new McpCalls(runtime, catalog);
         this.clock = clock == null ? Clock.systemUTC() : clock;
         this.idleMillis = (idleLimit == null ? IDLE_LIMIT : idleLimit).toMillis();

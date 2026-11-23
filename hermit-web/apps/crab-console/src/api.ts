@@ -1,4 +1,7 @@
 import { type ApiError, createClient, seg } from '@shared/http'
+import type { GroupDef } from '@shared/groups'
+
+export type { GroupDef }
 
 let unauthorized: (error: ApiError) => void = () => {}
 
@@ -93,6 +96,8 @@ export interface CapabilityState {
   method: string
   readOnly: boolean
   disabled: boolean
+  /** 所属分组路径（如 approval 或 approval/leave）；未分组为 null。 */
+  group?: string | null
 }
 
 export interface ConchDetail {
@@ -103,6 +108,8 @@ export interface ConchDetail {
   description: string | null
   credentials: CredentialField[]
   config: ConfigDeclaration[]
+  /** 一/二级能力分组目录；未声明分组的规则包为空数组。 */
+  groups?: GroupDef[]
   capabilities: CapabilityState[]
   /** 本机是否已订阅。本地包为 false。 */
   subscribed: boolean
@@ -238,9 +245,10 @@ export interface ConfigValue {
 }
 
 export interface ApiKeyScope {
-  /** 全部规则包的全部能力，包括本地包。两个集合都为空的旧 Key 也是 true。只读仍只放行只读能力。 */
+  /** 全部规则包的全部能力，包括本地包。所有集合都为空的旧 Key 也是 true。只读仍只放行只读能力。 */
   all: boolean
   conches: string[] | null
+  groups?: string[] | null
   actions: string[] | null
   readOnly: boolean
 }
@@ -995,8 +1003,15 @@ export const api = {
   setCapability: (conch: string, action: string, enabled: boolean) =>
     http.post<{ disabled: boolean }>(`${base}/capabilities/${seg(conch)}/${seg(action)}/${enabled ? 'enable' : 'disable'}`),
 
+  /** 按一级或二级分组批量启停能力；一级分组包含下属二级子组。返回每个受影响能力的最新状态。 */
+  setGroup: (conch: string, group: string, enabled: boolean) =>
+    http.post<{ conch: string; group: string; disabled: boolean; actions: { action: string; disabled: boolean }[] }>(
+      `${conchPath(conch)}/groups/${enabled ? 'enable' : 'disable'}`,
+      { group },
+    ),
+
   apiKeys: () => http.get<{ apiKeys: ApiKey[] }>(`${base}/apikeys`),
-  createApiKey: (body: { name: string; readOnly: boolean; all: boolean; conches: string[]; actions: string[] }) =>
+  createApiKey: (body: { name: string; readOnly: boolean; all: boolean; conches: string[]; groups?: string[]; actions: string[] }) =>
     http.post<CreatedApiKey>(`${base}/apikeys`, body),
   revokeApiKey: (id: string) => http.del<{ revoked: boolean }>(`${base}/apikeys/${seg(id)}`),
 

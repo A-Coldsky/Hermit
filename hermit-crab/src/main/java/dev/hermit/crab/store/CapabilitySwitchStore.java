@@ -35,6 +35,35 @@ public final class CapabilitySwitchStore {
         });
     }
 
+    /** 在单个事务里批量启停一组能力，不新增单独的分组开关表。 */
+    public void setDisabledBatch(Origin origin, String conch, java.util.Collection<String> actions, boolean disabled, String actor) {
+        Origin checkedOrigin = Checks.origin(origin);
+        String checkedConch = Checks.conch(conch);
+        String checkedActor = Checks.actor(actor);
+        if (actions == null || actions.isEmpty()) {
+            return;
+        }
+        java.util.ArrayList<String> checkedActions = new java.util.ArrayList<>(actions.size());
+        for (String action : actions) {
+            checkedActions.add(Checks.field(action));
+        }
+        Instant now = Instant.now();
+        AuditKind auditKind = disabled ? AuditKind.CAPABILITY_DISABLED : AuditKind.CAPABILITY_ENABLED;
+        String detail = Json.write(java.util.Map.of("disabled", disabled));
+        Db.transaction(dataSource, connection -> {
+            for (String action : checkedActions) {
+                upsert(connection, checkedOrigin, checkedConch, action, disabled, now);
+                ConfigAudit.append(
+                        connection,
+                        checkedActor,
+                        auditKind,
+                        checkedOrigin.name() + "/" + checkedConch + "/" + action,
+                        detail);
+            }
+            return null;
+        });
+    }
+
     /** Keys are {@code conch.action} for rows stored as disabled. */
     public Set<String> disabledKeys(Origin origin) {
         Origin checkedOrigin = Checks.origin(origin);

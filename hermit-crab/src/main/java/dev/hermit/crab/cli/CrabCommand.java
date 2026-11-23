@@ -88,7 +88,7 @@ public final class CrabCommand {
               crab config set <conch> <key> <value>
               crab config unset <conch> <key>
               crab audit list [--conch NAME] [--account NAME] [--limit N] [--page N]
-              crab apikey create <name> [--all] [--conches a,b] [--actions conch.action] [--read-only]
+              crab apikey create <name> [--all] [--conches a,b] [--groups conch:group] [--actions conch.action] [--read-only]
               crab apikey list
               crab apikey revoke <id>
               crab local import <file> [--replace]
@@ -475,7 +475,7 @@ public final class CrabCommand {
         String verb = parsed.positionals.get(1);
         if ("list".equals(verb)) {
             if (parsed.positionals.size() != 4 || parsed.fromEnv != null || parsed.readOnly || parsed.all
-                    || parsed.conches != null) {
+                    || parsed.conches != null || parsed.groups != null || parsed.actions != null) {
                 err.print(USAGE);
                 return 1;
             }
@@ -502,7 +502,7 @@ public final class CrabCommand {
             return 1;
         }
         if (parsed.positionals.size() != 5 || parsed.readOnly || parsed.all
-                || parsed.conches != null || parsed.actions != null) {
+                || parsed.conches != null || parsed.groups != null || parsed.actions != null) {
             err.print(USAGE);
             return 1;
         }
@@ -921,6 +921,7 @@ public final class CrabCommand {
                 + " all=" + scope.grantsAllOfficial();
         if (!scope.grantsAllOfficial()) {
             line += " conches=" + joinScope(scope.conches())
+                    + (scope.groups().isEmpty() ? "" : " groups=" + joinScope(scope.groups()))
                     + " actions=" + joinScope(scope.actions());
         }
         line += " read-only=" + scope.readOnlyOnly();
@@ -966,7 +967,7 @@ public final class CrabCommand {
         return switch (verb) {
             case "list" -> {
                 if (parsed.positionals.size() != 2 || parsed.fromEnv != null || parsed.conches != null
-                        || parsed.actions != null || parsed.readOnly || parsed.all) {
+                        || parsed.groups != null || parsed.actions != null || parsed.readOnly || parsed.all) {
                     err.print(USAGE);
                     yield 1;
                 }
@@ -979,7 +980,7 @@ public final class CrabCommand {
             }
             case "revoke" -> {
                 if (parsed.positionals.size() != 3 || parsed.fromEnv != null || parsed.conches != null
-                        || parsed.actions != null || parsed.readOnly || parsed.all) {
+                        || parsed.groups != null || parsed.actions != null || parsed.readOnly || parsed.all) {
                     err.print(USAGE);
                     yield 1;
                 }
@@ -997,16 +998,17 @@ public final class CrabCommand {
                 }
                 String name = parsed.positionals.get(2);
                 Set<String> conches = parsed.conches == null ? Set.of() : parsed.conches;
+                Set<String> groups = parsed.groups == null ? Set.of() : parsed.groups;
                 Set<String> actions = parsed.actions == null ? Set.of() : parsed.actions;
                 ApiKeyScope scope;
                 try {
-                    scope = ApiKeyScope.explicit(parsed.all, conches, actions, parsed.readOnly);
+                    scope = ApiKeyScope.explicit(parsed.all, conches, groups, actions, parsed.readOnly);
                 } catch (IllegalArgumentException ex) {
                     err.println(clientMessage(ex));
                     yield 1;
                 }
                 yield withRuntime(env, runtime -> {
-                    if (!scope.conches().isEmpty() || !scope.actions().isEmpty()) {
+                    if (!scope.conches().isEmpty() || !scope.groups().isEmpty() || !scope.actions().isEmpty()) {
                         runtime.loadInstalledConches();
                     }
                     CreatedApiKey created = runtime.admin().createApiKey(name, scope, Actors.CLI);
@@ -1034,7 +1036,8 @@ public final class CrabCommand {
             return 1;
         }
         if (parsed.positionals.size() != 2 || !"password".equals(parsed.positionals.get(1))
-                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.actions != null) {
+                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.groups != null
+                || parsed.actions != null) {
             err.print(USAGE);
             return 1;
         }
@@ -1078,7 +1081,7 @@ public final class CrabCommand {
             return debugTrace(parsed, env, in, out, err);
         }
         if (parsed.positionals.size() != 2 || parsed.readOnly || parsed.all
-                || parsed.conches != null || parsed.actions != null || parsed.account != null) {
+                || parsed.conches != null || parsed.groups != null || parsed.actions != null || parsed.account != null) {
             if (parsed.positionals.size() > 2 && isDebugVerb(verb)) {
                 err.println("口令不能写在命令行参数里。");
                 return 1;
@@ -1112,7 +1115,8 @@ public final class CrabCommand {
             PrintStream err
     ) {
         if (parsed.positionals.size() != 4 || parsed.account == null || parsed.account.isBlank()
-                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.actions != null) {
+                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.groups != null
+                || parsed.actions != null) {
             err.print(USAGE);
             return 1;
         }
@@ -1158,7 +1162,7 @@ public final class CrabCommand {
             PrintStream err
     ) {
         if (parsed.positionals.size() != 3 || parsed.account != null || parsed.readOnly || parsed.all
-                || parsed.conches != null || parsed.actions != null) {
+                || parsed.conches != null || parsed.groups != null || parsed.actions != null) {
             err.print(USAGE);
             return 1;
         }
@@ -1305,6 +1309,7 @@ public final class CrabCommand {
         String fromEnv = null;
         String account = null;
         Set<String> conches = null;
+        Set<String> groups = null;
         Set<String> actions = null;
         boolean readOnly = false;
         boolean all = false;
@@ -1314,8 +1319,8 @@ public final class CrabCommand {
                 all = true;
                 continue;
             }
-            if ("--from-env".equals(arg) || "--conches".equals(arg) || "--actions".equals(arg)
-                    || "--account".equals(arg)) {
+            if ("--from-env".equals(arg) || "--conches".equals(arg) || "--groups".equals(arg)
+                    || "--actions".equals(arg) || "--account".equals(arg)) {
                 if (i + 1 >= args.length || args[i + 1].startsWith("--")) {
                     err.println("缺少 " + arg + " 的值。");
                     return null;
@@ -1324,6 +1329,7 @@ public final class CrabCommand {
                 switch (arg) {
                     case "--from-env" -> fromEnv = value;
                     case "--conches" -> conches = split(value);
+                    case "--groups" -> groups = split(value);
                     case "--actions" -> actions = split(value);
                     case "--account" -> account = value;
                     default -> {
@@ -1345,7 +1351,7 @@ public final class CrabCommand {
             err.println("不认识的选项 --account。");
             return null;
         }
-        return new Parsed(positionals, fromEnv, conches, actions, readOnly, all, account);
+        return new Parsed(positionals, fromEnv, conches, groups, actions, readOnly, all, account);
     }
 
     private int mcp(
@@ -1360,7 +1366,8 @@ public final class CrabCommand {
             return 1;
         }
         if (parsed.positionals.size() != 3 || !"refresh".equals(parsed.positionals.get(1))
-                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.actions != null) {
+                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.groups != null
+                || parsed.actions != null) {
             err.print(USAGE);
             return 1;
         }
@@ -1455,6 +1462,7 @@ public final class CrabCommand {
             List<String> positionals,
             String fromEnv,
             Set<String> conches,
+            Set<String> groups,
             Set<String> actions,
             boolean readOnly,
             boolean all,

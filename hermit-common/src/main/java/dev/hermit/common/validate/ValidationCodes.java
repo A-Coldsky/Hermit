@@ -72,6 +72,14 @@ public final class ValidationCodes {
     /** request 的 {@code retry} 写法不对，或用在了不能重复提交的请求上。阻止保存。 */
     public static final String RETRY = "RETRY";
     public static final String CONCURRENT_READS = "CONCURRENT_READS";
+    /** 分组或子分组名称不符合标识符规则。错误，阻止保存。 */
+    public static final String GROUP_NAME = "GROUP_NAME";
+    /** 分组嵌套超过两层。错误，阻止保存。 */
+    public static final String GROUP_DEPTH = "GROUP_DEPTH";
+    /** 能力的 group 为空串或指向未声明的分组。错误，阻止保存。 */
+    public static final String UNKNOWN_GROUP = "UNKNOWN_GROUP";
+    /** 声明了分组，但其自身和下属子分组均没有任何能力。警告，不阻止保存。 */
+    public static final String EMPTY_GROUP = "EMPTY_GROUP";
 
     private ValidationCodes() {
     }

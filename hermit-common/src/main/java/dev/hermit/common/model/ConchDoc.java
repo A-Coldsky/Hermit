@@ -29,7 +29,8 @@ public record ConchDoc(
         McpUpstream upstream,
         ToolFilter tools,
         McpSnapshot snapshot,
-        Map<String, String> scripts
+        Map<String, String> scripts,
+        Map<String, GroupDef> groups
 ) {
     public ConchDoc {
         Objects.requireNonNull(conch, "conch");
@@ -41,5 +42,6 @@ public record ConchDoc(
         actions = actions == null ? Map.of() : Frozen.ordered(actions);
         healthCheck = healthCheck == null ? List.of() : Frozen.mapList(healthCheck);
         scripts = scripts == null ? Map.of() : Frozen.ordered(scripts);
+        groups = groups == null ? Map.of() : Frozen.ordered(groups);
     }
 }

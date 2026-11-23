@@ -34,7 +34,7 @@ public final class CrabConfigLoader {
             "capability_timeout_seconds", "session_idle_minutes", "max_login_failures",
             "mcp_max_concurrency_per_account", "connect_timeout_ms", "body_idle_timeout_ms",
             "max_header_line_bytes", "max_header_count");
-    private static final Set<String> MCP = Set.of("allowed_origins");
+    private static final Set<String> MCP = Set.of("allowed_origins", "direct_limit");
     private static final Set<String> TLS = Set.of("ca_dir", "system_trust");
 
     private static final YAMLMapper YAML = yaml();
@@ -122,7 +122,9 @@ public final class CrabConfigLoader {
                             defaults.maxHeaderLineBytes(), 256, 1_048_576),
                     integer(file, engine, "max_header_count", "engine.max_header_count",
                             defaults.maxHeaderCount(), 1, 10_000),
-                    text(file, server, "public_url", "server.public_url"));
+                    text(file, server, "public_url", "server.public_url"),
+                    integer(file, mcp, "direct_limit", "mcp.direct_limit",
+                            defaults.mcpDirectLimit(), 0, 500));
         } catch (IllegalArgumentException ex) {
             throw new ConfigFileException(file + ": " + ex.getMessage());
         }

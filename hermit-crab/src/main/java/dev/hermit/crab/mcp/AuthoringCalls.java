@@ -241,7 +241,7 @@ final class AuthoringCalls {
             if (principal.scope().readOnlyOnly() && !readOnly) {
                 return McpCalls.failAsRequest(attempt, "FORBIDDEN", READ_ONLY_TRIAL_PREFIX + action + " 不是只读，已拒绝。");
             }
-            if (!principal.permits(conch, action, readOnly)) {
+            if (!principal.permits(conch, action, capability.group(), readOnly)) {
                 return McpCalls.failAsRequest(attempt, "FORBIDDEN", notInScope(conch));
             }
         }

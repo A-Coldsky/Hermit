@@ -313,7 +313,7 @@ public final class Invoker {
         if (origin == Origin.LOCAL && !principal.scope().allowsLocal(conch)) {
             return requestOnly(traceId, ErrorCode.FORBIDDEN, "forbidden");
         }
-        if (!principal.permits(conch, action, CapabilityHttp.readOnly(capability))) {
+        if (!principal.permits(conch, action, capability.group(), CapabilityHttp.readOnly(capability))) {
             return requestOnly(traceId, ErrorCode.FORBIDDEN, "forbidden");
         }
         if (recorded == CallChannel.MCP && capability.effectiveConfirm() && confirmedAgainst == null) {

@@ -9,10 +9,12 @@ import java.util.Set;
 
 import dev.hermit.common.mcp.ToolSnapshots;
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.CapabilityGroups;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.FlowSteps;
+import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.model.McpTool;
 import dev.hermit.common.model.Step;
 
@@ -30,7 +32,11 @@ public record ConchDiff(
         List<ToolChange> toolChanges,
         List<String> addedScripts,
         List<String> removedScripts,
-        List<String> changedScripts
+        List<String> changedScripts,
+        List<String> addedGroups,
+        List<String> removedGroups,
+        List<String> changedGroups,
+        List<ActionGroupChange> actionGroupChanges
 ) {
     public ConchDiff {
         addedActions = List.copyOf(addedActions);
@@ -47,15 +53,21 @@ public record ConchDiff(
         addedScripts = List.copyOf(addedScripts);
         removedScripts = List.copyOf(removedScripts);
         changedScripts = List.copyOf(changedScripts);
+        addedGroups = addedGroups == null ? List.of() : List.copyOf(addedGroups);
+        removedGroups = removedGroups == null ? List.of() : List.copyOf(removedGroups);
+        changedGroups = changedGroups == null ? List.of() : List.copyOf(changedGroups);
+        actionGroupChanges = actionGroupChanges == null ? List.of() : List.copyOf(actionGroupChanges);
     }
 
     public static ConchDiff between(ConchDoc oldDoc, ConchDoc newDoc) {
         Objects.requireNonNull(oldDoc, "oldDoc");
         Objects.requireNonNull(newDoc, "newDoc");
         ScriptDiff scripts = scriptDiff(oldDoc, newDoc);
+        GroupDiff groups = groupDiff(oldDoc, newDoc);
         List<String> addedActions = new ArrayList<>();
         List<String> removedActions = new ArrayList<>();
         List<ActionChange> changedActions = new ArrayList<>();
+        List<ActionGroupChange> actionGroupChanges = new ArrayList<>();
         for (String name : oldDoc.actions().keySet()) {
             if (!newDoc.actions().containsKey(name)) {
                 removedActions.add(name);
@@ -68,6 +80,9 @@ public record ConchDiff(
                 continue;
             }
             Action current = entry.getValue();
+            if (!Objects.equals(previous.group(), current.group())) {
+                actionGroupChanges.add(new ActionGroupChange(entry.getKey(), previous.group(), current.group()));
+            }
             boolean input = !Objects.equals(previous.input(), current.input());
             boolean output = !Objects.equals(previous.output(), current.output());
             boolean steps = !Objects.equals(previous.steps(), current.steps())
@@ -130,7 +145,34 @@ public record ConchDiff(
                 addedCredentials, removedCredentials, requiredChanges,
                 addedConfig, removedConfig, defaultChanges, newRequired,
                 toolChanges(oldDoc, newDoc),
-                scripts.added(), scripts.removed(), scripts.changed());
+                scripts.added(), scripts.removed(), scripts.changed(),
+                groups.added(), groups.removed(), groups.changed(), actionGroupChanges);
+    }
+
+    private static GroupDiff groupDiff(ConchDoc oldDoc, ConchDoc newDoc) {
+        Map<String, GroupDef> oldGroups = CapabilityGroups.flatten(oldDoc);
+        Map<String, GroupDef> newGroups = CapabilityGroups.flatten(newDoc);
+        List<String> added = new ArrayList<>();
+        List<String> removed = new ArrayList<>();
+        List<String> changed = new ArrayList<>();
+        for (Map.Entry<String, GroupDef> entry : oldGroups.entrySet()) {
+            GroupDef next = newGroups.get(entry.getKey());
+            if (next == null) {
+                removed.add(entry.getKey());
+            } else if (!Objects.equals(entry.getValue().title(), next.title())
+                    || !Objects.equals(entry.getValue().description(), next.description())) {
+                changed.add(entry.getKey());
+            }
+        }
+        for (String path : newGroups.keySet()) {
+            if (!oldGroups.containsKey(path)) {
+                added.add(path);
+            }
+        }
+        return new GroupDiff(added, removed, changed);
+    }
+
+    private record GroupDiff(List<String> added, List<String> removed, List<String> changed) {
     }
 
     /**

@@ -17,34 +17,60 @@ import java.util.Set;
  * is that runtime meaning. Console and CLI creation reject both sets empty unless {@code all}
  * is requested. {@link ApiKeyPrincipal} does not read {@code all}.
  */
-public record ApiKeyScope(Set<String> conches, Set<String> actions, boolean readOnlyOnly, boolean all) {
+public record ApiKeyScope(
+        Set<String> conches,
+        Set<String> actions,
+        boolean readOnlyOnly,
+        boolean all,
+        Set<String> groups
+) {
     public static final String MISSING_SCOPE =
-            "必须指定范围：选择全部权限（包括本地规则包），或填写 conches、actions";
+            "必须指定范围：选择全部权限（包括本地规则包），或填写 conches、groups、actions";
     public static final String ALL_EXCLUDES_NAMES =
-            "选择了全部权限时不能同时填写 conches 或 actions";
+            "选择了全部权限时不能同时填写 conches、groups 或 actions";
 
     public ApiKeyScope {
         conches = conches == null ? Set.of() : Set.copyOf(conches);
         actions = actions == null ? Set.of() : Set.copyOf(actions);
-        if (all && (!conches.isEmpty() || !actions.isEmpty())) {
+        groups = groups == null ? Set.of() : Set.copyOf(groups);
+        if (all && (!conches.isEmpty() || !actions.isEmpty() || !groups.isEmpty())) {
             throw new IllegalArgumentException(ALL_EXCLUDES_NAMES);
         }
     }
 
-    /** Same as {@code all == false}. Existing callers and stored rows use this shape. */
+    /** Same as {@code all == false}, without groups. Existing callers and stored rows use this shape. */
     public ApiKeyScope(Set<String> conches, Set<String> actions, boolean readOnlyOnly) {
-        this(conches, actions, readOnlyOnly, false);
+        this(conches, actions, readOnlyOnly, false, Set.of());
+    }
+
+    /** Without groups. Existing callers use this shape. */
+    public ApiKeyScope(Set<String> conches, Set<String> actions, boolean readOnlyOnly, boolean all) {
+        this(conches, actions, readOnlyOnly, all, Set.of());
+    }
+
+    /**
+     * Scope from a console or CLI create without groups.
+     */
+    public static ApiKeyScope explicit(boolean all, Set<String> conches, Set<String> actions, boolean readOnlyOnly) {
+        return explicit(all, conches, Set.of(), actions, readOnlyOnly);
     }
 
     /**
      * Scope from a console or CLI create. {@code all} requests every loaded conch and
      * every action, including local conches, still subject to {@code readOnlyOnly}.
-     * Both sets empty without {@code all} is rejected. {@code all} together with any name is rejected.
+     * All sets empty without {@code all} is rejected. {@code all} together with any name is rejected.
      */
-    public static ApiKeyScope explicit(boolean all, Set<String> conches, Set<String> actions, boolean readOnlyOnly) {
+    public static ApiKeyScope explicit(
+            boolean all,
+            Set<String> conches,
+            Set<String> groups,
+            Set<String> actions,
+            boolean readOnlyOnly
+    ) {
         Set<String> namedConches = conches == null ? Set.of() : Set.copyOf(conches);
+        Set<String> namedGroups = groups == null ? Set.of() : Set.copyOf(groups);
         Set<String> namedActions = actions == null ? Set.of() : Set.copyOf(actions);
-        boolean named = !namedConches.isEmpty() || !namedActions.isEmpty();
+        boolean named = !namedConches.isEmpty() || !namedGroups.isEmpty() || !namedActions.isEmpty();
         if (all && named) {
             throw new IllegalArgumentException(ALL_EXCLUDES_NAMES);
         }
@@ -52,18 +78,18 @@ public record ApiKeyScope(Set<String> conches, Set<String> actions, boolean read
             throw new IllegalArgumentException(MISSING_SCOPE);
         }
         if (all) {
-            return new ApiKeyScope(Set.of(), Set.of(), readOnlyOnly, true);
+            return new ApiKeyScope(Set.of(), Set.of(), readOnlyOnly, true, Set.of());
         }
-        return new ApiKeyScope(namedConches, namedActions, readOnlyOnly, false);
+        return new ApiKeyScope(namedConches, namedActions, readOnlyOnly, false, namedGroups);
     }
 
     /**
      * Every loaded conch and every action, before the read-only filter, including local conches.
-     * True for an explicit {@code all} key and for a stored row whose sets are both empty.
-     * A key that names any conch or action is false here and must list a local conch to use it.
+     * True for an explicit {@code all} key and for a stored row whose sets are all empty.
+     * A key that names any conch, group, or action is false here and must list a local conch to use it.
      */
     public boolean grantsAllOfficial() {
-        return conches.isEmpty() && actions.isEmpty();
+        return conches.isEmpty() && actions.isEmpty() && groups.isEmpty();
     }
 
     /**

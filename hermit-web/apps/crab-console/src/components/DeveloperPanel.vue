@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import JsonBlock from '@shared/components/JsonBlock.vue'
 import { ApiError, type Envelope } from '@shared/http'
 import { copyText, errorCodeLabels, errorText, notifyError } from '@shared/format'
+import { buildGroupTree, type GroupDef } from '@shared/groups'
 import { api, type Account, type CapabilityState, type McpRefreshResult } from '../api'
 import ShellPicker from './ShellPicker.vue'
 import TrustJump from './TrustJump.vue'
@@ -14,12 +15,29 @@ const props = defineProps<{
   driver: 'http' | 'mcp'
   debugEnabled: boolean
   capabilities: CapabilityState[]
+  groups?: GroupDef[]
   accounts: Account[]
 }>()
 
 const emit = defineEmits<{ changed: [] }>()
 
 const runnable = computed(() => props.capabilities.filter((c) => !c.disabled))
+const groupedRunnable = computed(() => buildGroupTree(props.groups, runnable.value, (c) => c.group))
+const runnableOptionGroups = computed(() => {
+  const tree = groupedRunnable.value
+  const sections: { label: string; items: CapabilityState[] }[] = []
+  for (const g of tree.groups) {
+    if (g.direct.length) {
+      sections.push({ label: g.title, items: g.direct })
+    }
+    for (const c of g.children) {
+      if (c.all.length) {
+        sections.push({ label: `${g.title} / ${c.title}`, items: c.all })
+      }
+    }
+  }
+  return sections
+})
 const defaultAccount = computed(() => props.accounts.find((a) => a.default)?.name ?? props.accounts[0]?.name ?? '')
 const isMcp = computed(() => props.driver === 'mcp')
 
@@ -133,8 +151,26 @@ async function refreshTools() {
       <h4>试跑</h4>
       <el-form label-position="top" class="form" @submit.prevent="run">
         <el-form-item label="能力">
-          <el-select v-model="trial.action" placeholder="选择能力" data-test="trial-action">
-            <el-option v-for="cap in runnable" :key="cap.action" :label="`${cap.action} · ${cap.title}`" :value="cap.action" />
+          <el-select v-model="trial.action" filterable placeholder="选择能力" data-test="trial-action">
+            <template v-if="groupedRunnable.hasGroups">
+              <el-option
+                v-for="cap in groupedRunnable.topLevel"
+                :key="cap.action"
+                :label="`${cap.action} · ${cap.title}`"
+                :value="cap.action"
+              />
+              <el-option-group v-for="section in runnableOptionGroups" :key="section.label" :label="section.label">
+                <el-option
+                  v-for="cap in section.items"
+                  :key="cap.action"
+                  :label="`${cap.action} · ${cap.title}`"
+                  :value="cap.action"
+                />
+              </el-option-group>
+            </template>
+            <template v-else>
+              <el-option v-for="cap in runnable" :key="cap.action" :label="`${cap.action} · ${cap.title}`" :value="cap.action" />
+            </template>
           </el-select>
         </el-form-item>
         <el-form-item v-if="accounts.length" label="账号">

@@ -21,6 +21,7 @@ public final class UserMessages {
             Map.entry("not found", "不存在"),
             Map.entry("conch not found", "规则包不存在"),
             Map.entry("capability not found", "能力不存在"),
+            Map.entry("group not found", "分组不存在"),
             Map.entry("api key not found", "API Key 不存在"),
             Map.entry("account not found", "没有这个账号。"),
             Map.entry("account already exists", "已经有同名账号。"),

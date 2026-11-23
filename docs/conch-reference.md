@@ -71,7 +71,7 @@ Crab 不接收、不存储、也不解析 HAR。HAR 留在你自己的环境里�
 
 业务接口只选用户确认过的功能对应的那一次请求。方法、路径、查询和正文里会变的字段做成 `input`，固定字段写在步骤里。`base_url` 用站点的源站（协议、主机、端口），`path` 只写路径。`User-Agent`、`Accept`、`Accept-Language`、`Accept-Encoding`、`Referer`、`Origin`、`Sec-Fetch-*`、`Sec-Ch-Ua*` 通常不必写。不要写 `Cookie` 头，会话 Cookie 由 Crab 按账号保存。`Host` 和 `Content-Length` 不能写。响应用 `extract` 取出业务字段，`output` 只返回这些字段。
 
-凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.9.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。用了 request 的 `body` 或 `xml_escape` 时，还要不低于 1.7.0，否则 message 为「使用 body 时 min_crab_version 必须不低于 1.7.0」或「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。
+凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`，不能与已安装的正式包重名。`min_crab_version` 填 SemVer，不要高于当前 Crab；当前兼容版本是 1.10.0。`driver: mcp` 还要不低于 1.1.0。用了顶层 `scripts` 或 script 步骤的 `use` 时，还要不低于 1.2.0。用了 `{{login...}}` 或非空 `auth.cookies` 时，还要不低于 1.3.0。用了登录步骤 `ask` 时，还要不低于 1.4.0。用了引号下标时，还要不低于 1.6.0，否则 message 为「使用引号下标时 min_crab_version 必须不低于 1.6.0」。用了 request 的 `body` 或 `xml_escape` 时，还要不低于 1.7.0，否则 message 为「使用 body 时 min_crab_version 必须不低于 1.7.0」或「使用 xml_escape 时 min_crab_version 必须不低于 1.7.0」。用了 `type: file`、`multipart` 或 `download` 时不低于 1.8.0。用了 `if`、`repeat`、`retry` 或 `auth.concurrent_reads` 时不低于 1.9.0。用了顶层 `groups` 或能力的 `group` 时，还要不低于 1.10.0，否则 message 为「使用能力分组时 min_crab_version 必须不低于 1.10.0」。
 
 ### 令牌
 
@@ -227,8 +227,8 @@ actions:
 
 | 字段 | 当前规则 |
 | --- | --- |
-| `conch`、action 名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.9.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高 |
+| `conch`、action 名、分组名 | `^[a-z][a-z0-9_]{1,63}$` |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.10.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。用了 `type: file`、`multipart` 或 `download` 时不低于 1.8.0。用了 `if`、`repeat`、`retry` 或 `auth.concurrent_reads` 时不低于 1.9.0。用了 `groups` 或能力的 `group` 时不低于 1.10.0 |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -237,7 +237,8 @@ actions:
 | `auth.alive_check` | 请求及 `expect_not_redirect`，空闲超时后检测会话。可以引用 `{{login.名字}}` |
 | `auth.cookies` | 可选。模板标识符到 Cookie 名，例如 `xsrf: "XSRF-TOKEN"`，之后写 `{{login.xsrf}}`。空映射不要求 1.3.0。非空时 `min_crab_version` 不低于 1.3.0 |
 | `auth.concurrent_reads` | 可选布尔，默认 false。打开后，写了 `mcp.read_only: true` 的能力在同一账号下可以同时执行，见「同一账号的只读能力并行」。`min_crab_version` 不低于 1.9.0 |
-| `actions` | 能力映射，每个包含输入、步骤、输出和示例等 |
+| `groups` | 可选。能力分组目录（最多两级），用于 MCP 渐进式发现、Crab 按分组启停、API Key 按分组授权及 OpenAPI 标签，见「能力分组」。非空时 `min_crab_version` 不低于 1.10.0 |
+| `actions` | 能力映射，每个包含输入、步骤、输出和示例等，可选填 `group` 归入已声明的分组 |
 | `health_check` | 目前仅解析/保存，没有自动执行器 |
 | `owner`、`tags`、`changelog` | 管理元数据 |
 
@@ -251,9 +252,46 @@ actions:
 
 凭证、配置、账号和能力开关会在 Crab 的 `config_audit` 追加一条记录。记录里是字段名和动作，不是凭证明文、密文或配置值。本机 `GET /console/api/audit` 和 CLI `audit list` 按时间倒序读取，结果同样只有操作者、动作、origin、Conch、账号、时间和字段名。detail 里其它键不会被读出来。
 
-Action 还支持 `method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 键时警告是「缺少 related」；写成 `related: []` 表示没有关联能力，不产生这条警告。`related: null` 与省略相同，仍是「缺少 related」。related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。Crab 把 related 交给 Agent：直接工具说明末尾多一行「相关能力：conch__action、…」，`describe_capability` 返回 `related` 数组，使用指南里每个能力多一行「相关能力」。只写出同一规则包里当前 Key 看得到的能力；指向自己、不存在、未暴露、已停用或没有权限的名字不写。上面的 `sample_oa` 只有 `list_todo`，所以 `related` 写成 `[]`。
+Action 还支持 `group`、`method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 键时警告是「缺少 related」；写成 `related: []` 表示没有关联能力，不产生这条警告。`related: null` 与省略相同，仍是「缺少 related」。related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。Crab 把 related 交给 Agent：直接工具说明末尾多一行「相关能力：conch__action、…」，`describe_capability` 返回 `related` 数组，使用指南里每个能力多一行「相关能力」。只写出同一规则包里当前 Key 看得到的能力；指向自己、不存在、未暴露、已停用或没有权限的名字不写。上面的 `sample_oa` 只有 `list_todo`，所以 `related` 写成 `[]`。
 
 输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由输入层转换并按生成的 JSON Schema 校验。生成的 schema 含 `additionalProperties: false`。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换、小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`），以及未声明字段，都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内、也不会丢掉多余字段再当成功。HTTP 网关和 MCP 走同一条校验，所以两边相同。MCP 在校验前去掉账号选择（直接工具的 `account`，或能力入参已占用该名字时的 `_account`）。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`、`traceId`，能定位到单个字段时还有 `field`。`traceId` 与响应头 `X-Hermit-Trace` 相同。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；上面 `sample_oa` 的 `page` 声明了 `minimum: 1`。
+
+## 能力分组
+
+能力较少的规则包可以完全不写 `groups` 和 `group`，全部能力保持平铺，不产生警告，也不需要提高 `min_crab_version`。能力较多时，可以在顶层声明最多两级目录（一级分组与二级 `children`），并在各 action 上通过 `group` 归类：
+
+```yaml
+min_crab_version: 1.10.0
+groups:
+  approval:
+    title: 审批管理
+    description: 各类待办与审批流
+    children:
+      leave:
+        title: 请假审批
+        description: 请假单查询与审批
+      expense:
+        title: 报销审批
+  hr:
+    title: 人事档案
+actions:
+  get_me:
+    title: 当前用户信息
+    # 不写 group：直接留在顶层，与一级分组并列，不产生警告
+  list_all_todos:
+    group: approval
+    title: 全部待办
+  approve_leave:
+    group: approval/leave
+    title: 审批请假单
+```
+
+- **动作标识仍保持平铺**：`actions` 的键仍然在包内唯一；HTTP 路径（`/api/{conch}/{action}`）、MCP 工具名（`{conch}__{action}`）、`related` 引用、单个能力开关和调用记录都不因分组而改名，老包升级加分组不会破坏现有调用方。
+- **两级目录与顶层直出**：`groups` 的键与 `children` 的键均须匹配 `^[a-z][a-z0-9_]{1,63}$`（不合规报 `GROUP_NAME`）。每个分组必须写 `title`（缺失报 `MISSING_TITLE`），`description` 可选；二级分组下不能再写 `children`（最多两级，超限报 `GROUP_DEPTH` 或解析错误）。
+- **action 的 `group`**：可选，格式为 `<一级分组名>` 或 `<一级分组名>/<二级分组名>`，必须指向已在 `groups` 声明的分组（写空串或未声明路径报 `UNKNOWN_GROUP`）。不写 `group` 的能力直接留在顶层，与一级分组并列，**合法且不产生警告**；写一级分组的能力直接放在该一级分组下，与其二级子分组并列。
+- **空分组警告**：声明了但本身及子分组下均无任何能力的分组会给出警告 `EMPTY_GROUP`，不阻止保存和发布。
+- **版本门槛与驱动支持**：`driver: http` 与 `driver: mcp` 均可使用分组。只要声明了非空 `groups` 或任意 action 写了 `group`，`min_crab_version` 必须不低于 1.10.0（否则 `MIN_CRAB_VERSION`）。
+- **下游效果**：Crab 的 MCP 目录模式中 `list_systems` 返回分组树与数量，`search_capabilities` 支持按 `group` 或 `ungrouped` 过滤，且为每个可见分组生成按需读取的资源指南 `hermit://conches/{conch}/groups/{group}/guide`；Crab 控制台支持按一/二级分组整批启停，API Key 支持按 `conch:group` 或 `conch:parent/child` 授权（一级覆盖下属二级）；OpenAPI 为已分组能力生成 `tags`。
 
 ## MCP 上游包
 
@@ -286,7 +324,7 @@ actions:
 
 不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。Reef 上传和正式包要求 `actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`，message 为「mcp 包必须至少有一个 action」。开发者模式打开时，本地规则包的空 `actions` 只是同一错误码的警告，message 为「mcp 包还没有 action，刷新工具列表后才能调用。」。开发者模式关掉时，空文件仍不能导入。`tools.include` / `exclude` 在刷新时过滤：`include` 省略或为空表示全部，`exclude` 优先，`*` 与 `?` 按整段、区分大小写匹配。能调用的名字仍只有刷新之后留下的 `actions`。
 
-本地刷新按上游工具名合并，不改 `version`。已有 action 保留本地名字、标题、描述、`read_only`、`destructive`、`confirm`、`idempotent` 和 `notes`，更新 schema、上游注解和 `schema_sha256`。新工具的本地名把非 `[a-z0-9]` 换成 `_`，长度 2–64，冲突时加 `_2`、`_3`。新描述去掉 C0 控制字符（保留换行、回车、制表）、零宽与双向字符，以及 ANSI CSI/OSC，截到 2 KiB UTF-8；空了就写成「（上游未提供描述）」。不删 URL，也不删「忽略之前的指令」。新工具的 `read_only` 只在 `readOnlyHint` 为 true 时为 true；`destructiveHint` 是布尔就用它（显式 false 保持 false），没有这个布尔时非只读为 true；`confirm` 写成与 `destructive` 相同。不把 `idempotentHint` 抄到 `idempotent`。注解去掉 `_meta`。没有 `inputSchema` 时写成 `{type: object}`；上游没有 `outputSchema` 就不写 `output_schema`。`snapshot.tools_sha256` 哈希的是过滤前的完整列表。`initialize` 的 `capabilities` 仍是 `{}`，依赖 elicitation 或 sampling 才出现的工具不会进包。写回会丢掉 YAML 注释和原来的排版。上游工具超过 500 个、超过 20 页，或分页游标不前进时整次失败，不改文件。
+本地刷新按上游工具名合并，不改 `version`。顶层 `groups` 与已有 action 的 `group` 原样保留，已有 action 还保留本地名字、标题、描述、`read_only`、`destructive`、`confirm`、`idempotent` 和 `notes`，更新 schema、上游注解和 `schema_sha256`。新工具的本地名把非 `[a-z0-9]` 换成 `_`，长度 2–64，冲突时加 `_2`、`_3`。新描述去掉 C0 控制字符（保留换行、回车、制表）、零宽与双向字符，以及 ANSI CSI/OSC，截到 2 KiB UTF-8；空了就写成「（上游未提供描述）」。不删 URL，也不删「忽略之前的指令」。新工具的 `read_only` 只在 `readOnlyHint` 为 true 时为 true；`destructiveHint` 是布尔就用它（显式 false 保持 false），没有这个布尔时非只读为 true；`confirm` 写成与 `destructive` 相同。不把 `idempotentHint` 抄到 `idempotent`。注解去掉 `_meta`。没有 `inputSchema` 时写成 `{type: object}`；上游没有 `outputSchema` 就不写 `output_schema`。`snapshot.tools_sha256` 哈希的是过滤前的完整列表。`initialize` 的 `capabilities` 仍是 `{}`，依赖 elicitation 或 sampling 才出现的工具不会进包。写回会丢掉 YAML 注释和原来的排版。上游工具超过 500 个、超过 20 页，或分页游标不前进时整次失败，不改文件。
 
 `upstream.auth.type` 是 `headers` 或 `oauth`。`headers` 的请求头模板只能引用 `{{credential.*}}` 和 `{{config.*}}`，不能引用 `input`。HTTP 包允许模板里出现未声明的 `config.base_url`，mcp 请求头没有这项豁免。`oauth` 必须写 `client_id`。`scopes` 里不能有空字符串。`authorization_endpoint` 和 `token_endpoint` 可以省略。省略时 Crab 先看 MCP 地址返回 401 时 `WWW-Authenticate` 里的 `resource_metadata`，再按 RFC 9728 请求路径感知和根上的 `/.well-known/oauth-protected-resource`，然后按 RFC 8414 读取授权服务器元数据；没有再试 `/.well-known/openid-configuration`。每个 URL 都要过 `allowed_hosts` 和地址检查，不跟随重定向，也不做动态客户端注册。写了的端点必须是不带模板、用户信息和片段的 http 或 https URL。https 的主机要落在 `allowed_hosts`。http 还要和 `upstream.url` 同一源（协议、主机、端口；省略端口时 https 为 443、http 为 80）。`oauth` 不能再设置 `Authorization`。
 
@@ -310,7 +348,7 @@ actions:
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
-`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.7.0，可以载入 1.1.0、1.2.0、1.3.0、1.4.0、1.5.0 和 1.6.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.7.0 时会报高于当前 Crab。请求头模板用了 `xml_escape` 时还要不低于 1.7.0。
+`min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.10.0，可以载入 1.1.0 至 1.10.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.10.0 时会报高于当前 Crab。请求头模板用了 `xml_escape` 时还要不低于 1.7.0；使用了 `groups` 或 action 的 `group` 时还要不低于 1.10.0。
 
 `GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 

@@ -29,6 +29,10 @@ const empty = computed(() => {
     v.addedScripts,
     v.removedScripts,
     v.changedScripts,
+    v.addedGroups,
+    v.removedGroups,
+    v.changedGroups,
+    v.actionGroupChanges,
   ].some((list) => list && list.length)
 })
 
@@ -89,6 +93,26 @@ function show(value: unknown): string {
             <el-tag v-for="part in changeParts.filter((p) => change[p.key])" :key="part.key" size="small" type="warning" effect="plain">
               {{ part.label }}
             </el-tag>
+          </li>
+        </ul>
+      </section>
+      <section
+        v-if="d.addedGroups?.length || d.removedGroups?.length || d.changedGroups?.length || d.actionGroupChanges?.length"
+        data-test="group-changes"
+      >
+        <h4>分组</h4>
+        <div v-if="d.addedGroups?.length || d.removedGroups?.length" class="chips">
+          <el-tag v-for="name in d.addedGroups" :key="`ga-${name}`" type="success" class="mono">+ {{ name }}</el-tag>
+          <el-tag v-for="name in d.removedGroups" :key="`gr-${name}`" type="danger" class="mono">− {{ name }}</el-tag>
+        </div>
+        <ul v-if="d.changedGroups?.length || d.actionGroupChanges?.length" class="changes">
+          <li v-for="name in d.changedGroups" :key="`gc-${name}`">
+            <span class="mono">~ {{ name }}</span>
+            <el-tag size="small" type="warning" effect="plain">标题/说明</el-tag>
+          </li>
+          <li v-for="move in d.actionGroupChanges" :key="`gm-${move.name}`">
+            <span class="mono">~ {{ move.name }}</span>
+            <span class="hm-muted">分组 {{ move.before ?? '（顶层）' }} → {{ move.after ?? '（顶层）' }}</span>
           </li>
         </ul>
       </section>

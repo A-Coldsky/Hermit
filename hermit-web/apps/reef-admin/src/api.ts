@@ -1,6 +1,9 @@
 import { createClient, seg } from '@shared/http'
+import type { GroupDef } from '@shared/groups'
 import { router } from './router'
 import { markExpiredRedirect, session, signOut } from './auth'
+
+export type { GroupDef }
 
 const http = createClient({
   headers: (): Record<string, string> => (session.token ? { Authorization: `Bearer ${session.token}` } : {}),
@@ -46,6 +49,12 @@ export interface ToolChange {
   confirm: boolean | null
 }
 
+export interface ActionGroupChange {
+  name: string
+  before: string | null
+  after: string | null
+}
+
 export interface ConchDiff {
   addedActions: string[]
   removedActions: string[]
@@ -62,6 +71,11 @@ export interface ConchDiff {
   addedScripts: string[]
   removedScripts: string[]
   changedScripts: string[]
+  /** 能力分组路径变化。 */
+  addedGroups?: string[]
+  removedGroups?: string[]
+  changedGroups?: string[]
+  actionGroupChanges?: ActionGroupChange[]
 }
 
 /** 只含 `auth.type`。请求头模板和 OAuth 的 client_id、端点不在这个对象里。 */
@@ -87,6 +101,7 @@ export interface McpSnapshotInfo {
 export interface McpToolRow {
   name: string
   upstreamName: string | null
+  group?: string | null
   readOnly: boolean
   destructive: boolean
   confirm: boolean
@@ -142,6 +157,7 @@ export interface Capability {
   name: string
   title: string
   description: string
+  group?: string | null
   effectiveMethod: string
   inputJsonSchema: Record<string, unknown>
   outputJsonSchema: Record<string, unknown>
@@ -168,6 +184,7 @@ export interface ConchDetail {
   changelog: string | null
   credentials: Record<string, FieldDeclaration>
   config: Record<string, FieldDeclaration>
+  groups?: GroupDef[]
   actions: Record<string, Capability>
   disabled: boolean
   disabledAt: string | null

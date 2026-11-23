@@ -178,18 +178,41 @@ final class McpCalls {
     }
 
     private McpSchema.CallToolResult search(ApiKeyPrincipal principal, Map<String, Object> arguments, Attempt attempt) {
-        Object query = arguments.get("query");
-        if (!(query instanceof String text) || text.isBlank()) {
-            if (query != null && !(query instanceof String)) {
+        Object rawQuery = arguments.get("query");
+        String query = null;
+        if (rawQuery != null) {
+            if (!(rawQuery instanceof String text)) {
                 return fail(attempt, "INVALID_INPUT", "query must be a string", "query");
             }
-            return fail(attempt, "INVALID_INPUT", "query is required");
+            if (!text.isBlank()) {
+                query = text;
+            }
         }
-        Object conch = arguments.get("conch");
-        if (conch != null && !(conch instanceof String)) {
-            return fail(attempt, "INVALID_INPUT", "invalid conch");
+        Object rawConch = arguments.get("conch");
+        if (rawConch != null && !(rawConch instanceof String)) {
+            return fail(attempt, "INVALID_INPUT", "invalid conch", "conch");
         }
-        return ok(catalog.search(principal, text, conch instanceof String name ? name : null));
+        String conch = rawConch instanceof String name && !name.isBlank() ? name : null;
+        Object rawGroup = arguments.get("group");
+        if (rawGroup != null && !(rawGroup instanceof String)) {
+            return fail(attempt, "INVALID_INPUT", "group must be a string", "group");
+        }
+        String group = rawGroup instanceof String path && !path.isBlank() ? path : null;
+        Object rawUngrouped = arguments.get("ungrouped");
+        boolean ungrouped = false;
+        if (rawUngrouped != null) {
+            if (!(rawUngrouped instanceof Boolean flag)) {
+                return fail(attempt, "INVALID_INPUT", "ungrouped must be a boolean", "ungrouped");
+            }
+            ungrouped = flag;
+        }
+        if (group != null && ungrouped) {
+            return fail(attempt, "INVALID_INPUT", "group and ungrouped cannot both be set", "group");
+        }
+        if (query == null && group == null && !ungrouped) {
+            return fail(attempt, "INVALID_INPUT", "query is required", "query");
+        }
+        return ok(catalog.search(principal, query, conch, group, ungrouped));
     }
 
     private McpSchema.CallToolResult describe(ApiKeyPrincipal principal, Map<String, Object> arguments, Attempt attempt) {
@@ -425,7 +448,7 @@ final class McpCalls {
         if (action == null) {
             return !principal.scope().readOnlyOnly();
         }
-        return principal.permits(trace.conch(), trace.action(), CapabilityHttp.readOnly(action));
+        return principal.permits(trace.conch(), trace.action(), action.group(), CapabilityHttp.readOnly(action));
     }
 
     /** Full-scope key, and the call log is the trial that key started. */

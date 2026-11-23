@@ -1,11 +1,25 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { groupDisplayTitle, type GroupDef } from '@shared/groups'
 import type { McpToolRow } from '../api'
 
-defineProps<{ tools: McpToolRow[] }>()
+const props = defineProps<{
+  tools: McpToolRow[]
+  groups?: GroupDef[]
+}>()
+
+const showGroup = computed(
+  () => Boolean(props.groups?.length) || props.tools.some((t) => Boolean(t.group)),
+)
 
 function annotations(row: McpToolRow): string {
   const entries = Object.entries(row.upstreamAnnotations ?? {})
   return entries.length ? entries.map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('，') : '—'
+}
+
+function groupLabel(row: McpToolRow): string {
+  if (!row.group) return '—'
+  return groupDisplayTitle(props.groups, row.group)
 }
 </script>
 
@@ -15,6 +29,12 @@ function annotations(row: McpToolRow): string {
     <el-table-column label="工具" min-width="180">
       <template #default="{ row }">
         <span class="mono">{{ row.name }}</span>
+      </template>
+    </el-table-column>
+    <el-table-column v-if="showGroup" label="分组" min-width="150">
+      <template #default="{ row }">
+        <el-tag v-if="row.group" size="small" effect="plain">{{ groupLabel(row) }}</el-tag>
+        <span v-else class="hm-muted">—</span>
       </template>
     </el-table-column>
     <el-table-column label="上游名称" min-width="160">

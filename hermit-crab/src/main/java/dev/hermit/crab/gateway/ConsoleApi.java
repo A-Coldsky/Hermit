@@ -21,6 +21,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ExecutionResult;
@@ -110,6 +111,8 @@ final class ConsoleApi {
         put(app, "/console/api/conches/{conch}/config", ctx -> writeConfig(runtime, ctx));
         post(app, "/console/api/conches/{conch}/enable", ctx -> toggleConch(runtime, ctx, false));
         post(app, "/console/api/conches/{conch}/disable", ctx -> toggleConch(runtime, ctx, true));
+        post(app, "/console/api/conches/{conch}/groups/enable", ctx -> toggleGroup(runtime, ctx, false));
+        post(app, "/console/api/conches/{conch}/groups/disable", ctx -> toggleGroup(runtime, ctx, true));
         post(app, "/console/api/conches/{conch}/source", ctx -> switchSource(runtime, ctx));
         post(app, "/console/api/capabilities/{conch}/{action}/enable", ctx -> toggle(runtime, ctx, false));
         post(app, "/console/api/capabilities/{conch}/{action}/disable", ctx -> toggle(runtime, ctx, true));
@@ -254,6 +257,7 @@ final class ConsoleApi {
         body.put("driver", null);
         body.put("credentials", List.of());
         body.put("config", List.of());
+        body.put("groups", List.of());
         body.put("capabilities", List.of());
         body.put("subscribed", true);
         body.put("needsConfiguration", false);
@@ -285,6 +289,7 @@ final class ConsoleApi {
         body.put("driver", null);
         body.put("credentials", List.of());
         body.put("config", List.of());
+        body.put("groups", List.of());
         body.put("capabilities", List.of());
         body.put("declarationsLoaded", false);
         ConchDoc readable = runtime.conchSync() == null
@@ -387,6 +392,7 @@ final class ConsoleApi {
         body.put("driver", null);
         body.put("credentials", List.of());
         body.put("config", List.of());
+        body.put("groups", List.of());
         body.put("capabilities", List.of());
         body.put("declarationsLoaded", false);
         ConchDoc readable = runtime.localConches() == null
@@ -424,6 +430,7 @@ final class ConsoleApi {
         body.put("declarationsLoaded", true);
         body.put("credentials", credentialDecls(doc));
         body.put("config", configDecls(doc));
+        body.put("groups", groupDecls(doc));
         ArrayList<Map<String, Object>> capabilities = new ArrayList<>();
         for (Action action : doc.actions().values()) {
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
@@ -433,9 +440,34 @@ final class ConsoleApi {
             row.put("method", CapabilityHttp.method(action).name());
             row.put("readOnly", CapabilityHttp.readOnly(action));
             row.put("disabled", runtime.capabilityDisabled(doc.conch(), action.name()));
+            row.put("group", action.group());
             capabilities.add(row);
         }
         body.put("capabilities", capabilities);
+    }
+
+    private static List<Map<String, Object>> groupDecls(ConchDoc doc) {
+        if (doc == null || doc.groups().isEmpty()) {
+            return List.of();
+        }
+        ArrayList<Map<String, Object>> list = new ArrayList<>(doc.groups().size());
+        for (GroupDef group : doc.groups().values()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("name", group.name());
+            row.put("title", text(group.title()));
+            row.put("description", text(group.description()));
+            ArrayList<Map<String, Object>> children = new ArrayList<>(group.children().size());
+            for (GroupDef child : group.children().values()) {
+                LinkedHashMap<String, Object> childRow = new LinkedHashMap<>();
+                childRow.put("name", child.name());
+                childRow.put("title", text(child.title()));
+                childRow.put("description", text(child.description()));
+                children.add(childRow);
+            }
+            row.put("children", children);
+            list.add(row);
+        }
+        return list;
     }
 
     private static void putPrevious(CrabRuntime runtime, String conch, Map<String, Object> row) {
@@ -838,6 +870,26 @@ final class ConsoleApi {
                 "disabled", runtime.capabilityDisabled(conch, action)));
     }
 
+    private static void toggleGroup(CrabRuntime runtime, Context ctx, boolean disabled) throws Exception {
+        String conch = ctx.pathParam("conch");
+        JsonNode body = object(ctx);
+        rejectUnknownFields(body, Set.of("group"));
+        String group = requiredText(body, "group");
+        List<String> affected = runtime.setGroupDisabled(conch, group, disabled, Actors.CONSOLE);
+        ArrayList<Map<String, Object>> states = new ArrayList<>(affected.size());
+        for (String action : affected) {
+            states.add(Map.of(
+                    "action", action,
+                    "disabled", runtime.capabilityDisabled(conch, action)));
+        }
+        LinkedHashMap<String, Object> data = new LinkedHashMap<>();
+        data.put("conch", conch);
+        data.put("group", group);
+        data.put("disabled", disabled);
+        data.put("actions", states);
+        GatewayResponses.writeData(ctx, data);
+    }
+
     private static void apiKeys(CrabRuntime runtime, Context ctx) {
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (ApiKeySummary key : runtime.admin().listApiKeys()) {
@@ -846,7 +898,7 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of("apiKeys", rows));
     }
 
-    private static final Set<String> API_KEY_FIELDS = Set.of("name", "readOnly", "all", "conches", "actions");
+    private static final Set<String> API_KEY_FIELDS = Set.of("name", "readOnly", "all", "conches", "groups", "actions");
 
     private static void createApiKey(CrabRuntime runtime, Context ctx) throws Exception {
         JsonNode body = object(ctx);
@@ -855,9 +907,10 @@ final class ConsoleApi {
         boolean readOnly = bool(body, "readOnly", false);
         boolean all = bool(body, "all", false);
         Set<String> conches = stringSet(body.get("conches"));
+        Set<String> groups = stringSet(body.get("groups"));
         Set<String> actions = stringSet(body.get("actions"));
         CreatedApiKey created = runtime.admin().createApiKey(
-                name, ApiKeyScope.explicit(all, conches, actions, readOnly), Actors.CONSOLE);
+                name, ApiKeyScope.explicit(all, conches, groups, actions, readOnly), Actors.CONSOLE);
         LinkedHashMap<String, Object> data = new LinkedHashMap<>();
         data.put("id", created.id());
         data.put("name", created.name());
@@ -1501,6 +1554,7 @@ final class ConsoleApi {
             } catch (IllegalArgumentException | IllegalStateException ex) {
                 String message = ex.getMessage();
                 if ("capability not found".equals(message)
+                        || "group not found".equals(message)
                         || "api key not found".equals(message)
                         || "conch not found".equals(message)) {
                     GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, message);
@@ -1866,6 +1920,7 @@ final class ConsoleApi {
         LinkedHashMap<String, Object> row = new LinkedHashMap<>();
         row.put("all", scope.grantsAllOfficial());
         row.put("conches", scope.conches());
+        row.put("groups", scope.groups());
         row.put("actions", scope.actions());
         row.put("readOnly", scope.readOnlyOnly());
         return row;

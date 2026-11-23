@@ -286,9 +286,9 @@ watch(() => props.conch, load, { immediate: true })
 
         <el-tab-pane :label="mcp ? `工具（${toolCount}）` : `能力（${capabilityCount}）`" name="capabilities" :disabled="!detail">
           <div v-if="detail && mcp" class="hm-card">
-            <McpToolTable :tools="detail.tools ?? []" />
+            <McpToolTable :tools="detail.tools ?? []" :groups="detail.groups" />
           </div>
-          <CapabilityList v-else-if="detail" :actions="detail.actions" />
+          <CapabilityList v-else-if="detail" :actions="detail.actions" :groups="detail.groups" />
         </el-tab-pane>
 
         <el-tab-pane :label="`版本（${versions.length}）`" name="versions">

@@ -32,9 +32,12 @@ public record CrabConfig(
         int bodyIdleTimeoutMs,
         int maxHeaderLineBytes,
         int maxHeaderCount,
-        String publicUrl
+        String publicUrl,
+        int mcpDirectLimit
 ) {
-    /** 不带 {@code server.public_url} 的写法。 */
+    public static final int DEFAULT_MCP_DIRECT_LIMIT = 40;
+
+    /** 不带 {@code server.public_url} 与 {@code mcp.direct_limit} 的写法。 */
     public CrabConfig(
             String reefUrl, String reefToken, String reefPublicKey, String serverHost, int serverPort,
             int syncIntervalSeconds, boolean reportEnabled, int reportIntervalSeconds,
@@ -46,7 +49,22 @@ public record CrabConfig(
         this(reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
                 maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust,
-                connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount, null);
+                connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount, null, DEFAULT_MCP_DIRECT_LIMIT);
+    }
+
+    /** 不带 {@code mcp.direct_limit} 的写法。 */
+    public CrabConfig(
+            String reefUrl, String reefToken, String reefPublicKey, String serverHost, int serverPort,
+            int syncIntervalSeconds, boolean reportEnabled, int reportIntervalSeconds,
+            List<String> disabledCapabilities, Map<String, String> aliases, int capabilityTimeoutSeconds,
+            int sessionIdleMinutes, int maxLoginFailures, List<String> mcpAllowedOrigins,
+            int mcpMaxConcurrencyPerAccount, String tlsCaDir, boolean tlsSystemTrust, int connectTimeoutMs,
+            int bodyIdleTimeoutMs, int maxHeaderLineBytes, int maxHeaderCount, String publicUrl
+    ) {
+        this(reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
+                reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust,
+                connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount, publicUrl, DEFAULT_MCP_DIRECT_LIMIT);
     }
 
     public CrabConfig {
@@ -86,6 +104,9 @@ public record CrabConfig(
         if (maxHeaderCount < 1 || maxHeaderCount > 10_000) {
             throw new IllegalArgumentException("engine.max_header_count must be from 1 to 10000");
         }
+        if (mcpDirectLimit < 0 || mcpDirectLimit > 500) {
+            throw new IllegalArgumentException("mcp.direct_limit must be from 0 to 500");
+        }
         disabledCapabilities = List.copyOf(disabledCapabilities == null ? List.of() : disabledCapabilities);
         aliases = aliases == null ? Map.of() : Map.copyOf(aliases);
         for (String disabled : disabledCapabilities) {
@@ -107,7 +128,7 @@ public record CrabConfig(
     public static CrabConfig defaults() {
         return new CrabConfig(
                 null, null, null, "127.0.0.1", 7777, 300, true, 1800, List.of(), Map.of(), 60, 10, 3, List.of(), 4,
-                null, true, 15_000, 5_000, 65_536, 500);
+                null, true, 15_000, 5_000, 65_536, 500, null, DEFAULT_MCP_DIRECT_LIMIT);
     }
 
     public EngineSettings engineSettings() {
@@ -125,7 +146,7 @@ public record CrabConfig(
                 url, token, publicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
                 maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
-                publicUrl);
+                publicUrl, mcpDirectLimit);
     }
 
     public CrabConfig withListen(String host, int port) {
@@ -133,7 +154,7 @@ public record CrabConfig(
                 reefUrl, reefToken, reefPublicKey, host, port, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
                 maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
-                publicUrl);
+                publicUrl, mcpDirectLimit);
     }
 
     public CrabConfig withAliases(Map<String, String> aliasMap) {
@@ -141,7 +162,7 @@ public record CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliasMap, capabilityTimeoutSeconds, sessionIdleMinutes,
                 maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
-                publicUrl);
+                publicUrl, mcpDirectLimit);
     }
 
     public CrabConfig withDisabled(List<String> disabled) {
@@ -149,7 +170,7 @@ public record CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabled, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
                 maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
-                publicUrl);
+                publicUrl, mcpDirectLimit);
     }
 
     public CrabConfig withLimits(int capabilityTimeoutSeconds, int concurrencyPerAccount) {
@@ -157,7 +178,7 @@ public record CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
                 maxLoginFailures, mcpAllowedOrigins, concurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
-                publicUrl);
+                publicUrl, mcpDirectLimit);
     }
 
     public CrabConfig withMcpAllowedOrigins(List<String> origins) {
@@ -165,7 +186,15 @@ public record CrabConfig(
                 reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
                 reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
                 maxLoginFailures, origins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
-                publicUrl);
+                publicUrl, mcpDirectLimit);
+    }
+
+    public CrabConfig withMcpDirectLimit(int limit) {
+        return new CrabConfig(
+                reefUrl, reefToken, reefPublicKey, serverHost, serverPort, syncIntervalSeconds, reportEnabled,
+                reportIntervalSeconds, disabledCapabilities, aliases, capabilityTimeoutSeconds, sessionIdleMinutes,
+                maxLoginFailures, mcpAllowedOrigins, mcpMaxConcurrencyPerAccount, tlsCaDir, tlsSystemTrust, connectTimeoutMs, bodyIdleTimeoutMs, maxHeaderLineBytes, maxHeaderCount,
+                publicUrl, limit);
     }
 
     /** 下载链接的前缀。只接受 http 或 https 的地址，不带查询串；末尾的斜杠去掉。 */

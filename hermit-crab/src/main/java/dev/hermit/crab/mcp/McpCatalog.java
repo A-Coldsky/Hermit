@@ -10,7 +10,9 @@ import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
 
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.CapabilityGroups;
 import dev.hermit.common.model.Example;
+import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.model.ParamSpec;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.engine.DevTraceDraft;
@@ -23,6 +25,8 @@ import io.modelcontextprotocol.spec.McpSchema;
 
 final class McpCatalog {
     static final int DIRECT_LIMIT = 40;
+    /** 顶层未分组能力不超过此数量时，list_systems 直接附带轻量摘要，省去额外一轮浏览。 */
+    static final int TOP_LEVEL_INLINE_LIMIT = 10;
     static final String ACCOUNT_PATTERN = "^[A-Za-z0-9_-]{1,64}$";
     static final String LIST_SYSTEMS = "list_systems";
     static final String SEARCH = "search_capabilities";
@@ -39,19 +43,25 @@ final class McpCatalog {
     private final ConchRegistry registry;
     private final BiPredicate<String, String> disabled;
     private final BooleanSupplier devMode;
+    private final int directLimit;
 
     McpCatalog(ConchRegistry registry, BiPredicate<String, String> disabled) {
-        this(registry, disabled, () -> false);
+        this(registry, disabled, () -> false, DIRECT_LIMIT);
     }
 
     McpCatalog(ConchRegistry registry, BiPredicate<String, String> disabled, BooleanSupplier devMode) {
+        this(registry, disabled, devMode, DIRECT_LIMIT);
+    }
+
+    McpCatalog(ConchRegistry registry, BiPredicate<String, String> disabled, BooleanSupplier devMode, int directLimit) {
         this.registry = registry;
         this.disabled = disabled;
         this.devMode = devMode == null ? () -> false : devMode;
+        this.directLimit = Math.max(0, directLimit);
     }
 
     boolean directory(ApiKeyPrincipal principal) {
-        return visible(principal).size() > DIRECT_LIMIT;
+        return visible(principal).size() > directLimit;
     }
 
     List<McpSchema.Tool> tools(ApiKeyPrincipal principal, String protocol) {
@@ -104,13 +114,20 @@ final class McpCatalog {
                     .mimeType("text/markdown")
                     .build());
         }
-        for (ConchRegistry.Active active : conches(principal)) {
+        List<CapabilityRef> visible = visible(principal);
+        for (ConchRegistry.Active active : conches(visible)) {
             ConchDoc conch = active.doc();
+            boolean local = active.origin() == Origin.LOCAL;
+            List<CapabilityRef> conchActions = actionsOf(visible, conch.conch());
+            boolean grouped = hasVisibleGroups(conch, conchActions);
             resources.add(McpSchema.Resource.builder(guideUri(conch.conch()), conch.conch())
                     .title(conch.title())
-                    .description(localMark(active.origin() == Origin.LOCAL, "由元数据生成的使用指南"))
+                    .description(localMark(local, grouped ? "系统概览与分组目录" : "由元数据生成的使用指南"))
                     .mimeType("text/markdown")
                     .build());
+            if (grouped) {
+                addGroupResources(resources, conch, conchActions, local);
+            }
         }
         return List.copyOf(resources);
     }
@@ -119,15 +136,16 @@ final class McpCatalog {
         if (AuthoringGuide.URI.equals(uri)) {
             return devMode.getAsBoolean() ? Optional.of(AuthoringGuide.text()) : Optional.empty();
         }
-        String conchName = conchFromGuide(uri);
-        if (conchName == null) {
+        GuideTarget target = parseGuideUri(uri);
+        if (target == null) {
             return Optional.empty();
         }
+        List<CapabilityRef> visible = visible(principal);
         ConchDoc conch = null;
         boolean local = false;
         ArrayList<CapabilityRef> actions = new ArrayList<>();
-        for (CapabilityRef ref : visible(principal)) {
-            if (ref.conch().conch().equals(conchName)) {
+        for (CapabilityRef ref : visible) {
+            if (ref.conch().conch().equals(target.conch())) {
                 conch = ref.conch();
                 local = ref.local();
                 actions.add(ref);
@@ -136,7 +154,25 @@ final class McpCatalog {
         if (conch == null) {
             return Optional.empty();
         }
-        return Optional.of(markdown(conch, actions, local));
+        if (target.groupPath() == null) {
+            if (hasVisibleGroups(conch, actions)) {
+                return Optional.of(groupedOverviewMarkdown(conch, actions, local));
+            }
+            return Optional.of(markdown(conch, actions, local));
+        }
+        if (!CapabilityGroups.hasGroup(conch, target.groupPath())) {
+            return Optional.empty();
+        }
+        ArrayList<CapabilityRef> matched = new ArrayList<>();
+        for (CapabilityRef ref : actions) {
+            if (CapabilityGroups.matches(ref.action().group(), target.groupPath())) {
+                matched.add(ref);
+            }
+        }
+        if (matched.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(groupMarkdown(conch, target.groupPath(), matched, actions, local));
     }
 
     Map<String, Object> listSystems(ApiKeyPrincipal principal) {
@@ -144,45 +180,91 @@ final class McpCatalog {
         ArrayList<Map<String, Object>> systems = new ArrayList<>();
         for (ConchRegistry.Active active : conches(visible)) {
             ConchDoc conch = active.doc();
-            int count = 0;
-            for (CapabilityRef ref : visible) {
-                if (ref.conch().conch().equals(conch.conch())) {
-                    count++;
-                }
-            }
+            List<CapabilityRef> conchActions = actionsOf(visible, conch.conch());
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("conch", conch.conch());
             row.put("title", conch.title());
             row.put("description", localMark(active.origin() == Origin.LOCAL, conch.description()));
-            row.put("capabilities", count);
+            row.put("capabilities", conchActions.size());
+            List<Map<String, Object>> groupTree = visibleGroupTree(conch, conchActions);
+            if (!groupTree.isEmpty()) {
+                row.put("groups", groupTree);
+                ArrayList<CapabilityRef> ungrouped = new ArrayList<>();
+                for (CapabilityRef ref : conchActions) {
+                    if (ref.action().group() == null) {
+                        ungrouped.add(ref);
+                    }
+                }
+                if (!ungrouped.isEmpty()) {
+                    row.put("ungroupedCount", ungrouped.size());
+                    if (ungrouped.size() <= TOP_LEVEL_INLINE_LIMIT) {
+                        ArrayList<Map<String, Object>> summaries = new ArrayList<>(ungrouped.size());
+                        for (CapabilityRef ref : ungrouped) {
+                            LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+                            item.put("name", ref.toolName());
+                            item.put("title", ref.action().title());
+                            item.put("readOnly", CapabilityHttp.readOnly(ref.action()));
+                            summaries.add(item);
+                        }
+                        row.put("topLevelCapabilities", summaries);
+                    }
+                }
+            }
             systems.add(row);
         }
         return Map.of("systems", systems);
     }
 
     Map<String, Object> search(ApiKeyPrincipal principal, String query, String conch) {
-        String needle = query == null ? "" : query.toLowerCase(Locale.ROOT);
+        return search(principal, query, conch, null, false);
+    }
+
+    Map<String, Object> search(
+            ApiKeyPrincipal principal,
+            String query,
+            String conch,
+            String group,
+            boolean ungrouped
+    ) {
+        String needle = query == null ? "" : query.toLowerCase(Locale.ROOT).trim();
+        String groupFilter = group == null ? "" : group.trim();
+        boolean hasQuery = !needle.isEmpty();
+        boolean hasGroup = !groupFilter.isEmpty();
         ArrayList<Map<String, Object>> matches = new ArrayList<>();
-        if (!needle.isBlank()) {
+        int total = 0;
+        if (hasQuery || hasGroup || ungrouped) {
             for (CapabilityRef ref : visible(principal)) {
                 if (conch != null && !conch.isBlank() && !ref.conch().conch().equals(conch)) {
                     continue;
                 }
-                if (!haystack(ref.action()).contains(needle)) {
+                if (ungrouped && ref.action().group() != null) {
                     continue;
                 }
-                LinkedHashMap<String, Object> row = new LinkedHashMap<>();
-                row.put("name", ref.toolName());
-                row.put("title", ref.action().title());
-                row.put("readOnly", CapabilityHttp.readOnly(ref.action()));
-                matches.add(row);
+                if (hasGroup && !CapabilityGroups.matches(ref.action().group(), groupFilter)) {
+                    continue;
+                }
+                if (hasQuery && !haystack(ref.conch(), ref.action()).contains(needle)) {
+                    continue;
+                }
+                total++;
                 // Result window, not an input pageSize. Callers cannot pass page or pageSize.
-                if (matches.size() == 20) {
-                    break;
+                if (matches.size() < 20) {
+                    LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+                    row.put("name", ref.toolName());
+                    row.put("title", ref.action().title());
+                    row.put("readOnly", CapabilityHttp.readOnly(ref.action()));
+                    if (ref.action().group() != null) {
+                        row.put("group", ref.action().group());
+                        row.put("groupTitle", CapabilityGroups.displayTitle(ref.conch(), ref.action().group()));
+                    }
+                    matches.add(row);
                 }
             }
         }
-        return Map.of("matches", matches);
+        LinkedHashMap<String, Object> result = new LinkedHashMap<>();
+        result.put("matches", matches);
+        result.put("total", total);
+        return result;
     }
 
     Optional<Map<String, Object>> describe(ApiKeyPrincipal principal, String name) {
@@ -203,6 +285,10 @@ final class McpCatalog {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("name", ref.toolName());
         body.put("title", action.title());
+        if (action.group() != null) {
+            body.put("group", action.group());
+            body.put("groupTitle", CapabilityGroups.displayTitle(ref.conch(), action.group()));
+        }
         String description = localMark(ref.local(), action.description());
         if ("mcp".equals(ref.conch().driver())) {
             description = "来源：源站 MCP。" + (description == null ? "" : description);
@@ -225,16 +311,125 @@ final class McpCatalog {
         return Optional.of(body);
     }
 
-    private List<ConchRegistry.Active> conches(ApiKeyPrincipal principal) {
-        return conches(visible(principal));
-    }
-
     private static List<ConchRegistry.Active> conches(List<CapabilityRef> visible) {
         LinkedHashMap<String, ConchRegistry.Active> conches = new LinkedHashMap<>();
         for (CapabilityRef ref : visible) {
             conches.putIfAbsent(ref.conch().conch(), new ConchRegistry.Active(ref.conch(), ref.origin()));
         }
         return List.copyOf(conches.values());
+    }
+
+    private static List<CapabilityRef> actionsOf(List<CapabilityRef> visible, String conchName) {
+        ArrayList<CapabilityRef> found = new ArrayList<>();
+        for (CapabilityRef ref : visible) {
+            if (ref.conch().conch().equals(conchName)) {
+                found.add(ref);
+            }
+        }
+        return found;
+    }
+
+    private static boolean hasVisibleGroups(ConchDoc conch, List<CapabilityRef> actions) {
+        if (conch == null || conch.groups().isEmpty()) {
+            return false;
+        }
+        for (CapabilityRef ref : actions) {
+            if (ref.action().group() != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<Map<String, Object>> visibleGroupTree(ConchDoc conch, List<CapabilityRef> actions) {
+        if (conch == null || conch.groups().isEmpty()) {
+            return List.of();
+        }
+        ArrayList<Map<String, Object>> tree = new ArrayList<>();
+        for (GroupDef group : conch.groups().values()) {
+            int total = countMatching(actions, group.name());
+            if (total == 0) {
+                continue;
+            }
+            LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+            item.put("group", group.name());
+            item.put("title", group.title());
+            if (!blank(group.description())) {
+                item.put("description", group.description());
+            }
+            item.put("capabilities", total);
+            ArrayList<Map<String, Object>> children = new ArrayList<>();
+            for (GroupDef child : group.children().values()) {
+                String childPath = group.name() + "/" + child.name();
+                int childCount = countMatching(actions, childPath);
+                if (childCount == 0) {
+                    continue;
+                }
+                LinkedHashMap<String, Object> childItem = new LinkedHashMap<>();
+                childItem.put("group", childPath);
+                childItem.put("title", child.title());
+                if (!blank(child.description())) {
+                    childItem.put("description", child.description());
+                }
+                childItem.put("capabilities", childCount);
+                children.add(childItem);
+            }
+            if (!children.isEmpty()) {
+                item.put("children", children);
+            }
+            tree.add(item);
+        }
+        return tree;
+    }
+
+    private static int countMatching(List<CapabilityRef> actions, String groupPath) {
+        int count = 0;
+        for (CapabilityRef ref : actions) {
+            if (CapabilityGroups.matches(ref.action().group(), groupPath)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static void addGroupResources(
+            List<McpSchema.Resource> resources,
+            ConchDoc conch,
+            List<CapabilityRef> actions,
+            boolean local
+    ) {
+        String conchTitle = blank(conch.title()) ? conch.conch() : conch.title();
+        for (GroupDef group : conch.groups().values()) {
+            int count = countMatching(actions, group.name());
+            if (count == 0) {
+                continue;
+            }
+            String desc = blank(group.description())
+                    ? count + " 个能力"
+                    : group.description() + "（" + count + " 个能力）";
+            resources.add(McpSchema.Resource.builder(groupGuideUri(conch.conch(), group.name()),
+                            conch.conch() + "/" + group.name())
+                    .title(conchTitle + " / " + group.title())
+                    .description(localMark(local, desc))
+                    .mimeType("text/markdown")
+                    .build());
+            for (GroupDef child : group.children().values()) {
+                String childPath = group.name() + "/" + child.name();
+                int childCount = countMatching(actions, childPath);
+                if (childCount == 0) {
+                    continue;
+                }
+                String childDesc = blank(child.description())
+                        ? childCount + " 个能力"
+                        : child.description() + "（" + childCount + " 个能力）";
+                resources.add(McpSchema.Resource.builder(groupGuideUri(conch.conch(), childPath),
+                                conch.conch() + "/" + childPath)
+                        .title(conchTitle + " / " + group.title() + " / " + child.title())
+                        .description(localMark(local, childDesc))
+                        .mimeType("text/markdown")
+                        .build());
+            }
+        }
     }
 
     private List<CapabilityRef> visible(ApiKeyPrincipal principal) {
@@ -250,11 +445,11 @@ final class McpCatalog {
                 if (!action.mcp().expose() || disabled.test(conch.conch(), action.name())) {
                     continue;
                 }
-                // 全范围 Key 列出本地工具。写了 conches 或 actions 的 Key 仍要在 conches 里点名。
+                // 全范围 Key 列出本地工具。写了 conches、groups 或 actions 的 Key 仍要在 conches 里点名。
                 if (origin == Origin.LOCAL && !principal.scope().allowsLocal(conch.conch())) {
                     continue;
                 }
-                if (!principal.permits(conch.conch(), action.name(), CapabilityHttp.readOnly(action))) {
+                if (!principal.permits(conch.conch(), action.name(), action.group(), CapabilityHttp.readOnly(action))) {
                     continue;
                 }
                 found.add(new CapabilityRef(origin, conch, action));
@@ -265,9 +460,9 @@ final class McpCatalog {
 
     private static List<McpSchema.Tool> directoryTools(boolean outputSchema) {
         return List.of(
-                tool(LIST_SYSTEMS, "列出当前可以调用的规则包（Conch）及其能力数量。", objectSchema(Map.of()),
+                tool(LIST_SYSTEMS, "列出当前可以调用的规则包（Conch）、能力数量，以及已声明的一/二级分组目录。", objectSchema(Map.of()),
                         outputSchema ? systemsOutputSchema() : null, true, true),
-                tool(SEARCH, "在标题、说明、备注和参数说明里搜索能力，最多返回 20 条。", searchSchema(),
+                tool(SEARCH, "按关键词或分组查找/浏览能力，最多返回 20 条。指定 group 或 ungrouped=true 时可省略 query。", searchSchema(),
                         outputSchema ? searchOutputSchema() : null, true, true),
                 tool(DESCRIBE, "查看一个能力的说明、参数、返回字段和示例。name 形如 conch__action。", nameSchema(),
                         outputSchema ? describeOutputSchema() : null, true, true),
@@ -279,9 +474,10 @@ final class McpCatalog {
         Action action = ref.action();
         boolean readOnly = CapabilityHttp.readOnly(action);
         boolean mcp = action.tool() != null;
+        String groupTitle = action.group() == null ? null : CapabilityGroups.displayTitle(ref.conch(), action.group());
         McpSchema.Tool.Builder builder = McpSchema.Tool.builder(ref.toolName(), withAccount(action))
                 .title(action.title())
-                .description(localMark(ref.local(), toolDescription(action, related(ref, visible))))
+                .description(localMark(ref.local(), toolDescription(action, related(ref, visible), groupTitle)))
                 .annotations(McpSchema.ToolAnnotations.builder()
                         .readOnlyHint(readOnly)
                         .destructiveHint(action.effectiveDestructive())
@@ -466,11 +662,29 @@ final class McpCatalog {
     }
 
     private static Map<String, Object> systemsOutputSchema() {
+        LinkedHashMap<String, Object> summary = new LinkedHashMap<>();
+        summary.put("name", Map.of("type", "string"));
+        summary.put("title", Map.of());
+        summary.put("readOnly", Map.of("type", "boolean"));
+        LinkedHashMap<String, Object> child = new LinkedHashMap<>();
+        child.put("group", Map.of("type", "string"));
+        child.put("title", Map.of());
+        child.put("description", Map.of());
+        child.put("capabilities", Map.of("type", "integer"));
+        LinkedHashMap<String, Object> group = new LinkedHashMap<>();
+        group.put("group", Map.of("type", "string"));
+        group.put("title", Map.of());
+        group.put("description", Map.of());
+        group.put("capabilities", Map.of("type", "integer"));
+        group.put("children", arraySchema(objectSchema(child)));
         LinkedHashMap<String, Object> item = new LinkedHashMap<>();
         item.put("conch", Map.of("type", "string"));
         item.put("title", Map.of());
         item.put("description", Map.of());
         item.put("capabilities", Map.of("type", "integer"));
+        item.put("groups", arraySchema(objectSchema(group)));
+        item.put("ungroupedCount", Map.of("type", "integer"));
+        item.put("topLevelCapabilities", arraySchema(objectSchema(summary)));
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("systems", arraySchema(objectSchema(item)));
         return objectSchema(properties);
@@ -481,8 +695,11 @@ final class McpCatalog {
         item.put("name", Map.of("type", "string"));
         item.put("title", Map.of());
         item.put("readOnly", Map.of("type", "boolean"));
+        item.put("group", Map.of("type", "string"));
+        item.put("groupTitle", Map.of("type", "string"));
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("matches", arraySchema(objectSchema(item)));
+        properties.put("total", Map.of("type", "integer"));
         return objectSchema(properties);
     }
 
@@ -490,6 +707,8 @@ final class McpCatalog {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("name", Map.of("type", "string"));
         properties.put("title", Map.of());
+        properties.put("group", Map.of("type", "string"));
+        properties.put("groupTitle", Map.of("type", "string"));
         properties.put("description", Map.of());
         properties.put("notes", Map.of());
         properties.put("related", arraySchema(Map.of("type", "string")));
@@ -516,8 +735,15 @@ final class McpCatalog {
     }
 
     static String toolDescription(Action action, List<String> related) {
+        return toolDescription(action, related, null);
+    }
+
+    static String toolDescription(Action action, List<String> related, String groupTitle) {
         StringBuilder text = new StringBuilder();
         append(text, action.title());
+        if (!blank(groupTitle)) {
+            append(text, "分组：" + groupTitle);
+        }
         append(text, action.description());
         append(text, action.notes());
         if (!related.isEmpty()) {
@@ -627,11 +853,11 @@ final class McpCatalog {
 
     private static Map<String, Object> searchSchema() {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
-        properties.put("query", Map.of("type", "string", "description", "匹配标题、说明、备注和参数说明"));
-        properties.put("conch", Map.of("type", "string", "description", "可选。只搜索这个规则包"));
-        LinkedHashMap<String, Object> schema = objectSchema(properties);
-        schema.put("required", List.of("query"));
-        return schema;
+        properties.put("query", Map.of("type", "string", "description", "可选（未指定 group/ungrouped 时必填）。匹配标题、说明、分组、备注和参数说明"));
+        properties.put("conch", Map.of("type", "string", "description", "可选。只搜索或浏览这个规则包"));
+        properties.put("group", Map.of("type", "string", "description", "可选。按分组筛选，形如 approval 或 approval/leave（一级分组包含其二级子分组）"));
+        properties.put("ungrouped", Map.of("type", "boolean", "description", "可选。设为 true 时只列出顶层未分组能力，不能与 group 同时使用"));
+        return objectSchema(properties);
     }
 
     private static Map<String, Object> nameSchema() {
@@ -651,11 +877,19 @@ final class McpCatalog {
         return schema;
     }
 
-    private static String haystack(Action action) {
+    private static String haystack(ConchDoc conch, Action action) {
         StringBuilder text = new StringBuilder();
         append(text, action.title());
         append(text, action.description());
         append(text, action.notes());
+        if (action.group() != null) {
+            append(text, action.group());
+            append(text, CapabilityGroups.displayTitle(conch, action.group()));
+            GroupDef def = CapabilityGroups.find(conch, action.group());
+            if (def != null) {
+                append(text, def.description());
+            }
+        }
         for (ParamSpec spec : action.input().values()) {
             append(text, spec.description());
         }
@@ -664,6 +898,131 @@ final class McpCatalog {
 
     private static String markdown(ConchDoc conch, List<CapabilityRef> actions, boolean local) {
         StringBuilder text = new StringBuilder();
+        writeGuideHeader(text, conch, local);
+        text.append("## 能力\n\n");
+        for (CapabilityRef ref : actions) {
+            writeActionSection(text, ref, actions, "###");
+        }
+        return text.toString();
+    }
+
+    /** 带分组的规则包主指南：先给分组目录与按组读取地址，不一次性展开全部组内细节。 */
+    private static String groupedOverviewMarkdown(ConchDoc conch, List<CapabilityRef> actions, boolean local) {
+        StringBuilder text = new StringBuilder();
+        writeGuideHeader(text, conch, local);
+        ArrayList<CapabilityRef> topLevel = new ArrayList<>();
+        for (CapabilityRef ref : actions) {
+            if (ref.action().group() == null) {
+                topLevel.add(ref);
+            }
+        }
+        if (!topLevel.isEmpty()) {
+            text.append("## 顶层能力\n\n");
+            if (topLevel.size() <= TOP_LEVEL_INLINE_LIMIT) {
+                for (CapabilityRef ref : topLevel) {
+                    writeActionSection(text, ref, actions, "###");
+                }
+            } else {
+                text.append("共有 ").append(topLevel.size())
+                        .append(" 个未分组顶层能力，可用 `search_capabilities`（传 `conch: \"")
+                        .append(conch.conch())
+                        .append("\"` 与 `ungrouped: true`）按需查看。\n\n");
+            }
+        }
+        text.append("## 分组目录\n\n");
+        text.append("按分组读取对应的指南资源，或用 `search_capabilities` 传 `group` 浏览该组下的能力：\n\n");
+        for (GroupDef group : conch.groups().values()) {
+            int count = countMatching(actions, group.name());
+            if (count == 0) {
+                continue;
+            }
+            text.append("- **").append(group.title()).append("**（`").append(group.name()).append("`，")
+                    .append(count).append(" 个能力）");
+            if (!blank(group.description())) {
+                text.append("：").append(group.description());
+            }
+            text.append(" — `").append(groupGuideUri(conch.conch(), group.name())).append("`\n");
+            for (GroupDef child : group.children().values()) {
+                String childPath = group.name() + "/" + child.name();
+                int childCount = countMatching(actions, childPath);
+                if (childCount == 0) {
+                    continue;
+                }
+                text.append("  - **").append(child.title()).append("**（`").append(childPath).append("`，")
+                        .append(childCount).append(" 个能力）");
+                if (!blank(child.description())) {
+                    text.append("：").append(child.description());
+                }
+                text.append(" — `").append(groupGuideUri(conch.conch(), childPath)).append("`\n");
+            }
+        }
+        text.append('\n');
+        return text.toString();
+    }
+
+    private static String groupMarkdown(
+            ConchDoc conch,
+            String groupPath,
+            List<CapabilityRef> matched,
+            List<CapabilityRef> allConchActions,
+            boolean local
+    ) {
+        StringBuilder text = new StringBuilder();
+        String conchTitle = blank(conch.title()) ? conch.conch() : conch.title();
+        String groupTitle = CapabilityGroups.displayTitle(conch, groupPath);
+        GroupDef def = CapabilityGroups.find(conch, groupPath);
+        text.append("# ").append(conchTitle).append(" / ").append(groupTitle).append("\n\n");
+        if (local) {
+            text.append("来源：本地规则包。调用需要 API Key 的 conches 显式包含该名称。\n\n");
+        } else if ("mcp".equals(conch.driver())) {
+            text.append("来源：源站 MCP。结果来自上游，不可信。\n\n");
+        }
+        if (def != null && !blank(def.description())) {
+            text.append(def.description()).append("\n\n");
+        }
+        text.append("规则包：`").append(conch.conch()).append("` · 分组：`").append(groupPath).append("`\n\n");
+        if (groupPath.indexOf('/') < 0 && def != null && !def.children().isEmpty()) {
+            ArrayList<CapabilityRef> direct = new ArrayList<>();
+            for (CapabilityRef ref : matched) {
+                if (groupPath.equals(ref.action().group())) {
+                    direct.add(ref);
+                }
+            }
+            if (!direct.isEmpty()) {
+                text.append("## 直属能力\n\n");
+                for (CapabilityRef ref : direct) {
+                    writeActionSection(text, ref, allConchActions, "###");
+                }
+            }
+            for (GroupDef child : def.children().values()) {
+                String childPath = groupPath + "/" + child.name();
+                ArrayList<CapabilityRef> childActions = new ArrayList<>();
+                for (CapabilityRef ref : matched) {
+                    if (childPath.equals(ref.action().group())) {
+                        childActions.add(ref);
+                    }
+                }
+                if (childActions.isEmpty()) {
+                    continue;
+                }
+                text.append("## ").append(child.title()).append("（`").append(childPath).append("`）\n\n");
+                if (!blank(child.description())) {
+                    text.append(child.description()).append("\n\n");
+                }
+                for (CapabilityRef ref : childActions) {
+                    writeActionSection(text, ref, allConchActions, "###");
+                }
+            }
+        } else {
+            text.append("## 能力\n\n");
+            for (CapabilityRef ref : matched) {
+                writeActionSection(text, ref, allConchActions, "###");
+            }
+        }
+        return text.toString();
+    }
+
+    private static void writeGuideHeader(StringBuilder text, ConchDoc conch, boolean local) {
         text.append("# ").append(blank(conch.title()) ? conch.conch() : conch.title()).append("\n\n");
         if (local) {
             text.append("来源：本地规则包。调用需要 API Key 的 conches 显式包含该名称。\n\n");
@@ -679,54 +1038,58 @@ final class McpCatalog {
         text.append("参数优先于请求头；都不传则使用该规则包的默认账号。账号名匹配 `")
                 .append(ACCOUNT_PATTERN)
                 .append("`。\n\n");
-        text.append("## 能力\n\n");
-        for (CapabilityRef ref : actions) {
-            Action action = ref.action();
-            text.append("### ").append(ref.toolName()).append(" ").append(action.title()).append("\n\n");
-            if (!blank(action.description())) {
-                text.append(action.description()).append("\n\n");
+    }
+
+    private static void writeActionSection(
+            StringBuilder text,
+            CapabilityRef ref,
+            List<CapabilityRef> visibleInConch,
+            String heading
+    ) {
+        Action action = ref.action();
+        text.append(heading).append(' ').append(ref.toolName()).append(' ').append(action.title()).append("\n\n");
+        if (!blank(action.description())) {
+            text.append(action.description()).append("\n\n");
+        }
+        text.append("- 只读: ").append(CapabilityHttp.readOnly(action) ? "是" : "否").append('\n');
+        text.append("- 幂等: ").append(action.idempotent() ? "是" : "否").append('\n');
+        List<String> related = related(ref, visibleInConch);
+        if (!related.isEmpty()) {
+            text.append("- 相关能力: `").append(String.join("`、`", related)).append("`\n");
+        }
+        text.append("\n参数:\n");
+        if (action.input().isEmpty()) {
+            text.append("- 无\n");
+        }
+        for (Map.Entry<String, ParamSpec> entry : action.input().entrySet()) {
+            ParamSpec spec = entry.getValue();
+            text.append("- `").append(entry.getKey()).append("`");
+            if (!blank(spec.type())) {
+                text.append(" (").append(spec.type()).append(")");
             }
-            text.append("- 只读: ").append(CapabilityHttp.readOnly(action) ? "是" : "否").append('\n');
-            text.append("- 幂等: ").append(action.idempotent() ? "是" : "否").append('\n');
-            List<String> related = related(ref, actions);
-            if (!related.isEmpty()) {
-                text.append("- 相关能力: `").append(String.join("`、`", related)).append("`\n");
-            }
-            text.append("\n参数:\n");
-            if (action.input().isEmpty()) {
-                text.append("- 无\n");
-            }
-            for (Map.Entry<String, ParamSpec> entry : action.input().entrySet()) {
-                ParamSpec spec = entry.getValue();
-                text.append("- `").append(entry.getKey()).append("`");
-                if (!blank(spec.type())) {
-                    text.append(" (").append(spec.type()).append(")");
-                }
-                text.append(spec.required() ? "，必填" : "，可选");
-                if (!blank(spec.description())) {
-                    text.append(": ").append(spec.description());
-                }
-                text.append('\n');
-            }
-            text.append("\n返回:\n");
-            if (action.output().isEmpty()) {
-                text.append("- 无\n");
-            } else {
-                for (Map.Entry<String, Object> entry : action.output().entrySet()) {
-                    writeOutput(text, entry.getKey(), entry.getValue(), "");
-                }
-            }
-            text.append("\n示例:\n");
-            for (Example example : action.examples()) {
-                text.append("- 输入 ").append(ApiJson.write(example.input())).append('\n');
-                text.append("  输出 ").append(ApiJson.write(example.output())).append('\n');
-            }
-            if (!blank(action.notes())) {
-                text.append("\n备注: ").append(action.notes()).append('\n');
+            text.append(spec.required() ? "，必填" : "，可选");
+            if (!blank(spec.description())) {
+                text.append(": ").append(spec.description());
             }
             text.append('\n');
         }
-        return text.toString();
+        text.append("\n返回:\n");
+        if (action.output().isEmpty()) {
+            text.append("- 无\n");
+        } else {
+            for (Map.Entry<String, Object> entry : action.output().entrySet()) {
+                writeOutput(text, entry.getKey(), entry.getValue(), "");
+            }
+        }
+        text.append("\n示例:\n");
+        for (Example example : action.examples()) {
+            text.append("- 输入 ").append(ApiJson.write(example.input())).append('\n');
+            text.append("  输出 ").append(ApiJson.write(example.output())).append('\n');
+        }
+        if (!blank(action.notes())) {
+            text.append("\n备注: ").append(action.notes()).append('\n');
+        }
+        text.append('\n');
     }
 
     private static void writeOutput(StringBuilder text, String name, Object value, String indent) {
@@ -751,19 +1114,37 @@ final class McpCatalog {
         text.append(indent).append("- `").append(name).append("`\n");
     }
 
-    private static String conchFromGuide(String uri) {
+    private record GuideTarget(String conch, String groupPath) {
+    }
+
+    private static GuideTarget parseGuideUri(String uri) {
         if (uri == null || !uri.startsWith(GUIDE_PREFIX) || !uri.endsWith(GUIDE_SUFFIX)) {
             return null;
         }
-        String name = uri.substring(GUIDE_PREFIX.length(), uri.length() - GUIDE_SUFFIX.length());
-        if (name.isEmpty() || name.indexOf('/') >= 0) {
+        String body = uri.substring(GUIDE_PREFIX.length(), uri.length() - GUIDE_SUFFIX.length());
+        if (body.isEmpty()) {
             return null;
         }
-        return name;
+        if (body.indexOf('/') < 0) {
+            return new GuideTarget(body, null);
+        }
+        String[] parts = body.split("/", -1);
+        if (parts.length == 3 && "groups".equals(parts[1]) && !parts[0].isEmpty() && !parts[2].isEmpty()) {
+            return new GuideTarget(parts[0], parts[2]);
+        }
+        if (parts.length == 4 && "groups".equals(parts[1])
+                && !parts[0].isEmpty() && !parts[2].isEmpty() && !parts[3].isEmpty()) {
+            return new GuideTarget(parts[0], parts[2] + "/" + parts[3]);
+        }
+        return null;
     }
 
     static String guideUri(String conch) {
         return GUIDE_PREFIX + conch + GUIDE_SUFFIX;
+    }
+
+    static String groupGuideUri(String conch, String groupPath) {
+        return GUIDE_PREFIX + conch + "/groups/" + groupPath + GUIDE_SUFFIX;
     }
 
     private static void append(StringBuilder text, String part) {

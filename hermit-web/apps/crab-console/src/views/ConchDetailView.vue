@@ -624,6 +624,7 @@ watch(
             <CapabilityToggles
               :conch="conch"
               :capabilities="detail.capabilities"
+              :groups="detail.groups"
               :rule-disabled="detail.ruleDisabled === true"
               :empty-text="detail.ruleDisabled && detail.declarationsLoaded !== true && !detail.capabilities.length ? '这版已停用，能力先不展示' : '没有能力'"
             />
@@ -650,6 +651,7 @@ watch(
               :driver="detail.driver === 'mcp' ? 'mcp' : 'http'"
               :debug-enabled="debug.enabled"
               :capabilities="detail.capabilities"
+              :groups="detail.groups"
               :accounts="accounts"
               @changed="load"
             />

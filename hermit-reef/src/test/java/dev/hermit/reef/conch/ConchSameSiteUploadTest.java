@@ -168,6 +168,148 @@ class ConchSameSiteUploadTest {
         return hits;
     }
 
+    /**
+     * 两位作者各写一个应用的包，都经同一个认证中心登录；第三位作者写的是认证中心（门户）自己的包。
+     * 上传时写出认证地址，并提示已发布的包里谁也经它登录。都只是警告。
+     */
+    @Test
+    void uploadShowsAuthOriginsAndPackagesBehindTheSameOne() throws Exception {
+        JsonNode first = upload(ssoYaml("oa_sso", "1.0.0", "https://oa.corp.com", "https://sso.corp.com", null));
+        assertThat(coded(first, "AUTH_ORIGIN_ADDED")).hasSize(1);
+        assertThat(coded(first, "AUTH_ORIGIN_ADDED").get(0).path("message").asText())
+                .contains("https://sso.corp.com:443")
+                .contains("账号密码会提交到那里")
+                .doesNotContain("当前发布的版本没有");
+        assertThat(coded(first, "SAME_AUTH")).isEmpty();
+        publish("oa_sso", "1.0.0");
+
+        // 另一个应用，经同一个认证中心：不是同一网站，但提示共用认证地址。
+        JsonNode second = upload(ssoYaml("erp_sso", "1.0.0", "https://erp.corp.com", "HTTPS://SSO.corp.com:443", null));
+        assertThat(sameSite(second)).isEmpty();
+        List<JsonNode> shared = coded(second, "SAME_AUTH");
+        assertThat(shared).hasSize(1);
+        assertThat(shared.get(0).path("path").asText()).isEqualTo("auth.origins");
+        assertThat(shared.get(0).path("message").asText())
+                .contains("oa_sso")
+                .contains("https://sso.corp.com:443")
+                .contains("出现登录页才提交账号密码");
+        publish("erp_sso", "1.0.0");
+
+        // 认证中心自己的包：它的 base_url 就是别人的认证地址。
+        JsonNode portal = upload(yaml("sso_portal", "1.0.0", "https://sso.corp.com", null));
+        assertThat(sameSite(portal)).isEmpty();
+        assertThat(coded(portal, "SAME_AUTH")).extracting(node -> node.path("message").asText())
+                .hasSize(2)
+                .anySatisfy(text -> assertThat(text).contains("erp_sso"))
+                .anySatisfy(text -> assertThat(text).contains("oa_sso"));
+        assertThat(coded(portal, "AUTH_ORIGIN_ADDED")).isEmpty();
+
+        // 认证地址引用配置项：默认值算包里写的地址；没有默认值时 Reef 看不到，只写出配置项名。
+        JsonNode configured = upload(ssoYaml(
+                "hr_sso", "1.0.0", "https://hr.corp.com", "{{config.sso_url}}", "https://sso.corp.com/"));
+        assertThat(coded(configured, "SAME_AUTH")).hasSize(2);
+        assertThat(coded(configured, "AUTH_ORIGIN_ADDED").get(0).path("message").asText())
+                .contains("配置项 sso_url 填的地址（默认 https://sso.corp.com:443）");
+        publish("hr_sso", "1.0.0");
+        // 同一个配置项、默认值没变：不提示。默认值换了主机：没另填的 Crab 会把凭证交到新地址，要提示。
+        assertThat(coded(upload(ssoYaml(
+                "hr_sso", "1.1.0", "https://hr.corp.com", "{{config.sso_url}}", "https://SSO.corp.com:443/cas")),
+                "AUTH_ORIGIN_ADDED")).isEmpty();
+        JsonNode redirected = upload(ssoYaml(
+                "hr_sso", "1.2.0", "https://hr.corp.com", "{{config.sso_url}}", "https://login2.corp.com"));
+        assertThat(coded(redirected, "AUTH_ORIGIN_ADDED").get(0).path("message").asText())
+                .contains("配置项 sso_url 填的地址（默认 https://login2.corp.com:443）")
+                .contains("当前发布的版本没有");
+        // 只是去掉默认值：还是那个配置项，不算新增。
+        assertThat(coded(upload(ssoYaml("hr_sso", "1.3.0", "https://hr.corp.com", "{{config.sso_url}}", "")),
+                "AUTH_ORIGIN_ADDED")).isEmpty();
+        JsonNode blank = upload(ssoYaml("crm_sso", "1.0.0", "https://crm.corp.com", "{{config.sso_url}}", ""));
+        assertThat(coded(blank, "SAME_AUTH")).isEmpty();
+
+        // 新版本没有新增认证地址：不再提示新增。换了认证地址：提示，并写明当前发布的版本没有。
+        assertThat(coded(upload(ssoYaml("oa_sso", "1.1.0", "https://oa.corp.com", "https://sso.corp.com:443", null)),
+                "AUTH_ORIGIN_ADDED")).isEmpty();
+        JsonNode moved = upload(ssoYaml("oa_sso", "1.2.0", "https://oa.corp.com", "https://login.corp.com", null));
+        assertThat(coded(moved, "AUTH_ORIGIN_ADDED").get(0).path("message").asText())
+                .contains("https://login.corp.com:443")
+                .contains("当前发布的版本没有");
+        assertThat(coded(moved, "SAME_AUTH")).isEmpty();
+
+        // 详情里写出包里的认证地址。
+        MvcResult detail = mockMvc.perform(get("/api/admin/conches/erp_sso")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode data = objectMapper.readTree(detail.getResponse().getContentAsString(StandardCharsets.UTF_8)).path("data");
+        assertThat(data.path("authOrigins")).hasSize(1);
+        assertThat(data.path("authOrigins").get(0).asText()).isEqualTo("HTTPS://SSO.corp.com:443");
+    }
+
+    private static List<JsonNode> coded(JsonNode uploaded, String code) {
+        List<JsonNode> hits = new java.util.ArrayList<>();
+        for (JsonNode warning : uploaded.path("warnings")) {
+            if (code.equals(warning.path("code").asText())) {
+                hits.add(warning);
+            }
+        }
+        return hits;
+    }
+
+    private static String ssoYaml(String conch, String version, String baseUrl, String origin, String configDefault) {
+        String config = configDefault == null
+                ? ""
+                : configDefault.isEmpty()
+                        ? """
+                          config:
+                            sso_url: { type: url, label: 认证中心, required: false }
+                          """
+                        : """
+                          config:
+                            sso_url: { type: url, label: 认证中心, required: false, default: "%s" }
+                          """.formatted(configDefault);
+        String login = origin.contains("config.") ? "{{config.sso_url}}/login" : origin + "/login";
+        return """
+                conch: %s
+                version: %s
+                driver: http
+                min_crab_version: 1.11.0
+                base_url: "%s"
+                title: 经认证中心登录
+                description: 认证地址上传提示测试。
+                owner: 平台组
+                credentials:
+                  password: { type: secret, label: 密码, required: true }
+                %sauth:
+                  origins: ["%s"]
+                  steps:
+                    - request: { method: GET, path: /, follow_redirects: true }
+                    - if:
+                        contains: 'name="password"'
+                        then:
+                          - request:
+                              method: POST
+                              url: "%s"
+                              form: { password: "{{credential.password}}" }
+                              follow_redirects: true
+                actions:
+                  get_me:
+                    title: 当前用户
+                    description: 返回常量。
+                    method: GET
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - set: {ok: "1"}
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: "1"}
+                    notes: 无
+                    related: []
+                """.formatted(conch, version, baseUrl, config, origin, login);
+    }
+
     private void publish(String conch, String version) throws Exception {
         mockMvc.perform(post("/api/admin/conches/" + conch + "/versions/" + version + "/publish")
                         .header("Authorization", "Bearer " + adminToken))

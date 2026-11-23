@@ -54,6 +54,11 @@ export interface ConchSummary {
    * 按生效的 `base_url` 判断，配置里填的优先。只是提示：它们各自登录，不共用 Cookie。
    */
   sameSite?: string[]
+  /**
+   * 本机其它已启用、和它经同一个认证地址（`auth.origins`，门户或 SSO）登录、但不是同一网站的规则包名，已排序。
+   * 一个包的认证地址是另一个包的认证地址或站点就算。只是提示：它们各自登录，不共用 Cookie。
+   */
+  sameAuth?: string[]
   /** 本机同名本地包的版本，没有为 null。和 reefVersion 都有值时，两份同名，只有 source 那份生效。 */
   localVersion?: string | null
   /** 本机同名正式包的版本，没有为 null。 */
@@ -124,7 +129,11 @@ export interface ConchDetail {
   site?: string | null
   /** 见 {@link ConchSummary.sameSite}。 */
   sameSite?: string[]
-  /** `sameSite` 里可能正在和它互相顶掉登录的包，见 {@link SessionContention}。 */
+  /** 登录时还要访问的认证地址（`auth.origins`，配置引用按本机填的值），`scheme://host:port`。没有为空数组。 */
+  authOrigins?: string[]
+  /** 见 {@link ConchSummary.sameAuth}。 */
+  sameAuth?: string[]
+  /** `sameSite`、`sameAuth` 里可能正在和它互相顶掉登录的包，见 {@link SessionContention}。 */
   contendingWith?: string[]
   /** 已加载版本。签名损坏且未载入时为 null，不表示已安装。 */
   version: string | null
@@ -706,6 +715,8 @@ export interface LocalImportResult {
   replaced: boolean
   /** 导入后本机其它已启用的同网站规则包，见 {@link ConchSummary.sameSite}。 */
   sameSite?: string[]
+  /** 见 {@link ConchSummary.sameAuth}。 */
+  sameAuth?: string[]
   /**
    * 不阻止保存。控制台给这些代码加短中文：`IGNORED_REQUEST_FIELD`（未知字段不会发送）、
    * `DOUBLE_ENCODE`（`query` / `form` 用了 `urlencode`）、`PERCENT_ENCODED`（`query` 字面值里已有 `%xx`）、
@@ -864,6 +875,8 @@ export interface SubscriptionResult {
   subscribed: boolean
   /** 订阅后本机其它已启用的同网站规则包，见 {@link ConchSummary.sameSite}。 */
   sameSite?: string[]
+  /** 见 {@link ConchSummary.sameAuth}。 */
+  sameAuth?: string[]
   outcome: SubscriptionOutcome | null
 }
 
@@ -1015,15 +1028,15 @@ export const api = {
 
   config: (conch: string) => http.get<{ fields: Record<string, ConfigValue> }>(`${conchPath(conch)}/config`),
   writeConfig: (conch: string, values: Record<string, string>) =>
-    http.put<{ updated: boolean; sameSite?: string[] }>(`${conchPath(conch)}/config`, values),
+    http.put<{ updated: boolean; sameSite?: string[]; sameAuth?: string[] }>(`${conchPath(conch)}/config`, values),
 
   /** 启用或停用整个规则包。停用后所有 Key 都不能调用，凭证、账号和配置不动。 */
   setConchEnabled: (conch: string, enabled: boolean) =>
-    http.post<{ conch: string; switchedOff: boolean; sameSite?: string[] }>(`${conchPath(conch)}/${enabled ? 'enable' : 'disable'}`),
+    http.post<{ conch: string; switchedOff: boolean; sameSite?: string[]; sameAuth?: string[] }>(`${conchPath(conch)}/${enabled ? 'enable' : 'disable'}`),
 
   /** 同名的本地包和正式包之间切换生效的那份。copy 只在切到 REEF 时有效：复制本地包的账号、凭证和配置。 */
   setConchSource: (conch: string, source: 'LOCAL' | 'REEF', copy = false) =>
-    http.post<{ conch: string; source: 'LOCAL' | 'REEF'; copied: boolean; copiedAccounts: number; copiedConfigKeys: number; sameSite?: string[] }>(
+    http.post<{ conch: string; source: 'LOCAL' | 'REEF'; copied: boolean; copiedAccounts: number; copiedConfigKeys: number; sameSite?: string[]; sameAuth?: string[] }>(
       `${conchPath(conch)}/source`,
       source === 'REEF' ? { source, copy } : { source },
     ),

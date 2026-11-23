@@ -11,6 +11,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -46,6 +48,7 @@ import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.engine.SessionManager;
 import java.util.TreeMap;
+import dev.hermit.common.http.AuthOrigins;
 import dev.hermit.common.http.SiteAddress;
 import dev.hermit.crab.engine.SessionContention;
 import dev.hermit.crab.upstream.McpCallPayload;
@@ -316,7 +319,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         return tlsTrust;
     }
 
-    /** 检测只允许已加载规则的 base_url、MCP 上游和 OAuth 端点，以及 Reef 地址。 */
+    /** 检测只允许已加载规则的 base_url、认证地址、MCP 上游和 OAuth 端点，以及 Reef 地址。 */
     private boolean probeAllowed(String host, int port) {
         return probeTargets().contains(host + ":" + port);
     }
@@ -325,6 +328,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         LinkedHashSet<String> targets = new LinkedHashSet<>();
         for (ConchDoc doc : registry.snapshot().values()) {
             addProbeTarget(targets, doc.baseUrl());
+            // 登录步骤也会连认证地址，那边的证书同样要能检测和信任。
+            for (String origin : AuthOrigins.declared(doc)) {
+                addProbeTarget(targets, origin);
+            }
             McpUpstream upstream = doc.upstream();
             if (upstream == null) {
                 continue;
@@ -338,6 +345,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             if (auth != null) {
                 addProbeTarget(targets, auth.authorizationEndpoint());
                 addProbeTarget(targets, auth.tokenEndpoint());
+            }
+        }
+        for (List<String> origins : authOrigins().values()) {
+            for (String origin : origins) {
+                addProbeTarget(targets, origin);
             }
         }
         addProbeTarget(targets, config.reefUrl());
@@ -1208,6 +1220,28 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         return sites;
     }
 
+    /**
+     * 每个已启用、当前生效的 {@code driver: http} 包登录时还要访问的认证地址（{@code auth.origins}，
+     * 配置引用按这台 Crab 填的值），不含它自己的站点。没有认证地址的包不在里面。
+     */
+    public Map<String, List<String>> authOrigins() {
+        TreeMap<String, List<String>> all = new TreeMap<>();
+        for (String name : registry.snapshot().keySet()) {
+            ConchRegistry.Active active = registry.active(name).orElse(null);
+            if (active == null || conchSwitchedOff.contains(name) || !AuthOrigins.used(active.doc())) {
+                continue;
+            }
+            ConchDoc doc = active.doc();
+            Map<String, String> merged = DeclaredSettings.mergedConfig(doc, conchConfig.all(active.origin(), name));
+            ArrayList<String> origins = new ArrayList<>(AuthOrigins.effective(doc, merged));
+            origins.remove(SiteAddress.effective(doc, merged.get("base_url")));
+            if (!origins.isEmpty()) {
+                all.put(name, List.copyOf(origins));
+            }
+        }
+        return all;
+    }
+
     /** 和这个包访问同一网站的其它已启用规则包，按包名排序。只用来提示。 */
     public List<String> sameSite(String conch) {
         return sameSite(conch, sites());
@@ -1227,16 +1261,59 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         return List.copyOf(peers);
     }
 
-    /** 可能在互相顶掉登录的规则包。只留现在仍然访问同一网站的。 */
+    /** 和这个包经同一个认证地址登录、但不是同一网站的其它已启用规则包，按包名排序。只用来提示。 */
+    public List<String> sameAuth(String conch) {
+        return sameAuth(conch, sites(), authOrigins());
+    }
+
+    /**
+     * 两个包的地址（站点加认证地址）有一项相同、站点又不同：一个包的认证地址是另一个包的认证地址，
+     * 或者就是另一个包的站点（那个包本身是门户）。
+     */
+    public static List<String> sameAuth(
+            String conch, Map<String, String> sites, Map<String, List<String>> authOrigins) {
+        String site = sites.get(conch);
+        if (site == null) {
+            return List.of();
+        }
+        List<String> mine = authOrigins.getOrDefault(conch, List.of());
+        ArrayList<String> peers = new ArrayList<>();
+        for (Map.Entry<String, String> entry : sites.entrySet()) {
+            String other = entry.getKey();
+            if (other.equals(conch) || entry.getValue().equals(site)) {
+                continue;
+            }
+            List<String> theirs = authOrigins.getOrDefault(other, List.of());
+            if (mine.contains(entry.getValue()) || theirs.contains(site)
+                    || !Collections.disjoint(mine, theirs)) {
+                peers.add(other);
+            }
+        }
+        return List.copyOf(peers);
+    }
+
+    /**
+     * 可能在互相顶掉登录的规则包。只留两个包现在仍然都访问那个地址的（站点或认证地址）；
+     * 同一对包在几个地址上都告警时只留最近的一条。
+     */
     public List<SessionContention.Pair> contention() {
         Map<String, String> sites = sites();
+        Map<String, List<String>> auth = authOrigins();
         ArrayList<SessionContention.Pair> pairs = new ArrayList<>();
+        HashSet<List<String>> seen = new HashSet<>();
         for (SessionContention.Pair pair : contention.active()) {
-            if (pair.site().equals(sites.get(pair.first())) && pair.site().equals(sites.get(pair.second()))) {
+            if (reaches(pair.first(), pair.site(), sites, auth)
+                    && reaches(pair.second(), pair.site(), sites, auth)
+                    && seen.add(List.of(pair.first(), pair.second()))) {
                 pairs.add(pair);
             }
         }
         return List.copyOf(pairs);
+    }
+
+    private static boolean reaches(
+            String conch, String address, Map<String, String> sites, Map<String, List<String>> auth) {
+        return address.equals(sites.get(conch)) || auth.getOrDefault(conch, List.of()).contains(address);
     }
 
     private List<String> contendingWith(String conch) {

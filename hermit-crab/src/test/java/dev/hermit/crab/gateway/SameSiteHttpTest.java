@@ -242,6 +242,136 @@ class SameSiteHttpTest {
         assertThat(contention()).isEmpty();
     }
 
+    /**
+     * 两个包访问不同的应用，都经同一个认证中心登录。认证中心同一时间只认最后一次登录发的令牌。
+     * Crab 把它们列为「经同一个认证地址登录」，交替重新登录同样告警，告警里写的是认证地址。
+     */
+    @Test
+    void packagesBehindOneAuthOriginAreListedAndAlertedLikeSameSiteOnes() throws Exception {
+        AtomicInteger ssoLogins = new AtomicInteger();
+        String[] token = {""};
+        HttpServer sso = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        sso.createContext("/sso-login", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            token[0] = "tok-" + UUID.randomUUID();
+            ssoLogins.incrementAndGet();
+            respond(exchange, 200, "{\"token\":\"" + token[0] + "\"}");
+        });
+        HttpServer other = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        com.sun.net.httpserver.HttpHandler app = exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            boolean valid = !token[0].isEmpty() && token[0].equals(exchange.getRequestHeaders().getFirst("X-Token"));
+            respond(exchange, valid ? 200 : 401, "{\"ok\":" + valid + "}");
+        };
+        site.createContext("/tdata", app);
+        other.createContext("/tdata", app);
+        sso.start();
+        other.start();
+        try {
+            String ssoUrl = "http://localhost:" + sso.getAddress().getPort();
+            String otherUrl = "http://127.0.0.1:" + other.getAddress().getPort();
+            installBehindSso("app_a", siteUrl, "\"" + ssoUrl + "\"");
+            installBehindSso("app_b", otherUrl, "\"{{config.sso_url}}\"");
+            install("pkg_plain", "http://127.0.0.1:9", false);
+
+            // app_b 的认证地址引用配置项，还没填：不算。
+            assertThat(names(detail("app_a").path("authOrigins"))).containsExactly(ssoUrl);
+            assertThat(names(detail("app_a").path("sameAuth"))).isEmpty();
+            assertThat(names(detail("app_b").path("authOrigins"))).isEmpty();
+
+            JsonNode saved = console("PUT", "/console/api/conches/app_b/config",
+                    "{\"sso_url\":\"" + ssoUrl.replace("http://", "HTTP://") + "\"}");
+            assertThat(names(saved.path("sameAuth"))).containsExactly("app_a");
+            assertThat(names(saved.path("sameSite"))).isEmpty();
+            assertThat(names(detail("app_a").path("sameAuth"))).containsExactly("app_b");
+            assertThat(names(detail("app_b").path("authOrigins"))).containsExactly(ssoUrl);
+            assertThat(names(detail("app_a").path("sameSite"))).isEmpty();
+            assertThat(names(detail("pkg_plain").path("sameAuth"))).isEmpty();
+            for (JsonNode row : console("GET", "/console/api/conches", null).path("conches")) {
+                List<String> expected = switch (row.path("conch").asText()) {
+                    case "app_a" -> List.of("app_b");
+                    case "app_b" -> List.of("app_a");
+                    default -> List.of();
+                };
+                assertThat(names(row.path("sameAuth"))).isEqualTo(expected);
+            }
+
+            // 门户本身也是一个规则包：它的站点就是 app_a 的认证地址。
+            install("portal_pkg", ssoUrl, false);
+            assertThat(names(detail("app_a").path("sameAuth"))).containsExactly("app_b", "portal_pkg");
+            assertThat(names(detail("portal_pkg").path("sameAuth"))).containsExactly("app_a", "app_b");
+            console("POST", "/console/api/conches/portal_pkg/disable", "{}");
+
+            String key = key("all", new ApiKeyScope(Set.of(), Set.of(), false, true));
+            for (int round = 0; round < 4; round++) {
+                Reply first = call("GET", "/api/app_a/read", key);
+                assertThat(first.status).as(first.json.toString()).isEqualTo(200);
+                Reply second = call("GET", "/api/app_b/read", key);
+                assertThat(second.status).as(second.json.toString()).isEqualTo(200);
+            }
+            assertThat(ssoLogins.get()).isEqualTo(8);
+            JsonNode pairs = contention();
+            assertThat(pairs).hasSize(1);
+            assertThat(pairs.get(0).path("site").asText()).isEqualTo(ssoUrl);
+            assertThat(names(pairs.get(0).path("conches"))).containsExactly("app_a", "app_b");
+            assertThat(names(detail("app_b").path("contendingWith"))).containsExactly("app_a");
+
+            // app_b 改用别的认证中心之后，不再和 app_a 共用认证地址，告警不再显示。
+            JsonNode moved = console("PUT", "/console/api/conches/app_b/config",
+                    "{\"sso_url\":\"http://localhost:9\"}");
+            assertThat(names(moved.path("sameAuth"))).isEmpty();
+            assertThat(contention()).isEmpty();
+        } finally {
+            sso.stop(0);
+            other.stop(0);
+        }
+    }
+
+    private void installBehindSso(String name, String baseUrl, String origin) {
+        String login = origin.contains("config.") ? "\"{{config.sso_url}}/sso-login\"" : origin.replace("\"", "") + "/sso-login";
+        ConchDoc doc = ConchParser.parse("""
+                conch: %s
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.11.0
+                base_url: %s
+                title: 经认证中心登录 %s
+                description: 应用和认证中心不在同一个主机。
+                credentials:
+                  password: { type: secret, label: 密码, required: true }
+                config:
+                  sso_url: { type: url, label: 认证中心, required: false }
+                auth:
+                  origins: [%s]
+                  steps:
+                    - request:
+                        method: POST
+                        url: %s
+                        form: { password: "{{credential.password}}" }
+                    - extract:
+                        token: { jsonpath: "$.token" }
+                actions:
+                  read:
+                    title: 读
+                    description: 读一条数据。
+                    idempotent: true
+                    mcp: { expose: true, read_only: true }
+                    steps:
+                      - request: { method: GET, path: /tdata, headers: { X-Token: "{{login.token}}" } }
+                      - set: { message: seen }
+                    output:
+                      message: { type: string, description: 文本, value: seen }
+                    examples:
+                      - input: {}
+                        output: { message: seen }
+                    notes: 无
+                    related: []
+                """.formatted(name, baseUrl, name, origin, login));
+        runtime.registry().put(doc);
+        runtime.admin().createAccount(name, "default", Actors.CLI);
+        runtime.admin().writeCredentials(doc, "default", Map.of("password", PASSWORD), Actors.CLI);
+    }
+
     private void install(String name, String baseUrl, boolean aliveCheck) {
         ConchDoc doc = ConchParser.parse(yaml(name, baseUrl, aliveCheck));
         runtime.registry().put(doc);

@@ -94,6 +94,23 @@ final class StepRunner {
             boolean capture,
             Map<String, String> libraries
     ) {
+        return run(step, vars, expectPrefix, client, afterExchange, cookies, base, deadlineNanos, capture, libraries,
+                AuthReach.NONE);
+    }
+
+    Outcome run(
+            Step step,
+            Map<String, Object> vars,
+            String expectPrefix,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            BasicCookieStore cookies,
+            URI base,
+            long deadlineNanos,
+            boolean capture,
+            Map<String, String> libraries,
+            AuthReach reach
+    ) {
         Object rendered = "script".equals(step.type())
                 ? renderScript(step.def(), vars)
                 : templates.render(step.def(), vars);
@@ -103,9 +120,9 @@ final class StepRunner {
         }
         return switch (step.type()) {
             case "request" -> request(
-                    spec, vars, cookies, expectPrefix, client, afterExchange, base, deadlineNanos, capture);
+                    spec, vars, cookies, expectPrefix, client, afterExchange, base, deadlineNanos, capture, reach);
             case "extract" -> extract(spec, vars, deadlineNanos, capture);
-            case "assert" -> check(spec, vars, cookies, capture);
+            case "assert" -> check(spec, vars, cookies, base, capture);
             case "set" -> set(spec, vars, capture);
             case "script" -> script(spec, vars, deadlineNanos, capture, libraries);
             default -> throw new RuleProblem(
@@ -135,7 +152,8 @@ final class StepRunner {
             Runnable afterExchange,
             URI base,
             long deadlineNanos,
-            boolean capture
+            boolean capture,
+            AuthReach reach
     ) {
         HttpResult result;
         Retry retry = Retry.of(spec.get("retry"));
@@ -155,7 +173,8 @@ final class StepRunner {
                     expectPrefix,
                     deadlineNanos,
                     HttpCalls.sensitiveValues(vars, cookies),
-                    bodyIdle);
+                    bodyIdle,
+                    reach);
             String reason = retry == null ? null : retry.reason(result.status());
             if (reason != null && retry.again(retried == null ? 0 : retried.size(), deadlineNanos)) {
                 retried = Retry.note(retried, reason);
@@ -307,7 +326,8 @@ final class StepRunner {
         return changed;
     }
 
-    private Outcome check(Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies, boolean capture) {
+    private Outcome check(
+            Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies, URI base, boolean capture) {
         Object response = vars.get("response");
         Map<String, Object> map = Values.map(response);
         if (map == null || !map.containsKey("status")) {
@@ -334,7 +354,7 @@ final class StepRunner {
                         fail(NOT_CONTAINS_MISMATCH);
                     }
                 }
-                case "cookie_exists" -> checkCookie(Values.text(entry.getValue()), cookies);
+                case "cookie_exists" -> checkCookie(Values.text(entry.getValue()), cookies, base);
                 case "header_exists" -> checkHeader(Values.text(entry.getValue()), headers);
                 case "not_redirected_to" -> {
                     if (redirectedTo(redirect, url, Values.text(entry.getValue()))) {
@@ -354,7 +374,7 @@ final class StepRunner {
      * if 和 repeat.until 的判断。写了几个键就要全部成立。和 assert 不同，不成立只返回 false；
      * 要看响应的键在还没有响应时算规则写错。
      */
-    boolean test(Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies) {
+    boolean test(Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies, URI base) {
         Map<String, Object> response = Values.map(vars.get("response"));
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
             String key = entry.getKey();
@@ -366,8 +386,7 @@ final class StepRunner {
                 case "status" -> statusIn(value, Values.integer(response.get("status"), -1));
                 case "contains" -> bodyOf(response).contains(Values.text(value));
                 case "not_contains" -> !bodyOf(response).contains(Values.text(value));
-                case "cookie_exists" -> cookies.getCookies().stream()
-                        .anyMatch(cookie -> Values.text(value).equals(cookie.getName()));
+                case "cookie_exists" -> hasCookie(Values.text(value), cookies, base);
                 case "header_exists" -> {
                     Map<String, Object> headers = Values.map(response.get("headers"));
                     yield headers != null && headers.containsKey(Values.text(value).toLowerCase(Locale.ROOT));
@@ -602,13 +621,20 @@ final class StepRunner {
         return "规则声明的状态";
     }
 
-    private static void checkCookie(String name, BasicCookieStore cookies) {
+    private static void checkCookie(String name, BasicCookieStore cookies, URI base) {
+        if (!hasCookie(name, cookies, base)) {
+            fail(COOKIE_MISSING_SUMMARY);
+        }
+    }
+
+    /** 只看会发往 base_url 主机的 Cookie。认证地址上的同名 Cookie 不算。 */
+    private static boolean hasCookie(String name, BasicCookieStore cookies, URI base) {
         for (Cookie cookie : cookies.getCookies()) {
-            if (name.equals(cookie.getName())) {
-                return;
+            if (name.equals(cookie.getName()) && AuthReach.sentTo(cookie, base)) {
+                return true;
             }
         }
-        fail(COOKIE_MISSING_SUMMARY);
+        return false;
     }
 
     private static void checkHeader(String name, Map<String, Object> headers) {

@@ -388,7 +388,7 @@ class SessionManagerTest {
                 sessions.closeIdleConnections(java.time.Duration.ofMillis(1));
                 assertThat(sessions.idleConnections(key)).isZero();
                 assertThat(sessions.loggedIn(key)).isTrue();
-                assertThat(sessions.cookieValue(key, "sid")).isEqualTo("cookie-kept");
+                assertThat(sessions.cookieValue(key, "sid", null)).isEqualTo("cookie-kept");
 
                 assertThat(get(sessions, key, url)).isEqualTo("ok");
             } finally {
@@ -403,6 +403,58 @@ class SessionManagerTest {
         return sessions.client(key).execute(
                 new org.apache.hc.client5.http.classic.methods.HttpGet(url),
                 response -> org.apache.hc.core5.http.io.entity.EntityUtils.toString(response.getEntity()));
+    }
+
+    /** 没写 Domain 的 Cookie 重启后仍然只属于那个主机；按名字读 Cookie 只看会发往 base_url 的。 */
+    @Test
+    void hostOnlyCookieStaysHostOnlyAcrossARestartAndNamedReadsFollowTheBaseHost() throws Exception {
+        List<List<StoredCookie>> saved = new ArrayList<>();
+        SessionPersistence store = new SessionPersistence() {
+            @Override
+            public List<StoredCookie> load(SessionKey key) {
+                return List.of(
+                        new StoredCookie("host", "host-only-value", "corp.example", "/", null, false, false, true),
+                        new StoredCookie("wide", "domain-value", "corp.example", "/", null, false, false, false),
+                        // 这个字段加入之前存的：没有 hostOnly，按原来的域名匹配。
+                        new StoredCookie("old", "legacy-value", "corp.example", "/", null, false, false),
+                        new StoredCookie("sso", "sso-value", "sso.other.example", "/", null, false, false, true));
+            }
+
+            @Override
+            public void save(SessionKey key, List<StoredCookie> cookies) {
+                saved.add(cookies);
+            }
+
+            @Override
+            public void delete(SessionKey key) {
+            }
+        };
+        try (SessionManager sessions = new SessionManager(store)) {
+            SessionKey key = new SessionKey(Origin.OFFICIAL, "persist_probe", "alice");
+            assertThat(sessions.tryLock(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(5))).isTrue();
+            try {
+                java.net.URI sub = java.net.URI.create("https://oa.corp.example/app");
+                java.net.URI apex = java.net.URI.create("https://CORP.example./");
+                assertThat(sessions.cookieValue(key, "host", sub)).isNull();
+                assertThat(sessions.cookieValue(key, "host", apex)).isEqualTo("host-only-value");
+                assertThat(sessions.cookieValue(key, "wide", sub)).isEqualTo("domain-value");
+                assertThat(sessions.cookieValue(key, "old", sub)).isEqualTo("legacy-value");
+                assertThat(sessions.cookieValue(key, "sso", sub)).isNull();
+                assertThat(sessions.cookieValue(key, "sso", null)).isEqualTo("sso-value");
+                assertThat(sessions.cookieValue(key, "wide", java.net.URI.create("https://evilcorp.example/")))
+                        .isNull();
+
+                sessions.persist(key);
+                assertThat(saved).hasSize(1);
+                assertThat(saved.get(0)).filteredOn(StoredCookie::hostOnly)
+                        .extracting(StoredCookie::name).containsExactlyInAnyOrder("host", "sso");
+            } finally {
+                sessions.unlock(key);
+            }
+        }
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(
+                new StoredCookie("sid", "v", "h", "/", null, false, false));
+        assertThat(json).as("旧版本读不了多出来的字段，没用到时不写").doesNotContain("hostOnly");
     }
 
     private static void putCookie(SessionManager sessions, SessionKey key, String value) {

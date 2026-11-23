@@ -146,6 +146,36 @@ class LocalConchHistoryTest {
         }
     }
 
+    /** 登录步骤会把账号密码发到认证地址，所以本地包新增认证地址和改 base_url 一样要确认。 */
+    @Test
+    void addingAnAuthOriginWidensTheBoundary() throws Exception {
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("auth-origin"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource);
+            local.importBytes(LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            String withOrigin = LocalConchBehaviorTest.ping("hist_ping", "1.1.0")
+                    .replace("min_crab_version: 1.0.0", "min_crab_version: 1.11.0")
+                    .replace("credentials: {}", """
+                            credentials: {}
+                            auth:
+                              origins:
+                                - http://localhost:19
+                              steps:
+                                - request: { method: GET, url: "http://localhost:19/login" }
+                            """.stripTrailing());
+            LocalConches.PendingOverwrite staged =
+                    local.stagePending(withOrigin.getBytes(StandardCharsets.UTF_8), Actors.MCP, "agent-key").orElseThrow();
+            assertThat(staged.addedDestinations()).containsExactly("http://localhost:19");
+            assertThat(local.packages()).extracting(pkg -> pkg.version()).containsExactly("1.0.0");
+
+            local.confirmPending("hist_ping", staged.sha256(), Actors.CONSOLE);
+            assertThat(local.packages()).extracting(pkg -> pkg.version()).containsExactly("1.1.0");
+
+            // 认证地址没变的新版本不用再确认。
+            String same = withOrigin.replace("version: 1.1.0", "version: 1.2.0");
+            assertThat(local.stagePending(same.getBytes(StandardCharsets.UTF_8), Actors.MCP, "agent-key")).isEmpty();
+        }
+    }
+
     @Test
     void dotfilesAreNotLoaded() throws Exception {
         try (OpenCrab crab = OpenCrab.open(temp.resolve("dot"))) {

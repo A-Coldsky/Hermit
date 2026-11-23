@@ -228,7 +228,7 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名、分组名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.10.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。用了 `type: file`、`multipart` 或 `download` 时不低于 1.8.0。用了 `if`、`repeat`、`retry` 或 `auth.concurrent_reads` 时不低于 1.9.0。用了 `groups` 或能力的 `group` 时不低于 1.10.0 |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.11.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。用了 `type: file`、`multipart` 或 `download` 时不低于 1.8.0。用了 `if`、`repeat`、`retry` 或 `auth.concurrent_reads` 时不低于 1.9.0。用了 `groups` 或能力的 `group` 时不低于 1.10.0。用了 `auth.origins` 时不低于 1.11.0 |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -237,6 +237,7 @@ actions:
 | `auth.alive_check` | 请求及 `expect_not_redirect`，空闲超时后检测会话。可以引用 `{{login.名字}}` |
 | `auth.cookies` | 可选。模板标识符到 Cookie 名，例如 `xsrf: "XSRF-TOKEN"`，之后写 `{{login.xsrf}}`。空映射不要求 1.3.0。非空时 `min_crab_version` 不低于 1.3.0 |
 | `auth.concurrent_reads` | 可选布尔，默认 false。打开后，写了 `mcp.read_only: true` 的能力在同一账号下可以同时执行，见「同一账号的只读能力并行」。`min_crab_version` 不低于 1.9.0 |
+| `auth.origins` | 可选。登录步骤除了 `base_url` 还要访问的认证地址（门户、SSO），最多 4 个，见「门户和 SSO 登录」。非空时 `min_crab_version` 不低于 1.11.0 |
 | `groups` | 可选。能力分组目录（最多两级），用于 MCP 渐进式发现、Crab 按分组启停、API Key 按分组授权及 OpenAPI 标签，见「能力分组」。非空时 `min_crab_version` 不低于 1.10.0 |
 | `actions` | 能力映射，每个包含输入、步骤、输出和示例等，可选填 `group` 归入已声明的分组 |
 | `health_check` | 目前仅解析/保存，没有自动执行器 |
@@ -380,6 +381,107 @@ actions:
 - 并行的调用共用同一个 Cookie 罐。**上游每次响应都换 Cookie 或令牌（滚动会话、一次性 CSRF 令牌）时不要打开**，并行的请求会互相顶掉。只读能力里也不要依赖上一步请求在服务器上留下的状态（例如「先选部门，再查列表」靠服务器会话记住部门），两个调用会串。
 - 没有任何能力写 `mcp.read_only: true` 时是警告 `CONCURRENT_READS`，message 为「没有能力写 mcp.read_only: true，concurrent_reads 不起作用」。`min_crab_version` 低于 1.9.0 是 `MIN_CRAB_VERSION`，message 为「使用 auth.concurrent_reads 时 min_crab_version 必须不低于 1.9.0」。值不是布尔是解析错误。`driver: mcp` 的包不能写 `auth`。
 
+## 门户和 SSO 登录
+
+规则包的每个请求默认只能发往 `base_url`（协议、主机、端口都相同），跳到别处的重定向也不跟随。登录要先去另一个主机上的门户或认证中心（CAS、OIDC、SAML、自研门户）时，把那个地址写进 `auth.origins`：
+
+```yaml
+conch: sso_oa
+version: 1.0.0
+driver: http
+min_crab_version: 1.11.0
+base_url: https://oa.example.com
+title: 经认证中心登录的待办
+description: 应用和认证中心在两个主机上，登录时先被送到认证中心。
+credentials:
+  username: {type: text, label: 用户名, required: true, description: 登录账号}
+  password: {type: secret, label: 密码, required: true, description: 填原始密码}
+auth:
+  origins:
+    - https://sso.example.com
+  steps:
+    # 先访问应用。没登录时应用把请求送到认证中心，最后一次响应是认证中心的登录页。
+    - request: {method: GET, path: /home, follow_redirects: true}
+    # 出现密码框才提交。认证中心上已经登录时它直接带票据跳回应用，这一段不执行。
+    - if:
+        contains: 'name="password"'
+        then:
+          - extract:
+              execution: {css: "input[name=execution]", attr: value}
+          - request:
+              method: POST
+              url: https://sso.example.com/login
+              form:
+                username: "{{credential.username}}"
+                password: "{{credential.password}}"
+                execution: "{{execution}}"
+              follow_redirects: true
+    - assert: {status: 200, cookie_exists: JSESSIONID}
+  alive_check:
+    request: {method: GET, path: /home}
+    expect_not_redirect: /login
+actions:
+  list_todo:
+    title: 查询待办
+    description: 查询当前账号的待办。
+    idempotent: true
+    mcp: {expose: true, read_only: true}
+    steps:
+      - request: {method: GET, path: /todo/list}
+      - extract:
+          items:
+            css: "table#todo tr:not(:first-child)"
+            each:
+              id: {css: "td:nth-child(1)"}
+              title: {css: "td:nth-child(2)"}
+    output:
+      items:
+        type: array
+        description: 待办列表
+        items:
+          id: {type: string, description: 单号}
+          title: {type: string, description: 标题}
+    examples:
+      - input: {}
+        output:
+          items:
+            - {id: "A1", title: 示例待办}
+    notes: 结果按站点原顺序。
+    related: []
+```
+
+写法：
+
+- 每项是 `scheme://host[:port]`，只认 http 和 https，不能带路径、查询参数、`#` 片段、用户名或密码。最多 4 项。和 `base_url` 相同的地址不用写。
+- 各单位认证中心地址不同时，整项写成 `"{{config.名字}}"`，引用一个 `type: url` 的配置项（不能是 `base_url`）。登录步骤里用 `url: "{{config.名字}}/login"` 拼路径。这台 Crab 没填、配置项又没有默认值时，这一项不生效，登录步骤访问它会失败，不会提交凭证。
+- `driver: mcp` 的包不能写 `auth`。
+
+认证地址只对登录步骤开放：
+
+- `auth.steps`（包括 `if`、`repeat` 里的步骤）可以用绝对 `url` 请求认证地址。写了 `follow_redirects: true` 时，`base_url` 和认证地址之间的 301、302、303 跳转都跟随；跳到没声明的地址就停在那一次 3xx 响应上。
+- 跨主机的 307、308 不跟随。这两种跳转要求把正文原样重发，登录表单里有密码。遇到时停在这一次响应上，用 `{{response.headers.location}}` 自己发下一个请求。
+- 跨主机的那一跳不带规则里写的 `Authorization`、`Cookie` 和含凭证的请求头；Cookie 由 Cookie 罐按域名自动带，应用的 Cookie 不会发给认证中心，认证中心的也不会发给应用。
+- 能力步骤和 `alive_check` 仍然只能访问 `base_url`。写了认证地址是校验错误 `AUTH_ORIGIN`；模板渲染后才指向认证地址的，运行时失败，message 为「认证地址只能在登录步骤里访问，能力步骤和 alive_check 只能访问 base_url」。
+- 能力请求或 `alive_check` 被跳到认证地址，说明应用的会话没了：按会话失效处理，重新登录；能力写了 `idempotent: true` 时自动重跑一次，否则返回 `SESSION_EXPIRED`。
+- `cookie_exists`、`auth.cookies` 和 `{{login.名字}}` 只看会发给 `base_url` 的 Cookie。只发给认证中心的 Cookie（例如 CAS 的 TGC）按名字读不到。
+
+门户把登录结果交给应用有四种方式，都用现有步骤写：
+
+| 方式 | 浏览器里看到的 | 登录步骤 |
+| --- | --- | --- |
+| 跳转地址带一次性票据（`ticket`、`code`、`token`） | 地址栏闪过带参数的地址 | 上面的例子：`follow_redirects: true` 一路跟到应用，应用验票后发自己的 Cookie |
+| 页面里自动提交的表单（SAML） | 一次 POST，带 `SAMLResponse` 隐藏字段 | 向认证地址提交凭证后，`extract` 取出隐藏字段，再 `request` 把它 POST 给应用的接收地址 |
+| 门户和应用共用上级域名的 Cookie | 地址里什么都不带 | 在门户登录，门户发的 Cookie 写了 `Domain` 就会带给应用；最后请求一次应用确认已登录 |
+| 门户接口返回令牌，应用认请求头 | 应用的请求带 `Authorization` 或自定义头 | 向认证地址请求令牌，`extract` 取出来，能力步骤写 `{{login.名字}}` |
+
+先访问应用、出现登录页才提交凭证（上面例子里的 `if`）是标准写法。认证中心上已经登录时，它只换一张票据，不会被当成一次新登录。不带条件就向认证地址提交凭证是警告 `AUTH_ORIGIN`，message 以「每次登录都向认证地址提交凭证」开头；认证中心同一账号只允许一个会话时，这种写法会顶掉同一个人在别处的登录。SAML 和令牌这两种没有可判断的登录页时，这条警告可以保留。
+
+其它校验：`auth.origins` 的写法不对、引用的不是 `type: url` 配置项、配置项默认值不是 http(s) 地址，都是错误 `AUTH_ORIGIN`。`min_crab_version` 低于 1.11.0 是 `MIN_CRAB_VERSION`，message 为「使用 auth.origins 时 min_crab_version 必须不低于 1.11.0」。登录步骤的绝对地址既不是 `base_url` 也不在 `auth.origins` 里是警告 `AUTH_ORIGIN`，运行时会被拒绝。
+
+认证地址算进规则包的地址范围，因为账号密码会提交到那里。Reef 详情和 Crab 控制台详情都写出认证地址；Reef 上传时，新版本写了当前发布版本没有的认证地址，警告里有一条 `AUTH_ORIGIN_ADDED`；本地包覆盖时新增认证地址和改 `base_url` 一样要在控制台确认，并清掉这个包的登录会话。旧版本只在步骤文本里提到过的地址，新版本把它写成认证地址或 `base_url`，同样要确认；新引用一个配置项当认证地址也要确认，确认提示里写「无法静态确定的地址」。引用的配置项换了默认主机，本地包覆盖要确认，Reef 上传也有 `AUTH_ORIGIN_ADDED`（没另填这个配置项的 Crab 用的是默认值）。认证地址的证书不被信任时，和 `base_url` 一样可以在控制台的 TLS 页面检测并信任。
+
+两个规则包经同一个认证地址登录（或一个包的站点就是另一个包的认证地址）时，Crab 控制台按「经同一个认证地址登录」提示，交替重新登录告警也把它算进去。它们仍然各自登录、各存各的 Cookie：每个包各在认证中心登录一次。
+
 ## 步骤
 
 每个步骤是一个单键映射，支持八类：
@@ -403,7 +505,7 @@ request 的 path 与 url 必须二选一。`body`、`form` 与 `json` 互斥，�
 
 对象和数组不是文本：先写成 JSON，再按上面的 query 或 form 编码发出，不会因此拒绝请求。数字和布尔仍是十进制与 `true`/`false`，不走 JSON。开发追踪对每个对象或数组记一条 `not_text`，message 为「query.字段 不是文本，已按 JSON 写入」或「form.字段 不是文本，已按 JSON 写入」，只写字段名，不写值。字符串、数字和布尔不记这条警告。
 
-path 和 url 在拼接前只编码 URI 里非法的字符：空格、控制字符、非 ASCII、引号、尖括号、反斜杠、`^`、反引号、花括号、竖线和方括号，以及后面没有两位十六进制的 `%`。`/ ? # & =` 和已经写好的 `%xx` 保持原样，大小写也不改。非 ASCII 同样用步骤的 `encoding`，没写就是 UTF-8。相对路径里的 `//` 不再合并。`..` 和同源检查与原来相同，绝对路径里的 `..` 不删除。绝对 `url` 或解析后的地址与 `base_url` 不同源时，请求还没发出就是 `RULE_MISMATCH`，message 为「目标地址与 base_url 不同源」，不附加 URL。请求头 `Host` 和目标主机或端口不一致时也是 `RULE_MISMATCH`，message 为「Host 与目标地址不一致」，不写 Host 的值。`#` 后面的内容不会出现在请求行里。
+path 和 url 在拼接前只编码 URI 里非法的字符：空格、控制字符、非 ASCII、引号、尖括号、反斜杠、`^`、反引号、花括号、竖线和方括号，以及后面没有两位十六进制的 `%`。`/ ? # & =` 和已经写好的 `%xx` 保持原样，大小写也不改。非 ASCII 同样用步骤的 `encoding`，没写就是 UTF-8。相对路径里的 `//` 不再合并。`..` 和同源检查与原来相同，绝对路径里的 `..` 不删除。绝对 `url` 或解析后的地址与 `base_url` 不同源时，请求还没发出就是 `RULE_MISMATCH`，message 为「目标地址与 base_url 不同源」，不附加 URL。写了 `auth.origins` 的包，登录步骤还可以访问声明的认证地址，见「门户和 SSO 登录」。请求头 `Host` 和目标主机或端口不一致时也是 `RULE_MISMATCH`，message 为「Host 与目标地址不一致」，不写 Host 的值。`#` 后面的内容不会出现在请求行里。
 
 请求头的值如果有 U+00FF 以上的字符，这一步失败，message 为「请求头 {名字} 含有无法发送的字符，请先用 urlencode 处理」。Latin-1 范围内的字符仍发送。
 
@@ -682,6 +784,8 @@ script 步骤的 `use` 按顺序把这些库接在 `code` 前面，同一个函�
 ZIP 只包含 `conch.yaml`、`manifest.json`、`signature.sig`；manifest format=1，包含规则身份、最低版本和 YAML SHA-256，签名对 manifest 字节做 Ed25519。每个条目最多 1 MiB，并验证未知/重复条目、路径、签名、摘要与 YAML 元数据一致性。
 
 上传时如果 Reef 上已发布的另一个规则包写的是同一网站（`base_url` 或配置项 `base_url` 默认值的协议、主机、端口相同），警告里有一条 `SAME_SITE`，写出那个包的名字和维护者。它不阻止上传。同一台 Crab 同时启用两个包时，它们各自登录、互不共用；网站同一账号只允许一个会话时会互相顶掉，表现为调用变慢或间歇返回 `SESSION_EXPIRED`。能合并时把能力加进已有的包；不能合并时让使用者给两个包配不同的网站账号。
+
+已发布的另一个包不是同一网站、但经同一个认证地址登录（两边 `auth.origins` 有相同的地址，或一方的 `base_url` 就是另一方的认证地址），警告里有一条 `SAME_AUTH`，`path` 为 `auth.origins`。引用配置项的认证地址按默认值比较，没有默认值的 Reef 看不到。这个版本写了当前发布版本没有的认证地址（第一次上传时写了就算）时，另有一条 `AUTH_ORIGIN_ADDED`，写出这些地址，提醒发布的人确认它是这个系统的门户或认证中心。两条都不阻止上传。
 
 修改规则应增加版本号，通过 Reef 上传检查 errors/warnings，再发布一个更高版本，并在隔离 Crab 上手动更新后验证实际登录、输入/输出和错误路径。单纯发布成功不会执行 `health_check` 或测试真实凭证，也不会让已安装的 Crab 自动换版本。
 

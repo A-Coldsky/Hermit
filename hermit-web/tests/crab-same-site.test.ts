@@ -143,6 +143,87 @@ describe('同网站的规则包', () => {
     expect(JSON.stringify(warning.mock.calls[0][0])).toContain('oa_base')
   })
 
+  it('详情页写出认证地址和经同一个认证地址登录的包', async () => {
+    crab.conch.mockResolvedValue(detail())
+    let wrapper = await mountDetail()
+    expect(wrapper.find('[data-test="same-auth"]').exists()).toBe(false)
+
+    crab.conch.mockResolvedValue(detail({ authOrigins: ['https://sso.corp.com:443'] }))
+    wrapper = await mountDetail()
+    let notice = wrapper.get('[data-test="same-auth"]')
+    expect(notice.text()).toContain('登录时还会访问认证地址')
+    expect(notice.text()).toContain('https://sso.corp.com:443')
+    expect(notice.text()).toContain('账号密码会提交到那里')
+    expect(notice.findAll('[data-test="same-auth-link"]')).toHaveLength(0)
+
+    crab.conch.mockResolvedValue(detail({
+      authOrigins: ['https://sso.corp.com:443'],
+      sameSite: ['oa_base'],
+      sameAuth: ['erp_orders', 'hr_portal'],
+      contendingWith: ['erp_orders'],
+    }))
+    wrapper = await mountDetail()
+    notice = wrapper.get('[data-test="same-auth"]')
+    expect(notice.text()).toContain('可能在和经同一个认证地址登录的规则包互相顶掉登录')
+    expect(notice.text()).toContain('最近 erp_orders 和这个包轮流被对方的登录顶掉')
+    expect(notice.findAll('[data-test="same-auth-link"]').map((link) => link.text())).toEqual(['erp_orders', 'hr_portal'])
+    // 同网站那一条不把经认证地址顶掉的包算进去。
+    const site = wrapper.get('[data-test="same-site"]')
+    expect(site.text()).toContain('本机还有规则包访问同一个网站')
+    expect(site.text()).not.toContain('erp_orders')
+  })
+
+  it('门户自己的包没有认证地址，也列出经它登录的包和告警', async () => {
+    crab.conch.mockResolvedValue(detail({ sameAuth: ['erp_orders'] }))
+    let wrapper = await mountDetail()
+    let notice = wrapper.get('[data-test="same-auth"]')
+    expect(notice.text()).toContain('本机有规则包经这个网站登录')
+    expect(notice.text()).toContain('把它当门户或认证中心')
+    expect(notice.text()).not.toContain('账号密码会提交到那里')
+    expect(notice.findAll('[data-test="same-auth-link"]').map((link) => link.text())).toEqual(['erp_orders'])
+
+    crab.conch.mockResolvedValue(detail({ sameAuth: ['erp_orders'], contendingWith: ['erp_orders'] }))
+    wrapper = await mountDetail()
+    notice = wrapper.get('[data-test="same-auth"]')
+    expect(notice.text()).toContain('可能在和经同一个认证地址登录的规则包互相顶掉登录')
+    expect(notice.text()).toContain('最近 erp_orders 和这个包轮流被对方的登录顶掉')
+  })
+
+  it('启用和保存认证地址配置后提示经同一个认证地址登录的包', async () => {
+    const warning = vi.spyOn(ElMessage, 'warning')
+    crab.conch.mockResolvedValue(detail({ switchedOff: true, site: null }))
+    crab.setConchEnabled.mockResolvedValue({ conch: 'oa_leave', switchedOff: false, sameSite: [], sameAuth: ['erp_orders'] })
+    const wrapper = await mountDetail()
+    await wrapper.get('[data-test="conch-enable"]').trigger('click')
+    await flushPromises()
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(warning.mock.calls[0][0])).toContain('erp_orders 和它经同一个认证地址登录')
+
+    warning.mockClear()
+    const field = (type: string, label: string) => ({
+      type, label, required: false, description: null, options: null, value: null, defaultValue: null, missing: false,
+    })
+    crab.writeConfig.mockResolvedValue({ updated: true, sameSite: ['oa_base'], sameAuth: ['erp_orders'] })
+    const panel = await mountPage(ConfigPanel, {
+      props: { conch: 'oa_leave', fields: { sso_url: field('url', '认证中心'), dept: field('string', '部门') } },
+    })
+    await flushPromises()
+    const inputs = panel.findAll('input')
+    await inputs[1].setValue('研发')
+    await panel.findAll('button').find((b) => b.text().includes('保存'))!.trigger('click')
+    await flushPromises()
+    expect(warning).not.toHaveBeenCalled()
+
+    await inputs[0].setValue('https://sso.corp.com')
+    await panel.findAll('button').find((b) => b.text().includes('保存'))!.trigger('click')
+    await flushPromises()
+    expect(warning).toHaveBeenCalledTimes(1)
+    const text = JSON.stringify(warning.mock.calls[0][0])
+    expect(text).toContain('erp_orders')
+    // 没改 base_url，不重复提示同网站的包。
+    expect(text).not.toContain('oa_base')
+  })
+
   it('概览列出可能互相顶掉登录的两个包', async () => {
     const quiet = await mountPage(OverviewView)
     await flushPromises()

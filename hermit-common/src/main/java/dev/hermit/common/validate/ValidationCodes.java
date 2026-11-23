@@ -8,6 +8,16 @@ public final class ValidationCodes {
      * 只比较包里写的地址，每台 Crab 另填的地址由 Crab 控制台提示。
      */
     public static final String SAME_SITE = "SAME_SITE";
+    /**
+     * Reef 上传时：已发布的另一个规则包经同一个认证地址（{@code auth.origins}）登录，
+     * 或它的站点就是这个包的认证地址。警告，不阻止上传。
+     */
+    public static final String SAME_AUTH = "SAME_AUTH";
+    /**
+     * Reef 上传时：这个版本的登录步骤会访问 {@code base_url} 之外的认证地址，当前发布的版本没有。
+     * 凭证会提交到那里。警告，不阻止上传。
+     */
+    public static final String AUTH_ORIGIN_ADDED = "AUTH_ORIGIN_ADDED";
     public static final String ACTION_NAME = "ACTION_NAME";
     public static final String DRIVER = "DRIVER";
     public static final String MISSING_TITLE = "MISSING_TITLE";
@@ -85,6 +95,11 @@ public final class ValidationCodes {
     public static final String UNKNOWN_GROUP = "UNKNOWN_GROUP";
     /** 声明了分组，但其自身和下属子分组均没有任何能力。警告，不阻止保存。 */
     public static final String EMPTY_GROUP = "EMPTY_GROUP";
+    /**
+     * {@code auth.origins} 写法不对，或能力步骤、探活指向认证地址：错误，阻止保存。
+     * 登录步骤指向没声明的地址、不带条件就向认证地址提交凭证：警告。
+     */
+    public static final String AUTH_ORIGIN = "AUTH_ORIGIN";
 
     private ValidationCodes() {
     }

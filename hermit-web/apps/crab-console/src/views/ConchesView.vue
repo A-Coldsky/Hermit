@@ -28,7 +28,7 @@ import {
   type PendingLocalOverwrite,
   type ValidationIssue,
 } from '../api'
-import { notifySameSite, sameSiteText } from '../same-site'
+import { notifySameSite, sameAuthText, sameSiteText } from '../same-site'
 import LocalHistoryList from '../components/LocalHistoryList.vue'
 import { formatImportIssue } from '../import-issue'
 import { refreshPending } from '../status'
@@ -127,7 +127,7 @@ async function upload(file: File, confirm: boolean) {
     } else {
       ElMessage.success(`${verb}本地规则包 ${result.conch} v${result.version}`)
     }
-    notifySameSite(result.conch, result.sameSite)
+    notifySameSite(result.conch, result)
     await load()
   } catch (error) {
     const conflict = confirm ? null : overwriteConflict(error)
@@ -317,7 +317,7 @@ async function confirmPending(row: PendingLocalOverwrite) {
   try {
     const done = await api.confirmPendingOverwrite(conch, row.sha256, rememberChoice[conch] === true)
     ElMessage.success(`已确认覆盖 ${conch} ${versionLabel(row.toVersion)}`)
-    notifySameSite(conch, done.sameSite)
+    notifySameSite(conch, done)
     await load()
   } catch (error) {
     if (error instanceof ApiError && error.status === 409) {
@@ -384,7 +384,7 @@ async function restoreHistory(conch: string, entry: LocalConchHistoryEntry) {
   try {
     const done = await api.restoreLocalConch(conch, entry.id)
     ElMessage.success(`已回退 ${conch} 到 v${entry.version}`)
-    notifySameSite(conch, done.sameSite)
+    notifySameSite(conch, done)
     await load()
   } catch (error) {
     notifyError(error)
@@ -552,6 +552,9 @@ onMounted(load)
               <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
               <el-tooltip v-if="row.sameSite?.length" :content="`${sameSiteText(row.sameSite)}`" placement="top">
                 <el-tag type="info" effect="plain" size="small" class="local" data-test="same-site-tag">同网站 {{ row.sameSite.length }} 个包</el-tag>
+              </el-tooltip>
+              <el-tooltip v-if="row.sameAuth?.length" :content="`${sameAuthText(row.sameAuth)}`" placement="top">
+                <el-tag type="info" effect="plain" size="small" class="local" data-test="same-auth-tag">共用认证 {{ row.sameAuth.length }} 个包</el-tag>
               </el-tooltip>
               <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
               <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>

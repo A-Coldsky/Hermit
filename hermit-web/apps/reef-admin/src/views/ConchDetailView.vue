@@ -15,7 +15,7 @@ import VersionPanel from '../components/VersionPanel.vue'
 import ConchStats from '../components/ConchStats.vue'
 import DriverBadge from '../components/DriverBadge.vue'
 import McpToolTable from '../components/McpToolTable.vue'
-import { isMcp, mcpAuthLabels, pullCountHint, transportLabels } from '../labels'
+import { authOriginLabel, isMcp, mcpAuthLabels, pullCountHint, transportLabels } from '../labels'
 
 const props = defineProps<{ conch: string }>()
 const route = useRoute()
@@ -213,6 +213,13 @@ watch(() => props.conch, load, { immediate: true })
                 <template v-if="!mcp">
                   <dt>老系统地址</dt>
                   <dd class="mono">{{ detail.baseUrl ?? '由 Crab 端配置' }}</dd>
+                  <template v-if="detail.authOrigins?.length">
+                    <dt>认证地址</dt>
+                    <dd data-test="auth-origins">
+                      <span class="mono">{{ detail.authOrigins.map(authOriginLabel).join('、') }}</span>
+                      <div class="hm-muted">登录步骤还会访问这些地址，账号密码会提交到那里。</div>
+                    </dd>
+                  </template>
                 </template>
                 <dt>负责人</dt>
                 <dd>{{ detail.owner ?? '—' }}</dd>

@@ -142,6 +142,24 @@ describe('Reef 原生 MCP 展示：详情', () => {
     expect(wrapper.find('[data-test="mcp-upstream"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('HTTP 规则 · Hermit 编写')
     expect(wrapper.text()).toContain('老系统地址')
+    expect(wrapper.find('[data-test="auth-origins"]').exists()).toBe(false)
+  })
+
+  it('HTTP 包写了认证地址时列出来，配置引用写成由 Crab 端配置', async () => {
+    reef.conch.mockResolvedValue({
+      ...httpSummary,
+      ...detailBase,
+      actions: {},
+      minCrabVersion: '1.11.0',
+      baseUrl: 'https://oa.corp.com',
+      authOrigins: ['https://sso.corp.com', '{{ config.portal_url }}'],
+    })
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    const origins = wrapper.get('[data-test="auth-origins"]').text()
+    expect(origins).toContain('https://sso.corp.com、由 Crab 端配置（portal_url）')
+    expect(origins).toContain('账号密码会提交到那里')
   })
 })
 

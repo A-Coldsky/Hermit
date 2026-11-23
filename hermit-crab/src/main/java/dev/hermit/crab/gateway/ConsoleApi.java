@@ -169,6 +169,7 @@ final class ConsoleApi {
     private static void conches(CrabRuntime runtime, Context ctx) {
         Map<String, ConchCatalog.Entry> catalog = catalogByName(runtime);
         Map<String, String> sites = runtime.sites();
+        Map<String, List<String>> authOrigins = runtime.authOrigins();
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (String name : runtime.registry().snapshot().keySet()) {
             ConchRegistry.Active active = runtime.registry().active(name).orElse(null);
@@ -192,6 +193,7 @@ final class ConsoleApi {
             row.put("source", sourceLabel(source));
             row.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
             row.put("sameSite", CrabRuntime.sameSite(doc.conch(), sites));
+            row.put("sameAuth", CrabRuntime.sameAuth(doc.conch(), sites, authOrigins));
             putSources(runtime, doc.conch(), row);
             putReefDisabled(runtime, source, doc.conch(), row);
             putUpdateFields(catalog.get(doc.conch()), row);
@@ -215,11 +217,17 @@ final class ConsoleApi {
         return rows;
     }
 
-    /** 这个包实际访问的站点、同网站的其它已启用规则包，以及其中可能在和它互相顶掉登录的。 */
+    /**
+     * 这个包实际访问的站点、登录时还要访问的认证地址、同网站或经同一个认证地址登录的其它已启用规则包，
+     * 以及其中可能在和它互相顶掉登录的。
+     */
     private static void putSite(CrabRuntime runtime, String conch, Map<String, Object> body) {
         Map<String, String> sites = runtime.sites();
+        Map<String, List<String>> authOrigins = runtime.authOrigins();
         body.put("site", sites.get(conch));
+        body.put("authOrigins", authOrigins.getOrDefault(conch, List.of()));
         body.put("sameSite", CrabRuntime.sameSite(conch, sites));
+        body.put("sameAuth", CrabRuntime.sameAuth(conch, sites, authOrigins));
         ArrayList<String> rivals = new ArrayList<>();
         for (SessionContention.Pair pair : runtime.contention()) {
             if (pair.first().equals(conch)) {
@@ -847,7 +855,8 @@ final class ConsoleApi {
         runtime.admin().putConfigs(active.origin(), active.doc(), stringMap(object(ctx)), Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of(
                 "updated", true,
-                "sameSite", runtime.sameSite(active.doc().conch())));
+                "sameSite", runtime.sameSite(active.doc().conch()),
+                "sameAuth", runtime.sameAuth(active.doc().conch())));
     }
 
     private static void toggleConch(CrabRuntime runtime, Context ctx, boolean disabled) {
@@ -856,7 +865,8 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of(
                 "conch", conch,
                 "switchedOff", runtime.conchSwitchedOff(conch),
-                "sameSite", runtime.sameSite(conch)));
+                "sameSite", runtime.sameSite(conch),
+                "sameAuth", runtime.sameAuth(conch)));
     }
 
     private static final Set<String> SOURCE_FIELDS = Set.of("source", "copy");
@@ -886,6 +896,7 @@ final class ConsoleApi {
         data.put("copiedAccounts", done.accounts());
         data.put("copiedConfigKeys", done.configKeys());
         data.put("sameSite", runtime.sameSite(conch));
+        data.put("sameAuth", runtime.sameAuth(conch));
         GatewayResponses.writeData(ctx, data);
     }
 
@@ -1224,6 +1235,7 @@ final class ConsoleApi {
             body.put("subscribed", subscriptionHeld(runtime, conch, outcome));
             body.put("outcome", outcomeView(outcome));
             body.put("sameSite", runtime.sameSite(conch));
+            body.put("sameAuth", runtime.sameAuth(conch));
             GatewayResponses.writeData(ctx, body);
         } catch (SyncException ex) {
             SyncError error = ex.clientError().orElse(null);
@@ -1618,6 +1630,7 @@ final class ConsoleApi {
         body.put("backupId", result.backupId());
         body.put("warnings", issues(result.warnings()));
         body.put("sameSite", runtime.sameSite(result.conch()));
+        body.put("sameAuth", runtime.sameAuth(result.conch()));
         GatewayResponses.writeData(ctx, body);
     }
 

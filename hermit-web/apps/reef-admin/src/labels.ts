@@ -136,6 +136,12 @@ export function isMcp(row: { driver?: string | null }): boolean {
   return row.driver === 'mcp'
 }
 
+/** 认证地址条目给人看的写法：整项 `{{config.NAME}}` 写成「由 Crab 端配置（NAME）」，其余原样。 */
+export function authOriginLabel(entry: string): string {
+  const ref = /^\{\{\s*config\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}$/.exec(entry.trim())
+  return ref ? `由 Crab 端配置（${ref[1]}）` : entry
+}
+
 /** 上游地址的主机名。地址缺失或写错时为 null。 */
 export function upstreamHost(url: string | null | undefined): string | null {
   if (!url) {

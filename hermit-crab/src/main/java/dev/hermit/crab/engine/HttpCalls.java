@@ -65,7 +65,8 @@ import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.tls.TransportFailure;
 
 /**
- * 不自动跟随重定向。初始地址必须与 base_url 同源。
+ * 不自动跟随重定向。初始地址必须与 base_url 同源；登录步骤还可以请求 {@code auth.origins} 里的认证地址，
+ * 并在 base_url 和认证地址之间跟随跳转（跨源的 307、308 除外）。
  * {@code follow_redirects: true} 时，同源跳转保留规则请求头；默认端口的 http 升到 https 也可以跟随，
  * 但这一跳去掉认证头和带凭证的头。其它跨源停在当前 3xx。
  */
@@ -156,9 +157,24 @@ final class HttpCalls {
             Set<String> sensitive,
             Duration bodyIdle
     ) {
+        return execute(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle,
+                AuthReach.NONE);
+    }
+
+    static HttpResult execute(
+            Map<String, Object> spec,
+            CloseableHttpClient client,
+            Runnable afterExchange,
+            URI base,
+            String expectPrefix,
+            long deadlineNanos,
+            Set<String> sensitive,
+            Duration bodyIdle,
+            AuthReach reach
+    ) {
         // multipart 的请求体和 download 的响应正文是文件：追踪里只留摘要，正文上限改用暂存区的单文件上限。
         if (spec.get("multipart") == null && !FileSteps.downloads(spec)) {
-            return run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle);
+            return run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle, reach);
         }
         FileMode mode = new FileMode();
         if (FileSteps.downloads(spec)) {
@@ -167,7 +183,8 @@ final class HttpCalls {
         FILE_MODE.set(mode);
         HttpResult result = null;
         try {
-            result = run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle);
+            result = run(spec, client, afterExchange, base, expectPrefix, deadlineNanos, sensitive, bodyIdle,
+                    reach);
             return result;
         } finally {
             FILE_MODE.remove();
@@ -198,7 +215,8 @@ final class HttpCalls {
             String expectPrefix,
             long deadlineNanos,
             Set<String> sensitive,
-            Duration bodyIdle
+            Duration bodyIdle,
+            AuthReach reach
     ) {
         Duration idle = bodyIdle == null || bodyIdle.isZero() || bodyIdle.isNegative()
                 ? OutboundHttp.DEFAULT_BODY_IDLE
@@ -224,7 +242,7 @@ final class HttpCalls {
         boolean formQuery = formQuery(spec);
         Long stepLimit = timeoutLimit(spec.get("timeout_ms"));
         ArrayList<TraceWarning> warnings = new ArrayList<>();
-        URI target = resolve(base, spec, charset);
+        URI target = resolve(base, spec, charset, reach);
         Map<String, Object> query = optionalMap(spec.get("query"), "query");
         if (query != null && !query.isEmpty()) {
             target = withQuery(target, appendQuery(target.getRawQuery(), query, charset, formQuery, "query", warnings));
@@ -306,6 +324,12 @@ final class HttpCalls {
                     && pathHasPrefix(exchange.redirect, target, expectPrefix)) {
                 lost = true;
             }
+            // 能力步骤和探活被送去认证地址：会话已经失效。写没写 follow_redirects 都一样，
+            // 也不跟过去（同主机 http 升 https 的那种也不跟）：能力步骤不访问认证地址，
+            // 认证地址那边的 5xx 也不该盖住「会话失效」。
+            if (!reach.login() && isRedirect(exchange.status) && leadsToAuth(exchange.redirect, target, reach)) {
+                return exchange.toResult(true, warnings);
+            }
             if (!follow || !isRedirect(exchange.status) || exchange.redirect == null) {
                 if (exchange.status >= 500) {
                     throw upstreamFailure(exchange, warnings);
@@ -321,10 +345,19 @@ final class HttpCalls {
             }
             boolean same = sameOrigin(target, next);
             boolean upgrade = httpUpgrade(target, next);
-            if (!same && !upgrade) {
+            // 登录步骤在 base_url 和声明过的认证地址之间跳转。
+            boolean authHop = !same && !upgrade && reach.login() && reach.allows(base, next);
+            if (!same && !upgrade && !authHop) {
                 warnings.add(new TraceWarning(
                         TraceWarning.CROSS_ORIGIN,
                         "跳转到不同源 " + originText(next) + "，未跟随"));
+                return exchange.toResult(lost, warnings);
+            }
+            if (authHop && (exchange.status == 307 || exchange.status == 308)) {
+                // 307、308 要把原来的正文原样重发，正文里可能有密码，不发到另一个主机。
+                warnings.add(new TraceWarning(
+                        TraceWarning.CROSS_ORIGIN,
+                        exchange.status + " 跳转到不同源 " + originText(next) + " 要重发请求正文，未跟随"));
                 return exchange.toResult(lost, warnings);
             }
             if (expectPrefix != null && pathStarts(next, expectPrefix)) {
@@ -351,7 +384,8 @@ final class HttpCalls {
                     mode.wireBody = null;
                 }
             }
-            headers = headersForHop(headers, toGet, upgrade, secrets);
+            // 去认证地址或从它回来的那一跳：规则写的认证头和带凭证的头去掉，Cookie 由罐按域名决定。
+            headers = headersForHop(headers, toGet, upgrade || authHop, secrets);
             stripSecrets = upgrade;
             target = next;
         }
@@ -1014,15 +1048,18 @@ final class HttpCalls {
         }
     }
 
-    private static URI resolve(URI base, Map<String, Object> spec, Charset charset) {
+    private static URI resolve(URI base, Map<String, Object> spec, Charset charset, AuthReach reach) {
         try {
             String reference = present(spec, "url")
                     ? Values.text(spec.get("url"))
                     : Values.text(spec.get("path"));
             URI resolved = HostNames.withoutTrailingDot(
                     UrlComponents.resolve(HostNames.withoutTrailingDot(base), reference, charset));
-            if (!sameOrigin(base, resolved)) {
-                throw new RuleProblem(ErrorCode.RULE_MISMATCH, CROSS_ORIGIN_TARGET, null, null, null);
+            if (!reach.allows(base, resolved)) {
+                throw new RuleProblem(
+                        ErrorCode.RULE_MISMATCH,
+                        reach.declares(resolved) ? AUTH_ORIGIN_TARGET : CROSS_ORIGIN_TARGET,
+                        null, null, null);
             }
             return resolved;
         } catch (UrlComponents.Unencodable ex) {
@@ -1439,6 +1476,7 @@ final class HttpCalls {
     static final String UNRESOLVED_LOCATION = "重定向地址无法解析，未跟随";
     static final String LOCATION_WARNING = "Location 无法解析，未跟随";
     static final String CROSS_ORIGIN_TARGET = "目标地址与 base_url 不同源";
+    static final String AUTH_ORIGIN_TARGET = "认证地址只能在登录步骤里访问，能力步骤和 alive_check 只能访问 base_url";
     static final String HOST_MISMATCH = "Host 与目标地址不一致";
 
     static String upstreamStatus(int status) {
@@ -1491,6 +1529,18 @@ final class HttpCalls {
         }
         try {
             return pathStarts(current.resolve(location), prefix);
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
+    }
+
+    private static boolean leadsToAuth(String location, URI current, AuthReach reach) {
+        if (location == null || reach.origins().isEmpty()) {
+            return false;
+        }
+        try {
+            URI next = current.resolve(location);
+            return !sameOrigin(current, next) && reach.declares(next);
         } catch (IllegalArgumentException ex) {
             return false;
         }

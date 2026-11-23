@@ -304,7 +304,7 @@ Conch 列表和详情的包级 `needsConfiguration` 用同一套计算：账号�
 
 两个 `driver: http` 的规则包实际访问的地址协议、主机、端口都相同，就是同一网站。地址取生效的 `base_url`：配置里填了就用配置的，否则用包里写的。比较前协议和主机转小写、去掉主机末尾的点、补上默认端口（http 80，https 443）；路径和查询参数不参与。`driver: mcp` 的包、本机已停用的包、地址读不出的包不参与；同名的本地包和正式包只算生效的那一份。
 
-同网站只用于提示。两个包仍然各自登录，各存各的 Cookie、凭证和登录变量，Crab 不替它们共用会话，也不判断两边是不是同一个人。
+同网站只用于提示。两个包仍然各自登录，各存各的 Cookie、凭证和登录变量；要共用 Cookie，由使用者把两边的账号绑到同一个身份（见「身份：共用登录会话」）。Crab 不会自动绑定，也不判断两边是不是同一个人。
 
 - 控制台：列表每行的 `sameSite`、详情的 `site` 与 `sameSite`；订阅、导入或覆盖本地包、重新启用、切换来源、保存 `base_url` 之后的响应里带 `sameSite`，控制台当场提示一次。
 - 交替重新登录告警：一个包的能力请求收到 401、403 或被跳回登录页，并且同网站的另一个包在它上次登录之后登录过，记一次「被顶掉」。两个包在 10 分钟内轮流被对方顶掉满 3 轮（各 3 次、交替出现）时建立告警，出现在列表的 `contention`、详情的 `contendingWith` 和概览页。首次登录、空闲后探活发现失效再登录、同一个包的不同账号、只有一方反复失效，都不计。
@@ -317,9 +317,68 @@ Reef 上传时的 `SAME_SITE` 警告只能看到包里写的地址；每台 Crab
 
 - 控制台：列表每行的 `sameAuth`、详情的 `authOrigins`（这个包生效的认证地址，不含和自己站点相同的）与 `sameAuth`；上面那些带 `sameSite` 的响应同时带 `sameAuth`。已经列在 `sameSite` 里的包不重复出现在 `sameAuth`。
 - 交替重新登录告警把认证地址也算进去：两个包轮流被对方的登录顶掉时，按它们共有的地址（站点或认证地址）各记各的，同一对包只显示一条，`contention[].site` 写的是那个共有地址。详情的 `contendingWith` 可以同时包含 `sameSite` 和 `sameAuth` 里的包。
-- 同样只是提示：每个包各在认证中心登录一次，Crab 不替它们共用会话。
+- 同样只是提示：没有绑到同一个身份时，每个包各在认证中心登录一次。
 
 Reef 上传时的 `SAME_AUTH` 和 `AUTH_ORIGIN_ADDED` 警告见规则包参考的「发布包与验收」；Reef 管理 API 的规则包详情带 `authOrigins`，是包里原样写的条目（字面地址或整项 `{{config.名字}}`）。
+
+### 身份：共用登录会话
+
+同网站或经同一个认证地址登录的两个规则包，默认各有各的 Cookie，网站或认证中心只允许一个会话时会互相顶掉。使用者可以在控制台「身份」页把它们的账号绑到同一个身份，让它们共用一份 Cookie。
+
+一个身份代表某个网站或认证中心上的**一个人**，例如「OA · 张三」。规则是：
+
+- 每个包的每个账号最多绑一个身份；同一个身份里每个包（按来源分，本地包和正式包各算一个）只能绑一个账号。不绑的账号和以前一样，各用各的会话。
+- 只有 `driver: http` 的包能绑。新成员生效的地址（`base_url` 加认证地址）要和身份里某个现有成员至少有一项相同。
+- 只能由使用者在控制台绑定，请求里要带 `confirm: true`。Crab 不会自动绑定，规则包、API Key、MCP 工具都不能绑定。身份最多 200 个，名字 1–64 个字符、不能重名。
+- 绑定前的检查在本机比较两边 `type: text` 的凭证值，只给出 `SAME`（有相同的值）、`DIFFERENT`（两边都填了但没有相同的）或 `UNKNOWN`，不返回值，也不比较 `secret` 字段。`DIFFERENT` 只是警告，由使用者判断是不是同一个人。
+
+绑定之后：
+
+| 内容 | 行为 |
+| --- | --- |
+| Cookie、HTTP 连接、Cookie 落库 | 身份里的成员共用一份。Cookie 仍只发往域名和路径匹配的地址；规则按名字读 Cookie（`cookie_exists`、`auth.cookies`）只能读到会发往自己 `base_url` 的 |
+| 账号锁 | 身份一把。成员的调用排队执行；写了 `auth.concurrent_reads` 的包，它的只读能力之间仍然并行 |
+| 凭证、登录变量（`login.*`）、验证码等待、登录失败计数和暂停、探活和空闲计时 | 仍按账号，各成员分开 |
+
+登录由被调用的那个成员用自己的凭证和自己的登录步骤完成，Crab 不替别的包登录：
+
+- 成员写了 `alive_check`：第一次被调用时先探活，别的成员登录出来的 Cookie 对它也有效就直接用，不登录。
+- 没写 `alive_check`：第一次被调用时带着身份里已有的 Cookie 跑一次自己的登录步骤。认证中心认得已有的 Cookie 时不会再要密码。
+- 成员的会话失效（401、403、被跳到登录页或认证地址）：不清别的成员的 Cookie，带着现有 Cookie 重新跑自己的登录步骤。这次登录以 `AUTH_FAILED`、`RULE_MISMATCH` 或 `UPSTREAM_ERROR` 失败时，才清空整个身份的 Cookie，从空白状态再登录一次；超时、连不上、等待验证码不清空。清空会记在身份列表的 `lastCleared`（只在内存里）。
+
+什么时候清空或离开身份：
+
+| 操作 | 结果 |
+| --- | --- |
+| 修改或测试某个成员的凭证 | 清空这个身份的 Cookie，各成员下次调用重新登录 |
+| 解除绑定 | 这个账号回到独立会话（空白，下次调用重新登录）；身份的 Cookie 留给其余成员，最后一个成员离开时删除 |
+| 删除账号、退订正式包、删除本地包 | 这个包的账号离开身份 |
+| 本地包覆盖时地址范围扩大 | 这个包的账号离开身份并清掉自己的会话，新地址拿不到别的包登录出来的 Cookie |
+| 改了 `base_url` 或认证地址的配置、包换了版本或来源，成员之间不再有相同地址 | 成员按相同地址分组，留下成员最多的一组（一样多时留下不含刚改的那个包的一组），其余离开身份 |
+| 停用规则包、Reef 暂时撤下、包文件读不出来 | 绑定保留，列表里 `installed` 或 `active` 为 false；其余成员不受影响 |
+| 删除身份 | 所有成员回到独立会话，身份的 Cookie 删除 |
+
+绑定、解除、新建、改名、删除都写配置审计（`IDENTITY_BOUND`、`IDENTITY_UNBOUND`、`IDENTITY_CREATED`、`IDENTITY_RENAMED`、`IDENTITY_DELETED`）。绑定和解除的 `target` 是 `来源/包名/账号`，可以按包和账号筛选；自动离开时带原因 `account_deleted`、`address_widened`、`address_changed` 或 `package_removed`。审计里没有 Cookie 和凭证值。
+
+解决不了的情况：
+
+- 两个包都要用登录返回的值（`login.token` 之类），网站又在新登录后让旧值失效：绑定后仍会交替重新登录。绑定检查会警告，「同网站的规则包」里的告警也能看到；只能把能力合进一个包。
+- 某个包的登录步骤不看页面、一上来就向认证中心交密码：认证中心可能当成新登录，把别的成员顶掉。校验对这种写法给警告，见规则包参考的「门户和 SSO 登录」。
+- 网站把「当前部门、角色、租户」记在服务器会话里：一个包切换后另一个包也跟着变。这种账号不要绑到一起。
+- `driver: mcp` 的包不参与。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/console/api/identities` | `{identities: [{id, name, createdAt, members, lastCleared}]}`。`members[]`：`origin`、`conch`、`account`、`title`、`installed`（包在本机）、`active`（生效的是这个来源）、`addresses`（生效的站点和认证地址）。`lastCleared`：`{at, conch, account}` 或 null |
+| POST | `/console/api/identities` | 正文 `{name}`，返回新建的身份 |
+| PUT | `/console/api/identities/{id}` | 正文 `{name}`，改名 |
+| DELETE | `/console/api/identities/{id}` | 删除身份，成员回到独立会话 |
+| POST | `/console/api/identities/{id}/check` | 正文 `{conch, account}`，只检查不绑定。返回 `{allowed, problem, peers, warnings}`；`peers[]`：`origin`、`conch`、`account`、`addresses`（和它相同的地址）、`credentials`（`SAME` / `DIFFERENT` / `UNKNOWN`）。包按当前生效的来源算 |
+| POST | `/console/api/identities/{id}/members` | 正文 `{conch, account, confirm: true}`。没有 `confirm: true` 返回 400；检查不通过返回 400，`message` 是原因 |
+| DELETE | `/console/api/identities/{id}/members/{origin}/{conch}/{account}` | 解除绑定。`origin` 是 `OFFICIAL` 或 `LOCAL` |
+
+账号列表（`GET /console/api/conches/{conch}/accounts`）每行多一个 `identity`：`{id, name}` 或 null。
+
 
 ## 控制台 HTTPS 信任
 

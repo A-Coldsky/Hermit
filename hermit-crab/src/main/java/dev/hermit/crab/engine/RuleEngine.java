@@ -289,6 +289,9 @@ public final class RuleEngine implements ConchExecutor {
                 URI base = baseUri(conch, config);
                 scope = new LoginScope(
                         conch, request.rawInput(), credentials, config, key, base, deadline);
+                // 测试登录要验证的是这个账号自己的凭证：排队的成员可能在调用方清空之后又登录过，
+                // 带着它的 Cookie 认证中心不会再要密码。拿到锁之后再清一次，从空白登录。
+                sessions.resetShared(key);
                 login(scope);
                 return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
                         credentials, scope.redactionValues(), start);
@@ -371,7 +374,7 @@ public final class RuleEngine implements ConchExecutor {
             requireStepLoginRefs(scope, action.steps());
             Attempt attempt = runAction(action, scope);
             if (attempt.lost) {
-                sessions.markLoggedOut(key);
+                loseSession(scope);
                 noteLost(scope);
                 if (!action.idempotent() || lostBefore) {
                     return expired(attempt.logs, version, request, credentials, scope, start);
@@ -380,7 +383,7 @@ public final class RuleEngine implements ConchExecutor {
                 requireStepLoginRefs(scope, action.steps());
                 attempt = runAction(action, scope);
                 if (attempt.lost) {
-                    sessions.markLoggedOut(key);
+                    loseSession(scope);
                     noteLost(scope);
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
@@ -498,14 +501,31 @@ public final class RuleEngine implements ConchExecutor {
         return List.copyOf(values);
     }
 
+    /**
+     * 会话失效。绑了身份的账号先不清共用的 Cookie，带着它们重新登录；
+     * 这次调用里已经这样登录过、或刚靠探活接手过别的成员的会话，说明留着的 Cookie 没用，清空整个身份。
+     */
+    private void loseSession(LoginScope scope) {
+        if (scope.reusedCookies) {
+            scope.reusedCookies = false;
+            sessions.clearShared(scope.key);
+            return;
+        }
+        sessions.markLoggedOut(scope.key);
+    }
+
     private void ensureSession(LoginScope scope) {
-        if (!sessions.loggedIn(scope.key)) {
+        Auth auth = scope.conch.auth();
+        AliveCheck alive = auth == null ? null : auth.aliveCheck();
+        boolean loggedIn = sessions.loggedIn(scope.key);
+        // 身份里别的成员已经登录过：写了 alive_check 的包先探活，通过就直接用，不再登录。
+        boolean adopting = !loggedIn && alive != null && sessions.sharesCookies(scope.key)
+                && sessions.pending().current(scope.key) == null;
+        if (!loggedIn && !adopting) {
             login(scope);
             return;
         }
-        Auth auth = scope.conch.auth();
-        AliveCheck alive = auth == null ? null : auth.aliveCheck();
-        if (!sessions.idle(scope.key) || alive == null) {
+        if (!adopting && (!sessions.idle(scope.key) || alive == null)) {
             return;
         }
         requireLoginRefs(scope, alive.request());
@@ -542,9 +562,15 @@ public final class RuleEngine implements ConchExecutor {
         recordAlive(spec, result.method(), result.path(), result.status(), result.headers(), result.body(),
                 result.wire(), started, aliveOk, null, result.warnings());
         if (result.sessionLost() || result.status() == 401 || result.status() == 403) {
-            sessions.markLoggedOut(scope.key);
+            if (!adopting) {
+                sessions.markLoggedOut(scope.key);
+            }
             login(scope);
             return;
+        }
+        if (adopting) {
+            sessions.markLoggedIn(scope.key);
+            scope.reusedCookies = true;
         }
         sessions.touch(scope.key);
     }
@@ -929,7 +955,43 @@ public final class RuleEngine implements ConchExecutor {
     }
 
     private void login(LoginScope scope) {
+        if (!sessions.sharesCookies(scope.key)) {
+            login(scope, null, null, true);
+            return;
+        }
+        // 共用的罐里有 Cookie：和浏览器一样带着它们登录，认证中心的登录还有效时不用再交密码。
+        // 这样登录失败不算数：清空这个身份的 Cookie，从空白再登录一次，那一次失败才记登录失败。
+        scope.reusedCookies = true;
+        try {
+            login(scope, null, null, false);
+            return;
+        } catch (StepFailure ex) {
+            if (!retriesFromScratch(ex) || sessions.pending().current(scope.key) != null) {
+                throw ex;
+            }
+        }
+        scope.reusedCookies = false;
+        sessions.clearShared(scope.key);
+        DevTraceDraft draft = DevTraceScope.current();
+        if (draft != null) {
+            draft.addWarning("login", -1, "request", new TraceWarning(
+                    TraceWarning.SHARED_SESSION_CLEARED, "带着身份里已有的 Cookie 登录没有成功，已清空这个身份的 Cookie 重新登录。"));
+        }
         login(scope, null, null, true);
+    }
+
+    /**
+     * 超时、连不上、等待输入不是「留着的 Cookie 没用」，不值得清空重来。连不上和单步超时也报
+     * {@code UPSTREAM_ERROR}，要看失败的那一步有没有拿到 HTTP 响应。
+     */
+    private static boolean retriesFromScratch(StepFailure failure) {
+        if (failure.code == ErrorCode.AUTH_FAILED || failure.code == ErrorCode.RULE_MISMATCH) {
+            return true;
+        }
+        if (failure.code != ErrorCode.UPSTREAM_ERROR || failure.logs.isEmpty()) {
+            return false;
+        }
+        return failure.logs.get(failure.logs.size() - 1).status() != null;
     }
 
     /**
@@ -2007,6 +2069,8 @@ public final class RuleEngine implements ConchExecutor {
         private final LinkedHashSet<String> seenLogin = new LinkedHashSet<>();
         private boolean loggingIn;
         private boolean loggedInThisCall;
+        /** 这次调用里带着身份已有的 Cookie 登录过，或靠探活接手了别的成员的会话。 */
+        private boolean reusedCookies;
         /** 只持有共享锁：不能在这里登录。 */
         private boolean shared;
 

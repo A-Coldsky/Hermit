@@ -4,6 +4,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -24,6 +25,8 @@ import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.SessionContention;
+import dev.hermit.crab.engine.SessionKey;
+import dev.hermit.crab.engine.SessionManager;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.LoginPause;
@@ -36,6 +39,7 @@ import dev.hermit.crab.runtime.ConsoleSessions;
 import dev.hermit.crab.runtime.CredentialMessages;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.DeclaredSettings;
+import dev.hermit.crab.runtime.Identities;
 import dev.hermit.crab.runtime.ReefBootstrapException;
 import dev.hermit.crab.runtime.RequestOnlyException;
 import dev.hermit.crab.runtime.StatusCodes;
@@ -56,6 +60,7 @@ import dev.hermit.crab.store.CallLogStore;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.ConsolePassword;
 import dev.hermit.crab.store.DebugStateStore;
+import dev.hermit.crab.store.Identity;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.upstream.McpOAuth;
 import dev.hermit.crab.upstream.McpOAuthToken;
@@ -120,6 +125,14 @@ final class ConsoleApi {
         get(app, "/console/api/apikeys", ctx -> apiKeys(runtime, ctx));
         post(app, "/console/api/apikeys", ctx -> createApiKey(runtime, ctx));
         delete(app, "/console/api/apikeys/{id}", ctx -> revokeApiKey(runtime, ctx));
+        get(app, "/console/api/identities", ctx -> identities(runtime, ctx));
+        post(app, "/console/api/identities", ctx -> createIdentity(runtime, ctx));
+        put(app, "/console/api/identities/{id}", ctx -> renameIdentity(runtime, ctx));
+        delete(app, "/console/api/identities/{id}", ctx -> deleteIdentity(runtime, ctx));
+        post(app, "/console/api/identities/{id}/check", ctx -> checkIdentityMember(runtime, ctx));
+        post(app, "/console/api/identities/{id}/members", ctx -> bindIdentityMember(runtime, ctx));
+        delete(app, "/console/api/identities/{id}/members/{origin}/{conch}/{account}",
+                ctx -> unbindIdentityMember(runtime, ctx));
         get(app, "/console/api/calls", ctx -> calls(runtime, ctx));
         get(app, "/console/api/calls/{traceId}", ctx -> call(runtime, ctx));
         get(app, "/console/api/audit", ctx -> audit(runtime, ctx));
@@ -531,6 +544,7 @@ final class ConsoleApi {
         ConchDoc doc = active.doc();
         Origin source = active.origin();
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        HashMap<String, Map<String, Object>> identityNames = new HashMap<>();
         for (Account account : runtime.admin().listAccounts(source, doc.conch())) {
             List<String> missing = runtime.admin().missingCredentials(source, doc, account.account());
             boolean unreadable = runtime.admin().credentialsUnreadable(source, doc.conch(), account.account());
@@ -555,9 +569,136 @@ final class ConsoleApi {
             row.put("loginInputExpiresAt",
                     loginInput == null ? null : DateTimeFormatter.ISO_INSTANT.format(loginInput.expiresAt()));
             row.put("oauth", oauthStatus(runtime, source, doc, account.account()));
+            String identity = runtime.identities().identityOf(new SessionKey(source, doc.conch(), account.account()));
+            row.put("identity", identity == null ? null : identityNames.computeIfAbsent(identity, id -> {
+                for (Identity known : runtime.identities().list()) {
+                    if (known.id().equals(id)) {
+                        return Map.of("id", id, "name", known.name());
+                    }
+                }
+                return Map.of("id", id, "name", id);
+            }));
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("accounts", rows));
+    }
+
+    private static void identities(CrabRuntime runtime, Context ctx) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (Identity identity : runtime.identities().list()) {
+            rows.add(identityRow(runtime, identity));
+        }
+        GatewayResponses.writeData(ctx, Map.of("identities", rows));
+    }
+
+    private static Map<String, Object> identityRow(CrabRuntime runtime, Identity identity) {
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("id", identity.id());
+        row.put("name", identity.name());
+        row.put("createdAt", DateTimeFormatter.ISO_INSTANT.format(identity.createdAt()));
+        ArrayList<Map<String, Object>> members = new ArrayList<>();
+        for (SessionKey member : identity.members()) {
+            members.add(memberRow(runtime, member));
+        }
+        row.put("members", members);
+        SessionManager.Cleared cleared = runtime.identities().lastCleared(identity.id());
+        row.put("lastCleared", cleared == null ? null : Map.of(
+                "at", DateTimeFormatter.ISO_INSTANT.format(cleared.at()),
+                "conch", cleared.by().conch(),
+                "account", cleared.by().account()));
+        return row;
+    }
+
+    private static Map<String, Object> memberRow(CrabRuntime runtime, SessionKey member) {
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("origin", member.origin().name());
+        row.put("conch", member.conch());
+        row.put("account", member.account());
+        ConchDoc doc = runtime.registry().find(member.conch(), member.origin()).orElse(null);
+        row.put("title", doc == null ? null : text(doc.title()));
+        // 包不在本机（退订、删除）或同名的另一份在生效：绑定留着，这个成员现在不会被调用。
+        row.put("installed", doc != null);
+        row.put("active", doc != null && runtime.registry().origin(member.conch()) == member.origin());
+        row.put("addresses", List.copyOf(runtime.identities().addresses(member.origin(), member.conch())));
+        return row;
+    }
+
+    private static void createIdentity(CrabRuntime runtime, Context ctx) throws Exception {
+        Identity created = runtime.identities().create(requiredText(object(ctx), "name"), Actors.CONSOLE);
+        GatewayResponses.writeData(ctx, identityRow(runtime, created));
+    }
+
+    private static void renameIdentity(CrabRuntime runtime, Context ctx) throws Exception {
+        runtime.identities().rename(ctx.pathParam("id"), requiredText(object(ctx), "name"), Actors.CONSOLE);
+        GatewayResponses.writeData(ctx, Map.of("renamed", true));
+    }
+
+    private static void deleteIdentity(CrabRuntime runtime, Context ctx) {
+        runtime.identities().delete(ctx.pathParam("id"), Actors.CONSOLE);
+        GatewayResponses.writeData(ctx, Map.of("deleted", true));
+    }
+
+    private static void checkIdentityMember(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = object(ctx);
+        String conch = requiredText(body, "conch");
+        Identities.Check check = runtime.identities().check(
+                ctx.pathParam("id"), memberOrigin(runtime, conch), conch, requiredText(body, "account"));
+        GatewayResponses.writeData(ctx, checkBody(check));
+    }
+
+    /** 绑定要使用者点名确认：没带 {@code confirm: true} 的请求不执行。 */
+    private static void bindIdentityMember(CrabRuntime runtime, Context ctx) throws Exception {
+        JsonNode body = object(ctx);
+        String conch = requiredText(body, "conch");
+        String account = requiredText(body, "account");
+        if (!bool(body, "confirm", false)) {
+            throw new IllegalArgumentException("confirm is required");
+        }
+        Identities.Check check = runtime.identities().bind(
+                ctx.pathParam("id"), memberOrigin(runtime, conch), conch, account, Actors.CONSOLE);
+        GatewayResponses.writeData(ctx, checkBody(check));
+    }
+
+    private static void unbindIdentityMember(CrabRuntime runtime, Context ctx) {
+        Origin origin;
+        try {
+            origin = Origin.valueOf(ctx.pathParam("origin"));
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("origin must be LOCAL or OFFICIAL");
+        }
+        SessionKey key = new SessionKey(origin, ctx.pathParam("conch"), ctx.pathParam("account"));
+        if (!ctx.pathParam("id").equals(runtime.identities().identityOf(key))) {
+            throw new IllegalArgumentException("这个账号不在这个身份里");
+        }
+        runtime.identities().unbind(origin, key.conch(), key.account(), Actors.CONSOLE);
+        GatewayResponses.writeData(ctx, Map.of("unbound", true));
+    }
+
+    private static Origin memberOrigin(CrabRuntime runtime, String conch) {
+        Origin origin = runtime.registry().origin(conch);
+        if (origin == null) {
+            throw new IllegalArgumentException("规则包不在本机");
+        }
+        return origin;
+    }
+
+    private static Map<String, Object> checkBody(Identities.Check check) {
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("allowed", check.allowed());
+        body.put("problem", check.problem());
+        ArrayList<Map<String, Object>> peers = new ArrayList<>();
+        for (Identities.Peer peer : check.peers()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("origin", peer.member().origin().name());
+            row.put("conch", peer.member().conch());
+            row.put("account", peer.member().account());
+            row.put("addresses", peer.addresses());
+            row.put("credentials", peer.credentials().name());
+            peers.add(row);
+        }
+        body.put("peers", peers);
+        body.put("warnings", check.warnings());
+        return body;
     }
 
     private static void createAccount(CrabRuntime runtime, Context ctx) throws Exception {

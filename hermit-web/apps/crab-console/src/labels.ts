@@ -48,6 +48,11 @@ export const configAuditLabels: Record<string, { text: string; tone: 'success' |
   CONCH_SWITCHED_ON: { text: '启用规则包', tone: 'success' },
   CONCH_SOURCE_SWITCHED: { text: '切换规则包来源', tone: 'info' },
   FILE_SETTINGS_UPDATED: { text: '修改文件暂存区设置', tone: 'info' },
+  IDENTITY_CREATED: { text: '新建身份', tone: 'success' },
+  IDENTITY_RENAMED: { text: '身份改名', tone: 'info' },
+  IDENTITY_DELETED: { text: '删除身份', tone: 'danger' },
+  IDENTITY_BOUND: { text: '账号绑定身份', tone: 'success' },
+  IDENTITY_UNBOUND: { text: '账号解除身份', tone: 'warning' },
   DEBUG_CHANGED: { text: '切换调试', tone: 'info' },
   TEST_LOGIN: { text: '测试登录', tone: 'info' },
   SYNC_REQUESTED: { text: '手动同步', tone: 'info' },
@@ -134,4 +139,17 @@ export function reefImportErrorText(message: string): string | null {
     return '这个 Reef 的签名公钥和本机已装的正式规则包不一致。要换到另一个 Reef，先取消订阅全部正式规则包'
   if (message.startsWith('reef url did not answer as Reef')) return 'JSON 里的地址不是 Reef：请检查地址是否填错（端口、路径）'
   return null
+}
+
+/** 账号自动离开身份的原因。手动解除没有原因。 */
+const IDENTITY_REASONS: Record<string, string> = {
+  account_deleted: '账号已删除',
+  address_widened: '本地包的地址范围扩大',
+  address_changed: '地址变了，和身份里别的包不再相同',
+  package_removed: '规则包已退订或删除',
+}
+
+/** 配置审计里一项的显示文字：认识的原因码换成中文，其余原样。 */
+export function auditFieldText(action: string, field: string): string {
+  return action === 'IDENTITY_UNBOUND' ? IDENTITY_REASONS[field] ?? field : field
 }

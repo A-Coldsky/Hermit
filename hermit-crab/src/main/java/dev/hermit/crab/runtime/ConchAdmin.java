@@ -45,6 +45,7 @@ public final class ConchAdmin {
     private final ConchRegistry registry;
     private final DisabledConches disabledConches;
     private volatile Consumer<SessionKey> accountRemoved = key -> { };
+    private volatile Identities identities;
     private volatile Function<String, Optional<ConchDoc>> stagedDeclarations = name -> Optional.empty();
     private volatile Function<String, Origin> originFallback = name -> null;
 
@@ -103,8 +104,16 @@ public final class ConchAdmin {
     public void deleteAccount(Origin source, String conch, String name, String actor) {
         accounts.delete(source, conch, name, actor);
         SessionKey key = new SessionKey(source, conch, name);
+        Identities bound = identities;
+        if (bound != null) {
+            bound.accountDeleted(key, actor);
+        }
         sessions.forget(key);
         accountRemoved.accept(key);
+    }
+
+    void bindIdentities(Identities identities) {
+        this.identities = identities;
     }
 
     /** 删除账号后清掉别处按账号缓存的状态（MCP 上游会话、OAuth 刷新锁）。 */
@@ -205,9 +214,10 @@ public final class ConchAdmin {
         DeclaredSettings.checkConfigValue(field, value);
         if (value.isEmpty()) {
             config.delete(source, doc.conch(), key, actor);
-            return;
+        } else {
+            config.put(source, doc.conch(), key, value, actor);
         }
-        config.put(source, doc.conch(), key, value, actor);
+        addressesMayHaveChanged(doc.conch(), actor);
     }
 
     /** 先校验每一项，全部合法才在一个事务里写入。空串表示删除该项。 */
@@ -220,6 +230,15 @@ public final class ConchAdmin {
             DeclaredSettings.checkConfigValue(doc.config().get(entry.getKey()), entry.getValue());
         }
         config.putAll(source, doc.conch(), values, actor);
+        addressesMayHaveChanged(doc.conch(), actor);
+    }
+
+    /** 改了配置，包的站点或认证地址可能变了：不再和身份里其它成员有相同地址的账号离开身份。 */
+    private void addressesMayHaveChanged(String conch, String actor) {
+        Identities bound = identities;
+        if (bound != null) {
+            bound.revalidate(actor);
+        }
     }
 
     public void deleteConfig(ConchDoc doc, String key, String actor) {
@@ -231,6 +250,7 @@ public final class ConchAdmin {
             throw new IllegalArgumentException("unknown config field");
         }
         config.delete(source, doc.conch(), key, actor);
+        addressesMayHaveChanged(doc.conch(), actor);
     }
 
     public ExecutionResult testLogin(ConchDoc doc, String account, String traceId, String actor) {

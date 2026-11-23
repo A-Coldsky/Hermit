@@ -381,6 +381,12 @@ public final class ConchSync {
      * Sync never calls this. A target the validator rejects is left on disk and the working version stays.
      */
     public UpdateResult rollback(String conch, String actor) {
+        try (ConchRegistry.Hold ignored = registry.hold()) {
+            return rollbackHeld(conch, actor);
+        }
+    }
+
+    private UpdateResult rollbackHeld(String conch, String actor) {
         if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
             throw new IllegalArgumentException("actor must be cli or console");
         }
@@ -1272,6 +1278,19 @@ public final class ConchSync {
             String previousCurrent,
             boolean replaceUnreadable
     ) {
+        // 指针写失败会把旧版本放回注册表：成败定下来之后再通知，听的人不会按没装成的版本做事。
+        try (ConchRegistry.Hold ignored = registry.hold()) {
+            return activateHeld(entry, verified, zip, previousCurrent, replaceUnreadable);
+        }
+    }
+
+    private InstallResult activateHeld(
+            ReefClient.CatalogEntry entry,
+            VerifiedConch verified,
+            byte[] zip,
+            String previousCurrent,
+            boolean replaceUnreadable
+    ) {
         String conch = entry.conch();
         String version = entry.version();
         synchronized (ConchFileLocks.of(conch)) {
@@ -1581,6 +1600,12 @@ public final class ConchSync {
 
     /** Loads a verified installed zip and points {@code current} at it. Does not download. */
     private Reload reloadVerified(String conch, String versionText) {
+        try (ConchRegistry.Hold ignored = registry.hold()) {
+            return reloadVerifiedHeld(conch, versionText);
+        }
+    }
+
+    private Reload reloadVerifiedHeld(String conch, String versionText) {
         synchronized (ConchFileLocks.of(conch)) {
             if (isLocal(conch) || localVerifyFailure(conch, versionText).isPresent()) {
                 return Reload.other();

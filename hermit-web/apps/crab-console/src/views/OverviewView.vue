@@ -148,7 +148,9 @@ async function syncNow() {
     latestCrab.value = report.value.latestCrab
     syncedAt.value = new Date().toISOString()
     const installed = report.value.conches.filter((s) => s.kind === 'INSTALLED').length
-    conches.value = (await api.conches()).conches
+    const listed = await api.conches()
+    conches.value = listed.conches
+    contention.value = listed.contention ?? []
     const waiting = [
       repairs.value.length ? `${repairs.value.length} 个规则包需要修复` : '',
       updatable.value.length ? `${updatable.value.length} 个规则包有新版本待手动更新` : '',
@@ -266,13 +268,13 @@ onMounted(load)
       data-test="contention"
     >
       <template #title>
-        同一网站的两个规则包可能在互相顶掉登录：
+        访问同一网站或同一个认证中心的两个规则包可能在互相顶掉登录：
         <router-link v-for="name in pair.conches" :key="name" :to="`/conches/${encodeURIComponent(name)}`" class="mono pending">
           {{ name }}
         </router-link>
       </template>
       <template #default>
-        它们都访问 {{ pair.site }}，最近 10 分钟内轮流被对方的登录顶掉、又重新登录。可以让两个包使用不同的网站账号，或只保留其中一个。
+        它们都访问 {{ pair.site }}，最近 10 分钟内轮流被对方的登录顶掉、又重新登录。如果两边是同一个人的账号，可以在「<router-link to="/identities" data-test="contention-identity-link">身份</router-link>」里绑到一起共用 Cookie；否则可改用不同账号或只保留其中一个。
       </template>
     </el-alert>
 

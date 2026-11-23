@@ -88,7 +88,10 @@ function groupStatusType(node: GroupTreeNode<CapabilityState>): 'success' | 'inf
   return 'warning'
 }
 
+const anyBusy = computed(() => busyAction.value !== null || busyGroup.value !== null)
+
 async function toggle(cap: CapabilityState, enabled: boolean) {
+  if (anyBusy.value) return
   busyAction.value = cap.action
   try {
     const result = await api.setCapability(props.conch, cap.action, enabled)
@@ -102,7 +105,7 @@ async function toggle(cap: CapabilityState, enabled: boolean) {
 }
 
 async function toggleGroup(node: GroupTreeNode<CapabilityState>, enabled: boolean) {
-  if (!node.all.length) return
+  if (!node.all.length || anyBusy.value) return
   busyGroup.value = node.path
   try {
     const result = await api.setGroup(props.conch, node.path, enabled)
@@ -190,7 +193,7 @@ async function toggleGroup(node: GroupTreeNode<CapabilityState>, enabled: boolea
           <div class="group-actions" @click.stop>
             <el-switch
               :model-value="!ruleDisabled && groupAllEnabled(group)"
-              :disabled="ruleDisabled || !group.all.length || (busyGroup !== null && busyGroup !== group.path)"
+              :disabled="ruleDisabled || !group.all.length || anyBusy"
               :loading="busyGroup === group.path"
               :aria-label="`开关分组 ${group.title}`"
               :data-test="`group-switch-${group.path}`"
@@ -230,7 +233,7 @@ async function toggleGroup(node: GroupTreeNode<CapabilityState>, enabled: boolea
                 <div class="group-actions" @click.stop>
                   <el-switch
                     :model-value="!ruleDisabled && groupAllEnabled(child)"
-                    :disabled="ruleDisabled || !child.all.length || (busyGroup !== null && busyGroup !== child.path)"
+                    :disabled="ruleDisabled || !child.all.length || anyBusy"
                     :loading="busyGroup === child.path"
                     :aria-label="`开关子分组 ${child.title}`"
                     :data-test="`group-switch-${child.path}`"

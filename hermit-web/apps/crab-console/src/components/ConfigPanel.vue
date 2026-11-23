@@ -45,8 +45,8 @@ async function save() {
   try {
     const saved = await api.writeConfig(props.conch, changes.value)
     ElMessage.success('配置已保存')
-    // 站点跟 base_url 走；认证地址可以引用任何一个 type: url 的配置项。
-    const urlChanged = Object.keys(changes.value).some((name) => props.fields[name]?.type === 'url')
+    // 站点跟 base_url 走；认证地址可以引用 base_url 或任何一个 type: url 的配置项。
+    const urlChanged = Object.keys(changes.value).some((name) => name === 'base_url' || props.fields[name]?.type === 'url')
     notifySameSite(props.conch, {
       sameSite: 'base_url' in changes.value ? saved.sameSite : null,
       sameAuth: urlChanged ? saved.sameAuth : null,

@@ -63,6 +63,22 @@ export const importIssueLabels: Record<string, string> = {
   FRAGMENT_DROPPED: '片段不会发出去',
   /** `query_style` 不是 `url` 或 `form`。错误，阻止保存。 */
   QUERY_STYLE: 'query_style 无效',
+  /** 与已发布的其他规则包访问同一网站。警告，不阻止保存。 */
+  SAME_SITE: '与其他包同站点',
+  /** 与已发布的其他规则包经同一个认证地址登录。警告，不阻止保存。 */
+  SAME_AUTH: '与其他包同认证地址',
+  /** 相比当前版本新增了登录认证地址（`auth.origins`）。警告，不阻止保存。 */
+  AUTH_ORIGIN_ADDED: '新增认证地址',
+  /** `auth.origins` 写法不对，或能力步骤/探活指向认证地址，或登录步骤访问未声明地址。 */
+  AUTH_ORIGIN: '认证地址有误',
+  /** 分组或子分组名称不符合标识符规则。错误，阻止保存。 */
+  GROUP_NAME: '分组名不合法',
+  /** 分组嵌套超过两层。错误，阻止保存。 */
+  GROUP_DEPTH: '分组层级过深',
+  /** 能力的 `group` 为空串或指向未声明的分组。错误，阻止保存。 */
+  UNKNOWN_GROUP: '分组未声明',
+  /** 分组及其子分组下没有任何能力。警告，不阻止保存。 */
+  EMPTY_GROUP: '分组无能力',
 }
 
 /**

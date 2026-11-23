@@ -90,6 +90,38 @@ export const issueHints: Record<string, IssueHint> = {
     title: '未声明 Content-Type',
     hint: 'body 会按 text/plain 发送。需要 XML 时在 headers 里声明 Content-Type。不改也能保存。',
   },
+  SAME_SITE: {
+    title: '与已有规则包访问同一网站',
+    hint: 'Reef 上已有其他已发布的规则包访问同一网站。没绑到同一个身份时它们各自登录、不共用 Cookie，网站只允许单会话时会互相顶掉登录。不改也能发布。',
+  },
+  SAME_AUTH: {
+    title: '与已有规则包经同一认证地址登录',
+    hint: 'Reef 上已有其他已发布的规则包经同一个认证地址（门户或 SSO）登录。没绑到同一个身份时它们各自登录、不共用 Cookie。不改也能发布。',
+  },
+  AUTH_ORIGIN_ADDED: {
+    title: '新增了登录认证地址',
+    hint: '这个版本在登录步骤里新增了 base_url 之外的认证地址（auth.origins），账号凭证会提交到那里。发布前请确认该地址可信。不改也能发布。',
+  },
+  AUTH_ORIGIN: {
+    title: '认证地址（auth.origins）配置或用法有误',
+    hint: '检查 auth.origins 的地址格式和引用；只有登录步骤可以访问认证地址，能力步骤和 alive_check 只能访问 base_url。作为警告出现时不阻止保存。',
+  },
+  GROUP_NAME: {
+    title: '分组名不合法',
+    hint: '分组和子分组名须以小写字母开头，只含小写字母、数字和下划线，长 2 到 64 个字符。',
+  },
+  GROUP_DEPTH: {
+    title: '分组层级超过两层',
+    hint: '能力分组最多支持一级分组和二级子分组，请把多余层级拍平。',
+  },
+  UNKNOWN_GROUP: {
+    title: '能力引用了未声明的分组',
+    hint: '检查 action 的 group 是否已在顶层 groups 中声明（最多两层）；不分组请直接省略 group 字段。',
+  },
+  EMPTY_GROUP: {
+    title: '分组下没有任何能力',
+    hint: '这个分组及其子分组里没有归属任何能力，可以删掉或把对应能力的 group 指到这里。不改也能发布。',
+  },
 }
 
 export function isoDaysAgo(days: number): string {

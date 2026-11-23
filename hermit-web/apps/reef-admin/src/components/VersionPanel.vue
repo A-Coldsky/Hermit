@@ -220,7 +220,9 @@ async function runDiff() {
   </el-dialog>
 
   <el-dialog v-model="warningDialog.open" :title="`v${warningDialog.row?.version ?? ''} 的校验警告`" width="640px">
-    <p class="hm-muted hint">警告不影响发布，但说明这个版本的描述还不完整。</p>
+    <p class="hm-muted hint" data-test="warning-summary">
+      有 {{ warningDialog.row?.warnings.length ?? 0 }} 条校验警告。警告不会阻止发布，发布前请逐条确认。
+    </p>
     <IssueList v-if="warningDialog.row" :issues="warningDialog.row.warnings" tone="warning" />
   </el-dialog>
 

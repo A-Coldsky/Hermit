@@ -57,6 +57,8 @@ describe('版本表警告列', () => {
     await button.trigger('click')
     await flushPromises()
     expect(document.body.textContent).toContain('v1.0.0 的校验警告')
+    expect(document.body.querySelector('[data-test="warning-summary"]')?.textContent).toContain('有 2 条校验警告')
+    expect(document.body.textContent).not.toContain('描述还不完整')
     expect(document.body.textContent).toContain('related 指向不存在的能力 approve')
     expect(document.body.textContent).toContain('related 指向不存在的能力 list_done')
     wrapper.unmount()

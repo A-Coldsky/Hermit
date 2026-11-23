@@ -5,7 +5,13 @@ import { notifyError } from '@shared/format'
 import { api, type CredentialField } from '../api'
 import FieldInput from './FieldInput.vue'
 
-const props = defineProps<{ conch: string; account: string; fields: CredentialField[]; unreadable?: boolean }>()
+const props = defineProps<{
+  conch: string
+  account: string
+  fields: CredentialField[]
+  unreadable?: boolean
+  identityName?: string | null
+}>()
 const emit = defineEmits<{ saved: [] }>()
 const open = defineModel<boolean>('open', { required: true })
 
@@ -87,7 +93,11 @@ async function save() {
     await api.writeCredentials(props.conch, props.account, changes.value)
     // 连续保存两次时，新提示替换上一条，屏上只留一条。
     ElMessage.closeAll()
-    ElMessage.success('凭证已保存，已有会话会在下次调用时重新登录')
+    ElMessage.success(
+      props.identityName
+        ? `凭证已保存，身份「${props.identityName}」共用的 Cookie 已清空，各账号会在下次调用时重新登录`
+        : '凭证已保存，已有会话会在下次调用时重新登录',
+    )
     open.value = false
     emit('saved')
   } catch (error) {
@@ -115,6 +125,15 @@ async function save() {
       show-icon
       title="凭证只写不读：已保存的值不会回显。留空表示保持不变。"
       class="notice"
+    />
+    <el-alert
+      v-if="identityName"
+      type="warning"
+      :closable="false"
+      show-icon
+      :title="`这个账号已绑定到身份「${identityName}」：保存凭证会清空这个身份共用的 Cookie，身份里的所有账号下次调用都会重新登录。`"
+      class="notice"
+      data-test="credential-identity-warning"
     />
     <el-form v-loading="loading" label-position="top" @submit.prevent="save">
       <el-form-item v-for="field in fields" :key="field.name" :required="field.required || (!!unreadable && mustRefill(field))">

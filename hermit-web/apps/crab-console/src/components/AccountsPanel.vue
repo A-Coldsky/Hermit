@@ -87,9 +87,12 @@ async function makeDefault(account: Account) {
 }
 
 async function remove(account: Account) {
+  const identityNote = account.identity
+    ? `它已绑定到身份「${account.identity.name}」，删除后会同时从该身份解除绑定。`
+    : ''
   try {
     await ElMessageBox.confirm(
-      `删除账号 ${account.name} 会同时删除它保存的凭证和登录会话，删除后不可恢复。${account.default ? '它是默认账号，删除后不带 X-Hermit-Account 的调用将无法选中账号。' : ''}`,
+      `删除账号 ${account.name} 会同时删除它保存的凭证和登录会话，删除后不可恢复。${identityNote}${account.default ? '它是默认账号，删除后不带 X-Hermit-Account 的调用将无法选中账号。' : ''}`,
       '删除账号',
       { confirmButtonText: '删除', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
     )
@@ -109,6 +112,17 @@ async function remove(account: Account) {
 }
 
 async function testLogin(account: Account) {
+  if (account.identity) {
+    try {
+      await ElMessageBox.confirm(
+        `账号 ${account.name} 已绑定到身份「${account.identity.name}」。测试登录会清空这个身份共用的 Cookie，身份里的所有账号下次调用都会重新登录。`,
+        '继续测试登录？',
+        { confirmButtonText: '继续测试登录', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
+  }
   busy.value = account.name
   let openedCaptcha = false
   try {
@@ -670,6 +684,7 @@ async function disconnect(account: Account) {
     :account="editing.account"
     :fields="credentials"
     :unreadable="accounts.find((a) => a.name === editing.account)?.credentialsUnreadable ?? false"
+    :identity-name="accounts.find((a) => a.name === editing.account)?.identity?.name ?? null"
     @saved="emit('changed')"
   />
 

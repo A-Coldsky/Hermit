@@ -99,6 +99,19 @@ describe('formatImportIssue', () => {
     expect(formatImportIssue({ code: 'QUERY_STYLE', path: 'x', message: 'y' }).label).toBe('query_style 无效')
     expect(formatImportIssue({ code: 'REQUEST_BODY', path: 'x', message: 'y' }).label).toBe('请求正文无效')
     expect(formatImportIssue({ code: 'BODY_CONTENT_TYPE', path: 'x', message: 'y' }).label).toBe('未声明 Content-Type')
+    for (const code of [
+      'SAME_SITE',
+      'SAME_AUTH',
+      'AUTH_ORIGIN_ADDED',
+      'AUTH_ORIGIN',
+      'GROUP_NAME',
+      'GROUP_DEPTH',
+      'UNKNOWN_GROUP',
+      'EMPTY_GROUP',
+    ]) {
+      expect(importIssueLabels[code]).toBeTruthy()
+      expect(formatImportIssue({ code, path: 'x', message: 'y' }).label).toBe(importIssueLabels[code])
+    }
     expect(importIssueLabels.DRIVER).not.toBe(importIssueLabels.PARSE)
     expect(formatImportIssue({
       code: 'REQUIRED',

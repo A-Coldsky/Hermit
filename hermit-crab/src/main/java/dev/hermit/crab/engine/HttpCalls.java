@@ -324,9 +324,11 @@ final class HttpCalls {
                     && pathHasPrefix(exchange.redirect, target, expectPrefix)) {
                 lost = true;
             }
-            // 能力步骤和探活被送去认证地址：会话已经失效。写没写 follow_redirects 都一样。
+            // 能力步骤和探活被送去认证地址：会话已经失效。写没写 follow_redirects 都一样，
+            // 也不跟过去（同主机 http 升 https 的那种也不跟）：能力步骤不访问认证地址，
+            // 认证地址那边的 5xx 也不该盖住「会话失效」。
             if (!reach.login() && isRedirect(exchange.status) && leadsToAuth(exchange.redirect, target, reach)) {
-                lost = true;
+                return exchange.toResult(true, warnings);
             }
             if (!follow || !isRedirect(exchange.status) || exchange.redirect == null) {
                 if (exchange.status >= 500) {

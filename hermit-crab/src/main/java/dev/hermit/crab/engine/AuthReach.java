@@ -30,7 +30,12 @@ record AuthReach(Set<String> origins, boolean login) {
     }
 
     boolean declares(URI target) {
-        return !origins.isEmpty() && origins.contains(SiteAddress.of(target));
+        if (origins.isEmpty()) {
+            return false;
+        }
+        // mailto: 之类没有主机的地址规范不出站点；不可变集合不接受 null。
+        String site = SiteAddress.of(target);
+        return site != null && origins.contains(site);
     }
 
     /** 登录步骤能不能请求这个地址：{@code base_url} 或声明过的认证地址。 */

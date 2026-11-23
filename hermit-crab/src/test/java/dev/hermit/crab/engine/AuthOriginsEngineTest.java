@@ -119,6 +119,10 @@ class AuthOriginsEngineTest {
             reply(exchange, bearer ? 200 : 401, "application/json", bearer ? "{\"value\":\"ok\"}" : "{}");
             return;
         }
+        if (path.equals("/mail")) {
+            redirect(exchange, 302, "mailto:help@example.com");
+            return;
+        }
         if (path.equals("/leave")) {
             redirect(exchange, 302, strangerUrl + "/elsewhere");
             return;
@@ -316,6 +320,37 @@ class AuthOriginsEngineTest {
             assertThat(result.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
             assertThat(result.error().message()).contains("认证地址只能在登录步骤里访问");
             assertThat(ssoSeen).hasSize(before);
+        }
+    }
+
+    @Test
+    void redirectWithoutAHostIsAnOrdinaryResponse() {
+        // Location 是 mailto: 这种没有主机的地址：不是认证地址，也不该变成内部错误。
+        try (Fixture fixture = new Fixture(cas("- " + ssoUrl))) {
+            ExecutionResult result = fixture.call("escape", Map.of("target", appUrl + "/mail"));
+            // 和没写 auth.origins 的包一样：没跟随的 302 按上游状态码报错。
+            assertThat(result.success()).isFalse();
+            assertThat(result.error().code()).isEqualTo(ErrorCode.UPSTREAM_ERROR);
+            assertThat(result.error().message()).contains("302");
+            assertThat(tickets.get()).as("没有被当成会话失效").isEqualTo(1);
+        }
+    }
+
+    @Test
+    void capabilityThatFollowsRedirectsStillStopsAtTheAuthOrigin() {
+        String yaml = cas("- " + ssoUrl)
+                .replace("- request: {method: GET, path: /data}",
+                        "- request: {method: GET, path: /data, follow_redirects: true}");
+        try (Fixture fixture = new Fixture(yaml)) {
+            assertThat(fixture.call("run").success()).isTrue();
+            appSession = "expired";
+            int before = ssoSeen.size();
+            ExecutionResult again = fixture.call("run");
+            assertThat(again.success()).as(String.valueOf(again.error())).isTrue();
+            assertThat(tickets.get()).isEqualTo(2);
+            // 认证中心只收到重新登录时的那一次登录页请求，能力请求没有跟过去。
+            assertThat(ssoSeen.subList(before, ssoSeen.size()))
+                    .filteredOn(line -> line.startsWith("GET /login")).hasSize(1);
         }
     }
 

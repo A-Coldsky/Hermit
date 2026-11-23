@@ -177,6 +177,11 @@ export interface ConchDetail {
   driver: string
   minCrabVersion: string
   baseUrl: string | null
+  /**
+   * 包里写的认证地址（`auth.origins`），登录步骤除了 `baseUrl` 还会访问它们。
+   * 每项是 `scheme://host[:port]`，或整项 `{{config.NAME}}`（由每台 Crab 在配置里填）。没有为空数组。
+   */
+  authOrigins: string[]
   title: string
   description: string
   owner: string | null

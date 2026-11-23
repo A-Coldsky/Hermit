@@ -247,6 +247,7 @@ public final class ConchValidator {
         if (configuredBase != null) {
             checkLiteralHost("config.base_url.default", configuredBase.defaultValue(), errors, warnings);
         }
+        AuthOriginChecks.check(doc, errors, warnings);
         return new ValidationResult(errors, warnings);
     }
 

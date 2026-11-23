@@ -20,6 +20,7 @@ import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.http.HostNames;
+import dev.hermit.common.http.AuthOrigins;
 import dev.hermit.common.http.SiteAddress;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
@@ -101,14 +102,18 @@ public final class RuleEngine implements ConchExecutor {
     private void noteLogin(LoginScope scope) {
         SessionContention sink = contention;
         if (sink != null) {
-            sink.loggedIn(SiteAddress.of(scope.base), scope.key);
+            for (String address : scope.addresses()) {
+                sink.loggedIn(address, scope.key);
+            }
         }
     }
 
-    private void noteLost(URI base, SessionKey key) {
+    private void noteLost(LoginScope scope) {
         SessionContention sink = contention;
         if (sink != null) {
-            sink.lost(SiteAddress.of(base), key);
+            for (String address : scope.addresses()) {
+                sink.lost(address, scope.key);
+            }
         }
     }
 
@@ -356,7 +361,7 @@ public final class RuleEngine implements ConchExecutor {
             if (lostBefore) {
                 // 共享锁下那一次已经发现会话失效：别的调用还没重新登录过才登出，这一次算重跑。
                 if (sessions.markLoggedOutSince(key, handoff.epoch)) {
-                    noteLost(base, key);
+                    noteLost(scope);
                 }
                 if (!action.idempotent()) {
                     return expired(handoff.lost.logs, version, request, credentials, scope, start);
@@ -367,7 +372,7 @@ public final class RuleEngine implements ConchExecutor {
             Attempt attempt = runAction(action, scope);
             if (attempt.lost) {
                 sessions.markLoggedOut(key);
-                noteLost(base, key);
+                noteLost(scope);
                 if (!action.idempotent() || lostBefore) {
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
@@ -376,7 +381,7 @@ public final class RuleEngine implements ConchExecutor {
                 attempt = runAction(action, scope);
                 if (attempt.lost) {
                     sessions.markLoggedOut(key);
-                    noteLost(base, key);
+                    noteLost(scope);
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
             }
@@ -526,7 +531,8 @@ public final class RuleEngine implements ConchExecutor {
                     alive.expectNotRedirect(),
                     scope.deadline,
                     HttpCalls.sensitiveValues(vars, sessions.cookies(scope.key)),
-                    settings.bodyIdleTimeout());
+                    settings.bodyIdleTimeout(),
+                    scope.reach(false));
         } catch (RuleProblem ex) {
             recordAlive(spec, ex.method, ex.path, ex.status, ex.responseHeaders, ex.responseBody, ex.wire, started,
                     false, ex.transport, ex.warnings);
@@ -707,6 +713,7 @@ public final class RuleEngine implements ConchExecutor {
                         logs,
                         key,
                         base,
+                        scope.reach(true),
                         deadline,
                         "login",
                         conch.scripts(),
@@ -972,7 +979,8 @@ public final class RuleEngine implements ConchExecutor {
                 steps = auth.steps().subList(from, auth.steps().size());
             }
             try {
-                runSteps(steps, vars, true, null, logs, scope.key, scope.base, scope.deadline, "login",
+                runSteps(steps, vars, true, null, logs, scope.key, scope.base, scope.reach(true), scope.deadline,
+                        "login",
                         scope.conch.scripts(), indexBase, false, scope.conch);
                 Map<String, String> snapshot;
                 ArrayList<LoginSnapshots.Skipped> skipped = new ArrayList<>();
@@ -1025,7 +1033,7 @@ public final class RuleEngine implements ConchExecutor {
         Map<String, Object> vars = baseVars(scope);
         try {
             runSteps(action.steps(), vars, false, expectPrefix(scope.conch), logs, scope.key, scope.base,
-                    scope.deadline, "action", scope.conch.scripts());
+                    scope.reach(false), scope.deadline, "action", scope.conch.scripts());
             return Attempt.ok(vars, logs);
         } catch (SessionLost ex) {
             return Attempt.lost(logs);
@@ -1042,11 +1050,12 @@ public final class RuleEngine implements ConchExecutor {
             List<StepLog> logs,
             SessionKey key,
             URI base,
+            AuthReach reach,
             long deadline,
             String phase,
             Map<String, String> libraries
     ) {
-        return runSteps(definitions, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
+        return runSteps(definitions, vars, auth, expectPrefix, logs, key, base, reach, deadline, phase, libraries,
                 0, false, null);
     }
 
@@ -1058,6 +1067,7 @@ public final class RuleEngine implements ConchExecutor {
             List<StepLog> logs,
             SessionKey key,
             URI base,
+            AuthReach reach,
             long deadline,
             String phase,
             Map<String, String> libraries,
@@ -1065,7 +1075,7 @@ public final class RuleEngine implements ConchExecutor {
             boolean hideResponseBody,
             ConchDoc conch
     ) {
-        return runBlock(definitions, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
+        return runBlock(definitions, vars, auth, expectPrefix, logs, key, base, reach, deadline, phase, libraries,
                 indexBase, hideResponseBody, conch, new Block(), -1, 0, null);
     }
 
@@ -1103,6 +1113,7 @@ public final class RuleEngine implements ConchExecutor {
             List<StepLog> logs,
             SessionKey key,
             URI base,
+            AuthReach reach,
             long deadline,
             String phase,
             Map<String, String> libraries,
@@ -1150,7 +1161,7 @@ public final class RuleEngine implements ConchExecutor {
                     List<StepLog> inner = new ArrayList<>();
                     Continuation afterFlow = new Continuation(definitions, i + 1, null, false, continuation);
                     try {
-                        runFlow(step, at, started, vars, auth, expectPrefix, inner, key, base, deadline, phase,
+                        runFlow(step, at, started, vars, auth, expectPrefix, inner, key, base, reach, deadline, phase,
                                 libraries, hideResponseBody, conch, block, depth, afterFlow);
                     } catch (StepFailure ex) {
                         StepLog failed = ex.logs.isEmpty() ? null : ex.logs.get(ex.logs.size() - 1);
@@ -1180,7 +1191,8 @@ public final class RuleEngine implements ConchExecutor {
                         base,
                         deadline,
                         capture,
-                        libraries);
+                        libraries,
+                        reach);
                 block.last = outcome;
                 if (outcome.capture() != null
                         && "request".equals(step.type())
@@ -1257,6 +1269,7 @@ public final class RuleEngine implements ConchExecutor {
             List<StepLog> logs,
             SessionKey key,
             URI base,
+            AuthReach reach,
             long deadline,
             String phase,
             Map<String, String> libraries,
@@ -1269,7 +1282,7 @@ public final class RuleEngine implements ConchExecutor {
         DevTraceDraft draft = DevTraceScope.current();
         if (FlowSteps.IF.equals(step.type())) {
             Map<String, Object> condition = Values.map(templates.render(FlowSteps.condition(step), vars));
-            boolean holds = steps.test(condition, vars, sessions.cookies(key));
+            boolean holds = steps.test(condition, vars, sessions.cookies(key), base);
             String branch = holds ? "then" : "else";
             List<Step> chosen = FlowSteps.branch(step, branch);
             if (draft != null) {
@@ -1283,7 +1296,7 @@ public final class RuleEngine implements ConchExecutor {
                 }
                 draft.add(phase, at, elapsed(started), piece);
             }
-            runBlock(chosen, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
+            runBlock(chosen, vars, auth, expectPrefix, logs, key, base, reach, deadline, phase, libraries,
                     0, hideResponseBody, conch, block, at, depth + 1, afterFlow);
             return;
         }
@@ -1315,7 +1328,7 @@ public final class RuleEngine implements ConchExecutor {
                 Continuation repeatNext = until == null
                         ? (lastRound ? afterFlow : new Continuation(body, 0, null, false, null))
                         : new Continuation(afterFlow.steps(), afterFlow.from(), until, !lastRound, afterFlow.parent());
-                runBlock(body, vars, auth, expectPrefix, logs, key, base, deadline, phase, libraries,
+                runBlock(body, vars, auth, expectPrefix, logs, key, base, reach, deadline, phase, libraries,
                         0, hideResponseBody, conch, block, at, depth + 1, repeatNext);
                 if (collect != null) {
                     for (Map.Entry<String, Object> entry : collect.entrySet()) {
@@ -1335,7 +1348,8 @@ public final class RuleEngine implements ConchExecutor {
                     }
                 }
                 if (until != null) {
-                    stopped = steps.test(Values.map(templates.render(until, vars)), vars, sessions.cookies(key));
+                    stopped = steps.test(Values.map(templates.render(until, vars)), vars, sessions.cookies(key),
+                            base);
                 }
             }
         } finally {
@@ -1985,6 +1999,8 @@ public final class RuleEngine implements ConchExecutor {
         private final Map<String, String> config;
         private final SessionKey key;
         private final URI base;
+        /** 这台 Crab 上生效的认证地址，不含 base_url。 */
+        private final Set<String> authOrigins;
         private final long deadline;
         private final LoginView view = new LoginView();
         /** 这次调用读到的登录值，以及每次替换快照前后的值。清掉快照之后仍打码。 */
@@ -2009,7 +2025,27 @@ public final class RuleEngine implements ConchExecutor {
             this.config = config;
             this.key = key;
             this.base = base;
+            this.authOrigins = AuthOrigins.effective(conch, config);
             this.deadline = deadline;
+        }
+
+        /** 这次调用登录时会访问的地址：base_url 和生效的认证地址。互相顶掉登录按每个地址分别记。 */
+        private List<String> addresses() {
+            ArrayList<String> all = new ArrayList<>();
+            String site = SiteAddress.of(base);
+            if (site != null) {
+                all.add(site);
+            }
+            for (String origin : authOrigins) {
+                if (!origin.equals(site)) {
+                    all.add(origin);
+                }
+            }
+            return all;
+        }
+
+        private AuthReach reach(boolean login) {
+            return AuthReach.of(authOrigins, login);
         }
 
         private String lookup(String name) {
@@ -2018,7 +2054,7 @@ public final class RuleEngine implements ConchExecutor {
                 remember(stored);
                 return stored;
             }
-            String cookie = sessions.cookieValue(key, cookieName(name));
+            String cookie = sessions.cookieValue(key, cookieName(name), base);
             remember(cookie);
             return cookie;
         }

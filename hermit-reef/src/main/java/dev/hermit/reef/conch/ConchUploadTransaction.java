@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.http.AuthOrigins;
 import dev.hermit.common.http.SiteAddress;
 import dev.hermit.common.validate.ConchDiff;
 import dev.hermit.common.validate.ValidationCodes;
@@ -19,6 +20,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -65,8 +67,11 @@ class ConchUploadTransaction {
         if (highest != null && doc.version().compareTo(highest) <= 0) {
             throw conflict(ConchUploadService.VERSION_NOT_GREATER);
         }
-        JsonNode diff = diffAgainstCurrent(existing, doc);
-        List<ValidationIssue> warnings = withSameSite(prepared.warnings(), doc);
+        ConchDoc previous = currentDoc(existing);
+        JsonNode diff = previous == null
+                ? objectMapper.createObjectNode()
+                : objectMapper.valueToTree(ConchDiff.between(previous, doc));
+        List<ValidationIssue> warnings = withSameSite(withAddedAuthOrigins(prepared.warnings(), previous, doc), doc);
         String validationJson = json(warnings);
         String diffJson = json(diff);
         boolean wrote = false;
@@ -107,17 +112,69 @@ class ConchUploadTransaction {
     }
 
     /**
-     * 已发布的其它规则包里，包内地址和这次上传的包指向同一网站的，各加一条警告。
+     * 这个版本写了当前发布版本没有的认证地址时加一条警告：凭证会提交到 {@code base_url} 之外的地址，
+     * 发布的人要看得到。第一次上传的包，写了认证地址就提示。
+     */
+    private static List<ValidationIssue> withAddedAuthOrigins(
+            List<ValidationIssue> warnings, ConchDoc previous, ConchDoc uploaded) {
+        if (!AuthOrigins.used(uploaded)) {
+            return warnings;
+        }
+        Set<String> before = previous == null || previous.auth() == null
+                ? Set.of()
+                : authEntries(previous);
+        ArrayList<String> added = new ArrayList<>();
+        for (String entry : authEntries(uploaded)) {
+            if (!before.contains(entry)) {
+                added.add(entry);
+            }
+        }
+        if (added.isEmpty()) {
+            return warnings;
+        }
+        ArrayList<ValidationIssue> all = new ArrayList<>(warnings);
+        all.add(new ValidationIssue(
+                ValidationCodes.AUTH_ORIGIN_ADDED,
+                "auth.origins",
+                "登录步骤除了 base_url 还会访问认证地址 " + String.join("、", added)
+                        + (previous == null ? "" : "，当前发布的版本没有")
+                        + "。账号密码会提交到那里，发布前确认它是这个系统的门户或认证中心。",
+                null));
+        return List.copyOf(all);
+    }
+
+    /** 认证地址逐项写成给人看的文字：字面量规范成 scheme://host:port，配置引用写出配置项名。 */
+    private static Set<String> authEntries(ConchDoc doc) {
+        LinkedHashSet<String> entries = new LinkedHashSet<>();
+        for (String entry : doc.auth().origins()) {
+            String name = AuthOrigins.configName(entry);
+            if (name != null) {
+                entries.add("配置项 " + name + " 填的地址");
+                continue;
+            }
+            String site = SiteAddress.of(entry);
+            if (site != null) {
+                entries.add(site);
+            }
+        }
+        return entries;
+    }
+
+    /**
+     * 已发布的其它规则包里，包内地址和这次上传的包指向同一网站的，各加一条警告；
+     * 不是同一网站、但经同一个认证地址登录的（或一方的站点就是另一方的认证地址），也各加一条。
      * 两个包可能出自互不知道对方的作者；同一台 Crab 同时启用它们时各自登录。
      * 读不出来的旧包跳过，不影响上传。
      */
     private List<ValidationIssue> withSameSite(List<ValidationIssue> warnings, ConchDoc uploaded) {
         Set<String> sites = SiteAddress.declared(uploaded);
-        if (sites.isEmpty()) {
+        Set<String> auth = AuthOrigins.declared(uploaded);
+        if (sites.isEmpty() && auth.isEmpty()) {
             return warnings;
         }
         ArrayList<ValidationIssue> all = new ArrayList<>(warnings);
-        int hits = 0;
+        int siteHits = 0;
+        int authHits = 0;
         List<VersionRow> published = new ArrayList<>(repository.listCurrent());
         published.sort(Comparator.comparing(VersionRow::conch));
         for (VersionRow row : published) {
@@ -131,25 +188,53 @@ class ConchUploadTransaction {
             } catch (RuntimeException ex) {
                 continue;
             }
-            for (String site : SiteAddress.declared(other)) {
-                if (sites.contains(site)) {
-                    // 警告随版本存进一列 TEXT，条数要有上限。
-                    if (++hits <= SAME_SITE_LISTED) {
-                        all.add(new ValidationIssue(
-                                ValidationCodes.SAME_SITE, "base_url", sameSiteMessage(other, site), null));
-                    }
-                    break;
+            Set<String> otherSites = SiteAddress.declared(other);
+            String site = firstShared(otherSites, sites);
+            if (site != null) {
+                // 警告随版本存进一列 TEXT，条数要有上限。
+                if (++siteHits <= SAME_SITE_LISTED) {
+                    all.add(new ValidationIssue(
+                            ValidationCodes.SAME_SITE, "base_url", sameSiteMessage(other, site), null));
                 }
+                continue;
+            }
+            Set<String> otherAuth = AuthOrigins.declared(other);
+            String shared = firstShared(otherAuth, auth);
+            if (shared == null) {
+                shared = firstShared(otherSites, auth);
+            }
+            if (shared == null) {
+                shared = firstShared(otherAuth, sites);
+            }
+            if (shared != null && ++authHits <= SAME_SITE_LISTED) {
+                all.add(new ValidationIssue(
+                        ValidationCodes.SAME_AUTH, "auth.origins", sameAuthMessage(other, shared), null));
             }
         }
-        if (hits > SAME_SITE_LISTED) {
+        if (siteHits > SAME_SITE_LISTED) {
             all.add(new ValidationIssue(
                     ValidationCodes.SAME_SITE,
                     "base_url",
-                    "另有 " + (hits - SAME_SITE_LISTED) + " 个已发布的规则包也访问同一网站，这里不逐个列出。",
+                    "另有 " + (siteHits - SAME_SITE_LISTED) + " 个已发布的规则包也访问同一网站，这里不逐个列出。",
+                    null));
+        }
+        if (authHits > SAME_SITE_LISTED) {
+            all.add(new ValidationIssue(
+                    ValidationCodes.SAME_AUTH,
+                    "auth.origins",
+                    "另有 " + (authHits - SAME_SITE_LISTED) + " 个已发布的规则包也经同一个认证地址登录，这里不逐个列出。",
                     null));
         }
         return List.copyOf(all);
+    }
+
+    private static String firstShared(Set<String> candidates, Set<String> mine) {
+        for (String candidate : candidates) {
+            if (mine.contains(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     /** 逐个写出的同网站规则包上限，按包名顺序取前几个；其余只报个数。 */
@@ -165,6 +250,20 @@ class ConchUploadTransaction {
     static final int SAME_SITE_TEXT = 60;
 
     static String sameSiteMessage(ConchDoc other, String site) {
+        return named(other).append("也访问 ").append(site)
+                .append("。同一台 Crab 同时启用这两个包时各自登录；网站只允许一个会话时会互相顶掉。")
+                .append("可以考虑把能力加进已有的包。")
+                .toString();
+    }
+
+    static String sameAuthMessage(ConchDoc other, String origin) {
+        return named(other).append("也经 ").append(origin)
+                .append(" 登录。同一台 Crab 同时启用这两个包时各自在那里登录；它只允许一个会话时会互相顶掉。")
+                .append("登录步骤先访问应用、出现登录页才提交账号密码，可以少登录几次。")
+                .toString();
+    }
+
+    private static StringBuilder named(ConchDoc other) {
         StringBuilder text = new StringBuilder("已发布的规则包 ").append(other.conch());
         boolean titled = other.title() != null && !other.title().isBlank();
         boolean owned = other.owner() != null && !other.owner().isBlank();
@@ -180,24 +279,21 @@ class ConchUploadTransaction {
         } else {
             text.append(' ');
         }
-        return text.append("也访问 ").append(site)
-                .append("。同一台 Crab 同时启用这两个包时各自登录；网站只允许一个会话时会互相顶掉。")
-                .append("可以考虑把能力加进已有的包。")
-                .toString();
+        return text;
     }
 
-    private JsonNode diffAgainstCurrent(List<VersionRow> existing, ConchDoc uploaded) {
+    /** 当前发布的版本；还没发布过为 null。 */
+    private ConchDoc currentDoc(List<VersionRow> existing) {
         List<VersionRow> currents = existing.stream().filter(VersionRow::current).toList();
         if (currents.size() > 1) {
             throw new ApiException(500, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message());
         }
         if (currents.isEmpty()) {
-            return objectMapper.createObjectNode();
+            return null;
         }
         VersionRow current = currents.get(0);
-        ConchDoc previous = ConchParser.parse(new String(storage.readYaml(current.conch(), current.version()),
+        return ConchParser.parse(new String(storage.readYaml(current.conch(), current.version()),
                 StandardCharsets.UTF_8));
-        return objectMapper.valueToTree(ConchDiff.between(previous, uploaded));
     }
 
     private String json(Object value) {

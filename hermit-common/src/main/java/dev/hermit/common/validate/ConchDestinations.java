@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
+import dev.hermit.common.http.AuthOrigins;
 import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
@@ -16,6 +17,7 @@ import dev.hermit.common.model.Step;
 
 /**
  * 一份规则包静态能发往的地址。每项是规范化后的 {@code scheme://host:port}。
+ * {@code auth.origins} 里的认证地址计入：字面量直接算，引用配置项的算它的默认值。
  * 新集合是旧集合的子集，且两边都能静态确定、MCP 认证类型没变，才是同一边界。
  *
  * <p>OAuth 的 issuer 和 registration 目前不是包字段，发现到的端点仍由上游允许主机在运行时拦住。
@@ -72,6 +74,19 @@ public final class ConchDestinations {
             analysis.take(text, true);
         }
         if (doc.auth() != null) {
+            for (String origin : doc.auth().origins()) {
+                String name = AuthOrigins.configName(origin);
+                if (name == null) {
+                    analysis.take(origin, true);
+                    continue;
+                }
+                // 引用配置项：地址由这台 Crab 的使用者填，和 config.base_url 一样只算默认值。
+                analysis.authConfig.add(name);
+                ConfigField field = doc.config().get(name);
+                if (field != null && field.defaultValue() instanceof String text) {
+                    analysis.take(text, true);
+                }
+            }
             for (Step step : doc.auth().steps()) {
                 analysis.walk(step.def());
             }
@@ -140,6 +155,8 @@ public final class ConchDestinations {
         private final TreeSet<Destination> destinations = new TreeSet<>();
         private boolean undetermined;
         private String authType;
+        /** auth.origins 引用的配置项。以它开头的地址已经算在认证地址里，不算无法静态确定。 */
+        private final Set<String> authConfig = new TreeSet<>();
 
         private void walk(Object node) {
             if (node instanceof Map<?, ?> map) {
@@ -175,6 +192,10 @@ public final class ConchDestinations {
         }
 
         private void considerWhole(String value) {
+            String configured = AuthOrigins.leadingConfigName(value);
+            if (configured != null && authConfig.contains(configured)) {
+                return;
+            }
             if (templatedOrigin(value)) {
                 undetermined = true;
                 return;

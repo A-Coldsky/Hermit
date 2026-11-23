@@ -241,14 +241,17 @@ public final class SessionManager implements AutoCloseable {
         return Map.copyOf(state(key).loginSnapshot);
     }
 
-    /** Cookie 罐里同名的值。没有则为 null。空字符串算有值。 */
-    String cookieValue(SessionKey key, String name) {
+    /**
+     * Cookie 罐里同名的值，只看会发往 {@code base} 主机的。没有则为 null。空字符串算有值。
+     * {@code base} 为 null 时不按主机筛。
+     */
+    String cookieValue(SessionKey key, String name, java.net.URI base) {
         AccountState state = state(key);
         if (name == null || state.cookies == null) {
             return null;
         }
         for (Cookie cookie : state.cookies.getCookies()) {
-            if (name.equals(cookie.getName())) {
+            if (name.equals(cookie.getName()) && AuthReach.sentTo(cookie, base)) {
                 return cookie.getValue();
             }
         }
@@ -623,7 +626,8 @@ public final class SessionManager implements AutoCloseable {
                     cookie.getPath(),
                     expiry,
                     cookie.isSecure(),
-                    httpOnly));
+                    httpOnly,
+                    cookie.getDomain() != null && !cookie.containsAttribute(Cookie.DOMAIN_ATTR)));
         }
         return cookies;
     }
@@ -635,7 +639,9 @@ public final class SessionManager implements AutoCloseable {
         BasicClientCookie restored = new BasicClientCookie(cookie.name(), cookie.value());
         if (cookie.domain() != null) {
             restored.setDomain(cookie.domain());
-            restored.setAttribute(Cookie.DOMAIN_ATTR, cookie.domain());
+            if (!cookie.hostOnly()) {
+                restored.setAttribute(Cookie.DOMAIN_ATTR, cookie.domain());
+            }
         }
         String path = cookie.path() == null ? "/" : cookie.path();
         restored.setPath(path);

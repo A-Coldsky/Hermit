@@ -34,14 +34,16 @@ import org.springframework.transaction.annotation.Transactional;
 class ConchUploadTransaction {
 
     private final ConchRepository repository;
+    private final ConchAvailabilityRepository availability;
     private final ConchStorage storage;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
-    ConchUploadTransaction(ConchRepository repository, ConchStorage storage, AuditService auditService,
-            ObjectMapper objectMapper, Clock clock) {
+    ConchUploadTransaction(ConchRepository repository, ConchAvailabilityRepository availability,
+            ConchStorage storage, AuditService auditService, ObjectMapper objectMapper, Clock clock) {
         this.repository = repository;
+        this.availability = availability;
         this.storage = storage;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
@@ -49,7 +51,11 @@ class ConchUploadTransaction {
     }
 
     @Transactional
-    public UploadResponse store(String actor, ConchUploadService.PreparedUpload prepared) {
+    public UploadResponse store(
+            String actor,
+            ConchUploadService.PreparedUpload prepared,
+            List<ValidationIssue> sameSiteWarnings
+    ) {
         if (actor == null || actor.isBlank()) {
             throw new ApiException(401, ReefErrorCode.UNAUTHORIZED, ReefErrorCode.UNAUTHORIZED.message());
         }
@@ -74,7 +80,9 @@ class ConchUploadTransaction {
         JsonNode diff = previous == null
                 ? objectMapper.createObjectNode()
                 : objectMapper.valueToTree(ConchDiff.between(previous, doc));
-        List<ValidationIssue> warnings = withSameSite(withAddedAuthOrigins(prepared.warnings(), previous, doc), doc);
+        List<ValidationIssue> warnings = append(
+                withAddedAuthOrigins(prepared.warnings(), previous, doc),
+                sameSiteWarnings);
         String validationJson = json(warnings);
         String diffJson = json(diff);
         boolean wrote = false;
@@ -177,24 +185,25 @@ class ConchUploadTransaction {
     }
 
     /**
-     * 已发布的其它规则包里，包内地址和这次上传的包指向同一网站的，各加一条警告；
+     * 已发布且未停用的其它规则包里，包内地址和这次上传的包指向同一网站的，各加一条警告；
      * 不是同一网站、但经同一个认证地址登录的（或一方的站点就是另一方的认证地址），也各加一条。
      * 两个包可能出自互不知道对方的作者；同一台 Crab 同时启用它们时各自登录。
-     * 读不出来的旧包跳过，不影响上传。
+     * 读不出来的旧包跳过，不影响上传。在获取版本锁与写事务之前执行，避免持锁扫描已发布文件。
      */
-    private List<ValidationIssue> withSameSite(List<ValidationIssue> warnings, ConchDoc uploaded) {
+    public List<ValidationIssue> sameSiteWarnings(ConchDoc uploaded) {
         Set<String> sites = SiteAddress.declared(uploaded);
         Set<String> auth = AuthOrigins.declared(uploaded);
         if (sites.isEmpty() && auth.isEmpty()) {
-            return warnings;
+            return List.of();
         }
-        ArrayList<ValidationIssue> all = new ArrayList<>(warnings);
+        ArrayList<ValidationIssue> all = new ArrayList<>();
         int siteHits = 0;
         int authHits = 0;
+        Set<String> disabled = availability.disabledNames();
         List<VersionRow> published = new ArrayList<>(repository.listCurrent());
         published.sort(Comparator.comparing(VersionRow::conch));
         for (VersionRow row : published) {
-            if (row.conch().equals(uploaded.conch())) {
+            if (row.conch().equals(uploaded.conch()) || disabled.contains(row.conch())) {
                 continue;
             }
             ConchDoc other;
@@ -241,6 +250,16 @@ class ConchUploadTransaction {
                     "另有 " + (authHits - SAME_SITE_LISTED) + " 个已发布的规则包也经同一个认证地址登录，这里不逐个列出。",
                     null));
         }
+        return List.copyOf(all);
+    }
+
+    private static List<ValidationIssue> append(List<ValidationIssue> base, List<ValidationIssue> extra) {
+        if (extra == null || extra.isEmpty()) {
+            return base;
+        }
+        ArrayList<ValidationIssue> all = new ArrayList<>(base.size() + extra.size());
+        all.addAll(base);
+        all.addAll(extra);
         return List.copyOf(all);
     }
 

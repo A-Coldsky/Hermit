@@ -215,6 +215,61 @@ class ConchGroupsApiTest {
                 .andExpect(jsonPath("$.data.errors[0].code").value("MIN_CRAB_VERSION"));
     }
 
+    @Test
+    void uploadRejectsDuplicateTopLevelAndChildGroupNames() throws Exception {
+        String duplicateGroupsYaml = """
+                conch: dup_grouped_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.10.0
+                base_url: http://127.0.0.1:8080
+                title: 重复分组示例
+                description: 测试重复分组名拦截
+                credentials: {}
+                groups:
+                  approval:
+                    title: 审批管理
+                    children:
+                      leave:
+                        title: 请假审批
+                      leave:
+                        title: 重复请假
+                  approval:
+                    title: 重复审批
+                actions:
+                  list_leave:
+                    group: approval
+                    title: 查询请假
+                    description: 请假列表
+                    method: GET
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - set: {ok: "1"}
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: "1"}
+                    notes: 请假
+                    related: []
+                """;
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "dup.yaml", "application/yaml", duplicateGroupsYaml.getBytes(StandardCharsets.UTF_8));
+        mockMvc.perform(multipart("/api/admin/conches")
+                        .file(file)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"))
+                .andExpect(jsonPath("$.data.errors.length()").value(2))
+                .andExpect(jsonPath("$.data.errors[0].code").value("GROUP_NAME"))
+                .andExpect(jsonPath("$.data.errors[0].path").value("groups.approval.children.leave"))
+                .andExpect(jsonPath("$.data.errors[0].line").value(15))
+                .andExpect(jsonPath("$.data.errors[1].code").value("GROUP_NAME"))
+                .andExpect(jsonPath("$.data.errors[1].path").value("groups.approval"))
+                .andExpect(jsonPath("$.data.errors[1].line").value(17));
+    }
+
     private void upload(String filename, String yaml) throws Exception {
         MockMultipartFile file = new MockMultipartFile(
                 "file", filename, "application/yaml", yaml.getBytes(StandardCharsets.UTF_8));

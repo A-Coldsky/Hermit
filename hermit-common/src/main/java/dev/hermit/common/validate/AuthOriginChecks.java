@@ -1,5 +1,6 @@
 package dev.hermit.common.validate;
 
+import java.net.URI;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -33,13 +34,14 @@ final class AuthOriginChecks {
         }
         List<String> origins = doc.auth().origins();
         LinkedHashSet<String> names = new LinkedHashSet<>();
+        if ((!origins.isEmpty() || doc.auth().originsDeclared())
+                && doc.minCrabVersion().compareTo(AuthOrigins.MIN_CRAB_VERSION) < 0) {
+            errors.add(ConchValidator.issue(
+                    ValidationCodes.MIN_CRAB_VERSION,
+                    "min_crab_version",
+                    "使用 auth.origins 时 min_crab_version 必须不低于 1.11.0"));
+        }
         if (!origins.isEmpty()) {
-            if (doc.minCrabVersion().compareTo(AuthOrigins.MIN_CRAB_VERSION) < 0) {
-                errors.add(ConchValidator.issue(
-                        ValidationCodes.MIN_CRAB_VERSION,
-                        "min_crab_version",
-                        "使用 auth.origins 时 min_crab_version 必须不低于 1.11.0"));
-            }
             if (origins.size() > AuthOrigins.MAX) {
                 errors.add(ConchValidator.issue(ValidationCodes.AUTH_ORIGIN, "auth.origins",
                         "最多写 " + AuthOrigins.MAX + " 个认证地址"));
@@ -104,6 +106,9 @@ final class AuthOriginChecks {
             if (SiteAddress.of(text) == null) {
                 errors.add(ConchValidator.issue(ValidationCodes.AUTH_ORIGIN, "config." + name + ".default",
                         "被 auth.origins 引用，默认值必须是 http:// 或 https:// 开头的地址"));
+            } else if (URI.create(text.trim()).getRawUserInfo() != null) {
+                errors.add(ConchValidator.issue(ValidationCodes.AUTH_ORIGIN, "config." + name + ".default",
+                        "被 auth.origins 引用，默认值不能带用户名或密码"));
             } else {
                 host("config." + name + ".default", text, errors, warnings);
             }

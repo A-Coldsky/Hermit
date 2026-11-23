@@ -4,6 +4,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { notifyError } from '@shared/format'
 import { api, type ConfigValue } from '../api'
 import FieldInput from './FieldInput.vue'
+import { notifySameSite } from '../same-site'
 
 const props = defineProps<{ conch: string; fields: Record<string, ConfigValue>; emptyText?: string }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -42,8 +43,9 @@ function defaultText(value: unknown): string {
 async function save() {
   saving.value = true
   try {
-    await api.writeConfig(props.conch, changes.value)
+    const saved = await api.writeConfig(props.conch, changes.value)
     ElMessage.success('配置已保存')
+    if ('base_url' in changes.value) notifySameSite(props.conch, saved.sameSite)
     emit('changed')
   } catch (error) {
     notifyError(error)

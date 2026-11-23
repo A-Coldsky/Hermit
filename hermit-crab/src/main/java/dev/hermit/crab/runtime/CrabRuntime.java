@@ -45,6 +45,9 @@ import dev.hermit.crab.engine.InputPreparer;
 import dev.hermit.crab.engine.RuleEngine;
 import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.engine.SessionManager;
+import java.util.TreeMap;
+import dev.hermit.common.http.SiteAddress;
+import dev.hermit.crab.engine.SessionContention;
 import dev.hermit.crab.upstream.McpCallPayload;
 import dev.hermit.crab.upstream.McpForwarder;
 import dev.hermit.crab.upstream.McpOAuth;
@@ -125,6 +128,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final dev.hermit.crab.store.ConchSourceStore conchSources;
     private final CredentialVault vault;
     private final ConchConfigStore conchConfig;
+    private final SessionContention contention;
     private final ApiKeyService apiKeys;
     private final ConchRegistry registry = new ConchRegistry();
     private final EngineSettings settings;
@@ -221,6 +225,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 settings,
                 clock);
         this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
+        this.contention = new SessionContention(clock);
+        this.engine.bindContention(contention);
         this.mcpForwarder = new McpForwarder(
                 sessions,
                 knownSecrets,
@@ -268,6 +274,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.invoker.bindMcpForwarder(mcpForwarder);
         this.invoker.bindRuleDisabled(this::ruleDisabled);
         this.invoker.bindSwitchedOff(this::conchSwitchedOff);
+        this.invoker.bindRivals(this::contendingWith);
         this.fileStage = new FileStage(
                 paths.data().resolve("files"),
                 clock,
@@ -1178,6 +1185,70 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     /** 整个规则包是否在本机被停用。按包名，不分来源。 */
     public boolean conchSwitchedOff(String conch) {
         return conch != null && conchSwitchedOff.contains(conch);
+    }
+
+    /**
+     * 每个已启用、当前生效的 {@code driver: http} 包实际访问的站点（{@code scheme://host:port}）。
+     * 配置里填了 {@code base_url} 用它，否则用包里的。同名的本地包和正式包只算生效的那一个。
+     */
+    public Map<String, String> sites() {
+        TreeMap<String, String> sites = new TreeMap<>();
+        for (String name : registry.snapshot().keySet()) {
+            ConchRegistry.Active active = registry.active(name).orElse(null);
+            if (active == null || conchSwitchedOff.contains(name)) {
+                continue;
+            }
+            ConchDoc doc = active.doc();
+            Map<String, String> merged = DeclaredSettings.mergedConfig(doc, conchConfig.all(active.origin(), name));
+            String site = SiteAddress.effective(doc, merged.get("base_url"));
+            if (site != null) {
+                sites.put(name, site);
+            }
+        }
+        return sites;
+    }
+
+    /** 和这个包访问同一网站的其它已启用规则包，按包名排序。只用来提示。 */
+    public List<String> sameSite(String conch) {
+        return sameSite(conch, sites());
+    }
+
+    public static List<String> sameSite(String conch, Map<String, String> sites) {
+        String site = sites.get(conch);
+        if (site == null) {
+            return List.of();
+        }
+        ArrayList<String> peers = new ArrayList<>();
+        for (Map.Entry<String, String> entry : sites.entrySet()) {
+            if (!entry.getKey().equals(conch) && entry.getValue().equals(site)) {
+                peers.add(entry.getKey());
+            }
+        }
+        return List.copyOf(peers);
+    }
+
+    /** 可能在互相顶掉登录的规则包。只留现在仍然访问同一网站的。 */
+    public List<SessionContention.Pair> contention() {
+        Map<String, String> sites = sites();
+        ArrayList<SessionContention.Pair> pairs = new ArrayList<>();
+        for (SessionContention.Pair pair : contention.active()) {
+            if (pair.site().equals(sites.get(pair.first())) && pair.site().equals(sites.get(pair.second()))) {
+                pairs.add(pair);
+            }
+        }
+        return List.copyOf(pairs);
+    }
+
+    private List<String> contendingWith(String conch) {
+        TreeSet<String> names = new TreeSet<>();
+        for (SessionContention.Pair pair : contention()) {
+            if (pair.first().equals(conch)) {
+                names.add(pair.second());
+            } else if (pair.second().equals(conch)) {
+                names.add(pair.first());
+            }
+        }
+        return List.copyOf(names);
     }
 
     public Set<String> conchSwitchedOffNames() {

@@ -23,6 +23,7 @@ import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.validate.ValidationIssue;
+import dev.hermit.crab.engine.SessionContention;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.ExecutionResult;
 import dev.hermit.crab.engine.LoginPause;
@@ -167,6 +168,7 @@ final class ConsoleApi {
 
     private static void conches(CrabRuntime runtime, Context ctx) {
         Map<String, ConchCatalog.Entry> catalog = catalogByName(runtime);
+        Map<String, String> sites = runtime.sites();
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (String name : runtime.registry().snapshot().keySet()) {
             ConchRegistry.Active active = runtime.registry().active(name).orElse(null);
@@ -189,6 +191,7 @@ final class ConsoleApi {
             row.put("loginPaused", loginPaused);
             row.put("source", sourceLabel(source));
             row.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
+            row.put("sameSite", CrabRuntime.sameSite(doc.conch(), sites));
             putSources(runtime, doc.conch(), row);
             putReefDisabled(runtime, source, doc.conch(), row);
             putUpdateFields(catalog.get(doc.conch()), row);
@@ -196,7 +199,36 @@ final class ConsoleApi {
             rows.add(row);
         }
         appendDisabled(runtime, rows);
-        GatewayResponses.writeData(ctx, Map.of("conches", rows));
+        GatewayResponses.writeData(ctx, Map.of("conches", rows, "contention", contention(runtime)));
+    }
+
+    /** 可能在互相顶掉登录的规则包，最近的在前。只在内存里，Crab 重启后清空。 */
+    private static List<Map<String, Object>> contention(CrabRuntime runtime) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (SessionContention.Pair pair : runtime.contention()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("site", pair.site());
+            row.put("conches", List.of(pair.first(), pair.second()));
+            row.put("lastAt", pair.lastAt().toString());
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    /** 这个包实际访问的站点、同网站的其它已启用规则包，以及其中可能在和它互相顶掉登录的。 */
+    private static void putSite(CrabRuntime runtime, String conch, Map<String, Object> body) {
+        Map<String, String> sites = runtime.sites();
+        body.put("site", sites.get(conch));
+        body.put("sameSite", CrabRuntime.sameSite(conch, sites));
+        ArrayList<String> rivals = new ArrayList<>();
+        for (SessionContention.Pair pair : runtime.contention()) {
+            if (pair.first().equals(conch)) {
+                rivals.add(pair.second());
+            } else if (pair.second().equals(conch)) {
+                rivals.add(pair.first());
+            }
+        }
+        body.put("contendingWith", rivals);
     }
 
     private static void conch(CrabRuntime runtime, Context ctx) {
@@ -236,6 +268,7 @@ final class ConsoleApi {
         body.put("loginPaused", paused);
         body.put("source", sourceLabel(source));
         body.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
+        putSite(runtime, doc.conch(), body);
         putSources(runtime, doc.conch(), body);
         putReefDisabled(runtime, source, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
@@ -812,7 +845,9 @@ final class ConsoleApi {
         ConchRegistry.Active active = requireActiveConch(runtime, ctx);
         // 先全部校验再一次写入：后面某项不合法时，前面的项也不生效。
         runtime.admin().putConfigs(active.origin(), active.doc(), stringMap(object(ctx)), Actors.CONSOLE);
-        GatewayResponses.writeData(ctx, Map.of("updated", true));
+        GatewayResponses.writeData(ctx, Map.of(
+                "updated", true,
+                "sameSite", runtime.sameSite(active.doc().conch())));
     }
 
     private static void toggleConch(CrabRuntime runtime, Context ctx, boolean disabled) {
@@ -820,7 +855,8 @@ final class ConsoleApi {
         runtime.setConchDisabled(conch, disabled, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, Map.of(
                 "conch", conch,
-                "switchedOff", runtime.conchSwitchedOff(conch)));
+                "switchedOff", runtime.conchSwitchedOff(conch),
+                "sameSite", runtime.sameSite(conch)));
     }
 
     private static final Set<String> SOURCE_FIELDS = Set.of("source", "copy");
@@ -849,6 +885,7 @@ final class ConsoleApi {
         data.put("copied", done.copied());
         data.put("copiedAccounts", done.accounts());
         data.put("copiedConfigKeys", done.configKeys());
+        data.put("sameSite", runtime.sameSite(conch));
         GatewayResponses.writeData(ctx, data);
     }
 
@@ -1186,6 +1223,7 @@ final class ConsoleApi {
             body.put("conch", conch);
             body.put("subscribed", subscriptionHeld(runtime, conch, outcome));
             body.put("outcome", outcomeView(outcome));
+            body.put("sameSite", runtime.sameSite(conch));
             GatewayResponses.writeData(ctx, body);
         } catch (SyncException ex) {
             SyncError error = ex.clientError().orElse(null);
@@ -1568,11 +1606,10 @@ final class ConsoleApi {
     private static void importLocal(CrabRuntime runtime, Context ctx) throws Exception {
         LocalConches.ImportResult result = runtime.localConches().importBytes(
                 localBody(ctx), Actors.CONSOLE, confirm(ctx));
-        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
-        writeImport(ctx, result);
+        writeImport(runtime, ctx, result);
     }
 
-    private static void writeImport(Context ctx, LocalConches.ImportResult result) {
+    private static void writeImport(CrabRuntime runtime, Context ctx, LocalConches.ImportResult result) {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", result.conch());
         body.put("version", result.version());
@@ -1580,6 +1617,7 @@ final class ConsoleApi {
         body.put("previousVersion", result.previousVersion());
         body.put("backupId", result.backupId());
         body.put("warnings", issues(result.warnings()));
+        body.put("sameSite", runtime.sameSite(result.conch()));
         GatewayResponses.writeData(ctx, body);
     }
 
@@ -1617,7 +1655,7 @@ final class ConsoleApi {
         if (remember && apiKeyPresented(ctx)) {
             throw LocalConchException.forbidden(LocalConches.GRANT_API_KEY);
         }
-        writeImport(ctx, runtime.localConches().confirmPending(
+        writeImport(runtime, ctx, runtime.localConches().confirmPending(
                 ctx.pathParam("conch"), sha.asText(), Actors.CONSOLE, remember));
     }
 
@@ -1684,7 +1722,7 @@ final class ConsoleApi {
     }
 
     private static void restoreHistory(CrabRuntime runtime, Context ctx) {
-        writeImport(ctx, runtime.localConches().restore(
+        writeImport(runtime, ctx, runtime.localConches().restore(
                 ctx.pathParam("conch"), ctx.pathParam("id"), Actors.CONSOLE));
     }
 

@@ -8,7 +8,7 @@ import StatCard from '@shared/components/StatCard.vue'
 import TraceId from '@shared/components/TraceId.vue'
 import { ApiError } from '@shared/http'
 import { copyText, errorCodeLabels, formatTime, notifyError, percent, relativeTime } from '@shared/format'
-import { api, type CallSummary, type CrabRelease, type DebugState, type ConchSummary, type SyncReport } from '../api'
+import { api, type CallSummary, type CrabRelease, type DebugState, type ConchSummary, type SessionContention, type SyncReport } from '../api'
 import { connectPrompt } from '../connect'
 import { outcomeLabels, syncReasonLabels } from '../labels'
 import { refreshPending } from '../status'
@@ -21,6 +21,7 @@ const router = useRouter()
 const loading = ref(true)
 const syncing = ref(false)
 const conches = ref<ConchSummary[]>([])
+const contention = ref<SessionContention[]>([])
 const calls = ref<CallSummary[]>([])
 const debug = ref<DebugState>({ enabled: false, expiresAt: null })
 const syncConfigured = ref(true)
@@ -129,6 +130,7 @@ async function load() {
   try {
     const [s, c, d] = await Promise.all([api.conches(), api.calls({ limit: 100 }), api.debug(), loadSync(), loadKeys()])
     conches.value = s.conches
+    contention.value = s.contention ?? []
     calls.value = c.calls
     debug.value = d
     loaded.value = true
@@ -252,6 +254,25 @@ onMounted(load)
         <router-link v-for="s in paused" :key="s.conch" :to="`/conches/${encodeURIComponent(s.conch)}`" class="mono pending">
           {{ s.conch }}
         </router-link>
+      </template>
+    </el-alert>
+    <el-alert
+      v-for="pair in contention"
+      :key="pair.conches.join('|')"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="notice"
+      data-test="contention"
+    >
+      <template #title>
+        同一网站的两个规则包可能在互相顶掉登录：
+        <router-link v-for="name in pair.conches" :key="name" :to="`/conches/${encodeURIComponent(name)}`" class="mono pending">
+          {{ name }}
+        </router-link>
+      </template>
+      <template #default>
+        它们都访问 {{ pair.site }}，最近 10 分钟内轮流被对方的登录顶掉、又重新登录。可以让两个包使用不同的网站账号，或只保留其中一个。
       </template>
     </el-alert>
 

@@ -40,7 +40,7 @@ const emit = defineEmits<{
       <template #default="{ row }">
         <el-switch
           :model-value="!row.disabled && !ruleDisabled"
-          :disabled="ruleDisabled || busyGroup !== null"
+          :disabled="ruleDisabled || busyGroup !== null || busyAction !== null"
           :loading="busyAction === row.action"
           :data-test="`cap-switch-${row.action}`"
           @change="(v: string | number | boolean) => emit('toggle', row, Boolean(v))"

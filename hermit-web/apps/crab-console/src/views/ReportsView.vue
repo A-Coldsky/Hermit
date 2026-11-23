@@ -82,6 +82,8 @@ async function send() {
       ElMessage.info('没有需要上报的数据')
     } else if (result.accepted) {
       ElMessage.success('已上报到 Reef')
+    } else if (result.status === 0) {
+      ElMessage.error('无法连接到 Reef，上报未送达')
     } else {
       ElMessage.error(`Reef 拒绝了上报（HTTP ${result.status}），稍后会自动重试`)
     }
@@ -93,16 +95,18 @@ async function send() {
   }
 }
 
-onMounted(() => {
+function refresh() {
   void load()
   void loadSettings()
-})
+}
+
+onMounted(refresh)
 </script>
 
 <template>
   <div v-loading="loading" class="reports">
     <PageHeader title="上报" description="上报开关与下次发给 Reef 的内容。只包含计数、耗时和失败摘要，不包含请求参数、返回数据或凭证">
-      <el-button :icon="Refresh" @click="load">刷新</el-button>
+      <el-button :icon="Refresh" @click="refresh">刷新</el-button>
       <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!configured || empty" @click="send">立即上报</el-button>
     </PageHeader>
 
@@ -116,7 +120,6 @@ onMounted(() => {
             v-model="draft.intervalSeconds"
             :min="60"
             :step="60"
-            step-strictly
             :disabled="!draft.enabled"
             controls-position="right"
             data-test="report-interval"

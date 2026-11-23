@@ -60,8 +60,12 @@ final class McpCatalog {
         this.directLimit = Math.max(0, directLimit);
     }
 
+    private boolean isDirectory(int visibleCount) {
+        return directLimit == 0 || visibleCount > directLimit;
+    }
+
     boolean directory(ApiKeyPrincipal principal) {
-        return visible(principal).size() > directLimit;
+        return isDirectory(visible(principal).size());
     }
 
     List<McpSchema.Tool> tools(ApiKeyPrincipal principal, String protocol) {
@@ -71,10 +75,10 @@ final class McpCatalog {
     List<McpSchema.Tool> tools(ApiKeyPrincipal principal, String protocol, boolean localCaller) {
         boolean outputSchema = McpErrors.outputSchemaSupported(protocol);
         ArrayList<McpSchema.Tool> tools = new ArrayList<>();
-        if (directory(principal)) {
+        List<CapabilityRef> visible = visible(principal);
+        if (isDirectory(visible.size())) {
             tools.addAll(directoryTools(outputSchema));
         } else {
-            List<CapabilityRef> visible = visible(principal);
             for (CapabilityRef ref : visible) {
                 tools.add(directTool(ref, visible, outputSchema));
             }
@@ -156,7 +160,7 @@ final class McpCatalog {
         }
         if (target.groupPath() == null) {
             if (hasVisibleGroups(conch, actions)) {
-                return Optional.of(groupedOverviewMarkdown(conch, actions, local));
+                return Optional.of(groupedOverviewMarkdown(conch, actions, local, isDirectory(visible.size())));
             }
             return Optional.of(markdown(conch, actions, local));
         }
@@ -907,7 +911,12 @@ final class McpCatalog {
     }
 
     /** 带分组的规则包主指南：先给分组目录与按组读取地址，不一次性展开全部组内细节。 */
-    private static String groupedOverviewMarkdown(ConchDoc conch, List<CapabilityRef> actions, boolean local) {
+    private static String groupedOverviewMarkdown(
+            ConchDoc conch,
+            List<CapabilityRef> actions,
+            boolean local,
+            boolean directory
+    ) {
         StringBuilder text = new StringBuilder();
         writeGuideHeader(text, conch, local);
         ArrayList<CapabilityRef> topLevel = new ArrayList<>();
@@ -918,7 +927,7 @@ final class McpCatalog {
         }
         if (!topLevel.isEmpty()) {
             text.append("## 顶层能力\n\n");
-            if (topLevel.size() <= TOP_LEVEL_INLINE_LIMIT) {
+            if (!directory || topLevel.size() <= TOP_LEVEL_INLINE_LIMIT) {
                 for (CapabilityRef ref : topLevel) {
                     writeActionSection(text, ref, actions, "###");
                 }
@@ -930,7 +939,11 @@ final class McpCatalog {
             }
         }
         text.append("## 分组目录\n\n");
-        text.append("按分组读取对应的指南资源，或用 `search_capabilities` 传 `group` 浏览该组下的能力：\n\n");
+        if (directory) {
+            text.append("按分组读取对应的指南资源，或用 `search_capabilities` 传 `group` 浏览该组下的能力：\n\n");
+        } else {
+            text.append("按分组读取对应的指南资源，或通过 `tools/list` 查看当前可见能力：\n\n");
+        }
         for (GroupDef group : conch.groups().values()) {
             int count = countMatching(actions, group.name());
             if (count == 0) {
@@ -1119,6 +1132,9 @@ final class McpCatalog {
 
     private static GuideTarget parseGuideUri(String uri) {
         if (uri == null || !uri.startsWith(GUIDE_PREFIX) || !uri.endsWith(GUIDE_SUFFIX)) {
+            return null;
+        }
+        if (uri.length() <= GUIDE_PREFIX.length() + GUIDE_SUFFIX.length()) {
             return null;
         }
         String body = uri.substring(GUIDE_PREFIX.length(), uri.length() - GUIDE_SUFFIX.length());

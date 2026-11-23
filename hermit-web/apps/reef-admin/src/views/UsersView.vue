@@ -14,6 +14,7 @@ import { roleLabels, userErrorText } from '../labels'
 /** 手机上不固定操作列：固定列会盖住大半张表，前面几列读不到。 */
 const narrow = useNarrow()
 const loading = ref(true)
+const loadFailed = ref(false)
 const users = ref<AdminUser[]>([])
 const busy = ref<string | null>(null)
 
@@ -42,7 +43,9 @@ async function load() {
   loading.value = true
   try {
     users.value = await api.users()
+    loadFailed.value = false
   } catch (error) {
+    loadFailed.value = true
     notifyError(error)
   } finally {
     loading.value = false
@@ -158,10 +161,22 @@ onMounted(load)
       <el-button type="primary" :icon="Plus" data-test="create-user" @click="openCreate">新建用户</el-button>
     </PageHeader>
 
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      class="load-failed"
+      :title="users.length ? '用户列表刷新失败，下面是上一次读到的内容' : '用户列表读取失败'"
+      data-test="users-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
+
     <div class="hm-card">
       <p class="hm-scroll-hint">表格可以左右滑动，操作在最右侧。</p>
       <el-table v-loading="loading" :data="users">
-        <template #empty>{{ loading ? '' : '没有用户' }}</template>
+        <template #empty>{{ loading || loadFailed ? '' : '没有用户' }}</template>
         <el-table-column label="用户名" min-width="160">
           <template #default="{ row }">
             <span class="mono">{{ row.username }}</span>
@@ -247,6 +262,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.load-failed {
+  margin-bottom: 16px;
+}
+
 .tag {
   margin-left: 6px;
 }

@@ -10,12 +10,18 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -28,6 +34,7 @@ import dev.hermit.crab.config.CrabConfig;
 import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CrabRuntime;
+import dev.hermit.crab.runtime.Identities;
 import dev.hermit.crab.store.Actors;
 import dev.hermit.crab.store.ApiKeyScope;
 import dev.hermit.crab.store.CrabPaths;
@@ -388,6 +395,245 @@ class IdentityHttpTest {
         assertThat(console("GET", "/console/api/audit?limit=50", null).toString()).contains("package_removed");
     }
 
+    /** H2：并发 delete 与 bind 不能留下悬空成员或不一致的内存绑定状态。 */
+    @Test
+    void concurrentIdentityDeleteAndBindLeavesCleanState() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        install("pkg_b", siteUrl, "zhangsan");
+        SessionKey memberA = new SessionKey(Origin.OFFICIAL, "pkg_a", "default");
+        SessionKey memberB = new SessionKey(Origin.OFFICIAL, "pkg_b", "default");
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 15; round++) {
+                String id = runtime.identities().create("del-" + round, Actors.CLI).id();
+                runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+                CyclicBarrier barrier = new CyclicBarrier(2);
+                Future<?> deleter = pool.submit(() -> {
+                    await(barrier);
+                    runtime.identities().delete(id, Actors.CLI);
+                });
+                Future<?> binder = pool.submit(() -> {
+                    await(barrier);
+                    try {
+                        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_b", "default", Actors.CLI);
+                    } catch (IllegalArgumentException ignored) {
+                        // 删除先完成时身份已不存在。
+                    }
+                });
+                deleter.get(10, TimeUnit.SECONDS);
+                binder.get(10, TimeUnit.SECONDS);
+                assertThat(runtime.identities().identityOf(memberA)).isNull();
+                assertThat(runtime.identities().identityOf(memberB)).isNull();
+                assertThat(runtime.identities().list()).isEmpty();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** H3：并发向空身份绑定两个地址毫无交集的包时，最多只能成功一个；重复绑定同一身份不清空现有会话。 */
+    @Test
+    void concurrentDisjointBindsNeverCoexistAndIdempotentRebindKeepsSession() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        install("pkg_far", elsewhereUrl, "zhangsan");
+        SessionKey memberA = new SessionKey(Origin.OFFICIAL, "pkg_a", "default");
+        SessionKey memberFar = new SessionKey(Origin.OFFICIAL, "pkg_far", "default");
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 15; round++) {
+                String id = runtime.identities().create("race-" + round, Actors.CLI).id();
+                CyclicBarrier barrier = new CyclicBarrier(2);
+                AtomicInteger ok = new AtomicInteger();
+                AtomicInteger rejected = new AtomicInteger();
+                Future<?> first = pool.submit(() -> {
+                    await(barrier);
+                    try {
+                        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+                        ok.incrementAndGet();
+                    } catch (IllegalArgumentException ex) {
+                        rejected.incrementAndGet();
+                    }
+                });
+                Future<?> second = pool.submit(() -> {
+                    await(barrier);
+                    try {
+                        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_far", "default", Actors.CLI);
+                        ok.incrementAndGet();
+                    } catch (IllegalArgumentException ex) {
+                        rejected.incrementAndGet();
+                    }
+                });
+                first.get(10, TimeUnit.SECONDS);
+                second.get(10, TimeUnit.SECONDS);
+                assertThat(ok.get()).isEqualTo(1);
+                assertThat(rejected.get()).isEqualTo(1);
+                assertThat(runtime.identities().identityOf(memberA) != null
+                        && runtime.identities().identityOf(memberFar) != null).isFalse();
+                runtime.identities().delete(id, Actors.CLI);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 幂等重复绑定同一身份：不触发 rebound，已有登录会话不被清掉。
+        String id = console("POST", "/console/api/identities", "{\"name\":\"幂等\"}").path("id").asText();
+        bind(id, "pkg_a");
+        read("pkg_a");
+        assertThat(logins.get()).isEqualTo(1);
+        bind(id, "pkg_a");
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+        read("pkg_a");
+        assertThat(logins.get()).as("重复绑定同一身份不应重登").isEqualTo(1);
+    }
+
+    /** H9：本地规则包与正式规则包混绑时，无论哪一方先绑，check 都给出未签名提示；同来源不提示。 */
+    @Test
+    void mixingLocalAndOfficialPackagesEmitsWarningInBothDirections() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        install("pkg_b", siteUrl, "zhangsan");
+        ConchDoc localDoc = doc("pkg_local", siteUrl);
+        runtime.registry().put(localDoc, Origin.LOCAL);
+        runtime.admin().createAccount(Origin.LOCAL, "pkg_local", "default", Actors.CLI);
+        runtime.admin().writeCredentials(
+                Origin.LOCAL, localDoc, "default", Map.of("username", "zhangsan", "password", PASSWORD), Actors.CLI);
+
+        String expectedWarning = "其中包含未经过 Reef 签名的本地规则包，绑定后会与正式规则包共用这份登录 Cookie，请确认本地规则可信。";
+
+        String idOfficial = runtime.identities().create("正式起头", Actors.CLI).id();
+        runtime.identities().bind(idOfficial, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+        Identities.Check sameOrigin = runtime.identities().check(idOfficial, Origin.OFFICIAL, "pkg_b", "default");
+        assertThat(sameOrigin.allowed()).isTrue();
+        assertThat(sameOrigin.warnings()).doesNotContain(expectedWarning);
+
+        Identities.Check localIntoOfficial = runtime.identities().check(idOfficial, Origin.LOCAL, "pkg_local", "default");
+        assertThat(localIntoOfficial.allowed()).isTrue();
+        assertThat(localIntoOfficial.warnings()).contains(expectedWarning);
+
+        String idLocal = runtime.identities().create("本地起头", Actors.CLI).id();
+        runtime.identities().bind(idLocal, Origin.LOCAL, "pkg_local", "default", Actors.CLI);
+        Identities.Check officialIntoLocal = runtime.identities().check(idLocal, Origin.OFFICIAL, "pkg_b", "default");
+        assertThat(officialIntoLocal.allowed()).isTrue();
+        assertThat(officialIntoLocal.warnings()).contains(expectedWarning);
+    }
+
+    /** H5：已载入的成员变成 driver: mcp 或清空 base_url 时，直接解绑该成员，且不毒化整个身份的重判。 */
+    @Test
+    void loadedMcpReplacementOrClearedBaseUrlDetachesMemberAndDoesNotPoisonIdentity() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        install("pkg_b", siteUrl, "zhangsan");
+        String id = runtime.identities().create("张三", Actors.CLI).id();
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_b", "default", Actors.CLI);
+
+        // pkg_b 被替换成同名的 driver: mcp 包：虽然仍已载入，但地址为空，应立即解绑而非跳过整个身份。
+        runtime.registry().put(mcpDoc("pkg_b"));
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_b", "default"))).isNull();
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default"))).isEqualTo(id);
+
+        // 只靠 config.base_url 确定地址的包：清空配置后地址为空，同样应被解绑。
+        ConchDoc cfgDoc = docWithoutBaseUrl("pkg_cfg");
+        runtime.registry().put(cfgDoc);
+        runtime.admin().createAccount(Origin.OFFICIAL, "pkg_cfg", "default", Actors.CLI);
+        runtime.admin().writeCredentials(
+                Origin.OFFICIAL, cfgDoc, "default", Map.of("username", "zhangsan", "password", PASSWORD), Actors.CLI);
+        runtime.admin().putConfig(Origin.OFFICIAL, cfgDoc, "base_url", siteUrl, Actors.CLI);
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_cfg", "default", Actors.CLI);
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_cfg", "default"))).isEqualTo(id);
+
+        runtime.admin().deleteConfig(Origin.OFFICIAL, cfgDoc, "base_url", Actors.CLI);
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_cfg", "default"))).isNull();
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default"))).isEqualTo(id);
+
+        // 桥接成员变成 mcp 后：不仅桥接成员自己离开，原本靠它连在一起的两个不相干包也不能继续留在同一身份。
+        install("pkg_far", elsewhereUrl, "zhangsan");
+        ConchDoc bridge = bridgeDoc("pkg_bridge", siteUrl, elsewhereUrl);
+        runtime.registry().put(bridge);
+        runtime.admin().createAccount(Origin.OFFICIAL, "pkg_bridge", "default", Actors.CLI);
+        runtime.admin().writeCredentials(
+                Origin.OFFICIAL, bridge, "default", Map.of("username", "zhangsan", "password", PASSWORD), Actors.CLI);
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_bridge", "default", Actors.CLI);
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_far", "default", Actors.CLI);
+
+        runtime.registry().put(mcpDoc("pkg_bridge"));
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_bridge", "default"))).isNull();
+        boolean aStays = id.equals(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default")));
+        boolean farStays = id.equals(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_far", "default")));
+        assertThat(aStays ^ farStays).as("桥接失效后两个不相干站点不能继续留在同一个身份").isTrue();
+    }
+
+    /** M4：正式包本就生效时带 copy 切换来源并复制了 base_url 配置，也必须重判身份绑定。 */
+    @Test
+    void switchSourceWithCopyRevalidatesIdentitiesWhenCopiedConfigMovesAddress() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        install("pkg_b", siteUrl, "zhangsan");
+        String id = runtime.identities().create("张三", Actors.CLI).id();
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_b", "default", Actors.CLI);
+
+        // 导入同名本地包并在本地配置里把 base_url 改到另一个站点；正式包仍处于生效状态。
+        runtime.localConches().importBytes(yaml("pkg_b", siteUrl, true).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+        ConchDoc localB = runtime.registry().find("pkg_b", Origin.LOCAL).orElseThrow();
+        runtime.admin().putConfig(Origin.LOCAL, localB, "base_url", elsewhereUrl, Actors.CLI);
+        assertThat(runtime.registry().origin("pkg_b")).isEqualTo(Origin.OFFICIAL);
+
+        CrabRuntime.SourceSwitch switched = runtime.switchSource("pkg_b", Origin.OFFICIAL, true, Actors.CONSOLE);
+        assertThat(switched.copied()).isTrue();
+        assertThat(switched.configKeys()).isEqualTo(1);
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_b", "default")))
+                .as("复制过来的 base_url 已改变地址，正式包账号应离开身份").isNull();
+        assertThat(runtime.identities().identityOf(new SessionKey(Origin.OFFICIAL, "pkg_a", "default"))).isEqualTo(id);
+    }
+
+    /** M5：reload 检测到本地文件被删除或扩大地址边界时，触发解绑与清会话；语法损坏的文件保持绑定。 */
+    @Test
+    void reloadLocalConchesUnbindsDeletedOrWidenedFilesWhileBrokenFileKeepsBinding() throws Exception {
+        install("pkg_a", siteUrl, "zhangsan");
+        runtime.localConches().importBytes(yaml("pkg_local", siteUrl, true).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+        ConchDoc localDoc = runtime.registry().find("pkg_local", Origin.LOCAL).orElseThrow();
+        runtime.admin().createAccount(Origin.LOCAL, "pkg_local", "default", Actors.CLI);
+        runtime.admin().writeCredentials(
+                Origin.LOCAL, localDoc, "default", Map.of("username", "zhangsan", "password", PASSWORD), Actors.CLI);
+
+        String id = runtime.identities().create("混绑", Actors.CLI).id();
+        runtime.identities().bind(id, Origin.OFFICIAL, "pkg_a", "default", Actors.CLI);
+        runtime.identities().bind(id, Origin.LOCAL, "pkg_local", "default", Actors.CLI);
+        SessionKey localKey = new SessionKey(Origin.LOCAL, "pkg_local", "default");
+        SessionKey officialKey = new SessionKey(Origin.OFFICIAL, "pkg_a", "default");
+        Path file = runtime.paths().localConches().resolve("pkg_local.yaml");
+
+        // 1. 文件临时写坏：reload 标记为 broken，但不是删除，绑定保留。
+        Files.writeString(file, ":\n");
+        runtime.localConches().reload(Actors.CLI);
+        assertThat(runtime.identities().identityOf(localKey)).isEqualTo(id);
+        assertThat(runtime.identities().identityOf(officialKey)).isEqualTo(id);
+
+        // 2. 从磁盘删掉文件再 reload：触发 onDeleted -> 解除绑定，另一个成员不受影响。
+        Files.delete(file);
+        runtime.localConches().reload(Actors.CLI);
+        assertThat(runtime.identities().identityOf(localKey)).isNull();
+        assertThat(runtime.identities().identityOf(officialKey)).isEqualTo(id);
+        assertThat(console("GET", "/console/api/audit?limit=50", null).toString()).contains("package_removed");
+
+        // 3. 重新导入并绑定后，直接在磁盘改文件扩大地址再 reload：触发 onWidened -> 解绑（address_widened）。
+        runtime.localConches().importBytes(yaml("pkg_local", siteUrl, true).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+        runtime.identities().bind(id, Origin.LOCAL, "pkg_local", "default", Actors.CLI);
+        assertThat(runtime.identities().identityOf(localKey)).isEqualTo(id);
+
+        Files.writeString(file, yaml("pkg_local", elsewhereUrl, true));
+        runtime.localConches().reload(Actors.CLI);
+        assertThat(runtime.identities().identityOf(localKey)).isNull();
+        assertThat(runtime.identities().identityOf(officialKey)).isEqualTo(id);
+        assertThat(console("GET", "/console/api/audit?limit=50", null).toString()).contains("address_widened");
+    }
+
+    private static void await(CyclicBarrier barrier) {
+        try {
+            barrier.await(10, TimeUnit.SECONDS);
+        } catch (Exception ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
     private void bind(String id, String conch) throws Exception {
         console("POST", "/console/api/identities/" + id + "/members",
                 "{\"conch\":\"" + conch + "\",\"account\":\"default\",\"confirm\":true}");
@@ -449,8 +695,12 @@ class IdentityHttpTest {
     }
 
     private static ConchDoc doc(String name, String baseUrl, boolean aliveCheck) {
+        return ConchParser.parse(yaml(name, baseUrl, aliveCheck));
+    }
+
+    private static String yaml(String name, String baseUrl, boolean aliveCheck) {
         String alive = aliveCheck ? "  alive_check:\n    request: { method: GET, path: /data }\n" : "";
-        return ConchParser.parse("""
+        return """
                 conch: %s
                 version: 1.0.0
                 driver: http
@@ -486,6 +736,108 @@ class IdentityHttpTest {
                         output: { message: seen }
                     notes: 无
                     related: []
-                """.formatted(name, baseUrl, name, alive));
+                """.formatted(name, baseUrl, name, alive);
+    }
+
+    private static ConchDoc docWithoutBaseUrl(String name) {
+        return ConchParser.parse("""
+                conch: %s
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 可配站点 %s
+                description: 站点地址完全由本机配置提供。
+                credentials:
+                  username: { type: text, label: 登录名, required: true }
+                  password: { type: secret, label: 密码, required: true }
+                config:
+                  base_url: { type: url, label: 地址, required: true }
+                auth:
+                  steps:
+                    - request:
+                        method: POST
+                        path: /login
+                        form: { username: "{{credential.username}}", password: "{{credential.password}}" }
+                    - assert: { cookie_exists: sid }
+                actions:
+                  read:
+                    title: 读
+                    description: 读一条数据。
+                    idempotent: true
+                    mcp: { expose: true, read_only: true }
+                    steps:
+                      - request: { method: GET, path: /data }
+                      - set: { message: seen }
+                    output:
+                      message: { type: string, description: 文本, value: seen }
+                    examples:
+                      - input: {}
+                        output: { message: seen }
+                    notes: 无
+                    related: []
+                """.formatted(name, name));
+    }
+
+    private static ConchDoc bridgeDoc(String name, String baseUrl, String authOrigin) {
+        return ConchParser.parse("""
+                conch: %s
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.11.0
+                base_url: %s
+                title: 桥接 %s
+                description: 经认证地址登录的规则包。
+                credentials:
+                  username: { type: text, label: 登录名, required: true }
+                  password: { type: secret, label: 密码, required: true }
+                auth:
+                  origins: ["%s"]
+                  steps:
+                    - request:
+                        method: POST
+                        url: %s/login
+                        form: { username: "{{credential.username}}", password: "{{credential.password}}" }
+                    - assert: { cookie_exists: sid }
+                actions:
+                  read:
+                    title: 读
+                    description: 读一条数据。
+                    idempotent: true
+                    mcp: { expose: true, read_only: true }
+                    steps:
+                      - request: { method: GET, path: /data }
+                      - set: { message: seen }
+                    output:
+                      message: { type: string, description: 文本, value: seen }
+                    examples:
+                      - input: {}
+                        output: { message: seen }
+                    notes: 无
+                    related: []
+                """.formatted(name, baseUrl, name, authOrigin, authOrigin));
+    }
+
+    private static ConchDoc mcpDoc(String name) {
+        return ConchParser.parse("""
+                conch: %s
+                version: 2.0.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 上游 %s
+                description: MCP 规则包。
+                credentials: {}
+                upstream:
+                  url: https://mcp.example.com/mcp
+                  transport: streamable_http
+                  auth: { type: headers }
+                actions:
+                  search:
+                    tool: search
+                    title: 搜索
+                    description: 查询。
+                    mcp: { read_only: true, destructive: false }
+                    confirm: false
+                    input_schema: { type: object }
+                """.formatted(name, name));
     }
 }

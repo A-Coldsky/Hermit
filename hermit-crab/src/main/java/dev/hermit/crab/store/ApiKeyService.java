@@ -27,7 +27,7 @@ public final class ApiKeyService {
         this(dataSource, Clock.systemUTC());
     }
 
-    ApiKeyService(DataSource dataSource, Clock clock) {
+    public ApiKeyService(DataSource dataSource, Clock clock) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -58,6 +58,7 @@ public final class ApiKeyService {
             }
             ConfigAudit.append(
                     connection,
+                    createdAt,
                     checkedActor,
                     AuditKind.API_KEY_CREATED,
                     "apikey/" + id,
@@ -111,10 +112,11 @@ public final class ApiKeyService {
             if (revoked) {
                 throw new IllegalStateException("api key is already revoked");
             }
+            Instant revokedAt = clock.instant();
             try (PreparedStatement statement = connection.prepareStatement("""
                     UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL
                     """)) {
-                Db.setInstant(statement, 1, clock.instant());
+                Db.setInstant(statement, 1, revokedAt);
                 statement.setString(2, id);
                 if (statement.executeUpdate() != 1) {
                     throw new IllegalStateException("api key is already revoked");
@@ -122,6 +124,7 @@ public final class ApiKeyService {
             }
             ConfigAudit.append(
                     connection,
+                    revokedAt,
                     checkedActor,
                     AuditKind.API_KEY_REVOKED,
                     "apikey/" + id,

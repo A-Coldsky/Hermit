@@ -5,6 +5,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -13,9 +14,15 @@ import java.util.Optional;
 
 public final class ConchConfigStore {
     private final DataSource dataSource;
+    private final Clock clock;
 
     public ConchConfigStore(DataSource dataSource) {
+        this(dataSource, Clock.systemUTC());
+    }
+
+    public ConchConfigStore(DataSource dataSource, Clock clock) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     public Optional<String> get(Origin origin, String conch, String key) {
@@ -47,7 +54,7 @@ public final class ConchConfigStore {
         String checkedActor = Checks.actor(actor);
         Objects.requireNonNull(value, "value");
         Db.transaction(dataSource, connection -> {
-            putOne(connection, checkedOrigin, checkedConch, checkedKey, value, checkedActor, Instant.now());
+            putOne(connection, checkedOrigin, checkedConch, checkedKey, value, checkedActor, clock.instant());
             return null;
         });
     }
@@ -58,7 +65,7 @@ public final class ConchConfigStore {
         String checkedKey = Checks.configKey(key);
         String checkedActor = Checks.actor(actor);
         Db.transaction(dataSource, connection -> {
-            deleteOne(connection, checkedOrigin, checkedConch, checkedKey, checkedActor);
+            deleteOne(connection, checkedOrigin, checkedConch, checkedKey, checkedActor, clock.instant());
             return null;
         });
     }
@@ -77,10 +84,10 @@ public final class ConchConfigStore {
             checked.put(Checks.configKey(entry.getKey()), Objects.requireNonNull(entry.getValue(), "value"));
         }
         Db.transaction(dataSource, connection -> {
-            Instant now = Instant.now();
+            Instant now = clock.instant();
             for (Map.Entry<String, String> entry : checked.entrySet()) {
                 if (entry.getValue().isEmpty()) {
-                    deleteOne(connection, checkedOrigin, checkedConch, entry.getKey(), checkedActor);
+                    deleteOne(connection, checkedOrigin, checkedConch, entry.getKey(), checkedActor, now);
                 } else {
                     putOne(connection, checkedOrigin, checkedConch, entry.getKey(), entry.getValue(), checkedActor, now);
                 }
@@ -101,14 +108,21 @@ public final class ConchConfigStore {
         upsert(connection, origin, conch, key, value, now);
         ConfigAudit.append(
                 connection,
+                now,
                 actor,
                 AuditKind.CONFIG_PUT,
                 ConfigAudit.target(origin, conch),
                 Json.write(Map.of("key", key)));
     }
 
-    private static void deleteOne(Connection connection, Origin origin, String conch, String key, String actor)
-            throws SQLException {
+    private static void deleteOne(
+            Connection connection,
+            Origin origin,
+            String conch,
+            String key,
+            String actor,
+            Instant now
+    ) throws SQLException {
         int deleted;
         try (PreparedStatement statement = connection.prepareStatement("""
                 DELETE FROM conch_config
@@ -122,6 +136,7 @@ public final class ConchConfigStore {
         if (deleted > 0) {
             ConfigAudit.append(
                     connection,
+                    now,
                     actor,
                     AuditKind.CONFIG_DELETED,
                     ConfigAudit.target(origin, conch),

@@ -82,7 +82,7 @@ onMounted(load)
         <el-radio-button value="http">HTTP 规则</el-radio-button>
       </el-radio-group>
       <span class="spacer" />
-      <span v-if="!loading" class="hm-muted" data-test="conch-count">共 {{ filtered.length }} 个</span>
+      <span v-if="!loading && !(loadFailed && !conches.length)" class="hm-muted" data-test="conch-count">共 {{ filtered.length }} 个</span>
       <el-radio-group v-model="mode" size="small">
         <el-radio-button value="cards" aria-label="卡片视图"><el-icon><Grid /></el-icon></el-radio-button>
         <el-radio-button value="table" aria-label="列表视图"><el-icon><List /></el-icon></el-radio-button>
@@ -212,7 +212,7 @@ onMounted(load)
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
   gap: 16px;
 }
 
@@ -273,8 +273,9 @@ onMounted(load)
 
 .foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
+  gap: 8px 14px;
   padding-top: 12px;
   border-top: 1px solid var(--hm-border);
   font-size: 12.5px;

@@ -9,13 +9,15 @@ import TransportBlock from './TransportBlock.vue'
 
 const props = defineProps<{ trace: DevTrace }>()
 
-/** 带实际发送的请求，以及脚本失败，默认展开。 */
+/** 带实际发送的请求、脚本失败或警告的步骤默认展开。 */
 const open = ref<number[]>([])
 watch(
   () => props.trace.steps,
   (steps) => {
     // if / repeat 的子步骤和外层那一步下标相同，展开状态按位置记。
-    open.value = (steps ?? []).flatMap((step, position) => (step.wire || step.scriptError ? [position] : []))
+    open.value = (steps ?? []).flatMap((step, position) =>
+      step.wire || step.scriptError || step.warnings?.length ? [position] : [],
+    )
   },
   { immediate: true },
 )
@@ -43,6 +45,16 @@ function stepTitle(step: DevTraceStep): string {
     return `${step.type} · ${step.method} ${step.path}${round}`
   }
   return `${step.type}${round}`
+}
+
+function stepHeading(step: DevTraceStep): string {
+  if (step.index < 0) {
+    if (step.warnings?.some((warning) => warning.code === 'shared_session_cleared')) {
+      return '登录 · 共享会话已清空重来'
+    }
+    return step.phase === 'login' ? '登录' : stepTitle(step)
+  }
+  return `#${step.index} ${stepTitle(step)}`
 }
 
 function branchText(step: DevTraceStep): string {
@@ -85,12 +97,13 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
       <el-collapse v-else v-model="open">
         <el-collapse-item v-for="(step, position) in trace.steps" :key="position" :name="position">
           <template #title>
-            <span>#{{ step.index }} {{ stepTitle(step) }}</span>
+            <span>{{ stepHeading(step) }}</span>
             <el-tag v-if="step.status != null" size="small" :type="step.status >= 400 ? 'danger' : 'success'" effect="plain">
               HTTP {{ step.status }}
             </el-tag>
             <el-tag v-if="step.scriptError" size="small" type="danger" effect="plain">脚本失败</el-tag>
             <el-tag v-else-if="step.passed === false" size="small" type="danger" effect="plain">未通过</el-tag>
+            <el-tag v-if="step.warnings?.length" size="small" type="warning" effect="plain">警告</el-tag>
             <span class="hm-muted">{{ millis(step.durationMs) }}</span>
             <el-tag v-if="step.truncated" size="small" type="warning" effect="plain">已截断</el-tag>
             <el-tag v-if="step.transport" size="small" type="danger" effect="plain">连接失败</el-tag>
@@ -130,7 +143,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
               <dt>{{ step.wire ? '规则请求头' : '请求头' }}</dt>
               <dd><JsonBlock :value="step.requestHeaders" /></dd>
             </template>
-            <template v-if="step.requestBody !== undefined">
+            <template v-if="step.requestBody != null">
               <dt>{{ step.wire ? '规则请求体' : '请求体' }}</dt>
               <dd><JsonBlock :value="step.requestBody" /></dd>
             </template>
@@ -138,7 +151,7 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
               <dt>响应头</dt>
               <dd><JsonBlock :value="step.responseHeaders" /></dd>
             </template>
-            <template v-if="step.responseBody !== undefined">
+            <template v-if="step.responseBody != null">
               <dt>响应体</dt>
               <dd><JsonBlock :value="step.responseBody" /></dd>
             </template>
@@ -165,6 +178,17 @@ function exchangeTitle(item: DevTraceExchange, index: number): string {
             <template v-if="step.extractors?.length">
               <dt>提取</dt>
               <dd>{{ step.extractors.join('、') }}</dd>
+            </template>
+            <template v-if="step.variables?.length">
+              <dt>变量</dt>
+              <dd data-test="step-variables">
+                <ul class="variables">
+                  <li v-for="(item, idx) in step.variables" :key="`${item.name}-${idx}`" class="var-item">
+                    <span class="mono var-name">{{ item.name }}</span>
+                    <JsonBlock :value="item.summary" />
+                  </li>
+                </ul>
+              </dd>
             </template>
             <template v-if="step.assertions?.length">
               <dt>断言</dt>
@@ -269,5 +293,24 @@ h4 {
 
 :deep(.el-collapse-item__header) {
   gap: 8px;
+}
+
+.variables {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.var-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.var-name {
+  font-weight: 600;
 }
 </style>

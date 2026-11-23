@@ -22,16 +22,16 @@ public final class CapabilityGroups {
     private CapabilityGroups() {
     }
 
-    /** 规则包是否使用了 groups 声明或任意能力的 group 字段。 */
+    /** 规则包是否使用了 groups 声明或任意能力的 group 字段（含显式空映射或 null，避免低版本 Crab 解析失败）。 */
     public static boolean usesGroups(ConchDoc doc) {
         if (doc == null) {
             return false;
         }
-        if (!doc.groups().isEmpty()) {
+        if (doc.groupsDeclared() || !doc.groups().isEmpty()) {
             return true;
         }
         for (Action action : doc.actions().values()) {
-            if (action != null && action.group() != null) {
+            if (action != null && (action.groupDeclared() || action.group() != null)) {
                 return true;
             }
         }

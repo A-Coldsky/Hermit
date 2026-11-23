@@ -172,6 +172,10 @@ class SharedIdentityEngineTest {
             redirect(exchange, "/home");
             return;
         }
+        if (path.equals("/loose-ping")) {
+            reply(exchange, 200, "{\"ok\":true}");
+            return;
+        }
         if (user == null) {
             redirect(exchange, ssoUrl + "/login?service=" + name);
             return;
@@ -605,6 +609,56 @@ class SharedIdentityEngineTest {
         }
     }
 
+    /** H6：能力请求报会话失效后的重跑（含 concurrent_reads 交接）不能再走 alive_check 接手，必须直接重新登录。 */
+    @Test
+    void retryAfterSessionLossDoesNotAdoptBrokenSessionViaAliveCheck() {
+        SessionKey loose = new SessionKey(Origin.LOCAL, "oa_loose_ping", "alice");
+        SessionKey readsLoose = new SessionKey(Origin.LOCAL, "oa_reads_loose_ping", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, loose);
+        shared.bind("li", OA_BOB, readsLoose);
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(loose, "run")).isEqualTo("oa:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+
+            // 应用会话过期，但认证中心 TGC 仍在共享罐里；/loose-ping 仍返回 200。
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            long pingsBefore = seen.stream().filter(line -> line.contains(" /loose-ping ")).count();
+            int ticketsBefore = tickets.get();
+            assertThat(fixture.value(loose, "run")).as("重试必须跳过探活接手、直接重新换票").isEqualTo("oa:ALICE");
+            assertThat(seen.stream().filter(line -> line.contains(" /loose-ping ")).count()).isEqualTo(pingsBefore);
+            assertThat(tickets.get()).isEqualTo(ticketsBefore + 1);
+            assertThat(passwordLogins.get()).isEqualTo(1);
+
+            // concurrent_reads 路径：共享锁下发现失效并交接给独占锁，也不能走 alive_check 接手。
+            assertThat(fixture.value(readsLoose, "run")).isEqualTo("oa:ALICE");
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            long readsPingsBefore = seen.stream().filter(line -> line.contains(" /loose-ping ")).count();
+            int readsTicketsBefore = tickets.get();
+            assertThat(fixture.value(readsLoose, "run")).as("只读交接重跑必须直接重新换票").isEqualTo("oa:ALICE");
+            assertThat(seen.stream().filter(line -> line.contains(" /loose-ping ")).count()).isEqualTo(readsPingsBefore);
+            assertThat(tickets.get()).isEqualTo(readsTicketsBefore + 1);
+        }
+    }
+
+    /** M3：探活接手阶段 requireLoginRefs 已经触发完整登录时，不能再补跑一次 alive_check，也不能误标 reusedCookies。 */
+    @Test
+    void aliveCheckReferencingLoginVarDoesNotRunRedundantProbeAfterLogin() {
+        SessionKey aliveVars = new SessionKey(Origin.LOCAL, "oa_alive_vars", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, aliveVars);
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(OA_ALICE, "run")).isEqualTo("oa:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+
+            // oa_alive_vars 还没登录、共享罐有 Cookie，原本要走探活接手；但 alive_check 引用了 login.stamp，
+            // requireLoginRefs 会直接跑完整登录，之后不应再请求 /ping-stamp。
+            assertThat(fixture.value(aliveVars, "stamp")).isEqualTo("oa:ALICE");
+            assertThat(seen).noneMatch(line -> line.contains(" /ping-stamp "));
+            assertThat(passwordLogins.get()).isEqualTo(1);
+        }
+    }
+
     /** 给 conch() 的规则加上：只读能力、登录时等验证码、登录时取一个变量并在能力里用。 */
     private static String readOnly(String yaml) {
         return yaml.replace("    idempotent: true\n", "    idempotent: true\n    mcp: {expose: true, read_only: true}\n");
@@ -780,9 +834,14 @@ class SharedIdentityEngineTest {
                     conch("oa", oaUrl, ""),
                     conch("erp", erpUrl, ""),
                     conch("oa_reports", oaUrl, "  alive_check:\n    request: {method: GET, path: /ping}\n"),
+                    conch("oa_loose_ping", oaUrl, "  alive_check:\n    request: {method: GET, path: /loose-ping}\n"),
                     readOnly(conch("oa_reads_only", oaUrl, "  concurrent_reads: true\n")),
+                    readOnly(conch("oa_reads_loose_ping", oaUrl,
+                            "  concurrent_reads: true\n  alive_check:\n    request: {method: GET, path: /loose-ping}\n")),
                     asksForCode(conch("oa_ask", oaUrl, "")),
                     extractsStamp(conch("oa_vars", oaUrl, "")),
+                    extractsStamp(conch("oa_alive_vars", oaUrl,
+                            "  alive_check:\n    request: {method: GET, path: /ping-stamp, query: {stamp: \"{{login.stamp}}\"}}\n")),
                     extractsStamp(conch("erp_vars", erpUrl, "")))) {
                 ConchDoc doc = ConchParser.parse(yaml);
                 assertThat(ConchValidator.validate(doc, ConchValidator.Context.of(CrabVersion.CURRENT)).errors())

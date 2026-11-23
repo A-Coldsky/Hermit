@@ -13,11 +13,13 @@ import { bootstrapFileName, buildBootstrap, downloadJson, normalizeReefUrl } fro
 /** 窄屏只留辨认令牌要用的列，吊销按钮不再固定盖住前缀。 */
 const narrow = useNarrow()
 const loading = ref(true)
+const loadFailed = ref(false)
 const showAll = ref(false)
 const tokens = ref<AgentToken[]>([])
 const crabs = ref<CrabInstance[]>([])
 const revoking = ref<number | null>(null)
 const voidingConfig = ref(false)
+let loadSeq = 0
 
 const create = reactive({ open: false, name: '', saving: false })
 const issued = reactive({
@@ -34,15 +36,22 @@ const bootstrap = computed(() => {
 })
 
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const [t, c] = await Promise.all([api.tokens(isAdmin.value && showAll.value), api.crabs()])
+    if (seq !== loadSeq) return
     tokens.value = t
     crabs.value = c
+    loadFailed.value = false
   } catch (error) {
+    if (seq !== loadSeq) return
+    loadFailed.value = true
     notifyError(error)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) {
+      loading.value = false
+    }
   }
 }
 
@@ -54,6 +63,7 @@ function openCreate() {
 }
 
 async function submitCreate() {
+  if (create.saving) return
   const name = create.name.trim()
   if (!name) {
     ElMessage.warning('请给令牌起个名字，比如这台 Crab 所在的电脑')
@@ -86,8 +96,9 @@ function copySecret() {
 
 async function copyJson() {
   if (!bootstrap.value) return
-  await copyText(JSON.stringify(bootstrap.value, null, 2), '初始化 JSON 已复制')
-  issued.downloaded = true
+  if (await copyText(JSON.stringify(bootstrap.value, null, 2), '初始化 JSON 已复制')) {
+    issued.downloaded = true
+  }
 }
 
 async function closeIssued(done: () => void) {
@@ -161,6 +172,18 @@ onMounted(load)
       <el-button type="primary" :icon="Plus" data-test="create-token" @click="openCreate">生成令牌</el-button>
     </PageHeader>
 
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      class="load-failed"
+      :title="tokens.length || crabs.length ? '令牌列表刷新失败，下面是上一次读到的内容' : '令牌列表读取失败'"
+      data-test="tokens-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
+
     <div class="hm-card">
       <div class="hm-card-title">
         <span>Agent 令牌</span>
@@ -168,7 +191,7 @@ onMounted(load)
       </div>
       <p class="hm-scroll-hint">窄屏只显示名称、前缀、状态和操作；创建和最近使用时间在宽屏上查看。</p>
       <el-table v-loading="loading" :data="tokens">
-        <template #empty>{{ loading ? '' : '还没有令牌。点「生成令牌」为一台 Crab 生成' }}</template>
+        <template #empty>{{ loading || loadFailed ? '' : '还没有令牌。点「生成令牌」为一台 Crab 生成' }}</template>
         <el-table-column label="名称" :min-width="narrow ? 120 : 180">
           <template #default="{ row }">
             <span>{{ row.name }}</span>
@@ -221,7 +244,7 @@ onMounted(load)
       <div class="hm-card-title"><span>{{ isAdmin ? '已连接的 Crab' : '我的 Crab' }}</span></div>
       <p class="hm-scroll-hint">表格可以左右滑动。</p>
       <el-table v-loading="loading" :data="crabs">
-        <template #empty>{{ loading ? '' : '还没有 Crab 用令牌连接过 Reef' }}</template>
+        <template #empty>{{ loading || loadFailed ? '' : '还没有 Crab 用令牌连接过 Reef' }}</template>
         <el-table-column label="Crab" min-width="280">
           <template #default="{ row }">
             <span>{{ row.owner }}</span><span class="hm-muted"> · </span><span class="mono">{{ row.instanceId }}</span>
@@ -245,7 +268,7 @@ onMounted(load)
     <el-dialog v-model="create.open" title="生成令牌" width="440px">
       <el-form label-position="top" @submit.prevent="submitCreate">
         <el-form-item label="名称">
-          <el-input v-model="create.name" maxlength="64" show-word-limit placeholder="例如：财务部办公室电脑" data-test="token-name" />
+          <el-input v-model="create.name" :disabled="create.saving" maxlength="64" show-word-limit placeholder="例如：财务部办公室电脑" data-test="token-name" />
         </el-form-item>
       </el-form>
       <p class="hm-muted hint">令牌只在生成后显示一次。Reef 只保存它的摘要，忘了只能吊销重来。</p>
@@ -288,6 +311,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.load-failed {
+  margin-bottom: 16px;
+}
+
 .hm-card + .hm-card {
   margin-top: 16px;
 }

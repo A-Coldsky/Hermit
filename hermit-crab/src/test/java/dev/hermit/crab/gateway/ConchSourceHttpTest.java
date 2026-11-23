@@ -125,6 +125,86 @@ class ConchSourceHttpTest {
         }
     }
 
+    @Test
+    void copyWithUndecryptableLocalCredentialsReturns409AndLeavesOfficialUntouched() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("undecryptable"), PASSWORD, config)) {
+            String localYaml = TestServer.conchYaml().replaceFirst("(?m)^version:.*$", "version: 9.9.9");
+            server.runtime.localConches().importBytes(localYaml.getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            assertThat(switchTo(server, "LOCAL", null).status()).isEqualTo(200);
+            server.configureAccount("alice");
+
+            try (java.sql.Connection connection = server.runtime.dataSource().getConnection();
+                 java.sql.Statement statement = connection.createStatement()) {
+                assertThat(statement.executeUpdate(
+                        "UPDATE credentials SET ciphertext = X'01020304' WHERE origin = 'LOCAL' AND conch = 'legacy_oa' AND account = 'alice'"))
+                        .isGreaterThan(0);
+            }
+
+            TestServer.Reply failed = switchTo(server, "REEF", true);
+            assertThat(failed.status()).as(failed.body()).isEqualTo(409);
+            assertThat(failed.json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(failed.json().path("error").path("message").asText())
+                    .isEqualTo(dev.hermit.crab.secure.CredentialDecryptException.MESSAGE);
+            assertThat(failed.body()).doesNotContain("CredentialDecryptException").doesNotContain("INTERNAL");
+
+            assertThat(detail(server).path("source").asText()).isEqualTo("LOCAL");
+            assertThat(new dev.hermit.crab.store.AccountStore(server.runtime.dataSource())
+                    .list(Origin.OFFICIAL, "legacy_oa")).isEmpty();
+            assertThat(new dev.hermit.crab.store.ConchConfigStore(server.runtime.dataSource())
+                    .all(Origin.OFFICIAL, "legacy_oa")).isEmpty();
+        }
+    }
+
+    @Test
+    void copySkipsRedundantDefaultAuditAndCountsOnlyCreatedOrCredentialWrittenAccounts() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("audit-count"), PASSWORD, config)) {
+            String localYaml = TestServer.conchYaml().replaceFirst("(?m)^version:.*$", "version: 9.9.9");
+            server.runtime.localConches().importBytes(localYaml.getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            assertThat(switchTo(server, "LOCAL", null).status()).isEqualTo(200);
+            // alice 是第一个账号，自动成为 LOCAL 的默认账号。
+            server.configureAccount("alice");
+            server.configureAccount("bob");
+
+            TestServer.Reply firstCopy = switchTo(server, "REEF", true);
+            assertThat(firstCopy.status()).as(firstCopy.body()).isEqualTo(200);
+            assertThat(firstCopy.json().path("data").path("copied").asBoolean()).isTrue();
+            assertThat(firstCopy.json().path("data").path("copiedAccounts").asInt()).isEqualTo(2);
+            assertThat(new dev.hermit.crab.store.AccountStore(server.runtime.dataSource())
+                    .resolve(Origin.OFFICIAL, "legacy_oa", java.util.Optional.empty()).account()).isEqualTo("alice");
+            var officialDefaultChanges = dev.hermit.crab.store.AuditLog
+                    .page(server.runtime.dataSource(), "legacy_oa", null, 1, 50)
+                    .entries()
+                    .stream()
+                    .filter(entry -> "DEFAULT_CHANGED".equals(entry.action()) && "OFFICIAL".equals(entry.origin()))
+                    .toList();
+            assertThat(officialDefaultChanges).isEmpty();
+
+            // 切回 LOCAL：新建不带凭证的 carol（OFFICIAL 已有同名账号且不复制任何凭证），再新建不带凭证的 dave（仅 LOCAL 有）。
+            assertThat(switchTo(server, "LOCAL", null).status()).isEqualTo(200);
+            server.runtime.admin().createAccount(Origin.OFFICIAL, "legacy_oa", "carol", Actors.CONSOLE);
+            server.runtime.admin().createAccount(Origin.LOCAL, "legacy_oa", "carol", Actors.CONSOLE);
+            server.runtime.admin().createAccount(Origin.LOCAL, "legacy_oa", "dave", Actors.CONSOLE);
+
+            TestServer.Reply secondCopy = switchTo(server, "REEF", true);
+            assertThat(secondCopy.status()).as(secondCopy.body()).isEqualTo(200);
+            // alice、bob 写了凭证 (+2)，dave 新建 (+1)，carol 已存在且无凭证写入 (+0) -> 共 3，不是 4。
+            assertThat(secondCopy.json().path("data").path("copiedAccounts").asInt()).isEqualTo(3);
+
+            // 仅剩已有且无凭证的 carol 时，copiedAccounts 应为 0。
+            assertThat(switchTo(server, "LOCAL", null).status()).isEqualTo(200);
+            server.runtime.admin().setDefault(Origin.LOCAL, "legacy_oa", "carol", Actors.CONSOLE);
+            server.runtime.admin().deleteAccount(Origin.LOCAL, "legacy_oa", "alice", Actors.CONSOLE);
+            server.runtime.admin().deleteAccount(Origin.LOCAL, "legacy_oa", "bob", Actors.CONSOLE);
+            server.runtime.admin().deleteAccount(Origin.LOCAL, "legacy_oa", "dave", Actors.CONSOLE);
+
+            TestServer.Reply noopCopy = switchTo(server, "REEF", true);
+            assertThat(noopCopy.status()).as(noopCopy.body()).isEqualTo(200);
+            assertThat(noopCopy.json().path("data").path("copiedAccounts").asInt()).isEqualTo(0);
+        }
+    }
+
     private static TestServer.Reply switchTo(TestServer server, String source, Boolean copy) throws Exception {
         String body = copy == null
                 ? "{\"source\":\"" + source + "\"}"

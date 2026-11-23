@@ -44,6 +44,16 @@ class AuthOriginsValidationTest {
             assertThat(issue.code()).isEqualTo(ValidationCodes.MIN_CRAB_VERSION);
             assertThat(issue.message()).contains("auth.origins").contains("1.11.0");
         });
+        // 空列表或 null 在旧版本 Crab 解析时同样会报未知字段，因此同样要求 >= 1.11.0。
+        for (String head : new String[] { "origins: []", "origins: null" }) {
+            ValidationResult emptyLow = validate(yaml("1.10.0", head, "- request: { method: GET, path: / }", "", ""));
+            assertThat(emptyLow.errors()).as(head).anySatisfy(issue -> {
+                assertThat(issue.code()).isEqualTo(ValidationCodes.MIN_CRAB_VERSION);
+                assertThat(issue.message()).contains("auth.origins").contains("1.11.0");
+            });
+            ValidationResult emptyOk = validate(yaml("1.11.0", head, "- request: { method: GET, path: / }", "", ""));
+            assertThat(emptyOk.errors()).as(head + " at 1.11.0").isEmpty();
+        }
         // 没写 auth.origins 的旧包不受影响。
         assertThat(validate(yaml("1.0.0", "cookies: {}", "- request: { method: GET, path: / }", "", "")).errors())
                 .isEmpty();
@@ -80,6 +90,17 @@ class AuthOriginsValidationTest {
         assertThat(validate(yaml("1.11.0", "origins: [\"{{config.base_url}}\"]", GUARDED,
                 "base_url: { type: url, label: 应用 }", "")).errors())
                 .anyMatch(issue -> issue.message().contains("应用地址"));
+        // M10：被 auth.origins 引用的配置项默认值不能带用户名或密码。
+        for (String withUserInfo : new String[] {
+                "https://user:pw@sso.example", "https://user@sso.example/cas", "https://@sso.example" }) {
+            ValidationResult result = validate(yaml("1.11.0", origins, login,
+                    "sso_url: { type: url, label: 认证中心, default: \"" + withUserInfo + "\" }", ""));
+            assertThat(result.errors()).as(withUserInfo).anySatisfy(issue -> {
+                assertThat(issue.code()).isEqualTo(ValidationCodes.AUTH_ORIGIN);
+                assertThat(issue.path()).isEqualTo("config.sso_url.default");
+                assertThat(issue.message()).isEqualTo("被 auth.origins 引用，默认值不能带用户名或密码");
+            });
+        }
     }
 
     @Test
@@ -170,11 +191,24 @@ class AuthOriginsValidationTest {
     }
 
     @Test
-    void emptyOriginsLeaveTheCanonicalDocumentUntouched() {
+    void emptyOriginsLeaveTheCanonicalDocumentUntouched() throws Exception {
         ConchDoc plain = ConchParser.parse(yaml("1.0.0", "cookies: {}", "- request: { method: GET, path: / }", "", ""));
         ConchDoc empty = ConchParser.parse(yaml("1.0.0", "origins: []", "- request: { method: GET, path: / }", "", ""));
+        ConchDoc nil = ConchParser.parse(yaml("1.0.0", "origins: null", "- request: { method: GET, path: / }", "", ""));
         assertThat(empty).isEqualTo(plain);
+        assertThat(nil).isEqualTo(plain);
+        assertThat(empty.hashCode()).isEqualTo(plain.hashCode());
         assertThat(AuthOrigins.used(empty)).isFalse();
+        assertThat(AuthOrigins.used(nil)).isFalse();
+
+        com.fasterxml.jackson.databind.json.JsonMapper canonical = com.fasterxml.jackson.databind.json.JsonMapper.builder()
+                .enable(com.fasterxml.jackson.databind.MapperFeature.SORT_PROPERTIES_ALPHABETICALLY)
+                .enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+                .build();
+        String plainJson = canonical.writeValueAsString(plain);
+        assertThat(plainJson).doesNotContain("originsDeclared").doesNotContain("groupsDeclared").doesNotContain("groupDeclared");
+        assertThat(canonical.writeValueAsString(empty)).isEqualTo(plainJson);
+        assertThat(canonical.writeValueAsString(nil)).isEqualTo(plainJson);
     }
 
     @Test

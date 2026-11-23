@@ -3,6 +3,7 @@ package dev.hermit.crab.store;
 import javax.sql.DataSource;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -11,9 +12,15 @@ import java.util.Objects;
 /** 本地包和正式包同名时，记住哪一份生效。只有两份都在时才有记录。 */
 public final class ConchSourceStore {
     private final DataSource dataSource;
+    private final Clock clock;
 
     public ConchSourceStore(DataSource dataSource) {
+        this(dataSource, Clock.systemUTC());
+    }
+
+    public ConchSourceStore(DataSource dataSource, Clock clock) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     public Map<String, Origin> load() {
@@ -41,6 +48,7 @@ public final class ConchSourceStore {
         Db.transaction(dataSource, connection -> {
             ConfigAudit.append(
                     connection,
+                    clock.instant(),
                     checkedActor,
                     AuditKind.CONCH_SOURCE_SWITCHED,
                     checkedOrigin.name() + "/" + checked,
@@ -63,7 +71,7 @@ public final class ConchSourceStore {
                         "INSERT INTO conch_active_origin (conch, origin, updated_at) VALUES (?, ?, ?)")) {
                     insert.setString(1, checked);
                     insert.setString(2, origin.name());
-                    Db.setInstant(insert, 3, Instant.now());
+                    Db.setInstant(insert, 3, clock.instant());
                     insert.executeUpdate();
                 }
             }

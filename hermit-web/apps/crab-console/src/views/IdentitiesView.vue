@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Delete, Edit, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { notifyError } from '@shared/format'
@@ -9,10 +9,22 @@ import { api, type Account, type ConchSummary, type Identity, type IdentityCheck
 import { originLabels } from '../labels'
 
 const loading = ref(true)
+/** 读取失败和「一个身份都没有」要分开：失败时不能让人以为身份丢了。 */
+const loadFailed = ref(false)
 const identities = ref<Identity[]>([])
 const conches = ref<ConchSummary[]>([])
 const creating = ref(false)
+const mutating = ref(false)
 const newName = ref('')
+
+let unmounted = false
+let loadSeq = 0
+let pickSeq = 0
+let checkSeq = 0
+
+onBeforeUnmount(() => {
+  unmounted = true
+})
 
 /** 「添加账号」对话框。先选包和账号，检查通过并看过提示后才能确认。 */
 const adding = reactive({
@@ -24,18 +36,37 @@ const adding = reactive({
   check: null as IdentityCheck | null,
   checking: false,
   saving: false,
+  confirmedDifferent: false,
 })
 
+watch(
+  () => adding.open,
+  (open) => {
+    if (!open) {
+      pickSeq += 1
+      checkSeq += 1
+      adding.checking = false
+    }
+  },
+)
+
 /**
- * 能绑定的包：driver: http，并且生效的这一份不是已经在这个身份里的包。
+ * 能绑定的包：driver: http、未因校验停用，并且生效的这一份不是已经在这个身份里的包。
  * 同名的正式包和本地包是两份，账号各算各的：一份在身份里，切到另一份后还能把另一份绑进来。
  */
 const candidates = computed(() => {
   const taken = new Set((adding.identity?.members ?? []).map((member) => `${member.origin}/${member.conch}`))
   return conches.value.filter(
-    (conch) => conch.driver !== 'mcp' && !taken.has(`${conch.source === 'LOCAL' ? 'LOCAL' : 'OFFICIAL'}/${conch.conch}`),
+    (conch) =>
+      conch.driver !== 'mcp' &&
+      conch.ruleDisabled !== true &&
+      !taken.has(`${conch.source === 'LOCAL' ? 'LOCAL' : 'OFFICIAL'}/${conch.conch}`),
   )
 })
+
+function candidateLabel(conch: ConchSummary): string {
+  return conch.title ? `${conch.conch}（${conch.title}）` : conch.conch
+}
 
 const credentialText: Record<string, { text: string; type: 'success' | 'warning' | 'info' }> = {
   SAME: { text: '登录名看起来相同', type: 'success' },
@@ -43,17 +74,54 @@ const credentialText: Record<string, { text: string; type: 'success' | 'warning'
   UNKNOWN: { text: '比不出登录名是否相同', type: 'info' },
 }
 
-async function load() {
-  loading.value = true
-  try {
-    const [listed, packages] = await Promise.all([api.identities(), api.conches()])
-    identities.value = listed.identities ?? []
-    conches.value = packages.conches ?? []
-  } catch (error) {
-    notifyError(error)
-  } finally {
-    loading.value = false
+const hasDifferentCredentials = computed(() =>
+  Boolean(adding.check?.allowed && adding.check.peers.some((peer) => peer.credentials === 'DIFFERENT')),
+)
+
+const checkWarnings = computed(() => {
+  const check = adding.check
+  if (!check?.allowed) return []
+  const list = [...check.warnings]
+  const selected = conches.value.find((c) => c.conch === adding.conch)
+  if (selected && check.peers.length) {
+    const selectedOrigin = selected.source === 'LOCAL' ? 'LOCAL' : 'OFFICIAL'
+    const mixed = check.peers.some((peer) => peer.origin !== selectedOrigin)
+    const alreadyWarned = list.some(
+      (warning) => warning.includes('本地') && (warning.includes('正式') || warning.includes('官方') || warning.includes('未签名')),
+    )
+    if (mixed && !alreadyWarned) {
+      list.push('身份里将同时包含本地规则包（未签名）和正式规则包，它们会共用这份 Cookie；请确认本地规则包可信。')
+    }
   }
+  return list
+})
+
+const canConfirmAdd = computed(
+  () =>
+    !adding.checking &&
+    !adding.saving &&
+    Boolean(adding.identity && adding.check?.allowed) &&
+    (!hasDifferentCredentials.value || adding.confirmedDifferent),
+)
+
+async function load() {
+  const seq = ++loadSeq
+  loading.value = true
+  const [listedResult, packagesResult] = await Promise.allSettled([api.identities(), api.conches()])
+  if (unmounted || seq !== loadSeq) return
+  if (listedResult.status === 'fulfilled') {
+    identities.value = listedResult.value.identities ?? []
+    loadFailed.value = false
+  } else {
+    loadFailed.value = true
+    notifyError(listedResult.reason)
+  }
+  if (packagesResult.status === 'fulfilled') {
+    conches.value = packagesResult.value.conches ?? []
+  } else if (listedResult.status === 'fulfilled') {
+    notifyError(packagesResult.reason)
+  }
+  loading.value = false
 }
 
 const NAME_MAX = 64
@@ -71,7 +139,7 @@ const newNameProblem = computed(() => (newName.value.trim() ? nameProblem(newNam
 
 async function create() {
   const name = newName.value.trim()
-  if (nameProblem(name)) return
+  if (creating.value || nameProblem(name)) return
   creating.value = true
   try {
     await api.createIdentity(name)
@@ -85,104 +153,141 @@ async function create() {
 }
 
 async function rename(identity: Identity) {
-  let name: string
+  if (mutating.value) return
+  mutating.value = true
   try {
-    const answer = await ElMessageBox.prompt('只是显示用的名字，改名不影响已绑定的账号。', '身份改名', {
-      inputValue: identity.name,
-      confirmButtonText: '保存',
-      cancelButtonText: '取消',
-      inputValidator: (value) => nameProblem(value) || true,
-    })
-    name = String(answer.value).trim()
-  } catch {
-    return
-  }
-  try {
+    let name: string
+    try {
+      const answer = await ElMessageBox.prompt('只是显示用的名字，改名不影响已绑定的账号。', '身份改名', {
+        inputValue: identity.name,
+        confirmButtonText: '保存',
+        cancelButtonText: '取消',
+        inputValidator: (value) => nameProblem(value) || true,
+      })
+      name = String(answer.value).trim()
+    } catch {
+      return
+    }
     await api.renameIdentity(identity.id, name)
     await load()
   } catch (error) {
     notifyError(error)
+  } finally {
+    mutating.value = false
   }
 }
 
 async function remove(identity: Identity) {
+  if (mutating.value) return
+  mutating.value = true
   try {
-    await ElMessageBox.confirm(
-      identity.members.length
-        ? `里面的 ${identity.members.length} 个账号会回到各自独立的会话，下次调用各自重新登录。`
-        : '这个身份里没有账号。',
-      `删除身份「${identity.name}」？`,
-      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch {
-    return
-  }
-  try {
+    try {
+      await ElMessageBox.confirm(
+        identity.members.length
+          ? `里面的 ${identity.members.length} 个账号会回到各自独立的会话，下次调用各自重新登录。`
+          : '这个身份里没有账号。',
+        `删除身份「${identity.name}」？`,
+        { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
     await api.deleteIdentity(identity.id)
     await load()
   } catch (error) {
     notifyError(error)
+  } finally {
+    mutating.value = false
   }
 }
 
 async function unbind(identity: Identity, member: IdentityMember) {
+  if (mutating.value) return
+  mutating.value = true
   try {
-    await ElMessageBox.confirm(
-      `${member.conch} 的账号 ${member.account} 会回到自己独立的会话，下次调用重新登录。身份里的 Cookie 留给其余账号。`,
-      '解除绑定？',
-      { confirmButtonText: '解除', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch {
-    return
-  }
-  try {
+    try {
+      await ElMessageBox.confirm(
+        `${member.conch} 的账号 ${member.account} 会回到自己独立的会话，下次调用重新登录。身份里的 Cookie 留给其余账号。`,
+        '解除绑定？',
+        { confirmButtonText: '解除', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
     await api.unbindIdentityMember(identity.id, member)
     await load()
   } catch (error) {
     notifyError(error)
+  } finally {
+    mutating.value = false
   }
 }
 
 function openAdd(identity: Identity) {
+  pickSeq += 1
+  checkSeq += 1
   adding.identity = identity
   adding.conch = ''
   adding.account = ''
   adding.accounts = []
   adding.check = null
+  adding.checking = false
+  adding.confirmedDifferent = false
   adding.open = true
 }
 
 async function pickConch() {
+  const seq = ++pickSeq
+  checkSeq += 1
   adding.account = ''
   adding.accounts = []
   adding.check = null
-  if (!adding.conch) return
+  adding.checking = false
+  adding.confirmedDifferent = false
+  const conch = adding.conch
+  if (!conch) return
   try {
-    adding.accounts = (await api.accounts(adding.conch)).accounts ?? []
+    const listed = (await api.accounts(conch)).accounts ?? []
+    if (unmounted || seq !== pickSeq || !adding.open || adding.conch !== conch) return
+    adding.accounts = listed
     if (adding.accounts.length === 1) {
       adding.account = adding.accounts[0].name
       await runCheck()
     }
   } catch (error) {
+    if (unmounted || seq !== pickSeq || !adding.open) return
     notifyError(error)
   }
 }
 
 async function runCheck() {
+  const seq = ++checkSeq
   adding.check = null
-  if (!adding.identity || !adding.conch || !adding.account) return
+  adding.confirmedDifferent = false
+  const identityId = adding.identity?.id
+  const conch = adding.conch
+  const account = adding.account
+  if (!identityId || !conch || !account) {
+    adding.checking = false
+    return
+  }
   adding.checking = true
   try {
-    adding.check = await api.checkIdentityMember(adding.identity.id, adding.conch, adding.account)
+    const result = await api.checkIdentityMember(identityId, conch, account)
+    if (unmounted || seq !== checkSeq || !adding.open) return
+    adding.check = result
   } catch (error) {
+    if (unmounted || seq !== checkSeq || !adding.open) return
     notifyError(error)
   } finally {
-    adding.checking = false
+    if (seq === checkSeq) {
+      adding.checking = false
+    }
   }
 }
 
 async function confirmAdd() {
-  if (!adding.identity || !adding.check?.allowed) return
+  if (!canConfirmAdd.value || !adding.identity) return
   adding.saving = true
   try {
     await api.bindIdentityMember(adding.identity.id, adding.conch, adding.account)
@@ -219,7 +324,7 @@ onMounted(load)
           data-test="identity-name"
           @keyup.enter="create"
         />
-        <el-button type="primary" :icon="Plus" :loading="creating" :disabled="!!nameProblem(newName)" data-test="identity-create" @click="create">
+        <el-button type="primary" :icon="Plus" :loading="creating" :disabled="creating || !!nameProblem(newName)" data-test="identity-create" @click="create">
           新建
         </el-button>
       </div>
@@ -231,15 +336,26 @@ onMounted(load)
       </ul>
     </div>
 
-    <p v-if="!loading && !identities.length" class="hm-muted empty" data-test="identity-empty">还没有身份。</p>
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      :title="identities.length ? '身份列表刷新失败，下面是上一次读到的内容' : '身份列表读取失败'"
+      data-test="identities-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
+
+    <p v-if="!loading && !loadFailed && !identities.length" class="hm-muted empty" data-test="identity-empty">还没有身份。</p>
 
     <div v-for="identity in identities" :key="identity.id" class="hm-card" data-test="identity-card">
       <div class="hm-card-title">
         <span class="name">{{ identity.name }}</span>
         <span class="actions">
-          <el-button link :icon="Edit" :aria-label="`${identity.name} 改名`" @click="rename(identity)">改名</el-button>
-          <el-button link type="primary" :icon="Plus" data-test="identity-add" @click="openAdd(identity)">添加账号</el-button>
-          <el-button link type="danger" :icon="Delete" data-test="identity-delete" @click="remove(identity)">删除</el-button>
+          <el-button link :icon="Edit" :disabled="mutating" :aria-label="`${identity.name} 改名`" @click="rename(identity)">改名</el-button>
+          <el-button link type="primary" :icon="Plus" :disabled="mutating" data-test="identity-add" @click="openAdd(identity)">添加账号</el-button>
+          <el-button link type="danger" :icon="Delete" :disabled="mutating" data-test="identity-delete" @click="remove(identity)">删除</el-button>
         </span>
       </div>
       <el-alert
@@ -278,7 +394,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="" width="90" align="right" fixed="right">
           <template #default="{ row }">
-            <el-button link type="danger" data-test="identity-unbind" @click="unbind(identity, row)">解除</el-button>
+            <el-button link type="danger" :disabled="mutating" data-test="identity-unbind" @click="unbind(identity, row)">解除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -289,7 +405,17 @@ onMounted(load)
         <label class="field">
           <span class="hm-muted">规则包</span>
           <el-select v-model="adding.conch" filterable placeholder="选择规则包" data-test="identity-conch" @change="pickConch">
-            <el-option v-for="conch in candidates" :key="conch.conch" :value="conch.conch" :label="`${conch.conch}（${conch.title}）`" />
+            <el-option
+              v-for="conch in candidates"
+              :key="`${conch.source}/${conch.conch}`"
+              :value="conch.conch"
+              :label="candidateLabel(conch)"
+            >
+              <span>{{ candidateLabel(conch) }}</span>
+              <el-tag v-if="conch.source === 'LOCAL'" size="small" effect="plain" class="tag" data-test="candidate-local-tag">
+                {{ originLabels.LOCAL ?? '本地' }}
+              </el-tag>
+            </el-option>
           </el-select>
         </label>
         <label class="field">
@@ -304,15 +430,20 @@ onMounted(load)
           <el-alert v-if="!adding.check.allowed" type="error" :closable="false" show-icon :title="adding.check.problem ?? '不能绑定'" />
           <template v-else>
             <p v-if="!adding.check.peers.length" class="hm-muted">这是这个身份的第一个账号。</p>
-            <div v-for="peer in adding.check.peers" :key="`${peer.origin}/${peer.conch}/${peer.account}`" class="peer">
+            <div v-for="peer in adding.check.peers" :key="`${peer.origin}/${peer.conch}/${peer.account}`" class="peer" data-test="identity-peer">
               <span class="mono">{{ peer.conch }} / {{ peer.account }}</span>
+              <el-tag v-if="peer.origin === 'LOCAL'" size="small" effect="plain" class="tag" data-test="peer-local-tag">
+                {{ originLabels.LOCAL ?? '本地' }}
+              </el-tag>
               <el-tag size="small" effect="plain" :type="credentialText[peer.credentials].type" class="tag">
                 {{ credentialText[peer.credentials].text }}
               </el-tag>
-              <div class="hm-muted note">相同的地址：{{ peer.addresses.join('、') }}</div>
+              <div class="hm-muted note">
+                {{ peer.addresses.length ? `相同的地址：${peer.addresses.join('、')}` : '通过身份里的其他成员间接关联' }}
+              </div>
             </div>
             <el-alert
-              v-for="warning in adding.check.warnings"
+              v-for="warning in checkWarnings"
               :key="warning"
               type="warning"
               :closable="false"
@@ -320,6 +451,14 @@ onMounted(load)
               :title="warning"
               class="warning"
             />
+            <el-checkbox
+              v-if="hasDifferentCredentials"
+              v-model="adding.confirmedDifferent"
+              class="confirm-different"
+              data-test="identity-confirm-different"
+            >
+              我已确认两边确实是同一个人的账号，不同登录名不会导致串号
+            </el-checkbox>
             <p class="hm-muted note">只比较文本类型的凭证（登录名通常是这类），不比较也不显示密码。请自己确认两边是同一个人。</p>
           </template>
         </template>
@@ -327,9 +466,9 @@ onMounted(load)
       <template #footer>
         <el-button @click="adding.open = false">取消</el-button>
         <el-button
-          type="primary"
+          :type="hasDifferentCredentials ? 'warning' : 'primary'"
           :loading="adding.saving"
-          :disabled="!adding.check?.allowed"
+          :disabled="!canConfirmAdd"
           data-test="identity-confirm"
           @click="confirmAdd"
         >
@@ -427,6 +566,14 @@ onMounted(load)
 
 .warning {
   margin-bottom: 8px;
+}
+
+.confirm-different {
+  display: flex;
+  height: auto;
+  white-space: normal;
+  line-height: 1.5;
+  margin: 10px 0 6px;
 }
 
 @media (max-width: 640px) {

@@ -51,11 +51,23 @@ final class ConfigAudit {
             String target,
             String detail
     ) throws SQLException {
+        append(connection, Instant.now(), actor, kind, target, detail);
+    }
+
+    static void append(
+            Connection connection,
+            Instant at,
+            String actor,
+            AuditKind kind,
+            String target,
+            String detail
+    ) throws SQLException {
+        Instant timestamp = at == null ? Instant.now() : at;
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO config_audit (at, actor, kind, target, detail)
                 VALUES (?, ?, ?, ?, ?)
                 """)) {
-            Db.setInstant(statement, 1, Instant.now());
+            Db.setInstant(statement, 1, timestamp);
             statement.setString(2, actor);
             statement.setString(3, kind.name());
             statement.setString(4, target);

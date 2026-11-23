@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Delete, Download, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
@@ -108,8 +108,14 @@ function resolvedTab(): DetailTab {
   return tabChoices().includes(requested as DetailTab) ? (requested as DetailTab) : fallbackTab()
 }
 
+let unmounted = false
+let loadSeq = 0
+onBeforeUnmount(() => {
+  unmounted = true
+})
+
 watch(tab, (value) => {
-  if (!tabsReady.value || route.query.tab === value) return
+  if (unmounted || !tabsReady.value || route.query.tab === value) return
   void router.replace({ query: { ...route.query, tab: value } })
 })
 
@@ -123,7 +129,7 @@ watch(
 )
 
 function settleTabs() {
-  if (!detail.value || detail.value.repairRequired) return
+  if (unmounted || !detail.value || detail.value.repairRequired) return
   const next = resolvedTab()
   tabsReady.value = true
   if (tab.value !== next) tab.value = next
@@ -156,29 +162,63 @@ const bannerTitle = computed(() => {
   return '默认账号可以调用，部分账号需要处理'
 })
 
-async function fetchParts(): Promise<[Account[], Record<string, ConfigValue>]> {
-  const [a, c] = await Promise.all([api.accounts(props.conch), api.config(props.conch)])
+async function fetchParts(conch: string = props.conch): Promise<[Account[], Record<string, ConfigValue>]> {
+  const [a, c] = await Promise.all([api.accounts(conch), api.config(conch)])
   return [a.accounts, c.fields]
 }
 
 async function reloadParts() {
+  const seq = loadSeq
+  const target = props.conch
   try {
-    ;[accounts.value, config.value] = await fetchParts()
+    const [nextAccounts, nextConfig] = await fetchParts(target)
+    if (unmounted || seq !== loadSeq) return
+    accounts.value = nextAccounts
+    config.value = nextConfig
     partsFailed.value = false
     void refreshPending()
   } catch (error) {
+    if (unmounted || seq !== loadSeq) return
     partsFailed.value = true
     notifyError(error)
   }
 }
 
+/** 改完配置后连带刷新详情，让 site / sameSite / authOrigins / sameAuth / contendingWith 立即更新且不切走当前标签。 */
+async function reloadDetailAndParts() {
+  const seq = loadSeq
+  const target = props.conch
+  const [detailResult, partsResult] = await Promise.allSettled([api.conch(target), fetchParts(target)])
+  if (unmounted || seq !== loadSeq) return
+  if (detailResult.status === 'fulfilled') {
+    detail.value = detailResult.value
+  } else {
+    notifyError(detailResult.reason)
+  }
+  if (partsResult.status === 'fulfilled') {
+    const [nextAccounts, nextConfig] = partsResult.value
+    accounts.value = nextAccounts
+    config.value = nextConfig
+    partsFailed.value = false
+    void refreshPending()
+  } else {
+    partsFailed.value = true
+    if (detailResult.status === 'fulfilled') {
+      notifyError(partsResult.reason)
+    }
+  }
+}
+
 async function load() {
+  const seq = ++loadSeq
+  const target = props.conch
   loading.value = true
   missing.value = false
   let next: ConchDetail
   try {
-    next = await api.conch(props.conch)
+    next = await api.conch(target)
   } catch (error) {
+    if (unmounted || seq !== loadSeq) return
     detail.value = null
     if (error instanceof ApiError && error.status === 404) {
       missing.value = true
@@ -188,6 +228,7 @@ async function load() {
     loading.value = false
     return
   }
+  if (unmounted || seq !== loadSeq) return
   if (next.repairRequired) {
     accounts.value = []
     config.value = {}
@@ -197,10 +238,14 @@ async function load() {
     return
   }
   try {
-    ;[accounts.value, config.value] = await fetchParts()
+    const [nextAccounts, nextConfig] = await fetchParts(target)
+    if (unmounted || seq !== loadSeq) return
+    accounts.value = nextAccounts
+    config.value = nextConfig
     partsFailed.value = false
     void refreshPending()
   } catch (error) {
+    if (unmounted || seq !== loadSeq) return
     partsFailed.value = true
     notifyError(error)
   }
@@ -217,8 +262,11 @@ const swap = ref<string | null>(null)
 
 async function loadDebug() {
   try {
-    debug.value = await api.debug()
+    const next = await api.debug()
+    if (unmounted) return
+    debug.value = next
   } catch {
+    if (unmounted) return
     debug.value = { enabled: false, expiresAt: null }
   }
 }
@@ -437,6 +485,8 @@ watch(
     detail.value = null
     accounts.value = []
     config.value = {}
+    partsFailed.value = false
+    toReef.open = false
     void load()
     void loadDebug()
   },
@@ -559,7 +609,7 @@ watch(
           </template>
           也访问 {{ detail.site }}。没绑到同一个身份的账号各自登录、各存各的 Cookie，互不共用；同一个人的账号可以在<router-link to="/identities" data-test="identity-link">身份</router-link>里绑到一起共用。
           <template v-if="sameSiteContending.length">
-            最近 {{ sameSiteContending.join('、') }} 和这个包轮流被对方的登录顶掉、又重新登录。同一个网站账号只允许一个会话时会这样：可以让两个包使用不同的网站账号，或只保留其中一个包。Crab 分不清两边是不是同一个人，所以这只是可能。
+            最近 {{ sameSiteContending.join('、') }} 和这个包轮流被对方的登录顶掉、又重新登录。同一个网站账号只允许一个会话时会这样：如果两边是同一个人的账号，可以在「身份」里绑到一起共用 Cookie；否则可以让两个包使用不同的网站账号，或只保留其中一个包。Crab 分不清两边是不是同一个人，所以这只是可能。
           </template>
           <template v-else>
             如果网站同一账号只允许一个会话，轮流调用时会互相顶掉登录，表现为调用变慢或返回「会话已失效」。
@@ -576,7 +626,12 @@ watch(
       >
         <template #default>
           <template v-if="detail.authOrigins?.length">
-            这个规则包的登录步骤除了 {{ detail.site }}，还会访问 {{ detail.authOrigins.join('、') }}（门户或 SSO），账号密码会提交到那里。能力步骤只访问 {{ detail.site }}。
+            <template v-if="detail.site">
+              这个规则包的登录步骤除了 {{ detail.site }}，还会访问 {{ detail.authOrigins.join('、') }}（门户或 SSO），账号密码会提交到那里。能力步骤只访问 {{ detail.site }}。
+            </template>
+            <template v-else>
+              这个规则包的登录步骤会访问 {{ detail.authOrigins.join('、') }}（门户或 SSO），账号密码会提交到那里。能力步骤只访问配置好的站点地址。
+            </template>
           </template>
           <template v-if="detail.sameAuth?.length">
             本机的
@@ -585,10 +640,10 @@ watch(
               <router-link :to="`/conches/${encodeURIComponent(name)}`" data-test="same-auth-link">{{ name }}</router-link>
             </template>
             <template v-if="detail.authOrigins?.length">也经同一个认证地址登录。</template>
-            <template v-else>登录时也要访问 {{ detail.site }}，把它当门户或认证中心。</template>
+            <template v-else>登录时也要访问 {{ detail.site || '这个网站' }}，把它当门户或认证中心。</template>
             没绑到同一个身份的账号各自登录、各存各的 Cookie，互不共用；同一个人的账号可以在<router-link to="/identities" data-test="identity-link">身份</router-link>里绑到一起共用。
             <template v-if="sameAuthContending.length">
-              最近 {{ sameAuthContending.join('、') }} 和这个包轮流被对方的登录顶掉、又重新登录。认证中心同一账号只允许一个会话时会这样。Crab 分不清两边是不是同一个人，所以这只是可能。
+              最近 {{ sameAuthContending.join('、') }} 和这个包轮流被对方的登录顶掉、又重新登录。认证中心同一账号只允许一个会话时会这样：如果两边是同一个人的账号，可以在「身份」里绑到一起共用 Cookie；否则可改用不同账号或只保留其中一个包。Crab 分不清两边是不是同一个人，所以这只是可能。
             </template>
           </template>
         </template>
@@ -706,7 +761,7 @@ watch(
               :conch="conch"
               :fields="config"
               :empty-text="detail.ruleDisabled && detail.declarationsLoaded !== true && !detail.config.length ? '这版已停用，配置项先不展示' : '这个规则包没有配置项'"
-              @changed="reloadParts"
+              @changed="reloadDetailAndParts"
             />
           </el-tab-pane>
           <el-tab-pane v-if="local" label="开发者" name="developer">

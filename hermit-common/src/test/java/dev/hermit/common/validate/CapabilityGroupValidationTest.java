@@ -130,6 +130,43 @@ class CapabilityGroupValidationTest {
     }
 
     @Test
+    void rejectsEmptyOrNullGroupsAndNullActionGroupBelow110WithoutChangingCanonicalJson() throws Exception {
+        String emptyGroupsLow = baseGrouped("1.9.0", "groups: {}", simpleAction("get_me", null));
+        String nullGroupsLow = baseGrouped("1.9.0", "groups: null", simpleAction("get_me", null));
+        String nullActionGroupLow = baseGrouped("1.9.0", "", simpleAction("get_me", "null"));
+
+        for (String lowYaml : List.of(emptyGroupsLow, nullGroupsLow, nullActionGroupLow)) {
+            ValidationResult result = ConchValidator.validate(ConchParser.parse(lowYaml), CTX);
+            assertThat(result.errors()).as(lowYaml).anySatisfy(issue -> {
+                assertThat(issue.code()).isEqualTo(ValidationCodes.MIN_CRAB_VERSION);
+                assertThat(issue.message()).contains("1.10.0");
+            });
+        }
+
+        // 1.10.0 及以上允许显式空/null 的 groups 或 action.group，且规范 JSON 与省略写法完全一致。
+        ConchDoc plain = ConchParser.parse(baseGrouped("1.10.0", "", simpleAction("get_me", null)));
+        ConchDoc emptyGroups = ConchParser.parse(baseGrouped("1.10.0", "groups: {}", simpleAction("get_me", null)));
+        ConchDoc nullGroups = ConchParser.parse(baseGrouped("1.10.0", "groups: null", simpleAction("get_me", null)));
+        ConchDoc nullActionGroup = ConchParser.parse(baseGrouped("1.10.0", "", simpleAction("get_me", "null")));
+
+        com.fasterxml.jackson.databind.json.JsonMapper canonical = com.fasterxml.jackson.databind.json.JsonMapper.builder()
+                .enable(com.fasterxml.jackson.databind.MapperFeature.SORT_PROPERTIES_ALPHABETICALLY)
+                .enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+                .build();
+        String plainJson = canonical.writeValueAsString(plain);
+        assertThat(plainJson).doesNotContain("groupsDeclared").doesNotContain("groupDeclared").doesNotContain("originsDeclared");
+
+        for (ConchDoc doc : List.of(emptyGroups, nullGroups, nullActionGroup)) {
+            ValidationResult ok = ConchValidator.validate(doc, CTX);
+            assertThat(ok.errors()).isEmpty();
+            assertThat(ok.warnings()).isEmpty();
+            assertThat(doc).isEqualTo(plain);
+            assertThat(doc.hashCode()).isEqualTo(plain.hashCode());
+            assertThat(canonical.writeValueAsString(doc)).isEqualTo(plainJson);
+        }
+    }
+
+    @Test
     void rejectsThirdLevelChildrenAtParseTime() {
         String yaml = baseGrouped("1.10.0", """
                 groups:

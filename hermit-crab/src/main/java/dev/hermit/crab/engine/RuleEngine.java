@@ -370,7 +370,7 @@ public final class RuleEngine implements ConchExecutor {
                     return expired(handoff.lost.logs, version, request, credentials, scope, start);
                 }
             }
-            ensureSession(scope);
+            ensureSession(scope, !lostBefore);
             requireStepLoginRefs(scope, action.steps());
             Attempt attempt = runAction(action, scope);
             if (attempt.lost) {
@@ -379,7 +379,7 @@ public final class RuleEngine implements ConchExecutor {
                 if (!action.idempotent() || lostBefore) {
                     return expired(attempt.logs, version, request, credentials, scope, start);
                 }
-                ensureSession(scope);
+                ensureSession(scope, false);
                 requireStepLoginRefs(scope, action.steps());
                 attempt = runAction(action, scope);
                 if (attempt.lost) {
@@ -514,12 +514,13 @@ public final class RuleEngine implements ConchExecutor {
         sessions.markLoggedOut(scope.key);
     }
 
-    private void ensureSession(LoginScope scope) {
+    private void ensureSession(LoginScope scope, boolean allowAdopt) {
         Auth auth = scope.conch.auth();
         AliveCheck alive = auth == null ? null : auth.aliveCheck();
         boolean loggedIn = sessions.loggedIn(scope.key);
         // 身份里别的成员已经登录过：写了 alive_check 的包先探活，通过就直接用，不再登录。
-        boolean adopting = !loggedIn && alive != null && sessions.sharesCookies(scope.key)
+        // 这次调用刚发现会话失效要重登时不再走探活接手，直接跑登录步骤。
+        boolean adopting = allowAdopt && !loggedIn && alive != null && sessions.sharesCookies(scope.key)
                 && sessions.pending().current(scope.key) == null;
         if (!loggedIn && !adopting) {
             login(scope);
@@ -529,6 +530,10 @@ public final class RuleEngine implements ConchExecutor {
             return;
         }
         requireLoginRefs(scope, alive.request());
+        if (adopting && sessions.loggedIn(scope.key)) {
+            // alive_check 引用了登录变量，requireLoginRefs 已经触发了完整登录，不再补跑一次探活，也不改写 reusedCookies。
+            return;
+        }
         Map<String, Object> vars = baseVars(scope);
         Object rendered;
         try {
@@ -1950,9 +1955,9 @@ public final class RuleEngine implements ConchExecutor {
             if (covered == null || covered) {
                 return true;
             }
-            if (continuation.hasNextRound()) {
-                return false;
-            }
+        }
+        if (continuation.hasNextRound()) {
+            return false;
         }
         return statusExpectationCoversFrom(
                 continuation.steps(), continuation.from(), actual, continuation.parent());

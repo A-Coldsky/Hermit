@@ -303,6 +303,76 @@ class LocalConchReplaceSessionTest {
         }
     }
 
+    /** M5：直接改磁盘上的本地包文件扩大地址后 reload，也必须清掉旧会话和登录快照，不把旧 Cookie 带到新地址。 */
+    @Test
+    void widenedReloadClearsSessionsAndLoginSnapshots() throws Exception {
+        HttpServer oldHost = server();
+        HttpServer newHost = server();
+        AtomicInteger oldLogins = new AtomicInteger();
+        AtomicInteger newLogins = new AtomicInteger();
+        AtomicInteger newPings = new AtomicInteger();
+        oldHost.createContext("/", exchange -> {
+            if ("/login".equals(exchange.getRequestURI().getPath())) {
+                oldLogins.incrementAndGet();
+                exchange.getResponseHeaders().add("Set-Cookie", "sid=old-cookie-value; Path=/");
+            }
+            byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        newHost.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            if ("/login".equals(path)) {
+                newLogins.incrementAndGet();
+                exchange.getResponseHeaders().add("Set-Cookie", "sid=new-cookie-value; Path=/");
+            } else if ("/ping".equals(path)) {
+                newPings.incrementAndGet();
+                String cookie = exchange.getRequestHeaders().getFirst("Cookie");
+                if (cookie != null && cookie.contains("old-cookie-value")) {
+                    exchange.sendResponseHeaders(500, -1);
+                    exchange.close();
+                    return;
+                }
+            }
+            byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        oldHost.start();
+        newHost.start();
+        int oldPort = oldHost.getAddress().getPort();
+        int newPort = newHost.getAddress().getPort();
+        try (CrabRuntime runtime = CrabRuntime.open(
+                new CrabPaths(temp.resolve("reload-widen")), CrabConfig.defaults(), name -> null)) {
+            runtime.localConches().importBytes(flight("1.0.0", oldPort).getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            runtime.admin().createAccount("flight", "ada", Actors.CLI);
+            ApiKeyPrincipal principal = principal(runtime);
+            assertThat(invoke(runtime, principal, "trace-old").status()).isEqualTo(200);
+            assertThat(oldLogins).hasValue(1);
+            assertThat(loginRows(runtime)).isEqualTo(1);
+            assertThat(sessionRows(runtime)).isEqualTo(1);
+
+            java.nio.file.Files.writeString(
+                    runtime.paths().localConches().resolve("flight.yaml"),
+                    flight("1.0.1", newPort));
+            runtime.localConches().reload(Actors.CLI);
+
+            assertThat(runtime.registry().find("flight").orElseThrow().baseUrl()).contains(":" + newPort);
+            assertThat(loginRows(runtime)).isZero();
+            assertThat(sessionRows(runtime)).isZero();
+
+            InvokeOutcome next = invoke(runtime, principal, "trace-new");
+            assertThat(next.status()).as(body(next)).isEqualTo(200);
+            assertThat(newLogins).hasValue(1);
+            assertThat(newPings).hasValue(1);
+        } finally {
+            oldHost.stop(0);
+            newHost.stop(0);
+        }
+    }
+
     private static HttpServer server() throws Exception {
         return HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     }

@@ -12,6 +12,7 @@ const crab = vi.hoisted(() => ({
   calls: vi.fn(),
   debug: vi.fn(),
   syncStatus: vi.fn(),
+  sync: vi.fn(),
   apiKeys: vi.fn(),
   setConchEnabled: vi.fn(),
 }))
@@ -227,7 +228,7 @@ describe('同网站的规则包', () => {
     expect(text).not.toContain('oa_base')
   })
 
-  it('概览列出可能互相顶掉登录的两个包', async () => {
+  it('概览列出可能互相顶掉登录的两个包，覆盖认证中心并指到身份页，立即同步也会刷新冲突', async () => {
     const quiet = await mountPage(OverviewView)
     await flushPromises()
     expect(quiet.find('[data-test="contention"]').exists()).toBe(false)
@@ -239,9 +240,78 @@ describe('同网站的规则包', () => {
     const wrapper = await mountPage(OverviewView)
     await flushPromises()
     const alert = wrapper.get('[data-test="contention"]')
+    expect(alert.text()).toContain('访问同一网站或同一个认证中心')
     expect(alert.text()).toContain('oa_base')
     expect(alert.text()).toContain('oa_leave')
     expect(alert.text()).toContain('https://oa.corp.com:443')
-    expect(alert.findAll('a').map((a) => a.attributes('href'))).toEqual(['/conches/oa_base', '/conches/oa_leave'])
+    expect(alert.text()).toContain('绑到一起共用 Cookie')
+    expect(alert.findAll('a').map((a) => a.attributes('href'))).toEqual(['/conches/oa_base', '/conches/oa_leave', '/identities'])
+
+    // 立即同步后更新 contention
+    crab.sync.mockResolvedValue({
+      notModified: true,
+      conches: [],
+      removed: [],
+      credentialChanges: [],
+      latestCrab: null,
+      error: null,
+    })
+    crab.conches.mockResolvedValueOnce({ conches: [], contention: [] })
+    await wrapper.findAll('button').find((b) => b.text().includes('立即同步'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="contention"]').exists()).toBe(false)
+  })
+
+  it('M12: 保存配置后刷新详情页的站点与同站点/认证地址提示，且不切走配置标签', async () => {
+    crab.conch
+      .mockResolvedValueOnce(detail({ site: null, sameSite: [], authOrigins: ['https://sso.corp.com:443'] }))
+      .mockResolvedValueOnce(detail({ site: 'https://oa.corp.com:443', sameSite: ['oa_base'], authOrigins: ['https://sso.corp.com:443'] }))
+    crab.config.mockResolvedValue({
+      fields: {
+        base_url: {
+          type: 'text',
+          label: '站点地址',
+          required: false,
+          description: null,
+          options: null,
+          value: '',
+          defaultValue: null,
+          missing: false,
+        },
+      },
+    })
+    crab.writeConfig.mockResolvedValue({ updated: true, sameSite: ['oa_base'], sameAuth: ['erp_orders'] })
+    const warning = vi.spyOn(ElMessage, 'warning')
+
+    const wrapper = await mountPage(ConchDetailView, { props: { conch: 'oa_leave' }, path: '/?tab=config' })
+    await flushPromises()
+
+    // site 为空但有 authOrigins 时，不出现悬空「除了 ，还会访问」「只访问 。」
+    const authNotice = wrapper.get('[data-test="same-auth"]').text()
+    expect(authNotice).not.toContain('除了 ，')
+    expect(authNotice).not.toContain('只访问 。')
+    expect(authNotice).toContain('这个规则包的登录步骤会访问 https://sso.corp.com:443')
+    expect(authNotice).toContain('配置好的站点地址')
+
+    // 修改 type: text 的 base_url 并保存：同时触发 sameAuth 提示、重新拉取 detail、并停留在配置标签
+    const input = wrapper.get('#pane-config input')
+    await input.setValue('https://oa.corp.com')
+    await wrapper.findAll('#pane-config button').find((b) => b.text().includes('保存配置'))!.trigger('click')
+    await flushPromises()
+
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(warning.mock.calls[0][0])).toContain('erp_orders')
+    expect(crab.conch).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-test="same-site"]').text()).toContain('oa_base')
+    expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toContain('配置')
+    wrapper.unmount()
+  })
+
+  it('M13: 同网站互相顶掉登录告警里也提示同一个人的账号可绑到身份共用 Cookie', async () => {
+    crab.conch.mockResolvedValue(detail({ sameSite: ['oa_base'], contendingWith: ['oa_base'] }))
+    const wrapper = await mountDetail()
+    const notice = wrapper.get('[data-test="same-site"]').text()
+    expect(notice).toContain('可以在「身份」里绑到一起共用 Cookie')
+    expect(notice).toContain('使用不同的网站账号')
   })
 })

@@ -26,7 +26,7 @@ import {
   expiryState,
   hasCertificate,
   hasPrivateKey,
-  isTlsKind,
+  isPinnableTlsKind,
   issuerCertificate,
   leafOf,
   pinRefusal,
@@ -256,7 +256,10 @@ async function removeHost(host: string, port: number) {
   }
 }
 
+let probeSeq = 0
+
 async function beginTrust(host: string, port: number) {
+  const seq = ++probeSeq
   pin.open = true
   pin.loading = true
   pin.saving = false
@@ -265,13 +268,26 @@ async function beginTrust(host: string, port: number) {
   pin.probe = null
   pin.error = ''
   try {
-    pin.probe = await api.probeTls(host, port)
+    const result = await api.probeTls(host, port)
+    if (seq !== probeSeq) return
+    pin.probe = result
   } catch (error) {
+    if (seq !== probeSeq) return
     pin.error = errorText(error)
   } finally {
-    pin.loading = false
+    if (seq === probeSeq) pin.loading = false
   }
 }
+
+watch(
+  () => pin.open,
+  (open) => {
+    if (!open) {
+      probeSeq++
+      pin.loading = false
+    }
+  },
+)
 
 async function confirmPin() {
   const cert = leaf.value
@@ -347,7 +363,7 @@ watch(
         </div>
         <p class="plain" data-test="failure-plain">{{ plainFailure(failure) }}</p>
         <el-button
-          v-if="isTlsKind(failure.kind)"
+          v-if="isPinnableTlsKind(failure.kind)"
           type="primary"
           data-test="trust-site"
           @click="beginTrust(failure.host, failure.port)"

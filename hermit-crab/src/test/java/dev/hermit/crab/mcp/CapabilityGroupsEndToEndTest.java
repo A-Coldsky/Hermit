@@ -36,6 +36,7 @@ import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.upstream.McpToolMerge;
+import io.modelcontextprotocol.spec.McpSchema;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -408,6 +409,119 @@ class CapabilityGroupsEndToEndTest {
         assertThat(parsed.actions().get("search_customer").group()).isEqualTo("customer");
     }
 
+    @Test
+    void malformedGuideUriReturnsResourceNotFoundInsteadOfInternalError() throws Exception {
+        CrabPaths paths = new CrabPaths(temp.resolve("crab-malformed-uri"));
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (CrabRuntime runtime = CrabRuntime.open(paths, config);
+             CrabHttpServer server = new CrabHttpServer(runtime)) {
+            server.start();
+            String baseUrl = "http://127.0.0.1:" + server.port();
+            runtime.registry().put(ConchParser.parse(groupedConchYaml("sample_oa", 0)), Origin.OFFICIAL);
+            CreatedApiKey key = runtime.admin().createApiKey(
+                    "full", ApiKeyScope.explicit(true, Set.of(), Set.of(), Set.of(), false), Actors.CLI);
+            String session = mcpInit(baseUrl, key.plaintext());
+
+            for (String badUri : List.of("hermit://conches/guide", "hermit://conches//guide")) {
+                JsonNode reply = mcpPost(baseUrl, key.plaintext(), session, 2, "resources/read",
+                        Map.of("uri", badUri));
+                assertThat(reply.has("error")).as(badUri + " -> " + reply).isTrue();
+                assertThat(reply.path("error").path("code").asInt())
+                        .as(badUri)
+                        .isEqualTo(McpSchema.ErrorCodes.RESOURCE_NOT_FOUND);
+                assertThat(reply.path("error").path("code").asInt())
+                        .isNotEqualTo(McpSchema.ErrorCodes.INTERNAL_ERROR);
+                assertThat(reply.path("error").path("data").path("code").asText()).isEqualTo(McpErrors.NOT_FOUND);
+            }
+        }
+    }
+
+    @Test
+    void directLimitZeroExposesDirectoryToolsEvenWithZeroVisibleCapabilities() throws Exception {
+        CrabPaths paths = new CrabPaths(temp.resolve("crab-zero-limit"));
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(0);
+        try (CrabRuntime runtime = CrabRuntime.open(paths, config);
+             CrabHttpServer server = new CrabHttpServer(runtime)) {
+            server.start();
+            String baseUrl = "http://127.0.0.1:" + server.port();
+            CreatedApiKey key = runtime.admin().createApiKey(
+                    "full", ApiKeyScope.explicit(true, Set.of(), Set.of(), Set.of(), false), Actors.CLI);
+            String session = mcpInit(baseUrl, key.plaintext());
+
+            JsonNode tools = mcpPost(baseUrl, key.plaintext(), session, 2, "tools/list", null)
+                    .path("result").path("tools");
+            assertThat(tools).hasSize(4);
+            assertThat(List.of(
+                    tools.get(0).path("name").asText(),
+                    tools.get(1).path("name").asText(),
+                    tools.get(2).path("name").asText(),
+                    tools.get(3).path("name").asText()))
+                    .containsExactlyInAnyOrder(
+                            McpCatalog.LIST_SYSTEMS,
+                            McpCatalog.SEARCH,
+                            McpCatalog.DESCRIBE,
+                            McpCatalog.CALL);
+
+            JsonNode systems = mcpCall(baseUrl, key.plaintext(), session, 3, McpCatalog.LIST_SYSTEMS, Map.of());
+            assertThat(systems.path("result").path("isError").asBoolean(true)).as(systems.toString()).isFalse();
+            assertThat(systems.path("result").path("structuredContent").path("systems")).isEmpty();
+        }
+    }
+
+    @Test
+    void directModeGroupedGuideListsAllTopLevelAndOmitsSearchCapabilities() throws Exception {
+        CrabPaths directPaths = new CrabPaths(temp.resolve("crab-direct-guide"));
+        CrabConfig directConfig = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (CrabRuntime runtime = CrabRuntime.open(directPaths, directConfig);
+             CrabHttpServer server = new CrabHttpServer(runtime)) {
+            server.start();
+            String baseUrl = "http://127.0.0.1:" + server.port();
+            // 13 ungrouped (> 10) + 5 grouped = 18 visible capabilities (<= default direct_limit 40 -> direct mode)
+            runtime.registry().put(ConchParser.parse(groupedConchYaml("direct_oa", 12)), Origin.OFFICIAL);
+            CreatedApiKey key = runtime.admin().createApiKey(
+                    "full", ApiKeyScope.explicit(true, Set.of(), Set.of(), Set.of(), false), Actors.CLI);
+            String session = mcpInit(baseUrl, key.plaintext());
+
+            JsonNode tools = mcpPost(baseUrl, key.plaintext(), session, 2, "tools/list", null)
+                    .path("result").path("tools");
+            assertThat(tools).hasSize(18);
+            assertThat(tools.toString()).doesNotContain(McpCatalog.SEARCH);
+
+            String guide = mcpPost(baseUrl, key.plaintext(), session, 3, "resources/read",
+                    Map.of("uri", "hermit://conches/direct_oa/guide"))
+                    .path("result").path("contents").get(0).path("text").asText();
+            assertThat(guide).contains("## 顶层能力")
+                    .contains("### direct_oa__get_me")
+                    .contains("### direct_oa__top_1")
+                    .contains("### direct_oa__top_12")
+                    .contains("## 分组目录")
+                    .contains("tools/list")
+                    .doesNotContain(McpCatalog.SEARCH);
+        }
+
+        // 目录模式下仍截断 >10 的顶层能力并提示 search_capabilities。
+        CrabPaths dirPaths = new CrabPaths(temp.resolve("crab-dir-guide"));
+        CrabConfig dirConfig = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(0);
+        try (CrabRuntime runtime = CrabRuntime.open(dirPaths, dirConfig);
+             CrabHttpServer server = new CrabHttpServer(runtime)) {
+            server.start();
+            String baseUrl = "http://127.0.0.1:" + server.port();
+            runtime.registry().put(ConchParser.parse(groupedConchYaml("dir_oa", 12)), Origin.OFFICIAL);
+            CreatedApiKey key = runtime.admin().createApiKey(
+                    "full", ApiKeyScope.explicit(true, Set.of(), Set.of(), Set.of(), false), Actors.CLI);
+            String session = mcpInit(baseUrl, key.plaintext());
+
+            String guide = mcpPost(baseUrl, key.plaintext(), session, 2, "resources/read",
+                    Map.of("uri", "hermit://conches/dir_oa/guide"))
+                    .path("result").path("contents").get(0).path("text").asText();
+            assertThat(guide).contains("## 顶层能力")
+                    .contains("共有 13 个未分组顶层能力")
+                    .contains(McpCatalog.SEARCH)
+                    .contains("ungrouped: true")
+                    .doesNotContain("### dir_oa__top_12");
+        }
+    }
+
     private record HttpResult(int status, String body, String session) {
         JsonNode bodyJson() throws Exception {
             return JSON.readTree(body);
@@ -429,6 +543,67 @@ class CapabilityGroupsEndToEndTest {
                 .build();
         HttpResponse<String> res = HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         return new HttpResult(res.statusCode(), res.body(), null);
+    }
+
+    @Test
+    void localImportRejectsDuplicateGroupAndChildKeys() throws Exception {
+        CrabPaths paths = new CrabPaths(temp.resolve("dup-groups"));
+        try (CrabRuntime runtime = CrabRuntime.open(paths, CrabConfig.defaults())) {
+            String dupTop = """
+                    conch: dup_top
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.10.0
+                    base_url: http://127.0.0.1:9
+                    title: 重复一级分组
+                    description: 说明
+                    credentials: {}
+                    groups:
+                      hr:
+                        title: 人事一
+                      hr:
+                        title: 人事二
+                    actions:
+                    %s
+                    """.formatted(actionYaml("get_emp", "hr", "查员工", true));
+            assertThatThrownBy(() -> runtime.localConches().importBytes(
+                    dupTop.getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                    .isInstanceOf(dev.hermit.crab.sync.LocalConchException.class)
+                    .satisfies(ex -> {
+                        var err = (dev.hermit.crab.sync.LocalConchException) ex;
+                        assertThat(err.errors()).anyMatch(i ->
+                                "GROUP_NAME".equals(i.code()) && "groups.hr".equals(i.path()));
+                    });
+
+            String dupChild = """
+                    conch: dup_child
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.10.0
+                    base_url: http://127.0.0.1:9
+                    title: 重复二级分组
+                    description: 说明
+                    credentials: {}
+                    groups:
+                      approval:
+                        title: 审批
+                        children:
+                          leave:
+                            title: 请假一
+                          leave:
+                            title: 请假二
+                    actions:
+                    %s
+                    """.formatted(actionYaml("list_leave", "approval/leave", "查请假", true));
+            assertThatThrownBy(() -> runtime.localConches().importBytes(
+                    dupChild.getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                    .isInstanceOf(dev.hermit.crab.sync.LocalConchException.class)
+                    .satisfies(ex -> {
+                        var err = (dev.hermit.crab.sync.LocalConchException) ex;
+                        assertThat(err.errors()).anyMatch(i ->
+                                "GROUP_NAME".equals(i.code()) && "groups.approval.children.leave".equals(i.path()));
+                    });
+        }
     }
 
     private static String mcpInit(String baseUrl, String key) throws Exception {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CopyDocument } from '@element-plus/icons-vue'
-import { computed, reactive } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import JsonBlock from '@shared/components/JsonBlock.vue'
 import { ApiError, type Envelope } from '@shared/http'
@@ -25,14 +25,14 @@ const runnable = computed(() => props.capabilities.filter((c) => !c.disabled))
 const groupedRunnable = computed(() => buildGroupTree(props.groups, runnable.value, (c) => c.group))
 const runnableOptionGroups = computed(() => {
   const tree = groupedRunnable.value
-  const sections: { label: string; items: CapabilityState[] }[] = []
+  const sections: { key: string; label: string; items: CapabilityState[] }[] = []
   for (const g of tree.groups) {
     if (g.direct.length) {
-      sections.push({ label: g.title, items: g.direct })
+      sections.push({ key: g.path, label: g.title, items: g.direct })
     }
     for (const c of g.children) {
       if (c.all.length) {
-        sections.push({ label: `${g.title} / ${c.title}`, items: c.all })
+        sections.push({ key: c.path, label: `${g.title} / ${c.title}`, items: c.all })
       }
     }
   }
@@ -64,6 +64,33 @@ const refresh = reactive({
   open: false,
   result: null as McpRefreshResult | null,
 })
+
+watch(
+  () => props.conch,
+  () => {
+    trial.action = ''
+    trial.account = ''
+    refresh.account = ''
+  },
+)
+
+watch(runnable, (items) => {
+  if (trial.action && !items.some((c) => c.action === trial.action)) {
+    trial.action = ''
+  }
+})
+
+watch(
+  () => props.accounts,
+  (items) => {
+    if (trial.account && !items.some((a) => a.name === trial.account)) {
+      trial.account = ''
+    }
+    if (refresh.account && !items.some((a) => a.name === refresh.account)) {
+      refresh.account = ''
+    }
+  },
+)
 
 function parseInput(): Record<string, unknown> | null {
   const raw = trial.input.trim() || '{}'
@@ -159,7 +186,7 @@ async function refreshTools() {
                 :label="`${cap.action} · ${cap.title}`"
                 :value="cap.action"
               />
-              <el-option-group v-for="section in runnableOptionGroups" :key="section.label" :label="section.label">
+              <el-option-group v-for="section in runnableOptionGroups" :key="section.key" :label="section.label">
                 <el-option
                   v-for="cap in section.items"
                   :key="cap.action"

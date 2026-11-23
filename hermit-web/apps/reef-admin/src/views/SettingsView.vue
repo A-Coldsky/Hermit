@@ -1,18 +1,21 @@
 <script setup lang="ts">
-import { CopyDocument, Download } from '@element-plus/icons-vue'
+import { CopyDocument, Download, Refresh } from '@element-plus/icons-vue'
 import { onMounted, ref } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, notifyError } from '@shared/format'
 import { api } from '../api'
 
 const loading = ref(true)
+const loadFailed = ref(false)
 const publicKey = ref('')
 
 async function load() {
   loading.value = true
   try {
     publicKey.value = (await api.signingKey()).publicKey
+    loadFailed.value = false
   } catch (error) {
+    loadFailed.value = true
     notifyError(error)
   } finally {
     loading.value = false
@@ -33,7 +36,21 @@ onMounted(load)
 
 <template>
   <div>
-    <PageHeader title="签名公钥" description="Reef 用 Ed25519 私钥为每个发布的规则包签名，Crab 用这把公钥验签" />
+    <PageHeader title="签名公钥" description="Reef 用 Ed25519 私钥为每个发布的规则包签名，Crab 用这把公钥验签">
+      <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+    </PageHeader>
+
+    <el-alert
+      v-if="loadFailed"
+      type="error"
+      show-icon
+      :closable="false"
+      class="load-failed"
+      :title="publicKey ? '签名公钥刷新失败，下面是上一次读到的内容' : '签名公钥读取失败'"
+      data-test="signing-key-load-failed"
+    >
+      <el-button size="small" :loading="loading" @click="load">重试</el-button>
+    </el-alert>
 
     <div v-loading="loading" class="hm-card">
       <div class="hm-card-title">
@@ -58,6 +75,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.load-failed {
+  margin-bottom: 16px;
+}
+
 .steps {
   margin: 0;
   padding-left: 20px;

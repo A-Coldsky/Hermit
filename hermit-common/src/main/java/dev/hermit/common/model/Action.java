@@ -5,10 +5,15 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 /**
  * {@code related == null} 表示能力没有 related 键，或该键写成了 null。
  * 空列表表示显式 {@code related: []}，即没有关联能力。
+ * {@code groupDeclared} 仅用于区分「没写 group」和「显式写了 group: null」以便检查版本门槛，
+ * 不进规范 JSON，也不参与文档相等性。
  */
 public record Action(
         String name,
@@ -24,7 +29,8 @@ public record Action(
         List<String> related,
         McpHints mcp,
         McpTool tool,
-        String group
+        String group,
+        @JsonIgnore boolean groupDeclared
 ) {
     public Action {
         if (name == null || name.isEmpty()) {
@@ -36,6 +42,65 @@ public record Action(
         examples = examples == null ? List.of() : List.copyOf(examples);
         related = related == null ? null : List.copyOf(related);
         mcp = mcp == null ? McpHints.defaults() : mcp;
+        groupDeclared = groupDeclared || group != null;
+    }
+
+    public Action(
+            String name,
+            String title,
+            String description,
+            HttpMethod method,
+            Map<String, ParamSpec> input,
+            Map<String, Object> output,
+            List<Step> steps,
+            boolean idempotent,
+            List<Example> examples,
+            String notes,
+            List<String> related,
+            McpHints mcp,
+            McpTool tool,
+            String group
+    ) {
+        this(
+                name, title, description, method, input, output, steps, idempotent,
+                examples, notes, related, mcp, tool, group, group != null);
+    }
+
+    @JsonIgnore
+    @Override
+    public boolean groupDeclared() {
+        return groupDeclared;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof Action action)) {
+            return false;
+        }
+        return idempotent == action.idempotent
+                && Objects.equals(name, action.name)
+                && Objects.equals(title, action.title)
+                && Objects.equals(description, action.description)
+                && method == action.method
+                && Objects.equals(input, action.input)
+                && Objects.equals(output, action.output)
+                && Objects.equals(steps, action.steps)
+                && Objects.equals(examples, action.examples)
+                && Objects.equals(notes, action.notes)
+                && Objects.equals(related, action.related)
+                && Objects.equals(mcp, action.mcp)
+                && Objects.equals(tool, action.tool)
+                && Objects.equals(group, action.group);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(
+                name, title, description, method, input, output, steps, idempotent,
+                examples, notes, related, mcp, tool, group);
     }
 
     /** 显式 method 优先；否则 readOnly 或 idempotent 为 GET，其余 POST。MCP 工具固定 POST。 */

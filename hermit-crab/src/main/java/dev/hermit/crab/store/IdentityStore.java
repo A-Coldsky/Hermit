@@ -5,6 +5,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -48,12 +49,20 @@ public final class IdentityStore implements SharedSessions {
 
     private final DataSource dataSource;
     private final CredentialCipher cipher;
+    private final Clock clock;
     private final SecureRandom random = new SecureRandom();
     private final ConcurrentHashMap<SessionKey, String> bound = new ConcurrentHashMap<>();
+    /** 串行化身份及其成员、会话的写事务和内存映射更新，避免并发创建/改名/绑定/删除留下孤儿行或破坏上限。 */
+    private final Object writeLock = new Object();
 
     public IdentityStore(DataSource dataSource, CredentialCipher cipher) {
+        this(dataSource, cipher, Clock.systemUTC());
+    }
+
+    public IdentityStore(DataSource dataSource, CredentialCipher cipher, Clock clock) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.cipher = Objects.requireNonNull(cipher, "cipher");
+        this.clock = clock == null ? Clock.systemUTC() : clock;
         for (Identity identity : list()) {
             for (SessionKey member : identity.members()) {
                 bound.put(member, identity.id());
@@ -134,73 +143,81 @@ public final class IdentityStore implements SharedSessions {
         byte[] bytes = new byte[12];
         random.nextBytes(bytes);
         String id = HexFormat.of().formatHex(bytes);
-        Instant now = Instant.now();
-        Db.transaction(dataSource, connection -> {
-            try (PreparedStatement count = connection.prepareStatement("SELECT COUNT(*) FROM identities");
-                 ResultSet rows = count.executeQuery()) {
-                if (rows.next() && rows.getInt(1) >= MAX_IDENTITIES) {
-                    throw new IllegalArgumentException("身份最多 " + MAX_IDENTITIES + " 个");
+        synchronized (writeLock) {
+            Instant now = clock.instant();
+            Db.transaction(dataSource, connection -> {
+                try (PreparedStatement count = connection.prepareStatement("SELECT COUNT(*) FROM identities");
+                     ResultSet rows = count.executeQuery()) {
+                    if (rows.next() && rows.getInt(1) >= MAX_IDENTITIES) {
+                        throw new IllegalArgumentException("身份最多 " + MAX_IDENTITIES + " 个");
+                    }
                 }
-            }
-            requireFreeName(connection, checked, null);
-            try (PreparedStatement insert = connection.prepareStatement(
-                    "INSERT INTO identities (id, name, created_at) VALUES (?, ?, ?)")) {
-                insert.setString(1, id);
-                insert.setString(2, checked);
-                Db.setInstant(insert, 3, now);
-                insert.executeUpdate();
-            }
-            ConfigAudit.append(connection, checkedActor, AuditKind.IDENTITY_CREATED, id,
-                    Json.write(Map.of("name", checked)));
-            return null;
-        });
-        return new Identity(id, checked, now, List.of());
+                requireFreeName(connection, checked, null);
+                try (PreparedStatement insert = connection.prepareStatement(
+                        "INSERT INTO identities (id, name, created_at) VALUES (?, ?, ?)")) {
+                    insert.setString(1, id);
+                    insert.setString(2, checked);
+                    Db.setInstant(insert, 3, now);
+                    insert.executeUpdate();
+                }
+                ConfigAudit.append(connection, now, checkedActor, AuditKind.IDENTITY_CREATED, id,
+                        Json.write(Map.of("name", checked)));
+                return null;
+            });
+            return new Identity(id, checked, now, List.of());
+        }
     }
 
     public void rename(String id, String name, String actor) {
         String checked = name(name);
         String checkedActor = Checks.actor(actor);
-        Db.transaction(dataSource, connection -> {
-            requireIdentity(connection, id);
-            requireFreeName(connection, checked, id);
-            try (PreparedStatement update = connection.prepareStatement(
-                    "UPDATE identities SET name = ? WHERE id = ?")) {
-                update.setString(1, checked);
-                update.setString(2, id);
-                update.executeUpdate();
-            }
-            ConfigAudit.append(connection, checkedActor, AuditKind.IDENTITY_RENAMED, id,
-                    Json.write(Map.of("name", checked)));
-            return null;
-        });
+        synchronized (writeLock) {
+            Instant now = clock.instant();
+            Db.transaction(dataSource, connection -> {
+                requireIdentity(connection, id);
+                requireFreeName(connection, checked, id);
+                try (PreparedStatement update = connection.prepareStatement(
+                        "UPDATE identities SET name = ? WHERE id = ?")) {
+                    update.setString(1, checked);
+                    update.setString(2, id);
+                    update.executeUpdate();
+                }
+                ConfigAudit.append(connection, now, checkedActor, AuditKind.IDENTITY_RENAMED, id,
+                        Json.write(Map.of("name", checked)));
+                return null;
+            });
+        }
     }
 
     /** 删掉身份、它的成员关系和 Cookie。返回原来的成员，调用方让它们回到各自的会话。 */
     public List<SessionKey> delete(String id, String actor) {
         String checkedActor = Checks.actor(actor);
-        List<SessionKey> members = Db.transaction(dataSource, connection -> {
-            requireIdentity(connection, id);
-            String name = nameOf(connection, id);
-            List<SessionKey> before = membersOf(connection, id);
-            for (String table : List.of("identity_members", "identity_sessions")) {
-                try (PreparedStatement delete = connection.prepareStatement(
-                        "DELETE FROM " + table + " WHERE identity_id = ?")) {
+        synchronized (writeLock) {
+            Instant now = clock.instant();
+            List<SessionKey> members = Db.transaction(dataSource, connection -> {
+                requireIdentity(connection, id);
+                String name = nameOf(connection, id);
+                List<SessionKey> before = membersOf(connection, id);
+                for (String table : List.of("identity_members", "identity_sessions")) {
+                    try (PreparedStatement delete = connection.prepareStatement(
+                            "DELETE FROM " + table + " WHERE identity_id = ?")) {
+                        delete.setString(1, id);
+                        delete.executeUpdate();
+                    }
+                }
+                try (PreparedStatement delete = connection.prepareStatement("DELETE FROM identities WHERE id = ?")) {
                     delete.setString(1, id);
                     delete.executeUpdate();
                 }
+                ConfigAudit.append(connection, now, checkedActor, AuditKind.IDENTITY_DELETED, id,
+                        Json.write(Map.of("name", name, "members", before.size())));
+                return before;
+            });
+            for (SessionKey member : members) {
+                bound.remove(member, id);
             }
-            try (PreparedStatement delete = connection.prepareStatement("DELETE FROM identities WHERE id = ?")) {
-                delete.setString(1, id);
-                delete.executeUpdate();
-            }
-            ConfigAudit.append(connection, checkedActor, AuditKind.IDENTITY_DELETED, id,
-                    Json.write(Map.of("name", name, "members", before.size())));
-            return before;
-        });
-        for (SessionKey member : members) {
-            bound.remove(member, id);
+            return members;
         }
-        return members;
     }
 
     /**
@@ -212,67 +229,74 @@ public final class IdentityStore implements SharedSessions {
         String checkedActor = Checks.actor(actor);
         Checks.conch(key.conch());
         Checks.account(key.account());
-        Db.transaction(dataSource, connection -> {
-            requireIdentity(connection, id);
-            String current = identityOf(connection, key);
-            if (id.equals(current)) {
-                return null;
-            }
-            if (current != null) {
-                throw new IllegalArgumentException("这个账号已经绑到另一个身份，先解除再绑定");
-            }
-            for (SessionKey member : membersOf(connection, id)) {
-                if (member.origin() == key.origin() && member.conch().equals(key.conch())) {
-                    throw new IllegalArgumentException(
-                            "这个身份下已经有 " + key.conch() + " 的账号 " + member.account() + "，一个包只能绑一个账号");
+        synchronized (writeLock) {
+            Instant now = clock.instant();
+            Db.transaction(dataSource, connection -> {
+                requireIdentity(connection, id);
+                String current = identityOf(connection, key);
+                if (id.equals(current)) {
+                    return null;
                 }
-            }
-            try (PreparedStatement insert = connection.prepareStatement("""
-                    INSERT INTO identity_members (origin, conch, account, identity_id, bound_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """)) {
-                insert.setString(1, key.origin().name());
-                insert.setString(2, key.conch());
-                insert.setString(3, key.account());
-                insert.setString(4, id);
-                Db.setInstant(insert, 5, Instant.now());
-                insert.executeUpdate();
-            }
-            ConfigAudit.append(connection, checkedActor, AuditKind.IDENTITY_BOUND, label(key),
-                    Json.write(Map.of("identity", nameOf(connection, id), "identityId", id)));
-            return null;
-        });
-        bound.put(key, id);
+                if (current != null) {
+                    if (exists(connection, current)) {
+                        throw new IllegalArgumentException("这个账号已经绑到另一个身份，先解除再绑定");
+                    }
+                    // 清理历史孤儿行（对应身份已不存在），避免主键冲突挡住新的绑定。
+                    deleteMember(connection, key);
+                }
+                for (SessionKey member : membersOf(connection, id)) {
+                    if (member.origin() == key.origin() && member.conch().equals(key.conch())) {
+                        throw new IllegalArgumentException(
+                                "这个身份下已经有 " + key.conch() + " 的账号 " + member.account() + "，一个包只能绑一个账号");
+                    }
+                }
+                try (PreparedStatement insert = connection.prepareStatement("""
+                        INSERT INTO identity_members (origin, conch, account, identity_id, bound_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """)) {
+                    insert.setString(1, key.origin().name());
+                    insert.setString(2, key.conch());
+                    insert.setString(3, key.account());
+                    insert.setString(4, id);
+                    Db.setInstant(insert, 5, now);
+                    insert.executeUpdate();
+                }
+                ConfigAudit.append(connection, now, checkedActor, AuditKind.IDENTITY_BOUND, label(key),
+                        Json.write(Map.of("identity", nameOf(connection, id), "identityId", id)));
+                return null;
+            });
+            bound.put(key, id);
+        }
     }
 
     /** 解除一个账号的绑定。返回它原来的身份，本来没绑为 null。{@code reason} 写进审计。 */
     public String unbind(SessionKey key, String reason, String actor) {
         Objects.requireNonNull(key, "key");
         String checkedActor = Checks.actor(actor);
-        String id = Db.transaction(dataSource, connection -> {
-            String current = identityOf(connection, key);
-            if (current == null) {
-                return null;
-            }
-            try (PreparedStatement delete = connection.prepareStatement(
-                    "DELETE FROM identity_members WHERE origin = ? AND conch = ? AND account = ?")) {
-                delete.setString(1, key.origin().name());
-                delete.setString(2, key.conch());
-                delete.setString(3, key.account());
-                delete.executeUpdate();
-            }
-            LinkedHashMap<String, Object> detail = new LinkedHashMap<>();
-            detail.put("identity", nameOf(connection, current));
-            detail.put("identityId", current);
-            if (reason != null) {
-                detail.put("reason", reason);
-            }
-            ConfigAudit.append(
-                    connection, checkedActor, AuditKind.IDENTITY_UNBOUND, label(key), Json.write(detail));
-            return current;
-        });
-        bound.remove(key);
-        return id;
+        synchronized (writeLock) {
+            Instant now = clock.instant();
+            String id = Db.transaction(dataSource, connection -> {
+                String current = identityOf(connection, key);
+                if (current == null) {
+                    return null;
+                }
+                deleteMember(connection, key);
+                if (!exists(connection, current)) {
+                    return null;
+                }
+                LinkedHashMap<String, Object> detail = new LinkedHashMap<>();
+                detail.put("identity", nameOf(connection, current));
+                detail.put("identityId", current);
+                if (reason != null) {
+                    detail.put("reason", reason);
+                }
+                ConfigAudit.append(
+                        connection, now, checkedActor, AuditKind.IDENTITY_UNBOUND, label(key), Json.write(detail));
+                return current;
+            });
+            bound.remove(key);
+            return id;
+        }
     }
 
     /** 这个包（某个来源）绑了身份的账号。 */
@@ -326,42 +350,57 @@ public final class IdentityStore implements SharedSessions {
             throw new IllegalStateException("session encoding failed");
         }
         byte[] ciphertext = cipher.encrypt(Origin.LOCAL, CIPHER_CONCH, identity, FIELD, json);
-        Db.transaction(dataSource, connection -> {
-            // 身份已经删掉时不再写回：进行中的调用可能在删除之后才收尾。
-            if (!exists(connection, identity)) {
-                return null;
-            }
-            try (PreparedStatement update = connection.prepareStatement(
-                    "UPDATE identity_sessions SET ciphertext = ?, updated_at = ? WHERE identity_id = ?")) {
-                update.setBytes(1, ciphertext);
-                Db.setInstant(update, 2, Instant.now());
-                update.setString(3, identity);
-                if (update.executeUpdate() == 1) {
+        synchronized (writeLock) {
+            Instant now = clock.instant();
+            Db.transaction(dataSource, connection -> {
+                // 身份已经删掉时不再写回：进行中的调用可能在删除之后才收尾。
+                if (!exists(connection, identity)) {
                     return null;
                 }
-            }
-            try (PreparedStatement insert = connection.prepareStatement(
-                    "INSERT INTO identity_sessions (identity_id, ciphertext, updated_at) VALUES (?, ?, ?)")) {
-                insert.setString(1, identity);
-                insert.setBytes(2, ciphertext);
-                Db.setInstant(insert, 3, Instant.now());
-                insert.executeUpdate();
-            }
-            return null;
-        });
+                try (PreparedStatement update = connection.prepareStatement(
+                        "UPDATE identity_sessions SET ciphertext = ?, updated_at = ? WHERE identity_id = ?")) {
+                    update.setBytes(1, ciphertext);
+                    Db.setInstant(update, 2, now);
+                    update.setString(3, identity);
+                    if (update.executeUpdate() == 1) {
+                        return null;
+                    }
+                }
+                try (PreparedStatement insert = connection.prepareStatement(
+                        "INSERT INTO identity_sessions (identity_id, ciphertext, updated_at) VALUES (?, ?, ?)")) {
+                    insert.setString(1, identity);
+                    insert.setBytes(2, ciphertext);
+                    Db.setInstant(insert, 3, now);
+                    insert.executeUpdate();
+                }
+                return null;
+            });
+        }
     }
 
     @Override
     public void delete(String identity) {
         Objects.requireNonNull(identity, "identity");
-        Db.transaction(dataSource, connection -> {
-            try (PreparedStatement delete = connection.prepareStatement(
-                    "DELETE FROM identity_sessions WHERE identity_id = ?")) {
-                delete.setString(1, identity);
-                delete.executeUpdate();
-            }
-            return null;
-        });
+        synchronized (writeLock) {
+            Db.transaction(dataSource, connection -> {
+                try (PreparedStatement delete = connection.prepareStatement(
+                        "DELETE FROM identity_sessions WHERE identity_id = ?")) {
+                    delete.setString(1, identity);
+                    delete.executeUpdate();
+                }
+                return null;
+            });
+        }
+    }
+
+    private static void deleteMember(Connection connection, SessionKey key) throws SQLException {
+        try (PreparedStatement delete = connection.prepareStatement(
+                "DELETE FROM identity_members WHERE origin = ? AND conch = ? AND account = ?")) {
+            delete.setString(1, key.origin().name());
+            delete.setString(2, key.conch());
+            delete.setString(3, key.account());
+            delete.executeUpdate();
+        }
     }
 
     private static String name(String name) {

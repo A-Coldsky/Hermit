@@ -1433,6 +1433,151 @@ class AuthoringMcpTest {
         }
     }
 
+    /** H1：按分组或能力限权的可写 Key 不能覆盖已有本地包，但整包范围 Key 与全权限 Key 仍可覆盖，且限权 Key 仍可建新包和试跑授权能力。 */
+    @org.junit.jupiter.api.Test
+    void groupOrActionScopedKeysCannotOverwriteExistingLocalPackage() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("narrow-save"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            assertThat(server.consoleImport(groupedLocal("scoped_local", "1.0.0")).statusCode()).isEqualTo(200);
+            server.runtime.admin().createAccount("scoped_local", "main", Actors.CONSOLE);
+            Path stored = server.runtime.paths().localConches().resolve("scoped_local.yaml");
+            String original = Files.readString(stored);
+
+            CreatedApiKey groupScoped = server.runtime.apiKeys().create(
+                    "group-scoped",
+                    ApiKeyScope.explicit(false, Set.of("scoped_local"), Set.of("scoped_local:hr"), Set.of(), false),
+                    Actors.CONSOLE);
+            CreatedApiKey actionScoped = server.runtime.apiKeys().create(
+                    "action-scoped",
+                    ApiKeyScope.explicit(false, Set.of("scoped_local"), Set.of(), Set.of("scoped_local.safe_op"), false),
+                    Actors.CONSOLE);
+            CreatedApiKey wholePackage = server.runtime.apiKeys().create(
+                    "whole-pkg",
+                    ApiKeyScope.explicit(false, Set.of("scoped_local"), Set.of(), Set.of(), false),
+                    Actors.CONSOLE);
+
+            String groupSession = server.initialize(groupScoped.plaintext(), false);
+            String actionSession = server.initialize(actionScoped.plaintext(), false);
+            String wholeSession = server.initialize(wholePackage.plaintext(), false);
+            String allSession = server.initialize(false);
+
+            // 可写 Key 仍暴露 conch_save_local（可建新包）。
+            assertThat(toolNames(server.rpc(groupScoped.plaintext(), groupSession, 2, "tools/list", null)))
+                    .contains("conch_save_local");
+            assertThat(toolNames(server.rpc(actionScoped.plaintext(), actionSession, 2, "tools/list", null)))
+                    .contains("conch_save_local");
+
+            // 1) 按分组限权的 Key 试图在同目的地边界下把管理能力改入 hr 组：必须 FORBIDDEN。
+            String groupEscalation = groupedLocal("scoped_local", "1.0.1").replace("group: admin", "group: hr");
+            JsonNode groupDenied = server.rpc(groupScoped.plaintext(), groupSession, 3, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", groupEscalation)));
+            assertThat(toolError(groupDenied).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(groupDenied)).isEqualTo(
+                    AuthoringCalls.NARROWED_SAVE_PREFIX + "scoped_local" + AuthoringCalls.NARROWED_SAVE_SUFFIX);
+            assertThat(Files.readString(stored)).isEqualTo(original);
+            assertThat(server.runtime.localConches().pending()).isEmpty();
+
+            // 扩大目的地时同样直接 FORBIDDEN，不挂待确认覆盖。
+            String widened = groupedLocal("scoped_local", "1.0.2")
+                    .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
+            JsonNode groupWidenedDenied = server.rpc(groupScoped.plaintext(), groupSession, 4, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", widened)));
+            assertThat(toolError(groupWidenedDenied).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(groupWidenedDenied)).isEqualTo(
+                    AuthoringCalls.NARROWED_SAVE_PREFIX + "scoped_local" + AuthoringCalls.NARROWED_SAVE_SUFFIX);
+            assertThat(Files.readString(stored)).isEqualTo(original);
+            assertThat(server.runtime.localConches().pending()).isEmpty();
+
+            // 2) 按能力限权的 Key 试图在同目的地边界下篡改 safe_op：必须 FORBIDDEN。
+            String actionEscalation = groupedLocal("scoped_local", "1.0.1").replace("safe-scoped_local", "hijacked");
+            JsonNode actionDenied = server.rpc(actionScoped.plaintext(), actionSession, 3, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", actionEscalation)));
+            assertThat(toolError(actionDenied).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(actionDenied)).isEqualTo(
+                    AuthoringCalls.NARROWED_SAVE_PREFIX + "scoped_local" + AuthoringCalls.NARROWED_SAVE_SUFFIX);
+            assertThat(Files.readString(stored)).isEqualTo(original);
+            assertThat(server.runtime.localConches().pending()).isEmpty();
+
+            // 3) 限权 Key 仍可新建全新本地包，并试跑授权范围内的能力（范围外能力拒绝）。
+            JsonNode created = server.rpc(groupScoped.plaintext(), groupSession, 5, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", writable("brand_new_pkg", "1.0.0"))));
+            assertThat(structured(created).path("ok").asBoolean()).as(created.toString()).isTrue();
+            assertThat(structured(created).path("replaced").asBoolean()).isFalse();
+
+            JsonNode allowedTrial = server.rpc(groupScoped.plaintext(), groupSession, 6, "tools/call", Map.of(
+                    "name", "conch_trial_run", "arguments", Map.of("conch", "scoped_local", "action", "safe_op")));
+            assertThat(allowedTrial.path("result").path("isError").asBoolean(true)).as(allowedTrial.toString()).isFalse();
+            assertThat(structured(allowedTrial).path("data").path("message").asText()).isEqualTo("safe-scoped_local");
+
+            JsonNode deniedTrial = server.rpc(groupScoped.plaintext(), groupSession, 7, "tools/call", Map.of(
+                    "name", "conch_trial_run", "arguments", Map.of("conch", "scoped_local", "action", "admin_op")));
+            assertThat(toolError(deniedTrial).path("code").asText()).isEqualTo("FORBIDDEN");
+
+            // 4) 整包范围 Key（conches 点名且未限分组/能力）与全部权限 Key 仍可覆盖已有本地包。
+            String wholeUpdate = groupedLocal("scoped_local", "1.0.1");
+            JsonNode wholeSaved = server.rpc(wholePackage.plaintext(), wholeSession, 3, "tools/call", Map.of(
+                    "name", "conch_save_local", "arguments", Map.of("yaml", wholeUpdate)));
+            assertThat(structured(wholeSaved).path("ok").asBoolean()).as(wholeSaved.toString()).isTrue();
+            assertThat(structured(wholeSaved).path("replaced").asBoolean()).isTrue();
+            assertThat(Files.readString(stored)).contains("version: 1.0.1");
+
+            String allUpdate = groupedLocal("scoped_local", "1.0.2");
+            JsonNode allSaved = server.call(allSession, "conch_save_local", Map.of("yaml", allUpdate));
+            assertThat(structured(allSaved).path("ok").asBoolean()).as(allSaved.toString()).isTrue();
+            assertThat(structured(allSaved).path("replaced").asBoolean()).isTrue();
+            assertThat(Files.readString(stored)).contains("version: 1.0.2");
+        }
+    }
+
+    private static String groupedLocal(String name, String version) {
+        return """
+                conch: %s
+                version: %s
+                driver: http
+                min_crab_version: 1.10.0
+                base_url: http://127.0.0.1:9/
+                title: 分组本地包
+                description: 用于校验按分组或能力限权的 Key 不能覆盖已有本地包。
+                credentials: {}
+                groups:
+                  hr:
+                    title: 人事
+                  admin:
+                    title: 管理
+                actions:
+                  safe_op:
+                    group: hr
+                    title: 人事查询
+                    description: 只读查询。
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - set: {message: safe-%s}
+                    output:
+                      message: {type: string, description: 文本}
+                    examples:
+                      - input: {}
+                        output: {message: safe-%s}
+                    notes: 无
+                    related: []
+                  admin_op:
+                    group: admin
+                    title: 管理操作
+                    description: 仅管理员可调用。
+                    idempotent: false
+                    mcp: {expose: true, read_only: false, destructive: true}
+                    steps:
+                      - set: {message: admin-%s}
+                    output:
+                      message: {type: string, description: 文本}
+                    examples:
+                      - input: {}
+                        output: {message: admin-%s}
+                    notes: 无
+                    related: []
+                """.formatted(name, version, name, name, name, name);
+    }
+
     private static String hostYaml(String version, String url) {
         return """
                 conch: host_mcp

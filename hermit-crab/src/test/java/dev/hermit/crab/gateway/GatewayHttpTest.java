@@ -565,6 +565,66 @@ class GatewayHttpTest {
         }
     }
 
+    @Test
+    void postAdmissionOrderAndConcurrentEnableDoNotDropBodyIdempotencyOrAccount() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("post-toctou"), PASSWORD, config)) {
+            server.configureAccount("alice");
+            server.configureAccount("bob");
+            String key = server.apiKey.plaintext();
+
+            // 能力停用或不存在时，404/CAPABILITY_DISABLED 优先于非法 JSON 与非法 Idempotency-Key。
+            server.runtime.setCapabilityDisabled("legacy_oa", "save_note", true, Actors.CONSOLE);
+            TestServer.Reply disabledBadBody = server.call(
+                    "POST", "/api/legacy_oa/save_note", key, "alice", "bad key", "not-json");
+            assertThat(disabledBadBody.status()).isEqualTo(404);
+            assertThat(disabledBadBody.json().path("error").path("code").asText()).isEqualTo("CAPABILITY_DISABLED");
+
+            TestServer.Reply missingBadBody = server.call(
+                    "POST", "/api/legacy_oa/no_such_action", key, "alice", "bad key", "not-json");
+            assertThat(missingBadBody.status()).isEqualTo(404);
+            assertThat(missingBadBody.json().path("error").path("code").asText()).isEqualTo("NOT_FOUND");
+            server.runtime.setCapabilityDisabled("legacy_oa", "save_note", false, Actors.CONSOLE);
+
+            // 模拟首次查询时能力尚未启用、进入 Invoker 前恰好启用的竞态：仍需完整读取正文、Idempotency-Key 和 ?account=。
+            java.util.concurrent.atomic.AtomicBoolean hideOnce = new java.util.concurrent.atomic.AtomicBoolean(true);
+            server.server.setActionLookup((conch, action) -> {
+                if ("legacy_oa".equals(conch) && "save_note".equals(action) && hideOnce.compareAndSet(true, false)) {
+                    return java.util.Optional.empty();
+                }
+                return server.runtime.enabledAction(conch, action);
+            });
+
+            int listsBefore = server.fixture.count("GET", "/todo/list.aspx");
+            TestServer.Reply raced = server.call(
+                    "POST", "/api/legacy_oa/save_note?account=bob", key, null, "race-1", "{\"text\":\"hello\"}");
+            assertThat(raced.status()).as(raced.body()).isEqualTo(200);
+            assertThat(raced.json().path("data").path("saved").asBoolean()).isTrue();
+            assertThat(callAccount(server, "legacy_oa", "save_note")).isEqualTo("bob");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(listsBefore + 1);
+
+            TestServer.Reply replay = server.call(
+                    "POST", "/api/legacy_oa/save_note?account=bob", key, null, "race-1", "{\"text\":\"hello\"}");
+            assertThat(replay.status()).isEqualTo(200);
+            assertThat(replay.header("Idempotent-Replayed")).isEqualTo("true");
+            assertThat(replay.body()).isEqualTo(raced.body());
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(listsBefore + 1);
+
+            TestServer.Reply conflict = server.call(
+                    "POST", "/api/legacy_oa/save_note?account=bob", key, null, "race-1", "{\"text\":\"other\"}");
+            assertThat(conflict.status()).isEqualTo(409);
+            assertThat(conflict.json().path("error").path("code").asText()).isEqualTo("IDEMPOTENCY_CONFLICT");
+
+            // 同样的竞态下如果正文是非法 JSON，必须拒绝而不是带空入参执行。
+            hideOnce.set(true);
+            TestServer.Reply racedBadJson = server.call(
+                    "POST", "/api/legacy_oa/save_note?account=bob", key, null, null, "not-json");
+            assertThat(racedBadJson.status()).isEqualTo(400);
+            assertThat(racedBadJson.json().path("error").path("message").asText()).isEqualTo("请求体不是合法的 JSON。");
+            assertThat(server.fixture.count("GET", "/todo/list.aspx")).isEqualTo(listsBefore + 1);
+        }
+    }
+
     private static void callSave(TestServer server, CountDownLatch start, AtomicReference<TestServer.Reply> target) {
         try {
             start.await();

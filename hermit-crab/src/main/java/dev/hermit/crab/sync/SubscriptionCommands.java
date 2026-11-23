@@ -1,5 +1,6 @@
 package dev.hermit.crab.sync;
 
+import java.time.Clock;
 import java.util.concurrent.locks.Lock;
 
 import javax.sql.DataSource;
@@ -31,16 +32,31 @@ public final class SubscriptionCommands {
             String conch,
             String actor
     ) {
+        unsubscribe(syncLock, paths, registry, disabledConches, subscriptions, dataSource, conch, actor, Clock.systemUTC());
+    }
+
+    public static void unsubscribe(
+            Lock syncLock,
+            CrabPaths paths,
+            ConchRegistry registry,
+            DisabledConches disabledConches,
+            Subscriptions subscriptions,
+            DataSource dataSource,
+            String conch,
+            String actor,
+            Clock clock
+    ) {
         if (!Actors.CLI.equals(actor) && !Actors.CONSOLE.equals(actor)) {
             throw new IllegalArgumentException("actor must be cli or console");
         }
+        Clock resolvedClock = clock == null ? Clock.systemUTC() : clock;
         if (syncLock == null) {
-            unsubscribeLocked(paths, registry, disabledConches, subscriptions, dataSource, conch, actor);
+            unsubscribeLocked(paths, registry, disabledConches, subscriptions, dataSource, conch, actor, resolvedClock);
             return;
         }
         syncLock.lock();
         try {
-            unsubscribeLocked(paths, registry, disabledConches, subscriptions, dataSource, conch, actor);
+            unsubscribeLocked(paths, registry, disabledConches, subscriptions, dataSource, conch, actor, resolvedClock);
         } finally {
             syncLock.unlock();
         }
@@ -53,7 +69,8 @@ public final class SubscriptionCommands {
             Subscriptions subscriptions,
             DataSource dataSource,
             String conch,
-            String actor
+            String actor,
+            Clock clock
     ) {
         if (!ConchValidator.isConchName(conch)) {
             throw new SubscriptionException(400, ErrorCode.INVALID_INPUT, SubscriptionException.NAME_INVALID);
@@ -75,6 +92,6 @@ public final class SubscriptionCommands {
         if (!subscriptions.delete(conch)) {
             return;
         }
-        AuditLog.record(dataSource, actor, AuditKind.CONCH_UNSUBSCRIBED, "OFFICIAL/" + conch, conch);
+        AuditLog.record(dataSource, clock.instant(), actor, AuditKind.CONCH_UNSUBSCRIBED, "OFFICIAL/" + conch, conch);
     }
 }

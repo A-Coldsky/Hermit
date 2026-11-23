@@ -2,7 +2,7 @@
 import TimeText from '@shared/components/TimeText.vue'
 import { CopyDocument, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText, notifyError, relativeTime } from '@shared/format'
 import { buildGroupTree, flattenGroups, groupMatches } from '@shared/groups'
@@ -17,6 +17,7 @@ const conchesLoaded = ref(false)
 const keys = ref<ApiKey[]>([])
 const showRevoked = ref(false)
 const conchDetails = ref<ConchDetail[]>([])
+let conchesSeq = 0
 
 const form = reactive({
   open: false,
@@ -84,6 +85,7 @@ const groupOptions = computed(() =>
   selectedConches.value
     .filter((s) => s.groups && s.groups.length)
     .map((s) => ({
+      key: s.conch,
       label: s.title || s.conch,
       options: flattenGroups(s.groups)
         .map((g) => {
@@ -110,6 +112,7 @@ const hasAnyGroups = computed(() => groupOptions.value.length > 0)
 
 const actionOptions = computed(() => {
   const sections: {
+    key: string
     label: string
     options: { value: string; label: string; title: string; covered: boolean }[]
   }[] = []
@@ -125,19 +128,19 @@ const actionOptions = computed(() => {
       covered: actionCoveredByGroup(s.conch, c.group),
     })
     if (!tree.hasGroups) {
-      sections.push({ label: conchTitle, options: eligible.map(mapCap) })
+      sections.push({ key: s.conch, label: conchTitle, options: eligible.map(mapCap) })
       continue
     }
     if (tree.topLevel.length) {
-      sections.push({ label: `${conchTitle} · 顶层能力`, options: tree.topLevel.map(mapCap) })
+      sections.push({ key: `${s.conch}::__top__`, label: `${conchTitle} · 顶层能力`, options: tree.topLevel.map(mapCap) })
     }
     for (const g of tree.groups) {
       if (g.direct.length) {
-        sections.push({ label: `${conchTitle} / ${g.title}`, options: g.direct.map(mapCap) })
+        sections.push({ key: `${s.conch}::${g.path}`, label: `${conchTitle} / ${g.title}`, options: g.direct.map(mapCap) })
       }
       for (const c of g.children) {
         if (c.all.length) {
-          sections.push({ label: `${conchTitle} / ${g.title} / ${c.title}`, options: c.all.map(mapCap) })
+          sections.push({ key: `${s.conch}::${c.path}`, label: `${conchTitle} / ${g.title} / ${c.title}`, options: c.all.map(mapCap) })
         }
       }
     }
@@ -145,13 +148,38 @@ const actionOptions = computed(() => {
   return sections
 })
 
+const validGroupValues = computed(() => new Set(groupOptions.value.flatMap((g) => g.options.map((o) => o.value))))
+const validActionValues = computed(() => new Set(actionOptions.value.flatMap((g) => g.options.map((o) => o.value))))
+
+// 切换只读、收窄规则包或重新加载规则包后，及时清掉已经不在可选项里的分组和能力，避免残留项误触发本地包补齐而悄悄扩大范围。
+watch(
+  () => [form.readOnly, form.conches.join('\0'), conchesLoaded.value, conchDetails.value] as const,
+  () => {
+    if (!conchesLoaded.value) return
+    const validGroups = validGroupValues.value
+    const nextGroups = form.groups.filter((g) => validGroups.has(g))
+    if (nextGroups.length !== form.groups.length) {
+      form.groups = nextGroups
+    }
+    const validActions = validActionValues.value
+    const nextActions = form.actions.filter((a) => validActions.has(a))
+    if (nextActions.length !== form.actions.length) {
+      form.actions = nextActions
+    }
+  },
+)
+
 const referencedConches = computed(() => {
   const referenced = new Set<string>()
+  const validGroups = validGroupValues.value
+  const validActions = validActionValues.value
   for (const g of form.groups) {
+    if (conchesLoaded.value && !validGroups.has(g)) continue
     const colon = g.indexOf(':')
     if (colon > 0) referenced.add(g.slice(0, colon))
   }
   for (const a of form.actions) {
+    if (conchesLoaded.value && !validActions.has(a)) continue
     const dot = a.indexOf('.')
     if (dot > 0) referenced.add(a.slice(0, dot))
   }
@@ -185,11 +213,29 @@ async function load() {
 }
 
 async function loadConches() {
+  const seq = ++conchesSeq
   try {
-    const list = (await api.conches()).conches
-    conchDetails.value = await Promise.all(list.map((s) => api.conch(s.conch)))
+    const list = (await api.conches()).conches.filter((s) => s.ruleDisabled !== true)
+    const results = await Promise.allSettled(list.map((s) => api.conch(s.conch)))
+    if (seq !== conchesSeq) return
+    const loaded: ConchDetail[] = []
+    let firstError: unknown = null
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        if (result.value.ruleDisabled !== true) {
+          loaded.push(result.value)
+        }
+      } else if (firstError === null) {
+        firstError = result.reason
+      }
+    }
+    conchDetails.value = loaded
     conchesLoaded.value = true
+    if (firstError !== null) {
+      notifyError(firstError)
+    }
   } catch (error) {
+    if (seq !== conchesSeq) return
     notifyError(error)
   }
 }
@@ -204,7 +250,7 @@ async function create() {
     ElMessage.warning('请填写名称')
     return
   }
-  const validGroups = new Set(groupOptions.value.flatMap((g) => g.options.map((o) => o.value)))
+  const validGroups = validGroupValues.value
   const rawGroups = form.all ? [] : form.groups.filter((g) => validGroups.has(g))
   // 一级分组已经覆盖其二级子组，去掉冗余子组保持范围简洁。
   const groups = rawGroups.filter((g) => {
@@ -213,7 +259,7 @@ async function create() {
     const slash = path.indexOf('/')
     return slash < 0 || !rawGroups.includes(`${g.slice(0, colon)}:${path.slice(0, slash)}`)
   })
-  const validActions = new Set(actionOptions.value.flatMap((g) => g.options.map((o) => o.value)))
+  const validActions = validActionValues.value
   const actions = form.all ? [] : form.actions.filter((a) => validActions.has(a))
   const conches = form.all ? [] : form.conches
   if (!form.all && !conches.length && !groups.length && !actions.length) {
@@ -424,7 +470,7 @@ onMounted(load)
             class="full"
             data-test="select-groups"
           >
-            <el-option-group v-for="section in groupOptions" :key="section.label" :label="section.label">
+            <el-option-group v-for="section in groupOptions" :key="section.key" :label="section.label">
               <el-option
                 v-for="option in section.options"
                 :key="option.value"
@@ -453,7 +499,7 @@ onMounted(load)
             class="full"
             data-test="select-actions"
           >
-            <el-option-group v-for="group in actionOptions" :key="group.label" :label="group.label">
+            <el-option-group v-for="group in actionOptions" :key="group.key" :label="group.label">
               <el-option v-for="option in group.options" :key="option.value" :label="option.label" :value="option.value">
                 <span class="mono">{{ option.label }}</span>
                 <span class="hm-muted option-title">{{ option.title }}</span>
@@ -493,6 +539,7 @@ onMounted(load)
 
 .connect-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
 }

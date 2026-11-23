@@ -306,6 +306,33 @@ class TlsConsoleTest {
         }
     }
 
+    /** M11：整包停用时，配置项里填写的 auth.origins 仍应允许在控制台检测证书。 */
+    @Test
+    void switchedOffPackageConfiguredAuthOriginCanStillBeProbed() throws Exception {
+        LabCertificates.Material certs = LabCertificates.generate(temp.resolve("certs"));
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        try (TestServer server = TestServer.open(temp.resolve("home"), "HermitTlsOff-91ab", config);
+             LocalHttps viaConfig = LocalHttps.start(
+                     new X509Certificate[] {certs.leaf(), certs.root()}, certs.leafKey())) {
+            String yaml = LocalConchBehaviorTest.ping("tls_sso_off", "1.0.0")
+                    .replace("min_crab_version: 1.0.0", "min_crab_version: 1.11.0")
+                    .replace("credentials: {}", """
+                            credentials: {}
+                            config:
+                              sso_url: { type: url, label: 认证中心, required: false }
+                            auth:
+                              origins: ["{{config.sso_url}}"]
+                              steps:
+                                - request: { method: GET, path: / }""");
+            var doc = ConchParser.parse(yaml);
+            server.runtime.registry().put(doc);
+            server.runtime.admin().putConfig(doc, "sso_url", viaConfig.url(), dev.hermit.crab.store.Actors.CLI);
+            server.runtime.setConchDisabled("tls_sso_off", true, dev.hermit.crab.store.Actors.CLI);
+
+            probeSha(server, viaConfig.port());
+        }
+    }
+
     private static String probeSha(TestServer server, int port) throws Exception {
         TestServer.Reply probed = server.console(
                 "POST", "/console/api/tls/probe", body("host", "127.0.0.1", "port", port), true);

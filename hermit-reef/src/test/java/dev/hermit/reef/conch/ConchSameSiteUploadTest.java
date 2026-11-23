@@ -245,6 +245,48 @@ class ConchSameSiteUploadTest {
         assertThat(data.path("authOrigins").get(0).asText()).isEqualTo("HTTPS://SSO.corp.com:443");
     }
 
+    @Test
+    void disabledPublishedConchesAreExcludedFromSameSiteAndSameAuthWarnings() throws Exception {
+        upload(ssoYaml("oa_disabled", "1.0.0", "https://oa.corp.com", "https://sso.corp.com", null));
+        publish("oa_disabled", "1.0.0");
+        disable("oa_disabled");
+
+        // 已停用的包不再分发给 Crab，同站点与同认证地址都不应再触发告警。
+        JsonNode sameSiteUpload = upload(yaml("oa_fresh", "1.0.0", "https://oa.corp.com", null));
+        assertThat(sameSite(sameSiteUpload)).isEmpty();
+        assertThat(coded(sameSiteUpload, "SAME_AUTH")).isEmpty();
+
+        JsonNode sameAuthUpload = upload(ssoYaml("erp_fresh", "1.0.0", "https://erp.corp.com", "https://sso.corp.com", null));
+        assertThat(sameSite(sameAuthUpload)).isEmpty();
+        assertThat(coded(sameAuthUpload, "SAME_AUTH")).isEmpty();
+
+        // 重新启用后，后续上传重新收到 SAME_SITE / SAME_AUTH 提示。
+        enable("oa_disabled");
+        JsonNode afterEnableSite = upload(yaml("oa_fresh", "1.1.0", "https://oa.corp.com", null));
+        assertThat(sameSite(afterEnableSite)).hasSize(1);
+        assertThat(sameSite(afterEnableSite).get(0).path("message").asText()).contains("oa_disabled");
+
+        JsonNode afterEnableAuth = upload(ssoYaml("erp_fresh", "1.1.0", "https://erp.corp.com", "https://sso.corp.com", null));
+        assertThat(coded(afterEnableAuth, "SAME_AUTH")).hasSize(1);
+        assertThat(coded(afterEnableAuth, "SAME_AUTH").get(0).path("message").asText()).contains("oa_disabled");
+    }
+
+    private void disable(String conch) throws Exception {
+        mockMvc.perform(post("/api/admin/conches/" + conch + "/disable")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"下线停用\"}"))
+                .andExpect(status().isOk());
+    }
+
+    private void enable(String conch) throws Exception {
+        mockMvc.perform(post("/api/admin/conches/" + conch + "/enable")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"恢复启用\"}"))
+                .andExpect(status().isOk());
+    }
+
     private static List<JsonNode> coded(JsonNode uploaded, String code) {
         List<JsonNode> hits = new java.util.ArrayList<>();
         for (JsonNode warning : uploaded.path("warnings")) {

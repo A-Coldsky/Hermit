@@ -115,10 +115,12 @@ public final class ConchParser {
         ToolFilter tools = toolFilter(node.get("tools"), "tools");
         McpSnapshot snapshot = snapshot(node.get("snapshot"), "snapshot");
         Map<String, String> scripts = scripts(node);
+        boolean groupsDeclared = node.has("groups");
         Map<String, GroupDef> groups = groups(node.get("groups"), "groups", 0);
         return new ConchDoc(
                 conch, version, driver, minCrabVersion, baseUrl, title, description, owner, tags,
-                changelog, credentials, config, auth, actions, healthCheck, upstream, tools, snapshot, scripts, groups);
+                changelog, credentials, config, auth, actions, healthCheck, upstream, tools, snapshot,
+                scripts, groups, groupsDeclared);
     }
 
     private static Map<String, GroupDef> groups(JsonNode node, String path, int depth) {
@@ -304,8 +306,9 @@ public final class ConchParser {
         AliveCheck alive = alive(obj.get("alive_check"), child(path, "alive_check"));
         Map<String, String> cookies = cookieAliases(obj.get("cookies"), child(path, "cookies"));
         boolean concurrentReads = bool(obj.get("concurrent_reads"), child(path, "concurrent_reads"), false);
+        boolean originsDeclared = obj.has("origins");
         List<String> origins = stringList(obj.get("origins"), child(path, "origins"));
-        return new Auth(steps, alive, cookies, concurrentReads, origins);
+        return new Auth(steps, alive, cookies, concurrentReads, origins, originsDeclared);
     }
 
     private static Map<String, String> cookieAliases(JsonNode node, String path) {
@@ -376,7 +379,8 @@ public final class ConchParser {
                 relatedNames(obj, path),
                 mcp(obj.get("mcp"), child(path, "mcp")),
                 mcpTool(obj, path),
-                text(obj.get("group"), child(path, "group")));
+                text(obj.get("group"), child(path, "group")),
+                obj.has("group"));
     }
 
     private static HttpMethod method(JsonNode node, String path) {

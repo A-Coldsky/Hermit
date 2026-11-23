@@ -48,7 +48,7 @@ export function relativeTime(value: string | null | undefined): string {
     return value
   }
   const minutes = Math.round(diff / 60000)
-  if (Math.abs(minutes) < 1) {
+  if (minutes <= 0) {
     return '刚刚'
   }
   if (minutes < 60) {
@@ -115,12 +115,14 @@ export function notifyError(error: unknown): void {
   ElMessage.error({ message: errorText(error), grouping: true })
 }
 
-export async function copyText(value: string, label = '已复制'): Promise<void> {
+export async function copyText(value: string, label = '已复制'): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(value)
     ElMessage.success(label)
+    return true
   } catch {
     ElMessage.warning('浏览器不允许写入剪贴板，请手动复制')
+    return false
   }
 }
 

@@ -103,8 +103,16 @@ async function showYaml(row: ConchVersion) {
 function openDiff(row: ConchVersion) {
   const index = props.versions.indexOf(row)
   const base = current.value && current.value.version !== row.version ? current.value : props.versions[index + 1]
-  diffDialog.from = base?.version ?? row.version
-  diffDialog.to = row.version
+  if (base) {
+    diffDialog.from = base.version
+    diffDialog.to = row.version
+  } else if (index > 0) {
+    diffDialog.from = row.version
+    diffDialog.to = props.versions[index - 1].version
+  } else {
+    diffDialog.from = row.version
+    diffDialog.to = row.version
+  }
   diffDialog.result = null
   diffDialog.open = true
   void runDiff()
@@ -165,7 +173,7 @@ async function runDiff() {
         <template #default="{ row }">
           <el-button link type="primary" @click="showYaml(row)">YAML</el-button>
           <el-button link type="primary" :disabled="versions.length < 2" @click="openDiff(row)">对比</el-button>
-          <el-tooltip v-if="disabled && row.status === 'UPLOADED'" content="规则包已停用，先启用再发布">
+          <el-tooltip v-if="disabled && row.status === 'UPLOADED' && isAdmin" content="规则包已停用，先启用再发布">
             <span class="off">发布</span>
           </el-tooltip>
           <el-button v-else-if="row.status === 'UPLOADED' && isAdmin" link type="primary" :loading="busy === row.version" @click="publish(row)">
@@ -212,7 +220,9 @@ async function runDiff() {
   </el-dialog>
 
   <el-dialog v-model="warningDialog.open" :title="`v${warningDialog.row?.version ?? ''} 的校验警告`" width="640px">
-    <p class="hm-muted hint">警告不影响发布，但说明这个版本的描述还不完整。</p>
+    <p class="hm-muted hint" data-test="warning-summary">
+      有 {{ warningDialog.row?.warnings.length ?? 0 }} 条校验警告。警告不会阻止发布，发布前请逐条确认。
+    </p>
     <IssueList v-if="warningDialog.row" :issues="warningDialog.row.warnings" tone="warning" />
   </el-dialog>
 

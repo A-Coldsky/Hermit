@@ -3,6 +3,7 @@ package dev.hermit.crab.store;
 import javax.sql.DataSource;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.Objects;
@@ -14,9 +15,15 @@ import java.util.Set;
  */
 public final class ConchSwitchStore {
     private final DataSource dataSource;
+    private final Clock clock;
 
     public ConchSwitchStore(DataSource dataSource) {
+        this(dataSource, Clock.systemUTC());
+    }
+
+    public ConchSwitchStore(DataSource dataSource, Clock clock) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     /** {@code origin} 只写进审计目标，用来把记录归到当前载入的那份包。 */
@@ -25,6 +32,7 @@ public final class ConchSwitchStore {
         String checkedConch = Checks.conch(conch);
         String checkedActor = Checks.actor(actor);
         Db.transaction(dataSource, connection -> {
+            Instant now = clock.instant();
             try (PreparedStatement delete = connection.prepareStatement(
                     "DELETE FROM conch_switches WHERE conch = ?")) {
                 delete.setString(1, checkedConch);
@@ -34,12 +42,13 @@ public final class ConchSwitchStore {
                 try (PreparedStatement insert = connection.prepareStatement(
                         "INSERT INTO conch_switches (conch, disabled, updated_at) VALUES (?, TRUE, ?)")) {
                     insert.setString(1, checkedConch);
-                    Db.setInstant(insert, 2, Instant.now());
+                    Db.setInstant(insert, 2, now);
                     insert.executeUpdate();
                 }
             }
             ConfigAudit.append(
                     connection,
+                    now,
                     checkedActor,
                     disabled ? AuditKind.CONCH_SWITCHED_OFF : AuditKind.CONCH_SWITCHED_ON,
                     checkedOrigin.name() + "/" + checkedConch,

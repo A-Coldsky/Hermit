@@ -5,10 +5,12 @@ import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.DuplicateActions;
+import dev.hermit.common.validate.DuplicateGroups;
 import dev.hermit.common.validate.DuplicateScripts;
 import dev.hermit.common.validate.IssueLines;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
+import dev.hermit.reef.web.ApiException;
 import dev.hermit.reef.web.ReefErrorCode;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -37,9 +39,13 @@ public class ConchUploadService {
     }
 
     public UploadResponse upload(String actor, byte[] body) {
+        if (actor == null || actor.isBlank()) {
+            throw new ApiException(401, ReefErrorCode.UNAUTHORIZED, ReefErrorCode.UNAUTHORIZED.message());
+        }
         PreparedUpload prepared = prepare(body);
+        List<ValidationIssue> sameSite = transaction.sameSiteWarnings(prepared.doc());
         synchronized (locks.monitor(prepared.doc().conch())) {
-            return transaction.store(actor, prepared);
+            return transaction.store(actor, prepared, sameSite);
         }
     }
 
@@ -52,6 +58,7 @@ public class ConchUploadService {
         ArrayList<ValidationIssue> duplicates = new ArrayList<>();
         duplicates.addAll(DuplicateActions.find(yaml));
         duplicates.addAll(DuplicateScripts.find(yaml));
+        duplicates.addAll(DuplicateGroups.find(yaml));
         ConchDoc doc;
         try {
             doc = ConchParser.parse(yaml);

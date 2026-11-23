@@ -20,6 +20,7 @@ import { repairConch, updateConch } from '../update'
 const narrow = useNarrow()
 const router = useRouter()
 const loading = ref(true)
+const loadFailed = ref(false)
 const syncing = ref(false)
 const busy = ref<string | null>(null)
 /** 正在订阅安装的那一行，用来显示换壳动画。 */
@@ -48,7 +49,9 @@ async function load() {
     repairs.value = new Map(
       (status?.report?.conches ?? []).filter((s) => s.kind === 'REPAIR_REQUIRED').map((s) => [s.conch, s.reason] as const),
     )
+    loadFailed.value = false
   } catch (error) {
+    loadFailed.value = true
     notifyError(error)
   } finally {
     loading.value = false
@@ -83,7 +86,8 @@ async function subscribe(row: CatalogConch) {
     } else if (!kind) {
       ElMessage.warning(`已订阅 ${row.conch}，但这次没有安装`)
     } else {
-      const reason = result.outcome?.reason ? `：${result.outcome.reason}` : ''
+      const rawReason = result.outcome?.reason
+      const reason = rawReason ? `：${syncReasonLabels[rawReason] ?? rawReason}` : ''
       ElMessage.warning(`已订阅 ${row.conch}，但这次没有安装（${label?.text ?? kind}${reason}）`)
     }
     await load()
@@ -165,6 +169,17 @@ onMounted(load)
     </el-result>
 
     <div v-else class="hm-card">
+      <el-alert
+        v-if="loadFailed"
+        type="error"
+        show-icon
+        :closable="false"
+        class="load-failed"
+        :title="catalog ? '目录刷新失败，下面是上一次读到的内容' : '目录读取失败'"
+        data-test="catalog-load-failed"
+      >
+        <el-button size="small" :loading="loading" @click="load">重试</el-button>
+      </el-alert>
       <div v-if="catalog" class="meta hm-muted">
         <span>共 <b class="num">{{ rows.length }}</b> 个，已订阅 <b class="num">{{ subscribedCount }}</b> 个</span>
         <span v-if="catalog.syncedAt">目录更新于 <TimeText :value="catalog.syncedAt" /></span>
@@ -174,7 +189,15 @@ onMounted(load)
       <p class="hm-scroll-hint">表格可以左右滑动，「订阅」在最右侧。</p>
       <el-table v-loading="loading" :data="rows">
         <template #empty>
-          {{ loading ? '' : catalog?.syncedAt ? 'Reef 上还没有已发布的规则包' : '点「从 Reef 刷新」获取可订阅的规则包' }}
+          {{
+            loading
+              ? ''
+              : loadFailed
+                ? '没有读到可订阅目录'
+                : catalog?.syncedAt
+                  ? 'Reef 上还没有已发布的规则包'
+                  : '点「从 Reef 刷新」获取可订阅的规则包'
+          }}
         </template>
         <el-table-column label="规则包" min-width="260">
           <template #default="{ row }">
@@ -237,6 +260,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.load-failed {
+  margin-bottom: 12px;
+}
+
 .meta {
   display: flex;
   flex-wrap: wrap;

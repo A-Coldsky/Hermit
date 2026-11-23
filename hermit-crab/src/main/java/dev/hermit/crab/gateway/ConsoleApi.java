@@ -1742,6 +1742,8 @@ final class ConsoleApi {
                 GatewayResponses.writeError(ctx, ex.status(), ex.code(), clientMessage(ex));
             } catch (RequestOnlyException ex) {
                 GatewayResponses.writeRequestError(ctx, ex.status(), ex.code(), ex.getMessage());
+            } catch (CredentialDecryptException ex) {
+                GatewayResponses.writeError(ctx, 409, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE);
             } catch (IllegalArgumentException | IllegalStateException ex) {
                 String message = ex.getMessage();
                 if ("capability not found".equals(message)

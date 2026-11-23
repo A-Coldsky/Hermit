@@ -332,7 +332,7 @@ Reef 上传时的 `SAME_AUTH` 和 `AUTH_ORIGIN_ADDED` 警告见规则包参考�
 | DELETE | `/console/api/tls/ca/{file}` | `{deleted: true}` 或 `{deleted: false}`。删掉文件后重新加载。删除会使 TLS 会话失效，并关掉 Apache 空闲连接 |
 | POST | `/console/api/tls/reload` | 重新读 CA 目录和操作系统信任库。不清 Cookie，不重建客户端。返回信任视图 |
 | GET | `/console/api/tls/failures` | `{failures:[{host, port, kind, message, at, chain}]}`。只在内存，按 `host:port` 保留最近的 TLS 失败，最多 32 条。`at` 为 ISO-8601 |
-| POST | `/console/api/tls/probe` | 正文 `{host, port}`。只握手，不发 HTTP 请求。地址必须是已加载规则的 `base_url`、MCP 上游或 OAuth 端点，或 Reef 地址，否则 400「这个地址不在已安装规则、MCP 上游或 Reef 地址里。」。返回 `{host, port, trusted, kind, message, chain}`。已经受信任时 `kind` 和 `message` 为 null |
+| POST | `/console/api/tls/probe` | 正文 `{host, port}`。只握手，不发 HTTP 请求。地址必须是已加载规则的 `base_url`、认证地址（`auth.origins`，含这台 Crab 上配置的值）、MCP 上游或 OAuth 端点，或 Reef 地址，否则 400「这个地址不在已安装规则、MCP 上游或 Reef 地址里。」。返回 `{host, port, trusted, kind, message, chain}`。已经受信任时 `kind` 和 `message` 为 null |
 | POST | `/console/api/tls/trusted-hosts` | 正文 `{host, port, sha256}`。`sha256` 是 64 位十六进制，必须和该地址最近一小时内见过的 leaf 一致（探测或 TLS 失败）。同一 `host:port` 再次登记会替换。过期返回 400「这张证书已经过期，不能登记。」，尚未生效同样拒绝。成功返回这一行：`host`、`port`、`sha256`、`subject`、`issuer`、`notAfter`、`createdAt`、`createdBy` |
 | DELETE | `/console/api/tls/trusted-hosts/{host}/{port}` | `{deleted: true}` 或 `{deleted: false}`。删除后清掉 TLS 会话和 Apache 空闲连接 |
 

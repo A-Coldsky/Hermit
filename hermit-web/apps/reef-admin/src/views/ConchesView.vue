@@ -5,6 +5,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
+import HermitMark from '@shared/components/HermitMark.vue'
 import { formatTime, notifyError, relativeTime } from '@shared/format'
 import { api, type ConchSummary } from '../api'
 import DriverBadge from '../components/DriverBadge.vue'
@@ -147,6 +148,7 @@ onMounted(load)
         </RouterLink>
       </div>
       <div v-else-if="!loading" class="hm-card empty">
+        <HermitMark variant="reef" :size="56" :tile="false" />
         <span>{{ emptyText }}</span>
         <el-button v-if="isAdmin && !conches.length && !loadFailed" type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
       </div>

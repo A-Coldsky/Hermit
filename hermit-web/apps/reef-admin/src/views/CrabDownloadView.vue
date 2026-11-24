@@ -2,6 +2,8 @@
 import { CopyDocument, Download, Link as LinkIcon, Reading, Refresh, Tickets } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
+import HermitDuet from '@shared/components/HermitDuet.vue'
+import HermitMark from '@shared/components/HermitMark.vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { copyText, notifyError } from '@shared/format'
@@ -87,18 +89,21 @@ onMounted(load)
     <div v-if="info" class="hm-card hero" data-test="crab-download-card">
       <template v-if="info.source === 'LOCAL'">
         <div class="hero-top">
-          <div>
-            <div class="hero-badges">
-              <el-tag type="success" effect="dark">可直接下载</el-tag>
-              <el-tag type="info" effect="plain">独立可执行 JAR · JDK 17+</el-tag>
-              <el-tag v-if="info.latestCrabVersion" type="primary" effect="plain" class="mono">
-                推荐版本 v{{ info.latestCrabVersion }}
-              </el-tag>
+          <div class="hero-lead">
+            <HermitMark variant="crab" :size="56" intro class="hero-mark" />
+            <div>
+              <div class="hero-badges">
+                <el-tag type="success" effect="dark">可直接下载</el-tag>
+                <el-tag type="info" effect="plain">独立可执行 JAR · JDK 17+</el-tag>
+                <el-tag v-if="info.latestCrabVersion" type="primary" effect="plain" class="mono">
+                  推荐版本 v{{ info.latestCrabVersion }}
+                </el-tag>
+              </div>
+              <h2 class="hero-file mono" data-test="jar-filename">{{ info.fileName }}</h2>
+              <p class="hm-muted hero-desc">
+                内含 Crab 规则引擎、本地 H2 存储、MCP 服务端与本机控制台界面，下载后一条命令即可运行。
+              </p>
             </div>
-            <h2 class="hero-file mono" data-test="jar-filename">{{ info.fileName }}</h2>
-            <p class="hm-muted hero-desc">
-              内含 Crab 规则引擎、本地 H2 存储、MCP 服务端与本机控制台界面，下载后一条命令即可运行。
-            </p>
           </div>
           <div class="hero-actions">
             <el-button
@@ -148,15 +153,18 @@ onMounted(load)
 
       <template v-else-if="info.source === 'EXTERNAL'">
         <div class="hero-top">
-          <div>
-            <div class="hero-badges">
-              <el-tag type="primary" effect="plain">外部下载地址</el-tag>
-              <el-tag v-if="info.latestCrabVersion" type="info" effect="plain" class="mono">
-                推荐版本 v{{ info.latestCrabVersion }}
-              </el-tag>
+          <div class="hero-lead">
+            <HermitMark variant="crab" :size="56" intro class="hero-mark" />
+            <div>
+              <div class="hero-badges">
+                <el-tag type="primary" effect="plain">外部下载地址</el-tag>
+                <el-tag v-if="info.latestCrabVersion" type="info" effect="plain" class="mono">
+                  推荐版本 v{{ info.latestCrabVersion }}
+                </el-tag>
+              </div>
+              <h2 class="hero-file">前往指定地址下载 Crab 客户端</h2>
+              <p class="hm-muted hero-desc">管理员已配置外部安装包链接，点击右侧按钮在新窗口打开。</p>
             </div>
-            <h2 class="hero-file">前往指定地址下载 Crab 客户端</h2>
-            <p class="hm-muted hero-desc">管理员已配置外部安装包链接，点击右侧按钮在新窗口打开。</p>
           </div>
           <div class="hero-actions">
             <a :href="info.externalUrl || '#'" target="_blank" rel="noopener noreferrer" class="ext-link">
@@ -170,14 +178,19 @@ onMounted(load)
 
       <template v-else>
         <div class="empty-box" data-test="no-jar-state">
-          <h3>暂未放置 Crab 独立 JAR 包</h3>
-          <p class="hm-muted">
-            {{
-              isAdmin
-                ? '请在构建独立 JAR 后，将文件放入 Reef 数据目录下的 downloads/ 子目录中（无需重启 Reef）。'
-                : '请联系管理员将构建好的 Crab 独立可执行 JAR 放入 Reef 数据目录的 downloads/ 目录中。'
-            }}
-          </p>
+          <div class="empty-head">
+            <div>
+              <h3>暂未放置 Crab 独立 JAR 包</h3>
+              <p class="hm-muted">
+                {{
+                  isAdmin
+                    ? '请在构建独立 JAR 后，将文件放入 Reef 数据目录下的 downloads/ 子目录中（无需重启 Reef）。'
+                    : '请联系管理员将构建好的 Crab 独立可执行 JAR 放入 Reef 数据目录的 downloads/ 目录中。'
+                }}
+              </p>
+            </div>
+            <HermitDuet variant="scene" :size="82" status="disconnected" />
+          </div>
           <div v-if="isAdmin" class="admin-tip">
             <div class="cmd-label">1. 在源码仓库打包独立可执行 JAR：</div>
             <div class="cmd-box">
@@ -286,6 +299,18 @@ onMounted(load)
   gap: 16px;
 }
 
+.hero-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex: 1 1 360px;
+  min-width: 0;
+}
+
+.hero-mark {
+  margin-top: 2px;
+}
+
 .hero-badges {
   display: flex;
   flex-wrap: wrap;
@@ -333,6 +358,19 @@ onMounted(load)
 
 .empty-box {
   padding: 12px 4px;
+}
+
+.empty-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.empty-head > div {
+  flex: 1 1 320px;
+  min-width: 0;
 }
 
 .empty-box h3 {

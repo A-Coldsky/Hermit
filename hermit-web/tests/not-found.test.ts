@@ -26,4 +26,21 @@ describe('应用内 404', () => {
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/')
   })
+
+  it('按 mark 属性显示对应应用的品牌图标（Reef 显示珊瑚，Crab 显示寄居蟹）', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/:pathMatch(.*)*', component: NotFoundView, props: { home: '/', homeLabel: '返回概览', mark: 'reef' } },
+      ],
+    })
+    await router.push('/missing')
+    await router.isReady()
+    const wrapper = mount(RouterView, { global: { plugins: [ElementPlus, router] } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-mark]').attributes('data-mark')).toBe('reef')
+    expect(wrapper.find('.coral').exists()).toBe(true)
+    expect(wrapper.find('.crab-body').exists()).toBe(false)
+  })
 })

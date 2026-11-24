@@ -14,10 +14,10 @@ defineProps<{ label: string; compact?: boolean }>()
     <svg viewBox="0 0 120 40" :width="compact ? 84 : 150" :height="compact ? 28 : 50" aria-hidden="true">
       <path class="ground" d="M2 37H118" />
       <g class="from">
-        <g transform="translate(2.65 18.65) scale(0.375)"><MascotShell tone="old" /></g>
+        <g transform="translate(3 19.2) scale(0.36)"><MascotShell tone="old" /></g>
       </g>
       <g class="to">
-        <g transform="translate(86.2 14) scale(0.5)"><MascotShell /></g>
+        <g transform="translate(86 13.3) scale(0.48)"><MascotShell /></g>
       </g>
       <g class="spark">
         <circle cx="86" cy="12" r="1.5" />
@@ -26,7 +26,7 @@ defineProps<{ label: string; compact?: boolean }>()
       </g>
       <g class="walker">
         <g class="bob">
-          <g transform="translate(2.6 6.2) scale(0.52)"><MascotCrab /></g>
+          <g transform="translate(2.5 9.25) scale(0.5)"><MascotCrab /></g>
         </g>
       </g>
     </svg>
@@ -60,7 +60,7 @@ svg {
 }
 
 .spark {
-  fill: var(--hm-shell-alt);
+  fill: var(--hm-accent);
 }
 
 .walker,

@@ -101,22 +101,42 @@ html:root {
   --hm-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
   --hm-ease: cubic-bezier(0.2, 0, 0, 1);
 
-  /* 品牌插画：寄居蟹（Crab）、珊瑚（Reef）和贝壳。只用于图标与装饰，不当文字色。 */
+  /* 品牌插画：寄居蟹（Crab）、外展海扇珊瑚（Reef）与奶油珍珠螺壳（Conch）。只用于图标与装饰，不当文字色。 */
   --hm-mark-tile: #10272b;
-  --hm-crab: #ff7a59;
-  --hm-crab-deep: #e8553a;
-  --hm-crab-blush: #ffb4a0;
-  --hm-shell: #2dd4bf;
-  --hm-shell-deep: #14b8a6;
-  --hm-shell-shine: #99f6e4;
-  --hm-shell-alt: #f59e0b;
-  --hm-shell-alt-deep: #b45309;
-  --hm-shell-alt-shine: #fde68a;
-  --hm-shell-old: #c3cdd0;
+  --hm-crab: #ff7854;
+  --hm-crab-deep: #e65132;
+  --hm-crab-soft: #ff9f84;
+  --hm-crab-blush: #ffc4b6;
+  --hm-shell: #fff2df;
+  --hm-shell-mid: #f4d0a4;
+  --hm-shell-deep: #cc8e5b;
+  --hm-shell-ridge: #be7e4c;
+  --hm-shell-inner: #784828;
+  --hm-shell-shine: #ffffff;
+  --hm-shell-alt: #bae6fd;
+  --hm-shell-alt-mid: #7dd3fc;
+  --hm-shell-alt-deep: #0ea5e9;
+  --hm-shell-alt-ridge: #0284c7;
+  --hm-shell-alt-inner: #0c4a6e;
+  --hm-shell-alt-shine: #f0f9ff;
+  --hm-shell-old: #d1d9dc;
+  --hm-shell-old-mid: #b5c2c6;
   --hm-shell-old-deep: #8c9ca2;
-  --hm-shell-old-shine: #e3e9eb;
+  --hm-shell-old-ridge: #75868c;
+  --hm-shell-old-inner: #4f5e63;
+  --hm-shell-old-shine: #edf2f4;
+  --hm-reef-dome: #2dd4bf;
+  --hm-reef-dome-deep: #14b8a6;
+  --hm-reef-highlight: #99f6e4;
+  --hm-reef-gold: #fbbf24;
+  --hm-reef-gold-deep: #f59e0b;
+  --hm-reef-gold-soft: #fde68a;
+  --hm-reef-rose: #fb7185;
+  --hm-reef-rose-deep: #f43f5e;
+  --hm-reef-teal-soft: #5eead4;
+  --hm-duet-water: rgba(20, 184, 166, 0.1);
   --hm-eye: #ffffff;
-  --hm-pupil: #10272b;
+  --hm-pupil: #182328;
 }
 
 /* 暗色：明暗阶按 Element 暗色主题的算法，light-N 与 #141414 混合，dark-2 与白色混合。 */
@@ -198,9 +218,14 @@ html.dark {
   --hm-shadow-raised: 0 6px 20px rgba(0, 0, 0, 0.4);
   --hm-shadow-lg: 0 8px 24px -6px rgba(0, 0, 0, 0.55);
   --hm-subtle: #182024;
-  --hm-shell-old: #4a5d62;
+  --hm-mark-tile: #0a1719;
+  --hm-shell-old: #56696f;
+  --hm-shell-old-mid: #44565c;
   --hm-shell-old-deep: #33454a;
-  --hm-shell-old-shine: #6f848a;
+  --hm-shell-old-ridge: #28373b;
+  --hm-shell-old-inner: #1c282b;
+  --hm-shell-old-shine: #778c93;
+  --hm-duet-water: rgba(45, 212, 191, 0.12);
   --hm-teal-soft: #143f3a;
   --hm-ring: 0 0 0 3px rgba(20, 184, 166, 0.3);
   --hm-hover-border: #34434a;

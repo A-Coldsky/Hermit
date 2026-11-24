@@ -30,7 +30,7 @@ export const router = createRouter({
           path: ':pathMatch(.*)*',
           name: 'not-found',
           component: () => import('@shared/components/NotFoundView.vue'),
-          props: { home: '/', homeLabel: '返回概览' },
+          props: { home: '/', homeLabel: '返回概览', mark: 'reef' },
         },
       ],
     },

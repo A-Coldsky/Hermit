@@ -169,7 +169,7 @@ class CaptureRedactorTest {
                           ],
                           "postData": {
                             "mimeType": "application/json",
-                            "text": "{\\"user\\":\\"bob\\",\\"password\\":\\"HarSecret99\\"}"
+                            "text": "{\\"user\\":\\"bob\\",\\"password\\":\\"HarSecret99\\",\\"code\\":\\"654321\\"}"
                           }
                         },
                         "response": {
@@ -179,9 +179,9 @@ class CaptureRedactorTest {
                             {"name": "Set-Cookie", "value": "OA_TOKEN=LIVE_OA_TOKEN; Path=/; HttpOnly"}
                           ],
                           "content": {
-                            "size": 32,
+                            "size": 44,
                             "mimeType": "application/json",
-                            "text": "{\\"ok\\":true,\\"token\\":\\"LIVE_RESP_TOK\\"}"
+                            "text": "{\\"code\\":0,\\"ok\\":true,\\"token\\":\\"LIVE_RESP_TOK\\"}"
                           }
                         }
                       }
@@ -197,6 +197,8 @@ class CaptureRedactorTest {
         assertThat(header(parsed.get(0).responseHeaders(), "Set-Cookie")).isEqualTo("OA_TOKEN=***; Path=/; HttpOnly");
 
         RecordedEntry redacted = CaptureRedactor.redactEntry(parsed.get(0), 1, Set.of(), 4096);
+        assertThat(redacted.requestBody()).contains("\"code\":\"***\"").doesNotContain("654321");
+        assertThat(redacted.responseBody()).contains("\"code\":0");
         CaptureSnapshot snap = new CaptureSnapshot(
                 "cap_12345678", "Test", Instant.parse("2026-11-24T12:00:00Z"), "har_import",
                 CaptureRedactor.extractOrigins(List.of(redacted)),
@@ -207,6 +209,7 @@ class CaptureRedactorTest {
                 .doesNotContain("RAW_HAR_COOKIE")
                 .doesNotContain("RAW_HAR_BEARER")
                 .doesNotContain("HarSecret99")
+                .doesNotContain("654321")
                 .doesNotContain("LIVE_OA_TOKEN")
                 .doesNotContain("LIVE_RESP_TOK")
                 .contains("OA_TOKEN=***")

@@ -463,7 +463,7 @@ public final class CaptureRedactor {
         String mime = baseMime(contentType);
         String redacted;
         if ("application/json".equals(mime) || mime.endsWith("+json") || looksLikeJson(body)) {
-            redacted = redactJsonOrFallback(body, secretRedactor);
+            redacted = redactJsonOrFallback(body, isResponse, secretRedactor);
         } else if (!isResponse && "application/x-www-form-urlencoded".equals(mime)) {
             redacted = redactFormLike(body, secretRedactor);
         } else if (!isResponse && mime.startsWith("multipart/")) {
@@ -485,17 +485,17 @@ public final class CaptureRedactor {
         return new TruncatedText(redacted, false);
     }
 
-    private static String redactJsonOrFallback(String body, Redactor secretRedactor) {
+    private static String redactJsonOrFallback(String body, boolean isResponse, Redactor secretRedactor) {
         try {
             JsonNode tree = ApiJson.tree(body);
-            JsonNode clean = redactJsonNode(tree, secretRedactor);
+            JsonNode clean = redactJsonNode(tree, isResponse, secretRedactor);
             return ApiJson.write(clean);
         } catch (RuntimeException ex) {
             return secretRedactor.redact(body);
         }
     }
 
-    private static JsonNode redactJsonNode(JsonNode node, Redactor secretRedactor) {
+    private static JsonNode redactJsonNode(JsonNode node, boolean isResponse, Redactor secretRedactor) {
         if (node == null || node.isNull()) {
             return node;
         }
@@ -506,10 +506,12 @@ public final class CaptureRedactor {
                 Map.Entry<String, JsonNode> entry = fields.next();
                 String key = entry.getKey();
                 JsonNode value = entry.getValue();
-                if (isSensitiveKey(key) && !value.isNull() && !value.isContainerNode() && !value.isBoolean()) {
+                boolean responseStatusCode = isResponse && "code".equalsIgnoreCase(key);
+                if (!responseStatusCode && isSensitiveKey(key)
+                        && !value.isNull() && !value.isContainerNode() && !value.isBoolean()) {
                     copy.set(key, TextNode.valueOf(MASK));
                 } else {
-                    copy.set(key, redactJsonNode(value, secretRedactor));
+                    copy.set(key, redactJsonNode(value, isResponse, secretRedactor));
                 }
             }
             return copy;
@@ -517,7 +519,7 @@ public final class CaptureRedactor {
         if (node.isArray()) {
             ArrayNode copy = ((ArrayNode) node).arrayNode();
             for (JsonNode item : node) {
-                copy.add(redactJsonNode(item, secretRedactor));
+                copy.add(redactJsonNode(item, isResponse, secretRedactor));
             }
             return copy;
         }

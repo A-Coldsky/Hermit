@@ -80,6 +80,10 @@ class SharedIdentityEngineTest {
     private volatile boolean staleTgcIsAnError;
     /** 认证中心临时返回 503（验证 P1-S2 不应清空全身份 Cookie）。 */
     private volatile boolean sso503;
+    /** 应用会话失效时 /data 回 200 加业务码，不跳认证中心。 */
+    private volatile boolean softExpiry;
+    /** 已登录时 /data 也回一个业务错误码（不是会话失效）。 */
+    private volatile String bizCode;
     private final List<String> ssoGetHeaders = new CopyOnWriteArrayList<>();
     private volatile CountDownLatch slowEntered = new CountDownLatch(1);
     private volatile CountDownLatch slowRelease = new CountDownLatch(0);
@@ -194,8 +198,27 @@ class SharedIdentityEngineTest {
             reply(exchange, 200, "{\"ok\":true}");
             return;
         }
+        if (user == null && sid != null && path.equals("/weak-home")) {
+            // 带着失效的会话 Cookie 来：首页照样回 200，不给新会话。
+            slowEntered.countDown();
+            try {
+                slowRelease.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+            reply(exchange, 200, "{\"value\":\"stale\"}");
+            return;
+        }
+        if (user == null && softExpiry && path.equals("/data")) {
+            reply(exchange, 200, "{\"code\":\"NOT_LOGIN\"}");
+            return;
+        }
         if (user == null) {
             redirect(exchange, ssoUrl + "/login?service=" + name);
+            return;
+        }
+        if (bizCode != null && name.equals("oa") && path.equals("/data")) {
+            reply(exchange, 200, "{\"code\":\"" + bizCode + "\"}");
             return;
         }
         if (path.equals("/stamp")) {
@@ -776,6 +799,277 @@ class SharedIdentityEngineTest {
         }
     }
 
+    // 1.12 的失效判定（expired_when、alive_check.expect、assert 的 on_fail）和身份共用叠加。
+
+    @Test
+    void expiredWhenOnABoundMemberOnlyFetchesANewTicket() {
+        SessionKey soft = new SessionKey(Origin.LOCAL, "oa_soft", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", soft, ERP_ALICE);
+        softExpiry = true;
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(soft, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+            int before = tickets.get();
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            assertThat(fixture.value(soft, "run")).isEqualTo("oa:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+            assertThat(tickets.get()).isEqualTo(before + 1);
+            assertThat(fixture.sessions.lastCleared("zhang")).isNull();
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            assertThat(tickets.get()).isEqualTo(before + 1);
+        }
+    }
+
+    @Test
+    void expiredWhenOnANonIdempotentCapabilityReportsExpiredAndTheNextCallRecovers() {
+        SessionKey soft = new SessionKey(Origin.LOCAL, "oa_soft_once", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", soft, ERP_ALICE);
+        softExpiry = true;
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(soft, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            long dataBefore = seen.stream().filter(line -> line.startsWith("oa GET /data")).count();
+            ExecutionResult lost = fixture.call(soft, "run");
+            assertThat(lost.success()).isFalse();
+            assertThat(lost.error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(seen.stream().filter(line -> line.startsWith("oa GET /data")).count())
+                    .as("非幂等不重放").isEqualTo(dataBefore + 1);
+            assertThat(fixture.sessions.lastCleared("zhang")).isNull();
+            assertThat(fixture.value(soft, "run")).isEqualTo("oa:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void concurrentReadsThatHitExpiredWhenLogInOnceAndKeepThePeerLoggedIn() throws Exception {
+        SessionKey reads = new SessionKey(Origin.LOCAL, "oa_soft_reads", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", reads, ERP_ALICE);
+        softExpiry = true;
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(reads, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            int before = tickets.get();
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            List<Future<String>> calls = new ArrayList<>();
+            for (int i = 0; i < 6; i++) {
+                calls.add(pool.submit(() -> fixture.value(reads, "run")));
+            }
+            for (Future<String> call : calls) {
+                assertThat(call.get(15, TimeUnit.SECONDS)).isEqualTo("oa:ALICE");
+            }
+            assertThat(passwordLogins.get()).isEqualTo(1);
+            assertThat(tickets.get()).as("6 个并行调用只重新换一次票据").isEqualTo(before + 1);
+            assertThat(fixture.sessions.lastCleared("zhang")).isNull();
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            assertThat(tickets.get()).isEqualTo(before + 1);
+        }
+    }
+
+    @Test
+    void assertOnFailInsideRepeatAndIfOnlyFetchesANewTicket() {
+        SessionKey asserts = new SessionKey(Origin.LOCAL, "oa_assert", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", asserts, ERP_ALICE);
+        softExpiry = true;
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(asserts, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            int before = tickets.get();
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            assertThat(fixture.value(asserts, "run")).isEqualTo("oa:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+            assertThat(tickets.get()).isEqualTo(before + 1);
+            assertThat(fixture.sessions.lastCleared("zhang")).isNull();
+        }
+    }
+
+    @Test
+    void aliveCheckExpectAdoptsThePeersSessionAndFallsBackToATicket() {
+        SessionKey expect = new SessionKey(Origin.LOCAL, "oa_expect", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", OA_ALICE, expect, ERP_ALICE);
+        softExpiry = true;
+        try (Fixture fixture = new Fixture(shared)) {
+            assertThat(fixture.value(OA_ALICE, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            int before = tickets.get();
+            assertThat(fixture.value(expect, "run")).isEqualTo("oa:ALICE");
+            assertThat(tickets.get()).as("探活的 expect 成立：直接用同伴登录出来的会话").isEqualTo(before);
+        }
+        // 另一种情况：同伴的 OA 会话已经失效，探活回 200 但 expect 不成立，应当只换票据。
+        MemoryShared again = new MemoryShared();
+        again.bind("wang", OA_ALICE, expect, ERP_ALICE);
+        try (Fixture fixture = new Fixture(again)) {
+            assertThat(fixture.value(OA_ALICE, "run")).isEqualTo("oa:ALICE");
+            int logins = passwordLogins.get();
+            int before = tickets.get();
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            assertThat(fixture.value(expect, "run")).isEqualTo("oa:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(logins);
+            assertThat(tickets.get()).isEqualTo(before + 1);
+            assertThat(fixture.sessions.lastCleared("wang")).isNull();
+        }
+    }
+
+    /** 规则把业务错误码也写进 expired_when：清空没有用，10 分钟内只连累同身份的成员一次。 */
+    @Test
+    void aRuleThatTakesABusinessErrorForExpiryLogsItsPeersOutOnlyOncePerWindow() {
+        SessionKey soft = new SessionKey(Origin.LOCAL, "oa_soft", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", soft, ERP_ALICE);
+        EngineTestSupport.MutableClock clock = new EngineTestSupport.MutableClock();
+        try (Fixture fixture = new Fixture(shared, clock)) {
+            assertThat(fixture.value(soft, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+
+            bizCode = "FORBIDDEN";
+            assertThat(fixture.call(soft, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            SessionManager.Cleared first = fixture.sessions.lastCleared("zhang");
+            assertThat(first.by()).as("第一次：带着旧 Cookie 登录成功后又失效，清空一次").isEqualTo(soft);
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            assertThat(passwordLogins.get()).as("同伴被登出，重新交了一次密码").isEqualTo(2);
+
+            for (int i = 0; i < 3; i++) {
+                clock.advance(Duration.ofMinutes(1));
+                assertThat(fixture.call(soft, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+                int tickets = this.tickets.get();
+                assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+                assertThat(this.tickets.get()).as("窗口内不再清空：同伴的会话留着").isEqualTo(tickets);
+            }
+            assertThat(passwordLogins.get()).isEqualTo(2);
+            assertThat(fixture.sessions.lastCleared("zhang")).isEqualTo(first);
+
+            clock.advance(SessionManager.RELAPSE_CLEAR_WINDOW);
+            assertThat(fixture.call(soft, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(fixture.sessions.lastCleared("zhang").at()).as("窗口过后可以再清空一次").isAfter(first.at());
+        }
+    }
+
+    /** 非幂等能力同理：第二次调用清空一次，之后窗口内不再把密码登录转给同伴。 */
+    @Test
+    void aNonIdempotentCapabilityThatKeepsLosingItsSessionClearsTheIdentityOnlyOncePerWindow() {
+        SessionKey once = new SessionKey(Origin.LOCAL, "oa_soft_once", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", once, ERP_ALICE);
+        try (Fixture fixture = new Fixture(shared, new EngineTestSupport.MutableClock())) {
+            assertThat(fixture.value(once, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            bizCode = "FORBIDDEN";
+            assertThat(fixture.call(once, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(fixture.sessions.lastCleared("zhang")).as("第一次只让自己登出").isNull();
+            assertThat(fixture.call(once, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(fixture.sessions.lastCleared("zhang").by()).isEqualTo(once);
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(2);
+            for (int i = 0; i < 3; i++) {
+                assertThat(fixture.call(once, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+                assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+            }
+            assertThat(passwordLogins.get()).as("窗口内同伴不再被登出").isEqualTo(2);
+        }
+    }
+
+    /** 失效的 Cookie 让登录步骤看似成功、没换到新会话：清空一次，下一次调用从空白登录恢复。 */
+    @Test
+    void aStaleCookieTheLoginStepsDoNotReplaceIsClearedOnceAndTheNextCallRecovers() {
+        SessionKey weak = new SessionKey(Origin.LOCAL, "oa_weak", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", weak, ERP_ALICE);
+        EngineTestSupport.MutableClock clock = new EngineTestSupport.MutableClock();
+        try (Fixture fixture = new Fixture(shared, clock)) {
+            assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+            assertThat(fixture.value(ERP_ALICE, "run")).isEqualTo("erp:ALICE");
+
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            assertThat(fixture.call(weak, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(fixture.sessions.lastCleared("zhang").by()).isEqualTo(weak);
+            assertThat(fixture.value(weak, "run")).as("清空后从空白登录").isEqualTo("oa:ALICE");
+            assertThat(passwordLogins.get()).isEqualTo(2);
+
+            // 窗口内又遇到一次：不再清空，只有这个成员登出；测试登录从空白开始，能手动恢复。
+            clock.advance(Duration.ofMinutes(1));
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            assertThat(fixture.call(weak, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(fixture.call(weak, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(fixture.engine.testLogin(fixture.request(weak, "run")).success()).isTrue();
+            assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+
+            // 测试登录之后窗口重新算：再遇到时又能清空一次，这一次调用自己重登后成功。
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            assertThat(fixture.call(weak, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+        }
+    }
+
+    /** 改凭证等着进行中的调用放开锁：那次调用记下的「清过一次」不能留到改完之后。 */
+    @Test
+    void savingCredentialsWhileACallRelapsesStartsTheWindowAgain() throws Exception {
+        SessionKey weak = new SessionKey(Origin.LOCAL, "oa_weak", "alice");
+        MemoryShared shared = new MemoryShared();
+        shared.bind("zhang", weak, ERP_ALICE);
+        EngineTestSupport.MutableClock clock = new EngineTestSupport.MutableClock();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try (Fixture fixture = new Fixture(shared, clock)) {
+            assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            slowEntered = new CountDownLatch(1);
+            slowRelease = new CountDownLatch(1);
+            Future<ExecutionResult> running = pool.submit(() -> fixture.call(weak, "run"));
+            assertThat(slowEntered.await(10, TimeUnit.SECONDS)).as("调用停在登录步骤里，拿着账号锁").isTrue();
+            Thread saving = new Thread(() -> fixture.sessions.invalidate(weak));
+            saving.start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (saving.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertThat(saving.getState()).as("改凭证在等账号锁").isEqualTo(Thread.State.WAITING);
+            slowRelease.countDown();
+            assertThat(running.get(10, TimeUnit.SECONDS).error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            saving.join(10_000);
+            SessionManager.Cleared first = fixture.sessions.lastCleared("zhang");
+            assertThat(first.by()).isEqualTo(weak);
+
+            assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+            clock.advance(Duration.ofMinutes(1));
+            appSessions.keySet().removeIf(value -> value.startsWith("oa-"));
+            assertThat(fixture.call(weak, "run").error().code()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+            assertThat(fixture.sessions.lastCleared("zhang").at()).as("改完凭证后窗口重新算").isAfter(first.at());
+            assertThat(fixture.value(weak, "run")).isEqualTo("oa:ALICE");
+        } finally {
+            slowRelease.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    private static final String EXPIRED_WHEN =
+            "  expired_when:\n    - json_equals: {\"$.code\": [NOT_LOGIN, FORBIDDEN]}\n";
+
+    private static String v112(String yaml) {
+        return yaml.replace("min_crab_version: 1.11.0", "min_crab_version: 1.12.0");
+    }
+
+    private static String once(String yaml) {
+        return yaml.replace("    idempotent: true\n", "    idempotent: false\n");
+    }
+
+    private static String assertsInRepeat(String yaml) {
+        return yaml.replace(
+                "      - request: {method: GET, path: /data}\n      - extract:\n",
+                "      - repeat:\n          max: 2\n          steps:\n"
+                        + "            - request: {method: GET, path: /data}\n"
+                        + "            - if:\n                contains: '\"code\"'\n                then:\n"
+                        + "                  - assert: {not_contains: NOT_LOGIN, on_fail: session_expired}\n"
+                        + "      - extract:\n");
+    }
+
     /** 给 conch() 的规则加上：只读能力、登录时等验证码、登录时取一个变量并在能力里用。 */
     private static String readOnly(String yaml) {
         return yaml.replace("    idempotent: true\n", "    idempotent: true\n    mcp: {expose: true, read_only: true}\n");
@@ -958,9 +1252,13 @@ class SharedIdentityEngineTest {
         private volatile String password = EngineTestSupport.PASSWORD;
 
         private Fixture(SharedSessions shared) {
+            this(shared, Clock.systemUTC());
+        }
+
+        private Fixture(SharedSessions shared, Clock clock) {
             EngineSettings settings = new EngineSettings(Duration.ofSeconds(20), Duration.ofMinutes(10), 3);
             sessions = new SessionManager(
-                    new NopSessionPersistence(), new NopLoginSnapshotStore(), shared, settings, Clock.systemUTC());
+                    new NopSessionPersistence(), new NopLoginSnapshotStore(), shared, settings, clock);
             ConchRegistry registry = new ConchRegistry();
             for (String yaml : List.of(
                     conch("oa", oaUrl, ""),
@@ -971,6 +1269,14 @@ class SharedIdentityEngineTest {
                     readOnly(conch("oa_reads_loose_ping", oaUrl,
                             "  concurrent_reads: true\n  alive_check:\n    request: {method: GET, path: /loose-ping}\n")),
                     asksForCode(conch("oa_ask", oaUrl, "")),
+                    v112(conch("oa_soft", oaUrl, EXPIRED_WHEN)),
+                    conch("oa_weak", oaUrl, "").replace("path: /home, follow_redirects", "path: /weak-home, follow_redirects"),
+                    v112(once(conch("oa_soft_once", oaUrl, EXPIRED_WHEN))),
+                    v112(readOnly(conch("oa_soft_reads", oaUrl, "  concurrent_reads: true\n" + EXPIRED_WHEN))),
+                    v112(assertsInRepeat(conch("oa_assert", oaUrl, ""))),
+                    v112(conch("oa_expect", oaUrl,
+                            "  alive_check:\n    request: {method: GET, path: /data}\n"
+                                    + "    expect:\n      json_exists: \"$.value\"\n      cookie_exists: sidA\n")),
                     asksForCodeWithHeaders(conch("oa_ask_hop", oaUrl, "")),
                     extractsStamp(conch("oa_vars", oaUrl, "")),
                     extractsStamp(conch("oa_alive_vars", oaUrl,

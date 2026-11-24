@@ -44,6 +44,8 @@ public final class SessionManager implements AutoCloseable {
     private static final int MAX_SEEN_COOKIE_VALUES = 64;
     /** 按 SessionKey 分段串行化无状态建新/迁移清理的条带锁数量；绝不与 Jar 锁反序嵌套。 */
     private static final int KEY_STRIPES = 64;
+    /** 同一个成员在这段时间里最多因为「登录成功后又失效」清空一次身份的 Cookie。 */
+    static final Duration RELAPSE_CLEAR_WINDOW = Duration.ofMinutes(10);
 
     private final SessionPersistence persistence;
     private final LoginSnapshotStore loginSnapshots;
@@ -173,6 +175,7 @@ public final class SessionManager implements AutoCloseable {
                 }
                 bumpInvalidationGen(key);
                 pending.discard(key);
+                state.relapseClearedAt = null;
                 if (state.jar.identity != null) {
                     clearJar(state.jar);
                     if (closed) {
@@ -532,9 +535,33 @@ public final class SessionManager implements AutoCloseable {
         clearJar(state.jar);
     }
 
+    /**
+     * 带着身份里已有的 Cookie 登录成功，同一次调用里能力又被判为会话失效。可能是留着的 Cookie 让登录看似成功，
+     * 清空后从空白登录就好；也可能是规则把业务错误当成了失效，清空没有用，只会连累同身份的成员。两者分不清，
+     * 所以同一个成员在 {@link #RELAPSE_CLEAR_WINDOW} 内只清空一次，窗口内再遇到只让它自己登出。
+     * 返回是否清空了。调用方持有账号锁。
+     */
+    boolean clearSharedAfterRelapse(SessionKey key) {
+        AccountState state = state(key);
+        if (state.jar.identity == null) {
+            markLoggedOut(key);
+            return false;
+        }
+        Instant now = clock.instant();
+        Instant last = state.relapseClearedAt;
+        if (last != null && !now.isBefore(last) && now.isBefore(last.plus(RELAPSE_CLEAR_WINDOW))) {
+            markLoggedOut(key);
+            return false;
+        }
+        state.relapseClearedAt = now;
+        clearShared(key);
+        return true;
+    }
+
     /** 测试登录用：绑了身份的账号清空身份的 Cookie，不记「清空重来」。调用方持有账号锁。 */
     void resetShared(SessionKey key) {
         AccountState state = state(key);
+        state.relapseClearedAt = null;
         if (state.jar.identity != null) {
             clearJar(state.jar);
         }
@@ -1389,6 +1416,11 @@ public final class SessionManager implements AutoCloseable {
         volatile Instant lastActive;
         volatile int authFailures;
         volatile boolean loginPaused;
+        /**
+         * 上一次因为「带着旧 Cookie 登录成功、能力却又失效」清空身份的时间。只在持有账号锁时读写，
+         * 所以改凭证和测试登录清掉它之后，进行中的调用不会再把它写回来；状态重建（绑定变了、删除账号）时随之丢弃。
+         */
+        Instant relapseClearedAt;
 
         AccountState(Jar jar, long initialEpoch) {
             this.jar = jar;

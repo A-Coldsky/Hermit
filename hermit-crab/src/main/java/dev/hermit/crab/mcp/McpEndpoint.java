@@ -51,6 +51,12 @@ public final class McpEndpoint {
             .build();
     private static final McpSchema.Implementation SERVER_INFO = McpSchema.Implementation.builder(
             "hermit-crab", CrabVersion.CURRENT.toString()).build();
+    static final String AUTHORING_INSTRUCTIONS =
+            "当前已开启 Hermit Crab 本机开发者模式，可用于编写或修改规则包（Conch）。"
+                    + "写或改 YAML 前先调用 conch_guide（或读取资源 hermit://authoring/guide）查阅步骤速查与相关章节；"
+                    + "修改已有规则包前先用 conch_read_yaml 读取原文（Reef 订阅的正式包只读不可直接修改，如需改动请用 conch_save_local 保存为本地规则包，可起新包名立即生效，或保存为同名本地副本再由用户在控制台切换来源）。"
+                    + "推荐顺序：先和用户确认要做哪些功能 → conch_validate 校验至无错 → conch_save_local 保存 → 用户在控制台建账号填凭证 → conch_trial_run 试跑，失败再用 debug_trace 查 traceId。"
+                    + "不要向用户索要口令、Cookie 或令牌，也不要写入 YAML。";
 
     private final CrabRuntime runtime;
     private final McpCatalog catalog;
@@ -237,7 +243,12 @@ public final class McpEndpoint {
             sessions.put(session.id, session);
             trim();
         }
-        McpSchema.InitializeResult result = McpSchema.InitializeResult.builder(protocol, CAPABILITIES, SERVER_INFO).build();
+        McpSchema.InitializeResult.Builder resultBuilder = McpSchema.InitializeResult.builder(
+                protocol, CAPABILITIES, SERVER_INFO);
+        if (runtime.debug().get().enabled() && Loopback.address(ctx.req().getRemoteAddr())) {
+            resultBuilder.instructions(AUTHORING_INSTRUCTIONS);
+        }
+        McpSchema.InitializeResult result = resultBuilder.build();
         writeResult(ctx, id, result, session);
     }
 

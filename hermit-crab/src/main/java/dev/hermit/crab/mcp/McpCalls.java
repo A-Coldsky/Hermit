@@ -136,10 +136,20 @@ final class McpCalls {
         if (McpCatalog.DEBUG_TRACE.equals(name)) {
             return readTrace(principal, arguments, attempt);
         }
-        if (McpCatalog.VALIDATE.equals(name) || McpCatalog.SAVE_LOCAL.equals(name) || McpCatalog.TRIAL_RUN.equals(name)) {
+        if (McpCatalog.GUIDE.equals(name)
+                || McpCatalog.READ_YAML.equals(name)
+                || McpCatalog.VALIDATE.equals(name)
+                || McpCatalog.SAVE_LOCAL.equals(name)
+                || McpCatalog.TRIAL_RUN.equals(name)) {
             if (!localCaller) {
                 return fail(attempt, "FORBIDDEN", AuthoringCalls.LOCAL_ONLY);
             }
+        }
+        if (McpCatalog.GUIDE.equals(name)) {
+            return authoring.guide(arguments, attempt);
+        }
+        if (McpCatalog.READ_YAML.equals(name)) {
+            return authoring.readYaml(principal, arguments, attempt);
         }
         if (McpCatalog.VALIDATE.equals(name)) {
             return authoring.validate(arguments, attempt);

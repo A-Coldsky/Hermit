@@ -33,6 +33,8 @@ final class McpCatalog {
     static final String DESCRIBE = "describe_capability";
     static final String CALL = "call_capability";
     static final String DEBUG_TRACE = "debug_trace";
+    static final String GUIDE = "conch_guide";
+    static final String READ_YAML = "conch_read_yaml";
     static final String VALIDATE = "conch_validate";
     static final String SAVE_LOCAL = "conch_save_local";
     static final String TRIAL_RUN = "conch_trial_run";
@@ -546,8 +548,27 @@ final class McpCatalog {
         Map<String, Object> yaml = yamlSchema();
         Map<String, Object> issues = outputSchema ? issueOutputSchema() : null;
         ArrayList<McpSchema.Tool> tools = new ArrayList<>();
+        tools.add(tool(GUIDE,
+                "按章节查询 Hermit 规则包（Conch）YAML 编写指南与语法参考（与资源 hermit://authoring/guide 同源）。"
+                        + "不传参数返回当前支持的 Crab 版本、步骤速查和章节目录；传 section 按章节 id、标题或子标题读取（传 all 获取全文）；传 query 按关键词定位章节。"
+                        + "写或改规则包 YAML 之前应先查阅相关章节。",
+                guideSchema(),
+                outputSchema ? guideOutputSchema() : null,
+                true,
+                true,
+                false));
+        tools.add(tool(READ_YAML,
+                "只读获取本机已安装的本地规则包或 Reef 订阅正式规则包的原始 YAML，方便核对或做增量改动。"
+                        + "Reef 订阅的正式包只读、绝对不能直接修改；如需改动，请基于读出的 YAML 改完后用 conch_save_local 保存为本地规则包"
+                        + "（可起新包名立即生效，或保存为同名本地副本再由用户在控制台切换来源）。不含真实凭证。",
+                readYamlSchema(),
+                outputSchema ? readYamlOutputSchema() : null,
+                true,
+                true,
+                false));
         tools.add(tool(VALIDATE,
-                        "校验一份规则包 YAML，不写文件。错误码、路径、行号和中文原因与控制台导入、命令行导入一致。"
+                        "校验一份规则包 YAML，不写文件。写 YAML 前先调用 conch_guide（或读取资源 hermit://authoring/guide）查阅语法与示例。"
+                                + "错误码、路径、行号和中文原因与控制台导入、命令行导入一致。"
                                 + "明文口令、Cookie 和请求头里的 Bearer 会报错并给出行号，不回显这些值。"
                                 + "写 YAML 之前先和用户确认要做哪些功能，只为确认过的功能写能力。",
                         yaml,
@@ -557,8 +578,10 @@ final class McpCatalog {
                         false));
         if (includeSave) {
             tools.add(tool(SAVE_LOCAL,
-                    "把通过校验的 YAML 存成本地规则包。" + AuthoringCalls.SAME_NAME
-                            + "不要传 confirm。正式包会拒绝。",
+                    "把通过校验的 YAML 存成本地规则包，绝不修改 Reef 订阅的正式规则包。"
+                            + "增量修改已有规则包前请先用 conch_read_yaml 读取原文；基于 Reef 正式包改动时，可起新包名保存为本地包，或保存为同名本地副本（原正式包保持不变并继续生效，需用户在控制台切换来源）。"
+                            + AuthoringCalls.SAME_NAME
+                            + "不要传 confirm。正式包本身不能被修改。",
                     yaml,
                     issues,
                     false,
@@ -574,6 +597,73 @@ final class McpCatalog {
                 false,
                 false));
         return List.copyOf(tools);
+    }
+
+    private static Map<String, Object> guideSchema() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("section", Map.of(
+                "type", "string",
+                "description", "可选。章节 id、章节标题或子标题（如 from_har、steps、上传和下载文件），传 all 获取全文；不能与 query 同时使用。省略时返回速查和目录。"));
+        properties.put("query", Map.of(
+                "type", "string",
+                "description", "可选。按关键词搜索指南章节，不能与 section 同时使用。"));
+        LinkedHashMap<String, Object> schema = objectSchema(properties);
+        schema.put("additionalProperties", false);
+        return schema;
+    }
+
+    private static Map<String, Object> guideOutputSchema() {
+        LinkedHashMap<String, Object> section = new LinkedHashMap<>();
+        section.put("id", Map.of("type", "string"));
+        section.put("title", Map.of("type", "string"));
+        section.put("bytes", Map.of("type", "integer"));
+        section.put("subsections", arraySchema(Map.of("type", "string")));
+        LinkedHashMap<String, Object> match = new LinkedHashMap<>(section);
+        match.put("excerpts", arraySchema(Map.of("type", "string")));
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("crabVersion", Map.of("type", "string"));
+        properties.put("quickReference", Map.of("type", "string"));
+        properties.put("sections", arraySchema(objectSchema(section)));
+        properties.put("id", Map.of("type", "string"));
+        properties.put("title", Map.of("type", "string"));
+        properties.put("parentId", Map.of("type", "string"));
+        properties.put("subsections", arraySchema(Map.of("type", "string")));
+        properties.put("content", Map.of("type", "string"));
+        properties.put("bytes", Map.of("type", "integer"));
+        properties.put("query", Map.of("type", "string"));
+        properties.put("matches", arraySchema(objectSchema(match)));
+        properties.put("total", Map.of("type", "integer"));
+        properties.put("note", Map.of("type", "string"));
+        return objectSchema(properties);
+    }
+
+    private static Map<String, Object> readYamlSchema() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("conch", Map.of("type", "string", "description", "规则包名"));
+        LinkedHashMap<String, Object> source = new LinkedHashMap<>();
+        source.put("type", "string");
+        source.put("enum", List.of("local", "reef"));
+        source.put("description", "可选。指定读取本地规则包（local）或 Reef 订阅的正式规则包（reef）。省略时读取当前生效来源。");
+        properties.put("source", source);
+        LinkedHashMap<String, Object> schema = objectSchema(properties);
+        schema.put("required", List.of("conch"));
+        schema.put("additionalProperties", false);
+        return schema;
+    }
+
+    private static Map<String, Object> readYamlOutputSchema() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("conch", Map.of("type", "string"));
+        properties.put("source", Map.of("type", "string"));
+        properties.put("readOnly", Map.of("type", "boolean"));
+        properties.put("active", Map.of("type", "boolean"));
+        properties.put("hasLocal", Map.of("type", "boolean"));
+        properties.put("hasReef", Map.of("type", "boolean"));
+        properties.put("version", Map.of("type", "string"));
+        properties.put("sha256", Map.of("type", "string"));
+        properties.put("yaml", Map.of("type", "string"));
+        properties.put("note", Map.of("type", "string"));
+        return objectSchema(properties);
     }
 
     private static Map<String, Object> yamlSchema() {
@@ -613,6 +703,7 @@ final class McpCatalog {
         properties.put("conch", Map.of("type", "string"));
         properties.put("version", Map.of("type", "string"));
         properties.put("replaced", Map.of("type", "boolean"));
+        properties.put("active", Map.of("type", "boolean"));
         properties.put("errors", arraySchema(objectSchema(issue)));
         properties.put("warnings", arraySchema(objectSchema(issue)));
         properties.put("message", Map.of("type", "string"));

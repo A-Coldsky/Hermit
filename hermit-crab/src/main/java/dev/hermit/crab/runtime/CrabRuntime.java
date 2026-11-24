@@ -169,7 +169,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final AtomicBoolean serving = new AtomicBoolean();
     private final Object lifecycle = new Object();
     private final Object switchLock = new Object();
-    private PublicKey reefKey;
+    private volatile PublicKey reefKey;
     private ConchSync conchSync;
     private LiveReportSettings liveReport;
     private ReportQueue reportQueue;
@@ -898,6 +898,29 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public LocalConches localConches() {
         return localConches;
+    }
+
+    /** 本机是否安装着这份 Reef 正式规则包（已载入，或已订阅且磁盘上仍有验签通过的包）。 */
+    public boolean hasOfficialPackage(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return false;
+        }
+        return registry.has(conch, Origin.OFFICIAL) || readOfficialYaml(conch).isPresent();
+    }
+
+    /** 只读获取已安装的 Reef 正式规则包原始 YAML，经当前 Reef 公钥验签，绝不修改原包。 */
+    public Optional<InstalledConches.VerifiedYaml> readOfficialYaml(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return Optional.empty();
+        }
+        PublicKey key = reefKey;
+        if (key == null) {
+            return Optional.empty();
+        }
+        if (!registry.has(conch, Origin.OFFICIAL) && !subscribed(conch)) {
+            return Optional.empty();
+        }
+        return InstalledConches.readVerifiedYaml(paths, key, conch);
     }
 
     public javax.sql.DataSource dataSource() {

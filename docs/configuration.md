@@ -136,7 +136,7 @@ URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 
 | `hermit.reef.agent-token` / `HERMIT_REEF_AGENT_TOKEN` | 默认空。空表示没有配置令牌；库里还有未吊销令牌时，Agent 请求用那些令牌。两者都没有时启动打一条警告，并拒绝所有 `/agent/**` |
 | `HERMIT_REEF_ADMIN_USER` / `HERMIT_REEF_ADMIN_PASSWORD` | 首次空库创建管理员；已有管理员不重设口令 |
 | `hermit.reef.jwt-ttl` | `8h`，JWT 有 60 秒时钟容差 |
-| `hermit.reef.latest-crab-version` / `crab-download-url` | 默认空。空的 `latest-crab-version` 表示不提示升级。非空时必须是 semver（`MAJOR.MINOR.PATCH`，可带预发布后缀，不接受 `+` build metadata），否则拒绝启动并点名 `hermit.reef.latest-crab-version`。只提供版本提示，不自动下载或升级 Crab |
+| `hermit.reef.latest-crab-version` / `crab-download-url` / `crab-jar-file` | 默认空。空的 `latest-crab-version` 表示不提示升级；非空时必须是 semver。Reef 优先从 `${hermit.reef.data-dir}/downloads/` 自动发现并流式提供独立可执行 Crab JAR（优先匹配 `hermit-crab*.jar` 且按修改时间取最新；配置 `crab-jar-file` / `HERMIT_REEF_CRAB_JAR_FILE` 时固定指向该目录内指定 `.jar` 文件名，拒绝符号链接和路径穿越）；未放置本地 JAR 时回退到 `crab-download-url`（仅接受 http/https） |
 | `hermit.reef.report-retention-days` | `90`，用于 `hermit_failure_reports` / `hermit_rollback_events` 的清理 |
 | `hermit.reef.retention-cron` / `HERMIT_REEF_RETENTION_CRON` | `0 0 3 * * *`。Spring 六段 cron（含秒），时区固定 UTC，默认每天 03:00。空白或无法解析的表达式拒绝启动。手动触发见 `POST /api/admin/retention/purge` |
 | `logging.pattern.level` | `%5p [%X{traceId}]`。请求处理期间 MDC 的 `traceId` 会出现在每条日志上，与响应里的值相同 |
@@ -154,7 +154,7 @@ URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 
 
 启动警告只在配置令牌为空白，并且 `hermit_agent_tokens` 里没有 `revoked_at IS NULL` 的行时出现。已经吊销的行不算可用令牌。已经作废的配置值仍然算「配置了令牌」，不会因此触发这条警告；Agent 请求会 401，直到改成新值或另有未吊销的库内令牌。`docker-compose.yml` 里 Reef 的入口仍会在 `HERMIT_REEF_AGENT_TOKEN` 去掉空白后为空时直接退出；那是容器入口的检查，Java 进程本身允许只靠库内令牌启动。
 
-Flyway `V6__users_and_agent_tokens.sql` 给 `hermit_admin_users` 增加 `role`（已有行默认为 `ADMIN`，检查约束 `ck_hermit_admin_users_role` 只允许 `ADMIN` / `USER`），并新建 `hermit_agent_tokens`、`hermit_crab_instances`。失败报告、小时计数和版本切换各增加可空的 `owner_user_id`。没有外键。`V7__voided_config_tokens.sql` 新建 `hermit_voided_config_tokens`，只存配置令牌的 SHA-256 和作废时间。`V8__admin_token_version.sql` 给 `hermit_admin_users` 增加 `token_version`（非空默认 0），修改口令或由管理员重置口令时加一，让旧 JWT 立即 401（不含 `tv` 的旧令牌按 0 处理）。已经跑过旧迁移的库启动时补这些对象，不必为 V6、V7 或 V8 重建。V1–V4 的就地改写仍然要求重建更早的库，见下面。
+Flyway `V6__users_and_agent_tokens.sql` 给 `hermit_admin_users` 增加 `role`（已有行默认为 `ADMIN`，检查约束 `ck_hermit_admin_users_role` 只允许 `ADMIN` / `USER`），并新建 `hermit_agent_tokens`、`hermit_crab_instances`。失败报告、小时计数和版本切换各增加可空的 `owner_user_id`。没有外键。`V7__voided_config_tokens.sql` 新建 `hermit_voided_config_tokens`，只存配置令牌的 SHA-256 和作废时间。`V8__admin_token_version.sql` 给 `hermit_admin_users` 增加 `token_version`（非空默认 0），修改口令或由管理员重置口令时加一，让旧 JWT 立即 401（不含 `tv` 的旧令牌按 0 处理）。`V9__notices_and_submissions.sql` 新建 `hermit_announcements`（公共公告）与 `hermit_conch_submissions`（独立规则审批单，YAML 原文落在 `submissions/<id>/conch.yaml`，避免 MySQL `TEXT` 64 KiB 限制），两张表从空开始、不影响存量数据。已经跑过旧迁移的库启动时补这些对象，不必为 V6–V9 重建。V1–V4 的就地改写仍然要求重建更早的库，见下面。
 
 Tide 配置位于 `hermit.reef.tide`：
 
@@ -185,7 +185,9 @@ Reef data-dir/
   keys/signing.key       # Ed25519 私钥
   keys/signing.pub       # 对应公钥
   keys/jwt.secret        # JWT HMAC 密钥
-  conches/                # 上传 YAML 与发布包
+  conches/               # 上传 YAML 与发布包
+  submissions/           # 规则审批单 YAML（submissions/<id>/conch.yaml）
+  downloads/             # 可选：手动放入 Crab 独立可执行 JAR（hermit-crab-*-all.jar）供 Reef 下载页分发
 
 Crab HERMIT_HOME/
   config.yml

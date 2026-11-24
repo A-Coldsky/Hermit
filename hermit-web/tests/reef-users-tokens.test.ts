@@ -108,7 +108,7 @@ describe('普通用户只读', () => {
     const conches = await mountPage(ConchesView)
     await flushPromises()
     expect(conches.text()).not.toContain('上传规则包')
-    expect(conches.text()).toContain('等管理员上传')
+    expect(conches.text()).toContain('提交规则包')
 
     reef.alerts.mockResolvedValue({
       alerts: [

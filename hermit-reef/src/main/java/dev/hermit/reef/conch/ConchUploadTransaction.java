@@ -126,7 +126,7 @@ class ConchUploadTransaction {
      * 这个版本写了当前发布版本没有的认证地址时加一条警告：凭证会提交到 {@code base_url} 之外的地址，
      * 发布的人要看得到。第一次上传的包，写了认证地址就提示。
      */
-    private static List<ValidationIssue> withAddedAuthOrigins(
+    static List<ValidationIssue> withAddedAuthOrigins(
             List<ValidationIssue> warnings, ConchDoc previous, ConchDoc uploaded) {
         if (!AuthOrigins.used(uploaded)) {
             return warnings;

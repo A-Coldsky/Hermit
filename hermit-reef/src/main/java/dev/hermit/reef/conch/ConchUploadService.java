@@ -49,7 +49,7 @@ public class ConchUploadService {
         }
     }
 
-    private static PreparedUpload prepare(byte[] body) {
+    static PreparedUpload prepare(byte[] body) {
         if (body == null || body.length == 0 || body.length > ConchPaths.MAX_UPLOAD_BYTES) {
             throw ConchRequestException.invalid(null);
         }

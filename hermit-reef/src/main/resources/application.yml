@@ -6,6 +6,7 @@ hermit:
     jwt-ttl: 8h
     latest-crab-version: ""
     crab-download-url: ""
+    crab-jar-file: ""
     report-retention-days: 90
     # Spring 六段 cron（含秒），时区固定 UTC。默认每天 03:00。
     retention-cron: "0 0 3 * * *"

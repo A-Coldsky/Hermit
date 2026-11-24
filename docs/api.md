@@ -7,7 +7,7 @@
 | 接口 | 认证 |
 | --- | --- |
 | Reef `/api/admin/login` | username/password；成功返回 data.token、data.expiresAt。JWT 带 `role`（`ADMIN` 或 `USER`）和 `tv`（签发时该用户的 `token_version`）。每次请求按数据库里的当前角色授权，不看 JWT 里的 `role`；`tv` 和库里的版本号对不上是 401，没有 `tv` 的旧令牌按 0 处理 |
-| Reef 其他 `/api/admin/**` | `Authorization: Bearer <JWT>`。`USER` 可以读规则包、Tide、告警，并管理自己的口令和 Agent 令牌；其余管理写操作、审计、清理和用户管理是 403 `FORBIDDEN`。账号已禁用时已发出的 JWT 也是 401 |
+| Reef 其他 `/api/admin/**` | `Authorization: Bearer <JWT>`。`USER` 可以读规则包、公告、Crab 下载、Tide、告警，提交/查看/撤回自己的规则审批单，并管理自己的口令和 Agent 令牌；其余管理写操作、规则审批批准/驳回、公告管理、审计、清理和用户管理是 403 `FORBIDDEN`。账号已禁用时已发出的 JWT 也是 401 |
 | Reef `/agent/**` | `X-Hermit-Instance: <UUID>` 和 `X-Hermit-Token`。令牌可以是配置里的 `HERMIT_REEF_AGENT_TOKEN`，或某个用户签发且未吊销、用户也未禁用的 Agent 令牌。禁用用户会把他名下未吊销的库内令牌写上 `revoked_at`，重新启用不清除，这些令牌与错误令牌一样 401。配置令牌归 id 最小的 `ADMIN`。这个管理员已禁用，或当前配置值的 SHA-256 在作废表里，配置令牌也 401；重新启用且配置值没改仍然 401。把配置改成另一个非空字符串后，新值可用（归属管理员须为启用），旧值仍 401。库里还没有任何 `ADMIN`、且当前值未作废时，配置令牌仍可通过，上报的 owner 为空，也不记 Crab 实例 |
 | Crab `/api/**`、别名、`/mcp` | `Authorization: Bearer <API Key>` 或 `X-Hermit-Key` |
 | Crab `/console/api/**` | 实际连接来源必须回环地址，且 `X-Hermit-Console: 1`。`Host` 和带了的 `Origin` 只能是 `localhost`、`127.0.0.1` 或 `[::1]`（端口不限），否则 403 `FORBIDDEN`「控制台只接受 localhost、127.0.0.1 或 [::1] 作为访问地址。」，防 DNS rebinding。设置了控制台口令时，除 `GET/POST /console/api/session` 外还要带登录后发的 Cookie `hermit_console`，没带或已过期是 401 `AUTH_FAILED`「需要控制台登录。」 |
@@ -68,12 +68,22 @@ Reef 的 4xx 与 5xx 会在服务端日志写一条含同一 `traceId` 的 `requ
 | POST | `/alerts/{id}/ack` | 确认告警 |
 | GET | `/audit` | 管理操作审计。`conch` 可选；`page` 默认 1；`size` 默认 20，最大 200。小于 1 或 `size` 大于 200 为 400。非数字见上面的参数类型错误 |
 | POST | `/retention/purge` | 立即清理过期失败报告、回滚事件和锁定窗口外的登录失败。`data` 为 `{failureReports, rollbackEvents, loginFailures}`。写入审计 `RETENTION_PURGE`，detail 为同样的三个计数。需要 `ADMIN` JWT。`USER` 为 403 |
+| GET | `/announcements` | `ADMIN` 与 `USER` 可读。公共公告列表，按置顶优先、更新时间倒序返回 `[{id, title, body, level, pinned, createdBy, createdAt, updatedBy, updatedAt}]` |
+| POST / PUT / DELETE | `/announcements`、`/announcements/{id}` | 仅 `ADMIN`。创建、更新或删除公共公告。`title` 1–128 字符（无控制字符），`body` 1–8000 字符纯文本，`level` 为 `INFO` / `WARNING` / `IMPORTANT`，`pinned` 为布尔。分别写审计 `ANNOUNCEMENT_CREATED` / `ANNOUNCEMENT_UPDATED` / `ANNOUNCEMENT_DELETED` |
+| GET | `/crab/download-info` | `ADMIN` 与 `USER` 可读。返回 `{available, source, fileName, sizeBytes, sha256, updatedAt, latestCrabVersion, downloadUrl, externalUrl}`。`source` 按优先级为 `LOCAL`（来自 `${data-dir}/downloads/`，拒绝符号链接和目录穿越，SHA-256 按文件元信息缓存，不泄露宿主机路径）> `EXTERNAL`（`crab-download-url`）> `NONE` |
+| GET | `/crab/download` | `ADMIN` 与 `USER` 可读。当 `source` 为 `LOCAL` 时流式下载本地独立可执行 Crab JAR（`application/java-archive`、`Content-Disposition: attachment`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-store`）；未配置本地 JAR 时返回 404 |
+| GET | `/submissions`、`/submissions/pending-count` | `ADMIN` 与 `USER` 可读。`USER` 只看自己提交的审批单及待审批计数；`ADMIN` 看全部。支持 `?status=PENDING|APPROVED|REJECTED|WITHDRAWN` 筛选，待审批记录置顶排序 |
+| GET | `/submissions/{id}`、`/submissions/{id}/yaml` | `ADMIN` 或提交人本人可读（他人访问 403）。详情返回校验警告、版本差异（`PENDING` 时对当前已发布版本实时计算 Diff 与 `versionConflict` / `conchDisabled`）、审批状态与意见；`/yaml` 返回提交的原始 YAML |
+| POST | `/submissions` | `ADMIN` 与 `USER` 可提交。multipart 字段 `file`（YAML 或仅含 `conch.yaml` 的 ZIP，限 1 MiB）和可选 `note`（≤ 500 字符）。复用 `ConchUploadService` 严格校验，不抢占正式版本表；单用户最多 20 条待审批，规则包停用或版本不高于当前已发布版本返回 409。审计 `SUBMISSION_CREATED` |
+| POST | `/submissions/{id}/withdraw` | 仅提交人本人可撤回自己的 `PENDING` 审批单（非本人 403，非待审批 409）。审计 `SUBMISSION_WITHDRAWN` |
+| POST | `/submissions/{id}/approve` | 仅 `ADMIN`。可选 `{comment}`（≤ 500 字符）。在包锁与单事务内复验 YAML、校验无版本冲突与未停用，写入 `hermit_conch_versions`（`uploaded_by` 保留原提交人）并调用 `ConchPublishService.publish` 完成 Ed25519 签名、自检与发布，更新审批单为 `APPROVED`。审计 `PUBLISH` 与 `SUBMISSION_APPROVED` |
+| POST | `/submissions/{id}/reject` | 仅 `ADMIN`。必填 `{comment}`（1–500 字符），将 `PENDING` 审批单更新为 `REJECTED`。审计 `SUBMISSION_REJECTED` |
 
 Tide 时间参数使用 ISO-8601 Instant，默认查询跨度 7 天，最大 400 天。bucket 支持 hour/day，默认 day；告警 status 支持 open/all，默认 open。确认告警只记下确认人和时间，不结束去重窗口：同一 `(kind, conch, conch_version)` 自 `created_at` 起 `dedup-hours` 内不再新建。窗口过后条件仍成立才会再出现一条。失败次数上涨不会提前打破这个窗口。
 
 失败分组、分组里的样本，以及版本切换事件带 `owner`（用户名）。旧数据没有归属，`owner` 为 null。同一组的 `owner` 相同；不同用户的失败会拆成两组。小时汇总 `series` 不加 `owner`。`hermit_failure_reports`、`hermit_hourly_counts`、`hermit_rollback_events` 各有可空的 `owner_user_id`，不进主键。小时计数更新时用 `COALESCE`，后来的空归属不会清掉已经记下的用户。
 
-用户和令牌审计还有 `USER_CREATED`、`USER_UPDATED`、`USER_PASSWORD_RESET`、`PASSWORD_CHANGED`、`AGENT_TOKEN_CREATED`、`AGENT_TOKEN_REVOKED`。detail 是 JSON，不含口令、令牌明文或配置令牌摘要。禁用用户时，每个被吊销的库内令牌一条 `AGENT_TOKEN_REVOKED`；若同时作废配置令牌，再加一条，detail 含 `source` 为 `CONFIG`。`USER` 不能读 `GET /audit`。
+用户、令牌、公告与审批审计还有 `USER_CREATED`、`USER_UPDATED`、`USER_PASSWORD_RESET`、`PASSWORD_CHANGED`、`AGENT_TOKEN_CREATED`、`AGENT_TOKEN_REVOKED`、`ANNOUNCEMENT_CREATED`、`ANNOUNCEMENT_UPDATED`、`ANNOUNCEMENT_DELETED`、`SUBMISSION_CREATED`、`SUBMISSION_APPROVED`、`SUBMISSION_REJECTED`、`SUBMISSION_WITHDRAWN`。detail 是 JSON，不含口令、令牌明文或配置令牌摘要。禁用用户时，每个被吊销的库内令牌一条 `AGENT_TOKEN_REVOKED`；若同时作废配置令牌，再加一条，detail 含 `source` 为 `CONFIG`。`USER` 不能读 `GET /audit`。
 
 配置了 `hermit.reef.tide.webhook-url` 时，新建告警会 POST JSON：`id`、`kind`、`conch`、`version`、`detail`、`createdAt`、`adminUrl`。协议须为 `http` 或 `https`，空字符串不推送；其他协议或没有协议时进程拒绝启动。`adminUrl` 固定为相对路径 `/alerts`（Reef 没有管理端对外基址配置）。发送失败不影响告警落库。
 

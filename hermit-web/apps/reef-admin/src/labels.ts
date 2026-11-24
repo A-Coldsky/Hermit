@@ -20,6 +20,26 @@ export const auditActionLabels: Record<string, string> = {
   PASSWORD_CHANGED: '修改密码',
   AGENT_TOKEN_CREATED: '生成令牌',
   AGENT_TOKEN_REVOKED: '吊销令牌',
+  ANNOUNCEMENT_CREATED: '发布公告',
+  ANNOUNCEMENT_UPDATED: '修改公告',
+  ANNOUNCEMENT_DELETED: '删除公告',
+  SUBMISSION_CREATED: '提交规则审批',
+  SUBMISSION_APPROVED: '批准并发布规则',
+  SUBMISSION_REJECTED: '驳回规则提交',
+  SUBMISSION_WITHDRAWN: '撤回规则提交',
+}
+
+export const announcementLevelLabels: Record<string, string> = {
+  INFO: '通知',
+  WARNING: '提醒',
+  IMPORTANT: '重要',
+}
+
+export const submissionStatusLabels: Record<string, string> = {
+  PENDING: '待审批',
+  APPROVED: '已批准发布',
+  REJECTED: '已驳回',
+  WITHDRAWN: '已撤回',
 }
 
 export const versionStatusLabels: Record<string, string> = {

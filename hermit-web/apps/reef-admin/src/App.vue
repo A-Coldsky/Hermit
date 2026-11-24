@@ -1,5 +1,18 @@
 <script setup lang="ts">
-import { ArrowDown, Bell, Box, DataLine, Document, House, Key, Tickets, User } from '@element-plus/icons-vue'
+import {
+  ArrowDown,
+  Bell,
+  Box,
+  Checked,
+  DataLine,
+  Document,
+  Download,
+  House,
+  Key,
+  Reading,
+  Tickets,
+  User,
+} from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PasswordDialog from './components/PasswordDialog.vue'
@@ -8,6 +21,7 @@ import AppLayout, { type NavItem } from '@shared/components/AppLayout.vue'
 import { api } from './api'
 import { isAdmin, session, setRole, signedIn, signOut } from './auth'
 import { openAlerts, refreshOpenAlerts } from './alerts'
+import { pendingSubmissions, refreshPendingSubmissions } from './submissions'
 
 const router = useRouter()
 const timer = ref<number>()
@@ -18,9 +32,17 @@ const passwordOpen = ref(false)
 const items = computed<NavItem[]>(() => [
   { to: '/', label: '概览', icon: House },
   { to: '/conches', label: '规则包目录', icon: Box },
+  {
+    to: '/submissions',
+    label: isAdmin.value ? '规则审批' : '规则提交',
+    icon: Checked,
+    badge: pendingSubmissions.value,
+  },
   { to: '/tide', label: 'Tide 统计', icon: DataLine },
   { to: '/alerts', label: '告警', icon: Bell, badge: openAlerts.value },
   { to: '/tokens', label: '我的令牌', icon: Tickets },
+  { to: '/crab', label: '下载 Crab', icon: Download },
+  { to: '/guide', label: '使用教程', icon: Reading },
   ...(isAdmin.value
     ? [
         { to: '/users', label: '用户管理', icon: User },
@@ -35,6 +57,11 @@ const roleLabel = computed(() => (session.role === 'ADMIN' ? '管理员' : sessi
 function onCommand(command: string) {
   if (command === 'password') passwordOpen.value = true
   else if (command === 'logout') logout()
+}
+
+function refreshBadges() {
+  void refreshOpenAlerts()
+  void refreshPendingSubmissions()
 }
 
 onMounted(async () => {
@@ -55,8 +82,8 @@ onMounted(async () => {
   if (!mounted) {
     return
   }
-  void refreshOpenAlerts()
-  timer.value = window.setInterval(() => void refreshOpenAlerts(), 60_000)
+  refreshBadges()
+  timer.value = window.setInterval(() => refreshBadges(), 60_000)
 })
 
 onBeforeUnmount(() => {

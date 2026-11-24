@@ -350,6 +350,76 @@ export interface PurgeCounts {
   loginFailures: number
 }
 
+export type AnnouncementLevel = 'INFO' | 'WARNING' | 'IMPORTANT'
+
+export interface Announcement {
+  id: number
+  title: string
+  body: string
+  level: AnnouncementLevel
+  pinned: boolean
+  createdBy: string
+  createdAt: string
+  updatedBy: string
+  updatedAt: string
+}
+
+export type CrabDownloadSource = 'LOCAL' | 'EXTERNAL' | 'NONE'
+
+export interface CrabDownloadInfo {
+  available: boolean
+  source: CrabDownloadSource
+  fileName: string | null
+  sizeBytes: number | null
+  sha256: string | null
+  updatedAt: string | null
+  latestCrabVersion: string | null
+  downloadUrl: string | null
+  externalUrl: string | null
+}
+
+export type SubmissionStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN'
+
+export interface SubmissionSummary {
+  id: number
+  conch: string
+  version: string
+  sha256: string
+  minCrabVersion: string
+  driver: string
+  title: string
+  status: SubmissionStatus
+  submitNote: string | null
+  submittedBy: string
+  submittedAt: string
+  reviewedBy: string | null
+  reviewedAt: string | null
+  reviewComment: string | null
+  warningCount: number
+}
+
+export interface SubmissionDetail {
+  id: number
+  conch: string
+  version: string
+  sha256: string
+  minCrabVersion: string
+  driver: string
+  title: string
+  status: SubmissionStatus
+  submitNote: string | null
+  submittedBy: string
+  submittedAt: string
+  reviewedBy: string | null
+  reviewedAt: string | null
+  reviewComment: string | null
+  warnings: ValidationIssue[]
+  diff: Partial<ConchDiff>
+  currentPublishedVersion: string | null
+  conchDisabled: boolean
+  versionConflict: boolean
+}
+
 function browserZone(): string | undefined {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
@@ -403,6 +473,35 @@ export const api = {
     http.post<ConchAvailability>(`/api/admin/conches/${seg(conch)}/disable`, { reason }),
   enableConch: (conch: string, reason: string) =>
     http.post<ConchAvailability>(`/api/admin/conches/${seg(conch)}/enable`, { reason }),
+
+  announcements: () => http.get<Announcement[]>('/api/admin/announcements'),
+  createAnnouncement: (body: { title: string; body: string; level: AnnouncementLevel; pinned: boolean }) =>
+    http.post<Announcement>('/api/admin/announcements', body),
+  updateAnnouncement: (id: number, body: { title: string; body: string; level: AnnouncementLevel; pinned: boolean }) =>
+    http.put<Announcement>(`/api/admin/announcements/${id}`, body),
+  deleteAnnouncement: (id: number) => http.del<{ id: number }>(`/api/admin/announcements/${id}`),
+
+  crabDownloadInfo: () => http.get<CrabDownloadInfo>('/api/admin/crab/download-info'),
+  downloadCrabJar: () => http.blob('/api/admin/crab/download'),
+
+  submissions: (status?: SubmissionStatus | 'ALL') =>
+    http.get<SubmissionSummary[]>('/api/admin/submissions', status && status !== 'ALL' ? { status } : undefined),
+  pendingSubmissionsCount: () => http.get<{ count: number }>('/api/admin/submissions/pending-count'),
+  submission: (id: number) => http.get<SubmissionDetail>(`/api/admin/submissions/${id}`),
+  submissionYaml: (id: number) => http.text(`/api/admin/submissions/${id}/yaml`),
+  submitConch: (file: File, note?: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (note && note.trim()) {
+      form.append('note', note.trim())
+    }
+    return http.upload<SubmissionDetail>('/api/admin/submissions', form)
+  },
+  withdrawSubmission: (id: number) => http.post<SubmissionDetail>(`/api/admin/submissions/${id}/withdraw`),
+  approveSubmission: (id: number, comment?: string) =>
+    http.post<SubmissionDetail>(`/api/admin/submissions/${id}/approve`, comment ? { comment } : {}),
+  rejectSubmission: (id: number, comment: string) =>
+    http.post<SubmissionDetail>(`/api/admin/submissions/${id}/reject`, { comment }),
 
   /** 按浏览器所在时区切日，北京时间凌晨的调用记在当天。 */
   tideSummary: (query: { conch?: string; from?: string; to?: string; bucket?: string }) =>

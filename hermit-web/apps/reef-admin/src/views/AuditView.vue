@@ -19,6 +19,13 @@ const actionTone: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'pr
   UPLOAD: 'primary',
   PUBLISH: 'success',
   ROLLBACK: 'warning',
+  ANNOUNCEMENT_CREATED: 'primary',
+  ANNOUNCEMENT_UPDATED: 'info',
+  ANNOUNCEMENT_DELETED: 'warning',
+  SUBMISSION_CREATED: 'primary',
+  SUBMISSION_APPROVED: 'success',
+  SUBMISSION_REJECTED: 'danger',
+  SUBMISSION_WITHDRAWN: 'info',
 }
 
 async function load() {

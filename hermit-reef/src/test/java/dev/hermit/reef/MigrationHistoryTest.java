@@ -39,6 +39,7 @@ class MigrationHistoryTest {
         MERGED.put("V6__users_and_agent_tokens.sql", "6bb1ec85735d95e6ab3a28c447bfa7aa437a08414dfca0bbe7a555d135cc3e1a");
         MERGED.put("V7__voided_config_tokens.sql", "00f2d0421cc871cce831d132700fabca943b5619d3b771089bfc34bfda396582");
         MERGED.put("V8__admin_token_version.sql", "a0f5d080b22820c4b95a96d70de9c8dad1973c7d6bb132333b420b1dc4239149");
+        MERGED.put("V9__notices_and_submissions.sql", "0d7e72925465a5cf9f868fad9dab4d470bee3360fbdb287845b0cd220776c2b9");
     }
 
     @Test
@@ -52,7 +53,8 @@ class MigrationHistoryTest {
 
     /**
      * 生产库停在 V7、已有管理员和登录失败记录。升级只跑新增的迁移：已有管理员的 token_version 是 0，
-     * 升级前签出的 JWT（没有 tv，按 0 处理）仍然有效，不会因为升级被统一踢下线。
+     * 升级前签出的 JWT（没有 tv，按 0 处理）仍然有效，不会因为升级被统一踢下线；
+     * V9 新增的公告表与规则审批表从空开始，不影响存量数据。
      */
     @Test
     void productionDatabaseWithRowsUpgrades() throws Exception {
@@ -80,6 +82,14 @@ class MigrationHistoryTest {
                 failures.next();
                 assertThat(failures.getInt(1)).isEqualTo(1);
                 assertThat(failures.getInt(2)).isEqualTo(1);
+            }
+            try (ResultSet notices = statement.executeQuery("SELECT COUNT(*) FROM hermit_announcements")) {
+                notices.next();
+                assertThat(notices.getInt(1)).isZero();
+            }
+            try (ResultSet submissions = statement.executeQuery("SELECT COUNT(*) FROM hermit_conch_submissions")) {
+                submissions.next();
+                assertThat(submissions.getInt(1)).isZero();
             }
         }
         assertThat(flyway(url, null).validateWithResult().validationSuccessful).isTrue();

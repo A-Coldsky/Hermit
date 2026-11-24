@@ -17,6 +17,7 @@ public class ReefProperties {
     private Duration jwtTtl = Duration.ofHours(8);
     private String latestCrabVersion = "";
     private String crabDownloadUrl = "";
+    private String crabJarFile = "";
     private int reportRetentionDays = 90;
     private String retentionCron = "0 0 3 * * *";
 
@@ -54,6 +55,10 @@ public class ReefProperties {
 
     public String latestCrabVersionOrNull() {
         return blankToNull(latestCrabVersion);
+    }
+
+    public String crabJarFileOrNull() {
+        return blankToNull(crabJarFile);
     }
 
     public String crabDownloadUrlOrNull() {
@@ -103,6 +108,14 @@ public class ReefProperties {
 
     public void setCrabDownloadUrl(String crabDownloadUrl) {
         this.crabDownloadUrl = crabDownloadUrl;
+    }
+
+    public String getCrabJarFile() {
+        return crabJarFile;
+    }
+
+    public void setCrabJarFile(String crabJarFile) {
+        this.crabJarFile = crabJarFile;
     }
 
     public int getReportRetentionDays() {

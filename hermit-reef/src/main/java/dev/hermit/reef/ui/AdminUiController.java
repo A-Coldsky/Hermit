@@ -190,6 +190,9 @@ public class AdminUiController {
         if (lower.endsWith(".css")) {
             return "text/css";
         }
+        if (lower.endsWith(".webp")) {
+            return "image/webp";
+        }
         return MediaTypeFactory.getMediaType(file).map(MediaType::toString).orElse(MediaType.APPLICATION_OCTET_STREAM_VALUE);
     }
 

@@ -39,7 +39,7 @@ const emptyText = computed(() => {
     return '没有读到规则包目录'
   }
   if (!conches.value.length) {
-    return isAdmin.value ? '还没有规则包，先上传一个 YAML' : '还没有规则包，等管理员上传'
+    return isAdmin.value ? '还没有规则包，先上传一个 YAML' : '还没有规则包，可以点击右上角「提交规则包」提交审批'
   }
   if (kind.value === 'all') {
     return `没有匹配「${keyword.value}」的规则包`
@@ -72,6 +72,7 @@ onMounted(load)
     <PageHeader title="规则包目录" description="每个规则包描述一个老系统的登录方式与可调用能力">
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-button v-if="isAdmin" type="primary" :icon="Upload" @click="router.push('/conches/upload')">上传规则包</el-button>
+      <el-button v-else type="primary" :icon="Upload" data-test="user-submit-btn" @click="router.push('/submissions')">提交规则包</el-button>
     </PageHeader>
 
     <div class="hm-toolbar bar">

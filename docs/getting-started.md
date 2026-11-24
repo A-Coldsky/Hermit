@@ -81,9 +81,15 @@ report:
 
 ```bash
 chmod 600 "$HERMIT_HOME/config.yml"
-CP="hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT.jar:$(cat hermit-crab/target/classpath.txt)"
-java -cp "$CP" dev.hermit.crab.CrabMain serve
+# 方式一（推荐，无需拼 classpath）：直接运行独立可执行 JAR
+java -jar hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT-all.jar serve
+
+# 方式二：用普通 jar + 依赖 classpath 运行
+# CP="hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT.jar:$(cat hermit-crab/target/classpath.txt)"
+# java -cp "$CP" dev.hermit.crab.CrabMain serve
 ```
+
+也可以将 `hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT-all.jar` 放入 Reef 数据目录的 `downloads/` 子目录中，团队成员登录 Reef 后即可在「下载 Crab」页面直接下载并用本机 JDK 17 启动，无需 Docker 或本地 Maven 构建。
 
 浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。
 

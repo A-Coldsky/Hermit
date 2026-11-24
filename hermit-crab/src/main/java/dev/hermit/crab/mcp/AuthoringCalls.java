@@ -24,6 +24,8 @@ import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.ExecutionResult;
+import dev.hermit.crab.recorder.CaptureSnapshot;
+import dev.hermit.crab.recorder.RecordedEntry;
 import dev.hermit.crab.runtime.ApiEnvelope;
 import dev.hermit.crab.runtime.ApiJson;
 import dev.hermit.crab.runtime.CapabilityHttp;
@@ -40,9 +42,10 @@ import dev.hermit.crab.sync.LocalConches;
 import io.modelcontextprotocol.spec.McpSchema;
 
 /**
- * Developer-mode tools that inspect syntax guides, read YAML, validate, save, and trial-run a local rule package.
+ * Developer-mode tools that inspect syntax guides, read YAML, inspect console-redacted browser captures,
+ * validate, save, and trial-run a local rule package.
  * Reef subscriptions are strictly read-only; edits must be saved to a local rule package.
- * They do not accept a HAR, do not read or write credentials, and do not publish to Reef.
+ * They do not read or write credentials, do not launch browsers, and do not publish to Reef.
  */
 final class AuthoringCalls {
     static final String DEV_MODE_CLOSED = "开发者模式没有打开。请到 Crab 控制台概览打开开发者模式。";
@@ -54,6 +57,7 @@ final class AuthoringCalls {
     /** 请求字段不能创建自动确认。只有控制台勾选才行。 */
     static final String GRANT_PARAM = "不能用参数授权自动确认。请到控制台确认。";
     static final String LOCAL_ONLY = "写规则包和这份指南只允许本机调用。请从本机连接 Crab。";
+    static final String CAPTURE_SCOPE_DENIED = "这把 API Key 限定了规则包范围，不能读取浏览器抓包快照。请用全部权限的 Key。";
     static final String READ_ONLY_SAVE = "这把 API Key 只允许调用只读能力，不能保存本地规则包。";
     static final String READ_ONLY_TRIAL_PREFIX = "这把 API Key 只允许调用只读能力。能力 ";
     /** 试跑已有本地规则包或覆盖未点名的本地规则包时，这把 Key 必须能调用它：全部权限，或在 conches 里点名。 */
@@ -87,6 +91,10 @@ final class AuthoringCalls {
     private static final Pattern CONCH_NAME = Pattern.compile("^[a-z][a-z0-9_]{1,63}$");
     private static final Set<String> GUIDE_FIELDS = Set.of("section", "query");
     private static final Set<String> READ_YAML_FIELDS = Set.of("conch", "source");
+    private static final Set<String> CAPTURE_GET_FIELDS = Set.of("captureId", "index", "indices", "includeBody", "maxBodyChars");
+    private static final int MAX_CAPTURE_BATCH = 10;
+    private static final int DEFAULT_CAPTURE_BODY_CHARS = 8_000;
+    private static final int MAX_CAPTURE_BODY_CHARS = 32_000;
     private static final Set<String> YAML_ONLY = Set.of("yaml");
     /** 这些字段都不能创建自动确认。大小写按客户端传来的键名，不另做折叠。 */
     private static final Set<String> GRANT_FIELDS = Set.of(
@@ -293,6 +301,230 @@ final class AuthoringCalls {
         body.put("yaml", new String(bytes, StandardCharsets.UTF_8));
         body.put("note", hasLocal ? REEF_READ_ONLY_WITH_LOCAL_NOTE : REEF_READ_ONLY_NOTE);
         return McpCalls.ok(body);
+    }
+
+    McpSchema.CallToolResult captureList(ApiKeyPrincipal principal, Map<String, Object> arguments, McpCalls.Attempt attempt) {
+        if (!devMode()) {
+            return McpCalls.fail(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
+        }
+        if (principal != null && !principal.scope().grantsAllOfficial()) {
+            return McpCalls.failAsRequest(attempt, "FORBIDDEN", CAPTURE_SCOPE_DENIED);
+        }
+        String unknown = unknownField(arguments, Set.of());
+        if (unknown != null) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "未知字段 " + unknown + "。");
+        }
+        List<CaptureSnapshot> snapshots = runtime.recorder().listSnapshots();
+        ArrayList<Map<String, Object>> rows = new ArrayList<>(snapshots.size());
+        for (CaptureSnapshot snapshot : snapshots) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("captureId", snapshot.id());
+            row.put("title", snapshot.title());
+            row.put("createdAt", snapshot.createdAt().toString());
+            row.put("source", snapshot.source());
+            row.put("origins", snapshot.origins());
+            row.put("cookieNames", snapshot.cookieNames());
+            row.put("hasRedirects", snapshot.hasRedirects());
+            row.put("hasDownloads", snapshot.hasDownloads());
+            row.put("entryCount", snapshot.entries().size());
+            ArrayList<Map<String, Object>> catalog = new ArrayList<>(snapshot.entries().size());
+            for (RecordedEntry entry : snapshot.entries()) {
+                LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+                item.put("index", entry.index());
+                item.put("method", entry.method());
+                item.put("status", entry.status());
+                item.put("url", entry.url());
+                item.put("origin", entry.origin());
+                item.put("path", entry.path());
+                item.put("resourceType", entry.resourceType());
+                item.put("mimeType", entry.mimeType());
+                item.put("redirectTo", entry.redirectTo());
+                item.put("binary", entry.binary());
+                item.put("contentDisposition", entry.contentDisposition());
+                item.put("responseBytes", entry.responseBytes());
+                item.put("hasRequestBody", entry.requestBody() != null && !entry.requestBody().isEmpty());
+                item.put("hasResponseBody", entry.responseBody() != null && !entry.responseBody().isEmpty());
+                catalog.add(item);
+            }
+            row.put("entries", catalog);
+            rows.add(row);
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("snapshots", rows);
+        body.put("total", rows.size());
+        body.put("note", UNTRUSTED);
+        body.put("untrusted", true);
+        return McpCalls.ok(body);
+    }
+
+    McpSchema.CallToolResult captureGet(ApiKeyPrincipal principal, Map<String, Object> arguments, McpCalls.Attempt attempt) {
+        if (!devMode()) {
+            return McpCalls.fail(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
+        }
+        if (principal != null && !principal.scope().grantsAllOfficial()) {
+            return McpCalls.failAsRequest(attempt, "FORBIDDEN", CAPTURE_SCOPE_DENIED);
+        }
+        String unknown = unknownField(arguments, CAPTURE_GET_FIELDS);
+        if (unknown != null) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "未知字段 " + unknown + "。");
+        }
+        String captureId = requiredText(arguments, "captureId");
+        if (captureId == null) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "需要 captureId。", "captureId");
+        }
+        boolean hasIndex = arguments.containsKey("index") && arguments.get("index") != null;
+        boolean hasIndices = arguments.containsKey("indices") && arguments.get("indices") != null;
+        if (hasIndex && hasIndices) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "index 和 indices 不能同时使用。", "index");
+        }
+        ArrayList<Integer> requestedIndices = new ArrayList<>();
+        if (hasIndex) {
+            Integer parsed = parsePositiveInt(arguments.get("index"));
+            if (parsed == null) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "index 必须是大于 0 的整数。", "index");
+            }
+            requestedIndices.add(parsed);
+        } else if (hasIndices) {
+            Object raw = arguments.get("indices");
+            if (!(raw instanceof List<?> list) || list.isEmpty()) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "indices 必须是非空整数数组。", "indices");
+            }
+            if (list.size() > MAX_CAPTURE_BATCH) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT",
+                        "单次最多读取 " + MAX_CAPTURE_BATCH + " 条请求，请分批调用。", "indices");
+            }
+            for (Object item : list) {
+                Integer parsed = parsePositiveInt(item);
+                if (parsed == null) {
+                    return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "indices 中的元素必须是大于 0 的整数。", "indices");
+                }
+                if (!requestedIndices.contains(parsed)) {
+                    requestedIndices.add(parsed);
+                }
+            }
+        }
+        boolean includeBody = true;
+        if (arguments.containsKey("includeBody") && arguments.get("includeBody") != null) {
+            Object raw = arguments.get("includeBody");
+            if (!(raw instanceof Boolean flag)) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "includeBody 必须是布尔值。", "includeBody");
+            }
+            includeBody = flag;
+        }
+        int maxBodyChars = DEFAULT_CAPTURE_BODY_CHARS;
+        if (arguments.containsKey("maxBodyChars") && arguments.get("maxBodyChars") != null) {
+            Integer parsed = parsePositiveInt(arguments.get("maxBodyChars"));
+            if (parsed == null || parsed < 200 || parsed > MAX_CAPTURE_BODY_CHARS) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT",
+                        "maxBodyChars 必须在 200 到 " + MAX_CAPTURE_BODY_CHARS + " 之间。", "maxBodyChars");
+            }
+            maxBodyChars = parsed;
+        }
+
+        Optional<CaptureSnapshot> found = runtime.recorder().getSnapshot(captureId.trim());
+        if (found.isEmpty()) {
+            return McpCalls.failAsRequest(attempt, "NOT_FOUND",
+                    "没有找到抓包快照 " + captureId.trim() + "。请先调用 conch_capture_list 查看当前可用快照。", "captureId");
+        }
+        CaptureSnapshot snapshot = found.get();
+        if (requestedIndices.isEmpty()) {
+            int count = Math.min(snapshot.entries().size(), MAX_CAPTURE_BATCH);
+            for (int i = 1; i <= count; i++) {
+                requestedIndices.add(i);
+            }
+        }
+
+        ArrayList<Map<String, Object>> details = new ArrayList<>();
+        ArrayList<Integer> missing = new ArrayList<>();
+        for (Integer idx : requestedIndices) {
+            if (idx < 1 || idx > snapshot.entries().size()) {
+                missing.add(idx);
+                continue;
+            }
+            RecordedEntry entry = snapshot.entries().get(idx - 1);
+            details.add(captureEntryDetail(entry, includeBody, maxBodyChars));
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("captureId", snapshot.id());
+        body.put("title", snapshot.title());
+        body.put("origins", snapshot.origins());
+        body.put("cookieNames", snapshot.cookieNames());
+        body.put("entries", details);
+        body.put("missingIndices", missing);
+        body.put("note", UNTRUSTED);
+        body.put("untrusted", true);
+        return McpCalls.ok(body);
+    }
+
+    private static Map<String, Object> captureEntryDetail(RecordedEntry entry, boolean includeBody, int maxBodyChars) {
+        LinkedHashMap<String, Object> map = new LinkedHashMap<>();
+        map.put("index", entry.index());
+        map.put("method", entry.method());
+        map.put("url", entry.url());
+        map.put("origin", entry.origin());
+        map.put("path", entry.path());
+        map.put("resourceType", entry.resourceType());
+        map.put("status", entry.status());
+        map.put("statusText", entry.statusText());
+        map.put("mimeType", entry.mimeType());
+        map.put("redirectTo", entry.redirectTo());
+        map.put("binary", entry.binary());
+        map.put("contentDisposition", entry.contentDisposition());
+        map.put("responseBytes", entry.responseBytes());
+        map.put("durationMs", entry.durationMs());
+        map.put("errorText", entry.errorText());
+        map.put("requestHeaders", captureHeaderList(entry.requestHeaders()));
+        map.put("responseHeaders", captureHeaderList(entry.responseHeaders()));
+        if (includeBody) {
+            if (entry.requestBody() != null) {
+                boolean cut = entry.requestBodyTruncated() || entry.requestBody().length() > maxBodyChars;
+                map.put("requestBody", entry.requestBody().length() > maxBodyChars
+                        ? entry.requestBody().substring(0, maxBodyChars)
+                        : entry.requestBody());
+                map.put("requestBodyTruncated", cut);
+            } else {
+                map.put("requestBody", null);
+                map.put("requestBodyTruncated", false);
+            }
+            if (!entry.binary() && entry.responseBody() != null) {
+                boolean cut = entry.responseBodyTruncated() || entry.responseBody().length() > maxBodyChars;
+                map.put("responseBody", entry.responseBody().length() > maxBodyChars
+                        ? entry.responseBody().substring(0, maxBodyChars)
+                        : entry.responseBody());
+                map.put("responseBodyTruncated", cut);
+            } else {
+                map.put("responseBody", null);
+                map.put("responseBodyTruncated", false);
+            }
+        }
+        return map;
+    }
+
+    private static List<Map<String, String>> captureHeaderList(List<RecordedEntry.HeaderPair> headers) {
+        ArrayList<Map<String, String>> list = new ArrayList<>(headers.size());
+        for (RecordedEntry.HeaderPair pair : headers) {
+            LinkedHashMap<String, String> row = new LinkedHashMap<>();
+            row.put("name", pair.name());
+            row.put("value", pair.value());
+            list.add(row);
+        }
+        return list;
+    }
+
+    private static Integer parsePositiveInt(Object raw) {
+        if (raw instanceof Integer i) {
+            return i > 0 ? i : null;
+        }
+        if (raw instanceof Long l) {
+            return l > 0 && l <= Integer.MAX_VALUE ? l.intValue() : null;
+        }
+        if (raw instanceof Number n) {
+            double d = n.doubleValue();
+            if (d == Math.floor(d) && d >= 1 && d <= Integer.MAX_VALUE) {
+                return (int) d;
+            }
+        }
+        return null;
     }
 
     McpSchema.CallToolResult validate(Map<String, Object> arguments, McpCalls.Attempt attempt) {

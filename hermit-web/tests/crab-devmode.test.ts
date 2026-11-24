@@ -85,6 +85,8 @@ describe('Crab 开发者模式', () => {
     const prompt = wrapper.get('[data-test="authoring-prompt"]').text()
     expect(prompt).toContain('conch_guide')
     expect(prompt).toContain('conch_read_yaml')
+    expect(prompt).toContain('conch_capture_list')
+    expect(prompt).toContain('conch_capture_get')
     expect(prompt).toContain('Reef 订阅的正式包只读不可直接修改')
     expect(prompt).toContain('hermit://authoring/guide')
     expect(prompt).toContain('conch_validate')
@@ -110,6 +112,7 @@ describe('Crab 开发者模式', () => {
     expect(block.html().indexOf('copy-authoring')).toBeLessThan(block.html().indexOf('<pre'))
     expect(block.text()).toContain('把下面这段发给 AI')
     expect(block.get('[data-test="copy-authoring"]').text()).toContain('复制')
+    expect(block.get('[data-test="open-recorder"]').text()).toContain('前往浏览器录制')
     wrapper.unmount()
   })
 

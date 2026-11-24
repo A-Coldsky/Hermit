@@ -692,6 +692,8 @@ class AuthoringMcpTest {
             assertThat(remoteTools.body()).contains("debug_trace")
                     .doesNotContain("conch_guide")
                     .doesNotContain("conch_read_yaml")
+                    .doesNotContain("conch_capture_list")
+                    .doesNotContain("conch_capture_get")
                     .doesNotContain("conch_validate")
                     .doesNotContain("conch_save_local")
                     .doesNotContain("conch_trial_run");
@@ -699,13 +701,21 @@ class AuthoringMcpTest {
                     {"jsonrpc":"2.0","id":3,"method":"resources/list"}
                     """, Map.of());
             assertThat(remoteResources.body()).doesNotContain(AuthoringGuide.URI);
-            for (String tool : java.util.List.of("conch_guide", "conch_read_yaml", "conch_validate", "conch_save_local", "conch_trial_run")) {
+            for (String tool : java.util.List.of(
+                    "conch_guide", "conch_read_yaml", "conch_capture_list", "conch_capture_get",
+                    "conch_validate", "conch_save_local", "conch_trial_run")) {
                 String payload = switch (tool) {
                     case "conch_guide" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_guide","arguments":{}}}
                             """;
                     case "conch_read_yaml" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_read_yaml","arguments":{"conch":"remote_ping"}}}
+                            """;
+                    case "conch_capture_list" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_capture_list","arguments":{}}}
+                            """;
+                    case "conch_capture_get" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_capture_get","arguments":{"captureId":"cap_00000000"}}}
                             """;
                     default -> callJson(tool, yaml);
                 };

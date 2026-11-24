@@ -138,6 +138,8 @@ final class McpCalls {
         }
         if (McpCatalog.GUIDE.equals(name)
                 || McpCatalog.READ_YAML.equals(name)
+                || McpCatalog.CAPTURE_LIST.equals(name)
+                || McpCatalog.CAPTURE_GET.equals(name)
                 || McpCatalog.VALIDATE.equals(name)
                 || McpCatalog.SAVE_LOCAL.equals(name)
                 || McpCatalog.TRIAL_RUN.equals(name)) {
@@ -150,6 +152,12 @@ final class McpCalls {
         }
         if (McpCatalog.READ_YAML.equals(name)) {
             return authoring.readYaml(principal, arguments, attempt);
+        }
+        if (McpCatalog.CAPTURE_LIST.equals(name)) {
+            return authoring.captureList(principal, arguments, attempt);
+        }
+        if (McpCatalog.CAPTURE_GET.equals(name)) {
+            return authoring.captureGet(principal, arguments, attempt);
         }
         if (McpCatalog.VALIDATE.equals(name)) {
             return authoring.validate(arguments, attempt);

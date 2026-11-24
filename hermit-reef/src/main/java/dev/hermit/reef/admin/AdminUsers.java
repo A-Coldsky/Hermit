@@ -98,6 +98,7 @@ public class AdminUsers {
         } catch (DataIntegrityViolationException ex) {
             throw conflict(USERNAME_EXISTS);
         }
+        clearLoginFailures(username, username);
         auditService.record(actor, AuditAction.USER_CREATED, null, null, detail(Map.of(
                 "username", username,
                 "role", role.name())));
@@ -124,12 +125,17 @@ public class AdminUsers {
             throw conflict(CANNOT_CHANGE_SELF);
         }
         boolean disabling = !target.disabled() && disabled;
+        boolean enabling = target.disabled() && !disabled;
         boolean voidConfig = disabling && configOwner(target);
         jdbc.update(
                 "UPDATE hermit_admin_users SET role = ?, disabled = ? WHERE id = ?",
                 role.name(),
                 disabled,
                 target.id());
+        if (enabling) {
+            // 重新启用时清掉禁用期间可能累计的登录失败记录，避免启用后仍被锁定。
+            clearLoginFailures(username, target.username());
+        }
         auditService.record(actor, AuditAction.USER_UPDATED, null, null, detail(Map.of(
                 "username", target.username(),
                 "role", role.name(),
@@ -166,6 +172,7 @@ public class AdminUsers {
                 "UPDATE hermit_admin_users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
                 passwordEncoder.encode(newPassword),
                 user.id());
+        clearLoginFailures(username, user.username());
         auditService.record(username, AuditAction.PASSWORD_CHANGED, null, null,
                 detail(Map.of("username", username)));
         return summarize(find(username));
@@ -180,14 +187,36 @@ public class AdminUsers {
         if (actor.equals(target.username())) {
             throw new ApiException(400, ReefErrorCode.INVALID_INPUT, CANNOT_RESET_OWN_PASSWORD);
         }
-        // 版本号加一，已经签出的 JWT（包括调用方自己这一张）随即失效。
+        // 版本号加一，被重置用户已经签出的 JWT 随即失效；同时清除登录失败锁定记录，使新密码立即可用。
         jdbc.update(
                 "UPDATE hermit_admin_users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
                 passwordEncoder.encode(newPassword),
                 target.id());
+        clearLoginFailures(username, target.username());
         auditService.record(actor, AuditAction.USER_PASSWORD_RESET, null, null,
                 detail(Map.of("username", target.username())));
         return summarize(target);
+    }
+
+    private void clearLoginFailures(String requestedUsername, String canonicalUsername) {
+        if (requestedUsername == null || requestedUsername.equals(canonicalUsername)) {
+            jdbc.update("DELETE FROM hermit_admin_login_failures WHERE username = ?", canonicalUsername);
+            return;
+        }
+        jdbc.update(
+                "DELETE FROM hermit_admin_login_failures WHERE username = ? OR username = ?",
+                requestedUsername,
+                canonicalUsername);
+    }
+
+    private boolean isLocked(String username) {
+        Instant cutoff = clock.instant().minus(LoginService.LOCK_WINDOW);
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM hermit_admin_login_failures WHERE username = ? AND failed_at > ?",
+                Integer.class,
+                username,
+                Timestamp.from(cutoff));
+        return count != null && count >= LoginService.MAX_FAILURES;
     }
 
     private UserSummary summarize(AdminAccount account) {
@@ -201,7 +230,14 @@ public class AdminUsers {
                 && !configTokenVoids.currentIsVoided()) {
             tokens++;
         }
-        return new UserSummary(account.username(), account.role(), account.disabled(), account.createdAt(), tokens);
+        boolean locked = !account.disabled() && isLocked(account.username());
+        return new UserSummary(
+                account.username(),
+                account.role(),
+                account.disabled(),
+                locked,
+                account.createdAt(),
+                tokens);
     }
 
     private boolean configOwner(AdminAccount account) {

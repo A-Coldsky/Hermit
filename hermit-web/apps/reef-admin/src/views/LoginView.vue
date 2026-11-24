@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { errorText } from '@shared/format'
 import { ApiError } from '@shared/http'
 import HermitMark from '@shared/components/HermitMark.vue'
-import { api } from '../api'
+import { api, type LoginFailureData } from '../api'
 import { consumeExpiredRedirect, setRole, signIn } from '../auth'
 
 const route = useRoute()
@@ -15,16 +15,31 @@ const loading = ref(false)
 const failure = ref('')
 const expired = consumeExpiredRedirect()
 
+function loginFailureText(error: unknown): string {
+  if (error instanceof ApiError && error.status === 401) {
+    const data = error.data && typeof error.data === 'object' ? (error.data as LoginFailureData) : null
+    if (data?.locked || data?.remainingAttempts === 0) {
+      return '登录失败次数过多，账号已锁定 15 分钟，请稍后再试或联系管理员重置密码'
+    }
+    if (typeof data?.remainingAttempts === 'number' && data.remainingAttempts > 0) {
+      return `用户名或密码错误，还可以尝试 ${data.remainingAttempts} 次`
+    }
+    return '用户名或密码错误'
+  }
+  return errorText(error)
+}
+
 async function submit() {
-  if (!form.username || !form.password) {
+  const username = form.username.trim()
+  if (!username || !form.password) {
     failure.value = '请输入用户名和密码'
     return
   }
   loading.value = true
   failure.value = ''
   try {
-    const result = await api.login(form.username, form.password)
-    signIn(result.token, result.expiresAt, form.username)
+    const result = await api.login(username, form.password)
+    signIn(result.token, result.expiresAt, username)
     try {
       setRole((await api.me()).role)
     } catch {
@@ -33,7 +48,7 @@ async function submit() {
     const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/') ? route.query.redirect : '/'
     await router.replace(redirect)
   } catch (error) {
-    failure.value = error instanceof ApiError && error.status === 401 ? '用户名或密码错误' : errorText(error)
+    failure.value = loginFailureText(error)
   } finally {
     loading.value = false
   }

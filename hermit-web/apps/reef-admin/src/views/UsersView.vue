@@ -21,17 +21,42 @@ const busy = ref<string | null>(null)
 const createRef = ref<FormInstance>()
 const create = reactive({ open: false, saving: false, username: '', password: '', role: 'USER' as AdminRole })
 const resetRef = ref<FormInstance>()
-const reset = reactive({ open: false, saving: false, username: '', password: '' })
+const reset = reactive({
+  open: false,
+  saving: false,
+  username: '',
+  disabled: false,
+  locked: false,
+  password: '',
+  confirm: '',
+  error: '',
+})
 
+const encoder = new TextEncoder()
 const passwordRule = [
   { required: true, message: '请输入密码', trigger: 'blur' },
   { min: 8, message: '密码至少 8 个字符', trigger: 'blur' },
+  {
+    validator: (_rule: unknown, value: string, callback: (err?: Error) => void) =>
+      !value || encoder.encode(value).length <= 72 ? callback() : callback(new Error('密码不能超过 72 字节')),
+    trigger: 'blur',
+  },
 ]
 const createRules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: passwordRule,
 }
-const resetRules: FormRules = { password: passwordRule }
+const resetRules: FormRules = {
+  password: passwordRule,
+  confirm: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) =>
+        value === reset.password ? callback() : callback(new Error('两次输入的新密码不一致')),
+      trigger: 'blur',
+    },
+  ],
+}
 
 function fail(error: unknown) {
   const text = error instanceof ApiError ? userErrorText(error.message) : null
@@ -133,17 +158,45 @@ async function update(user: AdminUser, body: { role?: AdminRole; disabled?: bool
 }
 
 function openReset(user: AdminUser) {
-  Object.assign(reset, { open: true, username: user.username, password: '' })
+  Object.assign(reset, {
+    open: true,
+    username: user.username,
+    disabled: user.disabled,
+    locked: Boolean(user.locked),
+    password: '',
+    confirm: '',
+    error: '',
+  })
   resetRef.value?.clearValidate()
 }
 
 async function submitReset() {
+  reset.error = ''
   if (!(await resetRef.value?.validate().catch(() => false))) return
+  if (reset.password.length < 8) {
+    reset.error = '密码至少 8 个字符'
+    return
+  }
+  if (encoder.encode(reset.password).length > 72) {
+    reset.error = '密码不能超过 72 字节'
+    return
+  }
+  if (reset.confirm !== reset.password) {
+    reset.error = '两次输入的新密码不一致'
+    return
+  }
   reset.saving = true
   try {
     await api.resetPassword(reset.username, reset.password)
-    ElMessage.success(`已重置 ${reset.username} 的密码，请把新密码告诉对方`)
+    ElMessage.success(
+      reset.disabled
+        ? `已重置 ${reset.username} 的密码。该账号当前已禁用，启用后才能登录`
+        : reset.locked
+          ? `已重置 ${reset.username} 的密码并解除登录锁定，请把新密码告诉对方`
+          : `已重置 ${reset.username} 的密码，请把新密码告诉对方`,
+    )
     reset.open = false
+    await load()
   } catch (error) {
     fail(error)
   } finally {
@@ -200,6 +253,7 @@ onMounted(load)
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
             <el-tag v-if="row.disabled" type="info" size="small" effect="plain">已禁用</el-tag>
+            <el-tag v-else-if="row.locked" type="warning" size="small" effect="plain">已锁定</el-tag>
             <el-tag v-else type="success" size="small" effect="plain">正常</el-tag>
           </template>
         </el-table-column>
@@ -248,14 +302,47 @@ onMounted(load)
     </el-dialog>
 
     <el-dialog v-model="reset.open" :title="`重置 ${reset.username} 的密码`" width="420px">
+      <el-alert
+        v-if="reset.disabled"
+        type="warning"
+        show-icon
+        :closable="false"
+        class="dialog-hint"
+        title="该账号当前已禁用，重置密码后仍需先启用才能登录。"
+      />
+      <el-alert
+        v-else-if="reset.locked"
+        type="info"
+        show-icon
+        :closable="false"
+        class="dialog-hint"
+        title="该账号当前处于登录锁定状态，重置密码后会同时解除锁定。"
+      />
       <el-form ref="resetRef" :model="reset" :rules="resetRules" label-position="top" @submit.prevent="submitReset">
         <el-form-item label="新密码" prop="password">
-          <el-input v-model="reset.password" type="password" show-password autocomplete="new-password" />
+          <el-input
+            v-model="reset.password"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            data-test="reset-password"
+          />
         </el-form-item>
+        <el-form-item label="再次输入新密码" prop="confirm">
+          <el-input
+            v-model="reset.confirm"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            data-test="reset-confirm"
+            @keyup.enter="submitReset"
+          />
+        </el-form-item>
+        <el-alert v-if="reset.error" :title="reset.error" type="error" :closable="false" show-icon />
       </el-form>
       <template #footer>
         <el-button @click="reset.open = false">取消</el-button>
-        <el-button type="primary" :loading="reset.saving" @click="submitReset">重置</el-button>
+        <el-button type="primary" :loading="reset.saving" data-test="submit-reset" @click="submitReset">重置</el-button>
       </template>
     </el-dialog>
   </div>
@@ -263,6 +350,10 @@ onMounted(load)
 
 <style scoped>
 .load-failed {
+  margin-bottom: 16px;
+}
+
+.dialog-hint {
   margin-bottom: 16px;
 }
 

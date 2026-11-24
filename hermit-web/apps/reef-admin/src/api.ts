@@ -276,10 +276,16 @@ export interface RollbackEvent {
 
 export type AdminRole = 'ADMIN' | 'USER'
 
+export interface LoginFailureData {
+  remainingAttempts?: number
+  locked?: boolean
+}
+
 export interface AdminUser {
   username: string
   role: AdminRole
   disabled: boolean
+  locked?: boolean
   createdAt: string
   tokenCount: number
 }

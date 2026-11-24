@@ -27,11 +27,18 @@ class AdminUsersTest {
         AdminAccount member = new AdminAccount(
                 2L, "reef-user", "hash-user", false, AdminRole.USER, ReefTestConfig.START, 0);
         List<Long> updatedIds = new ArrayList<>();
+        List<String> clearedFailures = new ArrayList<>();
         List<String> audits = new ArrayList<>();
 
         JdbcTemplate jdbc = new JdbcTemplate() {
             @Override
             public int update(String sql, Object... args) {
+                if (sql.startsWith("DELETE FROM hermit_admin_login_failures")) {
+                    for (Object arg : args) {
+                        clearedFailures.add(String.valueOf(arg));
+                    }
+                    return 1;
+                }
                 updatedIds.add((Long) args[1]);
                 return 1;
             }
@@ -91,6 +98,7 @@ class AdminUsersTest {
                     assertThat(ex.getMessage()).isEqualTo(AdminUsers.CANNOT_RESET_OWN_PASSWORD);
                 });
         assertThat(updatedIds).isEmpty();
+        assertThat(clearedFailures).isEmpty();
         assertThat(audits).isEmpty();
 
         assertThatThrownBy(() -> users.resetPassword("reef-admin", "nobody", "NewPassword-1234"))
@@ -101,7 +109,9 @@ class AdminUsersTest {
 
         UserSummary summary = users.resetPassword("reef-admin", "REEF-USER", "NewPassword-1234");
         assertThat(summary.username()).isEqualTo("reef-user");
+        assertThat(summary.locked()).isFalse();
         assertThat(updatedIds).containsExactly(2L);
+        assertThat(clearedFailures).containsExactly("REEF-USER", "reef-user");
         assertThat(audits).containsExactly("reef-admin|USER_PASSWORD_RESET|{\"username\":\"reef-user\"}");
     }
 }

@@ -296,6 +296,77 @@ class ReefUsersAndTokensTest {
                 .contains("PASSWORD_CHANGED", "USER_CREATED", "USER_PASSWORD_RESET");
     }
 
+    /** 账号连续失败被锁定后，管理员重置密码立即清除锁定，用户不必等待 15 分钟即可用新密码登录。 */
+    @Test
+    void passwordResetUnlocksLockedAccountAndAllowsImmediateLogin() throws Exception {
+        String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        createUser(admin, USER_NAME, USER_PASSWORD, "USER");
+        for (int i = 0; i < LoginService.MAX_FAILURES; i++) {
+            mockMvc.perform(post("/api/admin/login")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(credentials(USER_NAME, "wrong-password")))
+                    .andExpect(status().isUnauthorized());
+        }
+        mockMvc.perform(post("/api/admin/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(credentials(USER_NAME, USER_PASSWORD)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.data.locked").value(true))
+                .andExpect(jsonPath("$.data.remainingAttempts").value(0));
+
+        JsonNode beforeReset = read(get("/api/admin/users").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin));
+        assertThat(user(beforeReset, USER_NAME).get("locked").asBoolean()).isTrue();
+
+        mockMvc.perform(post("/api/admin/users/" + USER_NAME + "/password")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"password\":\"" + RESET_PASSWORD + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.locked").value(false));
+
+        JsonNode afterReset = read(get("/api/admin/users").header(HttpHeaders.AUTHORIZATION, "Bearer " + admin));
+        assertThat(user(afterReset, USER_NAME).get("locked").asBoolean()).isFalse();
+
+        String freshUser = login(USER_NAME, RESET_PASSWORD);
+        mockMvc.perform(get("/api/admin/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + freshUser))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.username").value(USER_NAME));
+    }
+
+    /** 禁用期间或建号前积累的登录失败，在重新启用或新建账号时会一并清掉，不会残留锁定。 */
+    @Test
+    void reEnableAndCreateClearPriorLoginFailures() throws Exception {
+        String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        String freshName = "pre-locked-user";
+        for (int i = 0; i < LoginService.MAX_FAILURES; i++) {
+            mockMvc.perform(post("/api/admin/login")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(credentials(freshName, "wrong-password")))
+                    .andExpect(status().isUnauthorized());
+        }
+        createUser(admin, freshName, USER_PASSWORD, "USER");
+        login(freshName, USER_PASSWORD);
+
+        mockMvc.perform(patch("/api/admin/users/" + freshName)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"disabled\":true}"))
+                .andExpect(status().isOk());
+        for (int i = 0; i < LoginService.MAX_FAILURES; i++) {
+            mockMvc.perform(post("/api/admin/login")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(credentials(freshName, USER_PASSWORD)))
+                    .andExpect(status().isUnauthorized());
+        }
+        mockMvc.perform(patch("/api/admin/users/" + freshName)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"disabled\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.locked").value(false));
+        login(freshName, USER_PASSWORD);
+    }
+
     @Test
     void lastEnabledAdminAndSelfChangeAreRejected() throws Exception {
         String admin = login(TestSecrets.USERNAME, TestSecrets.PASSWORD);

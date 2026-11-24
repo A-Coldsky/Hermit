@@ -20,8 +20,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class LoginService {
 
     public static final Duration LOCK_WINDOW = Duration.ofMinutes(15);
-    public static final int MAX_FAILURES = 5;
+    public static final int MAX_FAILURES = 10;
+    /** 剩余尝试次数不大于该值时开始提醒剩余次数（最后 5 次尝试机会）。 */
+    public static final int WARN_REMAINING_THRESHOLD = 5;
     public static final String FAILURE_MESSAGE = "authentication failed";
+    public static final String LOCKED_MESSAGE = "登录失败次数过多，账号已锁定 15 分钟，请稍后再试或联系管理员重置密码";
     /** 2 的幂。同一用户名的尝试落在同一把锁上，排队执行。 */
     static final int LOCK_STRIPES = 64;
 
@@ -51,6 +54,10 @@ public class LoginService {
         }
     }
 
+    public static String remainingMessage(int remainingAttempts) {
+        return "用户名或密码错误，还可以尝试 " + remainingAttempts + " 次";
+    }
+
     /**
      * 同一用户名的尝试串行：先数失败、再比口令、再记失败，整段在一个事务里，锁在事务提交之后才放。
      * 否则并发请求都读到同一个失败数，锁定前能多猜很多次。多个 Reef 进程共用一个库时仍各算各的。
@@ -58,6 +65,10 @@ public class LoginService {
      * 查询和写入仍用调用方传入的原文。
      */
     public Optional<LoginResponse> login(String username, String password) {
+        return authenticate(username, password).response();
+    }
+
+    public LoginAttempt authenticate(String username, String password) {
         Object lock = stripes[lockStripe(username)];
         synchronized (lock) {
             return transactions.execute(status -> attempt(username, password));
@@ -78,29 +89,45 @@ public class LoginService {
         return value.substring(0, end).toLowerCase(Locale.ROOT);
     }
 
-    private Optional<LoginResponse> attempt(String username, String password) {
+    private LoginAttempt attempt(String username, String password) {
         Instant now = clock.instant();
         AdminAccount user = users.find(username);
-        boolean locked = failureCount(username, now) >= MAX_FAILURES;
+        int priorFailures = failureCount(username, now);
+        boolean locked = priorFailures >= MAX_FAILURES;
         String hash = user == null ? dummyHash : user.passwordHash();
         boolean passwordMatches = passwordEncoder.matches(password, hash);
-        // 未知用户、密码错误、已禁用、锁定中都走同一条失败路径。
+        // 未知用户、密码错误、已禁用、锁定中都走同一条失败路径，避免暴露账号是否存在。
         boolean success = user != null && !user.disabled() && passwordMatches && !locked;
         if (!success) {
+            int totalFailures = priorFailures;
             // 锁定期间再记失败会把窗口往前推，锁就永远不会结束。
             if (!locked) {
                 jdbc.update(
                         "INSERT INTO hermit_admin_login_failures (username, failed_at) VALUES (?, ?)",
                         username,
                         Timestamp.from(now));
+                totalFailures = priorFailures + 1;
             }
             auditService.record(user != null ? user.username() : username, AuditAction.LOGIN_FAILURE, null, null, null);
-            return Optional.empty();
+            int remaining = Math.max(0, MAX_FAILURES - totalFailures);
+            return new LoginAttempt.Failure(remaining, remaining == 0);
         }
         String canonical = user.username();
+        clearFailures(username, canonical);
         auditService.record(canonical, AuditAction.LOGIN_SUCCESS, null, null, null);
         IssuedJwt issued = jwtService.issue(canonical, user.role(), user.tokenVersion());
-        return Optional.of(new LoginResponse(issued.token(), issued.expiresAt()));
+        return new LoginAttempt.Success(new LoginResponse(issued.token(), issued.expiresAt()));
+    }
+
+    private void clearFailures(String requestedUsername, String canonicalUsername) {
+        if (requestedUsername == null || requestedUsername.equals(canonicalUsername)) {
+            jdbc.update("DELETE FROM hermit_admin_login_failures WHERE username = ?", canonicalUsername);
+            return;
+        }
+        jdbc.update(
+                "DELETE FROM hermit_admin_login_failures WHERE username = ? OR username = ?",
+                requestedUsername,
+                canonicalUsername);
     }
 
     private int failureCount(String username, Instant now) {

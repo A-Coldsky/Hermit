@@ -17,6 +17,7 @@ const reef = vi.hoisted(() => ({
   voidConfigToken: vi.fn(),
   users: vi.fn(),
   updateUser: vi.fn(),
+  resetPassword: vi.fn(),
 }))
 
 vi.mock('../apps/reef-admin/src/api', () => ({ api: reef }))
@@ -43,7 +44,7 @@ const issued = {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   reef.tokens.mockResolvedValue([])
   reef.crabs.mockResolvedValue([])
 })
@@ -191,6 +192,93 @@ describe('用户管理', () => {
     expect(reef.updateUser).toHaveBeenCalledWith('alice', { disabled: false })
     expect(String(success.mock.calls[0][0])).toContain('不会恢复')
     success.mockRestore()
+  })
+
+  it('锁定用户显示已锁定，重置密码需二次确认并提示同步解除锁定、刷新列表', async () => {
+    setRole('ADMIN')
+    session.user = 'root'
+    reef.users
+      .mockResolvedValueOnce([
+        { username: 'root', role: 'ADMIN', disabled: false, locked: false, createdAt: '2026-11-01T00:00:00Z', tokenCount: 0 },
+        { username: 'alice', role: 'USER', disabled: false, locked: true, createdAt: '2026-11-02T00:00:00Z', tokenCount: 0 },
+      ])
+      .mockResolvedValueOnce([
+        { username: 'root', role: 'ADMIN', disabled: false, locked: false, createdAt: '2026-11-01T00:00:00Z', tokenCount: 0 },
+        { username: 'alice', role: 'USER', disabled: false, locked: false, createdAt: '2026-11-02T00:00:00Z', tokenCount: 0 },
+      ])
+    reef.resetPassword.mockResolvedValue({
+      username: 'alice',
+      role: 'USER',
+      disabled: false,
+      locked: false,
+      createdAt: '2026-11-02T00:00:00Z',
+      tokenCount: 0,
+    })
+    const success = vi.spyOn(ElMessage, 'success')
+    const wrapper = await mountPage(UsersView, { attach: true })
+    await flushPromises()
+    expect(wrapper.text()).toContain('已锁定')
+
+    await wrapper.findAll('tr button').filter((b) => b.text() === '重置密码')[0].trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('同时解除锁定')
+
+    const pwd = document.body.querySelector('input[data-test="reset-password"], [data-test="reset-password"] input') as HTMLInputElement
+    const confirm = document.body.querySelector('input[data-test="reset-confirm"], [data-test="reset-confirm"] input') as HTMLInputElement
+    const submit = document.body.querySelector('[data-test="submit-reset"]') as HTMLButtonElement
+
+    pwd.value = 'NewPass-1234'
+    pwd.dispatchEvent(new Event('input'))
+    confirm.value = 'Mismatch-1234'
+    confirm.dispatchEvent(new Event('input'))
+    await flushPromises()
+    submit.click()
+    await flushPromises()
+    expect(reef.resetPassword).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('两次输入的新密码不一致')
+
+    confirm.value = 'NewPass-1234'
+    confirm.dispatchEvent(new Event('input'))
+    await flushPromises()
+    submit.click()
+    await flushPromises()
+    expect(reef.resetPassword).toHaveBeenCalledWith('alice', 'NewPass-1234')
+    expect(String(success.mock.calls[0][0])).toContain('解除登录锁定')
+    expect(reef.users).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).not.toContain('已锁定')
+    success.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('重置已禁用用户密码时提示仍需先启用才能登录', async () => {
+    setRole('ADMIN')
+    session.user = 'root'
+    reef.users.mockResolvedValue([
+      { username: 'root', role: 'ADMIN', disabled: false, locked: false, createdAt: '2026-11-01T00:00:00Z', tokenCount: 0 },
+      { username: 'alice', role: 'USER', disabled: true, locked: false, createdAt: '2026-11-02T00:00:00Z', tokenCount: 0 },
+    ])
+    reef.resetPassword.mockResolvedValue({})
+    const success = vi.spyOn(ElMessage, 'success')
+    const wrapper = await mountPage(UsersView, { attach: true })
+    await flushPromises()
+
+    await wrapper.findAll('tr button').filter((b) => b.text() === '重置密码')[0].trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('已禁用')
+
+    const pwd = document.body.querySelector('input[data-test="reset-password"], [data-test="reset-password"] input') as HTMLInputElement
+    const confirm = document.body.querySelector('input[data-test="reset-confirm"], [data-test="reset-confirm"] input') as HTMLInputElement
+    pwd.value = 'NewPass-1234'
+    pwd.dispatchEvent(new Event('input'))
+    confirm.value = 'NewPass-1234'
+    confirm.dispatchEvent(new Event('input'))
+    await flushPromises()
+    ;(document.body.querySelector('[data-test="submit-reset"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(reef.resetPassword).toHaveBeenCalledWith('alice', 'NewPass-1234')
+    expect(String(success.mock.calls[0][0])).toContain('启用后才能登录')
+    success.mockRestore()
+    wrapper.unmount()
   })
 })
 

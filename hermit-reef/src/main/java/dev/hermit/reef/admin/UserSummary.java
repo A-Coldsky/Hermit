@@ -6,6 +6,7 @@ public record UserSummary(
         String username,
         AdminRole role,
         boolean disabled,
+        boolean locked,
         Instant createdAt,
         int tokenCount) {
 }

@@ -98,6 +98,34 @@ describe('Reef 登录失败', () => {
     expect(wrapper.text()).not.toContain('UNAUTHORIZED')
     expect(wrapper.text()).not.toContain('authentication failed')
   })
+
+  it('登录提交前去掉用户名前后空白，最后五次提醒剩余次数，锁定后提示联系管理员重置密码', async () => {
+    reef.login
+      .mockRejectedValueOnce(
+        new ApiError(401, 'UNAUTHORIZED', '用户名或密码错误，还可以尝试 5 次', { remainingAttempts: 5, locked: false }),
+      )
+      .mockRejectedValueOnce(
+        new ApiError(401, 'UNAUTHORIZED', '登录失败次数过多，账号已锁定 15 分钟，请稍后再试或联系管理员重置密码', {
+          remainingAttempts: 0,
+          locked: true,
+        }),
+      )
+    const wrapper = await mountPage(LoginView)
+    const [username, password] = wrapper.findAll('input')
+    await username.setValue('  alice  ')
+    await password.setValue('wrong-1')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(reef.login).toHaveBeenNthCalledWith(1, 'alice', 'wrong-1')
+    expect(wrapper.text()).toContain('用户名或密码错误，还可以尝试 5 次')
+
+    await password.setValue('wrong-2')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('登录失败次数过多，账号已锁定 15 分钟，请稍后再试或联系管理员重置密码')
+  })
 })
 
 describe('Crab 调用详情标题', () => {

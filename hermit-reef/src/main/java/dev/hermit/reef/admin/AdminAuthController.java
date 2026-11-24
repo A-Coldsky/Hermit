@@ -31,14 +31,17 @@ public class AdminAuthController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<ApiResponse<LoginResponse>> login(@Valid @RequestBody LoginRequest request,
+    public ResponseEntity<ApiResponse<?>> login(@Valid @RequestBody LoginRequest request,
             HttpServletRequest httpRequest, HttpServletResponse httpResponse) {
         httpResponse.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
         String traceId = TraceIds.current(httpRequest);
-        return loginService.login(request.username(), request.password())
-                .map(body -> ResponseEntity.ok(ApiResponse.ok(body, traceId)))
-                .orElseGet(() -> ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                        .body(ApiResponse.fail(ReefErrorCode.UNAUTHORIZED, LoginService.FAILURE_MESSAGE, traceId)));
+        LoginAttempt attempt = loginService.authenticate(request.username(), request.password());
+        if (attempt instanceof LoginAttempt.Success success) {
+            return ResponseEntity.ok(ApiResponse.ok(success.login(), traceId));
+        }
+        LoginAttempt.Failure failure = (LoginAttempt.Failure) attempt;
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.fail(ReefErrorCode.UNAUTHORIZED, failure.message(), failure.data(), traceId));
     }
 
     @GetMapping("/me")

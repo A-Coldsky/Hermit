@@ -149,16 +149,37 @@ class AdminApiTest {
     }
 
     @Test
-    void unknownUserWrongPasswordAndLockoutShareOneBody() throws Exception {
-        String unknown = failureBody("nobody", TestSecrets.PASSWORD);
-        String wrong = failureBody(TestSecrets.USERNAME, "wrong-password");
-        for (int i = 0; i < 4; i++) {
-            failureBody(TestSecrets.USERNAME, "wrong-password");
+    void unknownUserWrongPasswordAndLockoutFollowSameCountdownAndLockAtTen() throws Exception {
+        // 前 4 次失败不提醒剩余次数，未知用户与已知用户错误口令返回完全一致。
+        for (int attempt = 1; attempt <= 4; attempt++) {
+            String unknown = failureBody("nobody", TestSecrets.PASSWORD);
+            String wrong = failureBody(TestSecrets.USERNAME, "wrong-password");
+            assertThat(wrong).isEqualTo(unknown);
+            var parsed = objectMapper.readTree(wrong);
+            assertThat(parsed.get("data").isNull()).isTrue();
+            assertThat(parsed.get("error").get("message").asText()).isEqualTo(LoginService.FAILURE_MESSAGE);
         }
-        String locked = failureBody(TestSecrets.USERNAME, TestSecrets.PASSWORD);
-        assertThat(wrong).isEqualTo(unknown).isEqualTo(locked);
-        assertThat(objectMapper.readTree(locked).get("error").get("message").asText())
-                .isEqualTo(LoginService.FAILURE_MESSAGE);
+        // 第 5~9 次失败提醒最后 5 次剩余机会（5 -> 1），未知用户与已知用户返回完全一致。
+        for (int remaining = 5; remaining >= 1; remaining--) {
+            String unknown = failureBody("nobody", TestSecrets.PASSWORD);
+            String wrong = failureBody(TestSecrets.USERNAME, "wrong-password");
+            assertThat(wrong).isEqualTo(unknown);
+            var parsed = objectMapper.readTree(wrong);
+            assertThat(parsed.get("data").get("remainingAttempts").asInt()).isEqualTo(remaining);
+            assertThat(parsed.get("data").get("locked").asBoolean()).isFalse();
+            assertThat(parsed.get("error").get("message").asText())
+                    .isEqualTo(LoginService.remainingMessage(remaining));
+        }
+        // 第 10 次失败进入锁定；锁定后即使密码正确也返回同样锁定响应，且不再追加失败记录。
+        String unknownLocked = failureBody("nobody", TestSecrets.PASSWORD);
+        String tenthWrong = failureBody(TestSecrets.USERNAME, "wrong-password");
+        String lockedWithRightPassword = failureBody(TestSecrets.USERNAME, TestSecrets.PASSWORD);
+        assertThat(tenthWrong).isEqualTo(unknownLocked).isEqualTo(lockedWithRightPassword);
+        var parsedLocked = objectMapper.readTree(lockedWithRightPassword);
+        assertThat(parsedLocked.get("data").get("remainingAttempts").asInt()).isZero();
+        assertThat(parsedLocked.get("data").get("locked").asBoolean()).isTrue();
+        assertThat(parsedLocked.get("error").get("message").asText()).isEqualTo(LoginService.LOCKED_MESSAGE);
+
         Integer failures = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM hermit_admin_login_failures WHERE username = ?",
                 Integer.class,
@@ -166,9 +187,33 @@ class AdminApiTest {
         assertThat(failures).isEqualTo(LoginService.MAX_FAILURES);
     }
 
-    /** 并发的错误口令不能绕过锁定：同一用户名的尝试排队，最多记 5 次失败。 */
     @Test
-    void concurrentWrongPasswordsStillLockAfterFive(@Autowired LoginService logins) throws Exception {
+    void tenthAttemptCanStillSucceedAndClearsPreviousFailures() throws Exception {
+        for (int i = 0; i < LoginService.MAX_FAILURES - 1; i++) {
+            failureBody(TestSecrets.USERNAME, "wrong-password");
+        }
+        mockMvc.perform(post("/api/admin/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(credentials(TestSecrets.USERNAME, TestSecrets.PASSWORD)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.token").isNotEmpty());
+
+        Integer remainingRows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM hermit_admin_login_failures WHERE username = ?",
+                Integer.class,
+                TestSecrets.USERNAME);
+        assertThat(remainingRows).isZero();
+
+        // 成功后再次输错从第 1 次重新计算，不提醒次数也不锁定。
+        String firstAgain = failureBody(TestSecrets.USERNAME, "wrong-password");
+        var parsed = objectMapper.readTree(firstAgain);
+        assertThat(parsed.get("data").isNull()).isTrue();
+        assertThat(parsed.get("error").get("message").asText()).isEqualTo(LoginService.FAILURE_MESSAGE);
+    }
+
+    /** 并发的错误口令不能绕过锁定：同一用户名的尝试排队，最多记 10 次失败。 */
+    @Test
+    void concurrentWrongPasswordsStillLockAfterTen(@Autowired LoginService logins) throws Exception {
         int threads = 16;
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         CountDownLatch start = new CountDownLatch(1);
@@ -201,7 +246,7 @@ class AdminApiTest {
             failureBody(TestSecrets.USERNAME, "wrong-password");
         }
         clock.setInstant(ReefTestConfig.START.plus(Duration.ofMinutes(14)));
-        assertThat(failureBody(TestSecrets.USERNAME, TestSecrets.PASSWORD)).contains(LoginService.FAILURE_MESSAGE);
+        assertThat(failureBody(TestSecrets.USERNAME, TestSecrets.PASSWORD)).contains(LoginService.LOCKED_MESSAGE);
 
         clock.setInstant(ReefTestConfig.START.plus(LoginService.LOCK_WINDOW));
         mockMvc.perform(post("/api/admin/login")
@@ -218,9 +263,11 @@ class AdminApiTest {
                 "disabled-admin",
                 passwordEncoder.encode(TestSecrets.PASSWORD),
                 Timestamp.from(ReefTestConfig.START));
-        String unknown = failureBody("nobody", "whatever");
-        String disabled = failureBody("disabled-admin", TestSecrets.PASSWORD);
-        assertThat(disabled).isEqualTo(unknown);
+        for (int attempt = 1; attempt <= LoginService.MAX_FAILURES; attempt++) {
+            String unknown = failureBody("nobody", "whatever");
+            String disabled = failureBody("disabled-admin", TestSecrets.PASSWORD);
+            assertThat(disabled).isEqualTo(unknown);
+        }
     }
 
     @Test

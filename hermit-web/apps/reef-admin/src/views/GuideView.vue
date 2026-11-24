@@ -21,6 +21,7 @@ import shotApproval from '../assets/guide/reef_rule_approval.webp'
 import shotCrabReef from '../assets/guide/crab_reef_connect.webp'
 import shotCrabConches from '../assets/guide/crab_conch_account.webp'
 import shotCrabApiKeys from '../assets/guide/crab_apikey_mcp.webp'
+import shotCrabRecorder from '../assets/guide/crab_browser_recorder.webp'
 
 type TabKey = 'quickstart' | 'subscribe' | 'authoring' | 'intranet'
 
@@ -33,6 +34,7 @@ const allScreenshots = [
   shotCrabConches,
   shotCrabApiKeys,
   shotApproval,
+  shotCrabRecorder,
 ]
 
 const tabs: { key: TabKey; badge: string; title: string; subtitle: string }[] = [
@@ -465,9 +467,9 @@ const submissionLabel = computed(() => (isAdmin.value ? '前往规则审批' : '
               </marker>
             </defs>
             <rect x="16" y="34" width="180" height="86" rx="12" class="svg-box" />
-            <text x="34" y="64" class="svg-title">1. 本机编写调试</text>
-            <text x="34" y="88" class="svg-desc">Crab 导入本地规则</text>
-            <text x="34" y="106" class="svg-desc">开发者模式试跑 &amp; 导出</text>
+            <text x="34" y="64" class="svg-title">1. 本机录制与调试</text>
+            <text x="34" y="88" class="svg-desc">浏览器录制 / 导入 HAR</text>
+            <text x="34" y="106" class="svg-desc">AI 写规则、试跑并导出</text>
 
             <line x1="196" y1="77" x2="236" y2="77" stroke="var(--el-color-primary)" stroke-width="2" marker-end="url(#arrow-s3)" />
 
@@ -501,11 +503,37 @@ const submissionLabel = computed(() => (isAdmin.value ? '前往规则审批' : '
         <article class="hm-card step-block">
           <div class="step-header">
             <span class="step-index">步骤 1</span>
-            <h3>编写最小可用的 HTTP 规则包并本机试跑</h3>
+            <h3>录制抓包并一键交给 AI 生成规则（推荐，免手写 YAML）</h3>
           </div>
           <p class="step-text">
-            参考下面这份可直接通过校验的规则模板编写 YAML。在 Crab「规则包与账号」点击「导入本地规则包」，
-            打开开发者模式对每个能力进行试跑、检查每步请求/提取 Trace；验证无误后在规则包详情页点击「导出 YAML」。
+            在 Crab 概览打开「开发者模式」后，进入左侧「浏览器录制」：点「开始录制」会自动拉起独立空白 Chrome/Edge（不影响日常浏览器），
+            完成登录与业务点击后点「停止录制」并「生成脱敏快照」（Cookie 值与密码自动抹除，仅存内存），最后点「复制给 AI」即可让已接入 MCP 的 AI 自动分析接口、编写并校验本地规则包。
+            无 Chrome 环境也可直接「导入本地 .har 文件」，或跳过录制参考步骤 2 手动编写 YAML。
+          </p>
+          <figure class="shot-card single">
+            <el-image
+              :src="shotCrabRecorder"
+              :preview-src-list="allScreenshots"
+              :initial-index="6"
+              fit="cover"
+              class="shot-img"
+              alt="Crab 浏览器录制与脱敏快照截图"
+            />
+            <figcaption>
+              <span>Crab「浏览器录制」：自动过滤静态噪声与脱敏，生成快照后一键「复制给 AI」或下载脱敏 HAR</span>
+              <el-icon><ZoomIn /></el-icon>
+            </figcaption>
+          </figure>
+        </article>
+
+        <article class="hm-card step-block">
+          <div class="step-header">
+            <span class="step-index">步骤 2</span>
+            <h3>本机试跑与导出 YAML（或参考最小模板手写）</h3>
+          </div>
+          <p class="step-text">
+            无论是 AI 通过 MCP 保存还是在 Crab「规则包与账号」手动导入本地 YAML，都可以先配置本机测试账号并在开发者模式下试跑、查看每步请求与提取结果；
+            验证无误后在规则包详情页点击「导出 YAML」。下面是一份可直接通过校验的最小示例模板：
           </p>
           <div class="code-card">
             <div class="code-head">
@@ -520,7 +548,7 @@ const submissionLabel = computed(() => (isAdmin.value ? '前往规则审批' : '
 
         <article class="hm-card step-block">
           <div class="step-header">
-            <span class="step-index">步骤 2</span>
+            <span class="step-index">步骤 3</span>
             <h3>在 Reef 提交审批并由管理员一键签发</h3>
           </div>
           <p class="step-text">

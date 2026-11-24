@@ -41,6 +41,7 @@ const detailOpen = ref(false)
 const detailLoading = ref(false)
 const detail = ref<RecorderEntryDetail | null>(null)
 const harInput = ref<HTMLInputElement>()
+const showAdvanced = ref(false)
 
 const form = reactive({
   mode: 'launch' as 'launch' | 'attach',
@@ -61,6 +62,19 @@ const isRecording = computed(() => status.value?.state === 'RECORDING')
 const hasSession = computed(() => status.value != null && status.value.state !== 'IDLE')
 const browsers = computed(() => status.value?.browsers ?? [])
 const snapshots = computed(() => status.value?.snapshots ?? [])
+const selectedBrowserLabel = computed(() => {
+  if (form.mode === 'attach') {
+    return form.debugEndpoint.trim() ? `调试端口 ${form.debugEndpoint.trim()}` : '本机调试浏览器（自动检测）'
+  }
+  if (form.browserChoice === CUSTOM_BROWSER) {
+    return form.customBrowserPath.trim() ? `自定义路径：${form.customBrowserPath.trim()}` : '未指定浏览器路径'
+  }
+  const matched = browsers.value.find((b) => b.path === form.browserChoice)
+  return matched ? matched.name : browsers.value[0]?.name ?? '未检测到浏览器'
+})
+const launchBlocked = computed(
+  () => form.mode === 'launch' && browsers.value.length === 0 && !form.customBrowserPath.trim(),
+)
 
 const originCounts = computed(() => {
   const counts = new Map<string, number>()
@@ -140,6 +154,9 @@ function syncBrowserDefault(next: RecorderStatus) {
     && !next.browsers.some((b) => b.path === form.browserChoice)
   ) {
     form.browserChoice = next.browsers.length > 0 ? next.browsers[0].path : CUSTOM_BROWSER
+  }
+  if (next.browsers.length === 0) {
+    showAdvanced.value = true
   }
 }
 
@@ -420,7 +437,7 @@ onBeforeUnmount(stopPolling)
   <div v-loading="loading" class="recorder">
     <PageHeader
       title="浏览器录制"
-      description="在开发者模式下直连本机 Chrome / Edge 录制网络请求，自动过滤静态噪声并脱敏，生成可供下载的脱敏 HAR 和 AI 可读快照"
+      description="录制目标网站操作或导入本地 .har 文件，自动去噪脱敏后生成快照，一键交给 AI 生成规则（可选项）"
     >
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
@@ -445,7 +462,7 @@ onBeforeUnmount(stopPolling)
     <template v-else-if="status && status.devMode">
       <div class="hm-card block-gap" data-test="recorder-controls">
         <div class="hm-card-title">
-          <span>1. 启动录制或导入 HAR</span>
+          <span>1. 采集网络请求</span>
           <el-tag v-if="isRecording" type="danger" effect="dark" size="small" data-test="recording-badge">
             录制中 · {{ status.businessEntries }} 条业务 / 共 {{ status.totalEntries }} 条
           </el-tag>
@@ -464,93 +481,39 @@ onBeforeUnmount(stopPolling)
           class="block-gap"
         />
 
-        <div class="mode-row">
-          <el-radio-group v-model="form.mode" :disabled="isRecording" data-test="recorder-mode">
-            <el-radio-button value="launch">启动独立录制浏览器（推荐）</el-radio-button>
-            <el-radio-button value="attach">连接本机调试浏览器</el-radio-button>
-          </el-radio-group>
-        </div>
+        <el-alert
+          v-if="form.mode === 'launch' && browsers.length === 0"
+          type="info"
+          show-icon
+          :closable="false"
+          title="未自动检测到本机 Chrome / Edge / Chromium"
+          data-test="no-browser-notice"
+          class="block-gap"
+        >
+          浏览器录制为可选项，不影响开发者模式正常使用。可直接点击下方「导入本地 .har 文件」，或在「高级连接选项」中手填浏览器路径。
+        </el-alert>
 
-        <div v-if="form.mode === 'launch'" class="form-grid">
-          <el-alert
-            v-if="browsers.length === 0"
-            type="info"
-            show-icon
-            :closable="false"
-            title="未自动检测到本机 Chrome / Edge / Chromium"
-            data-test="no-browser-notice"
-            class="wide-alert"
-          >
-            浏览器录制为可选项，不影响开发者模式正常使用。可直接点击下方「导入本地 .har 文件」，或手动填写浏览器路径后再录制。
-          </el-alert>
-          <label class="field">
-            <span class="hm-muted">本机浏览器（自动探测）</span>
-            <el-select v-model="form.browserChoice" :disabled="isRecording" data-test="browser-select">
-              <el-option
-                v-for="b in browsers"
-                :key="b.path"
-                :label="`${b.name} (${b.path})`"
-                :value="b.path"
-              />
-              <el-option label="手动填写浏览器路径…" :value="CUSTOM_BROWSER" />
-            </el-select>
-          </label>
-          <label v-if="form.browserChoice === CUSTOM_BROWSER" class="field">
-            <span class="hm-muted">自定义可执行文件路径</span>
-            <el-input
-              v-model="form.customBrowserPath"
-              :disabled="isRecording"
-              placeholder="例如 C:\Program Files\Google\Chrome\Application\chrome.exe"
-              data-test="custom-browser-path"
-            />
-          </label>
-          <label class="field wide">
-            <span class="hm-muted">目标系统起始地址（可选，留空开空白页）</span>
+        <div class="primary-bar">
+          <label class="field primary-url">
+            <span class="hm-muted">
+              {{ form.mode === 'launch' ? '要录制的网站地址（可选，留空开空白页）' : '连接后自动打开地址（可选）' }}
+            </span>
             <el-input
               v-model="form.startUrl"
               :disabled="isRecording"
-              placeholder="https://oa.corp.local"
-              data-test="start-url"
+              :placeholder="form.mode === 'launch' ? 'https://oa.corp.local' : '留空保持当前标签页'"
+              :data-test="form.mode === 'launch' ? 'start-url' : 'attach-start-url'"
             />
           </label>
-        </div>
-
-        <div v-else class="form-grid">
-          <label class="field wide">
-            <span class="hm-muted">本机调试地址（留空自动检测 Chrome 144+ 远程调试，或填本机端口）</span>
-            <el-input
-              v-model="form.debugEndpoint"
-              :disabled="isRecording"
-              placeholder="留空自动检测，或填 http://127.0.0.1:9222"
-              data-test="debug-endpoint"
-            />
-          </label>
-          <label class="field">
-            <span class="hm-muted">连接后自动打开地址（可选）</span>
-            <el-input
-              v-model="form.startUrl"
-              :disabled="isRecording"
-              placeholder="留空保持当前标签页"
-              data-test="attach-start-url"
-            />
-          </label>
-          <p class="hm-muted small hint-line">
-            <el-tag v-if="status?.defaultRemoteDebuggingDetected" type="success" size="small" effect="plain">
-              已检测到本机 Chrome 远程调试入口
-            </el-tag>
-            <template v-else>
-              仅允许连接本机回环调试端口。Chrome 144+ 可在 <code>chrome://inspect/#remote-debugging</code> 开启授权调试；Chrome 136+ 命令行启动需同时带非默认 <code>--user-data-dir</code>。
-            </template>
-          </p>
         </div>
 
         <div class="actions-row">
           <el-button
             v-if="!isRecording"
-            :type="form.mode === 'launch' && browsers.length === 0 && !form.customBrowserPath.trim() ? 'default' : 'primary'"
+            :type="launchBlocked ? 'default' : 'primary'"
             :icon="VideoCamera"
             :loading="busy"
-            :disabled="form.mode === 'launch' && browsers.length === 0 && !form.customBrowserPath.trim()"
+            :disabled="launchBlocked"
             data-test="start-recording"
             @click="startRecording"
           >
@@ -568,7 +531,7 @@ onBeforeUnmount(stopPolling)
           </el-button>
 
           <el-button
-            :type="form.mode === 'launch' && browsers.length === 0 && !form.customBrowserPath.trim() ? 'primary' : 'default'"
+            :type="launchBlocked ? 'primary' : 'default'"
             :icon="Upload"
             :loading="importing"
             :disabled="isRecording"
@@ -589,15 +552,84 @@ onBeforeUnmount(stopPolling)
           >
             清空当前缓冲
           </el-button>
+
+          <div class="advanced-trigger">
+            <el-tag size="small" type="info" effect="plain" data-test="detected-browser-tag">
+              {{ selectedBrowserLabel }}
+            </el-tag>
+            <el-button
+              link
+              type="primary"
+              size="small"
+              data-test="toggle-advanced-recorder"
+              @click="showAdvanced = !showAdvanced"
+            >
+              {{ showAdvanced ? '收起高级连接选项' : '高级连接选项（切换浏览器 / 连接调试端口）' }}
+            </el-button>
+          </div>
         </div>
+
+        <div v-if="showAdvanced" class="advanced-panel" data-test="recorder-advanced-panel">
+          <div class="mode-row">
+            <el-radio-group v-model="form.mode" :disabled="isRecording" data-test="recorder-mode">
+              <el-radio-button value="launch">启动独立录制浏览器（推荐）</el-radio-button>
+              <el-radio-button value="attach">连接本机已开启的调试浏览器</el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <div v-if="form.mode === 'launch'" class="form-grid">
+            <label class="field">
+              <span class="hm-muted">本机浏览器（自动探测）</span>
+              <el-select v-model="form.browserChoice" :disabled="isRecording" data-test="browser-select">
+                <el-option
+                  v-for="b in browsers"
+                  :key="b.path"
+                  :label="`${b.name} (${b.path})`"
+                  :value="b.path"
+                />
+                <el-option label="手动填写浏览器路径…" :value="CUSTOM_BROWSER" />
+              </el-select>
+            </label>
+            <label v-if="form.browserChoice === CUSTOM_BROWSER" class="field">
+              <span class="hm-muted">自定义可执行文件路径</span>
+              <el-input
+                v-model="form.customBrowserPath"
+                :disabled="isRecording"
+                placeholder="例如 C:\Program Files\Google\Chrome\Application\chrome.exe"
+                data-test="custom-browser-path"
+              />
+            </label>
+          </div>
+
+          <div v-else class="form-grid">
+            <label class="field wide">
+              <span class="hm-muted">本机调试地址（留空自动检测 Chrome 144+ 远程调试，或填本机端口）</span>
+              <el-input
+                v-model="form.debugEndpoint"
+                :disabled="isRecording"
+                placeholder="留空自动检测，或填 http://127.0.0.1:9222"
+                data-test="debug-endpoint"
+              />
+            </label>
+            <p class="hm-muted small hint-line">
+              <el-tag v-if="status?.defaultRemoteDebuggingDetected" type="success" size="small" effect="plain">
+                已检测到本机 Chrome 远程调试入口
+              </el-tag>
+              <template v-else>
+                仅允许连接本机回环调试端口。Chrome 144+ 可在 <code>chrome://inspect/#remote-debugging</code> 开启授权调试；Chrome 136+ 命令行启动需同时带非默认 <code>--user-data-dir</code>。
+              </template>
+            </p>
+          </div>
+        </div>
+
         <p class="hm-muted small">
-          独立录制模式会自动隔离临时用户目录，不影响日常 Chrome/Edge 的标签页与登录态；捕获瞬间即抹掉 Cookie、Set-Cookie 与 Authorization 令牌值（保留 Cookie 名称用于生成 <code>auth.cookies</code>）。
+          会打开独立空白窗口，不影响日常浏览器的标签页和登录态；捕获瞬间即抹除 Cookie 值与登录认证头（仅保留 Cookie 名称用于生成规则）。
         </p>
       </div>
 
       <div v-if="hasSession" class="hm-card block-gap" data-test="recorder-entries-card">
         <div class="hm-card-title">
-          <span>2. 筛选并勾选要保留的请求</span>
+          <span>2. 勾选业务请求并生成脱敏快照</span>
           <span class="hm-muted small">已选 {{ selectedIds.length }} 条</span>
         </div>
 
@@ -677,12 +709,12 @@ onBeforeUnmount(stopPolling)
               <el-input v-model="snapshotForm.title" placeholder="例如：OA 登录与待办查询" data-test="snapshot-title" />
             </label>
             <label class="field wide">
-              <span class="hm-muted">额外脱敏词（可选，每行一个，如刚才手输的密码/验证码，防非标准字段名漏脱敏）</span>
+              <span class="hm-muted">额外脱敏词（可选）</span>
               <el-input
                 v-model="snapshotForm.extraSecretsText"
                 type="textarea"
                 :rows="2"
-                placeholder="每行一个敏感词，只用于替换打码，绝不保存"
+                placeholder="如刚才在网页里手输了密码或验证码，可每行贴一个，确保彻底打码（绝不保存）"
                 data-test="extra-secrets"
               />
             </label>
@@ -697,14 +729,14 @@ onBeforeUnmount(stopPolling)
             >
               生成脱敏快照（已选 {{ selectedIds.length }} 条）
             </el-button>
-            <span class="hm-muted small">生成后才对 AI MCP 工具（<code>conch_capture_list</code> / <code>conch_capture_get</code>）可见。</span>
+            <span class="hm-muted small">生成后即可一键复制给 AI 自动读取，或下载脱敏 HAR。</span>
           </div>
         </div>
       </div>
 
       <div class="hm-card" data-test="snapshots-card">
         <div class="hm-card-title">
-          <span>3. 已确认的脱敏快照（仅内存，最多 10 份）</span>
+          <span>3. 已生成的脱敏快照（仅内存，最多 10 份）</span>
           <span class="hm-muted small">共 {{ snapshots.length }} 份</span>
         </div>
 
@@ -816,15 +848,34 @@ onBeforeUnmount(stopPolling)
   margin: 4px 0 10px;
 }
 
+.primary-bar {
+  margin-bottom: 12px;
+}
+
+.advanced-trigger {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.advanced-panel {
+  margin: 4px 0 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--hm-subtle, var(--el-fill-color-lighter));
+  border: 1px solid var(--el-border-color-lighter);
+}
+
 .mode-row {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  margin-bottom: 14px;
 }
 
 @media (max-width: 720px) {

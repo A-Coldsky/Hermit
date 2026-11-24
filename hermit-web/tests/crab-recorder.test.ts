@@ -153,6 +153,9 @@ describe('Crab 浏览器录制页面', () => {
     const wrapper = await mountPage(RecorderView)
     await flushPromises()
 
+    expect(wrapper.get('[data-test="detected-browser-tag"]').text()).toContain('Google Chrome')
+    expect(wrapper.find('[data-test="recorder-advanced-panel"]').exists()).toBe(false)
+
     await wrapper.get('[data-test="start-url"]').setValue('https://sso.corp.local/login')
     await wrapper.get('[data-test="start-recording"]').trigger('click')
     await flushPromises()

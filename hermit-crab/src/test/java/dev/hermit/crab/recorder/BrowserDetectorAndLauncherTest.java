@@ -81,4 +81,32 @@ class BrowserDetectorAndLauncherTest {
                 .isInstanceOf(RecorderException.class)
                 .hasMessageContaining("找不到");
     }
+
+    @Test
+    void worksCleanlyWithoutAnyLocalBrowserInstalled() {
+        // Simulates a machine with zero Chrome/Edge/Chromium installed.
+        List<BrowserDetector.DetectedBrowser> none = BrowserDetector.detect("Mac OS X", k -> null, temp.toString());
+        assertThat(none).isEmpty();
+        assertThat(BrowserDetector.findDefaultDevToolsActivePort("Mac OS X", k -> null, temp.toString())).isEmpty();
+
+        try (RecorderManager manager = new RecorderManager(
+                temp.resolve("profiles"),
+                java.time.Clock.systemUTC(),
+                k -> null,
+                () -> true)) {
+            // HAR import & snapshot creation work completely independently of browser availability.
+            String har = """
+                    {"log":{"version":"1.2","entries":[{
+                      "startedDateTime":"2026-11-24T12:00:00Z","time":10,
+                      "request":{"method":"GET","url":"https://oa.example.com/api/list","headers":[]},
+                      "response":{"status":200,"statusText":"OK","headers":[],"content":{"size":9,"mimeType":"application/json","text":"{\\"ok\\":true}"}}
+                    }]}}""";
+            RecorderManager.RecorderStatus imported = manager.importHar(har.getBytes(StandardCharsets.UTF_8), "manual.har");
+            assertThat(imported.businessEntries()).isEqualTo(1);
+            List<RecordedEntry> entries = manager.listSessionEntries(false);
+            CaptureSnapshot snap = manager.createSnapshot("无浏览器手工 HAR", List.of(entries.get(0).id()), List.of());
+            assertThat(snap.entries()).hasSize(1);
+            assertThat(manager.exportHar(snap.id())).isNotEmpty();
+        }
+    }
 }

@@ -210,4 +210,20 @@ describe('Crab 浏览器录制页面', () => {
 
     wrapper.unmount()
   })
+
+  it('未检测到本机浏览器时提示为可选项、允许导入 HAR，填入自定义路径后可启用录制', async () => {
+    crab.recorderStatus.mockResolvedValue(statusBase({ browsers: [] }))
+    const wrapper = await mountPage(RecorderView)
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="no-browser-notice"]').text()).toContain('浏览器录制为可选项')
+    expect(wrapper.get('[data-test="start-recording"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="import-har"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-test="custom-browser-path"]').setValue('/opt/chrome/chrome')
+    await flushPromises()
+    expect(wrapper.get('[data-test="start-recording"]').attributes('disabled')).toBeUndefined()
+
+    wrapper.unmount()
+  })
 })

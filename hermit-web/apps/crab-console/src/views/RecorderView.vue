@@ -472,6 +472,17 @@ onBeforeUnmount(stopPolling)
         </div>
 
         <div v-if="form.mode === 'launch'" class="form-grid">
+          <el-alert
+            v-if="browsers.length === 0"
+            type="info"
+            show-icon
+            :closable="false"
+            title="未自动检测到本机 Chrome / Edge / Chromium"
+            data-test="no-browser-notice"
+            class="wide-alert"
+          >
+            浏览器录制为可选项，不影响开发者模式正常使用。可直接点击下方「导入本地 .har 文件」，或手动填写浏览器路径后再录制。
+          </el-alert>
           <label class="field">
             <span class="hm-muted">本机浏览器（自动探测）</span>
             <el-select v-model="form.browserChoice" :disabled="isRecording" data-test="browser-select">
@@ -536,9 +547,10 @@ onBeforeUnmount(stopPolling)
         <div class="actions-row">
           <el-button
             v-if="!isRecording"
-            type="primary"
+            :type="form.mode === 'launch' && browsers.length === 0 && !form.customBrowserPath.trim() ? 'default' : 'primary'"
             :icon="VideoCamera"
             :loading="busy"
+            :disabled="form.mode === 'launch' && browsers.length === 0 && !form.customBrowserPath.trim()"
             data-test="start-recording"
             @click="startRecording"
           >
@@ -556,6 +568,7 @@ onBeforeUnmount(stopPolling)
           </el-button>
 
           <el-button
+            :type="form.mode === 'launch' && browsers.length === 0 && !form.customBrowserPath.trim() ? 'primary' : 'default'"
             :icon="Upload"
             :loading="importing"
             :disabled="isRecording"
@@ -809,9 +822,19 @@ onBeforeUnmount(stopPolling)
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 14px;
+}
+
+@media (max-width: 720px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wide-alert {
+  grid-column: 1 / -1;
 }
 
 .field {

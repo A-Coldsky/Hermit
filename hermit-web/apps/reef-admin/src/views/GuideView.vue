@@ -515,8 +515,8 @@ const submissionLabel = computed(() => (isAdmin.value ? '前往规则审批' : '
               :src="shotCrabRecorder"
               :preview-src-list="allScreenshots"
               :initial-index="6"
-              fit="cover"
-              class="shot-img"
+              fit="contain"
+              class="shot-img shot-img-auto"
               alt="Crab 浏览器录制与脱敏快照截图"
             />
             <figcaption>
@@ -843,6 +843,10 @@ const submissionLabel = computed(() => (isAdmin.value ? '前往规则审批' : '
   width: 100%;
   aspect-ratio: 1200 / 806;
   cursor: zoom-in;
+}
+
+.shot-img-auto {
+  aspect-ratio: auto;
 }
 
 .shot-card figcaption {

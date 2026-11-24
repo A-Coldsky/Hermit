@@ -196,6 +196,7 @@ class RecorderConsoleAndMcpTest {
             JsonNode listStruct = listResult.path("result").path("structuredContent");
             assertThat(listStruct.path("total").asInt()).isEqualTo(1);
             assertThat(listStruct.path("untrusted").asBoolean()).isTrue();
+            assertThat(listStruct.path("next").asText()).contains("conch_capture_get").contains("conch_guide");
             assertThat(listStruct.path("snapshots").get(0).path("captureId").asText()).isEqualTo(captureId);
             assertThat(textList(listStruct.path("snapshots").get(0).path("cookieNames"))).containsExactly("OA_SESSION");
 
@@ -212,7 +213,9 @@ class RecorderConsoleAndMcpTest {
                     .doesNotContain("LIVE_BODY_TOK")
                     .contains("OA_SESSION=***")
                     .contains("请假审批");
-            assertThat(getResult.path("result").path("structuredContent").path("untrusted").asBoolean()).isTrue();
+            JsonNode getStruct = getResult.path("result").path("structuredContent");
+            assertThat(getStruct.path("untrusted").asBoolean()).isTrue();
+            assertThat(getStruct.path("next").asText()).contains("conch_guide").contains("conch_validate");
 
             // Narrow-scoped API key must NOT see or read capture snapshots.
             String narrowSession = mcpInit(base, narrowKey.plaintext());

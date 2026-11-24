@@ -553,8 +553,9 @@ final class McpCatalog {
         ArrayList<McpSchema.Tool> tools = new ArrayList<>();
         tools.add(tool(GUIDE,
                 "按章节查询 Hermit 规则包（Conch）YAML 编写指南与语法参考（与资源 hermit://authoring/guide 同源）。"
-                        + "不传参数返回当前支持的 Crab 版本、步骤速查和章节目录；传 section 按章节 id、标题或子标题读取（传 all 获取全文）；传 query 按关键词定位章节。"
-                        + "写或改规则包 YAML 之前应先查阅相关章节。",
+                        + "不传参数返回当前支持的 Crab 版本、步骤速查、可直接复制修改的 HTTP 起始模板（starterTemplate）、高频避坑清单（pitfalls）和章节目录；"
+                        + "传 section 按 starter、章节 id、标题或子标题读取（传 all 获取全文）；传 query 按关键词定位章节。"
+                        + "写或改规则包 YAML 之前应先调用此工具。",
                 guideSchema(),
                 outputSchema ? guideOutputSchema() : null,
                 true,
@@ -588,8 +589,8 @@ final class McpCatalog {
                     false));
         }
         tools.add(tool(VALIDATE,
-                        "校验一份规则包 YAML，不写文件。写 YAML 前先调用 conch_guide（或读取资源 hermit://authoring/guide）查阅语法与示例。"
-                                + "错误码、路径、行号和中文原因与控制台导入、命令行导入一致。"
+                        "校验一份规则包 YAML，不写文件。写 YAML 前先调用 conch_guide（或读取资源 hermit://authoring/guide）查阅起始模板、避坑清单与语法示例。"
+                                + "错误码、路径、行号和中文原因与控制台导入、命令行导入一致；校验失败时另附 fixHints 修正建议和 suggestedSections 推荐查阅章节。"
                                 + "明文口令、Cookie 和请求头里的 Bearer 会报错并给出行号，不回显这些值。"
                                 + "写 YAML 之前先和用户确认要做哪些功能，只为确认过的功能写能力。",
                         yaml,
@@ -660,6 +661,7 @@ final class McpCatalog {
         properties.put("total", Map.of("type", "integer"));
         properties.put("note", Map.of("type", "string"));
         properties.put("untrusted", Map.of("type", "boolean"));
+        properties.put("next", Map.of("type", "string"));
         return objectSchema(properties);
     }
 
@@ -686,6 +688,7 @@ final class McpCatalog {
         properties.put("missingIndices", arraySchema(Map.of("type", "integer")));
         properties.put("note", Map.of("type", "string"));
         properties.put("untrusted", Map.of("type", "boolean"));
+        properties.put("next", Map.of("type", "string"));
         return objectSchema(properties);
     }
 
@@ -693,7 +696,7 @@ final class McpCatalog {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("section", Map.of(
                 "type", "string",
-                "description", "可选。章节 id、章节标题或子标题（如 from_har、steps、上传和下载文件），传 all 获取全文；不能与 query 同时使用。省略时返回速查和目录。"));
+                "description", "可选。填 starter 获取完整起始模板与避坑清单，或填章节 id、章节标题、子标题（如 from_har、steps、上传和下载文件），传 all 获取全文；不能与 query 同时使用。省略时返回速查、起始模板、避坑清单和目录。"));
         properties.put("query", Map.of(
                 "type", "string",
                 "description", "可选。按关键词搜索指南章节，不能与 section 同时使用。"));
@@ -713,6 +716,8 @@ final class McpCatalog {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("crabVersion", Map.of("type", "string"));
         properties.put("quickReference", Map.of("type", "string"));
+        properties.put("starterTemplate", Map.of("type", "string"));
+        properties.put("pitfalls", arraySchema(Map.of("type", "string")));
         properties.put("sections", arraySchema(objectSchema(section)));
         properties.put("id", Map.of("type", "string"));
         properties.put("title", Map.of("type", "string"));
@@ -797,6 +802,8 @@ final class McpCatalog {
         properties.put("errors", arraySchema(objectSchema(issue)));
         properties.put("warnings", arraySchema(objectSchema(issue)));
         properties.put("message", Map.of("type", "string"));
+        properties.put("fixHints", arraySchema(Map.of("type", "string")));
+        properties.put("suggestedSections", arraySchema(Map.of("type", "string")));
         properties.put("next", Map.of("type", "string"));
         return objectSchema(properties);
     }

@@ -6,6 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -20,6 +21,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchDestinations;
+import dev.hermit.common.validate.ValidationCodes;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.CrabVersion;
@@ -76,8 +78,21 @@ final class AuthoringCalls {
             "已保存为本地规则包，原 Reef 正式包未被修改且仍为当前生效版本。请先到 Crab 控制台将该包来源切换为本地规则包，再为本地副本新建账号并填写凭证。不要把口令、Cookie 或令牌发给 AI。";
     static final String NEXT_READY = "凭证字段没变，可以直接试跑。不要把口令、Cookie 或令牌发给 AI。";
     static final String NEXT_LOGIN = "凭证字段有变化。请到控制台点该账号的「测试登录」，确认成功后再试跑。不要把口令、Cookie 或令牌发给 AI。";
+    static final String NEXT_VALIDATE_OK = "校验通过。如需保存并试跑，请调用 conch_save_local 保存为本地规则包。";
+    static final String NEXT_FIX_ERRORS =
+            "请按 errors 和 fixHints 逐条修复错误，必要时调用 conch_guide(section=...) 查阅 suggestedSections，修改后重新调用 conch_validate 直到 ok=true。";
+    static final String NEXT_CAPTURE_LIST_EMPTY =
+            "当前还没有已确认的抓包快照。请让用户在 Crab 控制台「浏览器录制」完成录制或导入本地 .har 文件并生成快照后再调用 conch_capture_list；若无需抓包，请先调用 conch_guide 获取 starterTemplate 与 pitfalls 开始编写。";
+    static final String NEXT_CAPTURE_LIST =
+            "第 1 步：只按方法、路径和用途向用户列出看起来像业务接口的请求，先和用户确认要做哪些功能（不要自己猜或全部做成能力）；"
+                    + "第 2 步：用 conch_capture_get 读取登录链及用户确认过的接口详情；"
+                    + "第 3 步：调用 conch_guide 获取 starterTemplate 与 pitfalls，按抓包编写 YAML（绝不写密码/Cookie/Bearer 原文），用 conch_validate 校验至 ok=true 后再用 conch_save_local 保存。";
+    static final String NEXT_CAPTURE_GET =
+            "结合这些脱敏请求编写或修改规则包：1) 先调用 conch_guide 获取 starterTemplate 与 pitfalls（涉及登录/SSO/会话失效/文件上传下载时按 section 查阅对应章节）；"
+                    + "2) 凭证只在 credentials 声明字段，Cookie 由 Crab 自动管理不要写 Cookie 请求头；"
+                    + "3) 写完先调用 conch_validate 校验至 ok=true，再调用 conch_save_local 保存。";
     static final String GUIDE_OVERVIEW_NOTE =
-            "传 section（可填 id、章节标题、子标题，或 all 获取全文）按需阅读；也可传 query 按关键词定位章节。同源资源 URI 为 hermit://authoring/guide。";
+            "建议直接复制 starterTemplate 按抓包或接口结构修改，并对照 pitfalls 避坑；传 section（可填 starter、章节 id、章节标题、子标题，或 all 获取全文）按需阅读；也可传 query 按关键词定位章节。同源资源 URI 为 hermit://authoring/guide。";
     static final String REEF_READ_ONLY_NOTE =
             "这是从 Reef 订阅的正式规则包，只读不可直接修改。如需改动，请基于这份 YAML 修改后用 conch_save_local 保存为本地规则包（可起新包名立即生效，或沿用同名保存为本地副本后再到控制台切换来源）。";
     static final String REEF_READ_ONLY_WITH_LOCAL_NOTE =
@@ -196,6 +211,8 @@ final class AuthoringCalls {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("crabVersion", crabVersion);
         body.put("quickReference", quick.content());
+        body.put("starterTemplate", AuthoringGuide.starterTemplate());
+        body.put("pitfalls", AuthoringGuide.pitfalls());
         body.put("sections", catalog);
         body.put("note", GUIDE_OVERVIEW_NOTE);
         return McpCalls.ok(body);
@@ -354,6 +371,7 @@ final class AuthoringCalls {
         body.put("total", rows.size());
         body.put("note", UNTRUSTED);
         body.put("untrusted", true);
+        body.put("next", rows.isEmpty() ? NEXT_CAPTURE_LIST_EMPTY : NEXT_CAPTURE_LIST);
         return McpCalls.ok(body);
     }
 
@@ -453,6 +471,7 @@ final class AuthoringCalls {
         body.put("missingIndices", missing);
         body.put("note", UNTRUSTED);
         body.put("untrusted", true);
+        body.put("next", NEXT_CAPTURE_GET);
         return McpCalls.ok(body);
     }
 
@@ -786,7 +805,7 @@ final class AuthoringCalls {
                     checked.warnings(),
                     checked.ok() ? null : "规则包校验失败",
                     null,
-                    null,
+                    checked.ok() ? NEXT_VALIDATE_OK : null,
                     checked.ok() ? null : attempt.traceId());
         } catch (LocalConchException ex) {
             return McpCalls.fail(attempt, ex.code().name(), ex.getMessage());
@@ -950,14 +969,180 @@ final class AuthoringCalls {
         if (message != null && !message.isBlank()) {
             body.put("message", message);
         }
-        if (next != null) {
-            body.put("next", next);
+        String resolvedNext = next;
+        if (!ok && errors != null && !errors.isEmpty()) {
+            Recovery recovery = recoveryFor(errors);
+            if (!recovery.fixHints().isEmpty()) {
+                body.put("fixHints", recovery.fixHints());
+            }
+            if (!recovery.suggestedSections().isEmpty()) {
+                body.put("suggestedSections", recovery.suggestedSections());
+            }
+            if (resolvedNext == null) {
+                resolvedNext = NEXT_FIX_ERRORS;
+            }
+        }
+        if (resolvedNext != null) {
+            body.put("next", resolvedNext);
         }
         if (!ok && requestId != null && !requestId.isBlank()) {
             body.put("requestId", requestId);
             body.put("requestNote", ApiEnvelope.REQUEST_NOTE);
         }
         return McpCalls.ok(body);
+    }
+
+    record Recovery(List<String> fixHints, List<String> suggestedSections) {
+    }
+
+    static Recovery recoveryFor(List<ValidationIssue> errors) {
+        LinkedHashSet<String> hints = new LinkedHashSet<>();
+        LinkedHashSet<String> sections = new LinkedHashSet<>();
+        if (errors == null) {
+            return new Recovery(List.of(), List.of());
+        }
+        for (ValidationIssue issue : errors) {
+            String code = issue == null || issue.code() == null ? "" : issue.code();
+            switch (code) {
+                case "PARSE" -> {
+                    hints.add("YAML 解析或层级结构有误：请检查缩进、冒号、引号（含 {{...}} 模板值建议加双引号）以及是否写了该层不支持的键，可对照 conch_guide(section=\"starter\") 核对骨架。");
+                    sections.add(AuthoringGuide.STARTER_SECTION);
+                    sections.add("fields");
+                }
+                case ValidationCodes.MIN_CRAB_VERSION -> {
+                    hints.add("将顶层 min_crab_version 调整为 " + CrabVersion.CURRENT + "（当前 Crab 兼容版本），即可支持 1.1–1.12 全部规则特性。");
+                    sections.add("fields");
+                }
+                case ValidationCodes.CONCH_NAME, ValidationCodes.ACTION_NAME -> {
+                    hints.add("包名与能力名必须以小写字母开头，仅含小写字母、数字和下划线（^[a-z][a-z0-9_]{1,63}$），不能含连字符或大写字母。");
+                    sections.add("fields");
+                }
+                case ValidationCodes.DRIVER -> {
+                    hints.add("driver 只允许 http 或 mcp（普通网站与接口规则包请写 driver: http）。");
+                    sections.add("fields");
+                }
+                case ValidationCodes.MISSING_TITLE, ValidationCodes.MISSING_DESCRIPTION -> {
+                    hints.add("顶层规则包和每个 action 都必须填写非空的 title 与 description。");
+                    sections.add(AuthoringGuide.STARTER_SECTION);
+                    sections.add("fields");
+                }
+                case ValidationCodes.MISSING_CREDENTIALS -> {
+                    hints.add("顶层必须显式声明 credentials 字段；无需登录或凭证时请写 credentials: {}。");
+                    sections.add(AuthoringGuide.STARTER_SECTION);
+                    sections.add("fields");
+                }
+                case ValidationCodes.MISSING_OUTPUT -> {
+                    hints.add("每个 HTTP 能力都必须写 output 映射说明返回字段（省略 value 时自动取同名步骤变量）。");
+                    sections.add(AuthoringGuide.STARTER_SECTION);
+                    sections.add("templates_scripts");
+                }
+                case ValidationCodes.MISSING_EXAMPLES -> {
+                    hints.add("每个 HTTP 能力必须至少提供一条 examples（含 input 和 output 示例，使用脱敏占位数据）。");
+                    sections.add(AuthoringGuide.STARTER_SECTION);
+                    sections.add("fields");
+                }
+                case ValidationCodes.PLAINTEXT_CREDENTIAL, "LITERAL_CREDENTIAL" -> {
+                    hints.add("绝不能把密码、Cookie、Session 或 Bearer 令牌原文写进 YAML：在 credentials 声明 type: secret 字段，步骤中用 {{credential.xxx}} 引用；会话 Cookie 由 Crab 自动管理，不要写 Cookie 请求头。");
+                    sections.add("from_har");
+                    sections.add("fields");
+                }
+                case ValidationCodes.CONFIG_SECRET -> {
+                    hints.add("config 不允许 type: secret，请把密码、令牌等秘密字段移到顶层 credentials 下。");
+                    sections.add("fields");
+                }
+                case ValidationCodes.UNDECLARED_CREDENTIAL -> {
+                    hints.add("模板引用了未声明的 {{credential.xxx}}，请先在顶层 credentials 下声明对应字段。");
+                    sections.add("fields");
+                }
+                case ValidationCodes.UNDECLARED_CONFIG -> {
+                    hints.add("模板引用了未声明的 {{config.xxx}}，请先在顶层 config 下声明对应字段。");
+                    sections.add("fields");
+                }
+                case ValidationCodes.UNDECLARED_INPUT -> {
+                    hints.add("模板引用了未声明的 {{input.xxx}}，请先在该 action 的 input 下声明该入参字段。");
+                    sections.add("fields");
+                }
+                case ValidationCodes.UNDECLARED_VARIABLE -> {
+                    hints.add("引用了未声明的变量：能力步骤读取登录阶段提取的值请改用 {{login.xxx}}（先在 auth.steps 产出或在 auth.cookies 映射）；本步骤列表内的变量须由前面的 extract/set/script.into 产出，或用 {{var | default('')}} 处理可选值。");
+                    sections.add("templates_scripts");
+                    sections.add("from_har");
+                }
+                case ValidationCodes.LOGIN_VARIABLE_EMPTY,
+                        ValidationCodes.LOGIN_DEFAULT,
+                        ValidationCodes.LOGIN_IN_OUTPUT,
+                        ValidationCodes.AUTH_COOKIES -> {
+                    hints.add("{{login.xxx}} 只能在能力步骤或 alive_check 中使用，须由 auth.steps 或 auth.cookies 声明；不能套 default 过滤器，也不能放进 output 返回。");
+                    sections.add("from_har");
+                    sections.add("templates_scripts");
+                }
+                case ValidationCodes.CREDENTIAL_IN_OUTPUT -> {
+                    hints.add("output 不能直接引用 {{credential.*}}，请只返回业务数据字段。");
+                    sections.add("templates_scripts");
+                }
+                case ValidationCodes.RESERVED_VARIABLE -> {
+                    hints.add("input、credential、config、response、now、login、loop 是保留变量名，不能用 set/extract/script.into/ask.into/collect 写入，请改用其他业务变量名。");
+                    sections.add("templates_scripts");
+                }
+                case ValidationCodes.TEMPLATE_SYNTAX -> {
+                    hints.add("检查 {{ ... }} 模板语法：带连字符的头名请用点号加引号下标 {{response.headers['content-type']}}；credential/login/config/input/now 后一律用点号。");
+                    sections.add("templates_scripts");
+                }
+                case ValidationCodes.UNSUPPORTED_STEP,
+                        ValidationCodes.FLOW_STEP,
+                        ValidationCodes.RETRY,
+                        ValidationCodes.EXTRACT_SPEC,
+                        ValidationCodes.EXTRACT_FIELD,
+                        ValidationCodes.EXTRACT_OPTIONAL,
+                        ValidationCodes.ASSERT_KEY,
+                        ValidationCodes.ASSERT_STATUS -> {
+                    hints.add("检查步骤写法：每步是单键映射（request/extract/assert/set/script/if/repeat/ask）；assert.status 写数字（如 200）；if/until/assert 的 equals/present 等变量判断键直接写变量名不加 {{ }}；retry 写在 request 内且默认只用于 GET/HEAD。");
+                    sections.add(AuthoringGuide.QUICK_REFERENCE_ID);
+                    sections.add("steps");
+                }
+                case ValidationCodes.REQUEST_BODY, ValidationCodes.QUERY_STYLE -> {
+                    hints.add("request 中 body、form、json、multipart 四选一互斥，body 必须是字符串模板；query_style 只允许 url 或 form。");
+                    sections.add("steps");
+                }
+                case ValidationCodes.SCRIPT_STEP -> {
+                    hints.add("检查 script 步骤与顶层 scripts：库名不可重复，use 引用的库必须在顶层 scripts 声明，单段 code 不超过 64 KiB。");
+                    sections.add("templates_scripts");
+                }
+                case ValidationCodes.SESSION_EXPIRY -> {
+                    hints.add("检查会话失效判定：auth.expired_when 使用字面量判断键（不可仅用 2xx 状态码，不可写 5xx）；assert 的 on_fail: session_expired 只能写在能力步骤且至少带一个判断条件，且 min_crab_version 不低于 1.12.0。");
+                    sections.add("session_expiry");
+                }
+                case ValidationCodes.AUTH_ORIGIN -> {
+                    hints.add("跨域名门户/SSO 登录地址须声明在 auth.origins（最多 4 个，仅登录步骤可用）；能力步骤和 alive_check 仍只能访问 base_url，且 min_crab_version 不低于 1.11.0。");
+                    sections.add("sso_login");
+                }
+                case ValidationCodes.GROUP_NAME, ValidationCodes.GROUP_DEPTH, ValidationCodes.UNKNOWN_GROUP -> {
+                    hints.add("能力分组最多两级（parent/child），分组名符合 ^[a-z][a-z0-9_]{1,63}$ 且 action.group 必须指向顶层 groups 已声明的分组，且 min_crab_version 不低于 1.10.0。");
+                    sections.add("groups");
+                }
+                case ValidationCodes.HOSTNAME -> {
+                    hints.add("主机名不能含下划线，非 ASCII 域名请转为 punycode，或改用 IP / 合法 DNS 别名。");
+                    sections.add("fields");
+                }
+                case ValidationCodes.DUPLICATE_ACTION -> {
+                    hints.add("actions 下存在重名的能力，请合并或重命名。");
+                    sections.add("fields");
+                }
+                case ValidationCodes.MCP_UPSTREAM,
+                        ValidationCodes.MCP_SCHEMA_REF,
+                        ValidationCodes.MCP_HEADER,
+                        ValidationCodes.MCP_DESCRIPTION,
+                        ValidationCodes.MCP_NO_ACTIONS -> {
+                    hints.add("请查阅 MCP 上游包章节核对 upstream、oauth、headers 与 tools 定义。");
+                    sections.add("mcp_upstream");
+                }
+                default -> {
+                    hints.add("请根据 errors 中的 path、line 和 message 逐条修正，必要时调用 conch_guide(section=\"starter\") 对照完整模板。");
+                    sections.add(AuthoringGuide.QUICK_REFERENCE_ID);
+                    sections.add(AuthoringGuide.STARTER_SECTION);
+                }
+            }
+        }
+        return new Recovery(List.copyOf(hints), List.copyOf(sections));
     }
 
     private static List<Map<String, Object>> issueMaps(List<ValidationIssue> found) {

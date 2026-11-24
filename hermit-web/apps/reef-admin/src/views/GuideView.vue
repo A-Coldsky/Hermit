@@ -130,6 +130,7 @@ actions:
       - input: { page: 1 }
         output: { items: [{ id: "OA-1024", title: "示例报销单审批" }] }
     notes: 只读接口，不会修改业务数据。
+    related: []
     idempotent: true
     mcp: { read_only: true }`
 

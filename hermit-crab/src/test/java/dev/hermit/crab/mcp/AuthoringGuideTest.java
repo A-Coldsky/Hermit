@@ -112,7 +112,20 @@ class AuthoringGuideTest {
 
         AuthoringGuide.SectionMatch byChineseTitle = AuthoringGuide.findSection("步骤").orElseThrow();
         assertThat(byChineseTitle.id()).isEqualTo("steps");
-        assertThat(byChineseTitle.subsections()).contains("条件、循环和重试", "上传和下载文件");
+        assertThat(byChineseTitle.subsections()).contains(
+                "ask（登录验证码）",
+                "request（请求与编码）",
+                "条件、循环和重试",
+                "上传和下载文件",
+                "请求超时、重定向与状态码处理",
+                "extract 与 assert（提取与断言）");
+
+        AuthoringGuide.SectionMatch templates = AuthoringGuide.findSection("templates_scripts").orElseThrow();
+        assertThat(templates.subsections()).contains(
+                "模板与过滤器",
+                "保留变量与作用域",
+                "输出与自动脱敏",
+                "脚本与脚本库");
 
         AuthoringGuide.SectionMatch bySubsection = AuthoringGuide.findSection("上传和下载文件").orElseThrow();
         assertThat(bySubsection.parentId()).isEqualTo("steps");
@@ -122,6 +135,12 @@ class AuthoringGuideTest {
         AuthoringGuide.SectionMatch byParentSub = AuthoringGuide.findSection("steps/条件、循环和重试").orElseThrow();
         assertThat(byParentSub.parentId()).isEqualTo("steps");
         assertThat(byParentSub.content()).contains("repeat");
+
+        AuthoringGuide.SectionMatch starter = AuthoringGuide.findSection("starter").orElseThrow();
+        assertThat(starter.id()).isEqualTo(AuthoringGuide.STARTER_SECTION);
+        assertThat(starter.content()).contains("conch: my_system").contains("min_crab_version: 1.12.0");
+        assertThat(AuthoringGuide.findSection("starter_template")).isPresent();
+        assertThat(AuthoringGuide.findSection("起始模板")).isPresent();
 
         AuthoringGuide.SectionMatch all = AuthoringGuide.findSection("ALL").orElseThrow();
         assertThat(all.id()).isEqualTo("all");
@@ -152,6 +171,65 @@ class AuthoringGuideTest {
         assertThat(synthetic).hasSize(1);
         assertThat(synthetic.get(0).title()).isEqualTo("第一章");
         assertThat(synthetic.get(0).subsectionTitles()).containsExactly("真实子章节");
+    }
+
+    @Test
+    void starterTemplateValidatesCleanlyWithZeroWarningsAndAllRecoverySectionsExist() {
+        assertThat(AuthoringGuide.pitfalls()).hasSize(10);
+        assertThat(AuthoringGuide.pitfalls()).allSatisfy(item -> assertThat(item).contains("❌").contains("✅"));
+
+        CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("starter")), CrabConfig.defaults());
+        try {
+            LocalConches.CheckResult checked = runtime.localConches().check(
+                    AuthoringGuide.starterTemplate().getBytes(StandardCharsets.UTF_8));
+            assertThat(checked.ok()).isTrue();
+            assertThat(codes(checked.errors())).isEmpty();
+            assertThat(codes(checked.warnings())).isEmpty();
+        } finally {
+            runtime.close();
+        }
+
+        List<String> allCodes = List.of(
+                "PARSE",
+                "LITERAL_CREDENTIAL",
+                "UNKNOWN_FUTURE_CODE",
+                dev.hermit.common.validate.ValidationCodes.MIN_CRAB_VERSION,
+                dev.hermit.common.validate.ValidationCodes.CONCH_NAME,
+                dev.hermit.common.validate.ValidationCodes.DRIVER,
+                dev.hermit.common.validate.ValidationCodes.MISSING_TITLE,
+                dev.hermit.common.validate.ValidationCodes.MISSING_CREDENTIALS,
+                dev.hermit.common.validate.ValidationCodes.MISSING_OUTPUT,
+                dev.hermit.common.validate.ValidationCodes.MISSING_EXAMPLES,
+                dev.hermit.common.validate.ValidationCodes.PLAINTEXT_CREDENTIAL,
+                dev.hermit.common.validate.ValidationCodes.CONFIG_SECRET,
+                dev.hermit.common.validate.ValidationCodes.UNDECLARED_CREDENTIAL,
+                dev.hermit.common.validate.ValidationCodes.UNDECLARED_CONFIG,
+                dev.hermit.common.validate.ValidationCodes.UNDECLARED_INPUT,
+                dev.hermit.common.validate.ValidationCodes.UNDECLARED_VARIABLE,
+                dev.hermit.common.validate.ValidationCodes.LOGIN_DEFAULT,
+                dev.hermit.common.validate.ValidationCodes.CREDENTIAL_IN_OUTPUT,
+                dev.hermit.common.validate.ValidationCodes.RESERVED_VARIABLE,
+                dev.hermit.common.validate.ValidationCodes.TEMPLATE_SYNTAX,
+                dev.hermit.common.validate.ValidationCodes.FLOW_STEP,
+                dev.hermit.common.validate.ValidationCodes.REQUEST_BODY,
+                dev.hermit.common.validate.ValidationCodes.SCRIPT_STEP,
+                dev.hermit.common.validate.ValidationCodes.SESSION_EXPIRY,
+                dev.hermit.common.validate.ValidationCodes.AUTH_ORIGIN,
+                dev.hermit.common.validate.ValidationCodes.UNKNOWN_GROUP,
+                dev.hermit.common.validate.ValidationCodes.HOSTNAME,
+                dev.hermit.common.validate.ValidationCodes.DUPLICATE_ACTION,
+                dev.hermit.common.validate.ValidationCodes.MCP_UPSTREAM);
+        for (String code : allCodes) {
+            AuthoringCalls.Recovery recovery = AuthoringCalls.recoveryFor(
+                    List.of(new ValidationIssue(code, "path", "msg")));
+            assertThat(recovery.fixHints()).as("fixHints for %s", code).isNotEmpty();
+            assertThat(recovery.suggestedSections()).as("suggestedSections for %s", code).isNotEmpty();
+            for (String section : recovery.suggestedSections()) {
+                assertThat(AuthoringGuide.findSection(section))
+                        .as("section %s suggested for %s", section, code)
+                        .isPresent();
+            }
+        }
     }
 
     private static List<String> codes(List<ValidationIssue> issues) {

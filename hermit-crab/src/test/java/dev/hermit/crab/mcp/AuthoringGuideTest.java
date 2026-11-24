@@ -91,6 +91,69 @@ class AuthoringGuideTest {
         }
     }
 
+    @Test
+    void sectionsSubsectionsAndSearchWorkAndIgnoreFencedCodeHeadings() {
+        List<AuthoringGuide.Section> sections = AuthoringGuide.sections();
+        assertThat(sections).isNotEmpty();
+        assertThat(sections).extracting(AuthoringGuide.Section::id)
+                .contains("quick_reference", "from_har", "fields", "groups", "mcp_upstream",
+                        "sso_login", "session_expiry", "steps", "templates_scripts", "local_dev");
+        assertThat(AuthoringGuide.quickReference().id()).isEqualTo("quick_reference");
+        assertThat(AuthoringGuide.quickReference().bytes()).isLessThanOrEqualTo(3 * 1024);
+
+        // 代码块内的 # 注释不得被当成章节
+        assertThat(sections).extracting(AuthoringGuide.Section::title)
+                .noneMatch(title -> title.startsWith("request：") || title.startsWith("assert："));
+
+        AuthoringGuide.SectionMatch byId = AuthoringGuide.findSection("session_expiry").orElseThrow();
+        assertThat(byId.title()).isEqualTo("非 401/403 的会话失效判定");
+        assertThat(byId.parentId()).isNull();
+        assertThat(byId.content()).contains("expired_when").doesNotContain("](");
+
+        AuthoringGuide.SectionMatch byChineseTitle = AuthoringGuide.findSection("步骤").orElseThrow();
+        assertThat(byChineseTitle.id()).isEqualTo("steps");
+        assertThat(byChineseTitle.subsections()).contains("条件、循环和重试", "上传和下载文件");
+
+        AuthoringGuide.SectionMatch bySubsection = AuthoringGuide.findSection("上传和下载文件").orElseThrow();
+        assertThat(bySubsection.parentId()).isEqualTo("steps");
+        assertThat(bySubsection.content()).contains("multipart").contains("download");
+        assertThat(bySubsection.bytes()).isLessThan(byChineseTitle.bytes());
+
+        AuthoringGuide.SectionMatch byParentSub = AuthoringGuide.findSection("steps/条件、循环和重试").orElseThrow();
+        assertThat(byParentSub.parentId()).isEqualTo("steps");
+        assertThat(byParentSub.content()).contains("repeat");
+
+        AuthoringGuide.SectionMatch all = AuthoringGuide.findSection("ALL").orElseThrow();
+        assertThat(all.id()).isEqualTo("all");
+        assertThat(all.content()).isEqualTo(AuthoringGuide.text());
+
+        assertThat(AuthoringGuide.findSection("not_a_real_section")).isEmpty();
+
+        List<AuthoringGuide.SearchHit> hits = AuthoringGuide.search("expired_when");
+        assertThat(hits).isNotEmpty();
+        assertThat(hits.get(0).id()).isEqualTo("session_expiry");
+        assertThat(hits.get(0).excerpts()).isNotEmpty();
+
+        // 独立测试围栏代码块内的 ## 标题不被切章
+        List<AuthoringGuide.Section> synthetic = AuthoringGuide.parseSections("""
+                # 标题
+
+                ## 第一章
+
+                ```yaml
+                ## 这不是章节
+                ### 也不是子章节
+                ```
+
+                ### 真实子章节
+
+                正文
+                """);
+        assertThat(synthetic).hasSize(1);
+        assertThat(synthetic.get(0).title()).isEqualTo("第一章");
+        assertThat(synthetic.get(0).subsectionTitles()).containsExactly("真实子章节");
+    }
+
     private static List<String> codes(List<ValidationIssue> issues) {
         ArrayList<String> codes = new ArrayList<>();
         for (ValidationIssue issue : issues) {

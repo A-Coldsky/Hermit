@@ -4,10 +4,12 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
@@ -22,6 +24,17 @@ import dev.hermit.crab.store.CrabPaths;
 import dev.hermit.crab.store.Origin;
 
 public final class InstalledConches {
+
+    public record VerifiedYaml(String conch, String version, byte[] bytes) {
+        public VerifiedYaml {
+            bytes = bytes == null ? new byte[0] : bytes.clone();
+        }
+
+        @Override
+        public byte[] bytes() {
+            return bytes.clone();
+        }
+    }
 
     private static final Logger LOG = Logger.getLogger(InstalledConches.class.getName());
 
@@ -122,6 +135,47 @@ public final class InstalledConches {
                     + " lines=" + RuleDisabled.lines(located));
         } catch (IOException ex) {
             failures.add(failure(conch, version, SyncReasons.PACKAGE_MISSING));
+        }
+    }
+
+    /**
+     * 只读读取本机已安装的 Reef 正式规则包原始 YAML。读取前按 Reef 公钥重新验签并核对清单，
+     * 绝不修改文件，也不返回未通过验签的内容。
+     */
+    public static Optional<VerifiedYaml> readVerifiedYaml(CrabPaths paths, PublicKey key, String conch) {
+        if (paths == null || key == null || !ConchFiles.safeSegment(conch)) {
+            return Optional.empty();
+        }
+        synchronized (ConchFileLocks.of(conch)) {
+            Path current = ConchFiles.conchDir(paths, conch).resolve("current");
+            if (Files.isSymbolicLink(current) || !Files.isRegularFile(current, LinkOption.NOFOLLOW_LINKS)) {
+                return Optional.empty();
+            }
+            String version;
+            try {
+                version = Files.readString(current, StandardCharsets.UTF_8).trim();
+            } catch (IOException ex) {
+                return Optional.empty();
+            }
+            if (!ConchFiles.safeSegment(version)) {
+                return Optional.empty();
+            }
+            Path zip = ConchFiles.versionDir(paths, conch, version).resolve("package.zip");
+            if (Files.isSymbolicLink(zip) || !Files.isRegularFile(zip, LinkOption.NOFOLLOW_LINKS)) {
+                return Optional.empty();
+            }
+            try {
+                if (Files.size(zip) > ConchFiles.MAX_ZIP_BYTES) {
+                    return Optional.empty();
+                }
+                VerifiedConch verified = ConchPackage.readVerified(Files.readAllBytes(zip), key);
+                if (!conch.equals(verified.manifest().conch()) || !version.equals(verified.manifest().version())) {
+                    return Optional.empty();
+                }
+                return Optional.of(new VerifiedYaml(conch, version, verified.conchYaml()));
+            } catch (PackageVerificationException | IOException ex) {
+                return Optional.empty();
+            }
         }
     }
 

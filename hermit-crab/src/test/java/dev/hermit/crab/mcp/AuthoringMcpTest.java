@@ -56,15 +56,36 @@ class AuthoringMcpTest {
     void developerModeShowsToolsAndGuideAndHidesThemImmediately() throws Exception {
         try (Harness server = Harness.open(temp.resolve("gate"))) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
-            String session = server.initialize(false);
+            HttpResponse<String> openedResponse = server.postRaw(server.key.plaintext(), null, """
+                    {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}
+                    """, Map.of());
+            assertThat(openedResponse.statusCode()).isEqualTo(200);
+            JsonNode openedInit = ApiJson.tree(openedResponse.body()).path("result");
+            assertThat(openedInit.path("instructions").asText())
+                    .contains("conch_guide")
+                    .contains("conch_read_yaml")
+                    .contains("hermit://authoring/guide")
+                    .contains("Reef 订阅的正式包只读");
+            String session = openedResponse.headers().firstValue("Mcp-Session-Id").orElseThrow();
             JsonNode tools = server.rpc(session, 2, "tools/list", null);
             assertThat(toolNames(tools)).contains(
-                    "conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
+                    "conch_guide", "conch_read_yaml", "conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
+            assertThat(tool(tools, "conch_guide").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
+            assertThat(tool(tools, "conch_guide").path("annotations").path("destructiveHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "conch_read_yaml").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
+            assertThat(tool(tools, "conch_read_yaml").path("annotations").path("destructiveHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "conch_read_yaml").path("description").asText()).contains("Reef 订阅的正式包只读");
             assertThat(tool(tools, "conch_validate").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
             assertThat(tool(tools, "conch_validate").path("annotations").path("destructiveHint").asBoolean()).isFalse();
-            assertThat(tool(tools, "conch_validate").path("description").asText()).contains("先和用户确认要做哪些功能");
+            assertThat(tool(tools, "conch_validate").path("description").asText())
+                    .contains("先和用户确认要做哪些功能")
+                    .contains("conch_guide")
+                    .contains("hermit://authoring/guide");
             assertThat(tool(tools, "conch_save_local").path("annotations").path("readOnlyHint").asBoolean()).isFalse();
             assertThat(tool(tools, "conch_save_local").path("annotations").path("destructiveHint").asBoolean()).isTrue();
+            assertThat(tool(tools, "conch_save_local").path("description").asText())
+                    .contains("conch_read_yaml")
+                    .contains("绝不修改 Reef 订阅的正式规则包");
             assertThat(tool(tools, "conch_trial_run").path("annotations").path("readOnlyHint").asBoolean()).isFalse();
             assertThat(tool(tools, "conch_trial_run").path("annotations").path("destructiveHint").asBoolean()).isFalse();
             assertThat(tool(tools, "conch_trial_run").path("annotations").path("idempotentHint").asBoolean()).isFalse();
@@ -76,17 +97,26 @@ class AuthoringMcpTest {
             assertThat(guide).contains("从 HAR 写规则").doesNotContain("](").doesNotContain("github.com");
 
             server.runtime.debug().setEnabled(false, Actors.CONSOLE);
-            String closed = server.initialize(false);
+            HttpResponse<String> closedResponse = server.postRaw(server.key.plaintext(), null, """
+                    {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}
+                    """, Map.of());
+            assertThat(closedResponse.statusCode()).isEqualTo(200);
+            assertThat(ApiJson.tree(closedResponse.body()).path("result").has("instructions")).isFalse();
+            String closed = closedResponse.headers().firstValue("Mcp-Session-Id").orElseThrow();
             JsonNode hiddenTools = server.rpc(closed, 2, "tools/list", null);
             assertThat(toolNames(hiddenTools)).doesNotContain(
-                    "conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
+                    "conch_guide", "conch_read_yaml", "conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
             JsonNode hiddenResources = server.rpc(closed, 3, "resources/list", null);
             assertThat(resourceUris(hiddenResources)).doesNotContain(AuthoringGuide.URI);
 
-            JsonNode called = server.rpc(closed, 4, "tools/call", Map.of(
-                    "name", "conch_validate", "arguments", Map.of("yaml", "conch: x\n")));
-            assertThat(toolMessage(called)).isEqualTo(AuthoringCalls.DEV_MODE_CLOSED);
-            assertThat(toolError(called).path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            for (Map<String, Object> call : List.of(
+                    Map.of("name", "conch_guide", "arguments", Map.of()),
+                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "demo")),
+                    Map.of("name", "conch_validate", "arguments", Map.of("yaml", "conch: x\n")))) {
+                JsonNode called = server.rpc(closed, 4, "tools/call", call);
+                assertThat(toolMessage(called)).as(String.valueOf(call.get("name"))).isEqualTo(AuthoringCalls.DEV_MODE_CLOSED);
+                assertThat(toolError(called).path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            }
             JsonNode trace = server.rpc(closed, 5, "tools/call", Map.of(
                     "name", "debug_trace", "arguments", Map.of("traceId", "missing")));
             assertThat(toolMessage(trace)).isEqualTo(AuthoringCalls.DEV_MODE_CLOSED).doesNotContain("没有这个工具");
@@ -654,11 +684,14 @@ class AuthoringMcpTest {
                     {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}
                     """, Map.of());
             assertThat(opened.statusCode()).as(opened.body()).isEqualTo(200);
+            assertThat(ApiJson.tree(opened.body()).path("result").has("instructions")).isFalse();
             String remoteSession = opened.headers().firstValue("Mcp-Session-Id").orElseThrow();
             HttpResponse<String> remoteTools = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
                     {"jsonrpc":"2.0","id":2,"method":"tools/list"}
                     """, Map.of());
             assertThat(remoteTools.body()).contains("debug_trace")
+                    .doesNotContain("conch_guide")
+                    .doesNotContain("conch_read_yaml")
                     .doesNotContain("conch_validate")
                     .doesNotContain("conch_save_local")
                     .doesNotContain("conch_trial_run");
@@ -666,8 +699,17 @@ class AuthoringMcpTest {
                     {"jsonrpc":"2.0","id":3,"method":"resources/list"}
                     """, Map.of());
             assertThat(remoteResources.body()).doesNotContain(AuthoringGuide.URI);
-            for (String tool : java.util.List.of("conch_validate", "conch_save_local", "conch_trial_run")) {
-                HttpResponse<String> called = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, callJson(tool, yaml), Map.of());
+            for (String tool : java.util.List.of("conch_guide", "conch_read_yaml", "conch_validate", "conch_save_local", "conch_trial_run")) {
+                String payload = switch (tool) {
+                    case "conch_guide" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_guide","arguments":{}}}
+                            """;
+                    case "conch_read_yaml" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_read_yaml","arguments":{"conch":"remote_ping"}}}
+                            """;
+                    default -> callJson(tool, yaml);
+                };
+                HttpResponse<String> called = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, payload, Map.of());
                 assertThat(called.statusCode()).as(called.body()).isEqualTo(200);
                 JsonNode body = ApiJson.tree(called.body());
                 assertThat(toolMessage(body)).as(tool).isEqualTo(AuthoringCalls.LOCAL_ONLY);
@@ -1638,6 +1680,236 @@ class AuthoringMcpTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void conchGuideReturnsQuickReferenceSectionsSubsectionsSearchAndRejectsBadInput() throws Exception {
+        CrabConfig directoryConfig = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(0);
+        try (Harness server = Harness.open(temp.resolve("guide-tool"), directoryConfig)) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            CreatedApiKey readOnly = server.runtime.apiKeys().create(
+                    "ro", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+            String session = server.initialize(readOnly.plaintext(), false);
+
+            // 目录模式下、只读 Key 依然看得到并能调用 conch_guide，看不到 conch_save_local
+            JsonNode tools = server.rpc(readOnly.plaintext(), session, 2, "tools/list", null);
+            assertThat(toolNames(tools)).contains("list_systems", "conch_guide", "conch_read_yaml", "conch_validate")
+                    .doesNotContain("conch_save_local");
+
+            JsonNode overview = server.rpc(readOnly.plaintext(), session, 3, "tools/call",
+                    Map.of("name", "conch_guide", "arguments", Map.of()));
+            assertThat(overview.path("result").path("isError").asBoolean()).isFalse();
+            JsonNode overData = structured(overview);
+            assertThat(overData.path("crabVersion").asText()).isEqualTo(dev.hermit.crab.engine.CrabVersion.CURRENT.toString());
+            assertThat(overData.path("quickReference").asText()).contains("- if:").contains("- repeat:");
+            assertThat(overData.path("sections").isArray()).isTrue();
+            assertThat(overData.path("sections").size()).isGreaterThanOrEqualTo(10);
+
+            JsonNode byId = server.rpc(readOnly.plaintext(), session, 4, "tools/call",
+                    Map.of("name", "conch_guide", "arguments", Map.of("section", "session_expiry")));
+            assertThat(structured(byId).path("id").asText()).isEqualTo("session_expiry");
+            assertThat(structured(byId).path("content").asText()).contains("expired_when").doesNotContain("](");
+
+            JsonNode bySub = server.rpc(readOnly.plaintext(), session, 5, "tools/call",
+                    Map.of("name", "conch_guide", "arguments", Map.of("section", "上传和下载文件")));
+            assertThat(structured(bySub).path("parentId").asText()).isEqualTo("steps");
+            assertThat(structured(bySub).path("content").asText()).contains("multipart").contains("download");
+
+            JsonNode full = server.rpc(readOnly.plaintext(), session, 6, "tools/call",
+                    Map.of("name", "conch_guide", "arguments", Map.of("section", "all")));
+            assertThat(structured(full).path("content").asText()).isEqualTo(AuthoringGuide.text());
+
+            JsonNode search = server.rpc(readOnly.plaintext(), session, 7, "tools/call",
+                    Map.of("name", "conch_guide", "arguments", Map.of("query", "expired_when")));
+            assertThat(structured(search).path("total").asInt()).isPositive();
+            assertThat(structured(search).path("matches").get(0).path("id").asText()).isEqualTo("session_expiry");
+
+            JsonNode both = server.rpc(readOnly.plaintext(), session, 8, "tools/call",
+                    Map.of("name", "conch_guide", "arguments", Map.of("section", "steps", "query", "repeat")));
+            assertThat(toolError(both).path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(toolError(both).path("field").asText()).isEqualTo("section");
+
+            JsonNode missing = server.rpc(readOnly.plaintext(), session, 9, "tools/call",
+                    Map.of("name", "conch_guide", "arguments", Map.of("section", "unknown_chapter")));
+            assertThat(toolError(missing).path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(toolError(missing).path("field").asText()).isEqualTo("section");
+
+            JsonNode unknownArg = server.rpc(readOnly.plaintext(), session, 10, "tools/call",
+                    Map.of("name", "conch_guide", "arguments", Map.of("extra", "1")));
+            assertThat(toolError(unknownArg).path("code").asText()).isEqualTo("INVALID_INPUT");
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void readYamlSupportsLocalAndVerifiedReefSubscriptionAndKeepsReefStrictlyReadOnly() throws Exception {
+        java.security.KeyPair reefKeys = dev.hermit.common.pkg.Ed25519Keys.generate();
+        String reefPubPem = dev.hermit.common.pkg.Ed25519Keys.writePublicPem(reefKeys.getPublic());
+        Path home = temp.resolve("read-reef");
+        CrabPaths paths = new CrabPaths(home);
+        String reefYaml = LocalConchBehaviorTest.ping("corp_oa", "1.0.0");
+        byte[] signedZip = dev.hermit.common.pkg.ConchPackage.write(
+                reefYaml.getBytes(StandardCharsets.UTF_8), reefKeys.getPrivate());
+        Path zipFile = paths.conches().resolve("corp_oa").resolve("1.0.0").resolve("package.zip");
+        Files.createDirectories(zipFile.getParent());
+        Files.write(zipFile, signedZip);
+        Files.writeString(paths.conches().resolve("corp_oa").resolve("current"), "1.0.0\n", StandardCharsets.UTF_8);
+
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withReef(null, null, reefPubPem);
+        try (Harness server = Harness.open(home, config)) {
+            server.runtime.loadInstalledConches();
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String session = server.initialize(false);
+
+            // 1. 默认读取已订阅的 Reef 正式包：只读、验签、原文完整
+            JsonNode readReef = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa"));
+            assertThat(readReef.path("result").path("isError").asBoolean()).as(readReef.toString()).isFalse();
+            JsonNode reefData = structured(readReef);
+            assertThat(reefData.path("conch").asText()).isEqualTo("corp_oa");
+            assertThat(reefData.path("source").asText()).isEqualTo("reef");
+            assertThat(reefData.path("readOnly").asBoolean()).isTrue();
+            assertThat(reefData.path("active").asBoolean()).isTrue();
+            assertThat(reefData.path("hasReef").asBoolean()).isTrue();
+            assertThat(reefData.path("hasLocal").asBoolean()).isFalse();
+            assertThat(reefData.path("version").asText()).isEqualTo("1.0.0");
+            assertThat(reefData.path("yaml").asText()).isEqualTo(reefYaml);
+            assertThat(reefData.path("sha256").asText()).hasSize(64);
+            assertThat(reefData.path("note").asText()).contains("只读不可直接修改").contains("conch_save_local");
+
+            // 2. 篡改磁盘 zip 正文字节后重新读取：验签失败，绝不返回被篡改内容
+            byte[] tampered = signedZip.clone();
+            tampered[tampered.length / 2] ^= 0x5A;
+            Files.write(zipFile, tampered);
+            JsonNode tamperedRead = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa", "source", "reef"));
+            assertThat(toolError(tamperedRead).path("code").asText()).as(tamperedRead.toString()).isEqualTo("NOT_FOUND");
+            Files.write(zipFile, signedZip);
+
+            // 3. 基于读出的 Reef YAML 起新包名保存到本地：新本地包立即生效，原 Reef 正式包不受任何影响
+            String forkedYaml = reefYaml.replace("conch: corp_oa", "conch: corp_oa_custom")
+                    .replace("version: 1.0.0", "version: 1.0.1");
+            JsonNode savedFork = server.call(session, "conch_save_local", Map.of("yaml", forkedYaml));
+            assertThat(structured(savedFork).path("ok").asBoolean()).isTrue();
+            assertThat(structured(savedFork).path("active").asBoolean()).isTrue();
+            JsonNode readFork = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa_custom"));
+            assertThat(structured(readFork).path("source").asText()).isEqualTo("local");
+            assertThat(structured(readFork).path("readOnly").asBoolean()).isFalse();
+            assertThat(structured(readFork).path("active").asBoolean()).isTrue();
+            assertThat(structured(readFork).path("hasReef").asBoolean()).isFalse();
+            assertThat(structured(readFork).path("yaml").asText()).isEqualTo(forkedYaml);
+
+            // 4. 基于读出的 Reef YAML 保存为同名本地副本：原 Reef 正式包保持生效且文件字节未变
+            String shadowYaml = reefYaml.replace("version: 1.0.0", "version: 1.0.2");
+            JsonNode savedShadow = server.call(session, "conch_save_local", Map.of("yaml", shadowYaml));
+            assertThat(structured(savedShadow).path("ok").asBoolean()).isTrue();
+            assertThat(structured(savedShadow).path("replaced").asBoolean()).isFalse();
+            assertThat(structured(savedShadow).path("active").asBoolean()).isFalse();
+            assertThat(structured(savedShadow).path("next").asText()).isEqualTo(AuthoringCalls.NEXT_SWITCH_SOURCE);
+            assertThat(Files.readAllBytes(zipFile)).isEqualTo(signedZip);
+            assertThat(server.runtime.registry().origin("corp_oa")).isEqualTo(dev.hermit.crab.store.Origin.OFFICIAL);
+
+            // 默认仍读当前生效的 Reef 正式包，但 hasLocal=true 提示已有同名本地副本
+            JsonNode defaultDual = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa"));
+            assertThat(structured(defaultDual).path("source").asText()).isEqualTo("reef");
+            assertThat(structured(defaultDual).path("active").asBoolean()).isTrue();
+            assertThat(structured(defaultDual).path("hasLocal").asBoolean()).isTrue();
+            assertThat(structured(defaultDual).path("yaml").asText()).isEqualTo(reefYaml);
+
+            // 指定 source=local 可读出尚未切换生效的同名本地副本
+            JsonNode localDual = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa", "source", "local"));
+            assertThat(structured(localDual).path("source").asText()).isEqualTo("local");
+            assertThat(structured(localDual).path("readOnly").asBoolean()).isFalse();
+            assertThat(structured(localDual).path("active").asBoolean()).isFalse();
+            assertThat(structured(localDual).path("hasReef").asBoolean()).isTrue();
+            assertThat(structured(localDual).path("yaml").asText()).isEqualTo(shadowYaml);
+            assertThat(structured(localDual).path("note").asText()).contains("切换为本地规则包");
+
+            // 控制台切换来源为 LOCAL 后：默认读本地副本，显式 source=reef 仍读到原封不动的 Reef 正式包
+            assertThat(server.runtime.registry().activate("corp_oa", dev.hermit.crab.store.Origin.LOCAL)).isTrue();
+            JsonNode activeLocal = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa"));
+            assertThat(structured(activeLocal).path("source").asText()).isEqualTo("local");
+            assertThat(structured(activeLocal).path("active").asBoolean()).isTrue();
+            assertThat(structured(activeLocal).path("yaml").asText()).isEqualTo(shadowYaml);
+
+            JsonNode inactiveReef = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa", "source", "reef"));
+            assertThat(structured(inactiveReef).path("source").asText()).isEqualTo("reef");
+            assertThat(structured(inactiveReef).path("readOnly").asBoolean()).isTrue();
+            assertThat(structured(inactiveReef).path("active").asBoolean()).isFalse();
+            assertThat(structured(inactiveReef).path("yaml").asText()).isEqualTo(reefYaml);
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void readYamlEnforcesWholePackageScopeAndDoesNotLeakExistence() throws Exception {
+        java.security.KeyPair reefKeys = dev.hermit.common.pkg.Ed25519Keys.generate();
+        String reefPubPem = dev.hermit.common.pkg.Ed25519Keys.writePublicPem(reefKeys.getPublic());
+        Path home = temp.resolve("read-scope");
+        CrabPaths paths = new CrabPaths(home);
+        String reefYaml = LocalConchBehaviorTest.ping("corp_oa", "1.0.0");
+        byte[] signedZip = dev.hermit.common.pkg.ConchPackage.write(
+                reefYaml.getBytes(StandardCharsets.UTF_8), reefKeys.getPrivate());
+        Path zipFile = paths.conches().resolve("corp_oa").resolve("1.0.0").resolve("package.zip");
+        Files.createDirectories(zipFile.getParent());
+        Files.write(zipFile, signedZip);
+        Files.writeString(paths.conches().resolve("corp_oa").resolve("current"), "1.0.0\n", StandardCharsets.UTF_8);
+
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withReef(null, null, reefPubPem);
+        try (Harness server = Harness.open(home, config)) {
+            server.runtime.loadInstalledConches();
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+
+            CreatedApiKey namedFull = server.runtime.apiKeys().create(
+                    "named-full", new ApiKeyScope(Set.of("corp_oa"), Set.of(), false, false), Actors.CONSOLE);
+            CreatedApiKey namedReadOnly = server.runtime.apiKeys().create(
+                    "named-ro", new ApiKeyScope(Set.of("corp_oa"), Set.of(), true, false), Actors.CONSOLE);
+            CreatedApiKey otherKey = server.runtime.apiKeys().create(
+                    "other", new ApiKeyScope(Set.of("other_pkg"), Set.of(), false, false), Actors.CONSOLE);
+            CreatedApiKey groupKey = server.runtime.apiKeys().create(
+                    "group", new ApiKeyScope(Set.of("corp_oa"), Set.of(), false, false, Set.of("corp_oa:hr")), Actors.CONSOLE);
+            CreatedApiKey actionKey = server.runtime.apiKeys().create(
+                    "action", new ApiKeyScope(Set.of(), Set.of("corp_oa.ping"), false, false), Actors.CONSOLE);
+
+            String namedSession = server.initialize(namedFull.plaintext(), false);
+            assertThat(structured(server.rpc(namedFull.plaintext(), namedSession, 2, "tools/call",
+                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa"))))
+                    .path("yaml").asText()).isEqualTo(reefYaml);
+
+            String roSession = server.initialize(namedReadOnly.plaintext(), false);
+            assertThat(structured(server.rpc(namedReadOnly.plaintext(), roSession, 2, "tools/call",
+                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa"))))
+                    .path("yaml").asText()).isEqualTo(reefYaml);
+
+            // 未授权 Key 读存在的包和不存在的包都直接 FORBIDDEN，不泄露存在性
+            String otherSession = server.initialize(otherKey.plaintext(), false);
+            JsonNode deniedExisting = server.rpc(otherKey.plaintext(), otherSession, 2, "tools/call",
+                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa")));
+            JsonNode deniedGhost = server.rpc(otherKey.plaintext(), otherSession, 3, "tools/call",
+                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "ghost_pkg")));
+            assertThat(toolError(deniedExisting).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolError(deniedGhost).path("code").asText()).isEqualTo("FORBIDDEN");
+
+            // 限定分组或能力的 Key 不能读完整规则包 YAML
+            String groupSession = server.initialize(groupKey.plaintext(), false);
+            JsonNode deniedGroup = server.rpc(groupKey.plaintext(), groupSession, 2, "tools/call",
+                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa")));
+            assertThat(toolError(deniedGroup).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(deniedGroup)).contains("限定了具体分组或能力");
+
+            String actionSession = server.initialize(actionKey.plaintext(), false);
+            JsonNode deniedAction = server.rpc(actionKey.plaintext(), actionSession, 2, "tools/call",
+                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa")));
+            assertThat(toolError(deniedAction).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(deniedAction)).contains("限定了具体分组或能力");
+
+            // 非法包名、非法 source 与未知字段校验
+            String fullSession = server.initialize(false);
+            assertThat(toolError(server.call(fullSession, "conch_read_yaml", Map.of("conch", "../etc")))
+                    .path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(toolError(server.call(fullSession, "conch_read_yaml", Map.of("conch", "corp_oa", "source", "other")))
+                    .path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(toolError(server.call(fullSession, "conch_read_yaml", Map.of("conch", "corp_oa", "extra", true)))
+                    .path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(toolError(server.call(fullSession, "conch_read_yaml", Map.of("conch", "missing_pkg")))
+                    .path("code").asText()).isEqualTo("NOT_FOUND");
+        }
+    }
+
     private static String writable(String name, String version) {
         return """
                 conch: %s
@@ -1685,7 +1957,11 @@ class AuthoringMcpTest {
         }
 
         static Harness open(Path home, String host) throws Exception {
-            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), CrabConfig.defaults().withListen(host, 0));
+            return open(home, CrabConfig.defaults().withListen(host, 0));
+        }
+
+        static Harness open(Path home, CrabConfig config) throws Exception {
+            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config);
             CrabHttpServer server = new CrabHttpServer(runtime);
             server.start();
             CreatedApiKey key = runtime.apiKeys().create("authoring", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);

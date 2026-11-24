@@ -50,7 +50,7 @@
 - 判断键（`if`、`until` 用；1.12.0 起 `assert` 也支持同一组变量键）：`status`、`contains`、`not_contains`、`cookie_exists`、`header_exists` 看最近一次响应；`equals: {变量名: 值}`、`not_equals`、`present: 变量名`、`not_present` 看变量。变量名直接写，不加 `{{ }}`。没有「或」。
 - 用了 `if`、`repeat`、`retry` 的包写 `min_crab_version: 1.9.0`；用了 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail`/变量判断键写 `1.12.0`。写 1.9.0 及以上的包，步骤里不认识的键是错误，报错会列出可用的键。
 - `ask`（等用户输入验证码）只能直接写在 `auth.steps` 下。
-- 写完用 `conch_validate` 校验，再试跑；以校验结果为准。
+- 写或改规则前可用 `conch_guide` 按章节/关键词查本文档；改已有包或基于 Reef 订阅包二次开发时先用 `conch_read_yaml` 读原文（Reef 订阅包只读不可直接改，需保存为本地包）；写完用 `conch_validate` 校验再试跑，以校验结果为准。
 
 ## 从 HAR 写规则
 
@@ -876,6 +876,6 @@ ZIP 只包含 `conch.yaml`、`manifest.json`、`signature.sig`；manifest format
 
 导入走与 Reef 上传相同的解析和校验，也同样拒绝 `actions` 里重复的能力名（`DUPLICATE_ACTION`，带行号），以及顶层 `scripts` 里重复的库名（`SCRIPT_STEP`，带行号，message 为「脚本库 名字 重复」，不回显源码）：MCP 的 `conch_validate`、`conch_save_local`，控制台导入和 CLI 导入都会拦下，不会在本地通过、到 Reef 上传才被拒。`config` 仍然不能写 `type: secret`。单文件上限 1 MiB。控制台这次请求还受 Crab 现有请求体上限（1_000_000 字节）约束。校验失败返回 400 `INVALID_INPUT`，`data` 为 `{errors, warnings}`，每项含 `code`、`path`、`message`。能定位到 YAML 行时再加 `line`（从 1 计）；缺字段这类定位不到的情况没有 `line`。失败不写文件。
 
-本地规则包可以和正式包同名，导入和订阅都不再因为重名被拒。两份都留在本机，同一时刻只有一份生效：只有一份时它生效；第二份出现时原来那份继续生效，在控制台规则包详情页切换来源。包名、工具名、HTTP 路径和 API Key 范围不随来源变化。已安装正式包时拒绝更换另一把 Reef 公钥仍是 `CONFLICT`。与已有本地规则包同名（含未能载入的坏包，或目录里已经有同名 yaml）必须确认后才覆盖：控制台不带 `confirm=true` 是 409 `CONFLICT`，CLI 不带 `--replace` 退出 1，都不写文件。确认后版本以 YAML 为准。账号和凭证留在 `(LOCAL, conch, account)` 上，删除本地规则包也不清它们。
+本地规则包可以和正式包同名，导入和订阅都不再因为重名被拒。两份都留在本机，同一时刻只有一份生效：只有一份时它生效；第二份出现时原来那份继续生效，在控制台规则包详情页切换来源。包名、工具名、HTTP 路径和 API Key 范围不随来源变化。已安装正式包时拒绝更换另一把 Reef 公钥仍是 `CONFLICT`。在开发者模式下，本机 MCP 提供只读的 `conch_guide`（按章节、子标题或关键词查阅本文档，与资源 `hermit://authoring/guide` 同源）和 `conch_read_yaml`（只读获取本地包或经验签的 Reef 订阅正式包原始 YAML，按整包权限范围校验）。Reef 订阅的正式包只读、绝对不能直接修改；如需改动，请基于读出的 YAML 修改后通过 `conch_save_local` 保存为本地规则包（可另起新包名立即生效，或沿用同名保存为本地副本后再到控制台切换来源）。与已有本地规则包同名（含未能载入的坏包，或目录里已经有同名 yaml）必须确认后才覆盖：控制台不带 `confirm=true` 是 409 `CONFLICT`，CLI 不带 `--replace` 退出 1，都不写文件。确认后版本以 YAML 为准。账号和凭证留在 `(LOCAL, conch, account)` 上，删除本地规则包也不清它们。
 
 导出的是磁盘上的原始字节，`Content-Type` 为 `application/yaml`。本地规则包可以经 HTTP 和 MCP 调用。全部权限，以及更早存下来、`conches` 与 `actions` 都为空的 Key 可以调用；写了 `conches` 或 `actions` 的 Key 仍要在 `conches` 里点名。只读限制仍然有效。MCP 工具和资源说明以 `[本地] ` 开头。调用记录的 `source` 为 `LOCAL`，不会进入 Tide 上报。同步不会下载、覆盖或卸下本地规则包。

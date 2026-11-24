@@ -61,6 +61,19 @@ class InstalledConchesTest {
             LoadReport rejected = InstalledConches.loadAll(crab.paths, Ed25519Keys.generate().getPublic(), wrongKey);
             assertThat(rejected.loaded()).isEmpty();
             assertThat(wrongKey.snapshot()).isEmpty();
+
+            Optional<InstalledConches.VerifiedYaml> ok =
+                    InstalledConches.readVerifiedYaml(crab.paths, reef.keys().getPublic(), "other_sys");
+            assertThat(ok).isPresent();
+            assertThat(ok.get().conch()).isEqualTo("other_sys");
+            assertThat(ok.get().version()).isEqualTo("1.0.0");
+            assertThat(new String(ok.get().bytes(), java.nio.charset.StandardCharsets.UTF_8))
+                    .isEqualTo(ConchTexts.standard("other_sys", "1.0.0"));
+
+            // 篡改后的包、错误公钥和非法路径段一律返回 empty
+            assertThat(InstalledConches.readVerifiedYaml(crab.paths, reef.keys().getPublic(), "legacy_oa")).isEmpty();
+            assertThat(InstalledConches.readVerifiedYaml(crab.paths, Ed25519Keys.generate().getPublic(), "other_sys")).isEmpty();
+            assertThat(InstalledConches.readVerifiedYaml(crab.paths, reef.keys().getPublic(), "../other_sys")).isEmpty();
         }
     }
 }

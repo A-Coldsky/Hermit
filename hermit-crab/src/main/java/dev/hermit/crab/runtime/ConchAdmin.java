@@ -434,7 +434,7 @@ public final class ConchAdmin {
 
     /** Registry origin, then the fallback, otherwise {@link Origin#OFFICIAL}. */
     private Origin origin(String conch) {
-        ConchRegistry.Active active = registry.active(conch).orElse(null);
+        ConchRegistry.Active active = registry.installed(conch).orElse(null);
         if (active != null) {
             return active.origin();
         }

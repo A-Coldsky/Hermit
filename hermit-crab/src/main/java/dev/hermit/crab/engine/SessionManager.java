@@ -46,6 +46,8 @@ public final class SessionManager implements AutoCloseable {
     private static final int KEY_STRIPES = 64;
     /** 同一个成员在这段时间里最多因为「登录成功后又失效」清空一次身份的 Cookie。 */
     static final Duration RELAPSE_CLEAR_WINDOW = Duration.ofMinutes(10);
+    /** 同一个授权器账号在 {@link #RELAPSE_CLEAR_WINDOW} 内，最多因为引用它的包判失效而重新登录这么多次。 */
+    static final int MAX_LINKED_RELOGINS = 2;
 
     private final SessionPersistence persistence;
     private final LoginSnapshotStore loginSnapshots;
@@ -556,6 +558,106 @@ public final class SessionManager implements AutoCloseable {
         state.relapseClearedAt = now;
         clearShared(key);
         return true;
+    }
+
+    /**
+     * 调用方持有 {@code holder} 的账号锁。让 {@code other} 的状态也可用，前提是两者共用同一个罐（同一把锁）：
+     * 引用授权器的包的账号和它绑到的授权器账号。不共用时返回 false，什么都不建。
+     */
+    boolean join(SessionKey holder, SessionKey other) {
+        AccountState mine = state(holder);
+        if (mine.jar.identity == null || !mine.jar.identity.equals(shared.identityOf(other))) {
+            return false;
+        }
+        AccountState theirs = ensureState(other);
+        if (theirs.jar == mine.jar && !stale(other, theirs)) {
+            return true;
+        }
+        // 对方的状态还是绑定变化之前的：这把锁管不到它，让调用方按「没配置好」处理，下一次调用会重建。
+        return false;
+    }
+
+    /** 引用授权器的包上一次换票（或接手）时授权器账号的会话代次。调用方持有账号锁。 */
+    long linkedEpoch(SessionKey key) {
+        return state(key).linkedEpoch;
+    }
+
+    void linkedEpoch(SessionKey key, long epoch) {
+        state(key).linkedEpoch = epoch;
+    }
+
+    /**
+     * 引用授权器、又没写 {@code auth.exchange} 的包被判为会话失效，而授权器的探活是通过的：可能是导出的令牌比
+     * 授权器的会话短命，重新登录授权器就好；也可能是规则把业务错误当成了失效。同一个包的账号在
+     * {@link #RELAPSE_CLEAR_WINDOW} 内只让授权器重新登录一次，同一个授权器账号在窗口内最多
+     * {@link #MAX_LINKED_RELOGINS} 次。返回这一次能不能重新登录，能的话已经记上。调用方持有账号锁。
+     */
+    boolean allowLinkedRelogin(SessionKey key, SessionKey authenticator) {
+        AccountState mine = state(key);
+        AccountState theirs = state(authenticator);
+        Instant now = clock.instant();
+        Instant last = mine.relapseClearedAt;
+        if (last != null && !now.isBefore(last) && now.isBefore(last.plus(RELAPSE_CLEAR_WINDOW))) {
+            return false;
+        }
+        theirs.linkedRelogins.removeIf(at -> now.isBefore(at) || !now.isBefore(at.plus(RELAPSE_CLEAR_WINDOW)));
+        if (theirs.linkedRelogins.size() >= MAX_LINKED_RELOGINS) {
+            return false;
+        }
+        mine.relapseClearedAt = now;
+        theirs.linkedRelogins.add(now);
+        return true;
+    }
+
+    /**
+     * 只让这个账号登出，并删掉罐里只属于它的站点的 Cookie：域名就是 {@code base} 的主机（父域的不动）；
+     * 主机同时是认证地址之一时，只删路径落在 {@code base} 路径下的。授权器和其它包的 Cookie 都留着。
+     * 调用方持有账号锁。
+     */
+    void dropOwnCookies(SessionKey key, URI base, Set<String> authHosts) {
+        AccountState state = state(key);
+        markLoggedOut(key);
+        if (base == null || base.getHost() == null || state.jar.cookies == null || state.jar.identity == null) {
+            return;
+        }
+        String host = base.getHost().toLowerCase(java.util.Locale.ROOT);
+        String prefix = base.getRawPath() == null || base.getRawPath().isEmpty() ? "/" : base.getRawPath();
+        boolean sharedHost = authHosts != null && authHosts.contains(host);
+        if (sharedHost && "/".equals(prefix)) {
+            return;
+        }
+        List<Cookie> kept = new ArrayList<>();
+        boolean removed = false;
+        for (Cookie cookie : state.jar.cookies.getCookies()) {
+            String domain = cookie.getDomain() == null ? "" : cookie.getDomain().toLowerCase(java.util.Locale.ROOT);
+            if (domain.startsWith(".")) {
+                domain = domain.substring(1);
+            }
+            boolean own = domain.equals(host) && (!sharedHost || underPath(cookie.getPath(), prefix));
+            if (own) {
+                removed = true;
+            } else {
+                kept.add(cookie);
+            }
+        }
+        if (!removed) {
+            return;
+        }
+        synchronized (state.seenCookieValues) {
+            state.jar.cookies.clear();
+            for (Cookie cookie : kept) {
+                state.jar.cookies.addCookie(cookie);
+            }
+        }
+        persist(key);
+    }
+
+    private static boolean underPath(String cookiePath, String prefix) {
+        if (cookiePath == null) {
+            return false;
+        }
+        String base = prefix.endsWith("/") ? prefix.substring(0, prefix.length() - 1) : prefix;
+        return cookiePath.equals(base) || cookiePath.startsWith(base + "/");
     }
 
     /** 测试登录用：绑了身份的账号清空身份的 Cookie，不记「清空重来」。调用方持有账号锁。 */
@@ -1421,6 +1523,10 @@ public final class SessionManager implements AutoCloseable {
          * 所以改凭证和测试登录清掉它之后，进行中的调用不会再把它写回来；状态重建（绑定变了、删除账号）时随之丢弃。
          */
         Instant relapseClearedAt;
+        /** 引用授权器的包：上一次换票或接手时授权器账号的会话代次。0 表示还没有。只在持有账号锁时读写。 */
+        long linkedEpoch;
+        /** 授权器账号：因为引用它的包判失效而重新登录的时间。只在持有账号锁时读写。 */
+        final List<Instant> linkedRelogins = new ArrayList<>();
 
         AccountState(Jar jar, long initialEpoch) {
             this.jar = jar;

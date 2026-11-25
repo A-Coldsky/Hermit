@@ -87,6 +87,10 @@ import dev.hermit.common.validate.ConchValidator;
  * key as {@code (origin, conch, account, action, api_key_id, "key")} so idempotency cache entries
  * are isolated per API key. Existing rows receive {@code ''} without conflict and expire naturally
  * under the 24-hour TTL. Later versions must not edit {@link #applyV22}.
+ * Version 23 adds {@code auth_bindings}: an account of a package that declares {@code auth.use}
+ * points at one account of a {@code driver: auth} package. The table starts empty and nothing is
+ * backfilled; packages without {@code auth.use} are unaffected.
+ * Later versions must not edit {@link #applyV23}.
  * Version 2 is applied when its own row is missing, not when {@code MAX(version)} is below 2:
  * a database that already recorded version 3 still receives version 2. Version 2 does not read
  * or create later tables. Crab has been released with versions 1–15. Version 16 is
@@ -262,6 +266,11 @@ public final class CrabDatabase implements AutoCloseable {
             if (!applied(connection, 22)) {
                 applyV22(connection);
                 insertVersion(connection, 22);
+            }
+            // Do not gate version 23 on MAX(version), and do not rewrite applyV21/applyV22. No backfill.
+            if (!applied(connection, 23)) {
+                applyV23(connection);
+                insertVersion(connection, 23);
             }
             return null;
         });
@@ -776,6 +785,31 @@ public final class CrabDatabase implements AutoCloseable {
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
                     PRIMARY KEY (identity_id)
                 )
+                """);
+    }
+
+    /**
+     * 授权器绑定：引用授权器的包（{@code auth.use}）的一个账号指向授权器的一个账号。
+     * {@code bound_base_url} 是绑定时使用者确认过的地址，生效地址变了绑定就不再有效。
+     * 授权器的 Cookie 和登录变量仍存在 {@code sessions}、{@code session_login} 里授权器账号那一行。
+     */
+    private static void applyV23(Connection connection) throws SQLException {
+        execute(connection, """
+                CREATE TABLE IF NOT EXISTS auth_bindings (
+                    origin VARCHAR(16) NOT NULL,
+                    conch VARCHAR(256) NOT NULL,
+                    account VARCHAR(64) NOT NULL,
+                    auth_origin VARCHAR(16) NOT NULL,
+                    auth_conch VARCHAR(256) NOT NULL,
+                    auth_account VARCHAR(64) NOT NULL,
+                    bound_base_url VARCHAR(2048) NOT NULL,
+                    bound_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    PRIMARY KEY (origin, conch, account)
+                )
+                """);
+        execute(connection, """
+                CREATE INDEX IF NOT EXISTS auth_bindings_target
+                ON auth_bindings (auth_origin, auth_conch, auth_account)
                 """);
     }
 

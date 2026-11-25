@@ -18,6 +18,7 @@ import dev.hermit.common.model.Auth;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.Step;
+import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.common.validate.ValidationResult;
@@ -27,6 +28,8 @@ public final class ConchRegistry {
     private static final Logger LOG = Logger.getLogger(ConchRegistry.class.getName());
 
     static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now", "login", "loop");
+    /** 引用授权器的包里另外保留。没写 {@code auth.use} 的旧包可以继续把 auth 当普通变量名。 */
+    static final String AUTH_VAR = "auth";
     private static final Set<String> STEP_TYPES = Set.of(
             "request", "extract", "assert", "set", "script", "ask", "if", "repeat");
 
@@ -38,9 +41,11 @@ public final class ConchRegistry {
             Map<String, ConchDoc> local,
             Map<String, ConchDoc> official,
             Map<String, Origin> selected,
-            Map<String, ConchDoc> active
+            Map<String, ConchDoc> active,
+            Map<String, ConchDoc> callable,
+            Map<String, ConchDoc> authenticators
     ) {
-        static final State EMPTY = new State(Map.of(), Map.of(), Map.of(), Map.of());
+        static final State EMPTY = new State(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
 
         static State of(Map<String, ConchDoc> local, Map<String, ConchDoc> official, Map<String, Origin> selected) {
             LinkedHashMap<String, ConchDoc> active = new LinkedHashMap<>();
@@ -55,11 +60,19 @@ public final class ConchRegistry {
                     active.put(name, theirs);
                 }
             }
+            LinkedHashMap<String, ConchDoc> callable = new LinkedHashMap<>();
+            LinkedHashMap<String, ConchDoc> authenticators = new LinkedHashMap<>();
+            for (Map.Entry<String, ConchDoc> entry : active.entrySet()) {
+                (AuthenticatorChecks.isAuthenticator(entry.getValue()) ? authenticators : callable)
+                        .put(entry.getKey(), entry.getValue());
+            }
             return new State(
                     Collections.unmodifiableMap(new LinkedHashMap<>(local)),
                     Collections.unmodifiableMap(new LinkedHashMap<>(official)),
                     Collections.unmodifiableMap(new LinkedHashMap<>(selected)),
-                    Collections.unmodifiableMap(active));
+                    Collections.unmodifiableMap(active),
+                    Collections.unmodifiableMap(callable),
+                    Collections.unmodifiableMap(authenticators));
         }
 
         Map<String, ConchDoc> slot(Origin origin) {
@@ -341,8 +354,41 @@ public final class ConchRegistry {
         return Optional.ofNullable(shared.state.get().slot(origin).get(conch));
     }
 
-    /** 生效的文档和来源取自同一个快照，切换来源时不会拿到一边新一边旧。 */
+    /**
+     * 生效的文档和来源取自同一个快照，切换来源时不会拿到一边新一边旧。
+     * 只给可调用的包（{@code driver: http}、{@code driver: mcp}）；授权器用 {@link #authenticator}。
+     */
     public Optional<Active> active(String conch) {
+        if (conch == null) {
+            return Optional.empty();
+        }
+        State current = shared.state.get();
+        ConchDoc doc = current.callable().get(conch);
+        return doc == null ? Optional.empty() : Optional.of(new Active(doc, current.activeOrigin(conch)));
+    }
+
+    /** 生效的授权器（{@code driver: auth}）和它的来源。授权器不能被调用，只有认证绑定、引擎登录和控制台管理会用到。 */
+    public Optional<Active> authenticator(String conch) {
+        if (conch == null) {
+            return Optional.empty();
+        }
+        State current = shared.state.get();
+        ConchDoc doc = current.authenticators().get(conch);
+        return doc == null ? Optional.empty() : Optional.of(new Active(doc, current.activeOrigin(conch)));
+    }
+
+    /** 生效的授权器。 */
+    public Map<String, ConchDoc> authenticators() {
+        return shared.state.get().authenticators();
+    }
+
+    /** 生效的全部包，含授权器。只给本机控制台的管理视图和存储清理用，不要拿它决定什么能被调用。 */
+    public Map<String, ConchDoc> installed() {
+        return shared.state.get().active();
+    }
+
+    /** 生效的那份，不分是不是授权器。用途同 {@link #installed}。 */
+    public Optional<Active> installed(String conch) {
         if (conch == null) {
             return Optional.empty();
         }
@@ -371,9 +417,13 @@ public final class ConchRegistry {
         }
     }
 
+    /**
+     * 完整视图只返回可调用的包：OpenAPI、MCP 工具表、API Key 范围、调用和统计都从这里取，授权器不会出现。
+     * 单来源视图返回这个来源槽里的全部文档（同步和本地导入要管理授权器文件）。
+     */
     public Map<String, ConchDoc> snapshot() {
         State current = shared.state.get();
-        return scope == null ? current.active() : current.slot(scope);
+        return scope == null ? current.callable() : current.slot(scope);
     }
 
     public Optional<ConchDoc> find(String conch) {

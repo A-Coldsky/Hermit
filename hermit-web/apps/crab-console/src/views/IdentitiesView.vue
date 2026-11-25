@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { notifyError } from '@shared/format'
-import { api, type Account, type ConchSummary, type Identity, type IdentityCheck, type IdentityMember } from '../api'
+import { api, type Account, type AuthenticatorView, type ConchSummary, type Identity, type IdentityCheck, type IdentityMember } from '../api'
 import { originLabels } from '../labels'
 
 const loading = ref(true)
@@ -13,6 +13,8 @@ const loading = ref(true)
 const loadFailed = ref(false)
 const identities = ref<Identity[]>([])
 const conches = ref<ConchSummary[]>([])
+/** 本机生效的授权器。读不到时不显示这一块，不影响身份。 */
+const authenticators = ref<AuthenticatorView[]>([])
 const creating = ref(false)
 const mutating = ref(false)
 const newName = ref('')
@@ -107,7 +109,11 @@ const canConfirmAdd = computed(
 async function load() {
   const seq = ++loadSeq
   loading.value = true
-  const [listedResult, packagesResult] = await Promise.allSettled([api.identities(), api.conches()])
+  const [listedResult, packagesResult, authResult] = await Promise.allSettled([
+    api.identities(),
+    api.conches(),
+    api.authenticators(),
+  ])
   if (unmounted || seq !== loadSeq) return
   if (listedResult.status === 'fulfilled') {
     identities.value = listedResult.value.identities ?? []
@@ -120,6 +126,9 @@ async function load() {
     conches.value = packagesResult.value.conches ?? []
   } else if (listedResult.status === 'fulfilled') {
     notifyError(packagesResult.reason)
+  }
+  if (authResult.status === 'fulfilled') {
+    authenticators.value = authResult.value.authenticators ?? []
   }
   loading.value = false
 }
@@ -307,11 +316,48 @@ onMounted(load)
 <template>
   <div v-loading="loading" class="identities">
     <PageHeader
-      title="身份"
+      title="授权与身份"
       description="两个规则包访问同一个网站或同一个认证中心、用的又是同一个人的登录时，把它们的账号绑到一个身份：共用一份 Cookie，只登录一次，不再互相顶掉。不绑定的账号仍各用各的会话"
     >
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </PageHeader>
+
+    <div v-if="authenticators.length" class="hm-card" data-test="authenticators">
+      <div class="hm-card-title"><span>授权器</span></div>
+      <p class="hm-muted hint">
+        授权器是只负责登录的规则包：密码只在授权器账号上填一次，引用它的规则包把账号绑上来，共用这份登录。绑定在各规则包的「账号」里做。绑了授权器的账号不能再加入身份。
+      </p>
+      <el-table :data="authenticators" empty-text="没有授权器">
+        <el-table-column label="授权器" min-width="200">
+          <template #default="{ row }">
+            <router-link :to="`/conches/${encodeURIComponent(row.conch)}`" class="mono" data-test="authenticator-link">{{ row.conch }}</router-link>
+            <el-tag size="small" effect="plain" type="info" class="auth-tag">{{ row.source === 'LOCAL' ? '本地包' : '正式包' }}</el-tag>
+            <div class="hm-muted">{{ row.title }} · {{ row.version }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="认证地址" min-width="220">
+          <template #default="{ row }">
+            <div v-for="origin in row.origins" :key="origin" class="mono">{{ origin }}</div>
+            <div v-if="row.allowHosts.length" class="hm-muted">只允许用在：{{ row.allowHosts.join('、') }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="账号和使用它的规则包" min-width="280">
+          <template #default="{ row }">
+            <div v-for="account in row.accounts" :key="account.name" data-test="authenticator-account">
+              <span class="mono">{{ account.name }}</span>：
+              <template v-if="account.consumers.length">
+                <template v-for="(c, index) in account.consumers" :key="`${c.origin}/${c.conch}/${c.account}`">
+                  <template v-if="index">、</template>
+                  <router-link :to="`/conches/${encodeURIComponent(c.conch)}`" class="mono">{{ c.conch }} / {{ c.account }}</router-link>
+                </template>
+              </template>
+              <span v-else class="hm-muted">还没有规则包绑定</span>
+            </div>
+            <span v-if="!row.accounts.length" class="hm-muted">还没有账号</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
 
     <div class="hm-card">
       <div class="hm-card-title"><span>新建身份</span></div>
@@ -580,5 +626,9 @@ onMounted(load)
   .add-form {
     grid-template-columns: 1fr;
   }
+}
+
+.auth-tag {
+  margin-left: 6px;
 }
 </style>

@@ -595,6 +595,37 @@ watch(
         </template>
       </el-alert>
       <el-alert
+        v-if="detail.authenticator"
+        type="info"
+        show-icon
+        :closable="false"
+        title="这是授权器"
+        data-test="authenticator-note"
+      >
+        <template #default>
+          授权器只负责登录，没有能力，不出现在 API、MCP 和 API Key 的范围里。在「账号」里新建账号、填写凭证；引用它的规则包把账号绑到这里。
+        </template>
+      </el-alert>
+      <el-alert
+        v-if="detail.authUse"
+        :type="detail.authUse.installed ? 'info' : 'warning'"
+        show-icon
+        :closable="false"
+        :title="detail.authUse.installed ? '登录由授权器提供' : '缺少授权器'"
+        data-test="auth-use-note"
+      >
+        <template #default>
+          <template v-if="detail.authUse.installed">
+            这个包用授权器
+            <router-link :to="`/conches/${encodeURIComponent(detail.authUse.conch)}`">{{ detail.authUse.conch }}</router-link>
+            （{{ detail.authUse.version }}，{{ detail.authUse.source === 'LOCAL' ? '本地包' : '正式包' }}）登录。在「账号」里把每个账号绑到一个授权器账号后才能调用。
+          </template>
+          <template v-else>
+            这个包需要授权器 <span class="mono">{{ detail.authUse.conch }}</span><template v-if="detail.authUse.minVersion">（不低于 {{ detail.authUse.minVersion }}）</template>，本机还没有。订阅或导入它之前，这个包的调用会返回「尚未配置」。
+          </template>
+        </template>
+      </el-alert>
+      <el-alert
         v-if="detail.sameSite?.length"
         :type="sameSiteContending.length ? 'warning' : 'info'"
         show-icon
@@ -783,6 +814,8 @@ watch(
           :credentials="detail.credentials"
           :rule-disabled="detail.ruleDisabled === true"
           :shown="tab === 'accounts'"
+          :auth-use="detail.authUse ?? null"
+          :authenticator="detail.authenticator === true"
           @changed="reloadParts"
         />
       </div>

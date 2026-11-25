@@ -5,7 +5,7 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ApiError } from '@shared/http'
 import { copyText, errorCodeLabels, errorText, formatTime, notifyError } from '@shared/format'
 import { useNarrow } from '@shared/narrow'
-import { api, type Account, type CredentialField, type LoginInput } from '../api'
+import { api, type Account, type AuthBindingCheck, type AuthUse, type CredentialField, type LoginInput } from '../api'
 import CredentialDialog from './CredentialDialog.vue'
 import TrustJump from './TrustJump.vue'
 
@@ -20,8 +20,109 @@ const props = defineProps<{
    * 缺省显示卡片。
    */
   shown?: boolean
+  /** 这个包的登录由授权器提供：账号不填凭证，改为绑定授权器的账号。 */
+  authUse?: AuthUse | null
+  /** 这个包本身是授权器：每个账号列出绑到它的业务包账号。 */
+  authenticator?: boolean
 }>()
 const emit = defineEmits<{ changed: [] }>()
+
+const binding = reactive({
+  open: false,
+  account: '',
+  authAccount: '',
+  options: [] as string[],
+  loading: false,
+  check: null as AuthBindingCheck | null,
+  saving: false,
+})
+
+async function openBinding(account: Account) {
+  if (!props.authUse) {
+    return
+  }
+  binding.account = account.name
+  binding.authAccount = account.authenticator?.account ?? ''
+  binding.check = null
+  binding.options = []
+  binding.open = true
+  binding.loading = true
+  try {
+    const { authenticators } = await api.authenticators()
+    const target = authenticators.find((a) => a.conch === props.authUse?.conch)
+    binding.options = target ? target.accounts.map((a) => a.name) : []
+    if (!binding.authAccount && binding.options.length === 1) {
+      binding.authAccount = binding.options[0]
+    }
+    if (binding.authAccount) {
+      await checkBinding()
+    }
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    binding.loading = false
+  }
+}
+
+async function checkBinding() {
+  binding.check = null
+  if (!binding.authAccount) {
+    return
+  }
+  const asked = binding.authAccount
+  try {
+    const check = await api.checkAuthBinding(props.conch, binding.account, asked)
+    if (asked === binding.authAccount) {
+      binding.check = check
+    }
+  } catch (error) {
+    notifyError(error)
+  }
+}
+
+async function confirmBinding() {
+  const check = binding.check
+  if (!check?.allowed || !check.baseUrl) {
+    return
+  }
+  binding.saving = true
+  try {
+    const result = await api.bindAuthBinding(props.conch, binding.account, binding.authAccount, check.baseUrl)
+    if (!result.allowed) {
+      binding.check = result
+      return
+    }
+    ElMessage.success(`${binding.account} 已绑定到授权器账号 ${binding.authAccount}`)
+    binding.open = false
+    emit('changed')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    binding.saving = false
+  }
+}
+
+async function unbind(account: Account) {
+  try {
+    await ElMessageBox.confirm(
+      `解除后，账号 ${account.name} 不能再调用，直到重新绑定授权器账号。授权器账号自己的登录和其它规则包不受影响。`,
+      '解除授权器绑定',
+      { confirmButtonText: '解除', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
+    )
+  } catch {
+    return
+  }
+  busy.value = account.name
+  try {
+    await api.unbindAuthBinding(props.conch, account.name)
+    ElMessage.success(`${account.name} 已解除授权器绑定`)
+    emit('changed')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    busy.value = null
+  }
+}
 
 const creating = reactive({ open: false, name: '', saving: false })
 const editing = reactive({ open: false, account: '' })
@@ -581,7 +682,15 @@ async function disconnect(account: Account) {
       <span>账号</span>
       <el-button type="primary" plain :icon="Plus" @click="creating.open = true">新建账号</el-button>
     </div>
-    <p class="hm-muted hint">
+    <p v-if="authenticator" class="hm-muted hint" data-test="authenticator-hint">
+      这是授权器：账号在这里填凭证、测试登录、输入验证码。引用它的规则包把自己的账号绑到这里的账号上，共用这份登录。授权器不能被 API Key 或 AI 调用。
+    </p>
+    <p v-else-if="authUse" class="hm-muted hint" data-test="auth-use-hint">
+      调用时用请求头 <code>X-Hermit-Account</code> 选择账号，不带时使用默认账号。这个包的登录由授权器
+      <router-link :to="`/conches/${encodeURIComponent(authUse.conch)}`">{{ authUse.conch }}</router-link>
+      提供：账号不填凭证，绑定一个授权器账号后才能调用。
+    </p>
+    <p v-else class="hm-muted hint">
       调用时用请求头 <code>X-Hermit-Account</code> 选择账号，不带时使用默认账号。每个账号有自己的凭证和登录会话。
     </p>
     <p class="hm-scroll-hint">表格可以左右滑动，操作在最右侧。</p>
@@ -597,7 +706,38 @@ async function disconnect(account: Account) {
           </router-link>
         </template>
       </el-table-column>
-      <el-table-column label="凭证" min-width="200">
+      <el-table-column v-if="authUse" label="授权器账号" min-width="240">
+        <template #default="{ row }">
+          <template v-if="row.authenticator">
+            <router-link :to="`/conches/${encodeURIComponent(row.authenticator.conch)}`" class="mono strong" data-test="auth-binding">
+              {{ row.authenticator.conch }} / {{ row.authenticator.account }}
+            </router-link>
+            <div class="hm-muted note">确认的地址：<span class="mono">{{ row.authenticator.baseUrl }}</span></div>
+            <div v-if="row.authenticator.loginInputRequired" class="note" data-test="auth-binding-input">
+              <el-tag type="warning" effect="plain" size="small">需要验证码</el-tag>
+              到授权器的账号页输入。
+            </div>
+            <div v-else-if="row.authenticator.loginPaused" class="note">
+              <el-tag type="warning" effect="plain" size="small">授权器登录已暂停</el-tag>
+            </div>
+          </template>
+          <template v-else>
+            <el-tag type="warning" effect="plain" size="small" data-test="auth-unbound">未绑定</el-tag>
+            <span class="note">绑定后才能调用</span>
+          </template>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="authenticator" label="使用它的账号" min-width="220">
+        <template #default="{ row }">
+          <template v-if="row.consumers?.length">
+            <div v-for="c in row.consumers" :key="`${c.origin}/${c.conch}/${c.account}`" data-test="auth-consumer">
+              <router-link :to="`/conches/${encodeURIComponent(c.conch)}`" class="mono">{{ c.conch }} / {{ c.account }}</router-link>
+            </div>
+          </template>
+          <span v-else class="hm-muted">还没有</span>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="!authUse" label="凭证" min-width="200">
         <template #default="{ row }">
           <template v-if="row.credentialsUnreadable">
             <el-tag type="danger" effect="plain" size="small">无法解密</el-tag>
@@ -667,7 +807,13 @@ async function disconnect(account: Account) {
                 断开
               </el-button>
             </template>
-            <el-button link type="primary" :disabled="!credentials.length" @click="editCredentials(row)">填写凭证</el-button>
+            <template v-if="authUse">
+              <el-button link type="primary" data-test="auth-bind" :disabled="!authUse.installed" @click="openBinding(row)">
+                {{ row.authenticator ? '改绑' : '绑定授权器' }}
+              </el-button>
+              <el-button v-if="row.authenticator" link type="danger" data-test="auth-unbind" @click="unbind(row)">解除绑定</el-button>
+            </template>
+            <el-button v-else link type="primary" :disabled="!credentials.length" @click="editCredentials(row)">填写凭证</el-button>
             <el-button
               v-if="!ruleDisabled"
               link
@@ -694,6 +840,39 @@ async function disconnect(account: Account) {
     <template #footer>
       <el-button @click="creating.open = false">取消</el-button>
       <el-button type="primary" :loading="creating.saving" @click="createAccount">创建</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="binding.open" :title="`绑定授权器 · ${binding.account}`" width="min(520px, 94vw)" data-test="auth-bind-dialog">
+    <p class="hm-muted">
+      选择授权器 <span class="mono">{{ authUse?.conch }}</span> 的一个账号。绑定后，这个账号用那份登录访问下面确认的地址；同一个授权器账号下的规则包共用 Cookie，调用排队执行。
+    </p>
+    <el-select
+      v-model="binding.authAccount"
+      placeholder="选择授权器账号"
+      :loading="binding.loading"
+      no-data-text="授权器还没有账号，先到授权器页面新建并填写凭证"
+      data-test="auth-bind-account"
+      style="width: 100%"
+      @change="checkBinding"
+    >
+      <el-option v-for="name in binding.options" :key="name" :label="name" :value="name" />
+    </el-select>
+    <template v-if="binding.check">
+      <el-alert v-if="!binding.check.allowed" type="error" :closable="false" show-icon class="bind-note" data-test="auth-bind-problem" :title="binding.check.problem ?? '不能绑定'" />
+      <template v-else>
+        <p class="bind-note">
+          请确认这个包访问的地址：<span class="mono strong" data-test="auth-bind-url">{{ binding.check.baseUrl }}</span>
+        </p>
+        <p class="hm-muted">授权器的登录（Cookie 和导出的令牌）会发到这个地址。地址不是你要访问的网站时不要绑定；以后地址变了，绑定会自动解除。</p>
+        <el-alert v-for="w in binding.check.warnings" :key="w" type="warning" :closable="false" show-icon class="bind-note" :title="w" />
+      </template>
+    </template>
+    <template #footer>
+      <el-button @click="binding.open = false">取消</el-button>
+      <el-button type="primary" data-test="auth-bind-confirm" :disabled="!binding.check?.allowed" :loading="binding.saving" @click="confirmBinding">
+        确认地址并绑定
+      </el-button>
     </template>
   </el-dialog>
 
@@ -947,5 +1126,9 @@ div.note {
   gap: 6px;
   margin-top: 8px;
   font-size: 13px;
+}
+
+.bind-note {
+  margin-top: 12px;
 }
 </style>

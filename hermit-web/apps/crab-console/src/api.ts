@@ -125,6 +125,10 @@ export interface SessionContention {
 
 export interface ConchDetail {
   conch: string
+  /** 这是一个授权器（`driver: auth`）：只负责登录，没有能力，不能被调用。 */
+  authenticator?: boolean
+  /** 这个包的登录由哪个授权器提供；不引用时为 null。 */
+  authUse?: AuthUse | null
   /** 实际访问的站点 `scheme://host:port`。`driver: mcp`、已停用或地址读不出时为 null。 */
   site?: string | null
   /** 见 {@link ConchSummary.sameSite}。 */
@@ -250,9 +254,65 @@ export interface IdentityCheck {
   warnings: string[]
 }
 
+/** 业务包引用的授权器（规则里的 `auth.use`）。 */
+export interface AuthUse {
+  conch: string
+  minVersion: string | null
+  /** 本机有没有生效的同名授权器。 */
+  installed: boolean
+  version: string | null
+  source: string | null
+}
+
+/** 业务包账号绑到的授权器账号。 */
+export interface AuthBindingView {
+  origin: 'OFFICIAL' | 'LOCAL'
+  conch: string
+  account: string
+  /** 绑定时确认的站点地址；这个包的地址变了，绑定会自动解除。 */
+  baseUrl: string
+  boundAt: string
+  /** 授权器账号的登录停在验证码。只能在授权器的账号页输入。 */
+  loginInputRequired: boolean
+  loginPaused: boolean
+}
+
+export interface AuthConsumer {
+  origin: 'OFFICIAL' | 'LOCAL'
+  conch: string
+  account: string
+}
+
+/** 本机生效的授权器。只在控制台里有，不能被 API Key 或 MCP 调用。 */
+export interface AuthenticatorView {
+  conch: string
+  version: string
+  title: string
+  description: string
+  source: string
+  origins: string[]
+  allowHosts: string[]
+  exports: string[]
+  accounts: { name: string; consumers: AuthConsumer[] }[]
+}
+
+/** 绑定授权器账号前的检查结果。 */
+export interface AuthBindingCheck {
+  allowed: boolean
+  problem: string | null
+  authenticator: AuthConsumer | null
+  /** 要使用者确认的站点地址：绑定后授权器的登录会用在这个地址上。 */
+  baseUrl: string | null
+  warnings: string[]
+}
+
 export interface Account {
   name: string
   default: boolean
+  /** 绑到的授权器账号；没绑、或这个包不引用授权器时为 null。 */
+  authenticator?: AuthBindingView | null
+  /** 只有授权器的账号有：绑到这个账号的业务包账号。 */
+  consumers?: AuthConsumer[]
   /** 绑到的身份；没绑为 null。 */
   identity?: { id: string; name: string } | null
   /** 该账号缺必填凭证，或已存凭证无法用当前主密钥解密。没有账号、自动登录暂停都不计入这里。 */
@@ -1137,6 +1197,14 @@ export const api = {
   /** 导入引导 JSON。服务端会先连 Reef 校验令牌，再热更新本进程。 */
   importReefBootstrap: (body: unknown) => http.post<ReefConnection>(`${base}/reef/bootstrap`, body),
 
+  authenticators: () => http.get<{ authenticators: AuthenticatorView[] }>(`${base}/authenticators`),
+  checkAuthBinding: (conch: string, account: string, authAccount: string) =>
+    http.post<AuthBindingCheck>(`${accountPath(conch, account)}/authenticator/check`, { authAccount }),
+  /** `baseUrl` 是检查时看到的地址；这之间地址变了会被拒绝。 */
+  bindAuthBinding: (conch: string, account: string, authAccount: string, baseUrl: string) =>
+    http.put<AuthBindingCheck>(`${accountPath(conch, account)}/authenticator`, { authAccount, baseUrl, confirm: true }),
+  unbindAuthBinding: (conch: string, account: string) =>
+    http.del<{ unbound: boolean }>(`${accountPath(conch, account)}/authenticator`),
   identities: () => http.get<{ identities: Identity[] }>(`${base}/identities`),
   createIdentity: (name: string) => http.post<Identity>(`${base}/identities`, { name }),
   renameIdentity: (id: string, name: string) => http.put<{ renamed: boolean }>(`${base}/identities/${seg(id)}`, { name }),

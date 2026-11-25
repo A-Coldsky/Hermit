@@ -22,6 +22,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.common.model.GroupDef;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.SessionContention;
@@ -39,6 +40,7 @@ import dev.hermit.crab.runtime.ConsoleSessions;
 import dev.hermit.crab.runtime.CredentialMessages;
 import dev.hermit.crab.runtime.CrabRuntime;
 import dev.hermit.crab.runtime.DeclaredSettings;
+import dev.hermit.crab.runtime.Authenticators;
 import dev.hermit.crab.runtime.Identities;
 import dev.hermit.crab.runtime.ReefBootstrapException;
 import dev.hermit.crab.runtime.RequestOnlyException;
@@ -61,6 +63,7 @@ import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.ConsolePassword;
 import dev.hermit.crab.store.DebugStateStore;
 import dev.hermit.crab.store.DevTraceStore;
+import dev.hermit.crab.store.AuthBinding;
 import dev.hermit.crab.store.Identity;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.upstream.McpOAuth;
@@ -127,6 +130,12 @@ final class ConsoleApi {
         get(app, "/console/api/apikeys", ctx -> apiKeys(runtime, ctx));
         post(app, "/console/api/apikeys", ctx -> createApiKey(runtime, ctx));
         delete(app, "/console/api/apikeys/{id}", ctx -> revokeApiKey(runtime, ctx));
+        get(app, "/console/api/authenticators", ctx -> authenticators(runtime, ctx));
+        post(app, "/console/api/conches/{conch}/accounts/{account}/authenticator/check",
+                ctx -> checkAuthBinding(runtime, ctx));
+        put(app, "/console/api/conches/{conch}/accounts/{account}/authenticator", ctx -> bindAuthBinding(runtime, ctx));
+        delete(app, "/console/api/conches/{conch}/accounts/{account}/authenticator",
+                ctx -> unbindAuthBinding(runtime, ctx));
         get(app, "/console/api/identities", ctx -> identities(runtime, ctx));
         post(app, "/console/api/identities", ctx -> createIdentity(runtime, ctx));
         put(app, "/console/api/identities/{id}", ctx -> renameIdentity(runtime, ctx));
@@ -257,7 +266,8 @@ final class ConsoleApi {
 
     private static void conch(CrabRuntime runtime, Context ctx) {
         String name = ctx.pathParam("conch");
-        ConchRegistry.Active active = runtime.registry().active(name).orElse(null);
+        // 控制台是本机的管理视图：授权器也能看详情、管账号和凭证，只是不在规则包列表和调用入口里。
+        ConchRegistry.Active active = runtime.registry().installed(name).orElse(null);
         if (active == null) {
             ConchSync sync = runtime.conchSync();
             ConchSync.UntrustedSignature damaged = sync == null ? null : sync.untrustedSignature(name).orElse(null);
@@ -297,6 +307,19 @@ final class ConsoleApi {
         putReefDisabled(runtime, source, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
         putPrevious(runtime, doc.conch(), body);
+        body.put("authenticator", AuthenticatorChecks.isAuthenticator(doc));
+        if (AuthenticatorChecks.uses(doc)) {
+            LinkedHashMap<String, Object> use = new LinkedHashMap<>();
+            use.put("conch", doc.auth().use());
+            use.put("minVersion", doc.auth().minVersion());
+            ConchRegistry.Active target = runtime.registry().authenticator(doc.auth().use()).orElse(null);
+            use.put("installed", target != null);
+            use.put("version", target == null ? null : target.doc().version().toString());
+            use.put("source", target == null ? null : sourceLabel(target.origin()));
+            body.put("authUse", use);
+        } else {
+            body.put("authUse", null);
+        }
         body.put("ruleDisabled", false);
         GatewayResponses.writeData(ctx, body);
     }
@@ -581,6 +604,16 @@ final class ConsoleApi {
                 }
                 return Map.of("id", id, "name", id);
             }));
+            SessionKey key = new SessionKey(source, doc.conch(), account.account());
+            AuthBinding binding = runtime.authenticators().find(key);
+            row.put("authenticator", binding == null ? null : bindingRow(runtime, binding));
+            if (AuthenticatorChecks.isAuthenticator(doc)) {
+                ArrayList<Map<String, Object>> consumers = new ArrayList<>();
+                for (AuthBinding consumer : runtime.authenticators().consumersOf(key)) {
+                    consumers.add(memberKey(consumer.account()));
+                }
+                row.put("consumers", consumers);
+            }
             rows.add(row);
         }
         GatewayResponses.writeData(ctx, Map.of("accounts", rows));
@@ -665,6 +698,103 @@ final class ConsoleApi {
         Identities.Check check = runtime.identities().bind(
                 ctx.pathParam("id"), active, conch, account, Actors.CONSOLE);
         GatewayResponses.writeData(ctx, checkBody(check));
+    }
+
+    private static Map<String, Object> memberKey(SessionKey key) {
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("origin", key.origin().name());
+        row.put("conch", key.conch());
+        row.put("account", key.account());
+        return row;
+    }
+
+    private static Map<String, Object> bindingRow(CrabRuntime runtime, AuthBinding binding) {
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>(memberKey(binding.authenticator()));
+        row.put("baseUrl", binding.boundBaseUrl());
+        row.put("boundAt", DateTimeFormatter.ISO_INSTANT.format(binding.boundAt()));
+        SessionKey target = binding.authenticator();
+        PendingLogins.View waiting = runtime.admin().loginInput(target.origin(), target.conch(), target.account());
+        row.put("loginInputRequired", waiting != null);
+        row.put("loginPaused", runtime.admin().loginPaused(target.origin(), target.conch(), target.account()));
+        return row;
+    }
+
+    /** 本机生效的授权器。只在控制台；规则包列表、OpenAPI、MCP 和 API Key 范围里都没有它们。 */
+    private static void authenticators(CrabRuntime runtime, Context ctx) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (String name : runtime.registry().authenticators().keySet()) {
+            ConchRegistry.Active active = runtime.registry().authenticator(name).orElse(null);
+            if (active == null) {
+                continue;
+            }
+            ConchDoc doc = active.doc();
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("conch", doc.conch());
+            row.put("version", doc.version().toString());
+            row.put("title", text(doc.title()));
+            row.put("description", text(doc.description()));
+            row.put("source", sourceLabel(active.origin()));
+            row.put("origins", List.copyOf(runtime.identities().addresses(active.origin(), doc.conch())));
+            row.put("allowHosts", doc.auth().allowHosts());
+            row.put("exports", List.copyOf(doc.auth().exports().keySet()));
+            ArrayList<Map<String, Object>> accounts = new ArrayList<>();
+            for (Account account : runtime.admin().listAccounts(active.origin(), doc.conch())) {
+                LinkedHashMap<String, Object> entry = new LinkedHashMap<>();
+                entry.put("name", account.account());
+                ArrayList<Map<String, Object>> consumers = new ArrayList<>();
+                for (AuthBinding consumer : runtime.authenticators()
+                        .consumersOf(new SessionKey(active.origin(), doc.conch(), account.account()))) {
+                    consumers.add(memberKey(consumer.account()));
+                }
+                entry.put("consumers", consumers);
+                accounts.add(entry);
+            }
+            row.put("accounts", accounts);
+            rows.add(row);
+        }
+        GatewayResponses.writeData(ctx, Map.of("authenticators", rows));
+    }
+
+    private static Map<String, Object> authCheckBody(Authenticators.Check check) {
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("allowed", check.allowed());
+        body.put("problem", check.problem());
+        body.put("authenticator", check.authenticator() == null ? null : memberKey(check.authenticator()));
+        body.put("baseUrl", check.baseUrl());
+        body.put("warnings", check.warnings());
+        return body;
+    }
+
+    private static void checkAuthBinding(CrabRuntime runtime, Context ctx) throws Exception {
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        Authenticators.Check check = runtime.authenticators().check(
+                active.origin(), active.doc().conch(), ctx.pathParam("account"),
+                requiredText(object(ctx), "authAccount"));
+        GatewayResponses.writeData(ctx, authCheckBody(check));
+    }
+
+    /**
+     * 绑定要使用者确认这个包的站点地址：请求要带 {@code confirm: true} 和检查时看到的 {@code baseUrl}，
+     * 地址在这之间变了就拒绝。
+     */
+    private static void bindAuthBinding(CrabRuntime runtime, Context ctx) throws Exception {
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        JsonNode body = object(ctx);
+        String authAccount = requiredText(body, "authAccount");
+        String baseUrl = requiredText(body, "baseUrl");
+        if (!bool(body, "confirm", false)) {
+            throw new IllegalArgumentException("confirm is required");
+        }
+        Authenticators.Check check = runtime.authenticators().bind(
+                active.origin(), active.doc().conch(), ctx.pathParam("account"), authAccount, baseUrl, Actors.CONSOLE);
+        GatewayResponses.writeData(ctx, authCheckBody(check));
+    }
+
+    private static void unbindAuthBinding(CrabRuntime runtime, Context ctx) {
+        ConchRegistry.Active active = requireActiveConch(runtime, ctx);
+        boolean removed = runtime.authenticators().unbind(
+                active.origin(), active.doc().conch(), ctx.pathParam("account"), Actors.CONSOLE);
+        GatewayResponses.writeData(ctx, Map.of("unbound", removed));
     }
 
     private static Origin optionalOrigin(JsonNode body, String field) {
@@ -809,7 +939,7 @@ final class ConsoleApi {
 
     private static void testLogin(CrabRuntime runtime, Context ctx) {
         String name = ctx.pathParam("conch");
-        ConchRegistry.Active live = runtime.registry().active(name).orElse(null);
+        ConchRegistry.Active live = runtime.registry().installed(name).orElse(null);
         if (live == null && runtime.ruleDisabled(name)) {
             GatewayResponses.writeRequestError(ctx, 409, ErrorCode.CONCH_DISABLED,
                     runtime.localRuleDisabled(name) ? TEST_LOGIN_DISABLED_LOCAL : TEST_LOGIN_DISABLED);
@@ -2129,7 +2259,7 @@ final class ConsoleApi {
      */
     private static ConchRegistry.Active requireActiveConch(CrabRuntime runtime, Context ctx) {
         String name = ctx.pathParam("conch");
-        ConchRegistry.Active live = runtime.registry().active(name).orElse(null);
+        ConchRegistry.Active live = runtime.registry().installed(name).orElse(null);
         if (live != null) {
             return live;
         }

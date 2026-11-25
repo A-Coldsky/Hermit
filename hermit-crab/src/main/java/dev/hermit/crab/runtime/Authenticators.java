@@ -238,13 +238,17 @@ public final class Authenticators implements AuthLinks {
     }
 
     /** 绑定或改绑。条件不满足时抛 {@link IllegalArgumentException}，消息就是原因。 */
-    public Check bind(Origin origin, String conch, String account, String authAccount, String actor) {
+    public Check bind(
+            Origin origin, String conch, String account, String authAccount, String confirmedBaseUrl, String actor) {
         SessionKey key = new SessionKey(origin, conch, account);
         Check check;
         synchronized (judging) {
             check = check(origin, conch, account, authAccount);
             if (!check.allowed()) {
                 throw new IllegalArgumentException(check.problem());
+            }
+            if (!check.baseUrl().equals(confirmedBaseUrl)) {
+                throw new IllegalArgumentException("规则包的站点地址已变化，请重新检查后再绑定");
             }
             AuthBinding current = store.find(key);
             if (current != null && current.authenticator().equals(check.authenticator())

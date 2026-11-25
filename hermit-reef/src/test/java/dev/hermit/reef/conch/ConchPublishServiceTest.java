@@ -32,7 +32,8 @@ class ConchPublishServiceTest {
                 null,
                 null,
                 null,
-                Clock.fixed(ReefTestConfig.START, ZoneOffset.UTC));
+                Clock.fixed(ReefTestConfig.START, ZoneOffset.UTC),
+                null);
 
         for (String name : List.of("Legacy", "LEGACY_OA", "legacy ", "legacy  ", " legacy")) {
             assertNotFound(() -> service.publish("reef-admin", name, "1.0.0"));
@@ -57,7 +58,8 @@ class ConchPublishServiceTest {
                 false,
                 null,
                 null,
-                0L);
+                0L,
+                null);
         ConchRepository repository = new ConchRepository(null) {
             @Override
             List<VersionRow> lockConch(String conch) {
@@ -72,7 +74,8 @@ class ConchPublishServiceTest {
                 null,
                 null,
                 null,
-                Clock.fixed(ReefTestConfig.START, ZoneOffset.UTC));
+                Clock.fixed(ReefTestConfig.START, ZoneOffset.UTC),
+                null);
 
         assertNotFound(() -> service.publish("reef-admin", "legacy", "1.0.0"));
         assertThat(queried).containsExactly("legacy");

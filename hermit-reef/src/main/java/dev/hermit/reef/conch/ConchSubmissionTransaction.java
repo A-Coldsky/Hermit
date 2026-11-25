@@ -45,6 +45,7 @@ class ConchSubmissionTransaction {
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final AuthDependencies authDependencies;
 
     ConchSubmissionTransaction(
             SubmissionRepository submissions,
@@ -55,7 +56,8 @@ class ConchSubmissionTransaction {
             ConchPublishService publishService,
             AuditService auditService,
             ObjectMapper objectMapper,
-            Clock clock) {
+            Clock clock,
+            AuthDependencies authDependencies) {
         this.submissions = submissions;
         this.submissionStorage = submissionStorage;
         this.conchRepository = conchRepository;
@@ -65,6 +67,7 @@ class ConchSubmissionTransaction {
         this.auditService = auditService;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.authDependencies = authDependencies;
     }
 
     @Transactional
@@ -90,6 +93,10 @@ class ConchSubmissionTransaction {
             if (doc.version().compareTo(currentVer) <= 0) {
                 throw conflict("提交版本必须高于当前已发布版本（" + currentRow.version() + "）");
             }
+        }
+        List<ValidationIssue> dependencyProblems = authDependencies.uploadProblems(doc);
+        if (!dependencyProblems.isEmpty()) {
+            throw ConchUploadService.dependencyFailed(prepared, dependencyProblems);
         }
         ConchDoc previous = currentRow == null ? null : readConchDoc(currentRow);
         JsonNode diff = previous == null
@@ -267,6 +274,10 @@ class ConchSubmissionTransaction {
         }
 
         VersionRow currentRow = currentPublishedRow(existing);
+        List<ValidationIssue> dependencyProblems = authDependencies.uploadProblems(doc);
+        if (!dependencyProblems.isEmpty()) {
+            throw ConchUploadService.dependencyFailed(prepared, dependencyProblems);
+        }
         ConchDoc previous = currentRow == null ? null : readConchDoc(currentRow);
         JsonNode diff = previous == null
                 ? objectMapper.createObjectNode()
@@ -296,7 +307,8 @@ class ConchSubmissionTransaction {
                             false,
                             validationJson,
                             diffJson,
-                            0),
+                            0,
+                            AuthDependencies.authUse(doc)),
                     "conches/" + conch + "/" + version + "/conch.yaml",
                     validationJson,
                     diffJson);

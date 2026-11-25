@@ -16,5 +16,6 @@ record VersionRow(
         boolean current,
         String validationJson,
         String diffJson,
-        long pullCount) {
+        long pullCount,
+        String authUse) {
 }

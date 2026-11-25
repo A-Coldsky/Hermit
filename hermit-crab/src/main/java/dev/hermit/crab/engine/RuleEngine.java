@@ -406,6 +406,10 @@ public final class RuleEngine implements ConchExecutor {
             if (lostBefore) {
                 // 共享锁下那一次已经发现会话失效：别的调用还没重新登录过才登出，这一次算重跑。
                 if (sessions.markLoggedOutSince(key, handoff.epoch)) {
+                    if (scope.linked != null) {
+                        // 和独占锁下发现失效一样：记下要先探授权器，写了 auth.exchange 的连带删掉自己的 Cookie。
+                        loseLinked(scope);
+                    }
                     noteLost(scope);
                 }
                 if (!action.idempotent()) {

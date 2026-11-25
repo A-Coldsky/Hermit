@@ -36,6 +36,21 @@
       <artifactId>hermit-web</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- 仅用于控制 Maven Reactor 顺序（确保 -pl hermit-reef -am 先打包 hermit-crab），不引入 Crab 类到 Reef classpath。 -->
+    <dependency>
+      <groupId>dev.hermit</groupId>
+      <artifactId>hermit-crab</artifactId>
+      <version>${project.version}</version>
+      <type>pom</type>
+      <scope>provided</scope>
+      <optional>true</optional>
+      <exclusions>
+        <exclusion>
+          <groupId>*</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter</artifactId>
@@ -87,7 +102,70 @@
   </dependencies>
 
   <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+        <excludes>
+          <exclude>bundled-crab/**</exclude>
+        </excludes>
+      </resource>
+      <resource>
+        <directory>src/main/resources/bundled-crab</directory>
+        <targetPath>bundled-crab</targetPath>
+        <filtering>true</filtering>
+      </resource>
+    </resources>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-clean-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>drop-stale-bundled-crab</id>
+            <phase>initialize</phase>
+            <goals>
+              <goal>clean</goal>
+            </goals>
+            <configuration>
+              <excludeDefaultDirectories>true</excludeDefaultDirectories>
+              <filesets>
+                <fileset>
+                  <directory>${project.build.outputDirectory}/bundled-crab</directory>
+                  <includes>
+                    <include>*.jar</include>
+                  </includes>
+                </fileset>
+              </filesets>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-resources-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>bundle-crab-jar</id>
+            <phase>prepare-package</phase>
+            <goals>
+              <goal>copy-resources</goal>
+            </goals>
+            <configuration>
+              <skip>${hermit.crab.bundle.skip}</skip>
+              <outputDirectory>${project.build.outputDirectory}/bundled-crab</outputDirectory>
+              <resources>
+                <resource>
+                  <directory>${project.basedir}/../hermit-crab/target</directory>
+                  <includes>
+                    <include>hermit-crab-${project.version}-all.jar</include>
+                  </includes>
+                  <filtering>false</filtering>
+                </resource>
+              </resources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>

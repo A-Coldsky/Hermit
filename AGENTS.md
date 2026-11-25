@@ -39,7 +39,7 @@
 - 完整验证：`./mvnw -B verify`，先确认 `JAVA_HOME` 为 JDK 17。
 - 模块验证示例：`./mvnw -pl hermit-crab -am test -Dhermit.web.skip=true`。
 - `hermit-it` 依赖已打包 Reef jar 和 Crab test-jar；干净目录全量验证用 `verify`。
-- Crab 构建产出普通 jar（供 `hermit-it` 与开发 classpath 使用）以及附加产物 `hermit-crab-<version>-all.jar`（独立可执行 fat JAR，仅需 JDK 17 运行，排除了 `hermit-web/reef-admin/**`）；若需通过 Reef「下载 Crab」分发，手动将 fat JAR 放入 Reef `data-dir/downloads/` 目录。
+- Crab 构建产出普通 jar（供 `hermit-it` 与开发 classpath 使用）以及附加产物 `hermit-crab-<version>-all.jar`（独立可执行 fat JAR，仅需 JDK 17 运行，排除了 `hermit-web/reef-admin/**`）。`hermit-reef` 在 `prepare-package` 阶段将同版本 `hermit-crab-<version>-all.jar` 内置进 `BOOT-INF/classes/bundled-crab/`（仅通过 `pom` 依赖控制 Reactor 顺序，不污染 Reef 运行时 classpath），开箱即可在「下载 Crab」页下载；管理员亦可通过管理台上传新版覆盖（存在 `data-dir/downloads/managed/`，仅保留当前与上一版，支持回退与恢复内置默认）。
 - 缺陷修复添加针对行为的回归测试；文档修改检查链接、命令与源码一致性。
 - 不复制真实 `.env`、`~/.hermit`、`reef-data`、数据库、密钥或凭证到代码/文档/测试输出。测试用临时目录和模拟服务。
 - 秘密放 `credentials`；`config` 不允许 `type: secret`。

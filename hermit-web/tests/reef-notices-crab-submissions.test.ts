@@ -16,6 +16,9 @@ const reef = vi.hoisted(() => ({
   deleteAnnouncement: vi.fn(),
   crabDownloadInfo: vi.fn(),
   downloadCrabJar: vi.fn(),
+  uploadCrabJar: vi.fn(),
+  rollbackCrabJar: vi.fn(),
+  resetCrabJar: vi.fn(),
   submissions: vi.fn(),
   pendingSubmissionsCount: vi.fn(),
   submission: vi.fn(),
@@ -202,6 +205,122 @@ describe('CrabDownloadView 独立 JAR 下载', () => {
     expect(wrap.find('[data-test="no-jar-state"]').exists()).toBe(true)
     expect(wrap.text()).toContain('downloads/')
     expect(wrap.text()).toContain('hermit-crab-*-all.jar')
+    wrap.unmount()
+  })
+
+  it('内置默认版本开箱可直接下载，且普通用户不显示管理区', async () => {
+    setRole('USER')
+    reef.crabDownloadInfo.mockResolvedValue({
+      available: true,
+      source: 'BUNDLED',
+      fileName: 'hermit-crab-0.1.0-SNAPSHOT-all.jar',
+      sizeBytes: 21 * 1024 * 1024,
+      sha256: 'c'.repeat(64),
+      updatedAt: '2026-11-24T08:00:00Z',
+      latestCrabVersion: null,
+      downloadUrl: '/api/admin/crab/download',
+      externalUrl: null,
+      bundledAvailable: true,
+      bundledFileName: 'hermit-crab-0.1.0-SNAPSHOT-all.jar',
+      bundledSizeBytes: 21 * 1024 * 1024,
+      bundledSha256: 'c'.repeat(64),
+      previousUpload: null,
+      pinnedByConfig: false,
+    })
+
+    const wrap = await mountPage(CrabDownloadView)
+    await flushPromises()
+
+    expect(wrap.get('[data-test="jar-source-tag"]').text()).toContain('内置默认版本')
+    expect(wrap.find('[data-test="download-jar-btn"]').exists()).toBe(true)
+    expect(wrap.find('[data-test="crab-admin-manage"]').exists()).toBe(false)
+    wrap.unmount()
+  })
+
+  it('管理员可上传新版 Crab、回退到上一版本并恢复内置默认版本', async () => {
+    setRole('ADMIN')
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+
+    const bundledState = {
+      available: true,
+      source: 'BUNDLED' as const,
+      fileName: 'hermit-crab-0.1.0-SNAPSHOT-all.jar',
+      sizeBytes: 21 * 1024 * 1024,
+      sha256: '0'.repeat(64),
+      updatedAt: '2026-11-24T08:00:00Z',
+      latestCrabVersion: null,
+      downloadUrl: '/api/admin/crab/download',
+      externalUrl: null,
+      uploadedBy: null,
+      bundledAvailable: true,
+      bundledFileName: 'hermit-crab-0.1.0-SNAPSHOT-all.jar',
+      bundledSizeBytes: 21 * 1024 * 1024,
+      bundledSha256: '0'.repeat(64),
+      previousUpload: null,
+      pinnedByConfig: false,
+    }
+    const uploadedState = {
+      ...bundledState,
+      source: 'UPLOADED' as const,
+      fileName: 'hermit-crab-1.13.0-all.jar',
+      sha256: '2'.repeat(64),
+      uploadedBy: 'admin',
+      previousUpload: {
+        fileName: 'hermit-crab-1.12.0-all.jar',
+        sizeBytes: 20 * 1024 * 1024,
+        sha256: '1'.repeat(64),
+        uploadedAt: '2026-11-24T07:00:00Z',
+        uploadedBy: 'admin',
+      },
+    }
+    const rolledBackState = {
+      ...uploadedState,
+      fileName: 'hermit-crab-1.12.0-all.jar',
+      sha256: '1'.repeat(64),
+      previousUpload: {
+        fileName: 'hermit-crab-1.13.0-all.jar',
+        sizeBytes: 21 * 1024 * 1024,
+        sha256: '2'.repeat(64),
+        uploadedAt: '2026-11-24T08:00:00Z',
+        uploadedBy: 'admin',
+      },
+    }
+
+    reef.crabDownloadInfo.mockResolvedValue(bundledState)
+    reef.uploadCrabJar.mockResolvedValue(uploadedState)
+    reef.rollbackCrabJar.mockResolvedValue(rolledBackState)
+    reef.resetCrabJar.mockResolvedValue(bundledState)
+
+    const wrap = await mountPage(CrabDownloadView)
+    await flushPromises()
+    expect(wrap.find('[data-test="crab-admin-manage"]').exists()).toBe(true)
+
+    // 选择文件并上传
+    const file = new File([new Uint8Array([1, 2, 3])], 'hermit-crab-1.13.0-all.jar', {
+      type: 'application/java-archive',
+    })
+    const input = wrap.get('[data-test="crab-file-input"]').element as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    await wrap.get('[data-test="crab-file-input"]').trigger('change')
+    await wrap.get('[data-test="upload-jar-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(reef.uploadCrabJar).toHaveBeenCalledWith(file)
+    expect(wrap.get('[data-test="jar-source-tag"]').text()).toContain('管理员已上传')
+    expect(wrap.get('[data-test="jar-filename"]').text()).toBe('hermit-crab-1.13.0-all.jar')
+    expect(wrap.find('[data-test="previous-upload-row"]').exists()).toBe(true)
+
+    // 回退到上一版本
+    await wrap.get('[data-test="rollback-jar-btn"]').trigger('click')
+    await flushPromises()
+    expect(reef.rollbackCrabJar).toHaveBeenCalledTimes(1)
+    expect(wrap.get('[data-test="jar-filename"]').text()).toBe('hermit-crab-1.12.0-all.jar')
+
+    // 恢复内置默认版本
+    await wrap.get('[data-test="reset-jar-btn"]').trigger('click')
+    await flushPromises()
+    expect(reef.resetCrabJar).toHaveBeenCalledTimes(1)
+    expect(wrap.get('[data-test="jar-source-tag"]').text()).toContain('内置默认版本')
     wrap.unmount()
   })
 })

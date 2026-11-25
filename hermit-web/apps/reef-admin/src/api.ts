@@ -364,7 +364,15 @@ export interface Announcement {
   updatedAt: string
 }
 
-export type CrabDownloadSource = 'LOCAL' | 'EXTERNAL' | 'NONE'
+export type CrabDownloadSource = 'UPLOADED' | 'LOCAL' | 'BUNDLED' | 'EXTERNAL' | 'NONE'
+
+export interface CrabPreviousUpload {
+  fileName: string
+  sizeBytes: number
+  sha256: string
+  uploadedAt: string
+  uploadedBy: string | null
+}
 
 export interface CrabDownloadInfo {
   available: boolean
@@ -376,6 +384,13 @@ export interface CrabDownloadInfo {
   latestCrabVersion: string | null
   downloadUrl: string | null
   externalUrl: string | null
+  uploadedBy?: string | null
+  bundledAvailable?: boolean
+  bundledFileName?: string | null
+  bundledSizeBytes?: number | null
+  bundledSha256?: string | null
+  previousUpload?: CrabPreviousUpload | null
+  pinnedByConfig?: boolean
 }
 
 export type SubmissionStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN'
@@ -483,6 +498,9 @@ export const api = {
 
   crabDownloadInfo: () => http.get<CrabDownloadInfo>('/api/admin/crab/download-info'),
   downloadCrabJar: () => http.blob('/api/admin/crab/download'),
+  uploadCrabJar: (file: File) => http.raw<CrabDownloadInfo>('/api/admin/crab/upload', file, { name: file.name }),
+  rollbackCrabJar: () => http.post<CrabDownloadInfo>('/api/admin/crab/rollback'),
+  resetCrabJar: () => http.del<CrabDownloadInfo>('/api/admin/crab/override'),
 
   submissions: (status?: SubmissionStatus | 'ALL') =>
     http.get<SubmissionSummary[]>('/api/admin/submissions', status && status !== 'ALL' ? { status } : undefined),

@@ -211,6 +211,7 @@ class AuthenticatorEngineTest {
                         method: POST
                         url: SSO/login
                         form: { username: "{{credential.username}}", password: "{{credential.password}}" }
+                    - assert: { status: 200 }
                     - extract: { access_token: { jsonpath: "$.token" } }
                   alive_check:
                     request:
@@ -223,9 +224,10 @@ class AuthenticatorEngineTest {
     }
 
     private String withOtp(String yaml) {
-        return yaml.replace("    - extract: { access_token: \"$.token\" }", """
+        return yaml.replace("    - assert: { status: 200 }\n    - extract: { access_token: { jsonpath: \"$.token\" } }", """
+                    - assert: { status: 200 }
                     - extract: { need: { jsonpath: "$.otp", optional: true } }
-                    - ask: { into: otp, label: 短信验证码 }
+                    - ask: { into: otp, kind: code, label: 短信验证码, timeout_s: 60 }
                     - request:
                         method: POST
                         url: SSO/login

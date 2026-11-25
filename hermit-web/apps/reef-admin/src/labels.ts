@@ -27,6 +27,9 @@ export const auditActionLabels: Record<string, string> = {
   SUBMISSION_APPROVED: '批准并发布规则',
   SUBMISSION_REJECTED: '驳回规则提交',
   SUBMISSION_WITHDRAWN: '撤回规则提交',
+  CRAB_JAR_UPLOADED: '上传新版 Crab',
+  CRAB_JAR_ROLLED_BACK: '回退 Crab 版本',
+  CRAB_JAR_RESET: '恢复内置 Crab',
 }
 
 export const announcementLevelLabels: Record<string, string> = {

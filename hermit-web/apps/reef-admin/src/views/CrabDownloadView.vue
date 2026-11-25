@@ -1,6 +1,16 @@
 <script setup lang="ts">
-import { CopyDocument, Download, Link as LinkIcon, Reading, Refresh, Tickets } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import {
+  CopyDocument,
+  Delete,
+  Download,
+  Link as LinkIcon,
+  Reading,
+  Refresh,
+  RefreshLeft,
+  Tickets,
+  Upload,
+} from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import HermitDuet from '@shared/components/HermitDuet.vue'
 import HermitMark from '@shared/components/HermitMark.vue'
@@ -10,10 +20,46 @@ import { copyText, notifyError } from '@shared/format'
 import { api, type CrabDownloadInfo } from '../api'
 import { isAdmin } from '../auth'
 
+const MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+
 const loading = ref(true)
 const loadFailed = ref(false)
 const downloading = ref(false)
+const uploading = ref(false)
+const rollingBack = ref(false)
+const resetting = ref(false)
 const info = ref<CrabDownloadInfo | null>(null)
+const selectedFile = ref<File | null>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
+
+const isDirectDownload = computed(() => {
+  const src = info.value?.source
+  return src === 'UPLOADED' || src === 'LOCAL' || src === 'BUNDLED'
+})
+
+const sourceLabel = computed(() => {
+  switch (info.value?.source) {
+    case 'UPLOADED':
+      return '管理员已上传'
+    case 'BUNDLED':
+      return '内置默认版本'
+    case 'LOCAL':
+      return '服务器本地文件'
+    default:
+      return ''
+  }
+})
+
+const sourceTagType = computed<'primary' | 'success' | 'info'>(() => {
+  switch (info.value?.source) {
+    case 'UPLOADED':
+      return 'primary'
+    case 'BUNDLED':
+      return 'success'
+    default:
+      return 'info'
+  }
+})
 
 const jarName = computed(() => info.value?.fileName || 'hermit-crab-0.1.0-SNAPSHOT-all.jar')
 const runCommand = computed(() => `java -jar ${jarName.value} serve`)
@@ -21,11 +67,16 @@ const customCommand = computed(() => `HERMIT_HOME=./crab-data java -jar ${jarNam
 const windowsCommand = computed(() => `java -jar .\\${jarName.value} serve`)
 const windowsCustomCommand = computed(() => `$env:HERMIT_HOME=".\\crab-data"; java -jar .\\${jarName.value} serve`)
 
-function formatBytes(bytes: number | null): string {
+function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined) return '—'
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function shortSha(sha: string | null | undefined): string {
+  if (!sha) return '—'
+  return sha.length > 16 ? `${sha.slice(0, 16)}…` : sha
 }
 
 async function load() {
@@ -42,7 +93,7 @@ async function load() {
 }
 
 async function downloadJar() {
-  if (!info.value || info.value.source !== 'LOCAL') return
+  if (!info.value || !isDirectDownload.value) return
   downloading.value = true
   try {
     const blob = await api.downloadCrabJar()
@@ -59,6 +110,92 @@ async function downloadJar() {
     notifyError(error)
   } finally {
     downloading.value = false
+  }
+}
+
+function onFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  selectedFile.value = input.files?.[0] ?? null
+}
+
+function clearFileInput() {
+  selectedFile.value = null
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
+}
+
+async function uploadJar() {
+  const file = selectedFile.value
+  if (!file) {
+    ElMessage.warning('请先选择要上传的 hermit-crab-*-all.jar 文件')
+    return
+  }
+  if (!file.name.toLowerCase().endsWith('.jar')) {
+    ElMessage.warning('只支持上传 .jar 文件')
+    return
+  }
+  if (file.size <= 0) {
+    ElMessage.warning('上传的文件为空')
+    return
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    ElMessage.warning('文件大小不能超过 64 MB')
+    return
+  }
+  uploading.value = true
+  try {
+    info.value = await api.uploadCrabJar(file)
+    clearFileInput()
+    ElMessage.success('新版 Crab JAR 已上传并生效')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function rollbackJar() {
+  const prev = info.value?.previousUpload
+  if (!prev) return
+  try {
+    await ElMessageBox.confirm(
+      `确认将当前下载版本回退到上一版本「${prev.fileName}」（${shortSha(prev.sha256)}）？回退后立即生效。`,
+      '回退到上一版本',
+      { confirmButtonText: '确认回退', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  rollingBack.value = true
+  try {
+    info.value = await api.rollbackCrabJar()
+    ElMessage.success('已回退到上一版本')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    rollingBack.value = false
+  }
+}
+
+async function resetJar() {
+  try {
+    await ElMessageBox.confirm(
+      '恢复内置默认版本将删除管理员已上传的当前版本与上一版本，并立即切回 Reef 内置的 Crab 客户端。是否继续？',
+      '恢复内置默认版本',
+      { confirmButtonText: '确认恢复', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  resetting.value = true
+  try {
+    info.value = await api.resetCrabJar()
+    ElMessage.success('已恢复为默认版本')
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    resetting.value = false
   }
 }
 
@@ -88,13 +225,14 @@ onMounted(load)
     </el-alert>
 
     <div v-if="info" class="hm-card hero" data-test="crab-download-card">
-      <template v-if="info.source === 'LOCAL'">
+      <template v-if="isDirectDownload">
         <div class="hero-top">
           <div class="hero-lead">
             <HermitMark variant="crab" :size="56" intro class="hero-mark" />
             <div>
               <div class="hero-badges">
                 <el-tag type="success" effect="dark">可直接下载</el-tag>
+                <el-tag :type="sourceTagType" effect="plain" data-test="jar-source-tag">{{ sourceLabel }}</el-tag>
                 <el-tag type="info" effect="plain">独立可执行 JAR · JDK 17+</el-tag>
                 <el-tag v-if="info.latestCrabVersion" type="primary" effect="plain" class="mono">
                   推荐版本 v{{ info.latestCrabVersion }}
@@ -131,9 +269,12 @@ onMounted(load)
 
         <el-descriptions :column="2" border class="meta-table">
           <el-descriptions-item label="文件大小">{{ formatBytes(info.sizeBytes) }}</el-descriptions-item>
-          <el-descriptions-item label="更新时间">
+          <el-descriptions-item :label="info.source === 'BUNDLED' ? '构建时间' : '更新时间'">
             <TimeText v-if="info.updatedAt" :value="info.updatedAt" />
             <span v-else>—</span>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="info.source === 'UPLOADED' && info.uploadedBy" label="上传人" :span="2">
+            {{ info.uploadedBy }}
           </el-descriptions-item>
           <el-descriptions-item label="SHA-256 校验和" :span="2">
             <div class="sha-row">
@@ -188,8 +329,8 @@ onMounted(load)
               <p class="hm-muted">
                 {{
                   isAdmin
-                    ? '请在构建独立 JAR 后，将文件放入 Reef 数据目录下的 downloads/ 子目录中（无需重启 Reef）。'
-                    : '请联系管理员将构建好的 Crab 独立可执行 JAR 放入 Reef 数据目录的 downloads/ 目录中。'
+                    ? '可直接通过下方管理区上传 hermit-crab-*-all.jar，或将其放入 Reef 数据目录下的 downloads/ 子目录中（无需重启 Reef）。'
+                    : '请联系管理员在管理台上传 Crab 独立可执行 JAR，或将其放入 Reef 数据目录的 downloads/ 目录中。'
                 }}
               </p>
             </div>
@@ -208,7 +349,7 @@ onMounted(load)
                 复制
               </el-button>
             </div>
-            <div class="cmd-label">2. 将生成的 fat JAR 复制到 Reef 数据目录：</div>
+            <div class="cmd-label">2. 通过下方上传框直接上传，或复制到 Reef 数据目录：</div>
             <div class="cmd-box">
               <code class="mono">cp hermit-crab/target/hermit-crab-*-all.jar &lt;reef-data&gt;/downloads/</code>
               <el-button
@@ -221,12 +362,114 @@ onMounted(load)
               </el-button>
             </div>
             <p class="hm-muted small-note">
-              放入后点击本页右上角「刷新」即可生效；也可以通过环境变量
+              正式打包的 <code class="mono">hermit-reef</code> JAR 已内置默认 Crab 客户端，无需手工拷贝即可直接使用；也可通过环境变量
               <code class="mono">HERMIT_REEF_CRAB_JAR_FILE</code> 固定指定文件名。
             </p>
           </div>
         </div>
       </template>
+    </div>
+
+    <div v-if="isAdmin && info" class="hm-card row" data-test="crab-admin-manage">
+      <div class="hm-card-title">
+        <span>客户端版本管理（仅管理员）</span>
+        <span class="hm-muted small-title-note">自动保留当前版本与上一个上传版本，立即生效</span>
+      </div>
+
+      <el-alert
+        v-if="info.pinnedByConfig"
+        type="warning"
+        show-icon
+        :closable="false"
+        class="gap"
+        title="当前由配置项 hermit.reef.crab-jar-file 固定指定客户端文件，页面上传与回退已停用。"
+      />
+
+      <div class="upload-bar">
+        <input
+          ref="fileInput"
+          type="file"
+          accept=".jar"
+          class="file-input"
+          data-test="crab-file-input"
+          :disabled="uploading || !!info.pinnedByConfig"
+          @change="onFileChange"
+        />
+        <el-button
+          type="primary"
+          :icon="Upload"
+          :loading="uploading"
+          :disabled="!selectedFile || !!info.pinnedByConfig"
+          data-test="upload-jar-btn"
+          @click="uploadJar"
+        >
+          上传并立即生效
+        </el-button>
+      </div>
+      <p class="hm-muted small-note">
+        请上传带 <code class="mono">-all</code> 后缀的独立可执行包（如 <code class="mono">hermit-crab-0.1.0-SNAPSHOT-all.jar</code>，上限 64 MB）。重复上传新版本时仅保留最新两版，更早的上传文件会自动清理。
+      </p>
+
+      <div v-if="info.previousUpload || info.bundledAvailable" class="version-slots">
+        <div v-if="info.previousUpload" class="slot-row" data-test="previous-upload-row">
+          <div class="slot-info">
+            <div class="slot-head">
+              <el-tag size="small" type="warning" effect="plain">上一上传版本</el-tag>
+              <span class="mono slot-name">{{ info.previousUpload.fileName }}</span>
+            </div>
+            <div class="hm-muted slot-meta">
+              <span>{{ formatBytes(info.previousUpload.sizeBytes) }}</span>
+              <span>·</span>
+              <span>SHA-256 <code class="mono">{{ shortSha(info.previousUpload.sha256) }}</code></span>
+              <template v-if="info.previousUpload.uploadedAt">
+                <span>·</span>
+                <TimeText :value="info.previousUpload.uploadedAt" />
+              </template>
+              <template v-if="info.previousUpload.uploadedBy">
+                <span>·</span>
+                <span>{{ info.previousUpload.uploadedBy }}</span>
+              </template>
+            </div>
+          </div>
+          <el-button
+            size="small"
+            :icon="RefreshLeft"
+            :loading="rollingBack"
+            :disabled="!!info.pinnedByConfig"
+            data-test="rollback-jar-btn"
+            @click="rollbackJar"
+          >
+            回退到上一版本
+          </el-button>
+        </div>
+
+        <div v-if="info.bundledAvailable" class="slot-row" data-test="bundled-default-row">
+          <div class="slot-info">
+            <div class="slot-head">
+              <el-tag size="small" type="success" effect="plain">Reef 内置默认版本</el-tag>
+              <span class="mono slot-name">{{ info.bundledFileName }}</span>
+            </div>
+            <div class="hm-muted slot-meta">
+              <span>{{ formatBytes(info.bundledSizeBytes) }}</span>
+              <span>·</span>
+              <span>SHA-256 <code class="mono">{{ shortSha(info.bundledSha256) }}</code></span>
+              <span v-if="info.source === 'BUNDLED'">· 当前生效中</span>
+            </div>
+          </div>
+          <el-button
+            v-if="info.source === 'UPLOADED'"
+            size="small"
+            type="danger"
+            plain
+            :icon="Delete"
+            :loading="resetting"
+            data-test="reset-jar-btn"
+            @click="resetJar"
+          >
+            恢复内置默认版本
+          </el-button>
+        </div>
+      </div>
     </div>
 
     <div class="hm-card row">
@@ -363,6 +606,75 @@ onMounted(load)
 .sha-text {
   word-break: break-all;
   font-size: 12.5px;
+}
+
+.small-title-note {
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.upload-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.file-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--hm-border);
+  background: var(--hm-subtle);
+  color: inherit;
+  font-size: 13px;
+}
+
+.version-slots {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.slot-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--hm-border);
+  background: var(--hm-subtle);
+}
+
+.slot-info {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+
+.slot-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.slot-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.slot-meta {
+  margin-top: 6px;
+  font-size: 12.5px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .empty-box {

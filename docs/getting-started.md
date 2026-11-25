@@ -91,7 +91,7 @@ java -jar hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT-all.jar serve
 # java -cp "$CP" dev.hermit.crab.CrabMain serve
 ```
 
-也可以将 `hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT-all.jar` 放入 Reef 数据目录的 `downloads/` 子目录中，团队成员登录 Reef 后即可在「下载 Crab」页面直接下载并用本机 JDK 17 启动，无需 Docker 或本地 Maven 构建。
+正式打包后的 `hermit-reef` JAR 默认已经内置了同版本 `hermit-crab-0.1.0-SNAPSHOT-all.jar`，团队成员登录 Reef 后即可在「下载 Crab」页面直接下载并用本机 JDK 17 启动，无需额外配置；后续如需更新 Crab，管理员直接在「下载 Crab」页面上传新版 `hermit-crab-*-all.jar` 即可立即生效（自动仅保留当前版本与上一版本，支持一键回退或恢复内置默认版本）。
 
 浏览器访问 Reef `http://127.0.0.1:8080/`、Crab `http://127.0.0.1:7777/console/`。
 

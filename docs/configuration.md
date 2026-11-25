@@ -137,7 +137,7 @@ URL 与令牌都没设、也没有引导文件时，入口仍会启动。缺少 
 | `hermit.reef.agent-token` / `HERMIT_REEF_AGENT_TOKEN` | 默认空。空表示没有配置令牌；库里还有未吊销令牌时，Agent 请求用那些令牌。两者都没有时启动打一条警告，并拒绝所有 `/agent/**` |
 | `HERMIT_REEF_ADMIN_USER` / `HERMIT_REEF_ADMIN_PASSWORD` | 首次空库创建管理员；已有管理员不重设口令 |
 | `hermit.reef.jwt-ttl` | `8h`，JWT 有 60 秒时钟容差 |
-| `hermit.reef.latest-crab-version` / `crab-download-url` / `crab-jar-file` | 默认空。空的 `latest-crab-version` 表示不提示升级；非空时必须是 semver。Reef 优先从 `${hermit.reef.data-dir}/downloads/` 自动发现并流式提供独立可执行 Crab JAR（优先匹配 `hermit-crab*.jar` 且按修改时间取最新；配置 `crab-jar-file` / `HERMIT_REEF_CRAB_JAR_FILE` 时固定指向该目录内指定 `.jar` 文件名，拒绝符号链接和路径穿越）；未放置本地 JAR 时回退到 `crab-download-url`（仅接受 http/https） |
+| `hermit.reef.latest-crab-version` / `crab-download-url` / `crab-jar-file` | 默认空。空的 `latest-crab-version` 表示不提示升级；非空时必须是 semver。正式打包的 Reef JAR 默认已内置同版本独立可执行 Crab JAR（`BUNDLED`），开箱即可在「下载 Crab」页下载；管理员亦可在页面直接上传新版 Crab JAR 覆盖（保存在 `${hermit.reef.data-dir}/downloads/managed/`，仅保留当前与上一版本，支持一键回退或恢复内置默认，无需重启）。优先级：显式配置的 `crab-jar-file` / `HERMIT_REEF_CRAB_JAR_FILE` > 管理员页面上传 > 手动放入 `downloads/` 目录的 `.jar` > Reef 内置默认包 > `crab-download-url`（仅接受 http/https） |
 | `hermit.reef.report-retention-days` | `90`，用于 `hermit_failure_reports` / `hermit_rollback_events` 的清理 |
 | `hermit.reef.retention-cron` / `HERMIT_REEF_RETENTION_CRON` | `0 0 3 * * *`。Spring 六段 cron（含秒），时区固定 UTC，默认每天 03:00。空白或无法解析的表达式拒绝启动。手动触发见 `POST /api/admin/retention/purge` |
 | `logging.pattern.level` | `%5p [%X{traceId}]`。请求处理期间 MDC 的 `traceId` 会出现在每条日志上，与响应里的值相同 |
@@ -188,7 +188,7 @@ Reef data-dir/
   keys/jwt.secret        # JWT HMAC 密钥
   conches/               # 上传 YAML 与发布包
   submissions/           # 规则审批单 YAML（submissions/<id>/conch.yaml）
-  downloads/             # 可选：手动放入 Crab 独立可执行 JAR（hermit-crab-*-all.jar）供 Reef 下载页分发
+  downloads/             # 可选：手工放置或管理员通过页面上传的 Crab JAR 覆盖版本（downloads/managed/ 仅保留当前与上一版）
 
 Crab HERMIT_HOME/
   config.yml

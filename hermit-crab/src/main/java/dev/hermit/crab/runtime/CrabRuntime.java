@@ -241,7 +241,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.identities = new Identities(identityStore, sessions, registry, conchConfig, accounts, vault);
         this.authenticators = new Authenticators(
                 authBindings, sessions, registry, conchConfig, accounts, vault, identities,
-                name -> this.disabledConches.contains(name));
+                this::conchDisabled);
         this.identities.bindAuthenticators(authenticators);
         this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
         this.engine.bindAuthLinks(authenticators);
@@ -532,6 +532,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public Identities identities() {
         return identities;
+    }
+
+    private boolean conchDisabled(String conch) {
+        return disabledConches.contains(conch);
     }
 
     public Authenticators authenticators() {

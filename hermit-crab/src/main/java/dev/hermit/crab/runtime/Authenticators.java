@@ -355,7 +355,7 @@ public final class Authenticators implements AuthLinks {
     }
 
     @Override
-    public Link resolve(SessionKey key, ConchDoc conch) {
+    public Link resolve(SessionKey key, ConchDoc conch, String site) {
         AuthBinding binding = store.find(key);
         if (binding == null || conch == null || !AuthenticatorChecks.uses(conch)) {
             return null;
@@ -370,7 +370,7 @@ public final class Authenticators implements AuthLinks {
         if (!AuthenticatorChecks.link(conch, authenticator).isEmpty()) {
             return null;
         }
-        String site = site(key.origin(), conch);
+        // site 是这次调用真正要访问的地址：排队期间改过配置、重新绑定过的，旧地址对不上新绑定，不给令牌。
         if (site == null || !site.equals(binding.boundBaseUrl()) || !allowed(authenticator, target.origin(), site)) {
             return null;
         }

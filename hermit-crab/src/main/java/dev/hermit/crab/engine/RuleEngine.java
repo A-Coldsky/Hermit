@@ -828,7 +828,7 @@ public final class RuleEngine implements ConchExecutor {
         if (conch.auth() == null || conch.auth().use() == null) {
             return scope;
         }
-        AuthLinks.Link link = links.resolve(key, conch);
+        AuthLinks.Link link = links.resolve(key, conch, SiteAddress.effective(conch, config.get("base_url")));
         if (link == null || !AuthenticatorChecks.isAuthenticator(link.authenticator())
                 || !sessions.join(key, link.key())) {
             throw new RuleProblem(ErrorCode.NOT_CONFIGURED, LINK_MISSING, null, null, null);

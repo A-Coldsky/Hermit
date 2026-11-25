@@ -136,6 +136,8 @@ export interface ConchSummary {
   pullCount: number
   /** 缺省或空白按 `http`。 */
   driver: string
+  /** 引用的授权器名（规则里的 `auth.use`）；不引用时为 null。 */
+  authUse?: string | null
   /** HTTP 包为 null。 */
   upstream: McpUpstreamInfo | null
   /** 包里没有 snapshot 时为 null。HTTP 包为 null。 */
@@ -175,6 +177,10 @@ export interface ConchDetail {
   published: boolean
   /** 缺省或空白按 `http`。 */
   driver: string
+  /** 引用的授权器名（规则里的 `auth.use`）；不引用时为 null。 */
+  authUse?: string | null
+  /** 授权器（`driver` 为 `auth`）导出的变量名；其它包为空数组。 */
+  authExports?: string[]
   minCrabVersion: string
   baseUrl: string | null
   /**

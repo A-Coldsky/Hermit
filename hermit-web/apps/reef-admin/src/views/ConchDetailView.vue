@@ -273,6 +273,17 @@ watch(
                 <dd class="mono">v{{ detail.version }}<span v-if="neverPublished" class="hm-muted"> · 最高已上传版本</span></dd>
                 <dt>类型</dt>
                 <dd><DriverBadge :driver="detail.driver" /></dd>
+                <template v-if="detail.authUse">
+                  <dt>授权器</dt>
+                  <dd data-test="auth-use">
+                    <router-link :to="`/conches/${encodeURIComponent(detail.authUse)}`" class="mono">{{ detail.authUse }}</router-link>
+                    <span class="hm-muted"> · 登录由它提供；它停用或删掉用到的导出变量前，要先更新或停用这个包</span>
+                  </dd>
+                </template>
+                <template v-if="detail.authExports?.length">
+                  <dt>导出变量</dt>
+                  <dd class="mono" data-test="auth-exports">{{ detail.authExports.join('、') }}</dd>
+                </template>
                 <dt>最低 Crab 版本</dt>
                 <dd class="mono">{{ detail.minCrabVersion }}</dd>
                 <template v-if="!mcp">

@@ -623,6 +623,7 @@ public final class SessionManager implements AutoCloseable {
 
     /**
      * 只让这个账号登出，并删掉罐里只属于它的站点的 Cookie：域名就是 {@code base} 的主机（父域的不动）；
+     * {@code authHosts} 是认证地址和同一个授权器账号下其它业务包所在的主机：
      * 主机同时是认证地址之一时，只删路径落在 {@code base} 路径下的。授权器和其它包的 Cookie 都留着。
      * 调用方持有账号锁。
      */

@@ -2,6 +2,7 @@ package dev.hermit.crab.engine;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import dev.hermit.common.model.ConchDoc;
 
@@ -26,9 +27,22 @@ public interface AuthLinks {
      * @param authenticator 授权器那份规则（{@code driver: auth}）
      * @param credentials 授权器账号的凭证，只在授权器自己的登录步骤里可见
      * @param config 授权器的配置
+     * @param siblingSites 绑到同一个授权器账号的其它业务包账号的站点地址。它们的 Cookie 和这个包的在同一个罐里，
+     *                     这个包作废自己的会话时不能删到它们的
      */
-    record Link(SessionKey key, ConchDoc authenticator, Map<String, String> credentials, Map<String, String> config) {
+    record Link(
+            SessionKey key,
+            ConchDoc authenticator,
+            Map<String, String> credentials,
+            Map<String, String> config,
+            Set<String> siblingSites) {
+        public Link(SessionKey key, ConchDoc authenticator, Map<String, String> credentials,
+                Map<String, String> config) {
+            this(key, authenticator, credentials, config, Set.of());
+        }
+
         public Link {
+            siblingSites = siblingSites == null ? Set.of() : Set.copyOf(siblingSites);
             Objects.requireNonNull(key, "key");
             Objects.requireNonNull(authenticator, "authenticator");
             credentials = credentials == null ? Map.of() : Map.copyOf(credentials);

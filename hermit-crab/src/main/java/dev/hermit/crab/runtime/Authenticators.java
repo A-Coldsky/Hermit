@@ -2,6 +2,7 @@ package dev.hermit.crab.runtime;
 
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -400,7 +401,13 @@ public final class Authenticators implements AuthLinks {
         } catch (RuntimeException ex) {
             return null;
         }
-        return new Link(target, authenticator, secrets, DeclaredSettings.mergedConfig(authenticator, stored));
+        LinkedHashSet<String> siblings = new LinkedHashSet<>();
+        for (AuthBinding other : store.consumersOf(target)) {
+            if (!other.account().equals(key)) {
+                siblings.add(other.boundBaseUrl());
+            }
+        }
+        return new Link(target, authenticator, secrets, DeclaredSettings.mergedConfig(authenticator, stored), siblings);
     }
 
     private String site(Origin origin, ConchDoc doc) {

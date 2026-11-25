@@ -740,7 +740,19 @@ public final class RuleEngine implements ConchExecutor {
         if (scope.conch.auth().exchange().isEmpty()) {
             sessions.markLoggedOut(scope.key);
         } else {
-            sessions.dropOwnCookies(scope.key, scope.base, scope.linked.hosts());
+            // 认证地址和别的业务包所在的主机上，只删路径落在自己 base_url 下的 Cookie。
+            Set<String> sharedHosts = scope.linked.hosts();
+            for (String site : scope.siblingSites) {
+                try {
+                    String host = URI.create(site).getHost();
+                    if (host != null) {
+                        sharedHosts.add(host.toLowerCase(java.util.Locale.ROOT));
+                    }
+                } catch (IllegalArgumentException ex) {
+                    // 不是地址，跳过
+                }
+            }
+            sessions.dropOwnCookies(scope.key, scope.base, sharedHosts);
         }
     }
 
@@ -847,6 +859,7 @@ public final class RuleEngine implements ConchExecutor {
         LoginScope a = new LoginScope(link.authenticator(), Map.of(), copyStrings(link.credentials()), authConfig,
                 link.key(), authBase, deadline);
         scope.linked = a;
+        scope.siblingSites = link.siblingSites();
         scope.authOrigins = a.authOrigins;
         return scope;
     }
@@ -2603,6 +2616,9 @@ public final class RuleEngine implements ConchExecutor {
             this.deadline = deadline;
             this.authenticator = AuthenticatorChecks.isAuthenticator(conch);
         }
+
+        /** 绑到同一个授权器账号的其它业务包的站点地址。 */
+        private Set<String> siblingSites = Set.of();
 
         /** 认证地址的主机名。 */
         private Set<String> hosts() {

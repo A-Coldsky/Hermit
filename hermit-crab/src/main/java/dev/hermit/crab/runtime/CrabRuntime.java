@@ -1245,8 +1245,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     null, paths, registry.scoped(Origin.OFFICIAL), disabledConches, subscriptions, database.dataSource(),
                     conch, actor, clock);
         }
-        // 正式包不在了：它的账号离开身份。同名的本地包不受影响。
-        identities.packageRemoved(Origin.OFFICIAL, conch, actor);
+        // 正式包不在了：它的账号离开身份，授权器绑定留着等重新订阅。同名的本地包不受影响。
+        identities.packageUnsubscribed(conch, actor);
     }
 
     public Optional<SyncReport> syncOnce(String requestedBy) {

@@ -31,6 +31,10 @@ final class CatalogCache {
                 text(node, "title", entry.title());
                 text(node, "description", entry.description());
                 node.put("capabilityCount", entry.capabilityCount());
+                node.put("driver", entry.driver());
+                if (entry.authUse() != null) {
+                    node.put("authUse", entry.authUse());
+                }
                 if (entry.requiredCredentialsKnown()) {
                     ArrayNode names = node.putArray("requiredCredentials");
                     for (String name : entry.requiredCredentials()) {
@@ -67,7 +71,9 @@ final class CatalogCache {
                         textOrNull(node, "description"),
                         countOrZero(node),
                         known ? credentialNames(credentials) : List.of(),
-                        known));
+                        known,
+                        textOrNull(node, "driver"),
+                        textOrNull(node, "authUse")));
             }
             return Optional.of(List.copyOf(entries));
         } catch (Exception ex) {

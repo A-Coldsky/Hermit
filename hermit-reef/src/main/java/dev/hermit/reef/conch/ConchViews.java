@@ -285,7 +285,9 @@ record ManifestEntry(
         int capabilityCount,
         List<String> requiredCredentials,
         String driver,
-        String upstreamHost) {
+        String upstreamHost,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        String authUse) {
     ManifestEntry {
         requiredCredentials = requiredCredentials == null ? List.of() : List.copyOf(requiredCredentials);
         if (driver == null || driver.isBlank()) {

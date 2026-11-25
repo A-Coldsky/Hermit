@@ -294,6 +294,21 @@ public final class Identities {
         if (linked != null) {
             linked.packageRemoved(origin, conch, actor);
         }
+        leaveAll(origin, conch, actor);
+    }
+
+    /**
+     * 使用者退订了正式包：它的账号离开身份。授权器绑定和账号、凭证、配置一样留着，
+     * 重新订阅后接着用；包不在本机期间，引用它的调用是 {@code NOT_CONFIGURED}。
+     */
+    public void packageUnsubscribed(String conch, String actor) {
+        if (registry.find(conch, Origin.OFFICIAL).isPresent()) {
+            return;
+        }
+        leaveAll(Origin.OFFICIAL, conch, actor);
+    }
+
+    private void leaveAll(Origin origin, String conch, String actor) {
         for (SessionKey key : store.boundAccounts(origin, conch)) {
             leave(key, REASON_PACKAGE_REMOVED, actor);
         }

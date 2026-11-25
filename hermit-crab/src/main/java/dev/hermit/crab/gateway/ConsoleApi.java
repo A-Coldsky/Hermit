@@ -721,6 +721,7 @@ final class ConsoleApi {
 
     /** 本机生效的授权器。只在控制台；规则包列表、OpenAPI、MCP 和 API Key 范围里都没有它们。 */
     private static void authenticators(CrabRuntime runtime, Context ctx) {
+        Map<String, ConchCatalog.Entry> catalog = catalogByName(runtime);
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (String name : runtime.registry().authenticators().keySet()) {
             ConchRegistry.Active active = runtime.registry().authenticator(name).orElse(null);
@@ -737,6 +738,8 @@ final class ConsoleApi {
             row.put("origins", List.copyOf(runtime.identities().addresses(active.origin(), doc.conch())));
             row.put("allowHosts", doc.auth().allowHosts());
             row.put("exports", List.copyOf(doc.auth().exports().keySet()));
+            row.put("subscribed", active.origin() == Origin.OFFICIAL && runtime.subscribed(doc.conch()));
+            putUpdateFields(active.origin() == Origin.OFFICIAL ? catalog.get(doc.conch()) : null, row);
             ArrayList<Map<String, Object>> accounts = new ArrayList<>();
             for (Account account : runtime.admin().listAccounts(active.origin(), doc.conch())) {
                 LinkedHashMap<String, Object> entry = new LinkedHashMap<>();
@@ -1609,6 +1612,8 @@ final class ConsoleApi {
             row.put("repairReason", entry.repairReason());
             row.put("message", entry.message());
             row.put("ruleDisabled", entry.ruleDisabled());
+            row.put("driver", entry.driver());
+            row.put("authUse", entry.authUse());
             if (entry.ruleDisabled()) {
                 putRuleHint(runtime, entry.conch(), row);
             }

@@ -60,7 +60,7 @@ function missingAuthenticator(row: CatalogConch): CatalogConch | null {
   return target && !target.subscribed && !target.installed && !target.localConflict ? target : null
 }
 
-function usedBy(row: CatalogConch): string[] {
+function consumersOf(row: CatalogConch): string[] {
   return packages.value.filter((r) => r.authUse === row.conch).map((r) => r.conch)
 }
 
@@ -247,7 +247,7 @@ onMounted(load)
         <el-radio-button value="authenticators"><KindShell kind="auth" :size="18" /> 授权器 {{ authenticators.length }}</el-radio-button>
       </el-radio-group>
       <p v-if="catalog && tab === 'authenticators'" class="hm-muted tab-hint">
-        授权器只负责登录，没有能力，不能被调用。引用它的规则包把账号绑到授权器账号上，共用一份登录。
+        授权器只负责登录，没有能力，不能被调用。引用它的业务包把账号绑到授权器账号上，共用一份登录。
       </p>
       <div v-if="catalog" class="meta hm-muted">
         <span>共 <b class="num">{{ rows.length }}</b> 个，已订阅 <b class="num">{{ subscribedCount }}</b> 个</span>
@@ -281,8 +281,8 @@ onMounted(load)
                   <el-button link type="primary" class="mono" @click="showAuthenticator">{{ row.authUse }}</el-button>
                   <el-tag v-if="missingAuthenticator(row)" type="warning" effect="plain" size="small">本机还没有</el-tag>
                 </span>
-                <span v-if="isAuthenticator(row) && usedBy(row).length" class="desc hm-muted" data-test="used-by">
-                  被这些规则包引用：{{ usedBy(row).join('、') }}
+                <span v-if="isAuthenticator(row) && consumersOf(row).length" class="desc hm-muted" data-test="used-by">
+                  被这些规则包引用：{{ consumersOf(row).join('、') }}
                 </span>
               </div>
             </div>

@@ -47,7 +47,7 @@ function account(extra: Record<string, unknown> = {}) {
     loginInputRequired: false,
     loginInputExpiresAt: null,
     oauth: null,
-    authenticator: null,
+    authBinding: null,
     ...extra,
   }
 }
@@ -95,7 +95,7 @@ describe('授权器', () => {
     expect(wrapper.find('[data-test="identity-empty"]').exists()).toBe(true)
   })
 
-  it('引用授权器的包：未绑定的账号提示绑定，不出现「填写凭证」', async () => {
+  it('业务包：未绑定的账号提示绑定，不出现「填写凭证」', async () => {
     const wrapper = await mountPage(AccountsPanel, {
       props: { conch: 'corp_oa', accounts: [account()], credentials: [], authUse },
       attach: true,
@@ -111,11 +111,11 @@ describe('授权器', () => {
     crab.checkAuthBinding.mockResolvedValue({
       allowed: true,
       problem: null,
-      authenticator: { origin: 'OFFICIAL', conch: 'corp_sso', account: 'zhangsan' },
+      authAccount: { origin: 'OFFICIAL', conch: 'corp_sso', account: 'zhangsan' },
       baseUrl: 'https://oa.corp.com',
       warnings: ['授权器是本地包'],
     })
-    crab.bindAuthBinding.mockResolvedValue({ allowed: true, problem: null, authenticator: null, baseUrl: 'https://oa.corp.com', warnings: [] })
+    crab.bindAuthBinding.mockResolvedValue({ allowed: true, problem: null, authAccount: null, baseUrl: 'https://oa.corp.com', warnings: [] })
     crab.authenticators.mockResolvedValue({ authenticators: [{ ...sso, accounts: [{ name: 'zhangsan', consumers: [] }] }] })
     const wrapper = await mountPage(AccountsPanel, {
       props: { conch: 'corp_oa', accounts: [account()], credentials: [], authUse },
@@ -135,7 +135,7 @@ describe('授权器', () => {
   })
 
   it('检查不通过时显示原因，不能确认', async () => {
-    crab.checkAuthBinding.mockResolvedValue({ allowed: false, problem: '授权器不允许用在这个地址', authenticator: null, baseUrl: null, warnings: [] })
+    crab.checkAuthBinding.mockResolvedValue({ allowed: false, problem: '授权器不允许用在这个地址', authAccount: null, baseUrl: null, warnings: [] })
     crab.authenticators.mockResolvedValue({ authenticators: [{ ...sso, accounts: [{ name: 'zhangsan', consumers: [] }] }] })
     const wrapper = await mountPage(AccountsPanel, {
       props: { conch: 'corp_oa', accounts: [account()], credentials: [], authUse },
@@ -153,7 +153,7 @@ describe('授权器', () => {
     const wrapper = await mountPage(AccountsPanel, {
       props: {
         conch: 'corp_oa',
-        accounts: [account({ authenticator: { ...bound, loginInputRequired: true } })],
+        accounts: [account({ authBinding: { ...bound, loginInputRequired: true } })],
         credentials: [],
         authUse,
       },
@@ -168,7 +168,7 @@ describe('授权器', () => {
     crab.testLogin.mockRejectedValue(new ApiError(409, 'LOGIN_INPUT_REQUIRED', '需要验证码'))
     const wrapper = await mountPage(AccountsPanel, {
       attach: true,
-      props: { conch: 'corp_oa', accounts: [account({ authenticator: bound })], credentials: [], authUse },
+      props: { conch: 'corp_oa', accounts: [account({ authBinding: bound })], credentials: [], authUse },
     })
     await flushPromises()
     await wrapper.find('[data-test="test-login"]').trigger('click')
@@ -183,7 +183,7 @@ describe('授权器', () => {
     crab.unbindAuthBinding.mockResolvedValue({ unbound: true })
     const wrapper = await mountPage(AccountsPanel, {
       attach: true,
-      props: { conch: 'corp_oa', accounts: [account({ authenticator: bound })], credentials: [], authUse },
+      props: { conch: 'corp_oa', accounts: [account({ authBinding: bound })], credentials: [], authUse },
     })
     await flushPromises()
     await wrapper.find('[data-test="auth-unbind"]').trigger('click')
@@ -198,7 +198,7 @@ describe('授权器', () => {
         conch: 'corp_sso',
         accounts: [account({ name: 'zhangsan', consumers: [{ origin: 'OFFICIAL', conch: 'corp_oa', account: 'default' }] })],
         credentials: [],
-        authenticator: true,
+        isAuthenticator: true,
       },
     })
     await flushPromises()

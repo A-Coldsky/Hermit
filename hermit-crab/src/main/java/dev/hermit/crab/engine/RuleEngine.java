@@ -51,7 +51,7 @@ public final class RuleEngine implements ConchExecutor {
     /** 这次请求现取的入参、凭证、配置和时钟。待输入登录不保存，接着登录也不覆盖回去。 */
     private static final Set<String> EPHEMERAL_VARS = Set.of("input", "credential", "config", "now", "login");
 
-    /** {@code linkedEpoch} 的取值：这个包被判为会话失效，下一次要先探授权器。 */
+    /** {@code boundEpoch} 的取值：这个包被判为会话失效，下一次要先探授权器。 */
     private static final long LINK_LOST = -1L;
 
     /** 登录 assert cookie 失败时给调用方的说明：原因，以及下一步。 */
@@ -74,9 +74,9 @@ public final class RuleEngine implements ConchExecutor {
     /** HTTP body capture. Null leaves execution unchanged. JSON-RPC traces are not written here. */
     private DevTraceSink traceSink;
     private volatile SessionContention contention;
-    private volatile AuthLinks links = AuthLinks.NONE;
+    private volatile AuthBindings authBindings = AuthBindings.NONE;
 
-    /** 引用授权器的包没绑定、绑定失效或授权器不可用时给调用方的说明。不带授权器的包名和账号名。 */
+    /** 业务包没绑定、绑定失效或授权器不可用时给调用方的说明。不带授权器的包名和账号名。 */
     static final String LINK_MISSING = "这个账号还没有绑定可用的登录授权，请在 Crab 控制台里绑定";
     static final String LINK_PAUSED = "该账号已暂停自动登录";
 
@@ -112,9 +112,9 @@ public final class RuleEngine implements ConchExecutor {
         this.traceSink = sink;
     }
 
-    /** 授权器绑定。没接上时引用授权器的包都不能调用。 */
-    public void bindAuthLinks(AuthLinks links) {
-        this.links = links == null ? AuthLinks.NONE : links;
+    /** 授权器绑定。没接上时业务包都不能调用。 */
+    public void useAuthBindings(AuthBindings authBindings) {
+        this.authBindings = authBindings == null ? AuthBindings.NONE : authBindings;
     }
 
     /** 同网站的规则包互相顶掉登录的计数。没绑定时不记。 */
@@ -325,8 +325,8 @@ public final class RuleEngine implements ConchExecutor {
                         conch, request.rawInput(), credentials, config, key, base, deadline);
                 // 测试登录要验证的是这个账号自己的凭证：排队的成员可能在调用方清空之后又登录过，
                 // 带着它的 Cookie 认证中心不会再要密码。拿到锁之后再清一次，从空白登录。
-                // 引用授权器的包测的是换票：不清，罐里是授权器和其它包的会话。
-                if (scope.linked == null) {
+                // 业务包测的是换票：不清，罐里是授权器和其它包的会话。
+                if (scope.bound == null) {
                     sessions.resetShared(key);
                 }
                 login(scope);
@@ -382,7 +382,7 @@ public final class RuleEngine implements ConchExecutor {
             traceBase = base;
             scope = open(conch, input, credentials, config, key, base, deadline);
             scope.shared = shared;
-            if (shared && scope.linked != null && !linkedReady(scope)) {
+            if (shared && scope.bound != null && !linkedReady(scope)) {
                 handoff.seen = scope.seenLogin;
                 return null;
             }
@@ -407,9 +407,9 @@ public final class RuleEngine implements ConchExecutor {
             if (lostBefore) {
                 // 共享锁下那一次已经发现会话失效：别的调用还没重新登录过才登出，这一次算重跑。
                 if (sessions.markLoggedOutSince(key, handoff.epoch)) {
-                    if (scope.linked != null) {
+                    if (scope.bound != null) {
                         // 和独占锁下发现失效一样：记下要先探授权器，写了 auth.exchange 的连带删掉自己的 Cookie。
-                        loseLinked(scope);
+                        loseBound(scope);
                     }
                     noteLost(scope);
                 }
@@ -554,8 +554,8 @@ public final class RuleEngine implements ConchExecutor {
      * 同一个成员短时间内只清一次：规则把业务错误当成失效时清空没有用，不让它反复登出同身份的成员。
      */
     private void loseSession(LoginScope scope) {
-        if (scope.linked != null) {
-            loseLinked(scope);
+        if (scope.bound != null) {
+            loseBound(scope);
             return;
         }
         if (scope.reusedCookies) {
@@ -567,8 +567,8 @@ public final class RuleEngine implements ConchExecutor {
     }
 
     private void ensureSession(LoginScope scope, boolean allowAdopt) {
-        if (scope.linked != null) {
-            ensureLinked(scope);
+        if (scope.bound != null) {
+            ensureBound(scope);
             return;
         }
         Auth auth = scope.conch.auth();
@@ -680,20 +680,20 @@ public final class RuleEngine implements ConchExecutor {
     }
 
     /**
-     * 引用授权器的包：先保证授权器账号登录着，再保证这个包自己换过票。两者共用一把账号锁，调用方已经持有。
+     * 业务包：先保证授权器账号登录着，再保证这个包自己换过票。两者共用一把账号锁，调用方已经持有。
      * 这个包上一次被判为会话失效时，先探授权器：授权器的会话没了才重新登录它；还在的话，写了
      * {@code auth.exchange} 的包只重新换票，没写的包（直接用导出值）在限流之内让授权器重新登录一次。
      * 换票失败只算这个包自己的，不记到授权器账号上。
      */
-    private void ensureLinked(LoginScope scope) {
-        LoginScope a = scope.linked;
+    private void ensureBound(LoginScope scope) {
+        LoginScope a = scope.bound;
         Auth auth = scope.conch.auth();
         try {
             if (sessions.loginPaused(a.key)) {
                 throw new StepFailure(ErrorCode.AUTH_FAILED, LINK_PAUSED, -1, "request", List.of());
             }
             ensureSession(a, true);
-            if (sessions.linkedEpoch(scope.key) == LINK_LOST && !a.loggedInThisCall) {
+            if (sessions.boundEpoch(scope.key) == LINK_LOST && !a.loggedInThisCall) {
                 requireLoginRefs(a, a.conch.auth().aliveCheck().request());
                 boolean alive = !a.loggedInThisCall && (a.probed || probe(a));
                 if (!a.loggedInThisCall) {
@@ -702,7 +702,7 @@ public final class RuleEngine implements ConchExecutor {
                         login(a);
                     } else {
                         sessions.touch(a.key);
-                        if (auth.exchange().isEmpty() && sessions.allowLinkedRelogin(scope.key, a.key)) {
+                        if (auth.exchange().isEmpty() && sessions.allowBoundRelogin(scope.key, a.key)) {
                             sessions.markLoggedOut(a.key);
                             login(a);
                         }
@@ -711,7 +711,7 @@ public final class RuleEngine implements ConchExecutor {
             }
             // 授权器更新后多导出了变量，而已有的登录是旧版本做的：在限流之内重新登录一次补上，
             // 不让这个包一直报「登录没有建立变量」。
-            if (!a.loggedInThisCall && missingExport(scope, a) && sessions.allowLinkedRelogin(scope.key, a.key)) {
+            if (!a.loggedInThisCall && missingExport(scope, a) && sessions.allowBoundRelogin(scope.key, a.key)) {
                 sessions.markLoggedOut(a.key);
                 login(a);
             }
@@ -724,7 +724,7 @@ public final class RuleEngine implements ConchExecutor {
             throw ex;
         }
         long epoch = sessions.epoch(a.key);
-        if (sessions.loggedIn(scope.key) && sessions.linkedEpoch(scope.key) == epoch) {
+        if (sessions.loggedIn(scope.key) && sessions.boundEpoch(scope.key) == epoch) {
             AliveCheck alive = auth.aliveCheck();
             if (alive == null || !sessions.idle(scope.key)) {
                 return;
@@ -735,8 +735,8 @@ public final class RuleEngine implements ConchExecutor {
                 return;
             }
             // 这个包自己的探活没过，和能力被判为失效一样处理：先看授权器，再重新换票。
-            loseLinked(scope);
-            ensureLinked(scope);
+            loseBound(scope);
+            ensureBound(scope);
             return;
         }
         exchange(scope);
@@ -754,12 +754,12 @@ public final class RuleEngine implements ConchExecutor {
     }
 
     /** 这个包自己的换票状态作废。写了 auth.exchange 的包连带删掉只属于它站点的 Cookie；授权器的会话不动。 */
-    private void dropLinked(LoginScope scope) {
+    private void dropBound(LoginScope scope) {
         if (scope.conch.auth().exchange().isEmpty()) {
             sessions.markLoggedOut(scope.key);
         } else {
             // 认证地址和别的业务包所在的主机上，只删路径落在自己 base_url 下的 Cookie。
-            Set<String> sharedHosts = scope.linked.hosts();
+            Set<String> sharedHosts = scope.bound.hosts();
             for (String site : scope.siblingSites) {
                 try {
                     String host = URI.create(site).getHost();
@@ -774,22 +774,22 @@ public final class RuleEngine implements ConchExecutor {
         }
     }
 
-    private void loseLinked(LoginScope scope) {
-        dropLinked(scope);
-        sessions.linkedEpoch(scope.key, LINK_LOST);
+    private void loseBound(LoginScope scope) {
+        dropBound(scope);
+        sessions.boundEpoch(scope.key, LINK_LOST);
         // 同一次调用里重跑时，授权器要重新探一次；这次调用里刚登录过的不用。
-        scope.linked.probed = false;
+        scope.bound.probed = false;
     }
 
     /** 用授权器的会话给这个包换票。没写 auth.exchange 时只记下这一代授权器会话。 */
     private void exchange(LoginScope scope) {
         Auth auth = scope.conch.auth();
-        long epoch = sessions.epoch(scope.linked.key);
+        long epoch = sessions.epoch(scope.bound.key);
         scope.loggedInThisCall = true;
         if (auth.exchange().isEmpty()) {
             scope.replaceSnapshot(Map.of());
             sessions.markLoggedIn(scope.key);
-            sessions.linkedEpoch(scope.key, epoch);
+            sessions.boundEpoch(scope.key, epoch);
             sessions.recordAuthSuccess(scope.key);
             return;
         }
@@ -812,7 +812,7 @@ public final class RuleEngine implements ConchExecutor {
             }
             scope.replaceSnapshot(snapshot);
             sessions.markLoggedIn(scope.key);
-            sessions.linkedEpoch(scope.key, epoch);
+            sessions.boundEpoch(scope.key, epoch);
             sessions.recordAuthSuccess(scope.key);
             noteLogin(scope);
             if (draft != null) {
@@ -844,11 +844,11 @@ public final class RuleEngine implements ConchExecutor {
 
     /** 只持有共享锁时：授权器登录着、不用探活，这个包换的票也还是这一代授权器会话的，才能直接跑。 */
     private boolean linkedReady(LoginScope scope) {
-        SessionKey a = scope.linked.key;
-        return sessions.sharedReady(a, true) && sessions.linkedEpoch(scope.key) == sessions.epoch(a);
+        SessionKey a = scope.bound.key;
+        return sessions.sharedReady(a, true) && sessions.boundEpoch(scope.key) == sessions.epoch(a);
     }
 
-    /** 建这次调用的作用域。引用授权器的包在这里接上授权器账号；没有可用的绑定时报 NOT_CONFIGURED。 */
+    /** 建这次调用的作用域。业务包在这里接上授权器账号；没有可用的绑定时报 NOT_CONFIGURED。 */
     private LoginScope open(
             ConchDoc conch,
             Map<String, Object> input,
@@ -862,22 +862,22 @@ public final class RuleEngine implements ConchExecutor {
         if (conch.auth() == null || conch.auth().use() == null) {
             return scope;
         }
-        AuthLinks.Link link = links.resolve(key, conch, SiteAddress.effective(conch, config.get("base_url")));
-        if (link == null || !AuthenticatorChecks.isAuthenticator(link.authenticator())
-                || !sessions.join(key, link.key())) {
+        AuthBindings.BoundAuth boundAuth = authBindings.resolve(key, conch, SiteAddress.effective(conch, config.get("base_url")));
+        if (boundAuth == null || !AuthenticatorChecks.isAuthenticator(boundAuth.authenticator())
+                || !sessions.join(key, boundAuth.key())) {
             throw new RuleProblem(ErrorCode.NOT_CONFIGURED, LINK_MISSING, null, null, null);
         }
-        Map<String, String> authConfig = copyStrings(link.config());
+        Map<String, String> authConfig = copyStrings(boundAuth.config());
         URI authBase;
         try {
-            authBase = baseUri(link.authenticator(), authConfig);
+            authBase = baseUri(boundAuth.authenticator(), authConfig);
         } catch (RuleProblem ex) {
             throw new RuleProblem(ErrorCode.NOT_CONFIGURED, LINK_MISSING, null, null, null);
         }
-        LoginScope a = new LoginScope(link.authenticator(), Map.of(), copyStrings(link.credentials()), authConfig,
-                link.key(), authBase, deadline);
-        scope.linked = a;
-        scope.siblingSites = link.siblingSites();
+        LoginScope a = new LoginScope(boundAuth.authenticator(), Map.of(), copyStrings(boundAuth.credentials()), authConfig,
+                boundAuth.key(), authBase, deadline);
+        scope.bound = a;
+        scope.siblingSites = boundAuth.siblingSites();
         scope.authOrigins = a.authOrigins;
         return scope;
     }
@@ -1274,11 +1274,11 @@ public final class RuleEngine implements ConchExecutor {
     }
 
     private void login(LoginScope scope) {
-        if (scope.linked != null) {
-            // 这个包自己没有登录步骤：登录就是重新换票（授权器该不该重新登录由 ensureLinked 判断）。
+        if (scope.bound != null) {
+            // 这个包自己没有登录步骤：登录就是重新换票（授权器该不该重新登录由 ensureBound 判断）。
             // 写了 auth.exchange 的连带删掉只属于它站点的 Cookie，从没有应用会话的状态换起。
-            dropLinked(scope);
-            ensureLinked(scope);
+            dropBound(scope);
+            ensureBound(scope);
             return;
         }
         Auth auth = scope.conch.auth();
@@ -2257,7 +2257,7 @@ public final class RuleEngine implements ConchExecutor {
         vars.put("credential", scope.credentials);
         vars.put("config", scope.config);
         vars.put("login", scope.view);
-        if (scope.linked != null) {
+        if (scope.bound != null) {
             vars.put(ConchRegistry.AUTH_VAR, scope.authView);
         }
         return vars;
@@ -2600,8 +2600,8 @@ public final class RuleEngine implements ConchExecutor {
         private Set<String> authOrigins;
         private final long deadline;
         private final LoginView view = new LoginView();
-        /** 引用授权器的包：授权器账号的作用域。它的凭证只进它自己的登录步骤。 */
-        private LoginScope linked;
+        /** 业务包：授权器账号的作用域。它的凭证只进它自己的登录步骤。 */
+        private LoginScope bound;
         private final AuthView authView = new AuthView();
         private final boolean authenticator;
         /** 这次调用里探活通过过。 */
@@ -2699,10 +2699,10 @@ public final class RuleEngine implements ConchExecutor {
 
         /** 授权器导出的值。只能读授权器在 auth.exports 里声明的名字。 */
         private String exported(String name) {
-            if (linked == null || !linked.conch.auth().exports().containsKey(name)) {
+            if (bound == null || !bound.conch.auth().exports().containsKey(name)) {
                 return null;
             }
-            return linked.lookup(name);
+            return bound.lookup(name);
         }
 
         private void remember(String value) {
@@ -2758,10 +2758,10 @@ public final class RuleEngine implements ConchExecutor {
         private List<String> redactionValues() {
             LinkedHashSet<String> values = new LinkedHashSet<>(sessions.redactionValues(key));
             values.addAll(seenLogin);
-            if (linked != null) {
+            if (bound != null) {
                 // 授权器的凭证、登录变量和 Cookie 不在这个包的账号名下，一样要打码。
-                values.addAll(linked.redactionValues());
-                for (String value : linked.credentials.values()) {
+                values.addAll(bound.redactionValues());
+                for (String value : bound.credentials.values()) {
                     if (value != null && !value.isEmpty()) {
                         values.add(value);
                     }
@@ -2855,11 +2855,11 @@ public final class RuleEngine implements ConchExecutor {
                 implements StepRunner.Peek, HttpCalls.SecretSource {
             @Override
             public Collection<String> knownValues() {
-                if (linked == null) {
+                if (bound == null) {
                     return List.of();
                 }
-                LinkedHashSet<String> values = new LinkedHashSet<>(linked.view.knownValues());
-                for (String value : linked.credentials.values()) {
+                LinkedHashSet<String> values = new LinkedHashSet<>(bound.view.knownValues());
+                for (String value : bound.credentials.values()) {
                     if (value != null && !value.isEmpty()) {
                         values.add(value);
                     }

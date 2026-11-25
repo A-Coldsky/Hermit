@@ -1792,7 +1792,7 @@ class AuthoringMcpTest {
             JsonNode first = all.path("authenticators").get(0);
             assertThat(first.path("conch").asText()).isEqualTo("corp_sso");
             assertThat(first.path("exports").get(0).path("name").asText()).isEqualTo("access_token");
-            assertThat(first.path("usedBy").get(0).asText()).isEqualTo("pkg_a");
+            assertThat(first.path("consumers").get(0).asText()).isEqualTo("pkg_a");
             assertThat(all.toString()).doesNotContain("zhangsan_secret_name");
 
             CreatedApiKey narrow = server.runtime.apiKeys().create(

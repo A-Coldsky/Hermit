@@ -598,7 +598,7 @@ onMounted(load)
 
     <template v-if="tab === 'authenticators'">
       <p class="hm-muted tab-hint">
-        授权器只负责登录，没有能力，不能被调用。引用它的规则包把账号绑到授权器账号上，共用一份登录；账号之间的绑定在「授权与身份」里看。
+        授权器只负责登录，没有能力，不能被调用。引用它的业务包把账号绑到授权器账号上，共用一份登录；账号之间的绑定在「授权与身份」里看。
       </p>
       <div v-if="authenticators.length" class="cards" data-test="authenticator-cards">
         <div

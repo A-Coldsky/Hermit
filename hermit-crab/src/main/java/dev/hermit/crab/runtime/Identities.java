@@ -122,9 +122,9 @@ public final class Identities {
 
     /** 这个本地包有没有任意账号绑到了身份。不查库。 */
     public boolean hasBoundLocal(String conch) {
-        Authenticators linked = authenticators;
+        Authenticators bindings = authenticators;
         return conch != null && (!store.boundAccounts(Origin.LOCAL, conch).isEmpty()
-                || (linked != null && linked.hasBoundLocal(conch)));
+                || (bindings != null && bindings.hasBoundLocal(conch)));
     }
 
     public SessionManager.Cleared lastCleared(String identity) {
@@ -187,7 +187,7 @@ public final class Identities {
             return new Check("driver: mcp 的包没有 Cookie 会话，不能绑定身份", List.of(), List.of());
         }
         if (AuthenticatorChecks.isAuthenticator(doc)) {
-            return new Check("授权器的账号不能绑定身份，引用它的包在包详情里绑定授权器账号", List.of(), List.of());
+            return new Check("授权器的账号不能绑定身份，引用它的业务包在包详情里绑定授权器账号", List.of(), List.of());
         }
         if (AuthenticatorChecks.uses(doc)) {
             return new Check("这个包用授权器登录（auth.use），不能再绑定身份", List.of(), List.of());
@@ -278,9 +278,9 @@ public final class Identities {
     }
 
     void accountDeleted(SessionKey key, String actor) {
-        Authenticators linked = authenticators;
-        if (linked != null) {
-            linked.accountDeleted(key, actor);
+        Authenticators bindings = authenticators;
+        if (bindings != null) {
+            bindings.accountDeleted(key, actor);
         }
         leave(key, REASON_ACCOUNT_DELETED, actor);
     }
@@ -290,9 +290,9 @@ public final class Identities {
         if (registry.find(conch, origin).isPresent()) {
             return;
         }
-        Authenticators linked = authenticators;
-        if (linked != null) {
-            linked.packageRemoved(origin, conch, actor);
+        Authenticators bindings = authenticators;
+        if (bindings != null) {
+            bindings.packageRemoved(origin, conch, actor);
         }
         leaveAll(origin, conch, actor);
     }
@@ -316,9 +316,9 @@ public final class Identities {
 
     /** 本地包的地址范围扩大了：它的账号都离开身份，新地址拿不到别的包登录出来的 Cookie。 */
     void widened(String conch) {
-        Authenticators linked = authenticators;
-        if (linked != null) {
-            linked.widened(conch);
+        Authenticators bindings = authenticators;
+        if (bindings != null) {
+            bindings.widened(conch);
         }
         for (SessionKey key : store.boundAccounts(Origin.LOCAL, conch)) {
             leave(key, REASON_WIDENED, Actors.SYNC);
@@ -331,9 +331,9 @@ public final class Identities {
      */
     public List<SessionKey> revalidate(String actor) {
         ArrayList<SessionKey> left = new ArrayList<>();
-        Authenticators linked = authenticators;
-        if (linked != null) {
-            left.addAll(linked.revalidate(actor));
+        Authenticators bindings = authenticators;
+        if (bindings != null) {
+            left.addAll(bindings.revalidate(actor));
         }
         LinkedHashMap<SessionKey, String> detached = new LinkedHashMap<>();
         synchronized (judging) {

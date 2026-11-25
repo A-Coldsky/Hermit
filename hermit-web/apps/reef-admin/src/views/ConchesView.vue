@@ -28,7 +28,7 @@ const isAuthenticator = (s: ConchSummary) => s.driver === 'auth'
 const packages = computed(() => conches.value.filter((s) => !isAuthenticator(s)))
 const authenticators = computed(() => conches.value.filter(isAuthenticator))
 /** 引用这个授权器的规则包。 */
-function usedBy(name: string): string[] {
+function consumersOf(name: string): string[] {
   return packages.value.filter((s) => s.authUse === name).map((s) => s.conch)
 }
 
@@ -154,7 +154,7 @@ onMounted(load)
             <DriverBadge :driver="row.driver" />
             <span v-if="isMcp(row)" class="mono hm-muted host" data-test="upstream-host">{{ upstreamHost(row.upstream?.url) ?? '上游地址未填' }}</span>
             <span v-if="row.authUse" class="mono hm-muted host" data-test="auth-use">授权器：{{ row.authUse }}</span>
-            <span v-if="row.driver === 'auth' && usedBy(row.conch).length" class="mono hm-muted host" data-test="used-by">被引用：{{ usedBy(row.conch).join('、') }}</span>
+            <span v-if="row.driver === 'auth' && consumersOf(row.conch).length" class="mono hm-muted host" data-test="used-by">被引用：{{ consumersOf(row.conch).join('、') }}</span>
           </div>
           <p class="desc">{{ row.description || '没有描述' }}</p>
           <div class="tags">
@@ -195,7 +195,7 @@ onMounted(load)
           <template #default="{ row }">
             <DriverBadge :driver="row.driver" />
             <div v-if="isMcp(row)" class="mono hm-muted host">{{ upstreamHost(row.upstream?.url) ?? '上游地址未填' }}</div>
-            <div v-if="row.driver === 'auth' && usedBy(row.conch).length" class="mono hm-muted host">被引用：{{ usedBy(row.conch).join('、') }}</div>
+            <div v-if="row.driver === 'auth' && consumersOf(row.conch).length" class="mono hm-muted host">被引用：{{ consumersOf(row.conch).join('、') }}</div>
           </template>
         </el-table-column>
         <el-table-column label="当前版本" width="190">

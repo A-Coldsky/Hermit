@@ -34,7 +34,7 @@ import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.crab.store.Origin;
 
 /**
- * 授权器（driver: auth）和引用它的包（auth.use）。认证中心在 localhost，两个应用在 127.0.0.1 的两个端口。
+ * 授权器（driver: auth）和引用它的业务包（auth.use）。认证中心在 localhost，两个应用在 127.0.0.1 的两个端口。
  * oa 写了 auth.exchange（拿认证中心的 Cookie 换自己的会话），api 没写（直接带导出的令牌）。
  */
 class AuthenticatorEngineTest {
@@ -274,7 +274,7 @@ class AuthenticatorEngineTest {
                 min_crab_version: 1.13.0
                 base_url: BASE
                 title: NAME
-                description: 引用授权器的包
+                description: 业务包
                 auth:
                   use: corp_sso
                   min_version: 1.2.0
@@ -560,7 +560,7 @@ class AuthenticatorEngineTest {
     @Test
     void anUnboundAccountIsRefusedWithoutNamingTheAuthenticator() {
         try (Fixture fixture = new Fixture()) {
-            fixture.links.remove(OA);
+            fixture.bindings.remove(OA);
             ExecutionResult refused = fixture.call(OA);
             assertThat(refused.error().code()).isEqualTo(ErrorCode.NOT_CONFIGURED);
             assertThat(EngineTestSupport.flatten(refused)).doesNotContain("corp_sso");
@@ -644,7 +644,7 @@ class AuthenticatorEngineTest {
             assertThat(passwordLogins.get()).isEqualTo(2);
             assertThat(fixture.value(OA)).isEqualTo("oa-data");
             assertThat(tickets.get()).isEqualTo(2);
-            // 引用授权器的包自己测试登录：只重新换票，不清授权器的会话。
+            // 业务包自己测试登录：只重新换票，不清授权器的会话。
             ExecutionResult own = fixture.engine.testLogin(fixture.request(OA, "run"));
             assertThat(own.success()).as(String.valueOf(own.error())).isTrue();
             assertThat(passwordLogins.get()).isEqualTo(2);
@@ -696,7 +696,7 @@ class AuthenticatorEngineTest {
     private final class Fixture implements AutoCloseable {
         private final SessionManager sessions;
         private final RuleEngine engine;
-        private final Map<SessionKey, SessionKey> links = new ConcurrentHashMap<>();
+        private final Map<SessionKey, SessionKey> bindings = new ConcurrentHashMap<>();
         private final AuthShared shared = new AuthShared();
         private final ConchRegistry registry;
         private volatile ConchDoc authenticator;
@@ -712,7 +712,7 @@ class AuthenticatorEngineTest {
                 authenticator = doc;
             } else {
                 SessionKey key = new SessionKey(Origin.LOCAL, doc.conch(), "main");
-                links.put(key, SSO);
+                bindings.put(key, SSO);
                 shared.bound.put(key, "auth:sso");
             }
         }
@@ -756,12 +756,12 @@ class AuthenticatorEngineTest {
             authenticator = auth;
             shared.bound.put(SSO, "auth:sso");
             for (SessionKey key : List.of(OA, API, API2, COPY, PEEK, SUB, READS)) {
-                links.put(key, SSO);
+                bindings.put(key, SSO);
                 shared.bound.put(key, "auth:sso");
             }
             engine = new RuleEngine(registry, sessions, settings);
-            engine.bindAuthLinks((key, conch, site) -> links.containsKey(key)
-                    ? new AuthLinks.Link(links.get(key), authenticator,
+            engine.useAuthBindings((key, conch, site) -> bindings.containsKey(key)
+                    ? new AuthBindings.BoundAuth(bindings.get(key), authenticator,
                             Map.of("username", "zhang", "password", password), Map.of(),
                             key.equals(SUB) ? Set.of(oaUrl) : key.equals(OA) ? Set.of(oaUrl + "/sub") : Set.of())
                     : null);

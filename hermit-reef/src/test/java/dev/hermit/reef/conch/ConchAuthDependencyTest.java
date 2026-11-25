@@ -186,6 +186,21 @@ class ConchAuthDependencyTest {
         publish("corp_oa", "1.1.0").andExpect(status().isConflict());
     }
 
+    @Test
+    void theManifestNamesTheAuthenticatorAConsumerUses() throws Exception {
+        publishBoth();
+
+        mockMvc.perform(get("/agent/conches/manifest")
+                        .header(dev.hermit.reef.security.AgentAccessFilter.INSTANCE_HEADER,
+                                "123e4567-e89b-12d3-a456-426614174000")
+                        .header(dev.hermit.reef.security.AgentAccessFilter.TOKEN_HEADER, "reef-auth-dep-test-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.conch=='corp_oa')].authUse").value("corp_sso"))
+                .andExpect(jsonPath("$.data[?(@.conch=='corp_oa')].driver").value("http"))
+                .andExpect(jsonPath("$.data[?(@.conch=='corp_sso')].driver").value("auth"))
+                .andExpect(jsonPath("$.data[?(@.conch=='corp_sso')].authUse").doesNotExist());
+    }
+
     private void publishBoth() throws Exception {
         upload(AUTHENTICATOR).andExpect(status().isOk());
         publish("corp_sso", "1.2.0").andExpect(status().isOk());

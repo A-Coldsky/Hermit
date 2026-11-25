@@ -444,12 +444,12 @@ final class StepRunner {
     }
 
     /**
-     * 引用授权器的包里 {@code auth} 是授权器导出值的视图，和 {@code login} 一样是秘密的来源；
+     * 业务包里 {@code auth} 是授权器导出值的视图，和 {@code login} 一样是秘密的来源；
      * 别的包里 {@code auth} 只是一个普通变量名，不受影响。
      */
     /**
      * 能力步骤一律追踪从 login.* 派生的变量。登录步骤里凭证是这个包自己的，不追踪；
-     * 但引用授权器的包换票（auth.exchange）时，auth.* 是别的包的秘密，同样要追踪，不让它流进普通 script。
+     * 但业务包换票（auth.exchange）时，auth.* 是别的包的秘密，同样要追踪，不让它流进普通 script。
      */
     static boolean tracksSecrets(boolean auth, Map<String, Object> vars) {
         return !auth || vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource;

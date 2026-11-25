@@ -46,7 +46,7 @@ public final class SessionManager implements AutoCloseable {
     private static final int KEY_STRIPES = 64;
     /** 同一个成员在这段时间里最多因为「登录成功后又失效」清空一次身份的 Cookie。 */
     static final Duration RELAPSE_CLEAR_WINDOW = Duration.ofMinutes(10);
-    /** 同一个授权器账号在 {@link #RELAPSE_CLEAR_WINDOW} 内，最多因为引用它的包判失效而重新登录这么多次。 */
+    /** 同一个授权器账号在 {@link #RELAPSE_CLEAR_WINDOW} 内，最多因为引用它的业务包判失效而重新登录这么多次。 */
     static final int MAX_LINKED_RELOGINS = 2;
 
     private final SessionPersistence persistence;
@@ -574,7 +574,7 @@ public final class SessionManager implements AutoCloseable {
 
     /**
      * 调用方持有 {@code holder} 的账号锁。让 {@code other} 的状态也可用，前提是两者共用同一个罐（同一把锁）：
-     * 引用授权器的包的账号和它绑到的授权器账号。不共用时返回 false，什么都不建。
+     * 业务包的账号和它绑到的授权器账号。不共用时返回 false，什么都不建。
      */
     boolean join(SessionKey holder, SessionKey other) {
         AccountState mine = state(holder);
@@ -589,13 +589,13 @@ public final class SessionManager implements AutoCloseable {
         return false;
     }
 
-    /** 引用授权器的包上一次换票（或接手）时授权器账号的会话代次。调用方持有账号锁。 */
-    long linkedEpoch(SessionKey key) {
-        return state(key).linkedEpoch;
+    /** 业务包上一次换票（或接手）时授权器账号的会话代次。调用方持有账号锁。 */
+    long boundEpoch(SessionKey key) {
+        return state(key).boundEpoch;
     }
 
-    void linkedEpoch(SessionKey key, long epoch) {
-        state(key).linkedEpoch = epoch;
+    void boundEpoch(SessionKey key, long epoch) {
+        state(key).boundEpoch = epoch;
     }
 
     /**
@@ -604,7 +604,7 @@ public final class SessionManager implements AutoCloseable {
      * {@link #RELAPSE_CLEAR_WINDOW} 内只让授权器重新登录一次，同一个授权器账号在窗口内最多
      * {@link #MAX_LINKED_RELOGINS} 次。返回这一次能不能重新登录，能的话已经记上。调用方持有账号锁。
      */
-    boolean allowLinkedRelogin(SessionKey key, SessionKey authenticator) {
+    boolean allowBoundRelogin(SessionKey key, SessionKey authenticator) {
         AccountState mine = state(key);
         AccountState theirs = state(authenticator);
         Instant now = clock.instant();
@@ -1536,9 +1536,9 @@ public final class SessionManager implements AutoCloseable {
          * 所以改凭证和测试登录清掉它之后，进行中的调用不会再把它写回来；状态重建（绑定变了、删除账号）时随之丢弃。
          */
         Instant relapseClearedAt;
-        /** 引用授权器的包：上一次换票或接手时授权器账号的会话代次。0 表示还没有。只在持有账号锁时读写。 */
-        long linkedEpoch;
-        /** 授权器账号：因为引用它的包判失效而重新登录的时间。只在持有账号锁时读写。 */
+        /** 业务包：上一次换票或接手时授权器账号的会话代次。0 表示还没有。只在持有账号锁时读写。 */
+        long boundEpoch;
+        /** 授权器账号：因为引用它的业务包判失效而重新登录的时间。只在持有账号锁时读写。 */
         final List<Instant> linkedRelogins = new ArrayList<>();
 
         AccountState(Jar jar, long initialEpoch) {

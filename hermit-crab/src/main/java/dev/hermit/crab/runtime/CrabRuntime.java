@@ -244,7 +244,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 this::conchDisabled);
         this.identities.bindAuthenticators(authenticators);
         this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
-        this.engine.bindAuthLinks(authenticators);
+        this.engine.useAuthBindings(authenticators);
         this.contention = new SessionContention(clock);
         this.engine.bindContention(contention);
         this.mcpForwarder = new McpForwarder(
@@ -1459,7 +1459,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      */
     public void setConchDisabled(String conch, boolean disabled, String actor) {
         synchronized (switchLock) {
-            // 授权器也能停用：停用后引用它的包按没有绑定处理。
+            // 授权器也能停用：停用后引用它的业务包按没有绑定处理。
             ConchRegistry.Active active = registry.installed(conch).orElse(null);
             boolean loaded = active != null;
             if (disabled ? !loaded : !loaded && !conchSwitchedOff.contains(conch)) {

@@ -84,7 +84,8 @@ class ManifestCompatibilityTest {
         });
 
         String stored = CatalogCache.encode(entries);
-        assertThat(stored).doesNotContain("driver");
+        assertThat(stored).contains("\"driver\":\"mcp\"");
+        assertThat(stored).doesNotContain("authUse");
         assertThat(stored).doesNotContain("upstreamHost");
         assertThat(stored).doesNotContain("Bearer");
         assertThat(CatalogCache.decode(stored)).contains(entries);

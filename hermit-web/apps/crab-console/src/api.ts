@@ -126,7 +126,7 @@ export interface SessionContention {
 export interface ConchDetail {
   conch: string
   /** 这是一个授权器（`driver: auth`）：只负责登录，没有能力，不能被调用。 */
-  authenticator?: boolean
+  isAuthenticator?: boolean
   /** 这个包的登录由哪个授权器提供；不引用时为 null。 */
   authUse?: AuthUse | null
   /** 实际访问的站点 `scheme://host:port`。`driver: mcp`、已停用或地址读不出时为 null。 */
@@ -305,7 +305,7 @@ export interface AuthenticatorView {
 export interface AuthBindingCheck {
   allowed: boolean
   problem: string | null
-  authenticator: AuthConsumer | null
+  authAccount: AuthConsumer | null
   /** 要使用者确认的站点地址：绑定后授权器的登录会用在这个地址上。 */
   baseUrl: string | null
   warnings: string[]
@@ -315,7 +315,7 @@ export interface Account {
   name: string
   default: boolean
   /** 绑到的授权器账号；没绑、或这个包不引用授权器时为 null。 */
-  authenticator?: AuthBindingView | null
+  authBinding?: AuthBindingView | null
   /** 只有授权器的账号有：绑到这个账号的业务包账号。 */
   consumers?: AuthConsumer[]
   /** 绑到的身份；没绑为 null。 */

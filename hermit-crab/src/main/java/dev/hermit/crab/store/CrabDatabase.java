@@ -789,7 +789,7 @@ public final class CrabDatabase implements AutoCloseable {
     }
 
     /**
-     * 授权器绑定：引用授权器的包（{@code auth.use}）的一个账号指向授权器的一个账号。
+     * 授权器绑定：业务包（{@code auth.use}）的一个账号指向授权器的一个账号。
      * {@code bound_base_url} 是绑定时使用者确认过的地址，生效地址变了绑定就不再有效。
      * 授权器的 Cookie 和登录变量仍存在 {@code sessions}、{@code session_login} 里授权器账号那一行。
      */

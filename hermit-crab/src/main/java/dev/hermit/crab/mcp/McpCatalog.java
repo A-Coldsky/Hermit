@@ -621,7 +621,7 @@ final class McpCatalog {
                 true,
                 false));
         tools.add(tool(AUTH_LIST,
-                "列出本机生效的授权器（driver: auth 的规则包，只负责登录）：包名、版本、来源、认证地址、导出的变量名，以及引用它的规则包。"
+                "列出本机生效的授权器（driver: auth 的规则包，只负责登录）：包名、版本、来源、认证地址、导出的变量名，以及引用它的业务包。"
                         + "写需要登录的规则包前先看有没有现成的授权器：有的话在规则里写 auth.use 引用它，不要再写 credentials 和登录步骤。"
                         + "不含账号、凭证和导出变量的值；绑定账号和输入验证码只能由用户在 Crab 控制台做。",
                 captureListSchema(),
@@ -699,7 +699,7 @@ final class McpCatalog {
         item.put("origins", Map.of("type", "array", "items", Map.of("type", "string")));
         item.put("allowHosts", Map.of("type", "array", "items", Map.of("type", "string")));
         item.put("exports", Map.of("type", "array", "items", objectSchema(export)));
-        item.put("usedBy", Map.of("type", "array", "items", Map.of("type", "string")));
+        item.put("consumers", Map.of("type", "array", "items", Map.of("type", "string")));
         LinkedHashMap<String, Object> output = new LinkedHashMap<>();
         output.put("authenticators", Map.of("type", "array", "items", objectSchema(item)));
         output.put("total", Map.of("type", "integer"));

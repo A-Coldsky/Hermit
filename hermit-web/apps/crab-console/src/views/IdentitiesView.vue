@@ -325,7 +325,7 @@ onMounted(load)
     <div v-if="authenticators.length" class="hm-card" data-test="authenticators">
       <div class="hm-card-title"><span>授权器</span></div>
       <p class="hm-muted hint">
-        授权器是只负责登录的规则包：密码只在授权器账号上填一次，引用它的规则包把账号绑上来，共用这份登录。绑定在各规则包的「账号」里做。绑了授权器的账号不能再加入身份。
+        授权器是只负责登录的规则包：密码只在授权器账号上填一次，引用它的业务包把账号绑上来，共用这份登录。绑定在各规则包的「账号」里做。绑了授权器的账号不能再加入身份。
       </p>
       <el-table :data="authenticators" empty-text="没有授权器">
         <el-table-column label="授权器" min-width="200">

@@ -307,7 +307,7 @@ final class ConsoleApi {
         putReefDisabled(runtime, source, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
         putPrevious(runtime, doc.conch(), body);
-        body.put("authenticator", AuthenticatorChecks.isAuthenticator(doc));
+        body.put("isAuthenticator", AuthenticatorChecks.isAuthenticator(doc));
         if (AuthenticatorChecks.uses(doc)) {
             LinkedHashMap<String, Object> use = new LinkedHashMap<>();
             use.put("conch", doc.auth().use());
@@ -606,7 +606,7 @@ final class ConsoleApi {
             }));
             SessionKey key = new SessionKey(source, doc.conch(), account.account());
             AuthBinding binding = runtime.authenticators().find(key);
-            row.put("authenticator", binding == null ? null : bindingRow(runtime, binding));
+            row.put("authBinding", binding == null ? null : bindingRow(runtime, binding));
             if (AuthenticatorChecks.isAuthenticator(doc)) {
                 ArrayList<Map<String, Object>> consumers = new ArrayList<>();
                 for (AuthBinding consumer : runtime.authenticators().consumersOf(key)) {
@@ -762,7 +762,7 @@ final class ConsoleApi {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("allowed", check.allowed());
         body.put("problem", check.problem());
-        body.put("authenticator", check.authenticator() == null ? null : memberKey(check.authenticator()));
+        body.put("authAccount", check.authenticator() == null ? null : memberKey(check.authenticator()));
         body.put("baseUrl", check.baseUrl());
         body.put("warnings", check.warnings());
         return body;

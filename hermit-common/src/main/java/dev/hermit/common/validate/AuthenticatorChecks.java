@@ -228,13 +228,13 @@ public final class AuthenticatorChecks {
             }
         }
         if (doc.credentials() != null && !doc.credentials().isEmpty()) {
-            errors.add(issue("credentials", "引用授权器的包不能声明 credentials，凭证由授权器保管"));
+            errors.add(issue("credentials", "业务包不能声明 credentials，凭证由授权器保管"));
         }
         if (!auth.steps().isEmpty()) {
-            errors.add(issue("auth.steps", "引用授权器的包不能写 auth.steps；登录后要换票据时写 auth.exchange"));
+            errors.add(issue("auth.steps", "业务包不能写 auth.steps；登录后要换票据时写 auth.exchange"));
         }
         if (auth.originsDeclared()) {
-            errors.add(issue("auth.origins", "引用授权器的包不能写 auth.origins，认证地址由授权器声明"));
+            errors.add(issue("auth.origins", "业务包不能写 auth.origins，认证地址由授权器声明"));
         }
         reserved(auth.exchange(), "auth.exchange", errors);
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
@@ -244,7 +244,7 @@ public final class AuthenticatorChecks {
         }
     }
 
-    /** 引用授权器的包里 {@code auth} 是保留的变量根，步骤不能写入同名变量。 */
+    /** 业务包里 {@code auth} 是保留的变量根，步骤不能写入同名变量。 */
     private static void reserved(List<Step> steps, String path, List<ValidationIssue> errors) {
         for (Step step : FlowSteps.flat(steps)) {
             boolean named = switch (step.type()) {
@@ -255,7 +255,7 @@ public final class AuthenticatorChecks {
             };
             if (named) {
                 errors.add(ConchValidator.issue(ValidationCodes.RESERVED_VARIABLE, path,
-                        "引用授权器的包里不能写入保留变量 auth"));
+                        "业务包里不能写入保留变量 auth"));
             }
         }
     }

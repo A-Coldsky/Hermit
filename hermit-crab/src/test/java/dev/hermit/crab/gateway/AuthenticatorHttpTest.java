@@ -150,8 +150,8 @@ class AuthenticatorHttpTest {
         assertThat(logins.get()).as("两个包共用授权器账号的一次登录").isEqualTo(1);
 
         JsonNode account = console("GET", "/console/api/conches/pkg_a/accounts", null).path("accounts").get(0);
-        assertThat(account.path("authenticator").path("conch").asText()).isEqualTo("corp_sso");
-        assertThat(account.path("authenticator").path("account").asText()).isEqualTo("zhang");
+        assertThat(account.path("authBinding").path("conch").asText()).isEqualTo("corp_sso");
+        assertThat(account.path("authBinding").path("account").asText()).isEqualTo("zhang");
         JsonNode listed = console("GET", "/console/api/authenticators", null).path("authenticators");
         assertThat(listed).hasSize(1);
         assertThat(listed.get(0).path("accounts").get(0).path("consumers")).hasSize(2);
@@ -182,7 +182,7 @@ class AuthenticatorHttpTest {
                 "sso", new ApiKeyScope(Set.of("corp_sso"), Set.of(), false, false), Actors.CLI))
                 .isInstanceOf(IllegalArgumentException.class);
         // 控制台仍能看授权器的详情和账号。
-        assertThat(console("GET", "/console/api/conches/corp_sso", null).path("authenticator").asBoolean()).isTrue();
+        assertThat(console("GET", "/console/api/conches/corp_sso", null).path("isAuthenticator").asBoolean()).isTrue();
         assertThat(console("GET", "/console/api/conches/corp_sso/accounts", null).path("accounts").get(0)
                 .path("consumers")).hasSize(1);
         assertThat(console("GET", "/console/api/conches/pkg_a", null).path("authUse").path("conch").asText())

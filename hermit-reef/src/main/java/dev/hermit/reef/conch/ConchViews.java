@@ -294,4 +294,11 @@ record ManifestEntry(
             driver = "http";
         }
     }
+
+    ManifestEntry(String conch, String version, String sha256, String minCrabVersion, String title,
+            String description, int capabilityCount, List<String> requiredCredentials, String driver,
+            String upstreamHost) {
+        this(conch, version, sha256, minCrabVersion, title, description, capabilityCount, requiredCredentials,
+                driver, upstreamHost, null);
+    }
 }

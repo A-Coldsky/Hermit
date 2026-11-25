@@ -502,7 +502,7 @@ watch(
         <span class="hm-muted"> / {{ conch }}</span>
       </template>
       <template #icon>
-        <ConchAvatar :name="conch" :title="detail?.title" :size="48" :kind="detail ? (detail.authenticator ? 'auth' : detail.driver ?? 'http') : null" />
+        <ConchAvatar :name="conch" :title="detail?.title" :size="48" :kind="detail ? (detail.isAuthenticator ? 'auth' : detail.driver ?? 'http') : null" />
       </template>
       <template #badge>
         <el-tag v-if="detail?.version && !detail.repairRequired" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
@@ -595,7 +595,7 @@ watch(
         </template>
       </el-alert>
       <el-alert
-        v-if="detail.authenticator"
+        v-if="detail.isAuthenticator"
         type="info"
         show-icon
         :closable="false"
@@ -603,7 +603,7 @@ watch(
         data-test="authenticator-note"
       >
         <template #default>
-          授权器只负责登录，没有能力，不出现在 API、MCP 和 API Key 的范围里。在「账号」里新建账号、填写凭证；引用它的规则包把账号绑到这里。
+          授权器只负责登录，没有能力，不出现在 API、MCP 和 API Key 的范围里。在「账号」里新建账号、填写凭证；引用它的业务包把账号绑到这里。
         </template>
       </el-alert>
       <el-alert
@@ -815,7 +815,7 @@ watch(
           :rule-disabled="detail.ruleDisabled === true"
           :shown="tab === 'accounts'"
           :auth-use="detail.authUse ?? null"
-          :authenticator="detail.authenticator === true"
+          :is-authenticator="detail.isAuthenticator === true"
           @changed="reloadParts"
         />
       </div>

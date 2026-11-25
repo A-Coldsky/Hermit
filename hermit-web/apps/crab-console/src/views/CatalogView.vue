@@ -54,10 +54,15 @@ function authenticatorOf(row: CatalogConch): CatalogConch | null {
   return row.authUse ? authenticators.value.find((r) => r.conch === row.authUse) ?? null : null
 }
 
-/** 引用的授权器本机还没有：没订阅，也没有同名的本地包在生效。 */
+/** 本机现在生效的授权器（正式的和本地的都算）。 */
+const effective = ref<Set<string>>(new Set())
+
+/** 引用的授权器本机还没有：没订阅，也没有同名的授权器（包括本地包）在生效。 */
 function missingAuthenticator(row: CatalogConch): CatalogConch | null {
   const target = authenticatorOf(row)
-  return target && !target.subscribed && !target.installed && !target.localConflict ? target : null
+  return target && !target.subscribed && !target.installed && !target.localConflict && !effective.value.has(target.conch)
+    ? target
+    : null
 }
 
 function consumersOf(row: CatalogConch): string[] {
@@ -71,8 +76,13 @@ function showAuthenticator() {
 async function load() {
   loading.value = true
   try {
-    const [result, status] = await Promise.all([api.catalog(), api.syncStatus().catch(() => null)])
+    const [result, status, local] = await Promise.all([
+      api.catalog(),
+      api.syncStatus().catch(() => null),
+      api.authenticators().catch(() => null),
+    ])
     catalog.value = result
+    effective.value = new Set((local?.authenticators ?? []).map((a) => a.conch))
     repairs.value = new Map(
       (status?.report?.conches ?? []).filter((s) => s.kind === 'REPAIR_REQUIRED').map((s) => [s.conch, s.reason] as const),
     )
@@ -118,6 +128,15 @@ async function subscribe(row: CatalogConch) {
       const first = await api.subscribe(needed.conch)
       if (!first.subscribed) {
         ElMessage.warning(`没有订阅授权器 ${needed.conch}：Reef 上当前不能订阅它，${row.conch} 也没有订阅`)
+        await load()
+        return
+      }
+      const firstKind = first.outcome?.kind
+      if (firstKind !== 'INSTALLED' && firstKind !== 'SKIPPED_SAME') {
+        const why = firstKind ? outcomeLabels[firstKind] : null
+        ElMessage.warning(
+          `已订阅授权器 ${needed.conch}，但没有安装到本机${why ? `（${why}）` : ''}；${row.conch} 没有订阅，授权器装好后再订阅它`,
+        )
         await load()
         return
       }

@@ -90,4 +90,15 @@ class ManifestCompatibilityTest {
         assertThat(stored).doesNotContain("Bearer");
         assertThat(CatalogCache.decode(stored)).contains(entries);
     }
+
+    @Test
+    void aCacheSavedBeforeDriverWasStoredCountsAsMissing() {
+        String legacy = """
+                [{"conch":"corp_sso","version":"1.0.0","sha256":"aa","minCrabVersion":"1.13.0",
+                  "title":"统一认证","description":null,"capabilityCount":0,"requiredCredentials":[]}]
+                """;
+
+        // 没有类型就分不出授权器：当作没有缓存，同步会丢掉 ETag 重新读一次清单。
+        assertThat(CatalogCache.decode(legacy)).isEmpty();
+    }
 }

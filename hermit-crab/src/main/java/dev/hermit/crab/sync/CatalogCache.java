@@ -60,6 +60,10 @@ final class CatalogCache {
                 if (node == null || !node.isObject()) {
                     return Optional.empty();
                 }
+                if (!node.hasNonNull("driver")) {
+                    // 升级前存的缓存没有类型和引用的授权器：当作没有缓存，下次同步重新读清单。
+                    return Optional.empty();
+                }
                 JsonNode credentials = node.get("requiredCredentials");
                 boolean known = credentials != null && credentials.isArray();
                 entries.add(new ReefClient.CatalogEntry(

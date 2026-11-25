@@ -179,6 +179,42 @@ describe('Crab 可订阅规则包：规则包 / 授权器页签', () => {
     expect(crab.subscribe.mock.calls.map((c) => c[0])).toEqual(['corp_oa'])
   })
 
+  it('授权器订阅了但没装上：不接着订阅业务包', async () => {
+    crab.catalog.mockResolvedValue({
+      conches: [entry({ authUse: 'corp_sso' }), sso()],
+      syncedAt: '2026-11-01T00:00:00Z',
+      configured: true,
+    })
+    crab.subscribe.mockResolvedValue({
+      conch: 'corp_sso',
+      subscribed: true,
+      outcome: { conch: 'corp_sso', version: '1.0.0', kind: 'SKIPPED_MIN_VERSION', reason: null },
+    })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = await mountPage(CatalogView)
+    await flushPromises()
+    await button(wrapper, '订阅')[0].trigger('click')
+    await flushPromises()
+    expect(crab.subscribe.mock.calls.map((c) => c[0])).toEqual(['corp_sso'])
+  })
+
+  it('本机有同名的本地授权器在生效时不询问', async () => {
+    crab.catalog.mockResolvedValue({
+      conches: [entry({ authUse: 'corp_sso' }), sso()],
+      syncedAt: '2026-11-01T00:00:00Z',
+      configured: true,
+    })
+    crab.authenticators.mockResolvedValue({ authenticators: [authenticator({ source: 'LOCAL', subscribed: false })] })
+    crab.subscribe.mockResolvedValue({ conch: 'corp_oa', subscribed: true, outcome: null })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = await mountPage(CatalogView)
+    await flushPromises()
+    await button(wrapper, '订阅')[0].trigger('click')
+    await flushPromises()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(crab.subscribe.mock.calls.map((c) => c[0])).toEqual(['corp_oa'])
+  })
+
   it('退订授权器前列出绑在它上面的账号，并说明绑定会保留', async () => {
     crab.catalog.mockResolvedValue({
       conches: [sso({ subscribed: true, installed: true, installedVersion: '1.0.0' })],

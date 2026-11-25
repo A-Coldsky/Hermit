@@ -260,6 +260,7 @@ final class ScriptStep {
         for (Map.Entry<String, Object> entry : vars.entrySet()) {
             String key = entry.getKey();
             if (!"credential".equals(key) && !"login".equals(key)
+                    && !(entry.getValue() instanceof HttpCalls.SecretSource)
                     && (hiddenVars == null || !hiddenVars.contains(key))) {
                 copy.put(key, entry.getValue());
             }
@@ -271,7 +272,7 @@ final class ScriptStep {
     private static Map<String, Object> copyWithCredential(Map<String, Object> vars) {
         LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : vars.entrySet()) {
-            if ("login".equals(entry.getKey())) {
+            if ("login".equals(entry.getKey()) || entry.getValue() instanceof HttpCalls.SecretSource) {
                 continue;
             }
             if ("credential".equals(entry.getKey())) {

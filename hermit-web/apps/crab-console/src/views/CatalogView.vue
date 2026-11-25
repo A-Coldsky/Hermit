@@ -301,7 +301,7 @@ onMounted(load)
                   <el-tag v-if="missingAuthenticator(row)" type="warning" effect="plain" size="small">本机还没有</el-tag>
                 </span>
                 <span v-if="isAuthenticator(row) && consumersOf(row).length" class="desc hm-muted" data-test="used-by">
-                  被这些规则包引用：{{ consumersOf(row).join('、') }}
+                  被这些业务包使用：{{ consumersOf(row).join('、') }}
                 </span>
               </div>
             </div>

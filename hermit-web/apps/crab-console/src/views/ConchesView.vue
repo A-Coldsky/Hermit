@@ -626,14 +626,14 @@ onMounted(load)
             <el-icon><component :is="row.accounts.length ? CircleCheckFilled : User" /></el-icon>
             <span v-if="!row.accounts.length">未建账号：先新建一个账号并填凭证</span>
             <span v-else-if="consumerCount(row)" data-test="authenticator-used-by">被 {{ consumerNames(row).join('、') }} 使用</span>
-            <span v-else>还没有规则包的账号绑到它上面</span>
+            <span v-else>还没有业务包的账号绑到它上面</span>
           </div>
           <p v-if="row.updateAvailable" class="update-note">
-            可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的规则包都用新版本登录。
+            可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的业务包都用新版本登录。
           </p>
           <div class="foot hm-muted">
             <span><b class="num">{{ row.accounts.length }}</b> 个账号</span>
-            <span><b class="num">{{ consumerCount(row) }}</b> 个规则包在用</span>
+            <span><b class="num">{{ consumerCount(row) }}</b> 个业务包在用</span>
             <span class="spacer" />
             <el-button
               v-if="row.updateAvailable"

@@ -448,6 +448,139 @@ class RecorderConsoleAndMcpTest {
         }
     }
 
+    @Test
+    void capturesPopupsBlankLinksFormPostCrossOriginIframeAndCoopNavigationInRealChrome() throws Exception {
+        List<BrowserDetector.DetectedBrowser> browsers = BrowserDetector.detect();
+        Assumptions.assumeFalse(browsers.isEmpty(), "No local Chrome/Chromium installed; skipping live popup/OOPIF CDP test");
+
+        HttpServer originA = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        HttpServer originB = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        int portA = originA.getAddress().getPort();
+        int portB = originB.getAddress().getPort();
+        // 127.0.0.1 and localhost are distinct origins so Chrome creates real OOPIF iframes & cross-origin COOP swaps.
+        String hostB = "http://localhost:" + portB;
+
+        originA.createContext("/", ex -> {
+            String path = ex.getRequestURI().getPath();
+            if ("/".equals(path)) {
+                String html = """
+                        <!doctype html><html><body>
+                        <iframe src="%1$s/iframe"></iframe>
+                        <a id="l1" href="%1$s/blank-opener" target="_blank">opener</a>
+                        <a id="l2" href="%1$s/blank-noopener" target="_blank" rel="noopener">noopener</a>
+                        <form id="f1" method="POST" action="%1$s/form-post" target="_blank">
+                          <input name="ticket" value="sso_ticket_1"/>
+                        </form>
+                        <script>
+                          setTimeout(() => {
+                            const w = window.open("%1$s/popup", "_blank");
+                            fetch('/opened?ok=' + (w ? '1' : '0'));
+                            document.getElementById('l1').click();
+                            document.getElementById('l2').click();
+                            document.getElementById('f1').submit();
+                            setTimeout(() => { location.href = "%1$s/coop-jump"; }, 250);
+                          }, 150);
+                        </script>
+                        </body></html>
+                        """.formatted(hostB);
+                byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+                ex.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+                ex.getResponseHeaders().add("Cross-Origin-Opener-Policy", "same-origin");
+                ex.sendResponseHeaders(200, bytes.length);
+                ex.getResponseBody().write(bytes);
+                ex.close();
+                return;
+            }
+            byte[] ok = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
+            ex.sendResponseHeaders(200, ok.length);
+            ex.getResponseBody().write(ok);
+            ex.close();
+        });
+
+        originB.createContext("/", ex -> {
+            String path = ex.getRequestURI().getPath();
+            if ("POST".equalsIgnoreCase(ex.getRequestMethod())) {
+                ex.getRequestBody().readAllBytes();
+            }
+            if ("/iframe".equals(path) || "/popup".equals(path) || "/blank-opener".equals(path)
+                    || "/blank-noopener".equals(path) || "/form-post".equals(path) || "/coop-jump".equals(path)) {
+                String apiPath = "/coop-jump".equals(path) ? "/after-coop-api" : path + "-api";
+                String html = "<!doctype html><script>fetch('" + apiPath + "')</script>ok";
+                byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+                ex.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+                if ("/coop-jump".equals(path)) {
+                    ex.getResponseHeaders().add("Cross-Origin-Opener-Policy", "same-origin");
+                }
+                ex.sendResponseHeaders(200, bytes.length);
+                ex.getResponseBody().write(bytes);
+                ex.close();
+                return;
+            }
+            byte[] ok = ("{\"path\":\"" + path + "\"}").getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
+            ex.sendResponseHeaders(200, ok.length);
+            ex.getResponseBody().write(ok);
+            ex.close();
+        });
+
+        originA.start();
+        originB.start();
+        try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("chrome-popups-oopif")), CrabConfig.defaults());
+             CrabHttpServer server = new CrabHttpServer(runtime)) {
+            server.start();
+            runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String base = "http://127.0.0.1:" + server.port();
+
+            HttpResponse<String> started = consolePostJson(base + "/console/api/recorder/start", Map.of(
+                    "mode", "launch",
+                    "startUrl", "http://127.0.0.1:" + portA + "/",
+                    "headless", true,
+                    "ignoreCertErrors", true));
+            assertThat(started.statusCode()).isEqualTo(200);
+
+            Set<String> expectedPaths = Set.of(
+                    "/opened",
+                    "/popup", "/popup-api",
+                    "/blank-opener", "/blank-opener-api",
+                    "/blank-noopener", "/blank-noopener-api",
+                    "/form-post", "/form-post-api",
+                    "/iframe", "/iframe-api",
+                    "/coop-jump", "/after-coop-api");
+            Set<String> seenPaths = new java.util.HashSet<>();
+            boolean popupSucceeded = false;
+
+            long deadline = System.currentTimeMillis() + 15_000L;
+            while (System.currentTimeMillis() < deadline) {
+                HttpResponse<String> resp = consoleGet(base + "/console/api/recorder/entries");
+                seenPaths.clear();
+                for (JsonNode e : ApiJson.tree(resp.body()).path("data").path("entries")) {
+                    String p = e.path("path").asText();
+                    seenPaths.add(p);
+                    if ("/opened".equals(p) && e.path("url").asText().contains("ok=1")) {
+                        popupSucceeded = true;
+                    }
+                }
+                if (popupSucceeded && seenPaths.containsAll(expectedPaths)) {
+                    break;
+                }
+                Thread.sleep(150);
+            }
+
+            HttpResponse<String> stopped = consolePostJson(base + "/console/api/recorder/stop", Map.of());
+            assertThat(stopped.statusCode()).isEqualTo(200);
+            assertThat(popupSucceeded)
+                    .as("async window.open() must not be blocked or stalled during recording")
+                    .isTrue();
+            assertThat(seenPaths)
+                    .as("all popup, target=_blank, form POST, cross-origin OOPIF iframe, and COOP requests must be captured")
+                    .containsAll(expectedPaths);
+        } finally {
+            originA.stop(0);
+            originB.stop(0);
+        }
+    }
+
     private HttpResponse<String> consoleGet(String url) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(url))
                 .header("X-Hermit-Console", "1")

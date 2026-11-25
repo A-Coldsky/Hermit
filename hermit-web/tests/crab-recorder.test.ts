@@ -229,4 +229,36 @@ describe('Crab 浏览器录制页面', () => {
 
     wrapper.unmount()
   })
+
+  it('在高级选项勾选忽略自签名证书错误时会在开始录制请求中透传 ignoreCertErrors', async () => {
+    crab.recorderStart.mockResolvedValue(
+      statusBase({
+        state: 'RECORDING',
+        sessionId: 'rec_cert1234',
+        mode: 'launch',
+        source: 'chrome_launch',
+        browserConnected: true,
+      }),
+    )
+
+    const wrapper = await mountPage(RecorderView)
+    await flushPromises()
+
+    await wrapper.get('[data-test="toggle-advanced-recorder"]').trigger('click')
+    await flushPromises()
+    const certCheckbox = wrapper.get('[data-test="ignore-cert-errors"] input[type="checkbox"]')
+    await certCheckbox.setValue(true)
+    await wrapper.get('[data-test="start-recording"]').trigger('click')
+    await flushPromises()
+
+    expect(crab.recorderStart).toHaveBeenCalledWith({
+      mode: 'launch',
+      startUrl: undefined,
+      browserPath: '/usr/bin/google-chrome',
+      debugEndpoint: undefined,
+      ignoreCertErrors: true,
+    })
+
+    wrapper.unmount()
+  })
 })

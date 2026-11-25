@@ -1373,6 +1373,7 @@ export interface RecorderStartRequest {
   startUrl?: string
   browserPath?: string
   debugEndpoint?: string
+  ignoreCertErrors?: boolean
 }
 
 export interface RecorderCreateSnapshotRequest {

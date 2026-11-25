@@ -29,7 +29,7 @@ import io.javalin.http.UploadedFile;
  */
 final class RecorderConsoleApi {
     private static final Set<String> START_FIELDS = Set.of(
-            "mode", "startUrl", "browserPath", "debugEndpoint", "headless");
+            "mode", "startUrl", "browserPath", "debugEndpoint", "headless", "ignoreCertErrors");
     private static final Set<String> SNAPSHOT_FIELDS = Set.of(
             "title", "entryIds", "extraSecrets");
 
@@ -63,8 +63,10 @@ final class RecorderConsoleApi {
         String browserPath = optionalText(body, "browserPath");
         String debugEndpoint = optionalText(body, "debugEndpoint");
         boolean headless = optionalBool(body, "headless", false);
+        boolean ignoreCertErrors = optionalBool(body, "ignoreCertErrors", false);
         RecorderManager.RecorderStatus result = runtime.recorder().start(
-                new RecorderManager.StartRequest(mode, startUrl, browserPath, debugEndpoint, headless));
+                new RecorderManager.StartRequest(
+                        mode, startUrl, browserPath, debugEndpoint, headless, ignoreCertErrors));
         GatewayResponses.writeData(ctx, statusView(result));
     }
 

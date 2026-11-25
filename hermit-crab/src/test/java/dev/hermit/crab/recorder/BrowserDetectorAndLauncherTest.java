@@ -296,4 +296,40 @@ class BrowserDetectorAndLauncherTest {
         assertThat(BrowserLauncher.hasLiveDefaultDevToolsPort(List.of(stale, live), uri -> uri.getPort() == 45222))
                 .isTrue();
     }
+
+    @Test
+    void buildsRelaxedLaunchCommandAndSeedsNormalBrowserPreferences() throws Exception {
+        Path exe = temp.resolve("chrome");
+        Path profileDir = temp.resolve("relaxed-profile");
+
+        List<String> headed = BrowserLauncher.buildLaunchCommand(exe, profileDir, "about:blank", false);
+        assertThat(headed)
+                .contains("--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
+                        "--disable-popup-blocking", "--disable-sync", "about:blank")
+                .doesNotContain("--disable-background-networking", "--disable-default-apps",
+                        "--enable-automation", "--headless=new");
+
+        List<String> headless = BrowserLauncher.buildLaunchCommand(exe, profileDir, "about:blank", true);
+        assertThat(headless).contains("--disable-popup-blocking", "--headless=new", "--disable-gpu", "--no-sandbox");
+
+        BrowserLauncher.seedRelaxedProfilePreferences(profileDir);
+        Path prefsFile = profileDir.resolve("Default").resolve("Preferences");
+        assertThat(prefsFile).isRegularFile();
+        com.fasterxml.jackson.databind.JsonNode prefs = dev.hermit.crab.runtime.ApiJson.tree(
+                Files.readString(prefsFile, StandardCharsets.UTF_8));
+        assertThat(prefs.path("https_only_mode_enabled").asBoolean(true)).isFalse();
+        assertThat(prefs.path("profile").path("cookie_controls_mode").asInt(-1)).isEqualTo(0);
+        assertThat(prefs.path("profile").path("block_third_party_cookies").asBoolean(true)).isFalse();
+        assertThat(prefs.path("profile").path("default_content_setting_values").path("popups").asInt()).isEqualTo(1);
+        assertThat(prefs.path("profile").path("default_content_setting_values").path("automatic_downloads").asInt())
+                .isEqualTo(1);
+        assertThat(prefs.path("profile").path("default_content_setting_values").path("mixed_script").asInt())
+                .isEqualTo(1);
+        assertThat(prefs.path("tracking_prevention").path("tracking_prevention_level").asInt(-1)).isEqualTo(0);
+
+        // Must not overwrite an already-initialized Preferences file.
+        Files.writeString(prefsFile, "{\"custom\":true}", StandardCharsets.UTF_8);
+        BrowserLauncher.seedRelaxedProfilePreferences(profileDir);
+        assertThat(Files.readString(prefsFile, StandardCharsets.UTF_8)).isEqualTo("{\"custom\":true}");
+    }
 }

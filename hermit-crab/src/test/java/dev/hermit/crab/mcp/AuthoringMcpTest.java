@@ -1774,6 +1774,9 @@ class AuthoringMcpTest {
                     app.replace("NAME", "pkg_a").replace("HOST", "a").replace("SSO", "corp_sso")));
             server.runtime.registry().put(dev.hermit.common.parse.ConchParser.parse(
                     app.replace("NAME", "pkg_b").replace("HOST", "b").replace("SSO", "other_sso")));
+            server.runtime.registry().put(dev.hermit.common.parse.ConchParser.parse(
+                    app.replace("NAME", "pkg_local").replace("HOST", "c").replace("SSO", "other_sso")),
+                    dev.hermit.crab.store.Origin.LOCAL);
             server.runtime.admin().createAccount("corp_sso", "zhangsan_secret_name", Actors.CONSOLE);
             String session = server.initialize(false);
 
@@ -1799,6 +1802,15 @@ class AuthoringMcpTest {
                     Map.of("name", "conch_auth_list", "arguments", Map.of())));
             assertThat(mine.path("total").asInt()).isEqualTo(1);
             assertThat(mine.toString()).contains("corp_sso").doesNotContain("other_sso").doesNotContain("pkg_b");
+
+            // 只点名了本地包的某个能力，不算能看到这个本地包，也就看不到它引用的授权器。
+            CreatedApiKey actionOnly = server.runtime.apiKeys().create(
+                    "only-local-read", new ApiKeyScope(Set.of(), Set.of("pkg_local.read"), false), Actors.CONSOLE);
+            String actionSession = server.initialize(actionOnly.plaintext(), false);
+            JsonNode none = structured(server.rpc(actionOnly.plaintext(), actionSession, 5, "tools/call",
+                    Map.of("name", "conch_auth_list", "arguments", Map.of())));
+            assertThat(none.path("total").asInt()).isZero();
+            assertThat(none.toString()).doesNotContain("other_sso").doesNotContain("pkg_local");
         }
     }
 

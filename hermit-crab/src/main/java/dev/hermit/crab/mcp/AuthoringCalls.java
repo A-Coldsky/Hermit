@@ -239,7 +239,7 @@ final class AuthoringCalls {
         java.util.TreeMap<String, java.util.TreeSet<String>> usedBy = new java.util.TreeMap<>();
         for (ConchDoc doc : runtime.registry().snapshot().values()) {
             if (dev.hermit.common.validate.AuthenticatorChecks.uses(doc)
-                    && (all || referencesConch(principal, doc.conch()))) {
+                    && (all || visibleTo(principal, doc.conch()))) {
                 usedBy.computeIfAbsent(doc.auth().use(), key -> new java.util.TreeSet<>()).add(doc.conch());
             }
         }
@@ -1294,6 +1294,14 @@ final class AuthoringCalls {
     private static String officialShadowDenied(String conch) {
         return "这把 API Key 没有正式规则包 " + conch
                 + " 的完整权限，不能创建同名本地规则包。请用全部权限的 Key，或在 conches 里点名该包且不限分组与能力的 Key。";
+    }
+
+    /** 范围有限的 Key 能不能看到这个包：正式包按点名的包、分组或能力算，本地包必须点名包本身。 */
+    private boolean visibleTo(ApiKeyPrincipal principal, String conch) {
+        if (runtime.registry().origin(conch) == Origin.LOCAL) {
+            return principal.scope().allowsLocal(conch);
+        }
+        return referencesConch(principal, conch);
     }
 
     private static boolean referencesConch(ApiKeyPrincipal principal, String conch) {

@@ -22,10 +22,17 @@ public final class CrabPaths {
     public static CrabPaths fromEnvironment(Function<String, String> environment) {
         Objects.requireNonNull(environment, "environment");
         String home = environment.apply("HERMIT_HOME");
-        if (home == null || home.isBlank()) {
+        if (home == null) {
             return new CrabPaths();
         }
-        return new CrabPaths(Path.of(home));
+        String cleaned = home.trim();
+        if (cleaned.length() >= 2 && cleaned.startsWith("\"") && cleaned.endsWith("\"")) {
+            cleaned = cleaned.substring(1, cleaned.length() - 1).trim();
+        }
+        if (cleaned.isEmpty()) {
+            return new CrabPaths();
+        }
+        return new CrabPaths(Path.of(cleaned));
     }
 
     public Path configFile() {

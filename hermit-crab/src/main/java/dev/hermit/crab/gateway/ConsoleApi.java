@@ -60,6 +60,7 @@ import dev.hermit.crab.store.CallLogStore;
 import dev.hermit.crab.store.CreatedApiKey;
 import dev.hermit.crab.store.ConsolePassword;
 import dev.hermit.crab.store.DebugStateStore;
+import dev.hermit.crab.store.DevTraceStore;
 import dev.hermit.crab.store.Identity;
 import dev.hermit.crab.store.Origin;
 import dev.hermit.crab.upstream.McpOAuth;
@@ -817,13 +818,7 @@ final class ConsoleApi {
         ConchRegistry.Active active = live != null ? live : requireActiveConch(runtime, ctx);
         ExecutionResult result = runtime.admin().testLogin(
                 active.origin(), active.doc(), ctx.pathParam("account"), GatewayResponses.trace(ctx), Actors.CONSOLE);
-        if (result.success()) {
-            GatewayResponses.writeData(ctx, result.data());
-            return;
-        }
-        ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
-        String message = result.error() == null ? "internal error" : result.error().message();
-        GatewayResponses.writeRequestError(ctx, StatusCodes.of(code), code, message == null ? "" : message);
+        writeLoginResult(runtime, ctx, result);
     }
 
     private static void loginInput(CrabRuntime runtime, Context ctx) {
@@ -865,7 +860,7 @@ final class ConsoleApi {
         }
         ExecutionResult result = runtime.admin().submitLoginInput(
                 active.origin(), active.doc(), ctx.pathParam("account"), GatewayResponses.trace(ctx), node.textValue());
-        writeLoginResult(ctx, result);
+        writeLoginResult(runtime, ctx, result);
     }
 
     private static void resendLoginInput(CrabRuntime runtime, Context ctx) throws Exception {
@@ -876,7 +871,7 @@ final class ConsoleApi {
         ExecutionResult result = runtime.admin().resendLoginInput(
                 source, doc, ctx.pathParam("account"), GatewayResponses.trace(ctx));
         if (!result.success()) {
-            writeLoginResult(ctx, result);
+            writeLoginResult(runtime, ctx, result);
             return;
         }
         PendingLogins.View view = runtime.admin().loginInput(source, doc.conch(), ctx.pathParam("account"));
@@ -893,13 +888,26 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of("abandoned", true));
     }
 
-    private static void writeLoginResult(Context ctx, ExecutionResult result) {
+    private static void writeLoginResult(CrabRuntime runtime, Context ctx, ExecutionResult result) {
+        String traceId = result.traceId();
+        boolean traced = traceId != null && !traceId.isBlank() && runtime.devTraces().find(traceId).isPresent();
         if (result.success()) {
-            GatewayResponses.writeData(ctx, result.data() == null ? Map.of("ok", true) : result.data());
+            Object raw = result.data() == null ? Map.of("ok", true) : result.data();
+            if (traced && raw instanceof Map<?, ?> map) {
+                LinkedHashMap<Object, Object> enriched = new LinkedHashMap<>(map);
+                enriched.put("traceId", traceId);
+                GatewayResponses.writeData(ctx, enriched);
+                return;
+            }
+            GatewayResponses.writeData(ctx, raw);
             return;
         }
         ErrorCode code = result.error() == null ? ErrorCode.INTERNAL : result.error().code();
         String message = result.error() == null ? "internal error" : result.error().message();
+        if (traced) {
+            GatewayResponses.writeTracedError(ctx, StatusCodes.of(code), code, message == null ? "" : message);
+            return;
+        }
         GatewayResponses.writeRequestError(ctx, StatusCodes.of(code), code, message == null ? "" : message);
     }
 
@@ -1149,9 +1157,20 @@ final class ConsoleApi {
     }
 
     private static void call(CrabRuntime runtime, Context ctx) {
-        CallLogStore.CallDetail detail = runtime.callLogs().findByTraceId(ctx.pathParam("traceId")).orElse(null);
+        String traceId = ctx.pathParam("traceId");
+        CallLogStore.CallDetail detail = runtime.callLogs().findByTraceId(traceId).orElse(null);
         if (detail == null) {
-            GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "没有这条调用记录：编号不存在，或执行前就被拒绝（请求编号查不到记录）。");
+            DevTraceStore.Trace trace = runtime.devTraces().find(traceId).orElse(null);
+            if (trace == null) {
+                GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "没有这条调用记录：编号不存在，或执行前就被拒绝（请求编号查不到记录）。");
+                return;
+            }
+            Map<String, Object> parsed = parseDevTrace(trace);
+            if (parsed == null) {
+                GatewayResponses.writeError(ctx, 404, ErrorCode.NOT_FOUND, "没有这条调用记录：编号不存在，或执行前就被拒绝（请求编号查不到记录）。");
+                return;
+            }
+            GatewayResponses.writeData(ctx, devTraceOnlyDetail(runtime, trace, parsed));
             return;
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>(summary(detail.call()));
@@ -1170,6 +1189,82 @@ final class ConsoleApi {
         body.put("steps", steps);
         body.put("devTrace", devTrace(runtime, detail.call().traceId()));
         GatewayResponses.writeData(ctx, body);
+    }
+
+    private static Map<String, Object> parseDevTrace(DevTraceStore.Trace trace) {
+        if (trace == null || trace.body() == null) {
+            return null;
+        }
+        try {
+            return ApiJson.objectMap(trace.body().getBytes(StandardCharsets.UTF_8));
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    private static Map<String, Object> devTraceOnlyDetail(
+            CrabRuntime runtime,
+            DevTraceStore.Trace trace,
+            Map<String, Object> devTrace
+    ) {
+        String version = runtime.registry().find(trace.conch(), trace.origin())
+                .map(doc -> doc.version().toString())
+                .orElse("");
+        long durationMs = 0L;
+        Boolean inferredSuccess = null;
+        String firstError = null;
+        Object rawSession = devTrace.get("session");
+        if (rawSession instanceof Map<?, ?> session && session.get("loginOk") instanceof Boolean loginOk) {
+            inferredSuccess = loginOk;
+        }
+        Object rawSteps = devTrace.get("steps");
+        if (rawSteps instanceof List<?> steps) {
+            for (Object item : steps) {
+                if (item instanceof Map<?, ?> step) {
+                    if (step.get("durationMs") instanceof Number num) {
+                        durationMs += Math.max(0L, num.longValue());
+                    }
+                    if (Boolean.FALSE.equals(step.get("passed")) || step.get("transport") != null) {
+                        inferredSuccess = false;
+                    }
+                    if (firstError == null && step.get("error") instanceof String err && !err.isBlank()) {
+                        firstError = err;
+                        inferredSuccess = false;
+                    }
+                }
+            }
+        }
+        Object rawExchanges = devTrace.get("exchanges");
+        if (rawExchanges instanceof List<?> exchanges) {
+            for (Object item : exchanges) {
+                if (item instanceof Map<?, ?> exchange) {
+                    if (exchange.get("durationMs") instanceof Number num) {
+                        durationMs += Math.max(0L, num.longValue());
+                    }
+                    if (exchange.get("error") != null) {
+                        inferredSuccess = false;
+                    }
+                }
+            }
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("traceId", trace.traceId());
+        body.put("at", trace.createdAt() == null ? null : trace.createdAt().toString());
+        body.put("origin", trace.origin().name());
+        body.put("conch", trace.conch());
+        body.put("action", trace.action());
+        body.put("account", trace.account() == null || trace.account().isBlank() ? null : trace.account());
+        body.put("conchVersion", version);
+        body.put("success", inferredSuccess == null || inferredSuccess);
+        body.put("errorCode", null);
+        body.put("errorMessage", firstError);
+        body.put("durationMs", durationMs);
+        body.put("apiKeyId", null);
+        body.put("source", trace.origin().name());
+        body.put("channel", "CONSOLE");
+        body.put("steps", List.of());
+        body.put("devTrace", devTrace);
+        return body;
     }
 
     private static void refreshLocalMcp(CrabRuntime runtime, Context ctx) {

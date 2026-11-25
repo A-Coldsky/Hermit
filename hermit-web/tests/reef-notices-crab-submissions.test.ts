@@ -171,6 +171,8 @@ describe('CrabDownloadView 独立 JAR 下载', () => {
     expect(wrap.get('[data-test="jar-filename"]').text()).toBe('hermit-crab-0.1.0-SNAPSHOT-all.jar')
     expect(wrap.get('[data-test="jar-sha256"]').text()).toBe('a'.repeat(64))
     expect(wrap.text()).toContain('java -jar hermit-crab-0.1.0-SNAPSHOT-all.jar serve')
+    expect(wrap.text()).toContain('$env:HERMIT_HOME=".\\crab-data"; java -jar .\\hermit-crab-0.1.0-SNAPSHOT-all.jar serve')
+    expect(wrap.text()).toContain('选择「保留」并核对上方 SHA-256 校验和')
     expect(wrap.text()).toContain('http://127.0.0.1:7777/console/')
     expect(wrap.text()).not.toContain('--port')
 

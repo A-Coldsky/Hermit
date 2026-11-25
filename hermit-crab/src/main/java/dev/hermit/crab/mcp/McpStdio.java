@@ -291,7 +291,8 @@ public final class McpStdio {
             return;
         }
         synchronized (stdoutLock) {
-            out.println(json);
+            byte[] bytes = (json + "\n").getBytes(StandardCharsets.UTF_8);
+            out.write(bytes, 0, bytes.length);
             out.flush();
         }
     }

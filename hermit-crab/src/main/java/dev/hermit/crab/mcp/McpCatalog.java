@@ -33,6 +33,7 @@ final class McpCatalog {
     static final String DESCRIBE = "describe_capability";
     static final String CALL = "call_capability";
     static final String DEBUG_TRACE = "debug_trace";
+    static final String DEBUG_TRACE_LIST = "debug_trace_list";
     static final String GUIDE = "conch_guide";
     static final String READ_YAML = "conch_read_yaml";
     static final String CAPTURE_LIST = "conch_capture_list";
@@ -88,8 +89,9 @@ final class McpCatalog {
             }
         }
         if (devMode.getAsBoolean()) {
-            tools.add(debugTraceTool(outputSchema));
+            tools.add(debugTraceTool(outputSchema, localCaller));
             if (localCaller) {
+                tools.add(debugTraceListTool(outputSchema));
                 boolean includeSave = principal == null || !principal.scope().readOnlyOnly();
                 boolean includeCapture = principal == null || principal.scope().grantsAllOfficial();
                 tools.addAll(authoringTools(outputSchema, includeSave, includeCapture));
@@ -518,10 +520,12 @@ final class McpCatalog {
         return objectSchema(properties);
     }
 
-    private static McpSchema.Tool debugTraceTool(boolean outputSchema) {
+    private static McpSchema.Tool debugTraceTool(boolean outputSchema, boolean localCaller) {
         LinkedHashMap<String, Object> traceId = new LinkedHashMap<>();
         traceId.put("type", "string");
-        traceId.put("description", "调用记录的 traceId");
+        traceId.put("description", localCaller
+                ? "调用记录、测试登录（test_login）、验证码续登（login_input）或刷新工具列表（mcp_refresh）的 traceId；不知道编号时可先用 debug_trace_list 列出最近记录"
+                : "调用记录的 traceId");
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("traceId", traceId);
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
@@ -539,12 +543,57 @@ final class McpCatalog {
         output.put("devTrace", Map.of("type", "object"));
         output.put("createdAt", Map.of("type", "string"));
         output.put("expiresAt", Map.of());
+        String description = localCaller
+                ? "读取一条本地规则包的开发追踪（含能力试跑、控制台测试登录 test_login、验证码续登 login_input 与 MCP 刷新 mcp_refresh）。"
+                        + DevTraceDraft.UNTRUSTED_NOTE
+                : "读取一条本地规则包的开发追踪。" + DevTraceDraft.UNTRUSTED_NOTE;
         return tool(DEBUG_TRACE,
-                "读取一条本地规则包的开发追踪。" + DevTraceDraft.UNTRUSTED_NOTE,
+                description,
                 schema,
                 outputSchema ? objectSchema(output) : null,
                 true,
                 true);
+    }
+
+    private static McpSchema.Tool debugTraceListTool(boolean outputSchema) {
+        LinkedHashMap<String, Object> conch = new LinkedHashMap<>();
+        conch.put("type", "string");
+        conch.put("description", "可选，按本地规则包名称过滤");
+        LinkedHashMap<String, Object> action = new LinkedHashMap<>();
+        action.put("type", "string");
+        action.put("description", "可选，按动作过滤（如 test_login、login_input、mcp_refresh 或具体能力名）");
+        LinkedHashMap<String, Object> limit = new LinkedHashMap<>();
+        limit.put("type", "integer");
+        limit.put("minimum", 1);
+        limit.put("maximum", 30);
+        limit.put("description", "可选，返回条数上限（默认 10，最大 30）");
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("conch", conch);
+        properties.put("action", action);
+        properties.put("limit", limit);
+        LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        schema.put("properties", properties);
+        schema.put("additionalProperties", false);
+
+        LinkedHashMap<String, Object> itemProps = new LinkedHashMap<>();
+        itemProps.put("traceId", Map.of("type", "string"));
+        itemProps.put("conch", Map.of("type", "string"));
+        itemProps.put("account", Map.of("type", "string"));
+        itemProps.put("action", Map.of("type", "string"));
+        itemProps.put("createdAt", Map.of("type", "string"));
+        itemProps.put("expiresAt", Map.of());
+        LinkedHashMap<String, Object> output = new LinkedHashMap<>();
+        output.put("traces", Map.of("type", "array", "items", objectSchema(itemProps)));
+        output.put("total", Map.of("type", "integer"));
+        output.put("note", Map.of("type", "string"));
+        return tool(DEBUG_TRACE_LIST,
+                "列出当前开发者模式下这把 API Key 可见的最近本地规则包开发追踪摘要（按时间倒序，包含测试登录 test_login、验证码续登 login_input、试跑与 MCP 刷新），便于不手抄 traceId 直接定位后调用 debug_trace 查看详情。",
+                schema,
+                outputSchema ? objectSchema(output) : null,
+                true,
+                true,
+                false);
     }
 
     private static List<McpSchema.Tool> authoringTools(boolean outputSchema, boolean includeSave, boolean includeCapture) {

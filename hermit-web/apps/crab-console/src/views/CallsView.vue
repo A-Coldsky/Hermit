@@ -294,7 +294,9 @@ onMounted(async () => {
             <dt>时间</dt>
             <dd>{{ formatTime(drawer.call.at) }}</dd>
             <dt>能力</dt>
-            <dd class="mono">{{ drawer.call.conch }}.{{ drawer.call.action }} v{{ drawer.call.conchVersion }}</dd>
+            <dd class="mono">
+              {{ drawer.call.conch }}.{{ drawer.call.action }}<template v-if="drawer.call.conchVersion"> v{{ drawer.call.conchVersion }}</template>
+            </dd>
             <dt>渠道</dt>
             <dd>{{ channelLabels[drawer.call.channel] ?? drawer.call.channel ?? '—' }}</dd>
             <dt>来源</dt>

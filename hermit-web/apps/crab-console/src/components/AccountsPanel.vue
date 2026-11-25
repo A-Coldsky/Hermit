@@ -111,6 +111,16 @@ async function remove(account: Account) {
   }
 }
 
+function extractTraceId(data: unknown): string | null {
+  if (data && typeof data === 'object' && 'traceId' in data) {
+    const id = (data as { traceId?: unknown }).traceId
+    if (typeof id === 'string' && id.trim()) {
+      return id.trim()
+    }
+  }
+  return null
+}
+
 async function testLogin(account: Account) {
   if (account.identity) {
     try {
@@ -134,7 +144,7 @@ async function testLogin(account: Account) {
       data,
       message: '',
       code: '',
-      traceId: null,
+      traceId: extractTraceId(data),
       requestId: null,
       requestNote: null,
     })
@@ -151,7 +161,7 @@ async function testLogin(account: Account) {
         data: null,
         message: errorText(error),
         code: error instanceof ApiError ? error.code : '',
-        traceId: null,
+        traceId: error instanceof ApiError ? error.traceId : null,
         requestId: error instanceof ApiError ? error.requestId : null,
         requestNote: error instanceof ApiError ? error.requestNote : null,
       })
@@ -188,6 +198,7 @@ interface LoginInputResult {
   success: boolean
   message: string
   code: string
+  traceId: string | null
   requestId: string | null
   requestNote: string | null
 }
@@ -418,8 +429,15 @@ async function submitLoginInput() {
   const name = loginInput.account
   loginInput.submitting = true
   try {
-    await api.submitLoginInput(props.conch, name, value)
-    loginInput.result = { success: true, message: '', code: '', requestId: null, requestNote: null }
+    const data = await api.submitLoginInput(props.conch, name, value)
+    loginInput.result = {
+      success: true,
+      message: '',
+      code: '',
+      traceId: extractTraceId(data),
+      requestId: null,
+      requestNote: null,
+    }
     loginInput.prompt = null
     revokeImage()
     emit('changed')
@@ -444,6 +462,7 @@ async function submitLoginInput() {
       success: false,
       message: errorText(error),
       code: error instanceof ApiError ? error.code : '',
+      traceId: error instanceof ApiError ? error.traceId : null,
       requestId: error instanceof ApiError ? error.requestId : null,
       requestNote: error instanceof ApiError ? error.requestNote : null,
     }
@@ -705,7 +724,23 @@ async function disconnect(account: Account) {
   >
     <div data-test="login-input">
       <div v-if="loginInput.result" data-test="login-input-result">
-        <el-result v-if="loginInput.result.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存" />
+        <el-result v-if="loginInput.result.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存">
+          <template v-if="loginInput.result.traceId" #extra>
+            <div class="trace-line" data-test="login-input-trace">
+              <span class="hm-muted">开发追踪编号</span>
+              <router-link :to="{ path: '/calls', query: { trace: loginInput.result.traceId } }" class="mono">
+                {{ loginInput.result.traceId }}
+              </router-link>
+              <el-button
+                link
+                :icon="CopyDocument"
+                aria-label="复制追踪编号"
+                @click="copyText(loginInput.result.traceId ?? '', '追踪编号已复制')"
+              />
+              <span class="hm-muted">可发给 AI 用 <code class="mono">debug_trace</code> 查看</span>
+            </div>
+          </template>
+        </el-result>
         <el-result
           v-else
           icon="error"
@@ -714,7 +749,20 @@ async function disconnect(account: Account) {
         >
           <template #extra>
             <TrustJump :message="loginInput.result.message" />
-            <template v-if="loginInput.result.requestId">
+            <div v-if="loginInput.result.traceId" class="trace-line" data-test="login-input-trace">
+              <span class="hm-muted">开发追踪编号</span>
+              <router-link :to="{ path: '/calls', query: { trace: loginInput.result.traceId } }" class="mono">
+                {{ loginInput.result.traceId }}
+              </router-link>
+              <el-button
+                link
+                :icon="CopyDocument"
+                aria-label="复制追踪编号"
+                @click="copyText(loginInput.result.traceId ?? '', '追踪编号已复制')"
+              />
+              <span class="hm-muted">可发给 AI 用 <code class="mono">debug_trace</code> 排查，也可点击查看</span>
+            </div>
+            <template v-else-if="loginInput.result.requestId">
               <span class="hm-muted">请求编号</span>
               <span class="mono">{{ loginInput.result.requestId }}</span>
               <el-button
@@ -796,7 +844,18 @@ async function disconnect(account: Account) {
   </el-dialog>
 
   <el-dialog v-model="testResult.open" :title="`测试登录 · ${testResult.account}`" width="560px">
-    <el-result v-if="testResult.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存" />
+    <el-result v-if="testResult.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存">
+      <template v-if="testResult.traceId" #extra>
+        <div class="trace-line" data-test="test-login-trace">
+          <span class="hm-muted">开发追踪编号</span>
+          <router-link :to="{ path: '/calls', query: { trace: testResult.traceId } }" class="mono">
+            {{ testResult.traceId }}
+          </router-link>
+          <el-button link :icon="CopyDocument" aria-label="复制追踪编号" @click="copyText(testResult.traceId, '追踪编号已复制')" />
+          <span class="hm-muted">可发给 AI 用 <code class="mono">debug_trace</code> 查看</span>
+        </div>
+      </template>
+    </el-result>
     <el-result
       v-else
       icon="error"
@@ -805,7 +864,15 @@ async function disconnect(account: Account) {
     >
       <template #extra>
         <TrustJump :message="testResult.message" />
-        <template v-if="testResult.requestId">
+        <div v-if="testResult.traceId" class="trace-line" data-test="test-login-trace">
+          <span class="hm-muted">开发追踪编号</span>
+          <router-link :to="{ path: '/calls', query: { trace: testResult.traceId } }" class="mono">
+            {{ testResult.traceId }}
+          </router-link>
+          <el-button link :icon="CopyDocument" aria-label="复制追踪编号" @click="copyText(testResult.traceId, '追踪编号已复制')" />
+          <span class="hm-muted">可发给 AI 用 <code class="mono">debug_trace</code> 排查，也可点击查看</span>
+        </div>
+        <template v-else-if="testResult.requestId">
           <span class="hm-muted">请求编号</span>
           <span class="mono">{{ testResult.requestId }}</span>
           <el-button link :icon="CopyDocument" aria-label="复制请求编号" @click="copyText(testResult.requestId, '请求编号已复制')" />
@@ -870,5 +937,15 @@ div.note {
   border: 1px solid var(--hm-border);
   border-radius: 8px;
   background: var(--hm-surface-2);
+}
+
+.trace-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 13px;
 }
 </style>

@@ -259,13 +259,16 @@ public final class RuleEngine implements ConchExecutor {
      * Runs auth steps only. The caller invalidates the session first and does not clear a login
      * pause. Success records an auth success, which clears the pause. Failure leaves it.
      * Success does not include auth step logs; {@code login} keeps those logs on the failure path.
+     * Local HTTP conches record a redacted developer trace while developer mode is enabled.
      */
     public ExecutionResult testLogin(ExecutionRequest request) {
         CallSecrets.begin();
         CallSite.begin(request);
+        DevTraceScope.begin(openDraft(request, null));
         try {
             return testLoginCaptured(request);
         } finally {
+            DevTraceScope.end();
             CallSite.end();
             CallSecrets.end();
         }
@@ -277,12 +280,14 @@ public final class RuleEngine implements ConchExecutor {
         Map<String, String> credentials = copyStrings(request.accountContext().credentials());
         Map<String, String> config = copyStrings(request.accountContext().config());
         String version = null;
+        URI traceBase = null;
         try {
             ConchDoc conch = liveConch(request);
             if (conch == null) {
                 return finish(false, null, ErrorCode.NOT_FOUND, "规则包不存在", null, null, "规则包不存在",
-                        List.of(), version, request, credentials, List.of(), start);
+                        List.of(), version, request, credentials, List.of(), start, null);
             }
+            traceBase = tryBaseUri(conch, config);
             version = conch.version().toString();
             SessionKey key = new SessionKey(request.origin(), request.conch(), request.account());
             boolean locked;
@@ -290,15 +295,16 @@ public final class RuleEngine implements ConchExecutor {
                 locked = sessions.tryLock(key, deadline);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
-                return internal(request, credentials, List.of(), version, start, ex);
+                return internal(request, credentials, List.of(), version, start, ex, traceBase);
             }
             if (!locked) {
                 return finish(false, null, ErrorCode.TIMEOUT, "执行超时", null, null, "执行超时",
-                        List.of(), version, request, credentials, List.of(), start);
+                        List.of(), version, request, credentials, List.of(), start, traceBase);
             }
             LoginScope scope = null;
             try {
                 URI base = baseUri(conch, config);
+                traceBase = base;
                 scope = new LoginScope(
                         conch, request.rawInput(), credentials, config, key, base, deadline);
                 // 测试登录要验证的是这个账号自己的凭证：排队的成员可能在调用方清空之后又登录过，
@@ -306,25 +312,25 @@ public final class RuleEngine implements ConchExecutor {
                 sessions.resetShared(key);
                 login(scope);
                 return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
-                        credentials, scope.redactionValues(), start);
+                        credentials, scope.redactionValues(), start, traceBase);
             } catch (StepFailure ex) {
                 Integer index = ex.index < 0 ? null : ex.index;
                 return finish(false, null, ex.code, ex.summary, index, ex.type, ex.summary, ex.logs, version, request,
-                        credentials, redactionOf(scope, key), start);
+                        credentials, redactionOf(scope, key), start, traceBase);
             } catch (DeadlineExceeded ex) {
                 Integer index = ex.index < 0 ? null : ex.index;
                 return finish(false, null, ErrorCode.TIMEOUT, "执行超时", index, ex.type, "执行超时", ex.logs, version,
-                        request, credentials, redactionOf(scope, key), start);
+                        request, credentials, redactionOf(scope, key), start, traceBase);
             } catch (RuleProblem ex) {
                 return finish(false, null, ex.code, ex.summary, null, null, ex.summary, List.of(), version, request,
-                        credentials, redactionOf(scope, key), start);
+                        credentials, redactionOf(scope, key), start, traceBase);
             } catch (RuntimeException ex) {
-                return internal(request, credentials, redactionOf(scope, key), version, start, ex);
+                return internal(request, credentials, redactionOf(scope, key), version, start, ex, traceBase);
             } finally {
                 sessions.unlock(key);
             }
         } catch (RuntimeException ex) {
-            return internal(request, credentials, List.of(), version, start, ex);
+            return internal(request, credentials, List.of(), version, start, ex, traceBase);
         }
     }
 

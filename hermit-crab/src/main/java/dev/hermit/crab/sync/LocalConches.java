@@ -1493,17 +1493,37 @@ public final class LocalConches {
             Path tmp = Files.createTempFile(target.getParent(), target.getFileName().toString() + "-", ".tmp");
             try {
                 Files.write(tmp, bytes);
-                try {
-                    Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException ex) {
-                    Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
-                }
+                moveWithWindowsLockRetry(tmp, target);
             } catch (IOException ex) {
                 Files.deleteIfExists(tmp);
                 throw ex;
             }
         } catch (IOException ex) {
             throw new IllegalStateException("local conch file was not written");
+        }
+    }
+
+    private static void moveWithWindowsLockRetry(Path tmp, Path target) throws IOException {
+        long[] backoffMs = {50L, 100L};
+        for (int attempt = 0; ; attempt++) {
+            try {
+                try {
+                    Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException ex) {
+                    Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+                return;
+            } catch (java.nio.file.AccessDeniedException ex) {
+                if (attempt >= backoffMs.length) {
+                    throw ex;
+                }
+                try {
+                    Thread.sleep(backoffMs[attempt]);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw ex;
+                }
+            }
         }
     }
 

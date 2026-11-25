@@ -6,13 +6,17 @@ import java.io.InputStreamReader;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import dev.hermit.common.error.ErrorCode;
 
@@ -23,6 +27,7 @@ import dev.hermit.common.error.ErrorCode;
 public final class BrowserDetector {
     public static final String ENV_CHROME_PATH = "HERMIT_CHROME_PATH";
     public static final String ENV_BROWSER_PATH = "HERMIT_BROWSER_PATH";
+    private static final Pattern WIN_ENV_TOKEN = Pattern.compile("%([^%]+)%");
 
     public record DetectedBrowser(String id, String name, String path) {
     }
@@ -56,11 +61,15 @@ public final class BrowserDetector {
             return Optional.empty();
         }
         for (String key : List.of(ENV_CHROME_PATH, ENV_BROWSER_PATH)) {
-            String value = env.apply(key);
-            if (value != null && !value.isBlank()) {
-                Path candidate = Path.of(value.trim());
-                if (isExecutableFile(candidate)) {
-                    return Optional.of(candidate.toAbsolutePath().normalize());
+            String value = stripQuotes(env.apply(key));
+            if (!value.isEmpty()) {
+                try {
+                    Path candidate = Path.of(value);
+                    if (isExecutableFile(candidate)) {
+                        return Optional.of(candidate.toAbsolutePath().normalize());
+                    }
+                } catch (RuntimeException ignored) {
+                    // Ignore malformed env path so recorder status stays available.
                 }
             }
         }
@@ -68,16 +77,20 @@ public final class BrowserDetector {
     }
 
     public static Path validateExecutable(String rawPath) {
-        if (rawPath == null || rawPath.isBlank()) {
+        String cleaned = stripQuotes(rawPath);
+        if (cleaned.isEmpty()) {
             throw new RecorderException(400, ErrorCode.INVALID_INPUT, "浏览器路径不能为空。");
         }
-        String trimmed = rawPath.trim();
-        if (trimmed.indexOf('\0') >= 0 || trimmed.indexOf('\n') >= 0 || trimmed.indexOf('\r') >= 0) {
+        if (cleaned.indexOf('\0') >= 0 || cleaned.indexOf('\n') >= 0 || cleaned.indexOf('\r') >= 0) {
             throw new RecorderException(400, ErrorCode.INVALID_INPUT, "浏览器路径格式无效。");
+        }
+        if (cleaned.toLowerCase(Locale.ROOT).endsWith(".lnk")) {
+            throw new RecorderException(400, ErrorCode.INVALID_INPUT,
+                    "检测到 Windows 快捷方式（.lnk），请填写浏览器真实可执行文件路径（如 chrome.exe 或 msedge.exe，可在快捷方式「属性 → 目标」中复制）。");
         }
         Path path;
         try {
-            path = Path.of(trimmed).toAbsolutePath().normalize();
+            path = Path.of(cleaned).toAbsolutePath().normalize();
         } catch (RuntimeException ex) {
             throw new RecorderException(400, ErrorCode.INVALID_INPUT, "浏览器路径格式无效。");
         }
@@ -91,11 +104,18 @@ public final class BrowserDetector {
     }
 
     /**
-     * Locates {@code DevToolsActivePort} inside standard Chrome / Edge user data directories
-     * (created when Chrome 144+ enables {@code chrome://inspect/#remote-debugging}).
+     * Locates the most recently updated {@code DevToolsActivePort} inside standard Chrome / Edge
+     * user data directories (created when Chrome 144+ enables {@code chrome://inspect/#remote-debugging}).
      */
     public static Optional<Path> findDefaultDevToolsActivePort() {
         return findDefaultDevToolsActivePort(
+                System.getProperty("os.name", ""),
+                System::getenv,
+                System.getProperty("user.home", ""));
+    }
+
+    public static List<Path> findDefaultDevToolsActivePorts() {
+        return findDefaultDevToolsActivePorts(
                 System.getProperty("os.name", ""),
                 System::getenv,
                 System.getProperty("user.home", ""));
@@ -106,13 +126,26 @@ public final class BrowserDetector {
             Function<String, String> env,
             String userHome
     ) {
+        List<Path> ports = findDefaultDevToolsActivePorts(osName, env, userHome);
+        return ports.isEmpty() ? Optional.empty() : Optional.of(ports.get(0));
+    }
+
+    static List<Path> findDefaultDevToolsActivePorts(
+            String osName,
+            Function<String, String> env,
+            String userHome
+    ) {
         String os = osName == null ? "" : osName.toLowerCase(Locale.ROOT);
         ArrayList<Path> candidates = new ArrayList<>();
         if (os.contains("win")) {
-            String localAppData = safeEnv(env, "LOCALAPPDATA");
+            String localAppData = safeEnvAny(env, "LOCALAPPDATA", "LocalAppData");
             if (!localAppData.isEmpty()) {
-                candidates.add(Path.of(localAppData, "Google", "Chrome", "User Data", "DevToolsActivePort"));
-                candidates.add(Path.of(localAppData, "Microsoft", "Edge", "User Data", "DevToolsActivePort"));
+                try {
+                    candidates.add(Path.of(localAppData, "Google", "Chrome", "User Data", "DevToolsActivePort"));
+                    candidates.add(Path.of(localAppData, "Microsoft", "Edge", "User Data", "DevToolsActivePort"));
+                } catch (RuntimeException ignored) {
+                    // Ignore invalid LOCALAPPDATA path.
+                }
             }
         } else if (os.contains("mac")) {
             if (userHome != null && !userHome.isBlank()) {
@@ -127,31 +160,50 @@ public final class BrowserDetector {
                 candidates.add(Path.of(userHome, ".config", "microsoft-edge", "DevToolsActivePort"));
             }
         }
+        ArrayList<Path> existing = new ArrayList<>();
         for (Path candidate : candidates) {
             if (Files.isRegularFile(candidate) && Files.isReadable(candidate)) {
-                return Optional.of(candidate);
+                existing.add(candidate);
             }
         }
-        return Optional.empty();
+        // Prefer the most recently modified DevToolsActivePort so an active Edge/Chrome wins over a stale file.
+        existing.sort(Comparator.comparing(BrowserDetector::lastModifiedOrMin).reversed());
+        return List.copyOf(existing);
+    }
+
+    private static FileTime lastModifiedOrMin(Path path) {
+        try {
+            return Files.getLastModifiedTime(path);
+        } catch (IOException ex) {
+            return FileTime.fromMillis(0L);
+        }
     }
 
     private static void detectWindows(LinkedHashMap<String, DetectedBrowser> found, Function<String, String> env) {
         List<String> roots = new ArrayList<>();
-        addNonBlank(roots, safeEnv(env, "ProgramFiles"));
-        addNonBlank(roots, safeEnv(env, "ProgramFiles(x86)"));
-        addNonBlank(roots, safeEnv(env, "LOCALAPPDATA"));
+        addNonBlank(roots, safeEnvAny(env, "ProgramFiles", "PROGRAMFILES"));
+        addNonBlank(roots, safeEnvAny(env, "ProgramFiles(x86)", "PROGRAMFILES(X86)"));
+        addNonBlank(roots, safeEnvAny(env, "LOCALAPPDATA", "LocalAppData"));
 
         for (String root : roots) {
-            addIfExecutable(found, "chrome", "Google Chrome", Path.of(root, "Google", "Chrome", "Application", "chrome.exe"));
+            tryAddIfExecutable(found, "chrome", "Google Chrome", root, "Google", "Chrome", "Application", "chrome.exe");
         }
-        queryWindowsAppPath("chrome.exe").ifPresent(p -> addIfExecutable(found, "chrome", "Google Chrome", p));
-        findOnPath(env, "chrome.exe").ifPresent(p -> addIfExecutable(found, "chrome", "Google Chrome", p));
+        if (!hasBrowserId(found, "chrome")) {
+            findOnPath(env, "chrome.exe", true).ifPresent(p -> addIfExecutable(found, "chrome", "Google Chrome", p));
+        }
+        if (!hasBrowserId(found, "chrome")) {
+            queryWindowsAppPath("chrome.exe", env).ifPresent(p -> addIfExecutable(found, "chrome", "Google Chrome", p));
+        }
 
         for (String root : roots) {
-            addIfExecutable(found, "edge", "Microsoft Edge", Path.of(root, "Microsoft", "Edge", "Application", "msedge.exe"));
+            tryAddIfExecutable(found, "edge", "Microsoft Edge", root, "Microsoft", "Edge", "Application", "msedge.exe");
         }
-        queryWindowsAppPath("msedge.exe").ifPresent(p -> addIfExecutable(found, "edge", "Microsoft Edge", p));
-        findOnPath(env, "msedge.exe").ifPresent(p -> addIfExecutable(found, "edge", "Microsoft Edge", p));
+        if (!hasBrowserId(found, "edge")) {
+            findOnPath(env, "msedge.exe", true).ifPresent(p -> addIfExecutable(found, "edge", "Microsoft Edge", p));
+        }
+        if (!hasBrowserId(found, "edge")) {
+            queryWindowsAppPath("msedge.exe", env).ifPresent(p -> addIfExecutable(found, "edge", "Microsoft Edge", p));
+        }
     }
 
     private static void detectMac(LinkedHashMap<String, DetectedBrowser> found, String userHome) {
@@ -180,25 +232,26 @@ public final class BrowserDetector {
         };
         for (String[] spec : specs) {
             String bin = spec[2];
-            findOnPath(env, bin).ifPresent(p -> addIfExecutable(found, spec[0], spec[1], p));
+            findOnPath(env, bin, false).ifPresent(p -> addIfExecutable(found, spec[0], spec[1], p));
             addIfExecutable(found, spec[0], spec[1], Path.of("/usr/bin", bin));
             addIfExecutable(found, spec[0], spec[1], Path.of("/usr/local/bin", bin));
             addIfExecutable(found, spec[0], spec[1], Path.of("/snap/bin", bin));
         }
     }
 
-    private static Optional<Path> findOnPath(Function<String, String> env, String binary) {
-        String pathEnv = safeEnv(env, "PATH");
+    private static Optional<Path> findOnPath(Function<String, String> env, String binary, boolean windows) {
+        String pathEnv = safeEnvAny(env, "PATH", "Path");
         if (pathEnv.isEmpty()) {
             return Optional.empty();
         }
-        String sep = System.getProperty("path.separator", ":");
-        for (String dir : pathEnv.split(java.util.regex.Pattern.quote(sep))) {
-            if (dir.isBlank()) {
+        String sep = windows ? ";" : System.getProperty("path.separator", ":");
+        for (String rawDir : pathEnv.split(Pattern.quote(sep))) {
+            String dir = stripQuotes(rawDir);
+            if (dir.isEmpty()) {
                 continue;
             }
             try {
-                Path candidate = Path.of(dir.trim(), binary);
+                Path candidate = Path.of(dir, binary);
                 if (isExecutableFile(candidate)) {
                     return Optional.of(candidate);
                 }
@@ -209,7 +262,7 @@ public final class BrowserDetector {
         return Optional.empty();
     }
 
-    private static Optional<Path> queryWindowsAppPath(String exeName) {
+    private static Optional<Path> queryWindowsAppPath(String exeName, Function<String, String> env) {
         for (String hive : List.of("HKLM", "HKCU")) {
             String key = hive + "\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + exeName;
             Process process = null;
@@ -225,23 +278,22 @@ public final class BrowserDetector {
                 if (process.exitValue() != 0) {
                     continue;
                 }
+                StringBuilder output = new StringBuilder();
                 try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getInputStream(), Charset.defaultCharset()))) {
+                        new InputStreamReader(process.getInputStream(), nativeCharset()))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
-                        int idx = line.indexOf("REG_SZ");
-                        if (idx >= 0) {
-                            String value = line.substring(idx + "REG_SZ".length()).trim();
-                            if (value.startsWith("\"") && value.endsWith("\"") && value.length() >= 2) {
-                                value = value.substring(1, value.length() - 1);
-                            }
-                            if (!value.isBlank()) {
-                                Path candidate = Path.of(value);
-                                if (isExecutableFile(candidate)) {
-                                    return Optional.of(candidate);
-                                }
-                            }
+                        output.append(line).append('\n');
+                        if (output.length() > 8192) {
+                            break;
                         }
+                    }
+                }
+                Optional<String> parsed = parseWindowsRegQueryOutput(output.toString(), env);
+                if (parsed.isPresent()) {
+                    Path candidate = Path.of(parsed.get());
+                    if (isExecutableFile(candidate)) {
+                        return Optional.of(candidate);
                     }
                 }
             } catch (IOException | InterruptedException | RuntimeException ex) {
@@ -255,6 +307,123 @@ public final class BrowserDetector {
             }
         }
         return Optional.empty();
+    }
+
+    /**
+     * Parses {@code reg query ... /ve} output for both {@code REG_SZ} and {@code REG_EXPAND_SZ},
+     * expanding Windows {@code %VAR%} tokens and stripping surrounding quotes.
+     */
+    static Optional<String> parseWindowsRegQueryOutput(String output, Function<String, String> env) {
+        if (output == null || output.isBlank()) {
+            return Optional.empty();
+        }
+        for (String line : output.split("\\R")) {
+            String value = null;
+            boolean expand = false;
+            int expandIdx = line.indexOf("REG_EXPAND_SZ");
+            if (expandIdx >= 0) {
+                value = line.substring(expandIdx + "REG_EXPAND_SZ".length()).trim();
+                expand = true;
+            } else {
+                int szIdx = line.indexOf("REG_SZ");
+                if (szIdx >= 0) {
+                    value = line.substring(szIdx + "REG_SZ".length()).trim();
+                }
+            }
+            if (value == null) {
+                continue;
+            }
+            value = stripQuotes(value);
+            if (expand && !value.isEmpty()) {
+                value = expandWindowsEnvVars(value, env);
+            }
+            value = stripQuotes(value);
+            if (!value.isEmpty()) {
+                return Optional.of(value);
+            }
+        }
+        return Optional.empty();
+    }
+
+    static String expandWindowsEnvVars(String raw, Function<String, String> env) {
+        if (raw == null || env == null || raw.indexOf('%') < 0) {
+            return raw == null ? "" : raw;
+        }
+        Matcher matcher = WIN_ENV_TOKEN.matcher(raw);
+        StringBuilder out = new StringBuilder();
+        while (matcher.find()) {
+            String varName = matcher.group(1);
+            String resolved = lookupWindowsEnv(env, varName);
+            matcher.appendReplacement(out, Matcher.quoteReplacement(resolved != null ? resolved : matcher.group(0)));
+        }
+        matcher.appendTail(out);
+        return out.toString();
+    }
+
+    private static String lookupWindowsEnv(Function<String, String> env, String name) {
+        String exact = env.apply(name);
+        if (exact != null && !exact.isBlank()) {
+            return stripQuotes(exact);
+        }
+        String upper = env.apply(name.toUpperCase(Locale.ROOT));
+        if (upper != null && !upper.isBlank()) {
+            return stripQuotes(upper);
+        }
+        for (String canonical : List.of("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "USERPROFILE", "SystemDrive")) {
+            if (canonical.equalsIgnoreCase(name)) {
+                String value = env.apply(canonical);
+                if (value != null && !value.isBlank()) {
+                    return stripQuotes(value);
+                }
+            }
+        }
+        return null;
+    }
+
+    static String stripQuotes(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String trimmed = raw.trim();
+        if (trimmed.length() >= 2 && trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+            return trimmed.substring(1, trimmed.length() - 1).trim();
+        }
+        return trimmed;
+    }
+
+    private static Charset nativeCharset() {
+        String prop = System.getProperty("native.encoding");
+        if (prop != null && !prop.isBlank()) {
+            try {
+                return Charset.forName(prop.trim());
+            } catch (RuntimeException ignored) {
+                // Fall back to JVM default charset.
+            }
+        }
+        return Charset.defaultCharset();
+    }
+
+    private static boolean hasBrowserId(LinkedHashMap<String, DetectedBrowser> found, String id) {
+        for (DetectedBrowser browser : found.values()) {
+            if (id.equals(browser.id())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void tryAddIfExecutable(
+            LinkedHashMap<String, DetectedBrowser> found,
+            String id,
+            String name,
+            String first,
+            String... more
+    ) {
+        try {
+            addIfExecutable(found, id, name, Path.of(first, more));
+        } catch (RuntimeException ignored) {
+            // Skip malformed directory root from environment.
+        }
     }
 
     private static void addIfExecutable(
@@ -284,12 +453,17 @@ public final class BrowserDetector {
         }
     }
 
-    private static String safeEnv(Function<String, String> env, String key) {
-        if (env == null) {
+    private static String safeEnvAny(Function<String, String> env, String... keys) {
+        if (env == null || keys == null) {
             return "";
         }
-        String val = env.apply(key);
-        return val == null ? "" : val.trim();
+        for (String key : keys) {
+            String val = stripQuotes(env.apply(key));
+            if (!val.isEmpty()) {
+                return val;
+            }
+        }
+        return "";
     }
 
     private static void addNonBlank(List<String> list, String value) {

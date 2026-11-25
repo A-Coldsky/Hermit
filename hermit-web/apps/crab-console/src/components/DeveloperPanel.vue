@@ -269,7 +269,12 @@ async function refreshTools() {
         </li>
       </ul>
       <p v-if="refresh.result.traceId" class="hm-muted">
-        JSON-RPC 追踪 {{ refresh.result.traceId }} 已记下，刷新没有对应的调用记录。
+        JSON-RPC 追踪
+        <router-link :to="{ path: '/calls', query: { trace: refresh.result.traceId } }" class="mono">
+          {{ refresh.result.traceId }}
+        </router-link>
+        <el-button link :icon="CopyDocument" aria-label="复制追踪编号" @click="copyText(refresh.result.traceId, '追踪编号已复制')" />
+        已记下，刷新没有对应的调用记录，可点击查看或交给 AI 用 <code class="mono">debug_trace</code> 排查。
       </p>
     </template>
   </el-dialog>

@@ -444,7 +444,7 @@ const submissionLabel = computed(() => (isAdmin.value ? '前往规则审批' : '
             </div>
             <div class="code-card">
               <div class="code-head">
-                <span>普通脚本调用（HTTP / OpenAPI）</span>
+                <span>普通脚本调用（HTTP / OpenAPI，bash）</span>
                 <el-button text size="small" :icon="CopyDocument" @click="copyText(curlSnippet, 'curl 示例已复制')">
                   复制
                 </el-button>

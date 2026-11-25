@@ -29,6 +29,11 @@ import dev.hermit.crab.secure.Redactor;
 public final class DevTraceStore {
     /** Refresh is not a capability call. A forwarder may store a trace under this action and no call log. */
     public static final String MCP_REFRESH_ACTION = "mcp_refresh";
+    /** Console test-login runs auth steps only without writing call_logs or Tide reports. */
+    public static final String TEST_LOGIN_ACTION = "test_login";
+    /** Console captcha/OTP continuation or resend runs auth steps only without writing call_logs or Tide reports. */
+    public static final String LOGIN_INPUT_ACTION = "login_input";
+    public static final int MAX_LIST_LIMIT = 50;
 
     private static final Logger LOG = Logger.getLogger(DevTraceStore.class.getName());
 
@@ -123,6 +128,54 @@ public final class DevTraceStore {
                     }
                     return Optional.of(read(resultSet));
                 }
+            }
+        });
+    }
+
+    /**
+     * Lists recent developer trace summaries ordered newest-first without loading full trace bodies.
+     * Callers must filter results through their own authorization checks.
+     */
+    public List<TraceSummary> listRecent(String conch, String action, int limit) {
+        int capped = Math.max(1, Math.min(limit, MAX_LIST_LIMIT));
+        String cleanConch = conch == null || conch.isBlank() ? null : conch.trim();
+        String cleanAction = action == null || action.isBlank() ? null : action.trim();
+        return Db.transaction(dataSource, connection -> {
+            StringBuilder sql = new StringBuilder("""
+                    SELECT trace_id, origin, conch, account, action, created_at, expires_at
+                    FROM dev_traces
+                    WHERE origin = 'LOCAL'
+                    """);
+            if (cleanConch != null) {
+                sql.append(" AND conch = ?");
+            }
+            if (cleanAction != null) {
+                sql.append(" AND action = ?");
+            }
+            sql.append(" ORDER BY created_at DESC, trace_id DESC LIMIT ?");
+            try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+                int idx = 1;
+                if (cleanConch != null) {
+                    statement.setString(idx++, cleanConch);
+                }
+                if (cleanAction != null) {
+                    statement.setString(idx++, cleanAction);
+                }
+                statement.setInt(idx, capped);
+                ArrayList<TraceSummary> rows = new ArrayList<>();
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    while (resultSet.next()) {
+                        rows.add(new TraceSummary(
+                                resultSet.getString("trace_id"),
+                                Origin.valueOf(resultSet.getString("origin")),
+                                resultSet.getString("conch"),
+                                resultSet.getString("account"),
+                                resultSet.getString("action"),
+                                Db.instant(resultSet, "created_at"),
+                                Db.instant(resultSet, "expires_at")));
+                    }
+                }
+                return List.copyOf(rows);
             }
         });
     }
@@ -286,6 +339,17 @@ public final class DevTraceStore {
             Instant createdAt,
             Instant expiresAt,
             String body
+    ) {
+    }
+
+    public record TraceSummary(
+            String traceId,
+            Origin origin,
+            String conch,
+            String account,
+            String action,
+            Instant createdAt,
+            Instant expiresAt
     ) {
     }
 

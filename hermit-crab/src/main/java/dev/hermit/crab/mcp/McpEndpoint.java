@@ -56,7 +56,7 @@ public final class McpEndpoint {
                     + "如果用户在 Crab 控制台录制或导入并保存了脱敏抓包快照，优先用 conch_capture_list 查看快照目录，再用 conch_capture_get 按序号读取详情；"
                     + "写或改 YAML 前先调用 conch_guide（或读取资源 hermit://authoring/guide）获取可直接复制修改的 starterTemplate、pitfalls 避坑清单、步骤速查与相关章节；"
                     + "修改已有规则包前先用 conch_read_yaml 读取原文（Reef 订阅的正式包只读不可直接修改，如需改动请用 conch_save_local 保存为本地规则包，可起新包名立即生效，或保存为同名本地副本再由用户在控制台切换来源）。"
-                    + "推荐顺序：先和用户确认要做哪些功能 → conch_validate 校验至无错（失败可按 fixHints/suggestedSections 修正） → conch_save_local 保存 → 用户在控制台建账号填凭证 → conch_trial_run 试跑，失败再用 debug_trace 查 traceId。"
+                    + "推荐顺序：先和用户确认要做哪些功能 → conch_validate 校验至无错（失败可按 fixHints/suggestedSections 修正） → conch_save_local 保存 → 用户在控制台建账号填凭证并可点「测试登录」 → conch_trial_run 试跑；测试登录、验证码续登或试跑失败时，用 debug_trace 查 traceId，或直接用 debug_trace_list 列出最近本机开发追踪排查原因。"
                     + "不要向用户索要口令、Cookie 或令牌，也不要写入 YAML。";
 
     private final CrabRuntime runtime;

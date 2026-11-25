@@ -329,7 +329,7 @@ public final class ConchAdmin {
                 traceId,
                 source,
                 doc.conch(),
-                "test_login",
+                dev.hermit.crab.store.DevTraceStore.TEST_LOGIN_ACTION,
                 Map.of(),
                 resolved.account(),
                 new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
@@ -408,7 +408,7 @@ public final class ConchAdmin {
                 traceId,
                 source,
                 doc.conch(),
-                "login_input",
+                dev.hermit.crab.store.DevTraceStore.LOGIN_INPUT_ACTION,
                 Map.of(),
                 resolved.account(),
                 new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));

@@ -58,7 +58,8 @@ record ConchSummary(
         String driver,
         UpstreamView upstream,
         SnapshotView snapshot,
-        List<ToolView> tools) {
+        List<ToolView> tools,
+        String authUse) {
 }
 
 record ConchVersionItem(
@@ -183,7 +184,9 @@ record ConchDetail(
         long pullCount,
         UpstreamView upstream,
         SnapshotView snapshot,
-        List<ToolView> tools) {
+        List<ToolView> tools,
+        String authUse,
+        List<String> authExports) {
 
     static ConchDetail from(ConchDoc doc, AvailabilityRow availability, long pullCount, boolean published) {
         Map<String, CredentialDeclaration> credentials = new java.util.LinkedHashMap<>();
@@ -223,7 +226,9 @@ record ConchDetail(
                 pullCount,
                 mcp.upstream(),
                 mcp.snapshot(),
-                mcp.tools());
+                mcp.tools(),
+                AuthDependencies.authUse(doc),
+                doc.auth() == null ? List.of() : List.copyOf(doc.auth().exports().keySet()));
     }
 }
 

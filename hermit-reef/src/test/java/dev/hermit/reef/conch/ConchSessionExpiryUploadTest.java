@@ -96,39 +96,6 @@ class ConchSessionExpiryUploadTest {
                 .andExpect(jsonPath("$.data.errors[0].code").value("MIN_CRAB_VERSION"));
     }
 
-    @Test
-    void rejectsAuthenticatorPackagesUntilDistributionLands() throws Exception {
-        // 写法能校验，但 Reef 还没有依赖校验和分发，Crab 也不能运行：先不让发布。
-        String authenticator = """
-                conch: corp_sso
-                version: 1.0.0
-                driver: auth
-                min_crab_version: 1.13.0
-                title: 统一登录
-                description: 说明
-                credentials: {}
-                auth:
-                  origins: ["https://sso.corp.example"]
-                  steps:
-                    - request: {method: GET, url: https://sso.corp.example/login}
-                  alive_check:
-                    request: {method: GET, url: https://sso.corp.example/me}
-                """;
-        String consumer = yaml("1.13.0")
-                .replace("credentials: {}\n", "")
-                .replace("  steps:\n    - request: {method: POST, path: /login}\n    - assert: {status: 200}\n",
-                        "  use: corp_sso\n");
-        for (String body : new String[] {authenticator, consumer}) {
-            mockMvc.perform(multipart("/api/admin/conches")
-                            .file(new MockMultipartFile("file", "x.yaml", "application/yaml",
-                                    body.getBytes(StandardCharsets.UTF_8)))
-                            .header("Authorization", "Bearer " + adminToken))
-                    .andExpect(status().isUnprocessableEntity())
-                    .andExpect(jsonPath("$.data.errors.length()").value(1))
-                    .andExpect(jsonPath("$.data.errors[0].code").value("AUTHENTICATOR"));
-        }
-    }
-
     private static String yaml(String minCrab) {
         return """
                 conch: oa_200_expiry

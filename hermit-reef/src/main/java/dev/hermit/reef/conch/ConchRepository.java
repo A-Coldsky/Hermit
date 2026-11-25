@@ -53,9 +53,13 @@ class ConchRepository {
         return jdbc.query(COLUMNS + "WHERE is_current = TRUE ORDER BY conch, id", ROWS);
     }
 
-    /** 当前发布、引用授权器 {@code authenticator} 的业务包。不加锁。 */
+    /** 当前发布、引用授权器 {@code authenticator} 的业务包。加锁读，调用方必须在事务里。 */
     List<VersionRow> listCurrentUsing(String authenticator) {
-        return jdbc.query(COLUMNS + "WHERE is_current = TRUE AND auth_use = ? ORDER BY conch, id", ROWS, authenticator)
+        // 加锁读：读到的是已提交的最新结果，不受本事务早先快照的影响（MySQL 默认是可重复读）。
+        return jdbc.query(
+                        COLUMNS + "WHERE is_current = TRUE AND auth_use = ? ORDER BY conch, id FOR UPDATE",
+                        ROWS,
+                        authenticator)
                 .stream()
                 .filter(row -> authenticator.equals(row.authUse()))
                 .toList();

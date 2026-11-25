@@ -73,7 +73,8 @@ public class ConchCatalogService {
                     mcp.driver(),
                     mcp.upstream(),
                     mcp.snapshot(),
-                    mcp.tools()));
+                    mcp.tools(),
+                    AuthDependencies.authUse(doc)));
         }
         summaries.sort(Comparator.comparing(ConchSummary::conch));
         return summaries;

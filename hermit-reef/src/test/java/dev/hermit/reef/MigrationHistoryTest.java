@@ -40,6 +40,7 @@ class MigrationHistoryTest {
         MERGED.put("V7__voided_config_tokens.sql", "00f2d0421cc871cce831d132700fabca943b5619d3b771089bfc34bfda396582");
         MERGED.put("V8__admin_token_version.sql", "a0f5d080b22820c4b95a96d70de9c8dad1973c7d6bb132333b420b1dc4239149");
         MERGED.put("V9__notices_and_submissions.sql", "0d7e72925465a5cf9f868fad9dab4d470bee3360fbdb287845b0cd220776c2b9");
+        MERGED.put("V10__conch_auth_use.sql", "0a583ea0735c131912edc1f4e4287b196e6e3726873497f18b73e4bd82509818");
     }
 
     @Test
@@ -54,7 +55,8 @@ class MigrationHistoryTest {
     /**
      * 生产库停在 V7、已有管理员和登录失败记录。升级只跑新增的迁移：已有管理员的 token_version 是 0，
      * 升级前签出的 JWT（没有 tv，按 0 处理）仍然有效，不会因为升级被统一踢下线；
-     * V9 新增的公告表与规则审批表从空开始，不影响存量数据。
+     * V9 新增的公告表与规则审批表从空开始，不影响存量数据；
+     * V10 给规则包版本加的 auth_use 在已有的版本行上是 NULL（不引用授权器）。
      */
     @Test
     void productionDatabaseWithRowsUpgrades() throws Exception {
@@ -66,6 +68,10 @@ class MigrationHistoryTest {
                     + "VALUES ('admin', 'x', TIMESTAMP '2026-11-01 00:00:00', FALSE)");
             statement.executeUpdate("INSERT INTO hermit_admin_login_failures (username, failed_at) "
                     + "VALUES ('admin', TIMESTAMP '2026-11-01 00:00:00')");
+            statement.executeUpdate("INSERT INTO hermit_conch_versions "
+                    + "(conch, version, sha256, package_path, status, uploaded_by, uploaded_at, is_current) "
+                    + "VALUES ('legacy_oa', '1.0.0', 'ab', 'p', 'PUBLISHED', 'admin', "
+                    + "TIMESTAMP '2026-11-01 00:00:00', TRUE)");
         }
 
         assertThat(flyway(url, null).migrate().migrationsExecuted).isEqualTo(MERGED.size() - Integer.parseInt(PRODUCTION_VERSION));
@@ -82,6 +88,12 @@ class MigrationHistoryTest {
                 failures.next();
                 assertThat(failures.getInt(1)).isEqualTo(1);
                 assertThat(failures.getInt(2)).isEqualTo(1);
+            }
+            try (ResultSet versions = statement.executeQuery(
+                    "SELECT COUNT(*), COUNT(auth_use) FROM hermit_conch_versions")) {
+                versions.next();
+                assertThat(versions.getInt(1)).isEqualTo(1);
+                assertThat(versions.getInt(2)).isZero();
             }
             try (ResultSet notices = statement.executeQuery("SELECT COUNT(*) FROM hermit_announcements")) {
                 notices.next();

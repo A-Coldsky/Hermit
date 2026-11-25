@@ -12,6 +12,14 @@ public interface SharedSessions {
     /** 这个账号绑到的身份；没绑为 null。 */
     String identityOf(SessionKey key);
 
+    /**
+     * 这个账号用的是别的账号的罐（绑到授权器账号的业务包账号）。它自己作废时只清它自己的登录状态，
+     * 罐里的 Cookie 是授权器和其它包的，不能跟着清。
+     */
+    default boolean borrows(SessionKey key) {
+        return false;
+    }
+
     /** 这个身份现在的成员。 */
     List<SessionKey> members(String identity);
 

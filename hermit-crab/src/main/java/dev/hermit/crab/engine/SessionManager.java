@@ -147,7 +147,7 @@ public final class SessionManager implements AutoCloseable {
                         persistence.delete(key);
                         loginSnapshots.delete(key);
                         pending.discard(key);
-                        identity = shared.identityOf(key);
+                        identity = shared.borrows(key) ? null : shared.identityOf(key);
                     } else {
                         identity = null;
                     }
@@ -178,6 +178,18 @@ public final class SessionManager implements AutoCloseable {
                 bumpInvalidationGen(key);
                 pending.discard(key);
                 state.relapseClearedAt = null;
+                if (state.jar.identity != null && shared.borrows(key)) {
+                    // 借用授权器账号的罐：只作废这个账号自己换来的票，授权器和其它包的会话留着。
+                    loginSnapshots.delete(key);
+                    state.loggedIn = false;
+                    state.epoch = epochSeq.incrementAndGet();
+                    state.lastActive = null;
+                    state.loginSnapshot.clear();
+                    if (closed) {
+                        states.remove(key, state);
+                    }
+                    return;
+                }
                 if (state.jar.identity != null) {
                     clearJar(state.jar);
                     if (closed) {

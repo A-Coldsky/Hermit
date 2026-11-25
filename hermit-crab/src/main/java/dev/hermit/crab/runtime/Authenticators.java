@@ -115,6 +115,11 @@ public final class Authenticators implements AuthLinks {
             }
 
             @Override
+            public boolean borrows(SessionKey key) {
+                return bindings.find(key) != null;
+            }
+
+            @Override
             public List<SessionKey> members(String identity) {
                 SessionKey authenticator = parse(identity);
                 if (authenticator == null) {

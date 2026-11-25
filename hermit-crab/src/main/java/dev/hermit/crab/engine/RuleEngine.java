@@ -1241,7 +1241,8 @@ public final class RuleEngine implements ConchExecutor {
     private void login(LoginScope scope) {
         if (scope.linked != null) {
             // 这个包自己没有登录步骤：登录就是重新换票（授权器该不该重新登录由 ensureLinked 判断）。
-            sessions.markLoggedOut(scope.key);
+            // 写了 auth.exchange 的连带删掉只属于它站点的 Cookie，从没有应用会话的状态换起。
+            dropLinked(scope);
             ensureLinked(scope);
             return;
         }

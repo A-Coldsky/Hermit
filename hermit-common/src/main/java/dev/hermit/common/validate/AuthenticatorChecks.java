@@ -1,6 +1,8 @@
 package dev.hermit.common.validate;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +42,7 @@ public final class AuthenticatorChecks {
             Pattern.CASE_INSENSITIVE);
     private static final Pattern TEMPLATE = Pattern.compile("\\{\\{(.*?)}}", Pattern.DOTALL);
     private static final Pattern AUTH_REF = Pattern.compile("(?<![\\w.])auth\\.([A-Za-z_][A-Za-z0-9_]*)");
+    private static final Pattern BARE_REF = Pattern.compile("auth\\.([A-Za-z_][A-Za-z0-9_]*)(?:[.\\[].*)?");
     private static final Pattern SCRIPT_REF = Pattern.compile("\\bvars\\.auth\\.([A-Za-z_][A-Za-z0-9_]*)");
 
     private AuthenticatorChecks() {
@@ -257,7 +260,43 @@ public final class AuthenticatorChecks {
         }
     }
 
-    /** 业务包里用到的授权器导出名，按出现顺序。模板 {@code {{auth.名字}}} 和脚本里的 {@code vars.auth.名字} 都算。 */
+    /** 判断键里不带 {@code {{ }}} 的变量名。只看这四个键，别处的 {@code auth.x} 字样（例如主机名）不算。 */
+    private static void bareReferences(Object node, Set<String> names) {
+        if (node instanceof Step step) {
+            bareReferences(step.def(), names);
+        } else if (node instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                Object value = entry.getValue();
+                if ("present".equals(key) || "not_present".equals(key)) {
+                    for (Object name : value instanceof Collection<?> list ? list : Collections.singletonList(value)) {
+                        bareName(name, names);
+                    }
+                } else if (("equals".equals(key) || "not_equals".equals(key)) && value instanceof Map<?, ?> pairs) {
+                    pairs.keySet().forEach(name -> bareName(name, names));
+                } else {
+                    bareReferences(value, names);
+                }
+            }
+        } else if (node instanceof Collection<?> list) {
+            list.forEach(item -> bareReferences(item, names));
+        }
+    }
+
+    private static void bareName(Object name, Set<String> names) {
+        if (name instanceof String text) {
+            Matcher ref = BARE_REF.matcher(text);
+            if (ref.matches()) {
+                names.add(ref.group(1));
+            }
+        }
+    }
+
+    /**
+     * 业务包里用到的授权器导出名，按出现顺序。模板 {@code {{auth.名字}}}、脚本里的 {@code vars.auth.名字}，
+     * 以及判断键（{@code present}、{@code not_present}、{@code equals}、{@code not_equals}）里直接写的
+     * 变量名 {@code auth.名字} 都算。
+     */
     public static Set<String> referencedExports(ConchDoc doc) {
         LinkedHashSet<String> names = new LinkedHashSet<>();
         if (!uses(doc)) {
@@ -268,7 +307,9 @@ public final class AuthenticatorChecks {
         if (doc.auth().aliveCheck() != null) {
             sources.add(doc.auth().aliveCheck().request());
             sources.add(doc.auth().aliveCheck().expectNotRedirect());
+            sources.add(doc.auth().aliveCheck().expect());
         }
+        sources.add(doc.auth().expiredWhen());
         for (Action action : doc.actions().values()) {
             if (action != null) {
                 sources.add(action.steps());
@@ -276,6 +317,7 @@ public final class AuthenticatorChecks {
             }
         }
         for (Object source : sources) {
+            bareReferences(source, names);
             String text = String.valueOf(source);
             Matcher template = TEMPLATE.matcher(text);
             while (template.find()) {

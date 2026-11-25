@@ -336,6 +336,20 @@ class AuthenticatorValidationTest {
     }
 
     @Test
+    void bareVariableNamesInConditionsCountAsReferences() {
+        String yaml = CONSUMER.replace("    - extract: { ticket: \"$.ticket\" }",
+                "    - extract: { ticket: \"$.ticket\" }\n    - assert: { present: auth.refresh_token }\n"
+                        + "    - assert: { not_equals: { auth.id_token: \"\" } }");
+        assertThat(validate(yaml).errors()).isEmpty();
+        ConchDoc doc = ConchParser.parse(yaml);
+        assertThat(AuthenticatorChecks.referencedExports(doc))
+                .containsExactlyInAnyOrder("access_token", "refresh_token", "id_token");
+        assertThat(AuthenticatorChecks.link(doc, ConchParser.parse(AUTHENTICATOR)))
+                .extracting(ValidationIssue::message)
+                .anyMatch(message -> message.contains("没有导出变量 refresh_token"));
+    }
+
+    @Test
     void legacyPackagesKeepTheirCanonicalJson() throws Exception {
         ConchDoc plain = ConchParser.parse(legacy("1.0.0", "cookies: {}"));
         JsonMapper canonical = JsonMapper.builder()

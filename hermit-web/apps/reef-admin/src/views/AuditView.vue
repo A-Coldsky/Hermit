@@ -26,6 +26,9 @@ const actionTone: Record<string, 'success' | 'danger' | 'warning' | 'info' | 'pr
   SUBMISSION_APPROVED: 'success',
   SUBMISSION_REJECTED: 'danger',
   SUBMISSION_WITHDRAWN: 'info',
+  CRAB_JAR_UPLOADED: 'primary',
+  CRAB_JAR_ROLLED_BACK: 'warning',
+  CRAB_JAR_RESET: 'info',
 }
 
 async function load() {

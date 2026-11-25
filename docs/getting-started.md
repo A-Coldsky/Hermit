@@ -83,6 +83,8 @@ report:
 chmod 600 "$HERMIT_HOME/config.yml"
 # 方式一（推荐，无需拼 classpath）：直接运行独立可执行 JAR
 java -jar hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT-all.jar serve
+# Windows PowerShell（可选指定不含分号的独立数据目录）：
+# $env:HERMIT_HOME=".\crab-data"; java -jar .\hermit-crab-0.1.0-SNAPSHOT-all.jar serve
 
 # 方式二：用普通 jar + 依赖 classpath 运行
 # CP="hermit-crab/target/hermit-crab-0.1.0-SNAPSHOT.jar:$(cat hermit-crab/target/classpath.txt)"

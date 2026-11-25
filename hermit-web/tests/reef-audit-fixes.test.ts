@@ -161,6 +161,20 @@ describe('H2 & M7：剪贴板失败不误标已保存，且防重复提交生成
     expect(ok).toHaveBeenCalledWith('已复制')
   })
 
+  it('copyText 在内网非 HTTPS 缺少 navigator.clipboard 时回退到 execCommand("copy")', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    const execCommand = vi.fn().mockReturnValue(true)
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true })
+    const ok = vi.spyOn(ElMessage, 'success').mockImplementation(() => ({}) as never)
+    try {
+      expect(await copyText('java -jar .\\hermit-crab.jar serve', '命令已复制')).toBe(true)
+      expect(execCommand).toHaveBeenCalledWith('copy')
+      expect(ok).toHaveBeenCalledWith('命令已复制')
+    } finally {
+      Object.defineProperty(document, 'execCommand', { value: undefined, configurable: true })
+    }
+  })
+
   it('复制初始化 JSON 失败时关闭弹窗仍弹出未保存确认', async () => {
     reef.tokens.mockResolvedValue([])
     reef.crabs.mockResolvedValue([])

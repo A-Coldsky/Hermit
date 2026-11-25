@@ -38,12 +38,16 @@ const letter = computed(() => (props.title?.trim() || props.name).slice(0, 1).to
   border-radius: 11px;
   font-weight: 700;
   color: var(--tint);
+  background: var(--hm-subtle);
   background: color-mix(in srgb, var(--tint) 13%, var(--hm-surface));
+  box-shadow: inset 0 0 0 1px var(--hm-border);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tint) 12%, transparent);
 }
 
 :global(html.dark) .avatar {
+  color: var(--hm-text);
   color: color-mix(in srgb, var(--tint) 45%, #ffffff);
+  background: var(--hm-surface-2);
   background: color-mix(in srgb, var(--tint) 28%, var(--hm-surface));
 }
 </style>

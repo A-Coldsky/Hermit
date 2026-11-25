@@ -724,7 +724,7 @@ class McpHttpTest {
                     new PrintStream(rejectedOut, true, StandardCharsets.UTF_8),
                     new PrintStream(rejectedErr, true, StandardCharsets.UTF_8));
             assertThat(rejected).isEqualTo(1);
-            assertThat(rejectedErr.toString(StandardCharsets.UTF_8)).isEqualTo("多余的参数。\n");
+            assertThat(rejectedErr.toString(StandardCharsets.UTF_8)).isEqualTo("多余的参数。" + System.lineSeparator());
             SecretChecks.absent(rejectedOut.toString(StandardCharsets.UTF_8), server.apiKey.plaintext());
             SecretChecks.absent(rejectedErr.toString(StandardCharsets.UTF_8), server.apiKey.plaintext());
 
@@ -813,7 +813,7 @@ class McpHttpTest {
                 new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
                 new PrintStream(optionErr, true, StandardCharsets.UTF_8));
         assertThat(missingOption).isEqualTo(1);
-        assertThat(optionErr.toString(StandardCharsets.UTF_8)).isEqualTo("缺少 --url 的值。\n");
+        assertThat(optionErr.toString(StandardCharsets.UTF_8)).isEqualTo("缺少 --url 的值。" + System.lineSeparator());
 
         ByteArrayOutputStream unknownErr = new ByteArrayOutputStream();
         int unknownOption = new CrabCommand().run(
@@ -823,7 +823,7 @@ class McpHttpTest {
                 new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
                 new PrintStream(unknownErr, true, StandardCharsets.UTF_8));
         assertThat(unknownOption).isEqualTo(1);
-        assertThat(unknownErr.toString(StandardCharsets.UTF_8)).isEqualTo("不认识的选项 --scope。\n");
+        assertThat(unknownErr.toString(StandardCharsets.UTF_8)).isEqualTo("不认识的选项 --scope。" + System.lineSeparator());
 
         String request = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"initialize\",\"params\":{}}";
         String filled = McpStdio.authenticationStdout(
@@ -868,6 +868,32 @@ class McpHttpTest {
             SecretChecks.absent(err.toString(StandardCharsets.UTF_8), "not-a-real-key");
         } finally {
             stub.stop(0);
+        }
+    }
+
+    @Test
+    void stdioAlwaysEmitsUtf8EvenOnGbkPrintStream() throws Exception {
+        // Simulates Chinese Windows 10 JDK 17 where System.out defaults to GBK (CP936):
+        // MCP JSON-RPC stdout must still contain valid UTF-8 Chinese text terminated with LF.
+        try (Harness server = Harness.open(temp.resolve("stdio-gbk"), PASSWORD)) {
+            server.configure("alice");
+            String input = initialize("{}") + "\n" + request(2, "tools/list", null) + "\n";
+            ByteArrayOutputStream rawOut = new ByteArrayOutputStream();
+            ByteArrayOutputStream rawErr = new ByteArrayOutputStream();
+            java.nio.charset.Charset gbk = java.nio.charset.Charset.forName("GBK");
+            int code = new CrabCommand().run(
+                    new String[] {"mcp-stdio", "--url", server.base + "/mcp", "--account", "alice"},
+                    name -> "HERMIT_API_KEY".equals(name) ? server.apiKey.plaintext() : null,
+                    new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)),
+                    new PrintStream(rawOut, true, gbk),
+                    new PrintStream(rawErr, true, gbk));
+            assertThat(code).isZero();
+            String utf8 = rawOut.toString(StandardCharsets.UTF_8);
+            assertThat(utf8).doesNotContain("\r\n");
+            String[] lines = utf8.trim().split("\n");
+            assertThat(lines).hasSizeGreaterThanOrEqualTo(2);
+            JsonNode toolsResp = ApiJson.tree(lines[1].getBytes(StandardCharsets.UTF_8));
+            assertThat(toolsResp.path("result").path("tools").toString()).contains("待办");
         }
     }
 

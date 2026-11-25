@@ -295,6 +295,7 @@ button:not(.el-button):focus-visible,
 }
 
 ::-webkit-scrollbar-thumb {
+  background: var(--hm-scrollbar);
   background: color-mix(in srgb, var(--hm-muted) 35%, transparent);
   border: 2px solid transparent;
   border-radius: 999px;
@@ -302,6 +303,7 @@ button:not(.el-button):focus-visible,
 }
 
 ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--hm-muted);
   background-color: color-mix(in srgb, var(--hm-muted) 60%, transparent);
 }
 

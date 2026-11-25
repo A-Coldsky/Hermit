@@ -59,7 +59,11 @@ class ConchStorage {
         try {
             temp = Files.createTempFile(dir, ".part-", ".tmp");
             Files.write(temp, bytes);
-            Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            try {
+                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException ex) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
             moved = true;
         } catch (IOException ex) {
             throw internal();

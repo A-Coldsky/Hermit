@@ -19,6 +19,7 @@ const jarName = computed(() => info.value?.fileName || 'hermit-crab-0.1.0-SNAPSH
 const runCommand = computed(() => `java -jar ${jarName.value} serve`)
 const customCommand = computed(() => `HERMIT_HOME=./crab-data java -jar ${jarName.value} serve`)
 const windowsCommand = computed(() => `java -jar .\\${jarName.value} serve`)
+const windowsCustomCommand = computed(() => `$env:HERMIT_HOME=".\\crab-data"; java -jar .\\${jarName.value} serve`)
 
 function formatBytes(bytes: number | null): string {
   if (bytes === null || bytes === undefined) return '—'
@@ -149,6 +150,9 @@ onMounted(load)
             </div>
           </el-descriptions-item>
         </el-descriptions>
+        <p class="hm-muted small-note">
+          Windows 浏览器下载 <code class="mono">.jar</code> 时若出现安全提示，选择「保留」并核对上方 SHA-256 校验和即可。
+        </p>
       </template>
 
       <template v-else-if="info.source === 'EXTERNAL'">
@@ -254,10 +258,15 @@ onMounted(load)
             <code class="mono">{{ windowsCommand }}</code>
             <el-button text size="small" :icon="CopyDocument" @click="copyText(windowsCommand, '命令已复制')" />
           </div>
-          <p class="hm-muted sub-gap">如需指定独立数据目录（端口可在 <code class="mono">config.yml</code> 中修改 <code class="mono">server.port</code>）：</p>
+          <p class="hm-muted sub-gap">如需指定独立数据目录（端口可在 <code class="mono">config.yml</code> 中修改 <code class="mono">server.port</code>，路径不要含分号）：</p>
           <div class="cmd-box">
             <code class="mono">{{ customCommand }}</code>
             <el-button text size="small" :icon="CopyDocument" @click="copyText(customCommand, '命令已复制')" />
+          </div>
+          <p class="hm-muted sub-gap">Windows PowerShell 指定独立数据目录：</p>
+          <div class="cmd-box">
+            <code class="mono">{{ windowsCustomCommand }}</code>
+            <el-button text size="small" :icon="CopyDocument" @click="copyText(windowsCustomCommand, '命令已复制')" />
           </div>
         </div>
 

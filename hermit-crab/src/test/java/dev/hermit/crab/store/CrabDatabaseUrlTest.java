@@ -85,6 +85,16 @@ class CrabDatabaseUrlTest {
     }
 
     @Test
+    void stripsSurroundingQuotesFromHermitHome() {
+        Path dir = temp.resolve("hermit data");
+        CrabPaths paths = CrabPaths.fromEnvironment(name -> "HERMIT_HOME".equals(name) ? "\"" + dir + "\"" : null);
+        assertThat(paths.root()).isEqualTo(dir.toAbsolutePath().normalize());
+
+        CrabPaths blank = CrabPaths.fromEnvironment(name -> "HERMIT_HOME".equals(name) ? " \"\" " : null);
+        assertThat(blank.root()).isEqualTo(new CrabPaths().root());
+    }
+
+    @Test
     @EnabledOnOs(OS.WINDOWS)
     void opensTheFileDatabaseOnAWindowsDrive() throws Exception {
         CrabPaths paths = new CrabPaths(temp);

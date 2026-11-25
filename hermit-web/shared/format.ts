@@ -115,15 +115,45 @@ export function notifyError(error: unknown): void {
   ElMessage.error({ message: errorText(error), grouping: true })
 }
 
-export async function copyText(value: string, label = '已复制'): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(value)
-    ElMessage.success(label)
-    return true
-  } catch {
-    ElMessage.warning('浏览器不允许写入剪贴板，请手动复制')
+function fallbackCopy(value: string): boolean {
+  if (typeof document === 'undefined' || typeof document.execCommand !== 'function' || !document.body) {
     return false
   }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '-9999px'
+  textarea.style.left = '-9999px'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  try {
+    textarea.focus()
+    textarea.select()
+    return document.execCommand('copy') === true
+  } catch {
+    return false
+  } finally {
+    textarea.remove()
+  }
+}
+
+export async function copyText(value: string, label = '已复制'): Promise<boolean> {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(value)
+      ElMessage.success(label)
+      return true
+    }
+  } catch {
+    // 非 HTTPS 内网地址或受限上下文下回退到 execCommand('copy')。
+  }
+  if (fallbackCopy(value)) {
+    ElMessage.success(label)
+    return true
+  }
+  ElMessage.warning('浏览器不允许写入剪贴板，请手动复制')
+  return false
 }
 
 export const errorCodeLabels: Record<string, string> = {

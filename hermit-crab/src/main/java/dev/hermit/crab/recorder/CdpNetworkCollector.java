@@ -202,6 +202,14 @@ public final class CdpNetworkCollector implements AutoCloseable {
      * Waits briefly for any in-flight {@code Network.getResponseBody} calls before closing the WebSocket.
      */
     public List<RecordedEntry> finishAndCollect() {
+        return finishAndCollect(false);
+    }
+
+    /**
+     * Waits briefly for in-flight response bodies, optionally sends CDP {@code Browser.close}
+     * (for Crab-launched isolated browsers so Windows releases profile locks cleanly), then closes.
+     */
+    public List<RecordedEntry> finishAndCollect(boolean closeBrowser) {
         if (!pendingBodies.isEmpty()) {
             try {
                 CompletableFuture.allOf(pendingBodies.toArray(new CompletableFuture[0]))
@@ -212,8 +220,21 @@ public final class CdpNetworkCollector implements AutoCloseable {
                 // Best-effort flush; entries without bodies are still kept.
             }
         }
-        close();
+        close(closeBrowser);
         return snapshotEntries();
+    }
+
+    public void close(boolean closeBrowser) {
+        if (closeBrowser && !closed.get() && webSocket != null) {
+            try {
+                sendCommand(null, "Browser.close", Map.of()).get(500, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            } catch (ExecutionException | TimeoutException | RuntimeException ignored) {
+                // Process teardown in BrowserLauncher will handle cleanup if CDP close does not complete.
+            }
+        }
+        close();
     }
 
     @Override
@@ -224,7 +245,7 @@ public final class CdpNetworkCollector implements AutoCloseable {
         WebSocket ws = this.webSocket;
         if (ws != null) {
             try {
-                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(1, TimeUnit.SECONDS);
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(500, TimeUnit.MILLISECONDS);
             } catch (Exception ignored) {
                 try {
                     ws.abort();

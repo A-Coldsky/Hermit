@@ -4,6 +4,7 @@ import dev.hermit.reef.config.ReefProperties;
 import dev.hermit.reef.web.ApiException;
 import dev.hermit.reef.web.ReefErrorCode;
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -33,7 +34,11 @@ class SubmissionStorage {
         try {
             temp = Files.createTempFile(dir, ".part-", ".tmp");
             Files.write(temp, yaml);
-            Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            try {
+                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException ex) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
             moved = true;
             return relativePath(id);
         } catch (IOException ex) {

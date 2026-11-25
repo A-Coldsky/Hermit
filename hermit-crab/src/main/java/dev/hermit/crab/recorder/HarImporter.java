@@ -35,8 +35,11 @@ public final class HarImporter {
         }
         JsonNode root;
         try {
-            root = ApiJson.tree(new String(bytes, StandardCharsets.UTF_8));
+            root = ApiJson.tree(bytes);
         } catch (RuntimeException ex) {
+            throw new RecorderException(400, ErrorCode.INVALID_INPUT, "HAR JSON 格式无效。");
+        }
+        if (!root.isObject()) {
             throw new RecorderException(400, ErrorCode.INVALID_INPUT, "HAR JSON 格式无效。");
         }
         JsonNode entriesNode = root.path("log").path("entries");

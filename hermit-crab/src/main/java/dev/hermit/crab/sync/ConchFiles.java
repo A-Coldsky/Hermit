@@ -186,16 +186,36 @@ final class ConchFiles {
         Path tmp = Files.createTempFile(parent, target.getFileName().toString() + "-", ".tmp");
         try {
             Files.write(tmp, bytes);
-            try {
-                Files.move(tmp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException ex) {
-                Files.move(tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            }
+            moveWithWindowsLockRetry(tmp, target);
             confirmInside(paths.conches(), target);
         } catch (IOException ex) {
             Files.deleteIfExists(tmp);
             throw ex;
+        }
+    }
+
+    private static void moveWithWindowsLockRetry(Path tmp, Path target) throws IOException {
+        long[] backoffMs = {50L, 100L};
+        for (int attempt = 0; ; attempt++) {
+            try {
+                try {
+                    Files.move(tmp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException ex) {
+                    Files.move(tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+                return;
+            } catch (java.nio.file.AccessDeniedException ex) {
+                if (attempt >= backoffMs.length) {
+                    throw ex;
+                }
+                try {
+                    Thread.sleep(backoffMs[attempt]);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw ex;
+                }
+            }
         }
     }
 

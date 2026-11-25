@@ -66,12 +66,16 @@ public final class RecorderManager implements AutoCloseable {
     ) {
     }
 
+    private static final long BROWSER_CACHE_SECONDS = 30L;
+
     private final Path profileBaseDir;
     private final Clock clock;
     private final Function<String, String> environment;
     private final BooleanSupplier devModeEnabled;
 
     private final Object lock = new Object();
+    private List<BrowserDetector.DetectedBrowser> cachedBrowsers;
+    private Instant browsersCachedAt;
     private SessionState state = SessionState.IDLE;
     private String sessionId;
     private String mode;
@@ -102,14 +106,12 @@ public final class RecorderManager implements AutoCloseable {
         if (!enabled) {
             clearAll();
         }
-        List<BrowserDetector.DetectedBrowser> browsers = BrowserDetector.detect(
+        List<BrowserDetector.DetectedBrowser> browsers = detectBrowsersCached();
+        List<Path> defaultPorts = BrowserDetector.findDefaultDevToolsActivePorts(
                 System.getProperty("os.name", ""),
                 environment,
                 System.getProperty("user.home", ""));
-        boolean defaultPort = BrowserDetector.findDefaultDevToolsActivePort(
-                System.getProperty("os.name", ""),
-                environment,
-                System.getProperty("user.home", "")).isPresent();
+        boolean defaultPort = BrowserLauncher.hasLiveDefaultDevToolsPort(defaultPorts);
         synchronized (lock) {
             List<RecordedEntry> current = currentEntriesLocked();
             int business = countBusiness(current);
@@ -132,6 +134,26 @@ public final class RecorderManager implements AutoCloseable {
                     defaultPort,
                     List.copyOf(snapshots.values()));
         }
+    }
+
+    private List<BrowserDetector.DetectedBrowser> detectBrowsersCached() {
+        Instant now = clock.instant();
+        synchronized (lock) {
+            if (cachedBrowsers != null && browsersCachedAt != null
+                    && (!cachedBrowsers.isEmpty() || state == SessionState.RECORDING)
+                    && !now.isAfter(browsersCachedAt.plusSeconds(BROWSER_CACHE_SECONDS))) {
+                return cachedBrowsers;
+            }
+        }
+        List<BrowserDetector.DetectedBrowser> fresh = BrowserDetector.detect(
+                System.getProperty("os.name", ""),
+                environment,
+                System.getProperty("user.home", ""));
+        synchronized (lock) {
+            cachedBrowsers = fresh;
+            browsersCachedAt = now;
+        }
+        return fresh;
     }
 
     public RecorderStatus start(StartRequest request) {
@@ -228,13 +250,15 @@ public final class RecorderManager implements AutoCloseable {
         }
 
         List<RecordedEntry> collected = List.of();
+        boolean gracefulCloseRequested = false;
         try {
             if (activeCollector != null) {
-                collected = activeCollector.finishAndCollect();
+                gracefulCloseRequested = activeBrowser != null;
+                collected = activeCollector.finishAndCollect(gracefulCloseRequested);
             }
         } finally {
             if (activeBrowser != null) {
-                activeBrowser.close();
+                activeBrowser.close(gracefulCloseRequested);
             }
         }
 
@@ -544,16 +568,18 @@ public final class RecorderManager implements AutoCloseable {
             CdpNetworkCollector collector,
             BrowserLauncher.LaunchedBrowser browser
     ) {
+        boolean gracefulCloseRequested = false;
         if (collector != null) {
             try {
-                collector.close();
+                gracefulCloseRequested = browser != null;
+                collector.close(gracefulCloseRequested);
             } catch (RuntimeException ignored) {
                 // Best-effort cleanup.
             }
         }
         if (browser != null) {
             try {
-                browser.close();
+                browser.close(gracefulCloseRequested);
             } catch (RuntimeException ignored) {
                 // Best-effort cleanup.
             }

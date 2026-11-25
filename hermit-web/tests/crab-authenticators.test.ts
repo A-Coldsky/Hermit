@@ -1,3 +1,4 @@
+import { ApiError } from '@shared/http'
 import { flushPromises } from '@vue/test-utils'
 import { ElMessageBox } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,6 +11,8 @@ const crab = vi.hoisted(() => ({
   checkAuthBinding: vi.fn(),
   bindAuthBinding: vi.fn(),
   unbindAuthBinding: vi.fn(),
+  testLogin: vi.fn(),
+  loginInput: vi.fn(),
 }))
 
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
@@ -161,10 +164,25 @@ describe('授权器', () => {
     expect(wrapper.find('[data-test="auth-binding-input"]').text()).toContain('到授权器的账号页输入')
   })
 
+  it('测试登录遇到授权器在等验证码：不在这个包的账号下开验证码框，指到授权器账号', async () => {
+    crab.testLogin.mockRejectedValue(new ApiError(409, 'LOGIN_INPUT_REQUIRED', '需要验证码'))
+    const wrapper = await mountPage(AccountsPanel, {
+      attach: true,
+      props: { conch: 'corp_oa', accounts: [account({ authenticator: bound })], credentials: [], authUse },
+    })
+    await flushPromises()
+    await wrapper.find('[data-test="test-login"]').trigger('click')
+    await flushPromises()
+    expect(crab.loginInput).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('授权器 corp_sso 的账号 zhangsan 在等验证码')
+    wrapper.unmount()
+  })
+
   it('解除绑定要确认', async () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     crab.unbindAuthBinding.mockResolvedValue({ unbound: true })
     const wrapper = await mountPage(AccountsPanel, {
+      attach: true,
       props: { conch: 'corp_oa', accounts: [account({ authenticator: bound })], credentials: [], authUse },
     })
     await flushPromises()

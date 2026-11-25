@@ -250,7 +250,24 @@ async function testLogin(account: Account) {
       requestNote: null,
     })
   } catch (error) {
-    if (error instanceof ApiError && error.code === 'LOGIN_INPUT_REQUIRED') {
+    if (error instanceof ApiError && error.code === 'LOGIN_INPUT_REQUIRED' && props.authUse) {
+      // 等验证码的是授权器的账号，这个包的账号下没有可输入的验证码。
+      const at = account.authenticator
+      Object.assign(testResult, {
+        open: true,
+        account: account.name,
+        success: false,
+        data: null,
+        message: at
+          ? `授权器 ${at.conch} 的账号 ${at.account} 在等验证码，到授权器的账号页输入后再测试。`
+          : `授权器 ${props.authUse.conch} 的账号在等验证码，到授权器的账号页输入后再测试。`,
+        code: error.code,
+        traceId: error.traceId,
+        requestId: error.requestId,
+        requestNote: error.requestNote,
+      })
+      emit('changed')
+    } else if (error instanceof ApiError && error.code === 'LOGIN_INPUT_REQUIRED') {
       openedCaptcha = true
       delete suppressed[account.name]
       await openLoginInput(account.name, true)

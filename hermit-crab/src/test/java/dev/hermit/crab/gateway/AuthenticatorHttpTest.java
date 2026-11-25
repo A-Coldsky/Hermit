@@ -221,6 +221,48 @@ class AuthenticatorHttpTest {
         assertThat(call("pkg_b").json.toString()).contains("NOT_CONFIGURED");
     }
 
+    @Test
+    void anAuthenticatorCanBeSwitchedOffAndItsAddressCanBeProbed() throws Exception {
+        installAll();
+        bind("pkg_a");
+        assertThat(call("pkg_a").status).isEqualTo(200);
+
+        console("POST", "/console/api/conches/corp_sso/disable", null);
+        assertThat(runtime.conchSwitchedOff("corp_sso")).isTrue();
+        assertThat(call("pkg_a").json.toString()).as("授权器停用后按没有绑定处理").contains("NOT_CONFIGURED");
+        console("POST", "/console/api/conches/corp_sso/enable", null);
+        assertThat(call("pkg_a").status).isEqualTo(200);
+
+        // 认证地址只写在授权器里：证书检测要认它（这里是明文端口，握手失败，但不是「不允许检测」）。
+        Reply probe = send("POST", "/console/api/tls/probe",
+                "{\"host\":\"localhost\",\"port\":" + sso.getAddress().getPort() + "}");
+        assertThat(probe.status).as(String.valueOf(probe.json)).isEqualTo(200);
+    }
+
+    @Test
+    void aBindingOnlyCoversTheAddressTheCallActuallyUses() throws Exception {
+        installAll();
+        bind("pkg_a");
+        SessionKey account = new SessionKey(Origin.OFFICIAL, "pkg_a", "default");
+        ConchDoc doc = consumer("pkg_a", appUrl);
+        assertThat(runtime.authenticators().resolve(account, doc, appUrl)).isNotNull();
+        // 排队期间地址被改掉又重新绑定：还在用旧地址的那次调用拿不到授权器的秘密。
+        assertThat(runtime.authenticators().resolve(account, doc, otherUrl)).isNull();
+    }
+
+    @Test
+    void aBindingSurvivesStartupWhileItsAuthenticatorIsNotLoadedYet() throws Exception {
+        installAll();
+        bind("pkg_a");
+        server.close();
+        runtime.close();
+        open();
+        // 启动时别的来源先载入：同名的普通包先到，绑定的那个授权器后到。
+        runtime.registry().put(consumer("pkg_a", appUrl));
+        runtime.registry().scoped(Origin.LOCAL).put(plain("corp_sso", appUrl));
+        assertThat(runtime.authenticators().list()).as("授权器还没载入，不能据此作废绑定").hasSize(1);
+    }
+
     private void installAll() {
         registerAll();
         ConchDoc authenticator = authenticator();
@@ -316,8 +358,20 @@ class AuthenticatorHttpTest {
                 """.replace("SSO", ssoUrl));
     }
 
+    /** 不用授权器的普通包。 */
+    private static ConchDoc plain(String name, String baseUrl) {
+        return ConchParser.parse(consumerYaml(name, baseUrl)
+                .replace("auth:\n  use: corp_sso\n  min_version: 1.2.0\n",
+                        "credentials:\n  token: { type: secret, label: 令牌, required: true }\n")
+                .replace("          headers: { Authorization: \"Bearer {{auth.access_token}}\" }\n", ""));
+    }
+
     private static ConchDoc consumer(String name, String baseUrl) {
-        return ConchParser.parse("""
+        return ConchParser.parse(consumerYaml(name, baseUrl));
+    }
+
+    private static String consumerYaml(String name, String baseUrl) {
+        return """
                 conch: %s
                 version: 1.0.0
                 driver: http
@@ -348,6 +402,6 @@ class AuthenticatorHttpTest {
                         output: { echo: x }
                     notes: 无
                     related: []
-                """.formatted(name, baseUrl, name));
+                """.formatted(name, baseUrl, name);
     }
 }

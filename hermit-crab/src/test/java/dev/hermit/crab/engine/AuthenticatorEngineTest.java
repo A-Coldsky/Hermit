@@ -43,6 +43,8 @@ class AuthenticatorEngineTest {
     private static final SessionKey API = new SessionKey(Origin.LOCAL, "api", "main");
     private static final SessionKey API2 = new SessionKey(Origin.LOCAL, "api2", "main");
     private static final SessionKey COPY = new SessionKey(Origin.LOCAL, "api_copy", "main");
+    private static final SessionKey SUB = new SessionKey(Origin.LOCAL, "oa_sub", "main");
+    private static final SessionKey PEEK = new SessionKey(Origin.LOCAL, "oa_peek", "main");
     private static final SessionKey READS = new SessionKey(Origin.LOCAL, "oa_reads", "main");
     private static final String PASSWORD = EngineTestSupport.PASSWORD;
 
@@ -63,7 +65,9 @@ class AuthenticatorEngineTest {
     private final Set<String> tokens = ConcurrentHashMap.newKeySet();
     private final Set<String> pendingTickets = ConcurrentHashMap.newKeySet();
     private final Set<String> oaSessions = ConcurrentHashMap.newKeySet();
+    private final Set<String> subSessions = ConcurrentHashMap.newKeySet();
     private final List<String> seen = new CopyOnWriteArrayList<>();
+    private final List<String> peeks = new CopyOnWriteArrayList<>();
     /** api 的 /data 一律按会话失效回 401（规则把业务错误当成失效，或令牌永远不被接受）。 */
     private volatile boolean apiAlwaysRejects;
     /** oa 不认任何票据。 */
@@ -157,6 +161,31 @@ class AuthenticatorEngineTest {
         String query = String.valueOf(exchange.getRequestURI().getQuery());
         String sid = cookie(exchange, "sidA");
         seen.add("oa " + exchange.getRequestMethod() + " " + path + " tgc=" + cookie(exchange, "TGC"));
+        String peek = exchange.getRequestHeaders().getFirst("X-Peek");
+        if (peek != null) {
+            peeks.add(peek);
+        }
+        if (path.startsWith("/sub/")) {
+            // 同一台主机上、另一个路径下的第二个应用，会话 Cookie 只发到 /sub。
+            if (path.equals("/sub/cas")) {
+                if (!pendingTickets.remove(query.replace("ticket=", ""))) {
+                    reply(exchange, 403, "{\"error\":\"bad ticket\"}");
+                    return;
+                }
+                String value = "sub-" + sequence.incrementAndGet() + "-session";
+                subSessions.add(value);
+                exchange.getResponseHeaders().add("Set-Cookie", "sidB=" + value + "; Path=/sub");
+                reply(exchange, 200, "{\"ok\":true}");
+                return;
+            }
+            String sub = cookie(exchange, "sidB");
+            if (sub == null || !subSessions.contains(sub)) {
+                reply(exchange, 401, "{\"error\":\"login\"}");
+                return;
+            }
+            reply(exchange, 200, "{\"value\":\"sub-data\"}");
+            return;
+        }
         if (path.equals("/cas")) {
             if (oaRejectsTickets || !pendingTickets.remove(query.replace("ticket=", ""))) {
                 reply(exchange, 403, "{\"error\":\"bad ticket\"}");
@@ -276,6 +305,36 @@ class AuthenticatorEngineTest {
                 """.replace("SSO", ssoUrl), "{ method: GET, path: /data }");
     }
 
+    private String subYaml() {
+        return consumer("oa_sub", oaUrl + "/sub", """
+                  exchange:
+                    - request: { method: GET, url: SSO/ticket }
+                    - extract: { ticket: { jsonpath: "$.ticket" } }
+                    - request: { method: GET, path: /sub/cas, query: { ticket: "{{ticket}}" } }
+                """.replace("SSO", ssoUrl), "{ method: GET, path: /sub/data }");
+    }
+
+    /** 换票步骤里把导出的令牌 set 进普通变量，再交给普通脚本，脚本看到什么就发给应用。 */
+    private String peekYaml() {
+        return consumer("oa_peek", oaUrl, """
+                  exchange:
+                    - request: { method: GET, url: SSO/ticket }
+                    - extract: { ticket: { jsonpath: "$.ticket" } }
+                    - set: { copied: "{{auth.access_token}}" }
+                    - script:
+                        into: peek
+                        code: |
+                          var copy = typeof vars.copied === 'undefined' ? 'hidden' : String(vars.copied);
+                          var direct = (vars.auth && vars.auth.access_token) ? String(vars.auth.access_token) : 'hidden';
+                          return copy + '/' + direct;
+                    - request:
+                        method: GET
+                        path: /cas
+                        query: { ticket: "{{ticket}}" }
+                        headers: { X-Peek: "{{peek}}" }
+                """.replace("SSO", ssoUrl), "{ method: GET, path: /data }");
+    }
+
     /** 把导出的令牌 set 进普通变量，再交给普通脚本，并把它们都放进输出。 */
     private String copyYaml() {
         return apiYaml("api_copy")
@@ -331,6 +390,61 @@ class AuthenticatorEngineTest {
             for (String token : tokens) {
                 assertThat(flat).as("输出里的副本要打码").doesNotContain(token);
             }
+        }
+    }
+
+    @Test
+    void anExportCopiedInsideExchangeNeverReachesAPlainScript() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(PEEK)).isEqualTo("oa-data");
+            assertThat(tokens).isNotEmpty();
+            // 换票步骤按登录步骤跑，但 auth.* 是别的包的秘密：副本和 auth 本身都不进普通脚本。
+            assertThat(peeks).containsExactly("hidden/hidden");
+        }
+    }
+
+    @Test
+    void reExchangingOnePackageKeepsTheCookiesOfAnotherPackageOnTheSameHost() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            assertThat(fixture.value(SUB)).isEqualTo("sub-data");
+            assertThat(tickets.get()).isEqualTo(2);
+            // /sub 下的应用会话失效：重新换票时只删 /sub 下的 Cookie，同主机根路径那个包的会话留着。
+            subSessions.clear();
+            assertThat(fixture.value(SUB)).isEqualTo("sub-data");
+            assertThat(tickets.get()).isEqualTo(3);
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            assertThat(tickets.get()).as("根路径的包不用重新换票").isEqualTo(3);
+        }
+    }
+
+    @Test
+    void invalidatingAConsumerAccountKeepsTheAuthenticatorSessionAndTheOtherPackages() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            assertThat(fixture.value(API)).isEqualTo("api-data");
+            // 控制台对业务包账号测试登录、删账号前都会先作废它：罐是授权器账号的，不能跟着清空。
+            fixture.sessions.invalidate(OA);
+            assertThat(fixture.sessions.loggedIn(SSO)).isTrue();
+            assertThat(fixture.sessions.loggedIn(OA)).isFalse();
+            assertThat(fixture.value(API)).isEqualTo("api-data");
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            assertThat(passwordLogins.get()).as("授权器不用重新交密码").isEqualTo(1);
+            assertThat(tickets.get()).as("只有被作废的包重新换票").isEqualTo(2);
+        }
+    }
+
+    @Test
+    void aParallelReadThatLosesBothSessionsLogsTheAuthenticatorInAgain() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(READS)).isEqualTo("oa-data");
+            // 应用和认证中心的会话一起没了。只读能力先在共享锁下发现失效，再到独占锁下恢复：
+            // 要先探授权器、重新登录它，而不是带着失效的授权器会话去换票。
+            oaSessions.clear();
+            ssoSessions.clear();
+            assertThat(fixture.value(READS)).isEqualTo("oa-data");
+            assertThat(passwordLogins.get()).isEqualTo(2);
+            assertThat(fixture.sessions.authFailures(READS)).as("没有白白失败的换票").isZero();
         }
     }
 
@@ -523,6 +637,11 @@ class AuthenticatorEngineTest {
         }
 
         @Override
+        public boolean borrows(SessionKey key) {
+            return !key.equals(SSO) && bound.containsKey(key);
+        }
+
+        @Override
         public List<SessionKey> members(String identity) {
             ArrayList<SessionKey> members = new ArrayList<>();
             bound.forEach((key, id) -> {
@@ -580,6 +699,8 @@ class AuthenticatorEngineTest {
                     apiYaml("api"),
                     apiYaml("api2"),
                     copyYaml(),
+                    peekYaml(),
+                    subYaml(),
                     oaYaml("oa_reads", "  concurrent_reads: true\n")
                             .replace("idempotent: true", "idempotent: true\n    mcp: {expose: true, read_only: true}"))) {
                 ConchDoc doc = ConchParser.parse(yaml);
@@ -592,14 +713,15 @@ class AuthenticatorEngineTest {
             }
             ConchDoc authenticator = auth;
             shared.bound.put(SSO, "auth:sso");
-            for (SessionKey key : List.of(OA, API, API2, COPY, READS)) {
+            for (SessionKey key : List.of(OA, API, API2, COPY, PEEK, SUB, READS)) {
                 links.put(key, SSO);
                 shared.bound.put(key, "auth:sso");
             }
             engine = new RuleEngine(registry, sessions, settings);
-            engine.bindAuthLinks((key, conch) -> links.containsKey(key)
+            engine.bindAuthLinks((key, conch, site) -> links.containsKey(key)
                     ? new AuthLinks.Link(links.get(key), authenticator,
-                            Map.of("username", "zhang", "password", password), Map.of())
+                            Map.of("username", "zhang", "password", password), Map.of(),
+                            key.equals(SUB) ? Set.of(oaUrl) : key.equals(OA) ? Set.of(oaUrl + "/sub") : Set.of())
                     : null);
         }
 

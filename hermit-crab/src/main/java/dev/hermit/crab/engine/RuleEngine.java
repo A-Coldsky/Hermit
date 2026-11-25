@@ -1710,7 +1710,7 @@ public final class RuleEngine implements ConchExecutor {
                         }
                         if (value instanceof List<?> list) {
                             gathered.get(entry.getKey()).addAll(list);
-                            if (!auth && StepRunner.referencesAny(sourcePath, block.taintedVars)) {
+                            if (StepRunner.tracksSecrets(auth, vars) && StepRunner.referencesAny(sourcePath, block.taintedVars)) {
                                 CallSecrets.remember(list);
                                 block.taintedVars.add(entry.getKey());
                             }

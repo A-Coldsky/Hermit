@@ -558,6 +558,53 @@ class AuthenticatorEngineTest {
     }
 
     @Test
+    void aReadOnlyCallAlsoGetsTheExportAddedByAnUpdate() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            fixture.install(authenticator()
+                    .replace("version: 1.2.0", "version: 1.3.0")
+                    .replace("- extract: { access_token: { jsonpath: \"$.token\" } }",
+                            "- extract: { access_token: { jsonpath: \"$.token\" }, api_token: { jsonpath: \"$.token\" } }")
+                    .replace("    access_token: { description: 访问令牌 }",
+                            "    access_token: { description: 访问令牌 }\n    api_token: { description: 接口令牌 }"));
+            // 先用不涉及新变量的包把这个账号的会话热起来，只读调用才会走共享锁。
+            String reads = consumer("api_reads", apiUrl, "  concurrent_reads: true\n",
+                    "{ method: GET, path: /data, headers: { Authorization: \"Bearer {{auth.access_token}}\" } }")
+                    .replace("idempotent: true", "idempotent: true\n    mcp: {expose: true, read_only: true}");
+            fixture.install(reads);
+            SessionKey key = new SessionKey(Origin.LOCAL, "api_reads", "main");
+            assertThat(fixture.value(key)).isEqualTo("api-data");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+
+            fixture.install(reads.replace("version: 1.0.0", "version: 1.0.1").replace("auth.access_token", "auth.api_token"));
+            assertThat(fixture.value(key)).as("只读能力也要补上新变量").isEqualTo("api-data");
+            assertThat(passwordLogins.get()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void anExportOnlyAnotherActionUsesDoesNotTriggerALogin() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            // 新版本多导出 api_token；已有的登录里没有它。
+            fixture.install(authenticator()
+                    .replace("version: 1.2.0", "version: 1.3.0")
+                    .replace("- extract: { access_token: { jsonpath: \"$.token\" } }",
+                            "- extract: { access_token: { jsonpath: \"$.token\" }, api_token: { jsonpath: \"$.token\" } }")
+                    .replace("    access_token: { description: 访问令牌 }",
+                            "    access_token: { description: 访问令牌 }\n    api_token: { description: 接口令牌 }"));
+            String run = "{ method: GET, path: /data, headers: { Authorization: \"Bearer {{auth.access_token}}\" } }";
+            String yaml = consumer("api_two", apiUrl, "", run);
+            String action = yaml.substring(yaml.indexOf("  run:"));
+            fixture.install(yaml + action.replace("  run:", "  other:").replace("auth.access_token", "auth.api_token"));
+            SessionKey key = new SessionKey(Origin.LOCAL, "api_two", "main");
+
+            assertThat(fixture.value(key)).isEqualTo("api-data");
+            assertThat(passwordLogins.get()).as("这个能力没用到缺的变量，不重新登录").isEqualTo(1);
+        }
+    }
+
+    @Test
     void anUnboundAccountIsRefusedWithoutNamingTheAuthenticator() {
         try (Fixture fixture = new Fixture()) {
             fixture.bindings.remove(OA);

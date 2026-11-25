@@ -382,7 +382,10 @@ public final class RuleEngine implements ConchExecutor {
             traceBase = base;
             scope = open(conch, input, credentials, config, key, base, deadline);
             scope.shared = shared;
-            if (shared && scope.bound != null && !linkedReady(scope)) {
+            if (scope.bound != null) {
+                scope.exportsNeeded = AuthenticatorChecks.referencedExports(conch, List.of(action));
+            }
+            if (shared && scope.bound != null && !boundReady(scope)) {
                 handoff.seen = scope.seenLogin;
                 return null;
             }
@@ -742,10 +745,10 @@ public final class RuleEngine implements ConchExecutor {
         exchange(scope);
     }
 
-    /** 这个包用到的导出变量里，有没有授权器现在的登录里拿不到的。 */
+    /** 这一次调用用到的导出变量里（换票、探活、失效判断和这个能力），有没有授权器现在的登录里拿不到的。 */
     private boolean missingExport(LoginScope scope, LoginScope authenticator) {
         Map<String, AuthExport> declared = authenticator.conch.auth().exports();
-        for (String name : AuthenticatorChecks.referencedExports(scope.conch)) {
+        for (String name : scope.exportsNeeded) {
             if (declared.containsKey(name) && authenticator.lookup(name) == null) {
                 return true;
             }
@@ -842,10 +845,11 @@ public final class RuleEngine implements ConchExecutor {
         }
     }
 
-    /** 只持有共享锁时：授权器登录着、不用探活，这个包换的票也还是这一代授权器会话的，才能直接跑。 */
-    private boolean linkedReady(LoginScope scope) {
+    /** 只持有共享锁时：授权器登录着、不用探活，这个包换的票也还是这一代授权器会话的，用到的导出变量都在，才能直接跑。 */
+    private boolean boundReady(LoginScope scope) {
         SessionKey a = scope.bound.key;
-        return sessions.sharedReady(a, true) && sessions.boundEpoch(scope.key) == sessions.epoch(a);
+        return sessions.sharedReady(a, true) && sessions.boundEpoch(scope.key) == sessions.epoch(a)
+                && !missingExport(scope, scope.bound);
     }
 
     /** 建这次调用的作用域。业务包在这里接上授权器账号；没有可用的绑定时报 NOT_CONFIGURED。 */
@@ -878,6 +882,7 @@ public final class RuleEngine implements ConchExecutor {
                 boundAuth.key(), authBase, deadline);
         scope.bound = a;
         scope.siblingSites = boundAuth.siblingSites();
+        scope.exportsNeeded = AuthenticatorChecks.referencedExports(conch, List.of());
         scope.authOrigins = a.authOrigins;
         return scope;
     }
@@ -2637,6 +2642,8 @@ public final class RuleEngine implements ConchExecutor {
 
         /** 绑到同一个授权器账号的其它业务包的站点地址。 */
         private Set<String> siblingSites = Set.of();
+        /** 这一次调用会用到的授权器导出名。 */
+        private Set<String> exportsNeeded = Set.of();
 
         /** 认证地址的主机名。 */
         private Set<String> hosts() {

@@ -313,6 +313,11 @@ public final class AuthenticatorChecks {
      * 变量名 {@code auth.名字} 都算。
      */
     public static Set<String> referencedExports(ConchDoc doc) {
+        return referencedExports(doc, doc.actions().values());
+    }
+
+    /** 同上，但能力只算给出的这几个；换票、探活和失效判断里用到的总是算。 */
+    public static Set<String> referencedExports(ConchDoc doc, Collection<Action> actions) {
         LinkedHashSet<String> names = new LinkedHashSet<>();
         if (!uses(doc)) {
             return names;
@@ -328,7 +333,7 @@ public final class AuthenticatorChecks {
         }
         sources.add(doc.auth().expiredWhen());
         doc.auth().expiredWhen().forEach(condition -> conditionReferences(condition, names));
-        for (Action action : doc.actions().values()) {
+        for (Action action : actions) {
             if (action != null) {
                 sources.add(action.steps());
                 sources.add(action.output());

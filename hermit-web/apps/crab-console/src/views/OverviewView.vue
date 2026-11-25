@@ -95,7 +95,22 @@ const syncIntervalText = computed(() => {
   if (!seconds) return ''
   return seconds % 60 === 0 ? `每 ${seconds / 60} 分钟自动同步一次` : `每 ${seconds} 秒自动同步一次`
 })
-const updatable = computed(() => conches.value.filter((s) => s.updateAvailable))
+/** 有新版本的授权器。它们不在规则包列表里，单独取。 */
+const authUpdates = ref<{ conch: string; latestVersion: string | null }[]>([])
+async function loadAuthUpdates() {
+  try {
+    const result = await api.authenticators()
+    authUpdates.value = (result.authenticators ?? [])
+      .filter((a) => a.updateAvailable)
+      .map((a) => ({ conch: a.conch, latestVersion: a.latestVersion }))
+  } catch {
+    // 读不到授权器不影响概览其它内容
+  }
+}
+const updatable = computed(() => [
+  ...conches.value.filter((s) => s.updateAvailable).map((s) => ({ conch: s.conch, latestVersion: s.latestVersion })),
+  ...authUpdates.value,
+])
 const unsubscribedCount = computed(() => report.value?.conches.filter((s) => s.kind === 'NOT_SUBSCRIBED').length ?? 0)
 
 async function loadSync() {
@@ -117,7 +132,7 @@ async function loadSync() {
 async function load() {
   loading.value = true
   try {
-    const [s, c, d] = await Promise.all([api.conches(), api.calls({ limit: 100 }), api.debug(), loadSync(), loadKeys()])
+    const [s, c, d] = await Promise.all([api.conches(), api.calls({ limit: 100 }), api.debug(), loadSync(), loadKeys(), loadAuthUpdates()])
     conches.value = s.conches
     contention.value = s.contention ?? []
     calls.value = c.calls
@@ -138,6 +153,7 @@ async function syncNow() {
     syncedAt.value = new Date().toISOString()
     const installed = report.value.conches.filter((s) => s.kind === 'INSTALLED').length
     const listed = await api.conches()
+    await loadAuthUpdates()
     conches.value = listed.conches
     contention.value = listed.contention ?? []
     const waiting = [

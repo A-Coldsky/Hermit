@@ -502,7 +502,7 @@ watch(
         <span class="hm-muted"> / {{ conch }}</span>
       </template>
       <template #icon>
-        <ConchAvatar :name="conch" :title="detail?.title" :size="48" />
+        <ConchAvatar :name="conch" :title="detail?.title" :size="48" :kind="detail ? (detail.authenticator ? 'auth' : detail.driver ?? 'http') : null" />
       </template>
       <template #badge>
         <el-tag v-if="detail?.version && !detail.repairRequired" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>

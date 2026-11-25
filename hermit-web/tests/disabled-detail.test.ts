@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
+  authenticators: vi.fn(async () => ({ authenticators: [] })),
   conch: vi.fn(),
   setConchEnabled: vi.fn(),
   setConchSource: vi.fn(),

@@ -6,6 +6,7 @@ import { formatTime } from '../shared/format'
 import { mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
+  authenticators: vi.fn(async () => ({ authenticators: [] })),
   conches: vi.fn(),
   localConches: vi.fn(),
   pendingLocalOverwrites: vi.fn(),

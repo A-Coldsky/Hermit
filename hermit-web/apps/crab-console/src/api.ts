@@ -293,6 +293,11 @@ export interface AuthenticatorView {
   origins: string[]
   allowHosts: string[]
   exports: string[]
+  /** 正式包并且本机订阅着。本地授权器为 false。 */
+  subscribed: boolean
+  updateAvailable: boolean
+  latestVersion: string | null
+  newRequiredCredentials: string[]
   accounts: { name: string; consumers: AuthConsumer[] }[]
 }
 
@@ -957,6 +962,10 @@ export interface CatalogConch {
   message: string | null
   /** 签名通过但当前校验载不进。`installed` 仍为 true，页面不要再显示健康的「已安装」。 */
   ruleDisabled: boolean
+  /** `http`、`mcp` 或 `auth`（授权器）。旧 Reef 的清单没有这一项时是 `http`。 */
+  driver: string
+  /** 这个包引用的授权器包名；不引用、或 Reef 的清单没带时为 null。 */
+  authUse: string | null
   /** 下一步。没有上一版时不含退回。 */
   fixHint?: string | null
   previousVersion?: string | null

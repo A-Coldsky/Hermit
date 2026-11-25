@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { deferred, mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
+  authenticators: vi.fn(async () => ({ authenticators: [] })),
   conches: vi.fn(),
   calls: vi.fn(),
   debug: vi.fn(),

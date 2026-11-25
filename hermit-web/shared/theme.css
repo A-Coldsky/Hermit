@@ -119,6 +119,13 @@ html:root {
   --hm-shell-alt-ridge: #0284c7;
   --hm-shell-alt-inner: #0c4a6e;
   --hm-shell-alt-shine: #f0f9ff;
+  /* 授权器的螺壳：金色，和钥匙对应。 */
+  --hm-shell-key: #fde9a8;
+  --hm-shell-key-mid: #f9c74f;
+  --hm-shell-key-deep: #e08e0b;
+  --hm-shell-key-ridge: #b96a06;
+  --hm-shell-key-inner: #5f3608;
+  --hm-shell-key-shine: #fffbea;
   --hm-shell-old: #d1d9dc;
   --hm-shell-old-mid: #b5c2c6;
   --hm-shell-old-deep: #8c9ca2;

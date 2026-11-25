@@ -240,6 +240,19 @@ class AuthenticatorHttpTest {
     }
 
     @Test
+    void aRefusalForAMissingBindingIsNotReplayedOnceTheBindingWorks() throws Exception {
+        installAll();
+        assertThat(keyed("pkg_a", "k-1").json.toString()).contains("NOT_CONFIGURED");
+        bind("pkg_a");
+        assertThat(keyed("pkg_a", "k-1").status).as("绑好之后同一个幂等键要真正执行").isEqualTo(200);
+
+        console("POST", "/console/api/conches/corp_sso/disable", null);
+        assertThat(keyed("pkg_a", "k-2").json.toString()).contains("NOT_CONFIGURED");
+        console("POST", "/console/api/conches/corp_sso/enable", null);
+        assertThat(keyed("pkg_a", "k-2").status).isEqualTo(200);
+    }
+
+    @Test
     void aBindingOnlyCoversTheAddressTheCallActuallyUses() throws Exception {
         installAll();
         bind("pkg_a");
@@ -289,6 +302,16 @@ class AuthenticatorHttpTest {
         HttpResponse<String> response = http.send(HttpRequest.newBuilder(URI.create(crab + "/api/" + conch + "/read"))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + key)
+                .GET()
+                .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        return new Reply(response.statusCode(), ApiJson.tree(response.body()));
+    }
+
+    private Reply keyed(String conch, String idempotencyKey) throws Exception {
+        HttpResponse<String> response = http.send(HttpRequest.newBuilder(URI.create(crab + "/api/" + conch + "/read"))
+                .timeout(Duration.ofSeconds(20))
+                .header("Authorization", "Bearer " + key)
+                .header("Idempotency-Key", idempotencyKey)
                 .GET()
                 .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         return new Reply(response.statusCode(), ApiJson.tree(response.body()));

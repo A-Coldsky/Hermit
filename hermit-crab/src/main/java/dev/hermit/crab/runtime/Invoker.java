@@ -496,7 +496,7 @@ public final class Invoker {
             }
             InvokeOutcome outcome = execute(
                     principal, doc, origin, action, staged, account, secrets, merged, Optional.of(key), channel, traceId);
-            if (!loginInputRequired(outcome)) {
+            if (!notReplayable(outcome)) {
                 idempotency.save(
                         origin,
                         doc.conch(),
@@ -620,13 +620,18 @@ public final class Invoker {
         return ConchDigest.sha256(doc);
     }
 
-    /** 待输入登录不能缓存 24 小时，否则同一幂等键在用户提交之后仍回放 409。 */
-    private static boolean loginInputRequired(InvokeOutcome outcome) {
+    /**
+     * 待输入登录不能缓存 24 小时，否则同一幂等键在用户提交之后仍回放 409。
+     * 引擎返回的 NOT_CONFIGURED（引用授权器的包没有可用的绑定）同理：什么都没发出去，
+     * 使用者绑好或重新启用授权器之后，同一个幂等键要能真正执行。
+     */
+    private static boolean notReplayable(InvokeOutcome outcome) {
         if (outcome == null || outcome.body() == null) {
             return false;
         }
         JsonNode code = ApiJson.tree(outcome.body()).path("error").path("code");
-        return code.isTextual() && ErrorCode.LOGIN_INPUT_REQUIRED.name().equals(code.asText());
+        return code.isTextual() && (ErrorCode.LOGIN_INPUT_REQUIRED.name().equals(code.asText())
+                || ErrorCode.NOT_CONFIGURED.name().equals(code.asText()));
     }
 
     /** 需要确认、但还没带上匹配令牌时的 message。令牌写在句子里，响应头用同一值。 */

@@ -139,6 +139,7 @@ final class McpCalls {
         if (McpCatalog.DEBUG_TRACE_LIST.equals(name)
                 || McpCatalog.GUIDE.equals(name)
                 || McpCatalog.READ_YAML.equals(name)
+                || McpCatalog.AUTH_LIST.equals(name)
                 || McpCatalog.CAPTURE_LIST.equals(name)
                 || McpCatalog.CAPTURE_GET.equals(name)
                 || McpCatalog.VALIDATE.equals(name)
@@ -156,6 +157,9 @@ final class McpCalls {
         }
         if (McpCatalog.READ_YAML.equals(name)) {
             return authoring.readYaml(principal, arguments, attempt);
+        }
+        if (McpCatalog.AUTH_LIST.equals(name)) {
+            return authoring.authList(principal, arguments, attempt);
         }
         if (McpCatalog.CAPTURE_LIST.equals(name)) {
             return authoring.captureList(principal, arguments, attempt);

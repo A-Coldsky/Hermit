@@ -703,7 +703,7 @@ class AuthoringMcpTest {
                     """, Map.of());
             assertThat(remoteResources.body()).doesNotContain(AuthoringGuide.URI);
             for (String tool : java.util.List.of(
-                    "debug_trace_list", "conch_guide", "conch_read_yaml", "conch_capture_list", "conch_capture_get",
+                    "debug_trace_list", "conch_guide", "conch_read_yaml", "conch_auth_list", "conch_capture_list", "conch_capture_get",
                     "conch_validate", "conch_save_local", "conch_trial_run")) {
                 String payload = switch (tool) {
                     case "debug_trace_list" -> """
@@ -717,6 +717,9 @@ class AuthoringMcpTest {
                             """;
                     case "conch_capture_list" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_capture_list","arguments":{}}}
+                            """;
+                    case "conch_auth_list" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_auth_list","arguments":{}}}
                             """;
                     case "conch_capture_get" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_capture_get","arguments":{"captureId":"cap_00000000"}}}
@@ -1707,6 +1710,95 @@ class AuthoringMcpTest {
             statement.setString(3, McpOAuthToken.FIELD);
             statement.setBytes(4, new byte[] {1, 2, 3, 4});
             statement.executeUpdate();
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void authListShowsAuthenticatorsWithoutAccountsAndNarrowKeysSeeOnlyTheirOwn() throws Exception {
+        String sso = """
+                conch: NAME
+                version: 1.2.0
+                driver: auth
+                min_crab_version: 1.13.0
+                title: 统一登录
+                description: SSO 登录
+                credentials:
+                  username: { type: text, label: 用户名, required: true }
+                  password: { type: secret, label: 密码, required: true }
+                auth:
+                  origins: ["https://HOST.corp.example"]
+                  steps:
+                    - request:
+                        method: POST
+                        url: https://HOST.corp.example/login
+                        form: { username: "{{credential.username}}", password: "{{credential.password}}" }
+                    - extract: { access_token: { jsonpath: "$.token" } }
+                  alive_check:
+                    request: { method: GET, url: https://HOST.corp.example/me }
+                  exports:
+                    access_token: { description: 访问令牌 }
+                """;
+        String app = """
+                conch: NAME
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.13.0
+                base_url: https://HOST.corp.example
+                title: 应用
+                description: 用授权器登录的包。
+                auth:
+                  use: SSO
+                actions:
+                  read:
+                    title: 读
+                    description: 读一条数据。
+                    idempotent: true
+                    steps:
+                      - request:
+                          method: GET
+                          path: /data
+                          headers: { Authorization: "Bearer {{auth.access_token}}" }
+                      - extract: { echo: { jsonpath: "$.echo" } }
+                    output:
+                      echo: { type: string, description: 回显 }
+                    examples:
+                      - input: {}
+                        output: { echo: x }
+                    notes: 无
+                    related: []
+                """;
+        try (Harness server = Harness.open(temp.resolve("auth-list"))) {
+            server.runtime.registry().put(dev.hermit.common.parse.ConchParser.parse(sso.replace("NAME", "corp_sso").replace("HOST", "sso")));
+            server.runtime.registry().put(dev.hermit.common.parse.ConchParser.parse(sso.replace("NAME", "other_sso").replace("HOST", "sso2")));
+            server.runtime.registry().put(dev.hermit.common.parse.ConchParser.parse(
+                    app.replace("NAME", "pkg_a").replace("HOST", "a").replace("SSO", "corp_sso")));
+            server.runtime.registry().put(dev.hermit.common.parse.ConchParser.parse(
+                    app.replace("NAME", "pkg_b").replace("HOST", "b").replace("SSO", "other_sso")));
+            server.runtime.admin().createAccount("corp_sso", "zhangsan_secret_name", Actors.CONSOLE);
+            String session = server.initialize(false);
+
+            // 开发者模式关着时不可用。
+            assertThat(toolNames(server.rpc(session, 2, "tools/list", null))).doesNotContain("conch_auth_list");
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            assertThat(toolNames(server.rpc(session, 3, "tools/list", null))).contains("conch_auth_list");
+            // 授权器不是可调用的工具。
+            assertThat(server.rpc(session, 3, "tools/list", null).toString()).doesNotContain("corp_sso");
+
+            JsonNode all = structured(server.call(session, "conch_auth_list", Map.of()));
+            assertThat(all.path("total").asInt()).isEqualTo(2);
+            JsonNode first = all.path("authenticators").get(0);
+            assertThat(first.path("conch").asText()).isEqualTo("corp_sso");
+            assertThat(first.path("exports").get(0).path("name").asText()).isEqualTo("access_token");
+            assertThat(first.path("usedBy").get(0).asText()).isEqualTo("pkg_a");
+            assertThat(all.toString()).doesNotContain("zhangsan_secret_name");
+
+            CreatedApiKey narrow = server.runtime.apiKeys().create(
+                    "only-a", new ApiKeyScope(Set.of("pkg_a"), Set.of(), false), Actors.CONSOLE);
+            String narrowSession = server.initialize(narrow.plaintext(), false);
+            JsonNode mine = structured(server.rpc(narrow.plaintext(), narrowSession, 4, "tools/call",
+                    Map.of("name", "conch_auth_list", "arguments", Map.of())));
+            assertThat(mine.path("total").asInt()).isEqualTo(1);
+            assertThat(mine.toString()).contains("corp_sso").doesNotContain("other_sso").doesNotContain("pkg_b");
         }
     }
 

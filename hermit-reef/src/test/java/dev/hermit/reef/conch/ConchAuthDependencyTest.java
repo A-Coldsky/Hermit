@@ -139,9 +139,14 @@ class ConchAuthDependencyTest {
         disable("corp_oa").andExpect(status().isOk());
         upload(without).andExpect(status().isOk());
         publish("corp_sso", "1.3.0").andExpect(status().isOk());
-        // 这时业务包对不上了，重新启用被拒绝。
+        // 这时业务包对不上了。仍然可以重新启用（否则停用的包发不了新版本，就再也启用不了），
+        // 启用后发布改好的版本；照旧引用被删变量的版本发不出去。
         enable("corp_oa")
-                .andExpect(status().isConflict());
+                .andExpect(status().isOk());
+        upload(CONSUMER.replace("version: 1.0.0", "version: 1.0.1")).andExpect(status().isUnprocessableEntity());
+        upload(CONSUMER.replace("version: 1.0.0", "version: 1.0.2").replace("auth.access_token", "auth.other"))
+                .andExpect(status().isOk());
+        publish("corp_oa", "1.0.2").andExpect(status().isOk());
     }
 
     @Test

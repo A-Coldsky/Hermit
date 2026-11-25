@@ -96,13 +96,24 @@ class AuthDependencies {
                 .toList();
     }
 
-    /** 重新启用业务包时用：它当前发布的版本现在还对得上授权器吗。调用方必须已经锁住业务包的版本行。 */
+    /**
+     * 重新启用业务包时用：它引用的授权器在不在、有没有停用。调用方必须已经锁住业务包的版本行。
+     * 这里不比对版本和导出变量：业务包停用期间授权器可以删掉它用到的导出变量，而停用的包不能发布新版本，
+     * 比对的话它就再也启用不了。对不上的包启用后在 Crab 上返回 NOT_CONFIGURED，直到发布改好的版本。
+     */
     List<ValidationIssue> currentConsumerProblems(List<VersionRow> rows) {
         VersionRow current = current(rows);
         if (current == null || current.authUse() == null) {
             return List.of();
         }
-        return consumerProblems(read(current));
+        String name = current.authUse();
+        if (current(repository.lockConch(name)) == null) {
+            return List.of(issue("auth.use", "授权器 " + name + " 还没有在 Reef 上发布，先发布授权器"));
+        }
+        if (availability.isDisabled(name)) {
+            return List.of(issue("auth.use", "授权器 " + name + " 已停用"));
+        }
+        return List.of();
     }
 
     private static VersionRow current(List<VersionRow> rows) {

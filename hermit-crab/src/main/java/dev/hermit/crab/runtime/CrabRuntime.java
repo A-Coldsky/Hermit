@@ -358,8 +358,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     private Set<String> probeTargets() {
         LinkedHashSet<String> targets = new LinkedHashSet<>();
-        for (String name : registry.snapshot().keySet()) {
-            ConchRegistry.Active active = registry.active(name).orElse(null);
+        // 授权器的认证地址同样要连，证书也要能检测和信任。
+        for (String name : registry.installed().keySet()) {
+            ConchRegistry.Active active = registry.installed(name).orElse(null);
             if (active == null) {
                 continue;
             }

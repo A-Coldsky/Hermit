@@ -535,7 +535,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     private boolean conchDisabled(String conch) {
-        return disabledConches.contains(conch);
+        return disabledConches.contains(conch) || conchSwitchedOff.contains(conch);
     }
 
     public Authenticators authenticators() {
@@ -1458,7 +1458,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      */
     public void setConchDisabled(String conch, boolean disabled, String actor) {
         synchronized (switchLock) {
-            ConchRegistry.Active active = registry.active(conch).orElse(null);
+            // 授权器也能停用：停用后引用它的包按没有绑定处理。
+            ConchRegistry.Active active = registry.installed(conch).orElse(null);
             boolean loaded = active != null;
             if (disabled ? !loaded : !loaded && !conchSwitchedOff.contains(conch)) {
                 throw new IllegalArgumentException("conch not found");

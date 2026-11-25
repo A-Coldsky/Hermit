@@ -1273,4 +1273,111 @@ export const api = {
   /** `{deleted: true}` 或 `{deleted: false}`。删除后清掉 TLS 会话。 */
   removeTlsHost: (host: string, port: number) =>
     http.del<{ deleted: boolean }>(`${base}/tls/trusted-hosts/${seg(host)}/${port}`),
+
+  /** 开发者模式浏览器录制状态、自动探测到的本机浏览器以及内存中的脱敏快照列表。 */
+  recorderStatus: () => http.get<RecorderStatus>(`${base}/recorder/status`),
+  recorderStart: (body: RecorderStartRequest) => http.post<RecorderStatus>(`${base}/recorder/start`, body),
+  recorderStop: () => http.post<RecorderStatus>(`${base}/recorder/stop`),
+  recorderEntries: (includeStatic = false) =>
+    http.get<{ entries: RecorderEntrySummary[] }>(`${base}/recorder/entries`, includeStatic ? { includeStatic: '1' } : undefined),
+  recorderEntry: (id: string) => http.get<RecorderEntryDetail>(`${base}/recorder/entries/${seg(id)}`),
+  recorderImportHar: (file: File) => http.raw<RecorderStatus>(`${base}/recorder/import-har`, file, { name: file.name }),
+  recorderClearSession: () => http.del<RecorderStatus>(`${base}/recorder/session`),
+  recorderSnapshots: () => http.get<{ snapshots: RecorderSnapshotSummary[] }>(`${base}/recorder/snapshots`),
+  recorderCreateSnapshot: (body: RecorderCreateSnapshotRequest) =>
+    http.post<RecorderSnapshotDetail>(`${base}/recorder/snapshots`, body),
+  recorderSnapshot: (id: string) => http.get<RecorderSnapshotDetail>(`${base}/recorder/snapshots/${seg(id)}`),
+  recorderDownloadHar: (id: string) => http.blob(`${base}/recorder/snapshots/${seg(id)}/har`),
+  recorderDeleteSnapshot: (id: string) => http.del<{ id: string; deleted: boolean }>(`${base}/recorder/snapshots/${seg(id)}`),
 }
+
+export interface DetectedBrowser {
+  id: string
+  name: string
+  path: string
+}
+
+export interface RecorderHeader {
+  name: string
+  value: string
+}
+
+export interface RecorderEntrySummary {
+  id: string
+  index: number
+  startedAt: string
+  durationMs: number
+  method: string
+  url: string
+  origin: string
+  path: string
+  resourceType: string
+  staticAsset: boolean
+  status: number
+  statusText: string
+  mimeType: string
+  redirectTo: string | null
+  binary: boolean
+  contentDisposition: string | null
+  responseBytes: number
+  errorText: string | null
+  hasRequestBody: boolean
+  hasResponseBody: boolean
+}
+
+export interface RecorderEntryDetail extends RecorderEntrySummary {
+  requestHeaders: RecorderHeader[]
+  requestBody: string | null
+  requestBodyTruncated: boolean
+  responseHeaders: RecorderHeader[]
+  responseBody: string | null
+  responseBodyTruncated: boolean
+}
+
+export interface RecorderSnapshotSummary {
+  id: string
+  title: string
+  createdAt: string
+  source: string
+  origins: string[]
+  cookieNames: string[]
+  hasRedirects: boolean
+  hasDownloads: boolean
+  entryCount: number
+}
+
+export interface RecorderSnapshotDetail extends RecorderSnapshotSummary {
+  entries: RecorderEntrySummary[]
+}
+
+export interface RecorderStatus {
+  devMode: boolean
+  state: 'IDLE' | 'RECORDING' | 'STOPPED'
+  sessionId: string | null
+  mode: string | null
+  source: string | null
+  startUrl: string | null
+  startedAt: string | null
+  stoppedAt: string | null
+  totalEntries: number
+  businessEntries: number
+  browserConnected: boolean
+  disconnectReason: string | null
+  defaultRemoteDebuggingDetected: boolean
+  browsers: DetectedBrowser[]
+  snapshots: RecorderSnapshotSummary[]
+}
+
+export interface RecorderStartRequest {
+  mode: 'launch' | 'attach'
+  startUrl?: string
+  browserPath?: string
+  debugEndpoint?: string
+}
+
+export interface RecorderCreateSnapshotRequest {
+  title?: string
+  entryIds: string[]
+  extraSecrets?: string[]
+}
+

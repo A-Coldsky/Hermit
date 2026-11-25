@@ -692,6 +692,8 @@ class AuthoringMcpTest {
             assertThat(remoteTools.body()).contains("debug_trace")
                     .doesNotContain("conch_guide")
                     .doesNotContain("conch_read_yaml")
+                    .doesNotContain("conch_capture_list")
+                    .doesNotContain("conch_capture_get")
                     .doesNotContain("conch_validate")
                     .doesNotContain("conch_save_local")
                     .doesNotContain("conch_trial_run");
@@ -699,13 +701,21 @@ class AuthoringMcpTest {
                     {"jsonrpc":"2.0","id":3,"method":"resources/list"}
                     """, Map.of());
             assertThat(remoteResources.body()).doesNotContain(AuthoringGuide.URI);
-            for (String tool : java.util.List.of("conch_guide", "conch_read_yaml", "conch_validate", "conch_save_local", "conch_trial_run")) {
+            for (String tool : java.util.List.of(
+                    "conch_guide", "conch_read_yaml", "conch_capture_list", "conch_capture_get",
+                    "conch_validate", "conch_save_local", "conch_trial_run")) {
                 String payload = switch (tool) {
                     case "conch_guide" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_guide","arguments":{}}}
                             """;
                     case "conch_read_yaml" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_read_yaml","arguments":{"conch":"remote_ping"}}}
+                            """;
+                    case "conch_capture_list" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_capture_list","arguments":{}}}
+                            """;
+                    case "conch_capture_get" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_capture_get","arguments":{"captureId":"cap_00000000"}}}
                             """;
                     default -> callJson(tool, yaml);
                 };
@@ -1700,8 +1710,19 @@ class AuthoringMcpTest {
             JsonNode overData = structured(overview);
             assertThat(overData.path("crabVersion").asText()).isEqualTo(dev.hermit.crab.engine.CrabVersion.CURRENT.toString());
             assertThat(overData.path("quickReference").asText()).contains("- if:").contains("- repeat:");
+            assertThat(overData.path("starterTemplate").asText())
+                    .contains("conch: my_system")
+                    .contains("min_crab_version: 1.12.0")
+                    .contains("related: []");
+            assertThat(overData.path("pitfalls").isArray()).isTrue();
+            assertThat(overData.path("pitfalls").size()).isGreaterThanOrEqualTo(8);
             assertThat(overData.path("sections").isArray()).isTrue();
             assertThat(overData.path("sections").size()).isGreaterThanOrEqualTo(10);
+
+            JsonNode starterSec = server.rpc(readOnly.plaintext(), session, 31, "tools/call",
+                    Map.of("name", "conch_guide", "arguments", Map.of("section", "starter")));
+            assertThat(structured(starterSec).path("id").asText()).isEqualTo("starter");
+            assertThat(structured(starterSec).path("content").asText()).contains("conch: my_system").contains("❌");
 
             JsonNode byId = server.rpc(readOnly.plaintext(), session, 4, "tools/call",
                     Map.of("name", "conch_guide", "arguments", Map.of("section", "session_expiry")));
@@ -1735,6 +1756,64 @@ class AuthoringMcpTest {
             JsonNode unknownArg = server.rpc(readOnly.plaintext(), session, 10, "tools/call",
                     Map.of("name", "conch_guide", "arguments", Map.of("extra", "1")));
             assertThat(toolError(unknownArg).path("code").asText()).isEqualTo("INVALID_INPUT");
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void validateAndSaveFailuresIncludeActionableFixHintsAndSuggestedSections() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("fix-hints"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String session = server.initialize(false);
+            String broken = """
+                    conch: weak_llm_oa
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.0.0
+                    base_url: http://127.0.0.1:8080
+                    title: 示例
+                    description: 故意包含常见写错
+                    actions:
+                      list_todo:
+                        title: 查询
+                        description: 列表
+                        steps:
+                          - if:
+                              present: token
+                              then:
+                                - request: {method: GET, path: /api/todos, headers: {X-Tok: "{{token}}"}}
+                        output:
+                          ok: {type: string, description: 结果, value: ok}
+                    """;
+            for (String toolName : List.of("conch_validate", "conch_save_local")) {
+                JsonNode resp = server.call(session, toolName, Map.of("yaml", broken));
+                assertThat(resp.path("result").path("isError").asBoolean(true)).isFalse();
+                JsonNode body = structured(resp);
+                assertThat(body.path("ok").asBoolean()).isFalse();
+                assertThat(body.path("fixHints").isArray()).isTrue();
+                assertThat(body.path("fixHints").toString())
+                        .contains("1.12.0")
+                        .contains("credentials: {}")
+                        .contains("examples")
+                        .contains("{{login.xxx}}");
+                assertThat(body.path("suggestedSections").isArray()).isTrue();
+                assertThat(body.path("suggestedSections").size()).isGreaterThanOrEqualTo(2);
+                for (JsonNode sec : body.path("suggestedSections")) {
+                    JsonNode guide = server.call(session, "conch_guide", Map.of("section", sec.asText()));
+                    assertThat(guide.path("result").path("isError").asBoolean(true))
+                            .as("suggested section %s should be readable via conch_guide", sec.asText())
+                            .isFalse();
+                }
+                assertThat(body.path("next").asText()).contains("fixHints").contains("conch_validate");
+            }
+
+            JsonNode okResp = server.call(session, "conch_validate",
+                    Map.of("yaml", AuthoringGuide.starterTemplate()));
+            JsonNode okBody = structured(okResp);
+            assertThat(okBody.path("ok").asBoolean()).isTrue();
+            assertThat(okBody.path("errors").isEmpty()).isTrue();
+            assertThat(okBody.path("warnings").isEmpty()).isTrue();
+            assertThat(okBody.has("fixHints")).isFalse();
+            assertThat(okBody.path("next").asText()).contains("conch_save_local");
         }
     }
 

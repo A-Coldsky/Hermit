@@ -179,6 +179,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     /** Last completed sync, from startup, the timer, or a manual request. Sync threads write; HTTP threads read. */
     private volatile SyncReport lastSync;
     private final FileStage fileStage;
+    private final dev.hermit.crab.recorder.RecorderManager recorder;
     private ScheduledExecutorService scheduler;
     private ScheduledExecutorService syncScheduler;
     private ScheduledExecutorService reportScheduler;
@@ -289,6 +290,11 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 paths.data().resolve("files"),
                 clock,
                 new FileStageSettingsStore(database.dataSource()).read().orElse(FileStageSettings.defaults()));
+        this.recorder = new dev.hermit.crab.recorder.RecorderManager(
+                paths.data().resolve("chrome-recorder"),
+                clock,
+                environment,
+                () -> debug.get().enabled());
         this.invoker.bindFileStage(fileStage, fileBase());
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches, clock);
@@ -320,11 +326,16 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             this.consolePassword.applyInitial(initialPassword);
             this.outboundTls.setPins(tlsHosts);
         } catch (RuntimeException ex) {
+            this.recorder.close();
             tlsTrust.close();
             this.mcpForwarder.close();
             this.database.close();
             throw ex;
         }
+    }
+
+    public dev.hermit.crab.recorder.RecorderManager recorder() {
+        return recorder;
     }
 
     public TlsTrust tlsTrust() {
@@ -1640,8 +1651,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     private void onDebugChanged(boolean enabled, java.util.List<String> deleted) {
         traceMemory.rememberDeleted(deleted);
-        if (!enabled && localConches != null) {
-            localConches.clearGrants();
+        if (!enabled) {
+            if (localConches != null) {
+                localConches.clearGrants();
+            }
+            if (recorder != null) {
+                recorder.clearAll();
+            }
         }
         notifyCatalogListeners();
     }
@@ -1792,6 +1808,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             return;
         }
         try {
+            recorder.close();
             fileStage.close();
             abandonServing();
             ReportQueue queue = reportQueue;

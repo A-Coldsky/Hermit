@@ -19,6 +19,7 @@ import java.util.regex.Pattern;
 final class AuthoringGuide {
     static final String URI = "hermit://authoring/guide";
     static final String ALL_SECTION = "all";
+    static final String STARTER_SECTION = "starter";
     static final String QUICK_REFERENCE_ID = "quick_reference";
     private static final String RESOURCE = "authoring/conch-reference.md";
     private static final Pattern MARKDOWN_LINK = Pattern.compile("!?\\[([^\\]\\n]*)\\]\\(([^)\\n]*)\\)");
@@ -40,6 +41,79 @@ final class AuthoringGuide {
             Map.entry("模板、输出与脚本", "templates_scripts"),
             Map.entry("发布包与验收", "publish"),
             Map.entry("本地开发与导出", "local_dev"));
+
+    private static final String STARTER_TEMPLATE = """
+            conch: my_system
+            version: 1.0.0
+            driver: http
+            min_crab_version: 1.12.0
+            base_url: http://127.0.0.1:8080
+            title: 示例系统（请替换为实际系统名）
+            description: 登录后查询业务数据。凭证只声明字段，真实值由用户在 Crab 控制台填写。
+            credentials:
+              username:
+                type: text
+                label: 用户名
+                required: true
+                description: 登录账号
+              password:
+                type: secret
+                label: 密码
+                required: true
+                description: 登录密码
+            auth:
+              steps:
+                - request:
+                    method: POST
+                    path: /api/login
+                    json:
+                      username: "{{credential.username}}"
+                      password: "{{credential.password}}"
+                - assert: {status: 200, cookie_exists: SESSIONID}
+              alive_check:
+                request: {method: GET, path: /api/me}
+                expect: {status: 200}
+            actions:
+              list_items:
+                title: 查询列表
+                description: 分页查询当前账号的业务列表。
+                method: GET
+                idempotent: true
+                mcp: {expose: true, read_only: true}
+                input:
+                  page: {type: integer, default: 1, minimum: 1, description: 页码，从 1 开始}
+                steps:
+                  - request:
+                      method: GET
+                      path: /api/items
+                      query: {page: "{{input.page}}"}
+                  - assert: {status: 200}
+                  - extract:
+                      items: {jsonpath: "$.data.items"}
+                output:
+                  items: {type: array, description: 业务列表}
+                examples:
+                  - input: {page: 1}
+                    output:
+                      items:
+                        - {id: "1", title: 示例条目}
+                notes: 只读接口，不会修改业务数据。
+                related: []
+            """;
+
+    private static final List<String> PITFALLS = List.of(
+            "❌ 省略或写旧的 min_crab_version: 1.0.0（导致 if/repeat/retry/groups/origins/expired_when/引号下标 报错） → ✅ 新规则包统一写 min_crab_version: 1.12.0。",
+            "❌ 省略 credentials、把密钥放进 config(type: secret) 或把抓包里的密码/Cookie/Bearer 原文写进 YAML → ✅ 无登录写 credentials: {}；有秘密放 credentials(type: secret)，步骤里写 {{credential.xxx}}，绝不把真值写进 YAML。",
+            "❌ 在能力步骤里直接写 {{token}} 引用登录提取值，或手写 Cookie/Host/Content-Length 请求头 → ✅ 跨登录读取一律写 {{login.token}}（带连字符 Cookie 先在 auth.cookies 映射）；Cookie 由 Crab 自动管理，不要写 Cookie/Host/Content-Length 头。",
+            "❌ 写成 assert: {status: \"200\"}（带引号）或 if: \"{{count}} > 0\" / while / elif → ✅ status 写数字（200 或 [200, 302]）；分支和循环用 if / repeat + until，比较大小先用 script 算成变量再用 equals 判断。",
+            "❌ 在 if/until/assert 的 equals/not_equals/present/not_present 里写 {{var}}（如 present: \"{{next}}\"） → ✅ 变量判断键直接写变量名，不加双花括号：present: next、equals: {code: \"0\"}；repeat 的 collect 也写变量名：collect: {all_rows: rows}。",
+            "❌ 用点号读带连字符的响应头（{{response.headers.content-type}}）或在 credential/login/input 后写方括号 → ✅ 带连字符用点号加引号下标：{{response.headers['content-type']}}；credential/login/config/input/now 一律用点号。",
+            "❌ 同一 request 同时写 json 和 body/form/multipart，或需要 302 跳转时漏写 follow_redirects: true → ✅ body/form/json/multipart 四选一互斥；默认不跟随重定向，需跟随写 follow_redirects: true；跨认证域名登录要在 auth.origins 声明。",
+            "❌ HTTP 规则包漏写 actions.<name>.examples、output，或省略 related 产生警告 → ✅ 每个 HTTP 能力必须写 title、description、output、examples；无关联能力显式写 related: []；只读查询标 idempotent: true 与 mcp: {expose: true, read_only: true}。",
+            "❌ 在 script 里把 vars.response 当字符串、不写 credential: true 就读 vars.credential，或直接 return Uint8Array/Date → ✅ 响应正文是 vars.response.body（JSON 先 JSON.parse）；读凭证加 credential: true；字节数组先转 hermit.hex/base64，不能用 class/async/fetch。",
+            "❌ HTTP 200 业务错误码或登录页 HTML 只靠默认 401/403，或试图修改 Reef 正式包/换包名绕过确认 → ✅ 业务码/登录页失效写 auth.expired_when（如 json_equals: {\"$.code\": 40100}）；Reef 正式包只读，改规则用 conch_save_local 存本地包，改已有本地包保持同名。");
+
+    private static final String STARTER_SECTION_CONTENT = buildStarterSection();
 
     private static final byte[] REFERENCE = readReference();
     private static final String TEXT = stripDocLinks(new String(REFERENCE, StandardCharsets.UTF_8));
@@ -88,6 +162,14 @@ final class AuthoringGuide {
         return REFERENCE.clone();
     }
 
+    static String starterTemplate() {
+        return STARTER_TEMPLATE;
+    }
+
+    static List<String> pitfalls() {
+        return PITFALLS;
+    }
+
     static List<Section> sections() {
         return SECTIONS;
     }
@@ -113,6 +195,17 @@ final class AuthoringGuide {
                     null,
                     TEXT,
                     utf8Bytes(TEXT),
+                    List.of()));
+        }
+        if (STARTER_SECTION.equalsIgnoreCase(needle)
+                || "starter_template".equalsIgnoreCase(needle)
+                || "起始模板".equals(needle)) {
+            return Optional.of(new SectionMatch(
+                    STARTER_SECTION,
+                    "可直接复制的 HTTP 规则起始模板与避坑清单",
+                    null,
+                    STARTER_SECTION_CONTENT,
+                    utf8Bytes(STARTER_SECTION_CONTENT),
                     List.of()));
         }
         for (Section section : SECTIONS) {
@@ -334,6 +427,23 @@ final class AuthoringGuide {
         RawSection(String title) {
             this.title = title;
         }
+    }
+
+    private static String buildStarterSection() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 可直接复制的 HTTP 规则起始模板\n\n");
+        sb.append("下面是一份能直接通过 `conch_validate`（0 错误、0 警告）的完整 HTTP 规则包骨架，可直接复制后按抓包结果修改：\n\n");
+        sb.append("```yaml\n");
+        sb.append(STARTER_TEMPLATE);
+        if (!STARTER_TEMPLATE.endsWith("\n")) {
+            sb.append('\n');
+        }
+        sb.append("```\n\n");
+        sb.append("## 高频避坑清单\n\n");
+        for (int i = 0; i < PITFALLS.size(); i++) {
+            sb.append(i + 1).append(". ").append(PITFALLS.get(i)).append('\n');
+        }
+        return sb.toString().stripTrailing();
     }
 
     private static byte[] readReference() {

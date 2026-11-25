@@ -178,6 +178,7 @@ final class ConsoleApi {
         post(app, "/console/api/tls/probe", ctx -> probeTls(runtime, ctx));
         post(app, "/console/api/tls/trusted-hosts", ctx -> trustTlsHost(runtime, ctx));
         delete(app, "/console/api/tls/trusted-hosts/{host}/{port}", ctx -> removeTlsHost(runtime, ctx));
+        RecorderConsoleApi.register(app, runtime);
     }
 
     private static void conches(CrabRuntime runtime, Context ctx) {
@@ -1876,8 +1877,8 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of("conch", conch, "revoked", true));
     }
 
-    /** Bearer 或非空 {@code X-Hermit-Key}。控制台会话带着它们也不能创建或撤销自动确认。 */
-    private static boolean apiKeyPresented(Context ctx) {
+    /** Bearer 或非空 {@code X-Hermit-Key}。控制台会话带着它们也不能执行仅限控制台的敏感操作。 */
+    static boolean apiKeyPresented(Context ctx) {
         String authorization = ctx.header("Authorization");
         if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)
                 && !authorization.substring(7).trim().isEmpty()) {

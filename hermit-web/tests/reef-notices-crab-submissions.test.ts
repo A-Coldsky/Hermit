@@ -333,6 +333,7 @@ describe('GuideView 图文使用教程', () => {
 
     await wrap.get('[data-test="guide-tab-authoring"]').trigger('click')
     expect(wrap.get('[data-test="guide-panel-authoring"]').isVisible()).toBe(true)
+    expect(wrap.text()).toContain('浏览器录制')
     expect(wrap.text()).toContain('批准并签名发布')
 
     await wrap.get('[data-test="guide-tab-intranet"]').trigger('click')

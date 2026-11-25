@@ -115,6 +115,7 @@ tls:
 | `HERMIT_MASTER_KEY` | 非空时优先使用环境主密钥，Java 不再读取或生成 `data/master.key`；容器入口将空白值视为未配置。非法值由 Java 拒绝并说明原因 |
 | `HERMIT_MASTER_KEY_FILE` | 未使用环境主密钥时，将挂载文件复制到 `data/master.key`；已有内容不同则拒绝覆盖。目标文件不存在且卷里已有凭证时，Java 不会另造一把新密钥 |
 | `HERMIT_CONSOLE_PASSWORD` | 可选。仅当库中还没有口令哈希时，启动时哈希入库一次。不写入 config.yml。容器入口不把它抄进文件，空白视为未设置。过短或过长由 Java 拒绝启动，错误信息里没有口令 |
+| `HERMIT_CHROME_PATH` / `HERMIT_BROWSER_PATH` | 可选。覆盖开发者模式「浏览器录制」自动探测到的本机 Chrome / Edge / Chromium 可执行文件路径（也可在控制台页面临时手填） |
 
 路径变量不会自动挂载文件，需要 Compose override 的只读 bind mount 或 `docker run --mount`。主密钥文件格式沿用 `data/master.key` 的 Base64 文本，不能填原始二进制密钥。
 

@@ -21,6 +21,7 @@ export const router = createRouter({
         { path: 'reports', name: 'reports', component: () => import('./views/ReportsView.vue') },
         { path: 'identities', name: 'identities', component: () => import('./views/IdentitiesView.vue') },
         { path: 'files', name: 'files', component: () => import('./views/FilesView.vue') },
+        { path: 'recorder', name: 'recorder', component: () => import('./views/RecorderView.vue') },
         { path: 'reef', name: 'reef', component: () => import('./views/ReefView.vue') },
         { path: 'trust', name: 'trust', component: () => import('./views/TrustView.vue') },
         { path: 'shells', redirect: '/conches' },

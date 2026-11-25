@@ -5,6 +5,7 @@ import { ApiError } from '../shared/http'
 import { deferred, mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
+  authenticators: vi.fn(async () => ({ authenticators: [] })),
   conch: vi.fn(),
   conches: vi.fn(),
   localConches: vi.fn(),

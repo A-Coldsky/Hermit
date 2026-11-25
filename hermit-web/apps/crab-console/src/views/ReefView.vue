@@ -2,6 +2,7 @@
 import { CircleCheckFilled, CircleCloseFilled, FolderOpened, Refresh, Upload, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
+import HermitDuet from '@shared/components/HermitDuet.vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { ApiError } from '@shared/http'
@@ -17,6 +18,11 @@ const connection = ref<ReefConnection | null>(null)
 const tokenRejected = ref<string | null>(null)
 const text = ref('')
 const fileInput = ref<HTMLInputElement>()
+
+const duetStatus = computed<'connected' | 'disconnected' | 'error'>(() => {
+  if (tokenRejected.value) return 'error'
+  return connection.value?.configured ? 'connected' : 'disconnected'
+})
 
 const parsed = computed<{ value: unknown; error: string | null }>(() => {
   const raw = text.value.trim()
@@ -109,48 +115,55 @@ onMounted(load)
 
     <div class="hm-card">
       <div class="hm-card-title"><span>当前连接</span></div>
-      <template v-if="connection?.configured">
-        <div v-if="tokenRejected" class="state bad" data-test="token-rejected">
-          <el-icon :size="22"><CircleCloseFilled /></el-icon>
-          <div>
-            <strong>{{ tokenRejected }}</strong>
-            <div class="hm-muted">
-              最近一次同步被 Reef 拒绝，令牌可能已被吊销、作废或所属用户已被禁用。请在 Reef「我的令牌」重新生成令牌，在下面重新导入初始化 JSON。
+      <div v-if="connection" class="conn-layout">
+        <div class="conn-body">
+          <template v-if="connection.configured">
+            <div v-if="tokenRejected" class="state bad" data-test="token-rejected">
+              <el-icon :size="22"><CircleCloseFilled /></el-icon>
+              <div>
+                <strong>{{ tokenRejected }}</strong>
+                <div class="hm-muted">
+                  最近一次同步被 Reef 拒绝，令牌可能已被吊销、作废或所属用户已被禁用。请在 Reef「我的令牌」重新生成令牌，在下面重新导入初始化 JSON。
+                </div>
+              </div>
+            </div>
+            <div v-else class="state ok">
+              <el-icon :size="22"><CircleCheckFilled /></el-icon>
+              <strong>已连接 Reef</strong>
+              <el-tag size="small" effect="plain" type="info">{{ connection.source === 'BOOTSTRAP' ? '初始化 JSON 导入' : 'config.yml 配置' }}</el-tag>
+            </div>
+            <dl class="hm-kv" data-test="connection">
+              <dt>Reef 地址</dt>
+              <dd class="mono">{{ connection.url ?? '—' }}</dd>
+              <template v-if="connection.source === 'BOOTSTRAP'">
+                <dt>令牌所属用户</dt>
+                <dd>{{ connection.owner ?? '—' }}</dd>
+                <dt>令牌名称</dt>
+                <dd>{{ connection.tokenName ?? '—' }}</dd>
+              </template>
+              <dt>令牌前缀</dt>
+              <dd class="mono">{{ connection.tokenPrefix ? `${connection.tokenPrefix}…` : '—' }}</dd>
+              <dt>签名公钥指纹</dt>
+              <dd class="mono fp">{{ connection.publicKeyFingerprint ?? '—' }}</dd>
+              <dt>本机实例号</dt>
+              <dd class="mono">{{ connection.instanceId }}</dd>
+              <template v-if="connection.importedAt">
+                <dt>导入时间</dt>
+                <dd><TimeText :value="connection.importedAt" /></dd>
+              </template>
+            </dl>
+            <p class="hm-muted hint">Reef 用「令牌所属用户 + 本机实例号」识别这台 Crab。</p>
+          </template>
+          <div v-else class="state warn">
+            <el-icon :size="22"><WarningFilled /></el-icon>
+            <div>
+              <strong>还没有连接 Reef</strong>
+              <div class="hm-muted">本地规则包照常可用；导入初始化 JSON 后才能订阅 Reef 上的规则包和上报。本机实例号 <span class="mono">{{ connection.instanceId }}</span></div>
             </div>
           </div>
         </div>
-        <div v-else class="state ok">
-          <el-icon :size="22"><CircleCheckFilled /></el-icon>
-          <strong>已连接 Reef</strong>
-          <el-tag size="small" effect="plain" type="info">{{ connection.source === 'BOOTSTRAP' ? '初始化 JSON 导入' : 'config.yml 配置' }}</el-tag>
-        </div>
-        <dl class="hm-kv" data-test="connection">
-          <dt>Reef 地址</dt>
-          <dd class="mono">{{ connection.url ?? '—' }}</dd>
-          <template v-if="connection.source === 'BOOTSTRAP'">
-            <dt>令牌所属用户</dt>
-            <dd>{{ connection.owner ?? '—' }}</dd>
-            <dt>令牌名称</dt>
-            <dd>{{ connection.tokenName ?? '—' }}</dd>
-          </template>
-          <dt>令牌前缀</dt>
-          <dd class="mono">{{ connection.tokenPrefix ? `${connection.tokenPrefix}…` : '—' }}</dd>
-          <dt>签名公钥指纹</dt>
-          <dd class="mono fp">{{ connection.publicKeyFingerprint ?? '—' }}</dd>
-          <dt>本机实例号</dt>
-          <dd class="mono">{{ connection.instanceId }}</dd>
-          <template v-if="connection.importedAt">
-            <dt>导入时间</dt>
-            <dd><TimeText :value="connection.importedAt" /></dd>
-          </template>
-        </dl>
-        <p class="hm-muted hint">Reef 用「令牌所属用户 + 本机实例号」识别这台 Crab。</p>
-      </template>
-      <div v-else-if="connection" class="state warn">
-        <el-icon :size="22"><WarningFilled /></el-icon>
-        <div>
-          <strong>还没有连接 Reef</strong>
-          <div class="hm-muted">本地规则包照常可用；导入初始化 JSON 后才能订阅 Reef 上的规则包和上报。本机实例号 <span class="mono">{{ connection.instanceId }}</span></div>
+        <div class="conn-art">
+          <HermitDuet variant="scene" :size="92" :status="duetStatus" intro />
         </div>
       </div>
     </div>
@@ -191,6 +204,27 @@ onMounted(load)
 <style scoped>
 .hm-card + .hm-card {
   margin-top: 16px;
+}
+
+.conn-layout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.conn-body {
+  flex: 1 1 360px;
+  min-width: 0;
+}
+
+.conn-art {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
 }
 
 .state {

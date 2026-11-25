@@ -15,6 +15,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
+import HermitMark from '@shared/components/HermitMark.vue'
 import { ApiError } from '@shared/http'
 import { formatTime, notifyError } from '@shared/format'
 import {
@@ -685,7 +686,8 @@ onMounted(load)
       </div>
     </div>
     <div v-else-if="!loading && !loadFailed && !pendingOverwrites.length" class="hm-card empty">
-      还没有规则包。到<router-link to="/catalog">可订阅规则包</router-link>订阅 Reef 上的规则包，或导入本地规则包
+      <HermitMark variant="crab" :size="56" :tile="false" class="empty-mark" />
+      <span>还没有规则包。到<router-link to="/catalog">可订阅规则包</router-link>订阅 Reef 上的规则包，或导入本地规则包</span>
     </div>
 
     <el-dialog v-model="report.open" :title="report.title" width="600px">
@@ -848,7 +850,11 @@ onMounted(load)
 }
 
 .empty {
-  padding: 48px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 44px 20px;
   text-align: center;
   color: var(--hm-muted);
 }

@@ -13,17 +13,17 @@ import MascotShell from '@shared/components/MascotShell.vue'
     <svg viewBox="0 0 140 34" width="164" height="40" aria-hidden="true">
       <path class="ground" d="M2 32H138" />
       <g class="pick s0">
-        <g transform="translate(38.92 18.2) scale(0.3)"><MascotShell tone="alt" /></g>
+        <g transform="translate(39 18.2) scale(0.28)"><MascotShell tone="alt" /></g>
       </g>
       <g class="pick s1">
-        <g transform="translate(75.4 13.6) scale(0.4)"><MascotShell /></g>
+        <g transform="translate(76 13.2) scale(0.38)"><MascotShell /></g>
       </g>
       <g class="pick s2">
-        <g transform="translate(116.55 18.2) scale(0.3)"><MascotShell tone="old" /></g>
+        <g transform="translate(116 18.2) scale(0.28)"><MascotShell tone="old" /></g>
       </g>
       <g class="walker">
         <g class="bob">
-          <g transform="translate(0.99 9.82) scale(0.3744)"><MascotCrab /></g>
+          <g transform="translate(1 11.5) scale(0.37)"><MascotCrab /></g>
         </g>
         <text class="mark ask" x="19" y="15">?</text>
         <text class="mark found" x="19" y="15">!</text>
@@ -57,7 +57,7 @@ svg {
 .found {
   font-size: 10px;
   font-weight: 800;
-  fill: var(--hm-shell-alt);
+  fill: var(--hm-accent);
 }
 
 .walker,

@@ -11,6 +11,9 @@ import {
   ZoomIn,
 } from '@element-plus/icons-vue'
 import { computed, ref } from 'vue'
+import MascotCrab from '@shared/components/MascotCrab.vue'
+import MascotReef from '@shared/components/MascotReef.vue'
+import MascotShell from '@shared/components/MascotShell.vue'
 import PageHeader from '@shared/components/PageHeader.vue'
 import { copyText } from '@shared/format'
 import { isAdmin } from '../auth'
@@ -192,6 +195,7 @@ const submissionLabel = computed(() => (isAdmin.value ? '前往规则审批' : '
             </defs>
             <!-- Reef -->
             <rect x="20" y="34" width="235" height="142" rx="14" class="svg-box svg-box-primary" />
+            <g transform="translate(216 40) scale(0.46)"><MascotReef :bubbles="false" /></g>
             <text x="40" y="66" class="svg-title">Reef 管理端（团队共用）</text>
             <text x="40" y="92" class="svg-desc">· 公共公告 &amp; 使用教程</text>
             <text x="40" y="114" class="svg-desc">· 规则包审批 &amp; Ed25519 签名</text>
@@ -206,6 +210,10 @@ const submissionLabel = computed(() => (isAdmin.value ? '前往规则审批' : '
 
             <!-- Crab -->
             <rect x="330" y="24" width="265" height="162" rx="14" class="svg-box svg-box-accent" />
+            <g transform="translate(556 30) scale(0.46)">
+              <MascotShell />
+              <MascotCrab />
+            </g>
             <text x="350" y="56" class="svg-title">本机 Crab（JDK 17 单 JAR）</text>
             <text x="350" y="82" class="svg-desc">· 监听 127.0.0.1:7777（仅本机）</text>
             <text x="350" y="104" class="svg-desc">· 校验 Reef 公钥签名后才载入</text>

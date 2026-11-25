@@ -5,6 +5,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
+import HermitDuet from '@shared/components/HermitDuet.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { notifyError } from '@shared/format'
 import { useNarrow } from '@shared/narrow'
@@ -159,10 +160,12 @@ onMounted(load)
 
     <el-result
       v-if="catalog && !catalog.configured"
-      icon="info"
       title="还没有连接 Reef"
       sub-title="在「连接 Reef」导入初始化 JSON 后才能看到可订阅的规则包。本地规则包不受影响"
     >
+      <template #icon>
+        <HermitDuet variant="scene" :size="96" status="disconnected" />
+      </template>
       <template #extra>
         <el-button type="primary" @click="router.push('/reef')">连接 Reef</el-button>
       </template>

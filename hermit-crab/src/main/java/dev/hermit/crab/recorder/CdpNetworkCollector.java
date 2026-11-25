@@ -44,8 +44,18 @@ public final class CdpNetworkCollector implements AutoCloseable {
     private static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(5);
     private static final Logger LOG = Logger.getLogger(CdpNetworkCollector.class.getName());
 
+    private static final List<Map<String, Object>> BROWSER_TARGET_FILTER = List.of(
+            Map.of("type", "page", "exclude", false),
+            Map.of("type", "iframe", "exclude", false),
+            Map.of("type", "tab", "exclude", true),
+            Map.of("exclude", true));
+    private static final List<Map<String, Object>> CHILD_TARGET_FILTER = List.of(
+            Map.of("type", "iframe", "exclude", false),
+            Map.of("exclude", true));
+
     private final Clock clock;
     private final int maxEntries;
+    private final boolean ignoreCertErrors;
     private final AtomicInteger nextCommandId = new AtomicInteger(1);
     private final AtomicInteger nextEntrySeq = new AtomicInteger(0);
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -53,6 +63,7 @@ public final class CdpNetworkCollector implements AutoCloseable {
     private final ConcurrentHashMap<Integer, CompletableFuture<JsonNode>> pendingCommands = new ConcurrentHashMap<>();
     private final Set<String> enabledSessions = ConcurrentHashMap.newKeySet();
     private final Set<String> attachedTargetIds = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<String, String> sessionTargetIds = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<CompletableFuture<?>> pendingBodies = new CopyOnWriteArrayList<>();
 
     private final Object stateLock = new Object();
@@ -69,14 +80,26 @@ public final class CdpNetworkCollector implements AutoCloseable {
     private volatile WebSocket webSocket;
     private volatile String pendingNavigateUrl;
     private volatile String disconnectReason;
+    private volatile boolean supportsTargetFilter = true;
 
-    private CdpNetworkCollector(Clock clock, int maxEntries) {
+    private CdpNetworkCollector(Clock clock, int maxEntries, boolean ignoreCertErrors) {
         this.clock = clock == null ? Clock.systemUTC() : clock;
         this.maxEntries = Math.max(10, maxEntries);
+        this.ignoreCertErrors = ignoreCertErrors;
     }
 
     public static CdpNetworkCollector connect(URI wsUri, Clock clock, int maxEntries, String initialNavigateUrl) {
-        CdpNetworkCollector collector = new CdpNetworkCollector(clock, maxEntries);
+        return connect(wsUri, clock, maxEntries, initialNavigateUrl, false);
+    }
+
+    public static CdpNetworkCollector connect(
+            URI wsUri,
+            Clock clock,
+            int maxEntries,
+            String initialNavigateUrl,
+            boolean ignoreCertErrors
+    ) {
+        CdpNetworkCollector collector = new CdpNetworkCollector(clock, maxEntries, ignoreCertErrors);
         collector.pendingNavigateUrl = (initialNavigateUrl != null && !initialNavigateUrl.isBlank()
                 && !"about:blank".equalsIgnoreCase(initialNavigateUrl))
                 ? initialNavigateUrl
@@ -102,26 +125,45 @@ public final class CdpNetworkCollector implements AutoCloseable {
                     "无法连接 Chrome DevTools WebSocket：" + rootMessage(ex));
         }
 
+        if (ignoreCertErrors) {
+            sendCommand(null, "Security.setIgnoreCertificateErrors", Map.of("ignore", true));
+        }
+
         String path = wsUri.getPath() == null ? "" : wsUri.getPath();
         boolean pageLevelEndpoint = path.startsWith("/devtools/page/");
         if (pageLevelEndpoint) {
-            enableNetworkOnSession(null, true);
+            enableNetworkOnSession(null, true, false, false);
         } else {
             bootstrapBrowserEndpoint();
         }
     }
 
     private void bootstrapBrowserEndpoint() {
-        CompletableFuture<JsonNode> autoAttach = sendCommand(null, "Target.setAutoAttach", Map.of(
-                "autoAttach", true,
-                "waitForDebuggerOnStart", false,
-                "flatten", true));
+        // Use waitForDebuggerOnStart=true paired with immediate Runtime.runIfWaitingForDebugger on every
+        // attached target. In modern Chromium, browser-level Target.setAutoAttach with waitForDebuggerOnStart=false
+        // can stall window.open() / target=_blank popups, whereas waitForDebuggerOnStart=true + immediate resume
+        // both avoids the stall and ensures Network.enable is active before the new page's very first request.
+        Map<String, Object> filteredParams = new LinkedHashMap<>();
+        filteredParams.put("autoAttach", true);
+        filteredParams.put("waitForDebuggerOnStart", true);
+        filteredParams.put("flatten", true);
+        filteredParams.put("filter", BROWSER_TARGET_FILTER);
+
+        CompletableFuture<JsonNode> autoAttach = sendCommand(null, "Target.setAutoAttach", filteredParams);
         try {
             JsonNode result = autoAttach.get(COMMAND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
             if (result != null && result.has("error")) {
-                // Target domain unsupported (e.g. direct page endpoint or lightweight CDP server): fall back.
-                enableNetworkOnSession(null, true);
-                return;
+                // Retry without filter for older Chromium (<105) or minimal CDP servers.
+                supportsTargetFilter = false;
+                JsonNode retry = sendCommand(null, "Target.setAutoAttach", Map.of(
+                        "autoAttach", true,
+                        "waitForDebuggerOnStart", true,
+                        "flatten", true)).get(COMMAND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                if (retry != null && retry.has("error")) {
+                    // Target domain unsupported (e.g. direct page endpoint or lightweight CDP server): fall back.
+                    enableNetworkOnSession(null, true, false, false);
+                    return;
+                }
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -129,7 +171,7 @@ public final class CdpNetworkCollector implements AutoCloseable {
             throw new RecorderException(502, ErrorCode.UPSTREAM_ERROR, "初始化 Chrome 调试会话被中断。");
         } catch (ExecutionException | TimeoutException ex) {
             // Fall back to direct Network.enable in case the endpoint is a simple page target.
-            enableNetworkOnSession(null, true);
+            enableNetworkOnSession(null, true, false, false);
             return;
         }
 
@@ -151,7 +193,10 @@ public final class CdpNetworkCollector implements AutoCloseable {
                                 "flatten", true)).thenAccept(attached -> {
                             String sid = attached == null ? "" : attached.path("result").path("sessionId").asText("");
                             if (!sid.isBlank()) {
-                                enableNetworkOnSession(sid, true);
+                                sessionTargetIds.put(sid, targetId);
+                                enableNetworkOnSession(sid, true, true, true);
+                            } else {
+                                attachedTargetIds.remove(targetId);
                             }
                         });
                     }
@@ -160,14 +205,37 @@ public final class CdpNetworkCollector implements AutoCloseable {
         });
     }
 
-    private void enableNetworkOnSession(String sessionId, boolean allowInitialNavigate) {
+    private void enableNetworkOnSession(
+            String sessionId,
+            boolean allowInitialNavigate,
+            boolean enableChildAutoAttach,
+            boolean resumeIfWaiting
+    ) {
         String key = sessionId == null ? "__root__" : sessionId;
         if (!enabledSessions.add(key)) {
+            if (resumeIfWaiting && sessionId != null) {
+                sendCommand(sessionId, "Runtime.runIfWaitingForDebugger", Map.of());
+            }
             return;
         }
         CompletableFuture<JsonNode> enabled = sendCommand(sessionId, "Network.enable", Map.of(
                 "maxTotalBufferSize", 16 * 1024 * 1024,
                 "maxResourceBufferSize", 2 * 1024 * 1024));
+        if (enableChildAutoAttach && sessionId != null) {
+            Map<String, Object> childParams = new LinkedHashMap<>();
+            childParams.put("autoAttach", true);
+            childParams.put("waitForDebuggerOnStart", true);
+            childParams.put("flatten", true);
+            if (supportsTargetFilter) {
+                childParams.put("filter", CHILD_TARGET_FILTER);
+            }
+            sendCommand(sessionId, "Target.setAutoAttach", childParams);
+        }
+        if (resumeIfWaiting && sessionId != null) {
+            // Pipelined after Network.enable & Target.setAutoAttach over the ordered WebSocket send chain
+            // so the target resumes within sub-millisecond latency without missing initial requests.
+            sendCommand(sessionId, "Runtime.runIfWaitingForDebugger", Map.of());
+        }
         if (allowInitialNavigate && pendingNavigateUrl != null) {
             enabled.thenRun(() -> {
                 String url = pendingNavigateUrl;
@@ -326,7 +394,8 @@ public final class CdpNetworkCollector implements AutoCloseable {
                 : null;
         JsonNode params = msg.path("params");
         switch (method) {
-            case "Target.attachedToTarget" -> onAttachedToTarget(params);
+            case "Target.attachedToTarget" -> onAttachedToTarget(sessionId, params);
+            case "Target.detachedFromTarget" -> onDetachedFromTarget(params);
             case "Network.requestWillBeSent" -> onRequestWillBeSent(sessionId, params);
             case "Network.requestWillBeSentExtraInfo" -> onRequestExtraInfo(sessionId, params);
             case "Network.responseReceived" -> onResponseReceived(sessionId, params);
@@ -339,16 +408,85 @@ public final class CdpNetworkCollector implements AutoCloseable {
         }
     }
 
-    private void onAttachedToTarget(JsonNode params) {
+    private void onAttachedToTarget(String parentSessionId, JsonNode params) {
         String childSession = params.path("sessionId").asText("");
+        if (childSession.isBlank()) {
+            return;
+        }
         JsonNode info = params.path("targetInfo");
         String targetId = info.path("targetId").asText("");
         String type = info.path("type").asText("");
-        if (!childSession.isBlank() && ("page".equals(type) || "iframe".equals(type))) {
-            if (targetId.isBlank() || attachedTargetIds.add(targetId)) {
-                enableNetworkOnSession(childSession, "page".equals(type));
+        if ("page".equals(type) || "iframe".equals(type)) {
+            if (!targetId.isBlank()) {
+                sessionTargetIds.put(childSession, targetId);
+                attachedTargetIds.add(targetId);
+            }
+            // Deduplicate by sessionId inside enableNetworkOnSession (not targetId) so COOP / RenderFrameHost
+            // swaps that detach an old session and attach a new session for the same targetId keep capturing.
+            enableNetworkOnSession(childSession, "page".equals(type), true, true);
+        } else {
+            // Defensive guard (e.g. older browsers ignoring TargetFilter): immediately resume & detach
+            // unrelated targets (service_worker, worker, browser_ui) so nothing ever stays paused.
+            sendCommand(childSession, "Runtime.runIfWaitingForDebugger", Map.of());
+            sendCommand(parentSessionId, "Target.detachFromTarget", Map.of("sessionId", childSession));
+        }
+    }
+
+    private void onDetachedFromTarget(JsonNode params) {
+        String childSession = params.path("sessionId").asText("");
+        if (childSession.isBlank()) {
+            return;
+        }
+        enabledSessions.remove(childSession);
+        String targetId = sessionTargetIds.remove(childSession);
+        if (targetId == null || targetId.isBlank()) {
+            targetId = params.path("targetId").asText("");
+        }
+        if (!targetId.isBlank() && !sessionTargetIds.containsValue(targetId)) {
+            attachedTargetIds.remove(targetId);
+        }
+    }
+
+    /**
+     * Resolves the active hop key for {@code (sessionId, requestId)}.
+     * When Chromium hands a cross-origin iframe (OOPIF) or COOP document navigation from a parent/previous
+     * session to a new child session, {@code requestWillBeSent} fires on the old session while
+     * {@code responseReceived}/{@code loadingFinished} fire on the new session with the same {@code requestId}.
+     * Migrating matching {@code Document} hops keeps status, headers, and response body intact.
+     */
+    private String resolveHopKeyLocked(String sessionId, String requestId) {
+        String exact = hopKey(sessionId, requestId);
+        if (activeHops.containsKey(exact)) {
+            return exact;
+        }
+        String matchedKey = null;
+        MutableHop matchedHop = null;
+        for (Map.Entry<String, MutableHop> entry : activeHops.entrySet()) {
+            MutableHop candidate = entry.getValue();
+            if (requestId.equals(candidate.requestId) && "Document".equalsIgnoreCase(candidate.resourceType)) {
+                matchedKey = entry.getKey();
+                matchedHop = candidate;
+                break;
             }
         }
+        if (matchedKey != null && matchedHop != null) {
+            activeHops.remove(matchedKey);
+            matchedHop.sessionId = sessionId;
+            activeHops.put(exact, matchedHop);
+            RecordedEntry prevRedirect = lastRedirectHop.remove(matchedKey);
+            if (prevRedirect != null) {
+                lastRedirectHop.put(exact, prevRedirect);
+            }
+            List<RecordedEntry.HeaderPair> earlyReq = earlyReqExtraHeaders.remove(matchedKey);
+            if (earlyReq != null) {
+                mergeHeaders(matchedHop.requestHeaders, earlyReq);
+            }
+            List<RecordedEntry.HeaderPair> earlyResp = earlyRespExtraHeaders.remove(matchedKey);
+            if (earlyResp != null) {
+                mergeHeaders(matchedHop.responseHeaders, earlyResp);
+            }
+        }
+        return exact;
     }
 
     private void onRequestWillBeSent(String sessionId, JsonNode params) {
@@ -358,11 +496,11 @@ public final class CdpNetworkCollector implements AutoCloseable {
         if (requestId.isBlank() || url.isBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
             return;
         }
-        String key = hopKey(sessionId, requestId);
         double ts = params.path("timestamp").asDouble(0.0);
         Instant now = wallTimeOrNow(params.path("wallTime").asDouble(0.0));
 
         synchronized (stateLock) {
+            String key = resolveHopKeyLocked(sessionId, requestId);
             // If this event represents a 3xx redirect, finalize the previous hop with redirectResponse first.
             JsonNode redirectResp = params.path("redirectResponse");
             MutableHop previous = activeHops.remove(key);
@@ -415,8 +553,8 @@ public final class CdpNetworkCollector implements AutoCloseable {
         if (extra.isEmpty()) {
             return;
         }
-        String key = hopKey(sessionId, requestId);
         synchronized (stateLock) {
+            String key = resolveHopKeyLocked(sessionId, requestId);
             MutableHop hop = activeHops.get(key);
             if (hop != null) {
                 // Avoid merging delayed POST-only headers onto a subsequent GET redirect hop.
@@ -438,8 +576,8 @@ public final class CdpNetworkCollector implements AutoCloseable {
         if (requestId.isBlank()) {
             return;
         }
-        String key = hopKey(sessionId, requestId);
         synchronized (stateLock) {
+            String key = resolveHopKeyLocked(sessionId, requestId);
             MutableHop hop = activeHops.get(key);
             if (hop == null) {
                 return;
@@ -462,8 +600,8 @@ public final class CdpNetworkCollector implements AutoCloseable {
             return;
         }
         int statusCode = params.path("statusCode").asInt(0);
-        String key = hopKey(sessionId, requestId);
         synchronized (stateLock) {
+            String key = resolveHopKeyLocked(sessionId, requestId);
             MutableHop hop = activeHops.get(key);
             // If a 3xx redirect already finalized previous hop and this ExtraInfo carries its Set-Cookie/Location headers:
             RecordedEntry prevRedirect = lastRedirectHop.get(key);
@@ -488,12 +626,12 @@ public final class CdpNetworkCollector implements AutoCloseable {
         if (requestId.isBlank()) {
             return;
         }
-        String key = hopKey(sessionId, requestId);
         double ts = params.path("timestamp").asDouble(0.0);
         long encodedBytes = Math.max(0L, Math.round(params.path("encodedDataLength").asDouble(0.0)));
 
         RecordedEntry finalized;
         synchronized (stateLock) {
+            String key = resolveHopKeyLocked(sessionId, requestId);
             lastRedirectHop.remove(key);
             earlyReqExtraHeaders.remove(key);
             earlyRespExtraHeaders.remove(key);
@@ -545,10 +683,10 @@ public final class CdpNetworkCollector implements AutoCloseable {
         if (requestId.isBlank()) {
             return;
         }
-        String key = hopKey(sessionId, requestId);
         double ts = params.path("timestamp").asDouble(0.0);
         String errorText = params.path("errorText").asText("loading failed");
         synchronized (stateLock) {
+            String key = resolveHopKeyLocked(sessionId, requestId);
             lastRedirectHop.remove(key);
             earlyReqExtraHeaders.remove(key);
             earlyRespExtraHeaders.remove(key);

@@ -43,8 +43,18 @@ public final class RecorderManager implements AutoCloseable {
             String startUrl,
             String browserPath,
             String debugEndpoint,
-            boolean headless
+            boolean headless,
+            boolean ignoreCertErrors
     ) {
+        public StartRequest(
+                String mode,
+                String startUrl,
+                String browserPath,
+                String debugEndpoint,
+                boolean headless
+        ) {
+            this(mode, startUrl, browserPath, debugEndpoint, headless, false);
+        }
     }
 
     public record RecorderStatus(
@@ -195,7 +205,8 @@ public final class RecorderManager implements AutoCloseable {
                     navigateUrl = normalizedUrl;
                 }
             }
-            newCollector = CdpNetworkCollector.connect(wsUri, clock, MAX_SESSION_ENTRIES, navigateUrl);
+            newCollector = CdpNetworkCollector.connect(
+                    wsUri, clock, MAX_SESSION_ENTRIES, navigateUrl, request != null && request.ignoreCertErrors());
         } catch (RuntimeException ex) {
             if (newCollector != null) {
                 newCollector.close();

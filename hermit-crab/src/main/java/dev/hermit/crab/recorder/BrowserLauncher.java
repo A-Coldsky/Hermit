@@ -14,8 +14,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -100,22 +102,9 @@ public final class BrowserLauncher {
         } catch (IOException ex) {
             throw new RecorderException(500, ErrorCode.INTERNAL, "无法创建临时浏览器配置目录。", ex);
         }
+        seedRelaxedProfilePreferences(profileDir);
 
-        ArrayList<String> command = new ArrayList<>();
-        command.add(executable.toString());
-        command.add("--remote-debugging-port=0");
-        command.add("--user-data-dir=" + profileDir.toAbsolutePath().normalize());
-        command.add("--no-first-run");
-        command.add("--no-default-browser-check");
-        command.add("--disable-background-networking");
-        command.add("--disable-default-apps");
-        command.add("--disable-sync");
-        if (headless) {
-            command.add("--headless=new");
-            command.add("--disable-gpu");
-            command.add("--no-sandbox");
-        }
-        command.add(normalizedUrl);
+        List<String> command = buildLaunchCommand(executable, profileDir, normalizedUrl, headless);
 
         Process process;
         try {
@@ -189,6 +178,73 @@ public final class BrowserLauncher {
                     "浏览器启动超时，未监听到 Chrome DevTools 调试端口。请确认本机浏览器可正常启动；若企业策略或安全软件禁用了远程调试，可改用「导入本地 .har 文件」。");
         }
         return new LaunchedBrowser(process, profileDir, resolved);
+    }
+
+    /**
+     * Builds minimal, relaxed Chrome/Edge launch flags so the isolated recording window behaves
+     * as close to a normal browser as possible without blocking popups, redirects, or normal web flows.
+     */
+    static List<String> buildLaunchCommand(
+            Path executable,
+            Path profileDir,
+            String normalizedUrl,
+            boolean headless
+    ) {
+        ArrayList<String> command = new ArrayList<>();
+        command.add(executable.toString());
+        command.add("--remote-debugging-port=0");
+        command.add("--user-data-dir=" + profileDir.toAbsolutePath().normalize());
+        command.add("--no-first-run");
+        command.add("--no-default-browser-check");
+        command.add("--disable-popup-blocking");
+        command.add("--disable-sync");
+        if (headless) {
+            command.add("--headless=new");
+            command.add("--disable-gpu");
+            command.add("--no-sandbox");
+        }
+        command.add(normalizedUrl);
+        return List.copyOf(command);
+    }
+
+    /**
+     * Pre-seeds standard Chromium/Edge {@code Default/Preferences} inside the temporary profile
+     * so fresh-profile restrictions (popup/redirect blocks, third-party cookie / Edge tracking prevention,
+     * mixed HTTP content inside HTTPS intranet portals, and automatic download blocks) do not break
+     * enterprise OA/SSO navigation during HAR recording, without triggering unsupported-flag infobars.
+     */
+    static void seedRelaxedProfilePreferences(Path profileDir) {
+        if (profileDir == null) {
+            return;
+        }
+        Path defaultDir = profileDir.resolve("Default");
+        Path prefsFile = defaultDir.resolve("Preferences");
+        if (Files.exists(prefsFile)) {
+            return;
+        }
+        Map<String, Object> defaultContentSettings = new LinkedHashMap<>();
+        defaultContentSettings.put("popups", 1);
+        defaultContentSettings.put("automatic_downloads", 1);
+        defaultContentSettings.put("mixed_script", 1);
+
+        Map<String, Object> profile = new LinkedHashMap<>();
+        profile.put("cookie_controls_mode", 0);
+        profile.put("block_third_party_cookies", false);
+        profile.put("default_content_setting_values", defaultContentSettings);
+
+        Map<String, Object> prefs = new LinkedHashMap<>();
+        prefs.put("browser", Map.of("has_seen_welcome_page", true));
+        prefs.put("distribution", Map.of("suppress_first_run_bubble", true));
+        prefs.put("https_only_mode_enabled", false);
+        prefs.put("profile", profile);
+        prefs.put("tracking_prevention", Map.of("tracking_prevention_level", 0));
+
+        try {
+            Files.createDirectories(defaultDir);
+            Files.writeString(prefsFile, ApiJson.write(prefs), StandardCharsets.UTF_8);
+        } catch (IOException | RuntimeException ignored) {
+            // Best-effort: browser still launches normally if seeding preferences fails.
+        }
     }
 
     /**

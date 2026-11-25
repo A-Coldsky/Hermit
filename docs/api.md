@@ -482,7 +482,7 @@ MCP 工具 `debug_trace` 只在开发者模式打开时出现在 `tools/list`。
 浏览器录制与抓包快照（仅在开发者模式打开时由本机控制台显式启停，纯内存保存、最多 10 份快照，不写入 H2 数据库也不上传 Reef；关闭开发者模式、24 小时到期或 Crab 退出时自动终止托管浏览器并清空临时配置目录与全部快照）：
 - 控制台接口（走回环 + `X-Hermit-Console: 1` + 控制台会话校验，拒绝携带 `Authorization: Bearer` 或 `X-Hermit-Key`）：
   - `GET /console/api/recorder/status`：返回当前录制状态（`IDLE` / `RECORDING` / `STOPPED`）、自动探测到的本机 Chrome / Edge / Chromium 路径列表（支持 `HERMIT_CHROME_PATH` / `HERMIT_BROWSER_PATH` 覆盖）、是否检测到本机 `DevToolsActivePort` 及已确认的快照摘要列表。
-  - `POST /console/api/recorder/start`：启动录制。支持 `mode: "launch"`（使用独立临时 `--user-data-dir` 与 `--remote-debugging-port=0` 拉起本机 Chrome/Edge，不影响日常浏览器，通过 JDK 17 `WebSocket` 直连 CDP 抓包）和 `mode: "attach"`（仅允许本机回环调试端口，或自动连接 Chrome 144+ `chrome://inspect/#remote-debugging` 产生的 `DevToolsActivePort`）。
+  - `POST /console/api/recorder/start`：启动录制。支持 `mode: "launch"`（使用独立临时 `--user-data-dir`、`--remote-debugging-port=0` 与 `--disable-popup-blocking` 拉起本机 Chrome/Edge，并预置标准 `Default/Preferences` 放宽弹窗跳转、跨站 Cookie、Edge 跟踪防护、混合内容与多文件下载限制，不影响日常浏览器，通过 JDK 17 `WebSocket` 直连 CDP 抓包，支持多标签页、弹窗、跨源 iframe 与跨源 COOP 跳转）和 `mode: "attach"`（仅允许本机回环调试端口，或自动连接 Chrome 144+ `chrome://inspect/#remote-debugging` 产生的 `DevToolsActivePort`）；另支持可选布尔字段 `ignoreCertErrors`（默认 `false`，勾选后仅在本次 CDP 录制会话内忽略自签名 / 内网 HTTPS 证书错误）。
   - `POST /console/api/recorder/stop`：停止录制并关闭托管浏览器，返回会话统计。
   - `GET /console/api/recorder/entries`（可选 `?includeStatic=1`）与 `GET /console/api/recorder/entries/{id}`：查看当前会话捕获的请求摘要与脱敏详情；捕获瞬间即抹除 `Cookie`、`Set-Cookie` 与 `Authorization` 令牌值（保留 Cookie 名称和属性），默认隐藏 JS/CSS/图片/字体等静态噪声。
   - `POST /console/api/recorder/import-har`（可选 `?name=...`，支持原始请求体或 multipart `file`，上限 20 MiB）：导入本地标准 HAR 1.2 文件进入同一套筛选、脱敏与快照流程。

@@ -49,6 +49,7 @@ const form = reactive({
   customBrowserPath: '',
   startUrl: '',
   debugEndpoint: '',
+  ignoreCertErrors: false,
 })
 
 const snapshotForm = reactive({
@@ -245,6 +246,7 @@ async function startRecording() {
       startUrl: form.startUrl.trim() || undefined,
       browserPath: browserPath || undefined,
       debugEndpoint: form.mode === 'attach' ? form.debugEndpoint.trim() || undefined : undefined,
+      ...(form.ignoreCertErrors ? { ignoreCertErrors: true } : {}),
     })
     status.value = next
     entries.value = []
@@ -620,10 +622,19 @@ onBeforeUnmount(stopPolling)
               </template>
             </p>
           </div>
+          <div class="advanced-extra">
+            <el-checkbox
+              v-model="form.ignoreCertErrors"
+              :disabled="isRecording"
+              data-test="ignore-cert-errors"
+            >
+              忽略自签名 / 内网 HTTPS 证书错误（仅本次录制有效）
+            </el-checkbox>
+          </div>
         </div>
 
         <p class="hm-muted small">
-          会打开独立空白窗口，不影响日常浏览器的标签页和登录态；捕获瞬间即抹除 Cookie 值与登录认证头（仅保留 Cookie 名称用于生成规则）。
+          会打开独立窗口，不影响日常浏览器的标签页和登录态；已自动放宽弹窗跳转、跨站 Cookie、混合内容与多文件下载限制，并支持多标签页与跨源 iframe 抓包；捕获瞬间即抹除 Cookie 值与登录认证头（仅保留 Cookie 名称用于生成规则）。
         </p>
       </div>
 
@@ -866,6 +877,10 @@ onBeforeUnmount(stopPolling)
   border-radius: 8px;
   background: var(--hm-subtle, var(--el-fill-color-lighter));
   border: 1px solid var(--el-border-color-lighter);
+}
+
+.advanced-extra {
+  margin-top: 10px;
 }
 
 .mode-row {

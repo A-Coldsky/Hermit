@@ -533,6 +533,31 @@ class AuthenticatorEngineTest {
     }
 
     @Test
+    void anExportAddedByAnAuthenticatorUpdateIsFilledByOneRelogin() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+
+            // 授权器更新：多导出一个变量。已有的登录是旧版本做的，里面没有它。
+            fixture.install(authenticator()
+                    .replace("version: 1.2.0", "version: 1.3.0")
+                    .replace("- extract: { access_token: { jsonpath: \"$.token\" } }",
+                            "- extract: { access_token: { jsonpath: \"$.token\" }, api_token: { jsonpath: \"$.token\" } }")
+                    .replace("    access_token: { description: 访问令牌 }",
+                            "    access_token: { description: 访问令牌 }\n    api_token: { description: 接口令牌 }"));
+            fixture.install(consumer("api_new", apiUrl, "",
+                    "{ method: GET, path: /data, headers: { Authorization: \"Bearer {{auth.api_token}}\" } }"));
+            SessionKey fresh = new SessionKey(Origin.LOCAL, "api_new", "main");
+
+            assertThat(fixture.value(fresh)).as("授权器重新登录一次，补上新变量").isEqualTo("api-data");
+            assertThat(passwordLogins.get()).isEqualTo(2);
+            assertThat(fixture.value(fresh)).isEqualTo("api-data");
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            assertThat(passwordLogins.get()).as("补上以后不再重新登录").isEqualTo(2);
+        }
+    }
+
+    @Test
     void anUnboundAccountIsRefusedWithoutNamingTheAuthenticator() {
         try (Fixture fixture = new Fixture()) {
             fixture.links.remove(OA);
@@ -673,7 +698,24 @@ class AuthenticatorEngineTest {
         private final RuleEngine engine;
         private final Map<SessionKey, SessionKey> links = new ConcurrentHashMap<>();
         private final AuthShared shared = new AuthShared();
+        private final ConchRegistry registry;
+        private volatile ConchDoc authenticator;
         private volatile String password = PASSWORD;
+
+        /** 授权器更新到新版本，或者装上一个新的业务包。 */
+        private void install(String yaml) {
+            ConchDoc doc = ConchParser.parse(yaml);
+            assertThat(ConchValidator.validate(doc, ConchValidator.Context.of(CrabVersion.CURRENT)).errors())
+                    .isEmpty();
+            registry.put(doc, Origin.LOCAL);
+            if (doc.conch().equals(SSO.conch())) {
+                authenticator = doc;
+            } else {
+                SessionKey key = new SessionKey(Origin.LOCAL, doc.conch(), "main");
+                links.put(key, SSO);
+                shared.bound.put(key, "auth:sso");
+            }
+        }
 
         private Fixture() {
             this(java.time.Clock.systemUTC(), false);
@@ -691,7 +733,7 @@ class AuthenticatorEngineTest {
             EngineSettings settings = new EngineSettings(Duration.ofSeconds(20), Duration.ofMinutes(10), 3);
             sessions = new SessionManager(
                     new NopSessionPersistence(), new NopLoginSnapshotStore(), shared, settings, clock);
-            ConchRegistry registry = new ConchRegistry();
+            registry = new ConchRegistry();
             ConchDoc auth = null;
             for (String yaml : List.of(
                     otp ? withOtp(authenticator()) : authenticator(),
@@ -711,7 +753,7 @@ class AuthenticatorEngineTest {
                     auth = doc;
                 }
             }
-            ConchDoc authenticator = auth;
+            authenticator = auth;
             shared.bound.put(SSO, "auth:sso");
             for (SessionKey key : List.of(OA, API, API2, COPY, PEEK, SUB, READS)) {
                 links.put(key, SSO);

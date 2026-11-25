@@ -28,6 +28,7 @@ import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
+import dev.hermit.common.model.AuthExport;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.Step;
@@ -708,6 +709,12 @@ public final class RuleEngine implements ConchExecutor {
                     }
                 }
             }
+            // 授权器更新后多导出了变量，而已有的登录是旧版本做的：在限流之内重新登录一次补上，
+            // 不让这个包一直报「登录没有建立变量」。
+            if (!a.loggedInThisCall && missingExport(scope, a) && sessions.allowLinkedRelogin(scope.key, a.key)) {
+                sessions.markLoggedOut(a.key);
+                login(a);
+            }
         } catch (StepFailure ex) {
             if (ex.code == ErrorCode.LOGIN_INPUT_REQUIRED) {
                 // 等的是授权器账号的验证码；对外只说这个包，授权器的包名不出现在调用结果里。
@@ -733,6 +740,17 @@ public final class RuleEngine implements ConchExecutor {
             return;
         }
         exchange(scope);
+    }
+
+    /** 这个包用到的导出变量里，有没有授权器现在的登录里拿不到的。 */
+    private boolean missingExport(LoginScope scope, LoginScope authenticator) {
+        Map<String, AuthExport> declared = authenticator.conch.auth().exports();
+        for (String name : AuthenticatorChecks.referencedExports(scope.conch)) {
+            if (declared.containsKey(name) && authenticator.lookup(name) == null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 这个包自己的换票状态作废。写了 auth.exchange 的包连带删掉只属于它站点的 Cookie；授权器的会话不动。 */

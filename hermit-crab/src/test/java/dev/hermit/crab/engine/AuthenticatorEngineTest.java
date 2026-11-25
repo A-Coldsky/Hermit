@@ -42,6 +42,7 @@ class AuthenticatorEngineTest {
     private static final SessionKey OA = new SessionKey(Origin.LOCAL, "oa", "main");
     private static final SessionKey API = new SessionKey(Origin.LOCAL, "api", "main");
     private static final SessionKey API2 = new SessionKey(Origin.LOCAL, "api2", "main");
+    private static final SessionKey COPY = new SessionKey(Origin.LOCAL, "api_copy", "main");
     private static final SessionKey READS = new SessionKey(Origin.LOCAL, "oa_reads", "main");
     private static final String PASSWORD = EngineTestSupport.PASSWORD;
 
@@ -275,6 +276,22 @@ class AuthenticatorEngineTest {
                 """.replace("SSO", ssoUrl), "{ method: GET, path: /data }");
     }
 
+    /** 把导出的令牌 set 进普通变量，再交给普通脚本，并把它们都放进输出。 */
+    private String copyYaml() {
+        return apiYaml("api_copy")
+                .replace("      value: { type: string, description: 值 }\n",
+                        "      value: { type: string, description: 值 }\n"
+                                + "      copied: { type: string, description: 复制 }\n"
+                                + "      leaked: { type: string, description: 脚本看到的 }\n"
+                                + "      direct: { type: string, description: 脚本直接读的 }\n")
+                + "      - set: { copied: \"{{auth.access_token}}\" }\n"
+                + "      - script:\n"
+                + "          code: |\n"
+                + "            var seen = typeof vars.copied === 'undefined' ? 'hidden' : String(vars.copied);\n"
+                + "            var direct = (vars.auth && vars.auth.access_token) ? String(vars.auth.access_token) : 'hidden';\n"
+                + "            return { leaked: seen, direct: direct };\n";
+    }
+
     private String apiYaml(String name) {
         return consumer(name, apiUrl, "",
                 "{ method: GET, path: /data, headers: { Authorization: \"Bearer {{auth.access_token}}\" } }");
@@ -298,6 +315,22 @@ class AuthenticatorEngineTest {
                 assertThat(flat).doesNotContain(token);
             }
             assertThat(flat).doesNotContain(PASSWORD);
+        }
+    }
+
+    @Test
+    void anExportCopiedWithSetStaysSecretAndNeverReachesAPlainScript() {
+        try (Fixture fixture = new Fixture()) {
+            ExecutionResult result = fixture.call(COPY);
+            assertThat(result.success()).as(String.valueOf(result.error())).isTrue();
+            Map<?, ?> data = (Map<?, ?>) result.data();
+            assertThat(data.get("leaked")).as("set 出来的副本不进普通脚本").isEqualTo("hidden");
+            assertThat(data.get("direct")).as("普通脚本读不到 auth").isEqualTo("hidden");
+            assertThat(tokens).isNotEmpty();
+            String flat = EngineTestSupport.flatten(result);
+            for (String token : tokens) {
+                assertThat(flat).as("输出里的副本要打码").doesNotContain(token);
+            }
         }
     }
 
@@ -546,6 +579,7 @@ class AuthenticatorEngineTest {
                     oaYaml("oa", ""),
                     apiYaml("api"),
                     apiYaml("api2"),
+                    copyYaml(),
                     oaYaml("oa_reads", "  concurrent_reads: true\n")
                             .replace("idempotent: true", "idempotent: true\n    mcp: {expose: true, read_only: true}"))) {
                 ConchDoc doc = ConchParser.parse(yaml);
@@ -558,7 +592,7 @@ class AuthenticatorEngineTest {
             }
             ConchDoc authenticator = auth;
             shared.bound.put(SSO, "auth:sso");
-            for (SessionKey key : List.of(OA, API, API2, READS)) {
+            for (SessionKey key : List.of(OA, API, API2, COPY, READS)) {
                 links.put(key, SSO);
                 shared.bound.put(key, "auth:sso");
             }

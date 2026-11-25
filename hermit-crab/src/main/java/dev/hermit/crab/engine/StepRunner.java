@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -354,7 +355,7 @@ final class StepRunner {
         Map<String, Object> before = capture ? new LinkedHashMap<>(vars) : null;
         int count = Extractors.apply(spec, vars, filters, templates, deadlineNanos);
         if (!auth && taintedVars != null) {
-            Set<String> taintedBefore = taintedVars.isEmpty() ? Set.of() : Set.copyOf(taintedVars);
+            Set<String> taintedBefore = withAuthView(taintedVars, vars);
             for (Map.Entry<String, Object> entry : spec.entrySet()) {
                 String key = entry.getKey();
                 Map<String, Object> child = Values.map(entry.getValue());
@@ -385,7 +386,7 @@ final class StepRunner {
             boolean auth,
             Set<String> taintedVars
     ) {
-        Set<String> taintedBefore = taintedVars == null || taintedVars.isEmpty() ? Set.of() : Set.copyOf(taintedVars);
+        Set<String> taintedBefore = withAuthView(taintedVars, vars);
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
             String key = entry.getKey();
             if (ConchRegistry.RESERVED.contains(key)) {
@@ -439,6 +440,23 @@ final class StepRunner {
         }
         return new Outcome(outcome.method(), outcome.path(), outcome.status(), outcome.extractCount(),
                 outcome.sessionLost(), DevTraceDraft.variablePiece("script", produced));
+    }
+
+    /**
+     * 引用授权器的包里 {@code auth} 是授权器导出值的视图，和 {@code login} 一样是秘密的来源；
+     * 别的包里 {@code auth} 只是一个普通变量名，不受影响。
+     */
+    private static Set<String> withAuthView(Set<String> taintedVars, Map<String, Object> vars) {
+        boolean view = vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource;
+        if (taintedVars == null || taintedVars.isEmpty()) {
+            return view ? Set.of(ConchRegistry.AUTH_VAR) : Set.of();
+        }
+        if (!view) {
+            return Set.copyOf(taintedVars);
+        }
+        LinkedHashSet<String> all = new LinkedHashSet<>(taintedVars);
+        all.add(ConchRegistry.AUTH_VAR);
+        return all;
     }
 
     private boolean referencesLoginOrTainted(Object rawNode, Set<String> taintedVars) {

@@ -260,26 +260,41 @@ public final class AuthenticatorChecks {
         }
     }
 
-    /** 判断键里不带 {@code {{ }}} 的变量名。只看这四个键，别处的 {@code auth.x} 字样（例如主机名）不算。 */
-    private static void bareReferences(Object node, Set<String> names) {
-        if (node instanceof Step step) {
-            bareReferences(step.def(), names);
-        } else if (node instanceof Map<?, ?> map) {
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                String key = String.valueOf(entry.getKey());
-                Object value = entry.getValue();
-                if ("present".equals(key) || "not_present".equals(key)) {
-                    for (Object name : value instanceof Collection<?> list ? list : Collections.singletonList(value)) {
-                        bareName(name, names);
+    /** 判断里不带 {@code {{ }}} 的变量名。只接收判断本身（assert、if、until、expect、expired_when 的一条），不往请求体里找。 */
+    private static void conditionReferences(Map<?, ?> condition, Set<String> names) {
+        for (Map.Entry<?, ?> entry : condition.entrySet()) {
+            String key = String.valueOf(entry.getKey());
+            Object value = entry.getValue();
+            if ("present".equals(key) || "not_present".equals(key)) {
+                for (Object name : value instanceof Collection<?> list ? list : Collections.singletonList(value)) {
+                    bareName(name, names);
+                }
+            } else if (("equals".equals(key) || "not_equals".equals(key)) && value instanceof Map<?, ?> pairs) {
+                pairs.keySet().forEach(name -> bareName(name, names));
+            }
+        }
+    }
+
+    /** 步骤里的判断和脚本：assert、if、repeat 的 until 里直接写的变量名，script 里的 {@code vars.auth.名字}。 */
+    private static void stepReferences(List<Step> steps, Set<String> names) {
+        for (Step step : FlowSteps.flat(steps)) {
+            switch (step.type()) {
+                case "assert", FlowSteps.IF -> conditionReferences(step.def(), names);
+                case FlowSteps.REPEAT -> {
+                    if (step.def().get("until") instanceof Map<?, ?> until) {
+                        conditionReferences(until, names);
                     }
-                } else if (("equals".equals(key) || "not_equals".equals(key)) && value instanceof Map<?, ?> pairs) {
-                    pairs.keySet().forEach(name -> bareName(name, names));
-                } else {
-                    bareReferences(value, names);
+                }
+                case "script" -> {
+                    Matcher script = SCRIPT_REF.matcher(String.valueOf(step.def()));
+                    while (script.find()) {
+                        names.add(script.group(1));
+                    }
+                }
+                default -> {
+                    // 其它步骤只可能通过模板引用。
                 }
             }
-        } else if (node instanceof Collection<?> list) {
-            list.forEach(item -> bareReferences(item, names));
         }
     }
 
@@ -293,7 +308,7 @@ public final class AuthenticatorChecks {
     }
 
     /**
-     * 业务包里用到的授权器导出名，按出现顺序。模板 {@code {{auth.名字}}}、脚本里的 {@code vars.auth.名字}，
+     * 业务包里用到的授权器导出名（顺序不保证）。模板 {@code {{auth.名字}}}、脚本里的 {@code vars.auth.名字}，
      * 以及判断键（{@code present}、{@code not_present}、{@code equals}、{@code not_equals}）里直接写的
      * 变量名 {@code auth.名字} 都算。
      */
@@ -304,31 +319,29 @@ public final class AuthenticatorChecks {
         }
         ArrayList<Object> sources = new ArrayList<>();
         sources.add(doc.auth().exchange());
+        stepReferences(doc.auth().exchange(), names);
         if (doc.auth().aliveCheck() != null) {
             sources.add(doc.auth().aliveCheck().request());
             sources.add(doc.auth().aliveCheck().expectNotRedirect());
             sources.add(doc.auth().aliveCheck().expect());
+            conditionReferences(doc.auth().aliveCheck().expect(), names);
         }
         sources.add(doc.auth().expiredWhen());
+        doc.auth().expiredWhen().forEach(condition -> conditionReferences(condition, names));
         for (Action action : doc.actions().values()) {
             if (action != null) {
                 sources.add(action.steps());
                 sources.add(action.output());
+                stepReferences(action.steps(), names);
             }
         }
         for (Object source : sources) {
-            bareReferences(source, names);
-            String text = String.valueOf(source);
-            Matcher template = TEMPLATE.matcher(text);
+            Matcher template = TEMPLATE.matcher(String.valueOf(source));
             while (template.find()) {
                 Matcher ref = AUTH_REF.matcher(template.group(1));
                 while (ref.find()) {
                     names.add(ref.group(1));
                 }
-            }
-            Matcher script = SCRIPT_REF.matcher(text);
-            while (script.find()) {
-                names.add(script.group(1));
             }
         }
         return names;

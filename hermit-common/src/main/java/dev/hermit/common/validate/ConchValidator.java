@@ -107,7 +107,7 @@ public final class ConchValidator {
             errors.add(issue(ValidationCodes.CONCH_NAME, "conch", "conch 不符合 ^[a-z][a-z0-9_]{1,63}$"));
         }
         boolean mcp = "mcp".equals(doc.driver());
-        if (!mcp && !"http".equals(doc.driver())) {
+        if (!mcp && !"http".equals(doc.driver()) && !AuthenticatorChecks.isAuthenticator(doc)) {
             errors.add(issue(ValidationCodes.DRIVER, "driver", "driver 只允许 http 或 mcp"));
         }
         if (blank(doc.title())) {
@@ -116,7 +116,7 @@ public final class ConchValidator {
         if (blank(doc.description())) {
             errors.add(issue(ValidationCodes.MISSING_DESCRIPTION, "description", "缺少 description"));
         }
-        if (doc.credentials() == null) {
+        if (doc.credentials() == null && !AuthenticatorChecks.uses(doc)) {
             errors.add(issue(ValidationCodes.MISSING_CREDENTIALS, "credentials", "缺少 credentials"));
         }
         // 解析器仍接受 type: secret，这里拒绝并指向该字段的 type，便于改放到 credentials。
@@ -147,6 +147,7 @@ public final class ConchValidator {
         checkFileFeatures(doc, errors);
         FlowChecks.version(doc, errors);
         SessionExpiryChecks.version(doc, errors);
+        AuthenticatorChecks.version(doc, errors);
         checkGroups(doc, errors, warnings);
         if (doc.auth() != null && doc.auth().concurrentReads()
                 && doc.actions().values().stream().noneMatch(a -> a != null && a.mcp().readOnly())) {
@@ -185,6 +186,22 @@ public final class ConchValidator {
                     warnings,
                     authInputs,
                     Nest.top(false, FlowChecks.strict(doc), true));
+            if (!doc.auth().exchange().isEmpty()) {
+                checkSteps(doc.auth().exchange(), "auth.exchange", ctx, errors);
+                checkPlainStepList(doc.auth().exchange(), "auth.exchange", errors);
+                checkOrderedSteps(
+                        doc.auth().exchange(),
+                        "auth.exchange",
+                        doc,
+                        new LinkedHashSet<>(),
+                        Set.of(),
+                        loginVars,
+                        usesLogin,
+                        errors,
+                        warnings,
+                        authInputs,
+                        Nest.top(false, FlowChecks.strict(doc), true));
+            }
             AliveCheck alive = doc.auth().aliveCheck();
             if (alive != null) {
                 checkPlainMap("auth.alive_check.request", alive.request(), false, false, errors);
@@ -252,6 +269,7 @@ public final class ConchValidator {
             checkLiteralHost("config.base_url.default", configuredBase.defaultValue(), errors, warnings);
         }
         AuthOriginChecks.check(doc, errors, warnings);
+        AuthenticatorChecks.check(doc, loginVars, errors, warnings);
         return new ValidationResult(errors, warnings);
     }
 
@@ -1446,6 +1464,16 @@ public final class ConchValidator {
             }
             return;
         }
+        if (AuthenticatorChecks.uses(doc)
+                && ("auth".equals(ref) || ref.startsWith("auth.") || ref.startsWith("auth["))) {
+            String name = head(ref, "auth");
+            if (handledByDefault) {
+                errors.add(issue(ValidationCodes.LOGIN_DEFAULT, path, "不能用 default 包裹授权器变量 " + ref));
+            } else if (name == null || !templateIdentifier(name)) {
+                errors.add(issue(ValidationCodes.UNDECLARED_VARIABLE, path, "授权器变量要写成 auth.名字"));
+            }
+            return;
+        }
         String credential = head(ref, "credential");
         if (credential != null) {
             if (doc.credentials() == null || !doc.credentials().containsKey(credential)) {
@@ -1691,7 +1719,9 @@ public final class ConchValidator {
      * loginNames 仍是登录步骤产出的全部名字，供裸 {@code {{sid}}} 继续报原来的错。
      */
     private static void collectLoginVars(Auth auth, Set<String> loginNames, Set<String> loginVars) {
-        for (Step step : FlowSteps.flat(auth.steps())) {
+        ArrayList<Step> all = new ArrayList<>(auth.steps());
+        all.addAll(auth.exchange());
+        for (Step step : FlowSteps.flat(all)) {
             if ("repeat".equals(step.type()) && step.def().get("collect") instanceof Map<?, ?> collect) {
                 for (Object name : collect.keySet()) {
                     loginNames.add(String.valueOf(name));
@@ -1730,6 +1760,7 @@ public final class ConchValidator {
     private static void checkReservedSteps(ConchDoc doc, List<ValidationIssue> errors) {
         if (doc.auth() != null) {
             reservedSteps(doc.auth().steps(), "auth.steps", errors, 0);
+            reservedSteps(doc.auth().exchange(), "auth.exchange", errors, 0);
         }
         for (Map.Entry<String, Action> entry : doc.actions().entrySet()) {
             reservedSteps(entry.getValue().steps(), "actions." + entry.getKey() + ".steps", errors, 0);

@@ -12,6 +12,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Clock;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -637,6 +638,45 @@ public class LocalConchBehaviorTest {
             assertThatThrownBy(() -> local.importBytes(twice.getBytes(StandardCharsets.UTF_8), Actors.CLI))
                     .isInstanceOf(LocalConchException.class);
             assertThat(crab.paths.localConches().resolve("dup_ping.yaml")).doesNotExist();
+        }
+    }
+
+    @Test
+    void authenticatorPackagesAreRejectedUntilTheRuntimeLands() throws Exception {
+        // 1.13.0 的写法已经能解析和校验，运行时还没有：兼容版本停在 1.12.0，本机不能载入。
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("authenticator"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource);
+            String authenticator = """
+                    conch: corp_sso
+                    version: 1.0.0
+                    driver: auth
+                    min_crab_version: 1.13.0
+                    title: 统一登录
+                    description: 说明
+                    credentials: {}
+                    auth:
+                      origins: ["https://sso.corp.example"]
+                      steps:
+                        - request: { method: GET, url: https://sso.corp.example/login }
+                      alive_check:
+                        request: { method: GET, url: https://sso.corp.example/me }
+                    """;
+            String consumer = ping("corp_oa", "1.0.0")
+                    .replace("min_crab_version: 1.0.0", "min_crab_version: 1.13.0")
+                    .replace("credentials: {}", "auth:\n  use: corp_sso");
+            for (String yaml : List.of(authenticator, consumer)) {
+                LocalConches.CheckResult checked = local.check(yaml.getBytes(StandardCharsets.UTF_8));
+                assertThat(checked.ok()).isFalse();
+                assertThat(checked.errors()).extracting(issue -> issue.code()).containsExactly("MIN_CRAB_VERSION");
+                assertThatThrownBy(() -> local.importBytes(yaml.getBytes(StandardCharsets.UTF_8), Actors.CLI))
+                        .isInstanceOf(LocalConchException.class);
+            }
+            // 不抬高版本也进不来：新写法本身要求 1.13.0。
+            String lowered = authenticator.replace("min_crab_version: 1.13.0", "min_crab_version: 1.12.0");
+            assertThat(local.check(lowered.getBytes(StandardCharsets.UTF_8)).errors())
+                    .anyMatch(issue -> issue.code().equals("MIN_CRAB_VERSION"));
+            assertThat(crab.paths.localConches().resolve("corp_sso.yaml")).doesNotExist();
+            assertThat(crab.paths.localConches().resolve("corp_oa.yaml")).doesNotExist();
         }
     }
 

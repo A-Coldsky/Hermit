@@ -11,6 +11,7 @@ import dev.hermit.common.http.AuthOrigins;
 import dev.hermit.common.http.HostNames;
 import dev.hermit.common.http.SiteAddress;
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.FlowSteps;
@@ -53,7 +54,12 @@ final class AuthOriginChecks {
         Set<String> declared = AuthOrigins.declared(doc);
         Set<String> bases = SiteAddress.declared(doc);
         Scope scope = new Scope(declared, names, bases);
-        loginSteps(doc.auth().steps(), "auth.steps", scope, false, 0, warnings);
+        boolean authenticator = AuthenticatorChecks.isAuthenticator(doc);
+        loginSteps(doc.auth().steps(), "auth.steps", scope, false, 0, authenticator ? errors : null, warnings);
+        if (authenticator) {
+            authenticatorAlive(doc.auth().aliveCheck(), scope, errors);
+            return;
+        }
         if (origins.isEmpty()) {
             return;
         }
@@ -133,6 +139,7 @@ final class AuthOriginChecks {
             Scope scope,
             boolean conditional,
             int depth,
+            List<ValidationIssue> authenticatorErrors,
             List<ValidationIssue> warnings
     ) {
         if (steps == null || depth > FlowSteps.MAX_DEPTH) {
@@ -144,7 +151,8 @@ final class AuthOriginChecks {
             if (FlowSteps.isFlow(step)) {
                 boolean inner = conditional || FlowSteps.IF.equals(step.type());
                 for (String key : FlowSteps.branchKeys(step)) {
-                    loginSteps(FlowSteps.branch(step, key), typed + "." + key, scope, inner, depth + 1, warnings);
+                    loginSteps(FlowSteps.branch(step, key), typed + "." + key, scope, inner, depth + 1,
+                            authenticatorErrors, warnings);
                 }
                 continue;
             }
@@ -154,6 +162,17 @@ final class AuthOriginChecks {
             }
             String url = (String) step.def().get(key);
             Target target = scope.target(url);
+            if (authenticatorErrors != null) {
+                // 授权器没有 base_url：相对路径没有地方可去，认证地址之外的主机一律不能访问。
+                if (relative(url)) {
+                    authenticatorErrors.add(ConchValidator.issue(ValidationCodes.AUTHENTICATOR, typed + "." + key,
+                            "授权器没有 base_url，请求要写以 auth.origins 里的地址开头的完整地址"));
+                } else if (target == Target.OTHER) {
+                    authenticatorErrors.add(ConchValidator.issue(ValidationCodes.AUTHENTICATOR, typed + "." + key,
+                            "指向 " + site(url) + "，不在 auth.origins 里"));
+                }
+                continue;
+            }
             if (target == Target.OTHER) {
                 warnings.add(ConchValidator.issue(ValidationCodes.AUTH_ORIGIN, typed + "." + key,
                         "指向 " + site(url) + "，既不是 base_url 也不在 auth.origins 里，运行时会被拒绝。"
@@ -164,6 +183,34 @@ final class AuthOriginChecks {
                                 + "建议先请求应用，用 if 判断出现登录页时才提交"));
             }
         }
+    }
+
+    /** 授权器的探活只能用 url，并且以声明的认证地址开头。 */
+    private static void authenticatorAlive(AliveCheck alive, Scope scope, List<ValidationIssue> errors) {
+        if (alive == null) {
+            return;
+        }
+        Map<String, Object> request = alive.request();
+        if (request.containsKey("path")) {
+            errors.add(ConchValidator.issue(ValidationCodes.AUTHENTICATOR, "auth.alive_check.request.path",
+                    "授权器没有 base_url，alive_check 要用 url 写完整地址，不能用 path"));
+        }
+        if (!(request.get("url") instanceof String url) || url.isBlank()) {
+            if (!request.containsKey("path")) {
+                errors.add(ConchValidator.issue(ValidationCodes.AUTHENTICATOR, "auth.alive_check.request.url",
+                        "授权器的 alive_check 必须写 url"));
+            }
+            return;
+        }
+        if (scope.target(url) != Target.AUTH) {
+            errors.add(ConchValidator.issue(ValidationCodes.AUTHENTICATOR, "auth.alive_check.request.url",
+                    "授权器的 alive_check 必须以 auth.origins 里的地址开头"));
+        }
+    }
+
+    private static boolean relative(String url) {
+        String text = url.trim();
+        return !text.startsWith("{{") && !ORIGIN.matcher(text).lookingAt();
     }
 
     private static void actionSteps(

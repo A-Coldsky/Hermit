@@ -178,6 +178,12 @@ class AuthenticatorValidationTest {
         assertThat(paths(validate(AUTHENTICATOR.replace(
                 "url: https://sso.corp.example/login", "url: https://evil.example/login"))))
                 .contains("auth.steps[0].request.url");
+        assertThat(paths(validate(AUTHENTICATOR.replace("url: https://sso.corp.example/login", "follow_redirects: true"))))
+                .contains("auth.steps[0].request");
+        assertThat(paths(validate(AUTHENTICATOR
+                .replace("url: https://sso.corp.example/login", "url: \"{{config.other}}/login\"")
+                .replace("credentials:", "config:\n  other: { type: url, label: 别的地址 }\ncredentials:"))))
+                .contains("auth.steps[0].request.url");
         assertThat(paths(validate(AUTHENTICATOR.replace("url: https://sso.corp.example/me", "path: /me"))))
                 .contains("auth.alive_check.request.path");
         assertThat(paths(validate(AUTHENTICATOR.replace(
@@ -253,6 +259,16 @@ class AuthenticatorValidationTest {
                 "headers: { Authorization: \"{{credential.password}}\" }\n    - extract"));
         assertThat(credential.errors()).anyMatch(issue -> issue.code().equals(ValidationCodes.UNDECLARED_CREDENTIAL)
                 && issue.path().startsWith("auth.exchange[0]"));
+    }
+
+    @Test
+    void exchangeCannotTransferFiles() {
+        for (String key : new String[] {"download: true", "multipart: { f: { text: x } }"}) {
+            ValidationResult result = validate(CONSUMER.replace(
+                    "path: /api/ticket\n", "path: /api/ticket\n        " + key + "\n"));
+            assertThat(result.errors()).as(key).anyMatch(issue -> issue.path().equals("auth")
+                    && issue.message().equals(FileTransfers.AUTH_STEPS));
+        }
     }
 
     @Test

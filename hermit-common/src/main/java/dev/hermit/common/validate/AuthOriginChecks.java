@@ -158,6 +158,10 @@ final class AuthOriginChecks {
             }
             String key = "request".equals(step.type()) ? addressKey(step.def()) : null;
             if (key == null) {
+                if (authenticatorErrors != null && "request".equals(step.type())) {
+                    authenticatorErrors.add(ConchValidator.issue(ValidationCodes.AUTHENTICATOR, typed,
+                            "授权器没有 base_url，请求要写以 auth.origins 里的地址开头的完整地址"));
+                }
                 continue;
             }
             String url = (String) step.def().get(key);
@@ -170,6 +174,9 @@ final class AuthOriginChecks {
                 } else if (target == Target.OTHER) {
                     authenticatorErrors.add(ConchValidator.issue(ValidationCodes.AUTHENTICATOR, typed + "." + key,
                             "指向 " + site(url) + "，不在 auth.origins 里"));
+                } else if (target == Target.UNKNOWN && AuthOrigins.leadingConfigName(url) != null) {
+                    authenticatorErrors.add(ConchValidator.issue(ValidationCodes.AUTHENTICATOR, typed + "." + key,
+                            "config." + AuthOrigins.leadingConfigName(url) + " 没有写进 auth.origins"));
                 }
                 continue;
             }

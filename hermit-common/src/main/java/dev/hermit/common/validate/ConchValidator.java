@@ -2349,6 +2349,7 @@ public final class ConchValidator {
         if (doc.auth() != null) {
             AliveCheck alive = doc.auth().aliveCheck();
             boolean inAuth = stepsUseKey(doc.auth().steps(), "multipart") || stepsUseKey(doc.auth().steps(), "download")
+                    || stepsUseKey(doc.auth().exchange(), "multipart") || stepsUseKey(doc.auth().exchange(), "download")
                     || (alive != null && alive.request() != null
                     && (used(alive.request().get("multipart")) || used(alive.request().get("download"))));
             if (inAuth) {

@@ -632,6 +632,29 @@ describe('M13 & M14: 错误与空态分离、ReportsView、AccountsPanel 与 Ove
     wrapper.unmount()
   })
 
+  it('AccountsPanel 开发者模式下测试登录失败带 traceId 时展示可跳转与可复制的开发追踪编号', async () => {
+    crab.testLogin.mockRejectedValueOnce(
+      new ApiError(422, 'AUTH_FAILED', '登录失败', null, 'trace-login-1', null, null),
+    )
+
+    const wrapper = await mountPage(AccountsPanel, {
+      props: { conch: 'local_oa', accounts: [sampleAccount()], credentials: [] },
+      attach: true,
+    })
+    await flushPromises()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text().trim() === '测试登录')!
+    await testBtn.trigger('click')
+    await flushPromises()
+
+    const traceBox = document.body.querySelector('[data-test="test-login-trace"]')
+    expect(traceBox).not.toBeNull()
+    expect(traceBox?.textContent).toContain('trace-login-1')
+    expect(traceBox?.textContent).toContain('debug_trace')
+    expect(traceBox?.querySelector('a')?.getAttribute('href')).toContain('trace-login-1')
+    wrapper.unmount()
+  })
+
   it('OverviewView 同步结果缺少版本号时不显示悬空的 v', async () => {
     crab.syncStatus.mockResolvedValue({
       report: {

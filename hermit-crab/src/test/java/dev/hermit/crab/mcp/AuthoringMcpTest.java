@@ -690,6 +690,7 @@ class AuthoringMcpTest {
                     {"jsonrpc":"2.0","id":2,"method":"tools/list"}
                     """, Map.of());
             assertThat(remoteTools.body()).contains("debug_trace")
+                    .doesNotContain("debug_trace_list")
                     .doesNotContain("conch_guide")
                     .doesNotContain("conch_read_yaml")
                     .doesNotContain("conch_capture_list")
@@ -702,9 +703,12 @@ class AuthoringMcpTest {
                     """, Map.of());
             assertThat(remoteResources.body()).doesNotContain(AuthoringGuide.URI);
             for (String tool : java.util.List.of(
-                    "conch_guide", "conch_read_yaml", "conch_capture_list", "conch_capture_get",
+                    "debug_trace_list", "conch_guide", "conch_read_yaml", "conch_capture_list", "conch_capture_get",
                     "conch_validate", "conch_save_local", "conch_trial_run")) {
                 String payload = switch (tool) {
+                    case "debug_trace_list" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"debug_trace_list","arguments":{}}}
+                            """;
                     case "conch_guide" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_guide","arguments":{}}}
                             """;
@@ -745,6 +749,22 @@ class AuthoringMcpTest {
             JsonNode saved = server.call(localSession, "conch_save_local", Map.of("yaml", yaml));
             assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();
             assertThat(server.runtime.paths().localConches().resolve("remote_ping.yaml")).exists();
+
+            // 控制台触发的本地包 test_login 追踪：本机全部权限读写 Key 可查，远端连接仍拒绝。
+            server.runtime.admin().createAccount("remote_ping", "alice", Actors.CONSOLE);
+            dev.hermit.common.model.ConchDoc savedDoc = server.runtime.registry().find("remote_ping").orElseThrow();
+            server.runtime.admin().testLogin(
+                    dev.hermit.crab.store.Origin.LOCAL, savedDoc, "alice", "remote-console-login", Actors.CONSOLE);
+            assertThat(server.runtime.devTraces().find("remote-console-login")).isPresent();
+            JsonNode localSeen = server.call(localSession, "debug_trace", Map.of("traceId", "remote-console-login"));
+            assertThat(localSeen.path("result").path("isError").asBoolean(true)).as(localSeen.toString()).isFalse();
+            HttpResponse<String> remoteDenied = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
+                    {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"debug_trace","arguments":{"traceId":"remote-console-login"}}}
+                    """, Map.of());
+            assertThat(remoteDenied.statusCode()).isEqualTo(200);
+            JsonNode remoteDeniedBody = ApiJson.tree(remoteDenied.body());
+            assertThat(toolError(remoteDeniedBody).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(remoteDeniedBody)).isEqualTo(McpCalls.TRACE_DENIED);
         }
     }
 

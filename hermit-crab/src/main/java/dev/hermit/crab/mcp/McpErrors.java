@@ -229,7 +229,7 @@ final class McpErrors {
             return "换一把没有勾选「只允许调用只读能力」的 Key。只读 Key 仍可以校验，也可以试跑 read_only 为 true 的能力。";
         }
         if (McpCalls.TRACE_DENIED.equals(message)) {
-            return "点名该本地规则包，或用试跑的那把全部权限 Key 读取自己的试跑追踪。正式包的追踪不能读。";
+            return "请使用点名该本地规则包的读写 Key，或本机全部权限读写 Key（可查自己试跑及控制台测试登录/试跑/刷新的本地调试追踪）。其他 API Key 和正式包的追踪不能读。";
         }
         if (McpCalls.TRACE_OUT_OF_SCOPE.equals(message)) {
             return "到 Crab 控制台「调用记录」按这个编号查看步骤和错误。只有开发者模式下的本地规则包调用才有开发追踪。";

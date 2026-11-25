@@ -94,6 +94,8 @@ describe('Crab 开发者模式', () => {
     expect(prompt).toContain('改已有包沿用原包名，需确认时让我确认，不要自己填 confirm')
     expect(prompt).not.toContain('换一个新包名')
     expect(prompt).toContain('conch_trial_run')
+    expect(prompt).toContain('debug_trace_list')
+    expect(prompt).toContain('测试登录')
     expect(prompt).toContain('/mcp')
     expect(prompt).toContain('Bearer <API Key>')
     expect(prompt).toContain('使用全部权限且未勾选只读的本机 API Key')

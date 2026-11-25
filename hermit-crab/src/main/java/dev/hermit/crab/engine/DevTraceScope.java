@@ -3,8 +3,10 @@ package dev.hermit.crab.engine;
 import java.util.Map;
 
 /**
- * The draft for the capability call currently running on this thread.
- * {@link RuleEngine#testLogin} does not set it. {@code execute} clears it before listeners run.
+ * The draft for the capability or login call currently running on this thread.
+ * {@code execute}, {@link RuleEngine#testLogin}, {@link RuleEngine#continueLogin}, and
+ * {@link RuleEngine#resendLogin} open it for local HTTP conches while developer mode is on
+ * and clear it before listeners run.
  */
 final class DevTraceScope {
     private static final ThreadLocal<DevTraceDraft> CURRENT = new ThreadLocal<>();

@@ -209,15 +209,26 @@ class DevTraceFlowTest {
             assertThat(content.path("devTrace").path("kind").asText()).isEqualTo("http");
             assertThat(content.toString()).doesNotContain(PASSWORD).doesNotContain(COOKIE);
 
+            CreatedApiKey allReadOnlyKey = runtime.apiKeys().create(
+                    "all-ro", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+            String allSession = initialize(http, crab, allKey.plaintext());
+
             JsonNode hidden = mcp(http, crab, otherKey.plaintext(), initialize(http, crab, otherKey.plaintext()),
                     4, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
-            assertThat(toolMessage(hidden)).isEqualTo(
-                    "这把 API Key 不能读取这条追踪。点名了该本地规则包的 Key 可以读。全部权限 Key 只能读自己用 conch_trial_run 试跑出来的本地规则包追踪。正式包的追踪不能读。");
+            assertThat(toolMessage(hidden)).contains("这把 API Key 不能读取这条追踪");
             assertThat(toolMessage(hidden)).doesNotContain("没有这个工具");
-            JsonNode allHidden = mcp(http, crab, allKey.plaintext(), initialize(http, crab, allKey.plaintext()),
+            // 本机全部权限读写 Key 在开发者模式下可读控制台试跑追踪，但仍不能读其他 API Key 的追踪，只读 Key 亦不可读。
+            JsonNode allConsoleSeen = mcp(http, crab, allKey.plaintext(), allSession,
                     5, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
-            assertThat(toolMessage(allHidden)).isEqualTo(toolMessage(hidden));
-            JsonNode officialHidden = mcp(http, crab, allKey.plaintext(), initialize(http, crab, allKey.plaintext()),
+            assertThat(allConsoleSeen.path("result").path("isError").asBoolean(true)).as(allConsoleSeen.toString()).isFalse();
+            JsonNode allOtherKeyHidden = mcp(http, crab, allKey.plaintext(), allSession,
+                    51, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", "key-trace")));
+            assertThat(toolMessage(allOtherKeyHidden)).isEqualTo(toolMessage(hidden));
+            JsonNode allRoHidden = mcp(http, crab, allReadOnlyKey.plaintext(), initialize(http, crab, allReadOnlyKey.plaintext()),
+                    52, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+            assertThat(toolMessage(allRoHidden)).isEqualTo(toolMessage(hidden));
+
+            JsonNode officialHidden = mcp(http, crab, allKey.plaintext(), allSession,
                     9, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", "official-trace")));
             // 正式包的调用有调用记录但没有开发追踪：说「不在可查范围」，不说成编号不存在。
             assertThat(toolMessage(officialHidden)).contains("不在可查范围").contains("调用记录").doesNotContain("没有这个工具");
@@ -235,7 +246,7 @@ class DevTraceFlowTest {
             assertThat(after.json.path("data").path("devTrace").isNull()).isTrue();
             String offSession = initialize(http, crab, localKey.plaintext());
             JsonNode offTools = mcp(http, crab, localKey.plaintext(), offSession, 7, "tools/list", null);
-            assertThat(toolNames(offTools)).doesNotContain("debug_trace");
+            assertThat(toolNames(offTools)).doesNotContain("debug_trace", "debug_trace_list");
             JsonNode offCall = mcp(http, crab, localKey.plaintext(), offSession, 8, "tools/call",
                     Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolMessage(offCall)).contains("追踪已删").doesNotContain("没有这个工具");
@@ -256,6 +267,189 @@ class DevTraceFlowTest {
             runtime.close();
             upstream.stop(0);
         }
+    }
+
+    @Test
+    void localTestLoginRecordsRedactedDevTraceForAgentAndConsole() throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean acceptLogin = new java.util.concurrent.atomic.AtomicBoolean(false);
+        HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        upstream.createContext("/login", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            if (acceptLogin.get()) {
+                respond(exchange, 200, "{\"ok\":true,\"note\":\"login-ok\"}", true);
+            } else {
+                respond(exchange, 401, "{\"code\":401,\"msg\":\"bad password " + PASSWORD + "\"}", false);
+            }
+        });
+        upstream.start();
+        CrabRuntime runtime = CrabRuntime.open(
+                new CrabPaths(temp.resolve("test-login-trace")),
+                CrabConfig.defaults().withListen("127.0.0.1", 0));
+        CrabHttpServer server = new CrabHttpServer(runtime);
+        try {
+            server.start();
+            String base = "http://127.0.0.1:" + upstream.getAddress().getPort();
+            runtime.localConches().importBytes(yaml(base).getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            runtime.admin().createAccount("local_echo", "alice", Actors.CONSOLE);
+            ConchDoc local = runtime.registry().find("local_echo").orElseThrow();
+            runtime.admin().writeCredentials(local, "alice", Map.of("password", PASSWORD, "pin", "abc"), Actors.CONSOLE);
+
+            ConchDoc official = ConchParser.parse(officialAuthYaml(base));
+            runtime.registry().put(official);
+            runtime.admin().createAccount("official_auth", "alice", Actors.CONSOLE);
+            runtime.admin().writeCredentials(official, "alice", Map.of("password", PASSWORD), Actors.CONSOLE);
+
+            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+            String crab = "http://127.0.0.1:" + server.port();
+
+            // 1. 开发者模式关闭时，本地包测试登录失败不写 dev_traces，仍返回 requestId。
+            Reply offFail = post(http, crab, "/console/api/conches/local_echo/accounts/alice/test-login", "{}");
+            assertThat(offFail.status).isEqualTo(422);
+            assertThat(offFail.json.has("traceId")).isFalse();
+            assertThat(offFail.json.path("requestId").asText()).isNotBlank();
+            assertThat(offFail.json.path("requestNote").asText()).contains("不可查追踪");
+            assertThat(runtime.devTraces().count()).isZero();
+
+            // 2. 开启开发者模式后，本地包测试登录失败记录脱敏 dev_traces 并返回 traceId，不污染 call_logs/report_queue。
+            runtime.debug().setEnabled(true, Actors.CONSOLE);
+            int queuedBefore = reportRows(runtime);
+            HttpResponse<String> failRaw = http.send(
+                    HttpRequest.newBuilder(URI.create(crab + "/console/api/conches/local_echo/accounts/alice/test-login"))
+                            .timeout(Duration.ofSeconds(20))
+                            .header("X-Hermit-Console", "1")
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(failRaw.statusCode()).isEqualTo(422);
+            JsonNode failJson = ApiJson.tree(failRaw.body());
+            String failTraceId = failJson.path("traceId").asText();
+            assertThat(failTraceId).isNotBlank();
+            assertThat(failJson.has("requestId")).isFalse();
+            assertThat(failRaw.headers().firstValue("X-Hermit-Trace")).contains(failTraceId);
+            assertThat(runtime.callLogs().findByTraceId(failTraceId)).isEmpty();
+            assertThat(reportRows(runtime)).isEqualTo(queuedBefore);
+
+            DevTraceStore.Trace stored = runtime.devTraces().find(failTraceId).orElseThrow();
+            assertThat(stored.action()).isEqualTo(DevTraceStore.TEST_LOGIN_ACTION);
+            assertThat(stored.body()).doesNotContain(PASSWORD).doesNotContain(COOKIE).contains("***");
+            assertSensitiveHeadersAbsent(ApiJson.tree(stored.body()));
+
+            // 3. 控制台 /console/api/calls/{traceId} 可直接查看仅存在 dev_traces 的测试登录追踪。
+            Reply consoleDetail = get(http, crab, "/console/api/calls/" + failTraceId);
+            assertThat(consoleDetail.status).as(consoleDetail.body).isEqualTo(200);
+            assertThat(consoleDetail.json.path("data").path("action").asText()).isEqualTo(DevTraceStore.TEST_LOGIN_ACTION);
+            assertThat(consoleDetail.json.path("data").path("success").asBoolean()).isFalse();
+            assertThat(consoleDetail.json.path("data").path("devTrace").path("kind").asText()).isEqualTo("http");
+            assertThat(consoleDetail.json.path("data").path("devTrace").path("session").path("loginOk").asBoolean()).isFalse();
+
+            // 4. 本机全部权限读写 Key 与点名该本地包的读写 Key 均可通过 debug_trace_list 与 debug_trace 调试；
+            //    只读 Key、其他包 Key 保持隔离。
+            CreatedApiKey allKey = runtime.apiKeys().create(
+                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+            CreatedApiKey allRoKey = runtime.apiKeys().create(
+                    "all-ro", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+            CreatedApiKey namedKey = runtime.apiKeys().create(
+                    "named", new ApiKeyScope(Set.of("local_echo"), Set.of(), false), Actors.CONSOLE);
+            CreatedApiKey namedRoKey = runtime.apiKeys().create(
+                    "named-ro", new ApiKeyScope(Set.of("local_echo"), Set.of(), true), Actors.CONSOLE);
+            CreatedApiKey otherKey = runtime.apiKeys().create(
+                    "other", new ApiKeyScope(Set.of("official_auth"), Set.of(), false), Actors.CONSOLE);
+
+            String allSession = initialize(http, crab, allKey.plaintext());
+            JsonNode listedTools = mcp(http, crab, allKey.plaintext(), allSession, 1, "tools/list", null);
+            assertThat(toolNames(listedTools)).contains("debug_trace", "debug_trace_list");
+
+            JsonNode listed = mcp(http, crab, allKey.plaintext(), allSession, 2, "tools/call",
+                    Map.of("name", "debug_trace_list", "arguments", Map.of("conch", "local_echo", "action", "test_login")));
+            assertThat(listed.path("result").path("isError").asBoolean(true)).as(listed.toString()).isFalse();
+            JsonNode listedBody = ApiJson.tree(listed.path("result").path("content").get(0).path("text").asText());
+            assertThat(listedBody.path("total").asInt()).isEqualTo(1);
+            assertThat(listedBody.path("traces").get(0).path("traceId").asText()).isEqualTo(failTraceId);
+
+            JsonNode allRead = mcp(http, crab, allKey.plaintext(), allSession, 3, "tools/call",
+                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", failTraceId)));
+            assertThat(allRead.path("result").path("isError").asBoolean(true)).as(allRead.toString()).isFalse();
+            JsonNode allReadBody = ApiJson.tree(allRead.path("result").path("content").get(0).path("text").asText());
+            assertThat(allReadBody.path("action").asText()).isEqualTo(DevTraceStore.TEST_LOGIN_ACTION);
+            assertThat(allReadBody.path("untrusted").asBoolean()).isTrue();
+            assertThat(allReadBody.toString()).doesNotContain(PASSWORD).doesNotContain(COOKIE);
+
+            JsonNode namedRead = mcp(http, crab, namedKey.plaintext(), initialize(http, crab, namedKey.plaintext()),
+                    4, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", failTraceId)));
+            assertThat(namedRead.path("result").path("isError").asBoolean(true)).as(namedRead.toString()).isFalse();
+
+            for (CreatedApiKey deniedKey : List.of(allRoKey, namedRoKey, otherKey)) {
+                String deniedSession = initialize(http, crab, deniedKey.plaintext());
+                JsonNode deniedRead = mcp(http, crab, deniedKey.plaintext(), deniedSession,
+                        5, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", failTraceId)));
+                assertThat(deniedRead.path("result").path("isError").asBoolean(false)).as(deniedKey.name()).isTrue();
+                assertThat(toolMessage(deniedRead)).contains("不能读取这条追踪");
+                JsonNode deniedList = mcp(http, crab, deniedKey.plaintext(), deniedSession,
+                        6, "tools/call", Map.of("name", "debug_trace_list", "arguments", Map.of("conch", "local_echo")));
+                JsonNode deniedListBody = ApiJson.tree(deniedList.path("result").path("content").get(0).path("text").asText());
+                assertThat(deniedListBody.path("total").asInt()).as(deniedKey.name()).isZero();
+            }
+
+            // 5. 测试登录成功也记录追踪并在 data.traceId 返回；正式包测试登录失败绝不记录追踪。
+            acceptLogin.set(true);
+            Reply okLogin = post(http, crab, "/console/api/conches/local_echo/accounts/alice/test-login", "{}");
+            assertThat(okLogin.status).as(okLogin.body).isEqualTo(200);
+            String okTraceId = okLogin.json.path("data").path("traceId").asText();
+            assertThat(okTraceId).isNotBlank();
+            assertThat(runtime.devTraces().find(okTraceId)).isPresent();
+
+            acceptLogin.set(false);
+            Reply officialFail = post(http, crab, "/console/api/conches/official_auth/accounts/alice/test-login", "{}");
+            assertThat(officialFail.status).isEqualTo(422);
+            assertThat(officialFail.json.has("traceId")).isFalse();
+            assertThat(officialFail.json.path("requestId").asText()).isNotBlank();
+            assertThat(runtime.devTraces().find(officialFail.json.path("requestId").asText())).isEmpty();
+
+            // 6. 关闭开发者模式后清空测试登录追踪，/console/api/calls/{traceId} 回到 404。
+            runtime.debug().setEnabled(false, Actors.CONSOLE);
+            assertThat(runtime.devTraces().count()).isZero();
+            assertThat(get(http, crab, "/console/api/calls/" + failTraceId).status).isEqualTo(404);
+        } finally {
+            server.close();
+            runtime.close();
+            upstream.stop(0);
+        }
+    }
+
+    private static String officialAuthYaml(String base) {
+        return """
+                conch: official_auth
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: %s
+                title: 正式认证
+                description: 正式包测试登录不记开发追踪。
+                credentials:
+                  password: { type: secret, required: true }
+                auth:
+                  steps:
+                    - request:
+                        method: POST
+                        path: /login
+                        json:
+                          password: "{{ credential.password }}"
+                    - assert:
+                        status: 200
+                actions:
+                  ping:
+                    title: 探测
+                    description: 返回标记。
+                    steps:
+                      - set:
+                          marker: ok
+                    output:
+                      marker: { type: string, description: 标记, value: ok }
+                    examples:
+                      - input: {}
+                        output: { marker: ok }
+                """.formatted(base);
     }
 
     @Test
@@ -285,8 +479,8 @@ class DevTraceFlowTest {
                     new String[] {"debug", "run", "local_echo", "echo", "--account", "alice"},
                     env(home, Map.of()),
                     new ByteArrayInputStream("{}\n".getBytes(StandardCharsets.UTF_8)),
-                    new java.io.PrintStream(out),
-                    new java.io.PrintStream(err));
+                    utf8PrintStream(out),
+                    utf8PrintStream(err));
             assertThat(ran).as(err.toString(StandardCharsets.UTF_8)).isZero();
             String stdout = out.toString(StandardCharsets.UTF_8);
             assertThat(stdout).contains("traceId=").doesNotContain(PASSWORD).doesNotContain(COOKIE);
@@ -298,8 +492,8 @@ class DevTraceFlowTest {
                     new String[] {"debug", "trace", traceId},
                     env(home, Map.of()),
                     emptyStdin(),
-                    new java.io.PrintStream(traced),
-                    new java.io.PrintStream(new ByteArrayOutputStream()))).isZero();
+                    utf8PrintStream(traced),
+                    utf8PrintStream(new ByteArrayOutputStream()))).isZero();
             assertThat(traced.toString(StandardCharsets.UTF_8)).contains("\"kind\":\"http\"")
                     .doesNotContain(PASSWORD).doesNotContain(COOKIE).contains("abc");
 
@@ -309,8 +503,8 @@ class DevTraceFlowTest {
                     new String[] {"debug", "trace", traceId},
                     env(home, Map.of()),
                     emptyStdin(),
-                    new java.io.PrintStream(new ByteArrayOutputStream()),
-                    new java.io.PrintStream(denied));
+                    utf8PrintStream(new ByteArrayOutputStream()),
+                    utf8PrintStream(denied));
             assertThat(missingPassword).isEqualTo(1);
             assertThat(denied.toString(StandardCharsets.UTF_8)).contains("请提供口令");
 
@@ -319,8 +513,8 @@ class DevTraceFlowTest {
                     new String[] {"debug", "trace", traceId, "--from-env", "PW"},
                     env(home, Map.of("PW", "console-secret-1")),
                     emptyStdin(),
-                    new java.io.PrintStream(allowed),
-                    new java.io.PrintStream(new ByteArrayOutputStream()))).isZero();
+                    utf8PrintStream(allowed),
+                    utf8PrintStream(new ByteArrayOutputStream()))).isZero();
             assertThat(allowed.toString(StandardCharsets.UTF_8)).contains("SID");
 
             assertThat(cli(home, Map.of("PW", "console-secret-1"), "debug", "off", "--from-env", "PW")).isZero();
@@ -329,8 +523,8 @@ class DevTraceFlowTest {
                     new String[] {"debug", "trace", traceId, "--from-env", "PW"},
                     env(home, Map.of("PW", "console-secret-1")),
                     emptyStdin(),
-                    new java.io.PrintStream(new ByteArrayOutputStream()),
-                    new java.io.PrintStream(gone));
+                    utf8PrintStream(new ByteArrayOutputStream()),
+                    utf8PrintStream(gone));
             assertThat(missing).isEqualTo(1);
             assertThat(gone.toString(StandardCharsets.UTF_8)).contains("没有这条开发追踪。");
 
@@ -347,12 +541,16 @@ class DevTraceFlowTest {
         return new ByteArrayInputStream(new byte[0]);
     }
 
+    private static java.io.PrintStream utf8PrintStream(ByteArrayOutputStream out) {
+        return new java.io.PrintStream(out, true, StandardCharsets.UTF_8);
+    }
+
     private static int cli(Path home, Map<String, String> extra, String... args) {
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = new CrabCommand().run(args, env(home, extra == null ? Map.of() : extra),
                 new ByteArrayInputStream(new byte[0]),
-                new java.io.PrintStream(new ByteArrayOutputStream()),
-                new java.io.PrintStream(err));
+                utf8PrintStream(new ByteArrayOutputStream()),
+                utf8PrintStream(err));
         assertThat(code).as(err.toString(StandardCharsets.UTF_8)).isZero();
         return code;
     }

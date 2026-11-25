@@ -35,7 +35,7 @@ final class McpCalls {
     static final String NO_CONFIRM = "客户端不支持确认，拒绝执行写操作";
     static final String REJECTED = "用户拒绝执行";
     static final String TRACE_DENIED =
-            "这把 API Key 不能读取这条追踪。点名了该本地规则包的 Key 可以读。全部权限 Key 只能读自己用 conch_trial_run 试跑出来的本地规则包追踪。正式包的追踪不能读。";
+            "这把 API Key 不能读取这条追踪。点名了该本地规则包的读写 Key 可以读，本机全部权限读写 Key 可读自己用 conch_trial_run 试跑出来的以及控制台触发的本地调试追踪。其他 API Key 和正式包的追踪不能读。";
     static final String TRACE_ABSENT = "没有这条追踪。编号不存在。";
     /** 编号对得上一条调用记录，但那次调用没有开发追踪（正式规则包，或开发者模式关着时的调用）。 */
     static final String TRACE_OUT_OF_SCOPE =
@@ -134,9 +134,10 @@ final class McpCalls {
         }
         Map<String, Object> arguments = request.arguments() == null ? Map.of() : request.arguments();
         if (McpCatalog.DEBUG_TRACE.equals(name)) {
-            return readTrace(principal, arguments, attempt);
+            return readTrace(principal, arguments, attempt, localCaller);
         }
-        if (McpCatalog.GUIDE.equals(name)
+        if (McpCatalog.DEBUG_TRACE_LIST.equals(name)
+                || McpCatalog.GUIDE.equals(name)
                 || McpCatalog.READ_YAML.equals(name)
                 || McpCatalog.CAPTURE_LIST.equals(name)
                 || McpCatalog.CAPTURE_GET.equals(name)
@@ -146,6 +147,9 @@ final class McpCalls {
             if (!localCaller) {
                 return fail(attempt, "FORBIDDEN", AuthoringCalls.LOCAL_ONLY);
             }
+        }
+        if (McpCatalog.DEBUG_TRACE_LIST.equals(name)) {
+            return listTraces(principal, arguments, attempt, localCaller);
         }
         if (McpCatalog.GUIDE.equals(name)) {
             return authoring.guide(arguments, attempt);
@@ -384,7 +388,8 @@ final class McpCalls {
     private McpSchema.CallToolResult readTrace(
             ApiKeyPrincipal principal,
             Map<String, Object> arguments,
-            Attempt attempt
+            Attempt attempt,
+            boolean localCaller
     ) {
         if (!runtime.debug().get().enabled()) {
             String id = arguments.get("traceId") instanceof String text ? text.trim() : "";
@@ -415,7 +420,7 @@ final class McpCalls {
             }
             return fail(attempt, "NOT_FOUND", TRACE_ABSENT);
         }
-        if (!visible(principal, trace)) {
+        if (!visible(principal, trace.origin(), trace.conch(), trace.action(), trace.traceId(), localCaller)) {
             return fail(attempt, "FORBIDDEN", TRACE_DENIED);
         }
         Object devTrace;
@@ -437,23 +442,102 @@ final class McpCalls {
         return ok(body);
     }
 
+    private static final Set<String> TRACE_LIST_FIELDS = Set.of("conch", "action", "limit");
+
+    private McpSchema.CallToolResult listTraces(
+            ApiKeyPrincipal principal,
+            Map<String, Object> arguments,
+            Attempt attempt,
+            boolean localCaller
+    ) {
+        if (!runtime.debug().get().enabled()) {
+            return fail(attempt, "NOT_FOUND", AuthoringCalls.DEV_MODE_CLOSED);
+        }
+        for (String key : arguments.keySet()) {
+            if (!TRACE_LIST_FIELDS.contains(key)) {
+                return failAsRequest(attempt, "INVALID_INPUT", "未知字段 " + key + "。");
+            }
+        }
+        String conch = null;
+        if (arguments.containsKey("conch") && arguments.get("conch") != null) {
+            if (!(arguments.get("conch") instanceof String text)) {
+                return failAsRequest(attempt, "INVALID_INPUT", "conch 必须是字符串。", "conch");
+            }
+            if (!text.isBlank()) {
+                conch = text.trim();
+            }
+        }
+        String action = null;
+        if (arguments.containsKey("action") && arguments.get("action") != null) {
+            if (!(arguments.get("action") instanceof String text)) {
+                return failAsRequest(attempt, "INVALID_INPUT", "action 必须是字符串。", "action");
+            }
+            if (!text.isBlank()) {
+                action = text.trim();
+            }
+        }
+        int limit = 10;
+        if (arguments.containsKey("limit") && arguments.get("limit") != null) {
+            Object rawLimit = arguments.get("limit");
+            if (!(rawLimit instanceof Number number)
+                    || rawLimit instanceof Double
+                    || rawLimit instanceof Float) {
+                return failAsRequest(attempt, "INVALID_INPUT", "limit 必须是 1 到 30 之间的整数。", "limit");
+            }
+            int parsed = number.intValue();
+            if (parsed < 1 || parsed > 30) {
+                return failAsRequest(attempt, "INVALID_INPUT", "limit 必须是 1 到 30 之间的整数。", "limit");
+            }
+            limit = parsed;
+        }
+        java.util.List<DevTraceStore.TraceSummary> candidates =
+                runtime.devTraces().listRecent(conch, action, DevTraceStore.MAX_LIST_LIMIT);
+        java.util.ArrayList<Map<String, Object>> traces = new java.util.ArrayList<>();
+        for (DevTraceStore.TraceSummary row : candidates) {
+            if (!visible(principal, row.origin(), row.conch(), row.action(), row.traceId(), localCaller)) {
+                continue;
+            }
+            LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+            item.put("traceId", row.traceId());
+            item.put("conch", row.conch());
+            item.put("account", row.account());
+            item.put("action", row.action());
+            item.put("createdAt", row.createdAt() == null ? null : row.createdAt().toString());
+            item.put("expiresAt", row.expiresAt() == null ? null : row.expiresAt().toString());
+            traces.add(item);
+            if (traces.size() >= limit) {
+                break;
+            }
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("traces", traces);
+        body.put("total", traces.size());
+        body.put("note", traces.isEmpty()
+                ? "当前没有可见的本机开发追踪。请在控制台执行测试登录/试跑，或调用 conch_trial_run 后再查。"
+                : "调用 debug_trace(traceId=...) 查看完整脱敏步骤详情。");
+        return ok(body);
+    }
+
     /**
-     * Local traces only. A named key still has to list the conch. A call recorded under another
-     * API key always stays hidden; only a true console/CLI trial ({@code apiKeyId == null}) can
-     * be read by another key that names the local conch.
-     * A full-scope key can read the local trial it started with {@code conch_trial_run}.
-     * Official traces are not local and stay hidden.
+     * Local traces only. A call recorded under another API key always stays hidden.
+     * A named key that lists the local conch can read console/CLI traces within its permission scope.
+     * A full-scope key can read its own {@code conch_trial_run} traces, and when connecting locally
+     * without read-only restriction in developer mode, can also read console/CLI local traces
+     * ({@code test_login}, {@code login_input}, {@code mcp_refresh}, and console trials where {@code apiKeyId == null}).
+     * Official traces are never stored and stay hidden.
      */
-    private boolean visible(ApiKeyPrincipal principal, DevTraceStore.Trace trace) {
-        if (trace.origin() != Origin.LOCAL || principal == null || principal.scope() == null) {
+    private boolean visible(
+            ApiKeyPrincipal principal,
+            Origin traceOrigin,
+            String conch,
+            String actionName,
+            String traceId,
+            boolean localCaller
+    ) {
+        if (traceOrigin != Origin.LOCAL || principal == null || principal.scope() == null) {
             return false;
         }
-        CallLogStore.CallDetail detail = runtime.callLogs().findByTraceId(trace.traceId()).orElse(null);
-        boolean namesConch = principal.scope().conches().contains(trace.conch());
-        boolean ownTrial = ownLocalTrial(principal, detail);
-        if (!namesConch && !ownTrial) {
-            return false;
-        }
+        CallLogStore.CallDetail detail = runtime.callLogs().findByTraceId(traceId).orElse(null);
         if (detail != null && detail.call().apiKeyId() != null
                 && !detail.call().apiKeyId().equals(principal.id())) {
             return false;
@@ -461,15 +545,29 @@ final class McpCalls {
         boolean fullPackageReadWrite = !principal.scope().readOnlyOnly()
                 && principal.scope().groups().isEmpty()
                 && principal.scope().actions().isEmpty();
-        if (DevTraceStore.MCP_REFRESH_ACTION.equals(trace.action())) {
-            return namesConch && fullPackageReadWrite;
+        boolean namesConch = principal.scope().conches().contains(conch);
+        boolean ownTrial = ownLocalTrial(principal, detail);
+        boolean localConsoleTrace = localCaller
+                && principal.scope().grantsAllOfficial()
+                && fullPackageReadWrite
+                && (detail == null || detail.call().apiKeyId() == null);
+        if (!namesConch && !ownTrial && !localConsoleTrace) {
+            return false;
         }
-        ConchDoc doc = runtime.registry().find(trace.conch(), Origin.LOCAL).orElse(null);
-        Action action = doc == null ? null : doc.actions().get(trace.action());
+        if (DevTraceStore.MCP_REFRESH_ACTION.equals(actionName)
+                || DevTraceStore.TEST_LOGIN_ACTION.equals(actionName)
+                || DevTraceStore.LOGIN_INPUT_ACTION.equals(actionName)) {
+            return (namesConch || localConsoleTrace) && fullPackageReadWrite;
+        }
+        ConchDoc doc = runtime.registry().find(conch, Origin.LOCAL).orElse(null);
+        Action action = doc == null ? null : doc.actions().get(actionName);
         if (action == null) {
             return fullPackageReadWrite;
         }
-        return principal.permits(trace.conch(), trace.action(), action.group(), CapabilityHttp.readOnly(action));
+        if (localConsoleTrace) {
+            return true;
+        }
+        return principal.permits(conch, actionName, action.group(), CapabilityHttp.readOnly(action));
     }
 
     /** Full-scope key, and the call log is the trial that key started. */

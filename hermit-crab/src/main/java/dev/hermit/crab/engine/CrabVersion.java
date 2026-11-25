@@ -17,7 +17,7 @@ public final class CrabVersion {
      * 1.12.0 起可以载入 {@code auth.expired_when}、{@code auth.alive_check.expect}，
      * 以及 {@code assert} 的 {@code on_fail: session_expired} 和变量断言键。
      */
-    public static final SemVer CURRENT = SemVer.parse("1.12.0");
+    public static final SemVer CURRENT = SemVer.parse("1.13.0");
 
     private CrabVersion() {
     }

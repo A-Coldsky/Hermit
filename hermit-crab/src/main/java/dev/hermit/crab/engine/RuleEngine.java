@@ -824,7 +824,7 @@ public final class RuleEngine implements ConchExecutor {
             URI base,
             long deadline
     ) {
-        LoginScope scope = open(conch, input, credentials, config, key, base, deadline);
+        LoginScope scope = new LoginScope(conch, input, credentials, config, key, base, deadline);
         if (conch.auth() == null || conch.auth().use() == null) {
             return scope;
         }

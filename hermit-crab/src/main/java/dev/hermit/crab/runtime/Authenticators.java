@@ -333,7 +333,13 @@ public final class Authenticators implements AuthLinks {
         if (!binding.boundBaseUrl().equals(site(key.origin(), doc))) {
             return REASON_ADDRESS_CHANGED;
         }
-        ConchRegistry.Active active = registry.authenticator(binding.authenticator().conch()).orElse(null);
+        SessionKey target = binding.authenticator();
+        if (registry.find(target.conch(), target.origin()).isEmpty()) {
+            // 绑定的那个来源的授权器这会儿不在本机（启动时正式包先载入，本地包还没到）。
+            // 这时生效的可能是另一个来源的同名包，不能据此判断；真被删掉时由 packageRemoved 作废。
+            return null;
+        }
+        ConchRegistry.Active active = registry.authenticator(target.conch()).orElse(null);
         if (active == null) {
             // 授权器这会儿不在本机，或者同名的包不再是授权器。后一种不会再回来。
             return registry.installed(binding.authenticator().conch()).isPresent() ? REASON_NO_LONGER_USES : null;

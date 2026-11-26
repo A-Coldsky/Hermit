@@ -319,11 +319,11 @@ describe('Reef 规则包目录：授权器页签', () => {
     expect(wrapper.find('[data-test="kind-filter"]').exists()).toBe(true)
 
     expect(wrapper.find('[data-test="kind-tabs"] svg').exists()).toBe(false)
-    expect(wrapper.find('.hm-card.conch .hm-kind-body > .hm-kind-water').attributes('data-kind')).toBe('http')
+    expect(wrapper.find('.hm-card.conch > .hm-kind-water').attributes('data-kind')).toBe('http')
     expect(wrapper.find('.hm-card.conch [data-test="driver-badge"]').attributes('data-kind')).toBe('http')
 
     await pick(wrapper, 'authenticators')
-    expect(wrapper.find('.hm-card.conch .hm-kind-body > .hm-kind-water').attributes('data-kind')).toBe('auth')
+    expect(wrapper.find('.hm-card.conch > .hm-kind-water').attributes('data-kind')).toBe('auth')
     expect(wrapper.find('[data-test="conch-count"]').text()).toBe('共 1 个')
     expect(wrapper.find('[data-test="kind-filter"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="used-by"]').text()).toContain('corp_oa')

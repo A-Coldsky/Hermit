@@ -156,15 +156,11 @@ onMounted(load)
             <span v-if="row.authUse" class="mono hm-muted host" data-test="auth-use">授权器：{{ row.authUse }}</span>
             <span v-if="row.driver === 'auth' && consumersOf(row.conch).length" class="mono hm-muted host" data-test="used-by">被引用：{{ consumersOf(row.conch).join('、') }}</span>
           </div>
-          <div class="hm-kind-body">
-            <div class="hm-kind-main">
-              <p class="desc">{{ row.description || '没有描述' }}</p>
-              <div class="tags">
-                <el-tag v-for="tag in row.tags" :key="tag" size="small" effect="plain" round>{{ tag }}</el-tag>
-              </div>
-            </div>
-            <KindShell :kind="row.driver" :size="56" class="hm-kind-water" aria-hidden="true" />
+          <p class="desc">{{ row.description || '没有描述' }}</p>
+          <div class="tags">
+            <el-tag v-for="tag in row.tags" :key="tag" size="small" effect="plain" round>{{ tag }}</el-tag>
           </div>
+          <KindShell :kind="row.driver" :size="56" class="hm-kind-water" aria-hidden="true" />
           <div class="foot hm-muted">
             <span><b class="num">{{ row.capabilityCount }}</b> 个{{ isMcp(row) ? '工具' : '能力' }}</span>
             <span :title="`${pullCountHint}，各版本合计`">拉取次数 <b class="num">{{ row.pullCount }}</b></span>
@@ -258,16 +254,47 @@ onMounted(load)
   gap: 16px;
 }
 
+/*
+ * 卡片分五个区：标题、类型行、描述、标签、底部信息。支持 subgrid 时，同一排卡片的每个区等高，
+ * 各区的起始位置横向对齐；类型水印在描述和标签右边，靠下。
+ */
 .conch {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
+  align-content: start;
   color: inherit;
+}
+
+.conch > * {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.conch > .desc,
+.conch > .tags {
+  grid-column: 1;
+}
+
+.conch > .tags {
+  align-content: flex-start;
+}
+
+.conch > .hm-kind-water {
+  grid-area: 3 / 2 / span 2 / auto;
+  align-self: end;
+}
+
+@supports (grid-template-rows: subgrid) {
+  .conch {
+    grid-row: span 5;
+    grid-template-rows: subgrid;
+  }
 }
 
 .top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
 }
 

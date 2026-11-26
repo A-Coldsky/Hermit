@@ -772,21 +772,23 @@ onMounted(load)
             <span class="mono hm-muted">{{ row.file }}</span>
           </div>
         </div>
-        <div class="status bad">
-          <el-icon><CircleCloseFilled /></el-icon>
-          <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
-          <span v-else>未载入，不能调用。修好文件后重新导入覆盖，或先删除再导入</span>
+        <div class="hm-kind-main">
+          <div class="status bad">
+            <el-icon><CircleCloseFilled /></el-icon>
+            <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
+            <span v-else>未载入，不能调用。修好文件后重新导入覆盖，或先删除再导入</span>
+          </div>
+          <p v-if="row.ruleDisabled ? disabledReasonOnly(row.reason) : row.reason" class="broken-reason" data-test="broken-reason">
+            {{ row.ruleDisabled ? disabledReasonOnly(row.reason) : row.reason }}
+          </p>
+          <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
+          <LocalHistoryList
+            :entries="historyOf(row.conch)"
+            :error="historyErrors[row.conch] ?? null"
+            :loading-id="restoreLoadingId(row.conch)"
+            @restore="restoreHistory(row.conch, $event)"
+          />
         </div>
-        <p v-if="row.ruleDisabled ? disabledReasonOnly(row.reason) : row.reason" class="broken-reason" data-test="broken-reason">
-          {{ row.ruleDisabled ? disabledReasonOnly(row.reason) : row.reason }}
-        </p>
-        <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
-        <LocalHistoryList
-          :entries="historyOf(row.conch)"
-          :error="historyErrors[row.conch] ?? null"
-          :loading-id="restoreLoadingId(row.conch)"
-          @restore="restoreHistory(row.conch, $event)"
-        />
         <div class="foot hm-muted">
           <span class="spacer" />
           <el-button
@@ -897,17 +899,33 @@ onMounted(load)
   gap: 16px;
 }
 
+/*
+ * 卡片分三个区：标题、状态与说明、底部操作。支持 subgrid 时，同一排卡片的每个区等高，
+ * 状态条和底部一行横向对齐。
+ */
 .conch {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
+  align-content: start;
   --hm-kind-gap: 14px;
+}
+
+@supports (grid-template-rows: subgrid) {
+  .conch {
+    grid-row: span 3;
+    grid-template-rows: subgrid;
+  }
 }
 
 .top {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.conch > .top {
+  align-items: flex-start;
 }
 
 .name {
@@ -970,6 +988,8 @@ onMounted(load)
   display: flex;
   align-items: center;
   gap: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hm-border);
   font-size: 12.5px;
 }
 

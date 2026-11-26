@@ -376,7 +376,7 @@ final class McpCatalog {
                 Hit hit = Hit.of(
                         terms,
                         ref.toolName(),
-                        haystack(ref.conch(), ref.action(), ref.toolName()),
+                        haystack(ref.conch(), ref.action()),
                         conchHaystack(ref.conch()));
                 if (hasQuery && hit.matched() == 0) {
                     continue;
@@ -424,13 +424,13 @@ final class McpCatalog {
         return result;
     }
 
-    /** 查询按空白拆成词，去重，最多取前 8 个。 */
+    /** 查询按空白（含全角空格）拆成词，去重，最多取前 8 个。 */
     private static List<String> terms(String query) {
         if (query == null) {
             return List.of();
         }
         java.util.LinkedHashSet<String> terms = new java.util.LinkedHashSet<>();
-        for (String term : query.toLowerCase(Locale.ROOT).trim().split("\\s+")) {
+        for (String term : query.toLowerCase(Locale.ROOT).split("[\\s\\p{Z}]+")) {
             if (!term.isEmpty() && terms.size() < 8) {
                 terms.add(term);
             }
@@ -1358,11 +1358,10 @@ final class McpCatalog {
         return text.toString().toLowerCase(Locale.ROOT);
     }
 
-    private static String haystack(ConchDoc conch, Action action, String toolName) {
+    private static String haystack(ConchDoc conch, Action action) {
         StringBuilder text = new StringBuilder();
-        // 只放「__」后面的能力名：工具全名带规则包名，放进来会让包名的命中算成能力自己的命中。
-        int split = toolName.indexOf("__");
-        append(text, split < 0 ? toolName : toolName.substring(split + 2));
+        // 只放能力名：工具全名带规则包名，放进来会让包名的命中算成能力自己的命中。
+        append(text, action.name());
         append(text, action.title());
         append(text, action.description());
         append(text, action.notes());

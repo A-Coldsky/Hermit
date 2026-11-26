@@ -111,6 +111,8 @@ class McpCatalogTest {
         // 多个词不必连在一起；全部命中的能力存在时只给这些。
         assertThat(names.apply("审批 休假")).containsExactly("group_oa__leave_apply");
         assertThat(names.apply("OA 待办")).containsExactly("group_oa__list_todo");
+        // 中文输入法的全角空格也算分隔。
+        assertThat(names.apply("　OA　待办 ")).containsExactly("group_oa__list_todo");
         // 没有能力命中全部词时退到部分命中，命中多的在前，同分时能力自己命中的在前。
         assertThat(names.apply("OA 审批 出差"))
                 .containsExactly("group_oa__leave_apply", "expense__submit", "group_oa__list_todo");

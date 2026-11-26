@@ -62,6 +62,7 @@ class AuthoringMcpTest {
             assertThat(openedResponse.statusCode()).isEqualTo(200);
             JsonNode openedInit = ApiJson.tree(openedResponse.body()).path("result");
             assertThat(openedInit.path("instructions").asText())
+                    .startsWith(McpCatalog.INSTRUCTIONS)
                     .contains("hermit_dev__guide")
                     .contains("hermit_dev__read_yaml")
                     .contains("hermit://conches/hermit_dev/guide")
@@ -111,7 +112,8 @@ class AuthoringMcpTest {
                     {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}
                     """, Map.of());
             assertThat(closedResponse.statusCode()).isEqualTo(200);
-            assertThat(ApiJson.tree(closedResponse.body()).path("result").has("instructions")).isFalse();
+            assertThat(ApiJson.tree(closedResponse.body()).path("result").path("instructions").asText())
+                    .isEqualTo(McpCatalog.INSTRUCTIONS);
             String closed = closedResponse.headers().firstValue("Mcp-Session-Id").orElseThrow();
             JsonNode hiddenTools = server.rpc(closed, 2, "tools/list", null);
             assertThat(toolNames(hiddenTools)).doesNotContain(
@@ -679,7 +681,8 @@ class AuthoringMcpTest {
                 HttpResponse<String> init = server.postRaw(plain.plaintext(), null, """
                         {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}
                         """, Map.of());
-                assertThat(ApiJson.tree(init.body()).path("result").has("instructions")).isFalse();
+                assertThat(ApiJson.tree(init.body()).path("result").path("instructions").asText())
+                    .isEqualTo(McpCatalog.INSTRUCTIONS);
                 String session = init.headers().firstValue("Mcp-Session-Id").orElseThrow();
 
                 assertThat(toolNames(server.rpc(plain.plaintext(), session, 2, "tools/list", null)))
@@ -796,7 +799,8 @@ class AuthoringMcpTest {
                     {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}
                     """, Map.of());
             assertThat(opened.statusCode()).as(opened.body()).isEqualTo(200);
-            assertThat(ApiJson.tree(opened.body()).path("result").has("instructions")).isFalse();
+            assertThat(ApiJson.tree(opened.body()).path("result").path("instructions").asText())
+                    .isEqualTo(McpCatalog.INSTRUCTIONS);
             String remoteSession = opened.headers().firstValue("Mcp-Session-Id").orElseThrow();
             HttpResponse<String> remoteTools = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
                     {"jsonrpc":"2.0","id":2,"method":"tools/list"}

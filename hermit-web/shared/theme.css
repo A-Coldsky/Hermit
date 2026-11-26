@@ -612,11 +612,24 @@ html.dark .el-pagination.is-background .el-pager li.is-active {
   color: #0b1620;
 }
 
-/* 卡片右下角的类型水印：一只淡螺壳，整只在卡片内，不挡点击。卡片自己要 position: relative。 */
+/* 卡片的类型水印：一只淡螺壳，占卡片正文右下角的一格，正文在它左边折行，不会压到文字和按钮。 */
+.hm-kind-body {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex: 1;
+}
+
+.hm-kind-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--hm-kind-gap, 12px);
+  min-width: 0;
+}
+
 .hm-kind-water {
-  position: absolute;
-  right: 12px;
-  bottom: 52px;
+  flex: none;
   opacity: var(--hm-kind-water);
   pointer-events: none;
 }

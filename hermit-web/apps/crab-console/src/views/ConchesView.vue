@@ -612,7 +612,6 @@ onMounted(load)
           @click="open(row)"
           @keyup.enter="open(row)"
         >
-          <KindShell kind="auth" :size="56" class="hm-kind-water" aria-hidden="true" />
           <div class="top">
             <ConchAvatar :name="row.conch" :title="row.title" />
             <div class="name">
@@ -625,15 +624,20 @@ onMounted(load)
               <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
             </div>
           </div>
-          <div class="status" :class="row.accounts.length ? 'ok' : 'idle'">
-            <el-icon><component :is="row.accounts.length ? CircleCheckFilled : User" /></el-icon>
-            <span v-if="!row.accounts.length">未建账号：先新建一个账号并填凭证</span>
-            <span v-else-if="consumerCount(row)" data-test="authenticator-used-by">被 {{ consumerNames(row).join('、') }} 使用</span>
-            <span v-else>还没有业务包的账号绑到它上面</span>
+          <div class="hm-kind-body">
+            <div class="hm-kind-main">
+              <div class="status" :class="row.accounts.length ? 'ok' : 'idle'">
+                <el-icon><component :is="row.accounts.length ? CircleCheckFilled : User" /></el-icon>
+                <span v-if="!row.accounts.length">未建账号：先新建一个账号并填凭证</span>
+                <span v-else-if="consumerCount(row)" data-test="authenticator-used-by">被 {{ consumerNames(row).join('、') }} 使用</span>
+                <span v-else>还没有业务包的账号绑到它上面</span>
+              </div>
+              <p v-if="row.updateAvailable" class="update-note">
+                可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的业务包都用新版本登录。
+              </p>
+            </div>
+            <KindShell kind="auth" :size="56" class="hm-kind-water" aria-hidden="true" />
           </div>
-          <p v-if="row.updateAvailable" class="update-note">
-            可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的业务包都用新版本登录。
-          </p>
           <div class="foot hm-muted">
             <span><b class="num">{{ row.accounts.length }}</b> 个账号</span>
             <span><b class="num">{{ consumerCount(row) }}</b> 个业务包在用</span>
@@ -673,7 +677,6 @@ onMounted(load)
         @click="open(row)"
         @keyup.enter="open(row)"
       >
-        <KindShell :kind="row.driver" :size="56" class="hm-kind-water" aria-hidden="true" />
         <div class="top">
           <ConchAvatar :name="row.conch" :title="row.title" />
           <div class="name">
@@ -696,29 +699,34 @@ onMounted(load)
             <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
           </div>
         </div>
-        <div class="status" :class="row.ruleDisabled || row.switchedOff ? 'bad' : row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
-          <el-icon><component :is="row.ruleDisabled || row.switchedOff ? CircleCloseFilled : row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
-          <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
-          <span v-else-if="row.switchedOff" data-test="switched-off-status">已停用：不能调用，进入详情可以重新启用</span>
-          <span v-else-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
-          <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
-          <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>
-          <span v-else>可用：可以通过 OpenAPI 和 MCP 调用</span>
+        <div class="hm-kind-body">
+          <div class="hm-kind-main">
+            <div class="status" :class="row.ruleDisabled || row.switchedOff ? 'bad' : row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
+              <el-icon><component :is="row.ruleDisabled || row.switchedOff ? CircleCloseFilled : row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
+              <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
+              <span v-else-if="row.switchedOff" data-test="switched-off-status">已停用：不能调用，进入详情可以重新启用</span>
+              <span v-else-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
+              <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
+              <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>
+              <span v-else>可用：可以通过 OpenAPI 和 MCP 调用</span>
+            </div>
+            <p v-if="row.ruleDisabled && disabledReasonOnly(row.message)" class="broken-reason" data-test="rule-message">{{ disabledReasonOnly(row.message) }}</p>
+            <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
+            <p v-if="previousBlockedNote(row)" class="broken-reason" data-test="previous-note">{{ previousBlockedNote(row) }}</p>
+            <p v-if="row.reefDisabled" class="reef-off-note">Reef 已停用：本机版本仍可调用，但不会再更新</p>
+            <p v-else-if="row.updateAvailable" class="update-note">
+              可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。进入详情更新
+            </p>
+            <LocalHistoryList
+              v-if="row.source === 'LOCAL'"
+              :entries="historyOf(row.conch)"
+              :error="historyErrors[row.conch] ?? null"
+              :loading-id="restoreLoadingId(row.conch)"
+              @restore="restoreHistory(row.conch, $event)"
+            />
+          </div>
+          <KindShell :kind="row.driver" :size="56" class="hm-kind-water" aria-hidden="true" />
         </div>
-        <p v-if="row.ruleDisabled && disabledReasonOnly(row.message)" class="broken-reason" data-test="rule-message">{{ disabledReasonOnly(row.message) }}</p>
-        <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
-        <p v-if="previousBlockedNote(row)" class="broken-reason" data-test="previous-note">{{ previousBlockedNote(row) }}</p>
-        <p v-if="row.reefDisabled" class="reef-off-note">Reef 已停用：本机版本仍可调用，但不会再更新</p>
-        <p v-else-if="row.updateAvailable" class="update-note">
-          可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。进入详情更新
-        </p>
-        <LocalHistoryList
-          v-if="row.source === 'LOCAL'"
-          :entries="historyOf(row.conch)"
-          :error="historyErrors[row.conch] ?? null"
-          :loading-id="restoreLoadingId(row.conch)"
-          @restore="restoreHistory(row.conch, $event)"
-        />
         <div class="foot hm-muted">
           <span v-if="!(row.ruleDisabled && row.capabilityCount === 0)"><b class="num">{{ row.capabilityCount }}</b> 个能力</span>
           <span><b class="num">{{ row.accountCount }}</b> 个账号</span>
@@ -890,10 +898,10 @@ onMounted(load)
 }
 
 .conch {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  --hm-kind-gap: 14px;
 }
 
 .top {

@@ -368,6 +368,23 @@ class ScriptLibraryEngineTest {
         RSAPublicKey publicKey = (RSAPublicKey) pair.getPublic();
         int bytes = (publicKey.getModulus().bitLength() + 7) / 8;
         String modulus = publicKey.getModulus().toString(16);
+        String warmup = conch(libraries("jsbn_rsa", js), """
+                - script:
+                    use: [jsbn_rsa]
+                    timeout_ms: 5000
+                    code: |
+                      return rsaEncrypt(vars.input.modulus, "warmup");
+                    into: value
+                """, """
+                value: { type: string, description: 结果 }
+                """, """
+                modulus: { type: string, description: 模数 }
+                """);
+        for (int i = 0; i < 2; i++) {
+            ExecutionResult warmed = execute(warmup, "run", Map.of("modulus", modulus), Origin.OFFICIAL, null,
+                    Clock.systemUTC(), KnownSecrets.empty(), "http://127.0.0.1");
+            assertThat(warmed.success()).as(error(warmed)).isTrue();
+        }
         String encrypting = conch(libraries("jsbn_rsa", js), """
                 - script:
                     use: [jsbn_rsa]

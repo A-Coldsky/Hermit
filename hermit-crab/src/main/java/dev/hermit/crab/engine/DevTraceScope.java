@@ -45,4 +45,29 @@ final class DevTraceScope {
         PENDING.remove();
         return piece;
     }
+
+    /** Suspends the outer package's dev trace while running a bound authenticator's login or probe. */
+    static Suspended suspend() {
+        DevTraceDraft draft = CURRENT.get();
+        Map<String, Object> pending = PENDING.get();
+        CURRENT.remove();
+        PENDING.remove();
+        return new Suspended(draft, pending);
+    }
+
+    record Suspended(DevTraceDraft draft, Map<String, Object> pending) implements AutoCloseable {
+        @Override
+        public void close() {
+            if (draft == null) {
+                CURRENT.remove();
+            } else {
+                CURRENT.set(draft);
+            }
+            if (pending == null) {
+                PENDING.remove();
+            } else {
+                PENDING.set(pending);
+            }
+        }
+    }
 }

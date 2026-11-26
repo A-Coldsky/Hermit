@@ -8,6 +8,7 @@ import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.http.AuthOrigins;
 import dev.hermit.common.http.SiteAddress;
+import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.common.validate.ConchDiff;
 import dev.hermit.common.validate.ValidationCodes;
 import dev.hermit.common.validate.ValidationIssue;
@@ -26,7 +27,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -123,7 +124,7 @@ class ConchUploadTransaction {
             if (wrote) {
                 storage.deleteYaml(conch, version);
             }
-            if (ex instanceof DataIntegrityViolationException) {
+            if (ex instanceof DuplicateKeyException) {
                 throw conflict(ConchUploadService.VERSION_EXISTS);
             }
             throw ex;
@@ -156,13 +157,14 @@ class ConchUploadTransaction {
             return warnings;
         }
         ArrayList<ValidationIssue> all = new ArrayList<>(warnings);
-        all.add(new ValidationIssue(
-                ValidationCodes.AUTH_ORIGIN_ADDED,
-                "auth.origins",
-                "登录步骤除了 base_url 还会访问认证地址 " + String.join("、", added)
+        String detail = AuthenticatorChecks.isAuthenticator(uploaded)
+                ? "登录步骤会访问认证地址 " + String.join("、", added)
                         + (previous == null ? "" : "，当前发布的版本没有")
-                        + "。账号密码会提交到那里，发布前确认它是这个系统的门户或认证中心。",
-                null));
+                        + "。账号密码会提交到那里，发布前确认它是认证中心。"
+                : "登录步骤除了 base_url 还会访问认证地址 " + String.join("、", added)
+                        + (previous == null ? "" : "，当前发布的版本没有")
+                        + "。账号密码会提交到那里，发布前确认它是这个系统的门户或认证中心。";
+        all.add(new ValidationIssue(ValidationCodes.AUTH_ORIGIN_ADDED, "auth.origins", detail, null));
         return List.copyOf(all);
     }
 
@@ -229,6 +231,10 @@ class ConchUploadTransaction {
                     all.add(new ValidationIssue(
                             ValidationCodes.SAME_SITE, "base_url", sameSiteMessage(other, site), null));
                 }
+                continue;
+            }
+            if ((AuthenticatorChecks.uses(uploaded) && other.conch().equals(uploaded.auth().use()))
+                    || (AuthenticatorChecks.uses(other) && uploaded.conch().equals(other.auth().use()))) {
                 continue;
             }
             Set<String> otherAuth = AuthOrigins.declared(other);

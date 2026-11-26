@@ -138,7 +138,9 @@ class AuthoringGuideTest {
 
         AuthoringGuide.SectionMatch starter = AuthoringGuide.findSection("starter").orElseThrow();
         assertThat(starter.id()).isEqualTo(AuthoringGuide.STARTER_SECTION);
-        assertThat(starter.content()).contains("conch: my_system").contains("min_crab_version: 1.12.0");
+        assertThat(starter.content()).contains("conch: my_system").contains("min_crab_version: 1.13.0");
+        assertThat(AuthoringGuide.findSection("auth_component")).isPresent();
+        assertThat(AuthoringGuide.findSection("授权器")).isPresent();
         assertThat(AuthoringGuide.findSection("starter_template")).isPresent();
         assertThat(AuthoringGuide.findSection("起始模板")).isPresent();
 

@@ -67,7 +67,7 @@ export interface IssueHint {
 export const issueHints: Record<string, IssueHint> = {
   CONCH_NAME: { title: '规则包名不合法', hint: '以小写字母开头，只含小写字母、数字和下划线，长 2 到 64 个字符。' },
   ACTION_NAME: { title: '能力名不合法', hint: '以小写字母开头，只含小写字母、数字和下划线，长 2 到 64 个字符。' },
-  DRIVER: { title: '不支持的 driver', hint: '目前支持 driver: http 和 driver: mcp。' },
+  DRIVER: { title: '不支持的 driver', hint: '目前支持 driver: http、driver: mcp 和 driver: auth。' },
   MISSING_TITLE: { title: '缺少标题', hint: '补上 title，控制台和 MCP 工具列表会显示它。' },
   MISSING_DESCRIPTION: { title: '缺少说明', hint: '补上 description，调用方和 AI 靠它理解这个字段或能力的用途。' },
   MISSING_CREDENTIALS: { title: '没有声明凭证', hint: '在 credentials 里声明登录要用的字段，如用户名和密码。' },
@@ -79,6 +79,7 @@ export const issueHints: Record<string, IssueHint> = {
   CONFIG_SECRET: { title: '配置项不能是密文', hint: '密码、令牌等秘密放到 credentials，config 只放地址、选项等非秘密内容。' },
   PLAINTEXT_CREDENTIAL: { title: '规则里写了明文秘密', hint: '把秘密改成 credentials 字段，用 {{credential.xxx}} 引用。' },
   CREDENTIAL_IN_OUTPUT: { title: '输出会带出凭证', hint: '不要把 credential 放进 output，调用结果会返回给调用方。' },
+  LOGIN_IN_OUTPUT: { title: '输出会带出登录或授权秘密', hint: '不要把 login.* 或授权器导出的 auth.* 变量放进 output，调用结果会返回给调用方。' },
   MIN_CRAB_VERSION: {
     title: 'min_crab_version 不满足所用特性要求',
     hint: '规则里用到了更高版本的特性，按下面提示把 min_crab_version 调到对应版本或以上。',
@@ -152,6 +153,10 @@ export const issueHints: Record<string, IssueHint> = {
   SESSION_EXPIRY: {
     title: '会话失效或断言规则写法有误',
     hint: '检查 auth.expired_when、auth.alive_check.expect 或 assert 的键名与格式（需要 min_crab_version 不低于 1.12.0）。',
+  },
+  AUTHENTICATOR: {
+    title: '授权器或依赖声明不符合规范',
+    hint: '检查 driver: auth（需 auth.origins、login、alive_check，不写 base_url / actions）或业务包的 auth.use、auth.min_version、auth.exchange 及已发布的授权器依赖（需要 min_crab_version 不低于 1.13.0）。',
   },
 }
 

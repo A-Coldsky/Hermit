@@ -305,6 +305,73 @@ class AuthenticatorHttpTest {
         JsonNode row = console("GET", "/console/api/authenticators", null).path("authenticators").get(0);
         assertThat(row.path("updateAvailable").asBoolean(true)).isFalse();
         assertThat(row.has("subscribed")).isTrue();
+        assertThat(row.has("needsConfiguration")).isTrue();
+    }
+
+    @Test
+    void consoleReadinessOfflineLocalCleanupAndIdentityUpgradeStayConsistent() throws Exception {
+        installAll();
+        bind("pkg_a");
+
+        // H9: pkg_a 已绑好授权器（needsConfiguration=false），pkg_b 有账号但未绑授权器（needsConfiguration=true），且列表不泄露授权器名。
+        JsonNode listed = console("GET", "/console/api/conches", null).path("conches");
+        assertThat(listed.toString()).doesNotContain("corp_sso");
+        for (JsonNode item : listed) {
+            if ("pkg_a".equals(item.path("conch").asText())) {
+                assertThat(item.path("needsConfiguration").asBoolean()).isFalse();
+                assertThat(item.path("usesAuthenticator").asBoolean()).isTrue();
+            } else if ("pkg_b".equals(item.path("conch").asText())) {
+                assertThat(item.path("needsConfiguration").asBoolean()).isTrue();
+                assertThat(item.path("usesAuthenticator").asBoolean()).isTrue();
+            }
+        }
+        assertThat(console("GET", "/console/api/conches/pkg_b/accounts", null)
+                .path("accounts").get(0).path("needsConfiguration").asBoolean()).isTrue();
+        assertThat(console("GET", "/console/api/conches/pkg_a/accounts", null)
+                .path("accounts").get(0).path("authBinding").path("ready").asBoolean()).isTrue();
+
+        // H5: 共享身份里的成员升级为 auth.use 后自动移出身份，且 check 不会因 credentials==null 抛 NPE。
+        ConchDoc plainOne = plain("id_one", appUrl);
+        ConchDoc plainTwo = plain("id_two", appUrl);
+        runtime.registry().put(plainOne);
+        runtime.registry().put(plainTwo);
+        runtime.admin().createAccount("id_one", "default", Actors.CLI);
+        runtime.admin().createAccount("id_two", "default", Actors.CLI);
+        String identityId = console("POST", "/console/api/identities", "{\"name\":\"同站身份\"}").path("id").asText();
+        console("POST", "/console/api/identities/" + identityId + "/members",
+                "{\"conch\":\"id_one\",\"account\":\"default\",\"confirm\":true}");
+        console("POST", "/console/api/identities/" + identityId + "/members",
+                "{\"conch\":\"id_two\",\"account\":\"default\",\"confirm\":true}");
+        assertThat(runtime.identities().list().get(0).members()).hasSize(2);
+
+        // id_one 升级为 auth.use 包：自动离开身份；再拿另一个包做 check 不会触发 NPE。
+        runtime.registry().put(consumer("id_one", appUrl));
+        assertThat(runtime.identities().list().get(0).members())
+                .extracting(SessionKey::conch)
+                .containsExactly("id_two");
+        ConchDoc plainThree = plain("id_three", appUrl);
+        runtime.registry().put(plainThree);
+        runtime.admin().createAccount("id_three", "default", Actors.CLI);
+        JsonNode checkAfter = console("POST", "/console/api/identities/" + identityId + "/check",
+                "{\"conch\":\"id_three\",\"account\":\"default\"}");
+        assertThat(checkAfter.path("allowed").asBoolean()).isTrue();
+
+        // H4: 本地业务包绑定授权器后，停机离线删掉本地 YAML 文件再重启，残留绑定在启动时自动清理。
+        String localYaml = consumerYaml("local_bound", appUrl);
+        runtime.localConches().importBytes(localYaml.getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+        runtime.admin().createAccount(Origin.LOCAL, "local_bound", "alice", Actors.CONSOLE);
+        console("PUT", "/console/api/conches/local_bound/accounts/alice/authenticator",
+                "{\"authAccount\":\"zhang\",\"baseUrl\":\"" + appUrl + "\",\"confirm\":true}");
+        assertThat(runtime.authenticators().find(new SessionKey(Origin.LOCAL, "local_bound", "alice"))).isNotNull();
+
+        java.nio.file.Path localYamlPath = runtime.paths().localConches().resolve("local_bound.yaml");
+        server.close();
+        runtime.close();
+        java.nio.file.Files.deleteIfExists(localYamlPath);
+        open();
+        runtime.loadInstalledConches();
+        assertThat(runtime.authenticators().find(new SessionKey(Origin.LOCAL, "local_bound", "alice")))
+                .as("离线删除本地 YAML 后启动时自动解绑").isNull();
     }
 
     private void installAll() {

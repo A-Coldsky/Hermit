@@ -31,10 +31,20 @@ public final class ApiKeyScopes {
     }
 
     public static void requireInstalled(ConchRegistry registry, ApiKeyScope scope, DisabledConches disabled) {
+        requireInstalled(registry, scope, disabled, name -> false);
+    }
+
+    public static void requireInstalled(
+            ConchRegistry registry,
+            ApiKeyScope scope,
+            DisabledConches disabled,
+            java.util.function.Predicate<String> authenticatorCheck
+    ) {
         Objects.requireNonNull(registry, "registry");
         Objects.requireNonNull(scope, "scope");
         DisabledConches tombstones = disabled == null ? DisabledConches.none() : disabled;
-        rejectUnknownConches(registry, tombstones, scope);
+        java.util.function.Predicate<String> isAuthenticator = authenticatorCheck == null ? name -> false : authenticatorCheck;
+        rejectUnknownConches(registry, tombstones, isAuthenticator, scope);
         for (String group : scope.groups()) {
             int colon = group == null ? -1 : group.indexOf(':');
             if (colon <= 0 || colon != group.lastIndexOf(':') || colon == group.length() - 1) {
@@ -61,10 +71,15 @@ public final class ApiKeyScopes {
         }
     }
 
-    private static void rejectUnknownConches(ConchRegistry registry, DisabledConches disabled, ApiKeyScope scope) {
+    private static void rejectUnknownConches(
+            ConchRegistry registry,
+            DisabledConches disabled,
+            java.util.function.Predicate<String> isAuthenticator,
+            ApiKeyScope scope
+    ) {
         ArrayList<String> unknown = new ArrayList<>();
         for (String name : scope.conches()) {
-            if (!knownConch(registry, disabled, name)) {
+            if (!knownConch(registry, disabled, isAuthenticator, name)) {
                 unknown.add(shown(name));
             }
         }
@@ -75,12 +90,20 @@ public final class ApiKeyScopes {
         throw new IllegalArgumentException("规则包不存在: " + joinLimited(unknown));
     }
 
-    private static boolean knownConch(ConchRegistry registry, DisabledConches disabled, String name) {
+    private static boolean knownConch(
+            ConchRegistry registry,
+            DisabledConches disabled,
+            java.util.function.Predicate<String> isAuthenticator,
+            String name
+    ) {
         if (name == null || name.isBlank()) {
             return false;
         }
         if (registry.find(name).isPresent()) {
             return true;
+        }
+        if (registry.authenticator(name).isPresent() || isAuthenticator.test(name)) {
+            return false;
         }
         return disabled.contains(name);
     }

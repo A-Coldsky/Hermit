@@ -62,7 +62,11 @@ record SubmissionDetail(
         JsonNode diff,
         String currentPublishedVersion,
         boolean conchDisabled,
-        boolean versionConflict) {
+        boolean versionConflict,
+        String authUse,
+        String authMinVersion,
+        List<String> authExports,
+        List<String> authAllowHosts) {
 }
 
 record PendingCountResponse(long count) {

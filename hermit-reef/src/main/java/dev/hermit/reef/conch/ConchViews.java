@@ -186,7 +186,8 @@ record ConchDetail(
         SnapshotView snapshot,
         List<ToolView> tools,
         String authUse,
-        List<String> authExports) {
+        List<String> authExports,
+        List<String> authAllowHosts) {
 
     static ConchDetail from(ConchDoc doc, AvailabilityRow availability, long pullCount, boolean published) {
         Map<String, CredentialDeclaration> credentials = new java.util.LinkedHashMap<>();
@@ -228,7 +229,8 @@ record ConchDetail(
                 mcp.snapshot(),
                 mcp.tools(),
                 AuthDependencies.authUse(doc),
-                doc.auth() == null ? List.of() : List.copyOf(doc.auth().exports().keySet()));
+                doc.auth() == null ? List.of() : List.copyOf(doc.auth().exports().keySet()),
+                doc.auth() == null ? List.of() : doc.auth().allowHosts());
     }
 }
 

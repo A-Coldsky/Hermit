@@ -21,7 +21,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -82,11 +82,12 @@ class ConchSubmissionTransaction {
         ConchDoc doc = prepared.doc();
         String conch = doc.conch();
         String version = doc.version().toString();
+        // 统一按 hermit_conch_versions -> hermit_conch_availability 的顺序加锁，避免与发布/停用事务死锁。
+        List<VersionRow> existing = conchRepository.lockConch(conch);
         AvailabilityRow avail = availability.lock(conch);
         if (avail != null && avail.disabled()) {
             throw conflict(ConchAvailabilityService.DISABLED);
         }
-        List<VersionRow> existing = conchRepository.lockConch(conch);
         VersionRow currentRow = currentPublishedRow(existing);
         if (currentRow != null) {
             SemVer currentVer = SemVer.parse(currentRow.version());
@@ -145,7 +146,7 @@ class ConchSubmissionTransaction {
             auditService.record(actor, AuditAction.SUBMISSION_CREATED, conch, version, json(detail));
 
             boolean conflictNow = hasVersionConflict(existing, doc.version());
-            return new SubmissionDetail(
+            return buildDetail(
                     id,
                     conch,
                     version,
@@ -164,7 +165,8 @@ class ConchSubmissionTransaction {
                     diff,
                     currentRow == null ? null : currentRow.version(),
                     false,
-                    conflictNow);
+                    conflictNow,
+                    doc);
         } catch (RuntimeException ex) {
             if (wroteFile && id > 0) {
                 submissionStorage.deleteYaml(id);
@@ -259,12 +261,12 @@ class ConchSubmissionTransaction {
             throw new ApiException(500, ReefErrorCode.INTERNAL, ReefErrorCode.INTERNAL.message());
         }
 
+        // 统一按 hermit_conch_versions -> hermit_conch_availability 的顺序加锁，避免与发布/停用事务死锁。
+        List<VersionRow> existing = conchRepository.lockConch(conch);
         AvailabilityRow avail = availability.lock(conch);
         if (avail != null && avail.disabled()) {
             throw conflict(ConchAvailabilityService.DISABLED);
         }
-
-        List<VersionRow> existing = conchRepository.lockConch(conch);
         if (existing.stream().anyMatch(v -> v.version().equals(version))) {
             throw conflict("该规则包已存在版本 " + version + "，请先处理已有版本后再审批或驳回此提交");
         }
@@ -276,7 +278,7 @@ class ConchSubmissionTransaction {
         VersionRow currentRow = currentPublishedRow(existing);
         List<ValidationIssue> dependencyProblems = authDependencies.uploadProblems(doc);
         if (!dependencyProblems.isEmpty()) {
-            throw ConchUploadService.dependencyFailed(prepared, dependencyProblems);
+            throw conflict(dependencyProblems.get(0).message());
         }
         ConchDoc previous = currentRow == null ? null : readConchDoc(currentRow);
         JsonNode diff = previous == null
@@ -324,7 +326,7 @@ class ConchSubmissionTransaction {
                 detail.put("comment", comment);
             }
             auditService.record(actor, AuditAction.SUBMISSION_APPROVED, conch, version, json(detail));
-            return new SubmissionDetail(
+            return buildDetail(
                     id,
                     conch,
                     version,
@@ -343,12 +345,13 @@ class ConchSubmissionTransaction {
                     diff,
                     version,
                     false,
-                    false);
+                    false,
+                    doc);
         } catch (RuntimeException ex) {
             if (wroteConchFiles) {
                 conchStorage.deleteUploadedFiles(conch, version);
             }
-            if (ex instanceof DataIntegrityViolationException) {
+            if (ex instanceof DuplicateKeyException) {
                 throw conflict("该规则包已存在版本 " + version + "，请先处理已有版本后再审批或驳回此提交");
             }
             throw ex;
@@ -389,23 +392,22 @@ class ConchSubmissionTransaction {
         List<ValidationIssue> warnings = parseWarnings(row.validationJson());
         JsonNode diff = parseDiff(row.diffJson());
         boolean versionConflict = false;
+        ConchDoc submittedDoc = readSubmittedDocQuietly(row.id());
         if (row.status() == SubmissionStatus.PENDING) {
             SemVer submittedVer = SemVer.parse(row.version());
             versionConflict = hasVersionConflict(versions, submittedVer);
-            if (currentRow != null) {
+            if (currentRow != null && submittedDoc != null) {
                 try {
                     ConchDoc liveCurrent = readConchDoc(currentRow);
-                    ConchDoc submittedDoc = ConchParser.parse(
-                            new String(submissionStorage.readYaml(row.id()), StandardCharsets.UTF_8));
                     diff = objectMapper.valueToTree(ConchDiff.between(liveCurrent, submittedDoc));
                 } catch (RuntimeException ignored) {
                     // 读不到时退回提交时快照。
                 }
-            } else {
+            } else if (currentRow == null) {
                 diff = objectMapper.createObjectNode();
             }
         }
-        return new SubmissionDetail(
+        return buildDetail(
                 row.id(),
                 row.conch(),
                 row.version(),
@@ -424,7 +426,64 @@ class ConchSubmissionTransaction {
                 diff,
                 currentRow == null ? null : currentRow.version(),
                 disabled,
-                versionConflict);
+                versionConflict,
+                submittedDoc);
+    }
+
+    private ConchDoc readSubmittedDocQuietly(long id) {
+        try {
+            return ConchParser.parse(new String(submissionStorage.readYaml(id), StandardCharsets.UTF_8));
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    private static SubmissionDetail buildDetail(
+            long id,
+            String conch,
+            String version,
+            String sha256,
+            String minCrabVersion,
+            String driver,
+            String title,
+            SubmissionStatus status,
+            String submitNote,
+            String submittedBy,
+            Instant submittedAt,
+            String reviewedBy,
+            Instant reviewedAt,
+            String reviewComment,
+            List<ValidationIssue> warnings,
+            JsonNode diff,
+            String currentPublishedVersion,
+            boolean conchDisabled,
+            boolean versionConflict,
+            ConchDoc doc
+    ) {
+        return new SubmissionDetail(
+                id,
+                conch,
+                version,
+                sha256,
+                minCrabVersion,
+                driver,
+                title,
+                status,
+                submitNote,
+                submittedBy,
+                submittedAt,
+                reviewedBy,
+                reviewedAt,
+                reviewComment,
+                warnings,
+                diff,
+                currentPublishedVersion,
+                conchDisabled,
+                versionConflict,
+                doc == null ? null : AuthDependencies.authUse(doc),
+                doc == null || doc.auth() == null ? null : doc.auth().minVersion(),
+                doc == null || doc.auth() == null ? List.of() : List.copyOf(doc.auth().exports().keySet()),
+                doc == null || doc.auth() == null ? List.of() : doc.auth().allowHosts());
     }
 
     private static VersionRow currentPublishedRow(List<VersionRow> rows) {
@@ -499,12 +558,17 @@ class ConchSubmissionTransaction {
         return List.copyOf(all);
     }
 
-    private static String safeTitle(String rawTitle, String fallbackConch) {
+    static String safeTitle(String rawTitle, String fallbackConch) {
         String source = (rawTitle == null || rawTitle.isBlank()) ? fallbackConch : rawTitle.trim();
         if (source.length() <= MAX_TITLE_LENGTH) {
             return source;
         }
-        return source.substring(0, MAX_TITLE_LENGTH);
+        int count = source.codePointCount(0, source.length());
+        int cut = source.offsetByCodePoints(0, Math.min(count, MAX_TITLE_LENGTH));
+        while (cut > MAX_TITLE_LENGTH) {
+            cut = Character.offsetByCodePoints(source, cut, -1);
+        }
+        return source.substring(0, cut);
     }
 
     private static ApiException notFound() {

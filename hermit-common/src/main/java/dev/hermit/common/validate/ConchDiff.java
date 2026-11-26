@@ -9,6 +9,8 @@ import java.util.Set;
 
 import dev.hermit.common.mcp.ToolSnapshots;
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.Auth;
+import dev.hermit.common.model.AuthExport;
 import dev.hermit.common.model.CapabilityGroups;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
@@ -36,7 +38,10 @@ public record ConchDiff(
         List<String> addedGroups,
         List<String> removedGroups,
         List<String> changedGroups,
-        List<ActionGroupChange> actionGroupChanges
+        List<ActionGroupChange> actionGroupChanges,
+        List<String> addedExports,
+        List<String> removedExports,
+        List<String> authChanges
 ) {
     public ConchDiff {
         addedActions = List.copyOf(addedActions);
@@ -57,6 +62,38 @@ public record ConchDiff(
         removedGroups = removedGroups == null ? List.of() : List.copyOf(removedGroups);
         changedGroups = changedGroups == null ? List.of() : List.copyOf(changedGroups);
         actionGroupChanges = actionGroupChanges == null ? List.of() : List.copyOf(actionGroupChanges);
+        addedExports = addedExports == null ? List.of() : List.copyOf(addedExports);
+        removedExports = removedExports == null ? List.of() : List.copyOf(removedExports);
+        authChanges = authChanges == null ? List.of() : List.copyOf(authChanges);
+    }
+
+    public ConchDiff(
+            List<String> addedActions,
+            List<String> removedActions,
+            List<ActionChange> changedActions,
+            List<String> addedCredentials,
+            List<String> removedCredentials,
+            List<CredentialRequiredChange> credentialRequiredChanges,
+            List<String> addedConfig,
+            List<String> removedConfig,
+            List<ConfigDefaultChange> configDefaultChanges,
+            List<String> newRequiredCredentials,
+            List<ToolChange> toolChanges,
+            List<String> addedScripts,
+            List<String> removedScripts,
+            List<String> changedScripts,
+            List<String> addedGroups,
+            List<String> removedGroups,
+            List<String> changedGroups,
+            List<ActionGroupChange> actionGroupChanges
+    ) {
+        this(
+                addedActions, removedActions, changedActions,
+                addedCredentials, removedCredentials, credentialRequiredChanges,
+                addedConfig, removedConfig, configDefaultChanges, newRequiredCredentials,
+                toolChanges, addedScripts, removedScripts, changedScripts,
+                addedGroups, removedGroups, changedGroups, actionGroupChanges,
+                List.of(), List.of(), List.of());
     }
 
     public static ConchDiff between(ConchDoc oldDoc, ConchDoc newDoc) {
@@ -64,6 +101,7 @@ public record ConchDiff(
         Objects.requireNonNull(newDoc, "newDoc");
         ScriptDiff scripts = scriptDiff(oldDoc, newDoc);
         GroupDiff groups = groupDiff(oldDoc, newDoc);
+        AuthDiff auth = authDiff(oldDoc, newDoc, scripts.affectingSteps());
         List<String> addedActions = new ArrayList<>();
         List<String> removedActions = new ArrayList<>();
         List<ActionChange> changedActions = new ArrayList<>();
@@ -146,7 +184,87 @@ public record ConchDiff(
                 addedConfig, removedConfig, defaultChanges, newRequired,
                 toolChanges(oldDoc, newDoc),
                 scripts.added(), scripts.removed(), scripts.changed(),
-                groups.added(), groups.removed(), groups.changed(), actionGroupChanges);
+                groups.added(), groups.removed(), groups.changed(), actionGroupChanges,
+                auth.addedExports(), auth.removedExports(), auth.changes());
+    }
+
+    private static AuthDiff authDiff(ConchDoc oldDoc, ConchDoc newDoc, Set<String> changedScripts) {
+        Auth previous = oldDoc.auth();
+        Auth current = newDoc.auth();
+        Map<String, AuthExport> oldExports = previous == null ? Map.of() : previous.exports();
+        Map<String, AuthExport> newExports = current == null ? Map.of() : current.exports();
+        List<String> addedExports = new ArrayList<>();
+        List<String> removedExports = new ArrayList<>();
+        boolean exportDescriptionChanged = false;
+        for (Map.Entry<String, AuthExport> entry : oldExports.entrySet()) {
+            AuthExport next = newExports.get(entry.getKey());
+            if (next == null) {
+                removedExports.add(entry.getKey());
+            } else if (!Objects.equals(entry.getValue(), next)) {
+                exportDescriptionChanged = true;
+            }
+        }
+        for (String name : newExports.keySet()) {
+            if (!oldExports.containsKey(name)) {
+                addedExports.add(name);
+            }
+        }
+        List<String> changes = new ArrayList<>();
+        if (!Objects.equals(oldDoc.driver(), newDoc.driver())) {
+            changes.add("driver");
+        }
+        List<Step> oldSteps = previous == null ? List.of() : previous.steps();
+        List<Step> newSteps = current == null ? List.of() : current.steps();
+        if (!Objects.equals(oldSteps, newSteps)
+                || referencesScript(oldSteps, changedScripts)
+                || referencesScript(newSteps, changedScripts)) {
+            changes.add("steps");
+        }
+        if (!Objects.equals(previous == null ? null : previous.aliveCheck(),
+                current == null ? null : current.aliveCheck())) {
+            changes.add("alive_check");
+        }
+        if (!Objects.equals(previous == null ? Map.of() : previous.cookies(),
+                current == null ? Map.of() : current.cookies())) {
+            changes.add("cookies");
+        }
+        if ((previous != null && previous.concurrentReads()) != (current != null && current.concurrentReads())) {
+            changes.add("concurrent_reads");
+        }
+        if (!Objects.equals(previous == null ? List.of() : previous.origins(),
+                current == null ? List.of() : current.origins())) {
+            changes.add("origins");
+        }
+        if (!Objects.equals(previous == null ? List.of() : previous.expiredWhen(),
+                current == null ? List.of() : current.expiredWhen())) {
+            changes.add("expired_when");
+        }
+        if (!Objects.equals(previous == null ? null : previous.use(),
+                current == null ? null : current.use())) {
+            changes.add("use");
+        }
+        if (!Objects.equals(previous == null ? null : previous.minVersion(),
+                current == null ? null : current.minVersion())) {
+            changes.add("min_version");
+        }
+        if (exportDescriptionChanged) {
+            changes.add("exports");
+        }
+        if (!Objects.equals(previous == null ? List.of() : previous.allowHosts(),
+                current == null ? List.of() : current.allowHosts())) {
+            changes.add("allow_hosts");
+        }
+        List<Step> oldExchange = previous == null ? List.of() : previous.exchange();
+        List<Step> newExchange = current == null ? List.of() : current.exchange();
+        if (!Objects.equals(oldExchange, newExchange)
+                || referencesScript(oldExchange, changedScripts)
+                || referencesScript(newExchange, changedScripts)) {
+            changes.add("exchange");
+        }
+        return new AuthDiff(addedExports, removedExports, changes);
+    }
+
+    private record AuthDiff(List<String> addedExports, List<String> removedExports, List<String> changes) {
     }
 
     private static GroupDiff groupDiff(ConchDoc oldDoc, ConchDoc newDoc) {

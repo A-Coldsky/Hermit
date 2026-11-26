@@ -284,7 +284,7 @@ final class McpCalls {
         if (group != null && ungrouped) {
             return fail(attempt, "INVALID_INPUT", "group and ungrouped cannot both be set", "group");
         }
-        if (query == null && group == null && !ungrouped) {
+        if (query == null && group == null && !ungrouped && !McpCatalog.DEV_CONCH.equals(conch)) {
             return fail(attempt, "INVALID_INPUT", "query is required", "query");
         }
         return ok(catalog.search(principal, query, conch, group, ungrouped, localCaller));
@@ -422,7 +422,7 @@ final class McpCalls {
      * is called through {@code Invoker} and is not handled here.
      */
     private McpSchema.CallToolResult missingTool(Attempt attempt, String toolName) {
-        String disabled = longestConchPrefix(toolName, runtime.disabledConches().names());
+        String disabled = longestConchPrefix(toolName, callableNames(runtime.disabledConches().names()));
         if (disabled != null && runtime.registry().find(disabled).isEmpty()) {
             String live = longestConchPrefix(toolName, runtime.registry().snapshot().keySet());
             if (live == null || live.length() <= disabled.length()) {
@@ -430,7 +430,7 @@ final class McpCalls {
             }
         }
         // 整包在本机停用：工具不在列表里，说明原因而不是说没有这个工具。
-        String switchedOff = longestConchPrefix(toolName, runtime.conchSwitchedOffNames());
+        String switchedOff = longestConchPrefix(toolName, callableNames(runtime.conchSwitchedOffNames()));
         if (switchedOff != null && runtime.registry().find(switchedOff).isPresent()) {
             String live = longestConchPrefix(toolName, runtime.registry().snapshot().keySet());
             if (live == null || live.length() <= switchedOff.length()) {
@@ -438,7 +438,7 @@ final class McpCalls {
             }
         }
         // 装着、但当前校验不让载入的包：工具不在列表里，也不能说成没有这个工具。
-        String rejected = longestConchPrefix(toolName, runtime.ruleDisabledNames());
+        String rejected = longestConchPrefix(toolName, callableNames(runtime.ruleDisabledNames()));
         if (rejected != null) {
             String live = longestConchPrefix(toolName, runtime.registry().snapshot().keySet());
             if (live == null || live.length() <= rejected.length()) {
@@ -446,6 +446,19 @@ final class McpCalls {
             }
         }
         return failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL);
+    }
+
+    private java.util.Set<String> callableNames(java.util.Set<String> names) {
+        if (names.isEmpty()) {
+            return names;
+        }
+        java.util.LinkedHashSet<String> filtered = new java.util.LinkedHashSet<>();
+        for (String name : names) {
+            if (!runtime.isKnownAuthenticator(name)) {
+                filtered.add(name);
+            }
+        }
+        return filtered;
     }
 
     private McpSchema.CallToolResult readTrace(

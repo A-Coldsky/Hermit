@@ -453,7 +453,7 @@ public class LocalConchBehaviorTest {
                         assertThat(failure.errors()).anySatisfy(issue -> {
                             assertThat(issue.code()).isEqualTo("DRIVER");
                             assertThat(issue.path()).isEqualTo("driver");
-                            assertThat(issue.message()).isEqualTo("driver 只允许 http 或 mcp");
+                            assertThat(issue.message()).isEqualTo("driver 只允许 http、mcp 或 auth");
                             assertThat(issue.line()).isEqualTo(sourceLine(driver, "driver:"));
                             assertThat(issue.message()).doesNotContain(marker).doesNotContain("shell");
                         });

@@ -192,8 +192,10 @@ describe('授权器', () => {
     expect(wrapper.emitted('changed')).toBeTruthy()
   })
 
-  it('授权器自己的账号页列出绑到它的账号', async () => {
+  it('授权器自己的账号页列出绑到它的账号，删除前提示会作废业务包绑定', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
     const wrapper = await mountPage(AccountsPanel, {
+      attach: true,
       props: {
         conch: 'corp_sso',
         accounts: [account({ name: 'zhangsan', consumers: [{ origin: 'OFFICIAL', conch: 'corp_oa', account: 'default' }] })],
@@ -204,5 +206,53 @@ describe('授权器', () => {
     await flushPromises()
     expect(wrapper.find('[data-test="authenticator-hint"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="auth-consumer"]').text()).toContain('corp_oa / default')
+    const deleteBtn = wrapper.findAll('button').find((b) => b.text() === '删除')
+    expect(deleteBtn).toBeDefined()
+    await deleteBtn!.trigger('click')
+    await flushPromises()
+    expect(String(confirm.mock.calls[0][0])).toContain('corp_oa/default')
+    expect(String(confirm.mock.calls[0][0])).toContain('作废')
+    wrapper.unmount()
+  })
+
+  it('业务包绑定的授权器账号未就绪时显示授权器原因，不说业务包缺少凭证', async () => {
+    const wrapper = await mountPage(AccountsPanel, {
+      props: {
+        conch: 'corp_oa',
+        accounts: [
+          account({
+            needsConfiguration: true,
+            authBinding: { ...bound, ready: false, problem: '授权器账号缺少凭证' },
+          }),
+        ],
+        credentials: [],
+        authUse,
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-test="auth-binding-unready"]').text()).toContain('无法登录：授权器账号缺少凭证')
+    expect(wrapper.text()).not.toContain('无法登录：缺少凭证')
+  })
+
+  it('引用授权器的业务包不会出现在共享身份的候选列表里', async () => {
+    crab.identities.mockResolvedValue({
+      identities: [{ id: 'id_1', name: '张三', createdAt: '2026-11-26T00:00:00Z', members: [], lastCleared: null }],
+    })
+    crab.conches.mockResolvedValue({
+      conches: [
+        { conch: 'plain_oa', title: '普通 OA', driver: 'http', source: 'REEF', usesAuthenticator: false },
+        { conch: 'sso_oa', title: 'SSO OA', driver: 'http', source: 'REEF', usesAuthenticator: true },
+      ],
+    })
+    const wrapper = await mountPage(IdentitiesView, { attach: true })
+    await flushPromises()
+    const addBtn = wrapper.findAll('button').find((b) => b.text().includes('添加账号'))
+    expect(addBtn).toBeDefined()
+    await addBtn!.trigger('click')
+    await flushPromises()
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('plain_oa')
+    expect(text).not.toContain('sso_oa')
+    wrapper.unmount()
   })
 })

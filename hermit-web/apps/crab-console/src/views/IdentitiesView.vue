@@ -61,6 +61,7 @@ const candidates = computed(() => {
   return conches.value.filter(
     (conch) =>
       conch.driver !== 'mcp' &&
+      conch.usesAuthenticator !== true &&
       conch.ruleDisabled !== true &&
       !taken.has(`${conch.source === 'LOCAL' ? 'LOCAL' : 'OFFICIAL'}/${conch.conch}`),
   )

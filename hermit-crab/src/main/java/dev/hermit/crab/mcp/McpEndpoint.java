@@ -256,6 +256,10 @@ public final class McpEndpoint {
             writeRpcError(ctx, id, McpErrors.invalidParams(), session);
             return;
         }
+        if (AuthoringGuide.URI.equals(request.uri()) && (principal == null || !principal.scope().devTools())) {
+            writeRpcError(ctx, id, McpErrors.resourceNotFound(), session);
+            return;
+        }
         if (AuthoringGuide.URI.equals(request.uri()) && !Loopback.address(ctx.req().getRemoteAddr())) {
             writeRpcError(ctx, id, McpErrors.authoringRemote(), session);
             return;

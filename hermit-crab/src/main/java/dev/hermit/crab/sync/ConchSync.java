@@ -1054,6 +1054,27 @@ public final class ConchSync {
     }
 
     /**
+     * Reads any verified zip still on disk for an official package (current pointer, tombstone version,
+     * or newest installed version) so unloaded/tombstoned authenticators remain distinguishable from callable packages.
+     */
+    public Optional<ConchDoc> readableAnyInstalled(String conch) {
+        return forDisplay(() -> {
+            if (conch == null || !ConchValidator.isConchName(conch) || !ConchFiles.safeSegment(conch)) {
+                return Optional.empty();
+            }
+            String version = ConchFiles.readCurrent(paths, conch).orElse(null);
+            if (version == null) {
+                version = disabledConches.version(conch);
+            }
+            if (version == null) {
+                version = newestInstalled(conch);
+            }
+            VerifiedConch verified = readInstalled(conch, version);
+            return verified == null ? Optional.<ConchDoc>empty() : Optional.of(verified.conchDoc());
+        });
+    }
+
+    /**
      * Recorded previous version, whether or not its files are still on disk and whether or not
      * the current validator will load it. A missing directory stays recorded so the console can
      * say the file is gone instead of offering a rollback.

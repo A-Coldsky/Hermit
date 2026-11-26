@@ -244,6 +244,12 @@ async function approve() {
     ElMessage.success(`${updated.conch} v${updated.version} 已批准并正式发布`)
     await load()
   } catch (error) {
+    if (error instanceof ApiError && error.data && typeof error.data === 'object') {
+      const errs = (error.data as { errors?: ValidationIssue[] }).errors
+      if (Array.isArray(errs) && errs.length) {
+        reviewError.value = errs.map((e) => (e.path ? `${e.path}：${e.message}` : e.message)).join('；')
+      }
+    }
     notifyError(error)
   } finally {
     actionBusy.value = false
@@ -481,6 +487,16 @@ onMounted(load)
             <el-descriptions-item label="规则标题" :span="2">{{ detail.title }}</el-descriptions-item>
             <el-descriptions-item label="提交人">{{ detail.submittedBy }}</el-descriptions-item>
             <el-descriptions-item label="提交时间"><TimeText :value="detail.submittedAt" /></el-descriptions-item>
+            <el-descriptions-item v-if="detail.authUse" label="依赖授权器" :span="2">
+              <code class="mono small">{{ detail.authUse }}</code>
+              <span v-if="detail.authMinVersion" class="hm-muted">（最低版本 v{{ detail.authMinVersion }}）</span>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="detail.authExports?.length" label="导出变量" :span="2">
+              <code class="mono small">{{ detail.authExports.join('、') }}</code>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="detail.authAllowHosts?.length" label="允许的业务站点" :span="2">
+              <code class="mono small">{{ detail.authAllowHosts.join('、') }}</code>
+            </el-descriptions-item>
             <el-descriptions-item v-if="detail.submitNote" label="提交说明" :span="2">
               <span class="pre-wrap">{{ detail.submitNote }}</span>
             </el-descriptions-item>

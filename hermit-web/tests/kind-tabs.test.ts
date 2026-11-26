@@ -332,6 +332,64 @@ describe('Crab 规则包与账号：先分订阅 / 本地，再分类型', () =>
     expect(card.find('.marks [data-test="kind-badge"]').attributes('data-kind')).toBe('auth')
     expect(card.find('.marks').text()).toContain('有新版本 v1.1.0')
   })
+
+  it('双来源授权器、停用本地授权器计数，以及引用授权器业务包的待配置文案', async () => {
+    crab.conches.mockResolvedValue({
+      conches: [
+        {
+          conch: 'corp_oa',
+          version: '1.0.0',
+          title: 'OA',
+          capabilityCount: 1,
+          subscribed: true,
+          accountCount: 1,
+          needsConfiguration: true,
+          usesAuthenticator: true,
+          loginPaused: false,
+          source: 'REEF',
+          driver: 'http',
+          newRequiredCredentials: [],
+        },
+      ],
+    })
+    crab.authenticators.mockResolvedValue({
+      authenticators: [
+        authenticator({
+          source: 'LOCAL',
+          subscribed: true,
+          localVersion: '1.2.0',
+          reefVersion: '1.0.0',
+          needsConfiguration: true,
+          accountCount: 1,
+        }),
+      ],
+    })
+    crab.localConches.mockResolvedValue({
+      conches: [
+        {
+          conch: 'bad_sso',
+          file: 'bad_sso.yaml',
+          broken: true,
+          driver: 'auth',
+          ruleDisabled: true,
+          error: 'missing alive_check',
+        },
+      ],
+    })
+    const wrapper = await mountPage(CrabConchesView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('待配置：账号未绑定授权器或缺少配置')
+    expect(wrapper.find('[data-test="authenticator-card"] [data-test="two-sources-tag"]').text()).toBe('本地这份在生效')
+    expect(wrapper.find('[data-test="authenticator-card"]').text()).toContain('待配置：还缺凭证或配置项')
+
+    await wrapper.find('[data-test="source-tabs"] input[value="local"]').setValue(true)
+    await flushPromises()
+    expect(wrapper.find('[data-test="kind-tabs"]').text()).toContain('授权器 2')
+    await pick(wrapper, 'auth')
+    expect(wrapper.findAll('[data-test="authenticator-card"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-test="broken-conch"]')).toHaveLength(1)
+  })
 })
 
 describe('Reef 规则包目录：授权器页签', () => {

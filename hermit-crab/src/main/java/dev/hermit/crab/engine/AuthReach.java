@@ -18,16 +18,22 @@ import dev.hermit.common.http.SiteAddress;
  *
  * @param origins {@link SiteAddress} 写法的认证地址
  */
-record AuthReach(Set<String> origins, boolean login) {
+record AuthReach(Set<String> origins, boolean login, boolean authenticator) {
 
-    static final AuthReach NONE = new AuthReach(Set.of(), false);
+    static final AuthReach NONE = new AuthReach(Set.of(), false, false);
 
     AuthReach {
         origins = origins == null ? Set.of() : Set.copyOf(origins);
     }
 
     static AuthReach of(Set<String> origins, boolean login) {
-        return origins == null || origins.isEmpty() ? NONE : new AuthReach(origins, login);
+        return of(origins, login, false);
+    }
+
+    static AuthReach of(Set<String> origins, boolean login, boolean authenticator) {
+        return (origins == null || origins.isEmpty()) && !authenticator
+                ? NONE
+                : new AuthReach(origins, login, authenticator);
     }
 
     boolean declares(URI target) {
@@ -42,6 +48,25 @@ record AuthReach(Set<String> origins, boolean login) {
     /** 登录步骤能不能请求这个地址：{@code base_url} 或声明过的认证地址。 */
     boolean allows(URI base, URI target) {
         return HttpCalls.sameOrigin(base, target) || (login && declares(target));
+    }
+
+    static boolean cookieReadable(Cookie cookie, URI base, AuthReach reach, CookieStore jar) {
+        if (readable(cookie, base, jar)) {
+            return true;
+        }
+        if (reach == null || !reach.authenticator()) {
+            return false;
+        }
+        for (String origin : reach.origins()) {
+            try {
+                if (readable(cookie, URI.create(origin), jar)) {
+                    return true;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 非法地址跳过
+            }
+        }
+        return false;
     }
 
     /**

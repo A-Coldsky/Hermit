@@ -217,6 +217,7 @@ final class ConsoleApi {
             row.put("loginPaused", loginPaused);
             row.put("source", sourceLabel(source));
             row.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
+            row.put("usesAuthenticator", AuthenticatorChecks.uses(doc));
             row.put("sameSite", CrabRuntime.sameSite(doc.conch(), sites));
             row.put("sameAuth", CrabRuntime.sameAuth(doc.conch(), sites, authOrigins));
             putSources(runtime, doc.conch(), row);
@@ -378,6 +379,7 @@ final class ConsoleApi {
         if (readable != null) {
             putPackageShape(runtime, readable, body);
         }
+        body.put("isAuthenticator", readable != null && AuthenticatorChecks.isAuthenticator(readable));
         body.put("subscribed", true);
         body.put("needsConfiguration", false);
         body.put("loginPaused", false);
@@ -405,7 +407,11 @@ final class ConsoleApi {
         if (sync == null) {
             return;
         }
+        Map<String, ConchCatalog.Entry> catalog = catalogByName(runtime);
         for (ConchSync.DisabledRule disabled : sync.disabledRules()) {
+            if (isDisabledAuthenticator(runtime, disabled.conch(), catalog.get(disabled.conch()))) {
+                continue;
+            }
             boolean listed = false;
             for (Map<String, Object> row : rows) {
                 if (disabled.conch().equals(row.get("conch"))) {
@@ -417,6 +423,16 @@ final class ConsoleApi {
                 rows.add(disabledSummary(runtime, disabled));
             }
         }
+    }
+
+    private static boolean isDisabledAuthenticator(
+            CrabRuntime runtime, String conch, ConchCatalog.Entry catalogEntry) {
+        ConchSync sync = runtime.conchSync();
+        ConchDoc readable = sync == null ? null : sync.readableInstalled(conch).orElse(null);
+        if (readable != null) {
+            return AuthenticatorChecks.isAuthenticator(readable);
+        }
+        return catalogEntry != null && "auth".equals(catalogEntry.driver());
     }
 
     private static Map<String, Object> disabledSummary(CrabRuntime runtime, ConchSync.DisabledRule disabled) {
@@ -484,6 +500,7 @@ final class ConsoleApi {
             body.put("title", text(readable.title()));
             body.put("description", text(readable.description()));
         }
+        body.put("isAuthenticator", readable != null && AuthenticatorChecks.isAuthenticator(readable));
         body.put("subscribed", false);
         body.put("needsConfiguration", false);
         body.put("loginPaused", false);
@@ -575,10 +592,15 @@ final class ConsoleApi {
             List<String> missing = runtime.admin().missingCredentials(source, doc, account.account());
             boolean unreadable = runtime.admin().credentialsUnreadable(source, doc.conch(), account.account());
             boolean paused = runtime.admin().loginPaused(source, doc.conch(), account.account());
+            SessionKey key = new SessionKey(source, doc.conch(), account.account());
+            AuthBinding binding = runtime.authenticators().find(key);
+            String authProblem = AuthenticatorChecks.uses(doc)
+                    ? runtime.authenticators().bindingProblem(key, doc)
+                    : null;
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("name", account.account());
             row.put("default", account.defaultAccount());
-            row.put("needsConfiguration", !missing.isEmpty() || unreadable);
+            row.put("needsConfiguration", !missing.isEmpty() || unreadable || authProblem != null);
             row.put("missingFields", missing);
             ArrayList<String> labels = new ArrayList<>();
             for (String field : missing) {
@@ -595,7 +617,7 @@ final class ConsoleApi {
             row.put("loginInputExpiresAt",
                     loginInput == null ? null : DateTimeFormatter.ISO_INSTANT.format(loginInput.expiresAt()));
             row.put("oauth", oauthStatus(runtime, source, doc, account.account()));
-            String identity = runtime.identities().identityOf(new SessionKey(source, doc.conch(), account.account()));
+            String identity = runtime.identities().identityOf(key);
             row.put("identity", identity == null ? null : identityNames.computeIfAbsent(identity, id -> {
                 for (Identity known : runtime.identities().list()) {
                     if (known.id().equals(id)) {
@@ -604,9 +626,7 @@ final class ConsoleApi {
                 }
                 return Map.of("id", id, "name", id);
             }));
-            SessionKey key = new SessionKey(source, doc.conch(), account.account());
-            AuthBinding binding = runtime.authenticators().find(key);
-            row.put("authBinding", binding == null ? null : bindingRow(runtime, binding));
+            row.put("authBinding", binding == null ? null : bindingRow(runtime, key, doc, binding));
             if (AuthenticatorChecks.isAuthenticator(doc)) {
                 ArrayList<Map<String, Object>> consumers = new ArrayList<>();
                 for (AuthBinding consumer : runtime.authenticators().consumersOf(key)) {
@@ -708,7 +728,8 @@ final class ConsoleApi {
         return row;
     }
 
-    private static Map<String, Object> bindingRow(CrabRuntime runtime, AuthBinding binding) {
+    private static Map<String, Object> bindingRow(
+            CrabRuntime runtime, SessionKey consumerKey, ConchDoc consumerDoc, AuthBinding binding) {
         LinkedHashMap<String, Object> row = new LinkedHashMap<>(memberKey(binding.authenticator()));
         row.put("baseUrl", binding.boundBaseUrl());
         row.put("boundAt", DateTimeFormatter.ISO_INSTANT.format(binding.boundAt()));
@@ -716,10 +737,13 @@ final class ConsoleApi {
         PendingLogins.View waiting = runtime.admin().loginInput(target.origin(), target.conch(), target.account());
         row.put("loginInputRequired", waiting != null);
         row.put("loginPaused", runtime.admin().loginPaused(target.origin(), target.conch(), target.account()));
+        String problem = runtime.authenticators().bindingProblem(consumerKey, consumerDoc);
+        row.put("ready", problem == null);
+        row.put("problem", problem);
         return row;
     }
 
-    /** 本机生效的授权器。只在控制台；规则包列表、OpenAPI、MCP 和 API Key 范围里都没有它们。 */
+    /** 本机生效的授权器（以及已订阅但校验停用的正式授权器）。只在控制台；规则包列表、OpenAPI、MCP 和 API Key 范围里都没有它们。 */
     private static void authenticators(CrabRuntime runtime, Context ctx) {
         Map<String, ConchCatalog.Entry> catalog = catalogByName(runtime);
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
@@ -729,24 +753,47 @@ final class ConsoleApi {
                 continue;
             }
             ConchDoc doc = active.doc();
+            Origin source = active.origin();
+            List<Account> accountList = runtime.admin().listAccounts(source, doc.conch());
+            boolean paused = loginPaused(runtime, source, doc, accountList);
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("conch", doc.conch());
             row.put("version", doc.version().toString());
             row.put("title", text(doc.title()));
             row.put("description", text(doc.description()));
-            row.put("source", sourceLabel(active.origin()));
-            row.put("origins", List.copyOf(runtime.identities().addresses(active.origin(), doc.conch())));
+            row.put("source", sourceLabel(source));
+            row.put("origins", List.copyOf(runtime.identities().addresses(source, doc.conch())));
             row.put("allowHosts", doc.auth().allowHosts());
             row.put("exports", List.copyOf(doc.auth().exports().keySet()));
-            row.put("subscribed", active.origin() == Origin.OFFICIAL && runtime.subscribed(doc.conch()));
-            putUpdateFields(active.origin() == Origin.OFFICIAL ? catalog.get(doc.conch()) : null, row);
+            row.put("subscribed", runtime.subscribed(doc.conch()));
+            row.put("accountCount", accountList.size());
+            row.put("needsConfiguration", needsConfiguration(runtime, source, doc, accountList, paused));
+            row.put("loginPaused", paused);
+            row.put("switchedOff", runtime.conchSwitchedOff(doc.conch()));
+            row.put("ruleDisabled", false);
+            putSources(runtime, doc.conch(), row);
+            putReefDisabled(runtime, source, doc.conch(), row);
+            putUpdateFields(source == Origin.OFFICIAL ? catalog.get(doc.conch()) : null, row);
+            if (source == Origin.OFFICIAL) {
+                putPrevious(runtime, doc.conch(), row);
+            } else {
+                row.put("previousVersion", null);
+                row.put("previousDisabled", false);
+                row.put("previousPresent", false);
+            }
             ArrayList<Map<String, Object>> accounts = new ArrayList<>();
-            for (Account account : runtime.admin().listAccounts(active.origin(), doc.conch())) {
+            for (Account account : accountList) {
                 LinkedHashMap<String, Object> entry = new LinkedHashMap<>();
                 entry.put("name", account.account());
+                boolean missingOrUnreadable = !runtime.admin().missingCredentials(source, doc, account.account()).isEmpty()
+                        || runtime.admin().credentialsUnreadable(source, doc.conch(), account.account());
+                entry.put("needsConfiguration", missingOrUnreadable);
+                entry.put("loginPaused", runtime.admin().loginPaused(source, doc.conch(), account.account()));
+                entry.put("loginInputRequired",
+                        runtime.admin().loginInput(source, doc.conch(), account.account()) != null);
                 ArrayList<Map<String, Object>> consumers = new ArrayList<>();
                 for (AuthBinding consumer : runtime.authenticators()
-                        .consumersOf(new SessionKey(active.origin(), doc.conch(), account.account()))) {
+                        .consumersOf(new SessionKey(source, doc.conch(), account.account()))) {
                     consumers.add(memberKey(consumer.account()));
                 }
                 entry.put("consumers", consumers);
@@ -755,7 +802,73 @@ final class ConsoleApi {
             row.put("accounts", accounts);
             rows.add(row);
         }
+        appendDisabledAuthenticators(runtime, catalog, rows);
         GatewayResponses.writeData(ctx, Map.of("authenticators", rows));
+    }
+
+    private static void appendDisabledAuthenticators(
+            CrabRuntime runtime, Map<String, ConchCatalog.Entry> catalog, ArrayList<Map<String, Object>> rows) {
+        ConchSync sync = runtime.conchSync();
+        if (sync == null) {
+            return;
+        }
+        for (ConchSync.DisabledRule disabled : sync.disabledRules()) {
+            ConchCatalog.Entry cat = catalog.get(disabled.conch());
+            if (!isDisabledAuthenticator(runtime, disabled.conch(), cat)) {
+                continue;
+            }
+            boolean listed = false;
+            for (Map<String, Object> row : rows) {
+                if (disabled.conch().equals(row.get("conch"))) {
+                    listed = true;
+                    break;
+                }
+            }
+            if (!listed) {
+                rows.add(disabledAuthenticatorSummary(runtime, disabled, cat));
+            }
+        }
+    }
+
+    private static Map<String, Object> disabledAuthenticatorSummary(
+            CrabRuntime runtime, ConchSync.DisabledRule disabled, ConchCatalog.Entry catalog) {
+        List<Account> accountList = runtime.admin().listAccounts(Origin.OFFICIAL, disabled.conch());
+        ConchDoc readable = runtime.conchSync() == null
+                ? null
+                : runtime.conchSync().readableInstalled(disabled.conch()).orElse(null);
+        LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+        row.put("conch", disabled.conch());
+        row.put("version", disabled.version());
+        row.put("title", text(disabled.title()));
+        row.put("description", text(disabled.description()));
+        row.put("source", "REEF");
+        row.put("origins", List.of());
+        row.put("allowHosts", readable != null && readable.auth() != null ? readable.auth().allowHosts() : List.of());
+        row.put("exports", readable != null && readable.auth() != null
+                ? List.copyOf(readable.auth().exports().keySet())
+                : List.of());
+        row.put("subscribed", true);
+        row.put("accountCount", accountList.size());
+        row.put("needsConfiguration", false);
+        row.put("loginPaused", false);
+        row.put("switchedOff", false);
+        row.put("ruleDisabled", true);
+        row.put("message", disabled.message());
+        row.put("fixHint", disabled.fixHint());
+        row.put("localVersion", runtime.registry().find(disabled.conch(), Origin.LOCAL)
+                .map(doc -> doc.version().toString()).orElse(null));
+        row.put("reefVersion", disabled.version());
+        row.put("reefDisabled", false);
+        row.put("reefDisabledAt", null);
+        row.put("updateAvailable", catalog != null && catalog.updateAvailable());
+        row.put("latestVersion", catalog != null && catalog.latestVersion() != null
+                ? catalog.latestVersion() : disabled.latestVersion());
+        row.put("newRequiredCredentials", catalog == null ? List.of() : catalog.newRequiredCredentials());
+        row.put("previousVersion", disabled.previousVersion());
+        row.put("previousDisabled", disabled.previousDisabled());
+        row.put("previousPresent", disabled.previousPresent());
+        row.put("accounts", List.of());
+        return row;
     }
 
     private static Map<String, Object> authCheckBody(Authenticators.Check check) {
@@ -2144,10 +2257,14 @@ final class ConsoleApi {
     private static void listLocal(CrabRuntime runtime, Context ctx) {
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (LocalConches.LocalPackage pkg : runtime.localConches().packages()) {
+            ConchDoc readable = pkg.conch() == null
+                    ? null
+                    : runtime.localConches().readableDoc(pkg.conch()).orElse(null);
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("conch", pkg.conch());
             row.put("file", pkg.file());
             row.put("version", pkg.version());
+            row.put("driver", readable == null ? null : driver(readable));
             row.put("loaded", pkg.loaded());
             row.put("active", pkg.loaded() && runtime.registry().origin(pkg.conch()) == Origin.LOCAL);
             row.put("broken", pkg.broken());
@@ -2285,9 +2402,19 @@ final class ConsoleApi {
     }
 
     private static boolean loginPaused(CrabRuntime runtime, Origin source, ConchDoc doc, List<Account> accounts) {
+        boolean usesAuth = AuthenticatorChecks.uses(doc);
         for (Account account : accounts) {
             if (runtime.admin().loginPaused(source, doc.conch(), account.account())) {
                 return true;
+            }
+            if (usesAuth) {
+                AuthBinding binding = runtime.authenticators().find(new SessionKey(source, doc.conch(), account.account()));
+                if (binding != null && runtime.admin().loginPaused(
+                        binding.authenticator().origin(),
+                        binding.authenticator().conch(),
+                        binding.authenticator().account())) {
+                    return true;
+                }
             }
         }
         return false;
@@ -2295,9 +2422,9 @@ final class ConsoleApi {
 
     /**
      * List and detail share this package flag. It is true when the conch has no account, required
-     * config or credentials are missing, stored credentials cannot be decrypted, or any account has
-     * automatic login paused. An existing account may leave {@code required: false} credentials unset.
-     * Account rows do not use this method.
+     * config or credentials are missing, stored credentials cannot be decrypted, any {@code auth.use}
+     * account is unbound or unready, or any account has automatic login paused. An existing account
+     * may leave {@code required: false} credentials unset. Account rows do not use this method.
      */
     private static boolean needsConfiguration(
             CrabRuntime runtime,
@@ -2312,9 +2439,14 @@ final class ConsoleApi {
         if (!DeclaredSettings.missingConfig(doc, runtime.admin().storedConfig(source, doc.conch())).isEmpty()) {
             return true;
         }
+        boolean usesAuth = AuthenticatorChecks.uses(doc);
         for (Account account : accounts) {
             if (!runtime.admin().missingCredentials(source, doc, account.account()).isEmpty()
                     || runtime.admin().credentialsUnreadable(source, doc.conch(), account.account())) {
+                return true;
+            }
+            if (usesAuth && runtime.authenticators().bindingProblem(
+                    new SessionKey(source, doc.conch(), account.account()), doc) != null) {
                 return true;
             }
         }

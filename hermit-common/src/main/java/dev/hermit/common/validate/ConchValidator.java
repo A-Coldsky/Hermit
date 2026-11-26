@@ -113,7 +113,7 @@ public final class ConchValidator {
         }
         boolean mcp = "mcp".equals(doc.driver());
         if (!mcp && !"http".equals(doc.driver()) && !AuthenticatorChecks.isAuthenticator(doc)) {
-            errors.add(issue(ValidationCodes.DRIVER, "driver", "driver 只允许 http 或 mcp"));
+            errors.add(issue(ValidationCodes.DRIVER, "driver", "driver 只允许 http、mcp 或 auth"));
         }
         if (blank(doc.title())) {
             errors.add(issue(ValidationCodes.MISSING_TITLE, "title", "缺少 title"));
@@ -412,7 +412,7 @@ public final class ConchValidator {
                     inputFields);
         }
         checkOutput(path + ".output", action.output(), errors);
-        checkCredentialInOutput(path + ".output", action.outputTemplate(), errors);
+        checkCredentialInOutput(path + ".output", action.outputTemplate(), doc, errors);
         checkSteps(action.steps(), path + ".steps", ctx, errors);
         checkPlainStepList(action.steps(), path + ".steps", errors);
         LinkedHashSet<String> declared = new LinkedHashSet<>();
@@ -731,18 +731,22 @@ public final class ConchValidator {
         return false;
     }
 
-    private static void checkCredentialInOutput(String path, Object node, List<ValidationIssue> errors) {
+    private static void checkCredentialInOutput(
+            String path, Object node, ConchDoc doc, List<ValidationIssue> errors) {
         if (node == null) {
             return;
         }
         if (node instanceof String text) {
             try {
                 for (String ref : TEMPLATES.referencedPaths(text)) {
-                    if (ref.startsWith("credential.") || ref.startsWith("credential[")) {
+                    if ("credential".equals(ref) || ref.startsWith("credential.") || ref.startsWith("credential[")) {
                         errors.add(issue(ValidationCodes.CREDENTIAL_IN_OUTPUT, path, "返回值不得引用凭证"));
                     }
                     if (isLoginPath(ref)) {
                         errors.add(issue(ValidationCodes.LOGIN_IN_OUTPUT, path, "返回值不得引用登录变量"));
+                    }
+                    if (AuthenticatorChecks.uses(doc) && isAuthPath(ref)) {
+                        errors.add(issue(ValidationCodes.LOGIN_IN_OUTPUT, path, "返回值不得引用授权器导出变量"));
                     }
                 }
             } catch (TemplateException ex) {
@@ -752,13 +756,13 @@ public final class ConchValidator {
         }
         if (node instanceof Map<?, ?> map) {
             for (Map.Entry<?, ?> entry : map.entrySet()) {
-                checkCredentialInOutput(path + "." + entry.getKey(), entry.getValue(), errors);
+                checkCredentialInOutput(path + "." + entry.getKey(), entry.getValue(), doc, errors);
             }
             return;
         }
         if (node instanceof List<?> list) {
             for (int i = 0; i < list.size(); i++) {
-                checkCredentialInOutput(path + "[" + i + "]", list.get(i), errors);
+                checkCredentialInOutput(path + "[" + i + "]", list.get(i), doc, errors);
             }
         }
     }
@@ -1492,12 +1496,11 @@ public final class ConchValidator {
             }
             return;
         }
-        if (AuthenticatorChecks.uses(doc)
-                && ("auth".equals(ref) || ref.startsWith("auth.") || ref.startsWith("auth["))) {
+        if (AuthenticatorChecks.uses(doc) && isAuthPath(ref)) {
             String name = head(ref, "auth");
             if (handledByDefault) {
                 errors.add(issue(ValidationCodes.LOGIN_DEFAULT, path, "不能用 default 包裹授权器变量 " + ref));
-            } else if (name == null || !templateIdentifier(name)) {
+            } else if (name == null || !AuthenticatorChecks.isExportIdentifier(name)) {
                 errors.add(issue(ValidationCodes.UNDECLARED_VARIABLE, path, "授权器变量要写成 auth.名字"));
             }
             return;
@@ -1834,6 +1837,10 @@ public final class ConchValidator {
 
     private static boolean isLoginPath(String ref) {
         return "login".equals(ref) || ref.startsWith("login.") || ref.startsWith("login[");
+    }
+
+    private static boolean isAuthPath(String ref) {
+        return "auth".equals(ref) || ref.startsWith("auth.") || ref.startsWith("auth[");
     }
 
     private static String loginField(String ref) {

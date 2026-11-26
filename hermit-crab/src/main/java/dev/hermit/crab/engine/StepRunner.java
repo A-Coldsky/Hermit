@@ -181,7 +181,7 @@ final class StepRunner {
                     spec, vars, cookies, expectPrefix, client, afterExchange, base, deadlineNanos, capture, reach,
                     auth ? List.of() : expiredWhen, extraSecrets);
             case "extract" -> extract(spec, step.def(), vars, deadlineNanos, capture, auth, taintedVars);
-            case "assert" -> check(spec, vars, cookies, base, capture, !auth);
+            case "assert" -> check(spec, vars, cookies, base, reach, capture, !auth);
             case "set" -> set(spec, step.def(), vars, capture, auth, taintedVars);
             case "script" -> script(spec, vars, deadlineNanos, capture, libraries, auth, taintedVars);
             default -> throw new RuleProblem(
@@ -352,16 +352,20 @@ final class StepRunner {
             boolean auth,
             Set<String> taintedVars
     ) {
-        Map<String, Object> before = capture ? new LinkedHashMap<>(vars) : null;
+        if (vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource
+                && spec.containsKey(ConchRegistry.AUTH_VAR)) {
+            throw new RuleProblem(ErrorCode.RULE_MISMATCH, "不能写入保留变量", null, null, null);
+        }
+        Map<String, Object> before = (capture || auth) ? new LinkedHashMap<>(vars) : null;
         int count = Extractors.apply(spec, vars, filters, templates, deadlineNanos);
         if (tracksSecrets(auth, vars) && taintedVars != null) {
-            Set<String> taintedBefore = withAuthView(taintedVars, vars);
             for (Map.Entry<String, Object> entry : spec.entrySet()) {
+                Set<String> currentTaint = withAuthView(taintedVars, vars);
                 String key = entry.getKey();
                 Map<String, Object> child = Values.map(entry.getValue());
                 Object rawChild = rawDef == null ? null : rawDef.get(key);
-                if (extractReadsLoginOrTainted(child, taintedBefore)
-                        || referencesLoginOrTainted(rawChild, taintedBefore)) {
+                if (extractReadsLoginOrTainted(child, currentTaint)
+                        || referencesLoginOrTainted(rawChild, currentTaint)) {
                     CallSecrets.remember(vars.get(key));
                     taintedVars.add(key);
                 } else {
@@ -369,10 +373,13 @@ final class StepRunner {
                 }
             }
         }
+        Map<String, Object> extracted = before != null ? changed(before, vars) : Map.of();
+        if (auth && !extracted.isEmpty()) {
+            CallSecrets.remember(extracted);
+        }
         if (!capture) {
             return new Outcome(null, null, null, count, false);
         }
-        Map<String, Object> extracted = changed(before, vars);
         rememberDerived(extracted);
         return new Outcome(null, null, null, count, false,
                 DevTraceDraft.extractPiece(spec, count, extracted));
@@ -386,16 +393,20 @@ final class StepRunner {
             boolean auth,
             Set<String> taintedVars
     ) {
-        Set<String> taintedBefore = withAuthView(taintedVars, vars);
+        boolean authReserved = vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource;
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
             String key = entry.getKey();
-            if (ConchRegistry.RESERVED.contains(key)) {
+            if (ConchRegistry.RESERVED.contains(key) || (authReserved && ConchRegistry.AUTH_VAR.equals(key))) {
                 throw new RuleProblem(ErrorCode.RULE_MISMATCH, "不能写入保留变量", null, null, null);
             }
+            Set<String> currentTaint = withAuthView(taintedVars, vars);
             vars.put(key, entry.getValue());
+            if (auth) {
+                CallSecrets.remember(entry.getValue());
+            }
             if (tracksSecrets(auth, vars)) {
                 Object rawValue = rawDef == null ? null : rawDef.get(key);
-                if (referencesLoginOrTainted(rawValue, taintedBefore)) {
+                if (referencesLoginOrTainted(rawValue, currentTaint)) {
                     CallSecrets.remember(entry.getValue());
                     if (taintedVars != null) {
                         taintedVars.add(key);
@@ -423,7 +434,7 @@ final class StepRunner {
     ) {
         boolean mask = Boolean.TRUE.equals(spec.get("credential"));
         boolean tracked = tracksSecrets(auth, vars);
-        boolean trackChanges = capture || mask || (tracked && taintedVars != null && !taintedVars.isEmpty());
+        boolean trackChanges = capture || mask || auth || (tracked && taintedVars != null && !taintedVars.isEmpty());
         Map<String, Object> before = trackChanges ? new LinkedHashMap<>(vars) : null;
         Set<String> hidden = (tracked && taintedVars != null && !taintedVars.isEmpty())
                 ? Set.copyOf(taintedVars)
@@ -432,8 +443,14 @@ final class StepRunner {
         Map<String, Object> produced = trackChanges ? changed(before, vars) : Map.of();
         if (mask) {
             CallSecrets.remember(produced);
+            if (tracked && taintedVars != null && !produced.isEmpty()) {
+                taintedVars.addAll(produced.keySet());
+            }
         } else if (tracked && taintedVars != null && !produced.isEmpty()) {
             taintedVars.removeAll(produced.keySet());
+        }
+        if (auth && !produced.isEmpty()) {
+            CallSecrets.remember(produced);
         }
         rememberDerived(produced);
         if (!capture) {
@@ -568,6 +585,7 @@ final class StepRunner {
             Map<String, Object> vars,
             BasicCookieStore cookies,
             URI base,
+            AuthReach reach,
             boolean capture,
             boolean allowSessionExpired
     ) {
@@ -615,7 +633,7 @@ final class StepRunner {
                             assertFail(NOT_CONTAINS_MISMATCH);
                         }
                     }
-                    case "cookie_exists" -> checkCookie(Values.text(entry.getValue()), cookies, base);
+                    case "cookie_exists" -> checkCookie(Values.text(entry.getValue()), cookies, base, reach);
                     case "header_exists" -> checkHeader(Values.text(entry.getValue()), headers);
                     case "not_redirected_to" -> {
                         if (redirectedTo(redirect, url, Values.text(entry.getValue()))) {
@@ -673,11 +691,21 @@ final class StepRunner {
         return new Outcome(null, null, null, null, false, DevTraceDraft.assertPiece(spec, true));
     }
 
+    boolean test(Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies, URI base) {
+        return test(spec, vars, cookies, base, AuthReach.NONE);
+    }
+
     /**
      * if 和 repeat.until 的判断。写了几个键就要全部成立。和 assert 不同，不成立只返回 false；
      * 要看响应的键在还没有响应时算规则写错。
      */
-    boolean test(Map<String, Object> spec, Map<String, Object> vars, BasicCookieStore cookies, URI base) {
+    boolean test(
+            Map<String, Object> spec,
+            Map<String, Object> vars,
+            BasicCookieStore cookies,
+            URI base,
+            AuthReach reach
+    ) {
         Map<String, Object> response = Values.map(vars.get("response"));
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
             String key = entry.getKey();
@@ -689,7 +717,7 @@ final class StepRunner {
                 case "status" -> statusIn(value, Values.integer(response.get("status"), -1));
                 case "contains" -> bodyOf(response).contains(Values.text(value));
                 case "not_contains" -> !bodyOf(response).contains(Values.text(value));
-                case "cookie_exists" -> hasCookie(Values.text(value), cookies, base);
+                case "cookie_exists" -> hasCookie(Values.text(value), cookies, base, reach);
                 case "header_exists" -> {
                     Map<String, Object> headers = Values.map(response.get("headers"));
                     yield headers != null && headers.containsKey(Values.text(value).toLowerCase(Locale.ROOT));
@@ -927,16 +955,16 @@ final class StepRunner {
         return "规则声明的状态";
     }
 
-    private static void checkCookie(String name, BasicCookieStore cookies, URI base) {
-        if (!hasCookie(name, cookies, base)) {
+    private static void checkCookie(String name, BasicCookieStore cookies, URI base, AuthReach reach) {
+        if (!hasCookie(name, cookies, base, reach)) {
             assertFail(COOKIE_MISSING_SUMMARY);
         }
     }
 
-    /** 只看会发往 base_url 主机的 Cookie。认证地址上的同名 Cookie 不算。 */
-    private static boolean hasCookie(String name, BasicCookieStore cookies, URI base) {
+    /** 普通包只看会发往 base_url 主机的 Cookie；授权器看全部生效认证地址。 */
+    private static boolean hasCookie(String name, BasicCookieStore cookies, URI base, AuthReach reach) {
         for (Cookie cookie : cookies.getCookies()) {
-            if (name.equals(cookie.getName()) && AuthReach.readable(cookie, base, cookies)) {
+            if (name.equals(cookie.getName()) && AuthReach.cookieReadable(cookie, base, reach, cookies)) {
                 return true;
             }
         }

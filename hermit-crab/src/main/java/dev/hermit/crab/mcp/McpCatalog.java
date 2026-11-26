@@ -49,9 +49,10 @@ final class McpCatalog {
     static final String DEV_DESCRIPTION =
             "Hermit Crab 内置的开发者工具包，用于编写或修改规则包（Conch），只在本机开发者模式打开、并且 API Key 勾选了开发者工具时出现。"
                     + "如果用户在 Crab 控制台录制或导入并保存了脱敏抓包快照，优先用 hermit_dev__capture_list 查看快照目录，再用 hermit_dev__capture_get 按序号读取详情；"
+                    + "涉及单点登录或多系统共用认证时，先用 hermit_dev__auth_list 查看本机可复用的 driver: auth 授权器组件与导出变量；"
                     + "写或改 YAML 前先用 hermit_dev__guide（或读取资源 hermit://conches/hermit_dev/guide）获取可直接复制修改的 starterTemplate、pitfalls 避坑清单、步骤速查与相关章节；"
                     + "修改已有规则包前先用 hermit_dev__read_yaml 读取原文（Reef 订阅的正式包只读不可直接修改，如需改动请用 hermit_dev__save_local 保存为本地规则包，可起新包名立即生效，或保存为同名本地副本再由用户在控制台切换来源）。"
-                    + "推荐顺序：先和用户确认要做哪些功能 → hermit_dev__validate 校验至无错（失败可按 fixHints/suggestedSections 修正） → hermit_dev__save_local 保存 → 用户在控制台建账号填凭证并可点「测试登录」 → hermit_dev__trial_run 试跑；测试登录、验证码续登或试跑失败时，用 hermit_dev__debug_trace 查 traceId，或直接用 hermit_dev__debug_trace_list 列出最近本机开发追踪排查原因。"
+                    + "推荐顺序：先和用户确认要做哪些功能 → hermit_dev__validate 校验至无错（失败可按 fixHints/suggestedSections 修正） → hermit_dev__save_local 保存 → 用户在控制台建账号填凭证（或绑定授权器账号）并可点「测试登录」 → hermit_dev__trial_run 试跑；测试登录、验证码续登或试跑失败时，用 hermit_dev__debug_trace 查 traceId，或直接用 hermit_dev__debug_trace_list 列出最近本机开发追踪排查原因。"
                     + "不要向用户索要口令、Cookie 或令牌，也不要写入 YAML。"
                     + "这些工具不直接出现在工具列表里：工具列表里有 hermit_dev 时用 hermit_dev(tool=工具名, arguments=参数) 调用，"
                     + "有 call_capability 时用 call_capability(name=工具名, arguments=参数) 调用。";
@@ -393,11 +394,15 @@ final class McpCatalog {
             }
         }
         boolean devConch = DEV_CONCH.equals(conch);
-        if (!hasGroup && (hasQuery || ungrouped) && (conch == null || conch.isBlank() || devConch)) {
+        if (!hasGroup && (hasQuery || ungrouped || devConch) && (conch == null || conch.isBlank() || devConch)) {
+            String devConchText = (DEV_CONCH + " " + DEV_TITLE).toLowerCase(Locale.ROOT);
             for (McpSchema.Tool tool : devTools(principal, false, localCaller)) {
-                // 不点名这个包时只按工具自己的名字和说明匹配；点名后空查询列出全部。
+                // 点名这个包后空查询列出全部；带查询词时同时支持按包名/包标题（如「开发工具」）和工具自身说明检索。
                 Hit hit = Hit.of(
-                        terms, tool.name(), (tool.name() + " " + tool.description()).toLowerCase(Locale.ROOT), "");
+                        terms,
+                        tool.name(),
+                        (tool.name() + " " + tool.description()).toLowerCase(Locale.ROOT),
+                        devConchText);
                 if (hasQuery && hit.matched() == 0) {
                     continue;
                 }

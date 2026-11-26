@@ -13,10 +13,10 @@ export function connectPrompt(endpoint: string): string {
     '4. 配好后明确告诉我三件事：配置写在哪个文件（完整路径）；占位符 <API Key> 在其中的哪个位置；我替换后需不需要重启或重新加载才生效。Key 我会在 Crab 控制台的「API Key」页创建，然后自己替换占位符。',
     '',
     '二、接入后',
-    '1. 先看 tools/list。工具名形如 规则包__能力，说明里写了用途、注意事项和相关能力，参数在 inputSchema 里。',
-    '2. 如果只看到 list_systems、search_capabilities、describe_capability、call_capability，说明能力较多：用 list_systems 看有哪些规则包，用 search_capabilities 找能力，用 describe_capability 看参数和示例，再用 call_capability 调用。',
+    '1. 先看 tools/list。默认提供目录工具 list_systems、search_capabilities、describe_capability、call_capability：先用 list_systems 看有哪些规则包，再用 search_capabilities 找能力，用 describe_capability 看参数和示例，最后用 call_capability 调用。',
+    '2. 如果 tools/list 直接列出了形如 规则包__能力 的工具（配了直接模式上限时），可直接查看其说明和 inputSchema 调用。',
     '3. 需要了解某个规则包的全貌时，读资源 hermit://conches/<规则包>/guide。',
-    '4. 列表里没有的能力就是这把 Key 不能用或已停用，不要猜工具名。调用失败时按返回里的 code 和 hint 处理。',
+    '4. 列表和目录里没有的能力就是这把 Key 不能用或已停用，不要猜工具名。调用失败时按返回里的 code 和 hint 处理。',
     '5. 一个规则包有多个账号时，用 account 参数指定账号。',
     '6. 连接返回 401 说明 Key 还没填或填错了，提醒我去检查占位符的位置，不要让我把 Key 发给你。',
   ].join('\n')

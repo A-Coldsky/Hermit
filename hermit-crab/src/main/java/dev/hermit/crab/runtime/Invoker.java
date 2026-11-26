@@ -103,6 +103,7 @@ public final class Invoker {
     private volatile VersionSuccess versionSuccess;
     private volatile McpForwarder mcpForwarder;
     private volatile java.util.function.Predicate<String> ruleDisabled = name -> false;
+    private volatile java.util.function.Predicate<String> authenticatorCheck = name -> false;
     private volatile FileStage fileStage;
     private volatile String fileBase;
     private volatile java.util.function.Predicate<String> switchedOff = name -> false;
@@ -275,6 +276,11 @@ public final class Invoker {
         this.ruleDisabled = lookup == null ? name -> false : lookup;
     }
 
+    /** 授权器永远不可通过网关或 MCP 直接调用，即便被撤下或校验停用也一律返回 NOT_FOUND。 */
+    public void bindAuthenticatorCheck(java.util.function.Predicate<String> lookup) {
+        this.authenticatorCheck = lookup == null ? name -> false : lookup;
+    }
+
     /** {@code driver: mcp} 走转发器。没绑定时这类包失败关闭，不会落到 HTTP 步骤引擎。 */
     public void bindMcpForwarder(McpForwarder forwarder) {
         this.mcpForwarder = forwarder;
@@ -337,6 +343,9 @@ public final class Invoker {
         ConchRegistry.Active live = registry.active(conch).orElse(null);
         ConchDoc doc = live == null ? null : live.doc();
         Origin origin = live == null ? null : live.origin();
+        if (doc == null && authenticatorCheck.test(conch)) {
+            return requestOnly(traceId, ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE);
+        }
         if (doc == null && disabledConches.contains(conch)) {
             return requestOnly(traceId, ErrorCode.CONCH_DISABLED, DisabledConches.CALL_MESSAGE);
         }

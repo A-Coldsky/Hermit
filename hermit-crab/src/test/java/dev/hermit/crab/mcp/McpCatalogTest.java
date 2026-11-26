@@ -217,6 +217,25 @@ class McpCatalogTest {
                 .doesNotContain("### oa__top_12");
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void devConchSearchListsAllOnEmptyQueryAndMatchesPackageTitle() {
+        ConchRegistry registry = new ConchRegistry();
+        McpCatalog catalog = new McpCatalog(registry, (c, a) -> false, () -> true, 0);
+        ApiKeyPrincipal devKey = new ApiKeyPrincipal(
+                "k-dev", "dev", ApiKeyScope.explicit(true, Set.of(), Set.of(), Set.of(), false, true));
+
+        List<java.util.Map<String, Object>> allDev = (List<java.util.Map<String, Object>>)
+                catalog.search(devKey, null, McpCatalog.DEV_CONCH, null, false, true).get("matches");
+        assertThat(allDev).extracting(row -> (String) row.get("name"))
+                .contains("hermit_dev__guide", "hermit_dev__auth_list", "hermit_dev__validate", "hermit_dev__save_local");
+
+        List<java.util.Map<String, Object>> byTitle = (List<java.util.Map<String, Object>>)
+                catalog.search(devKey, "开发工具", null, null, false, true).get("matches");
+        assertThat(byTitle).isNotEmpty();
+        assertThat(McpCatalog.DEV_DESCRIPTION).contains("hermit_dev__auth_list");
+    }
+
     private static String groupedYaml(String conch, int ungroupedCount) {
         StringBuilder actions = new StringBuilder();
         for (int i = 1; i <= ungroupedCount; i++) {

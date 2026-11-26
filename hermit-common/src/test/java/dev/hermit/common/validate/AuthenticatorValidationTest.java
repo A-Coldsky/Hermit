@@ -380,6 +380,79 @@ class AuthenticatorValidationTest {
                 .contains("\"exports\":{\"access_token\":{\"description\":\"访问令牌\"}}");
     }
 
+    @Test
+    void outputCannotExposeAuthenticatorExportsDirectlyOrViaFilters() {
+        String base64Leak = CONSUMER.replace(
+                "value: ok",
+                "value: \"{{auth.access_token | base64}}\"");
+        assertThat(validate(base64Leak).errors())
+                .anyMatch(issue -> issue.code().equals(ValidationCodes.LOGIN_IN_OUTPUT)
+                        && issue.path().equals("actions.list_todos.output.marker")
+                        && issue.message().contains("授权器导出变量"));
+        String bareLeak = CONSUMER.replace("value: ok", "value: \"{{auth.access_token}}\"");
+        assertThat(validate(bareLeak).errors())
+                .anyMatch(issue -> issue.code().equals(ValidationCodes.LOGIN_IN_OUTPUT));
+    }
+
+    @Test
+    void astReferencedExportsHandlesSubscriptsAndIgnoresStringLiteralsAndComments() {
+        String yaml = CONSUMER
+                .replace("list_todos:\n    title: 待办",
+                        "list_todos:\n    title: 待办\n    input:\n"
+                                + "      fallback: { type: string, description: 兜底, default: \"{{auth.input_tok}}\" }\n"
+                                + "      x: { type: object, description: 嵌套 }")
+                .replace("    - extract: { ticket: \"$.ticket\" }",
+                        "    - extract: { ticket: \"$.ticket\" }\n"
+                                + "    - script:\n"
+                                + "        credential: true\n"
+                                + "        into: sig\n"
+                                + "        code: |\n"
+                                + "          // vars.auth.commented_out\n"
+                                + "          /* vars.auth.block_comment */\n"
+                                + "          const fake = 'vars.auth.in_string';\n"
+                                + "          return vars.auth['bracket_tok'] + vars.auth[\"dq_tok\"];")
+                .replace("path: /api/todos",
+                        "path: \"/api/todos?a={{input.x['a}}b'] | default(auth.pipe_tok)}}&u={{input.fallback | default('https://auth.corp.example')}}\"");
+        assertThat(validate(yaml).errors()).isEmpty();
+        assertThat(AuthenticatorChecks.referencedExports(ConchParser.parse(yaml)))
+                .containsExactlyInAnyOrder("access_token", "input_tok", "bracket_tok", "dq_tok", "pipe_tok");
+    }
+
+    @Test
+    void nonAsciiAuthExportReferenceAndOutOfRangeWildcardPortsAreRejected() {
+        assertThat(validate(CONSUMER.replace("{{auth.access_token}}", "{{auth.中文}}")).errors())
+                .anyMatch(issue -> issue.code().equals(ValidationCodes.UNDECLARED_VARIABLE));
+        assertThat(validate(withAllowHosts("\"https://*.corp.example:0\"")).errors())
+                .anyMatch(issue -> issue.path().equals("auth.allow_hosts[0]"));
+        assertThat(validate(withAllowHosts("\"https://*.corp.example:70000\"")).errors())
+                .anyMatch(issue -> issue.path().equals("auth.allow_hosts[0]"));
+        String badConfigDefault = AUTHENTICATOR.replace("credentials:",
+                "config:\n  sso_client: { type: url, default: \"ftp://bad.example\" }\ncredentials:")
+                .replace("  exports:", "  allow_hosts: [\"{{config.sso_client}}\"]\n  exports:");
+        assertThat(validate(badConfigDefault).errors())
+                .anyMatch(issue -> issue.path().equals("config.sso_client.default"));
+    }
+
+    @Test
+    void duplicateExportKeysAndAuthDiffAreDetected() {
+        String dup = AUTHENTICATOR + "    access_token: { description: 重复 }\n";
+        assertThat(DuplicateExports.find(dup))
+                .singleElement()
+                .satisfies(issue -> {
+                    assertThat(issue.code()).isEqualTo(ValidationCodes.AUTHENTICATOR);
+                    assertThat(issue.path()).isEqualTo("auth.exports.access_token");
+                });
+        ConchDoc v1 = ConchParser.parse(AUTHENTICATOR);
+        ConchDoc v2 = ConchParser.parse(withAllowHosts("\"https://*.corp.example\"")
+                .replace("access_token: { description: 访问令牌 }",
+                        "access_token: { description: 访问令牌 }\n    id_token: { description: 身份令牌 }")
+                .replace("- extract: { access_token: \"$.token\" }",
+                        "- extract: { access_token: \"$.token\", id_token: \"$.id\" }"));
+        ConchDiff diff = ConchDiff.between(v1, v2);
+        assertThat(diff.addedExports()).containsExactly("id_token");
+        assertThat(diff.authChanges()).contains("steps", "allow_hosts");
+    }
+
     private static String withAllowHosts(String items) {
         return AUTHENTICATOR.replace("  exports:", "  allow_hosts: [" + items + "]\n  exports:");
     }

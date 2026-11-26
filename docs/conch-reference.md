@@ -248,19 +248,21 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名、分组名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.13.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时不低于 1.8.0（`driver: mcp` 不能用）。用了 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时不低于 1.9.0；不低于 1.9.0 的包里 request、extract、assert 的未知键是错误（更低的包仍是警告）。用了 `groups` 或能力的 `group` 时不低于 1.10.0。`driver: http` 用了 `auth.origins` 时不低于 1.11.0（`driver: mcp` 不能用）。`driver: http` 用了 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail: session_expired` / 变量断言键（`equals`、`not_equals`、`present`、`not_present`）时不低于 1.12.0（`driver: mcp` 不能用） |
-| `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.13.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时不低于 1.8.0（`driver: mcp` 不能用）。用了 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时不低于 1.9.0；不低于 1.9.0 的包里 request、extract、assert 的未知键是错误（更低的包仍是警告）。用了 `groups` 或能力的 `group` 时不低于 1.10.0。`driver: http` 用了 `auth.origins` 时不低于 1.11.0（`driver: mcp` 不能用）。`driver: http` 用了 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail: session_expired` / 变量断言键（`equals`、`not_equals`、`present`、`not_present`）时不低于 1.12.0（`driver: mcp` 不能用）。用了 `driver: auth`、`auth.use`、`auth.min_version`、`auth.exchange`、`auth.exports` 或 `auth.allow_hosts` 时不低于 1.13.0 |
+| `driver` | `http`、`mcp` 或 `auth`。mcp 的字段见「MCP 上游包」；`auth` 为可复用授权器，见「授权器」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求。其它 AI 靠这些文字找到规则包和能力，写法见「让其他 AI 找得到」 |
-| `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
+| `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错。写了 `auth.use` 的业务包不声明 `credentials`（凭证由绑定的授权器账号持有） |
 | `config` | 可选字段映射；字段支持默认值；不用于保存秘密 |
-| `auth.steps` | 登录步骤；可省略；没有登录步骤也会创建账号会话 |
-| `auth.alive_check` | 请求及可选的 `expect_not_redirect`、`expect`（1.12.0 起），空闲超时或共享身份首次接手时检测会话。`request` 可以引用 `{{login.名字}}` |
+| `auth.steps` | 登录步骤；`driver: auth` 必填，`driver: http` 可省略（写了 `auth.use` 时不能写） |
+| `auth.alive_check` | 请求及可选的 `expect_not_redirect`、`expect`（1.12.0 起），空闲超时或共享身份/授权器探活时检测会话；`driver: auth` 必填。`request` 可以引用 `{{login.名字}}` |
 | `auth.expired_when` | 可选规则列表（1.12.0 起，最多 16 条）。任意一条命中即按会话失效处理，用于识别 HTTP 200 业务错误码、JS/HTML 登录页、自定义响应头或 419/440/400 等非常规失效响应，见「非 401/403 的会话失效判定」。`min_crab_version` 不低于 1.12.0 |
 | `auth.cookies` | 可选。模板标识符到 Cookie 名，例如 `xsrf: "XSRF-TOKEN"`，之后写 `{{login.xsrf}}`。空映射不要求 1.3.0。非空时 `min_crab_version` 不低于 1.3.0 |
 | `auth.concurrent_reads` | 可选布尔，默认 false。打开后，写了 `mcp.read_only: true` 的能力在同一账号下可以同时执行，见「同一账号的只读能力并行」。`min_crab_version` 不低于 1.9.0 |
-| `auth.origins` | 可选。登录步骤除了 `base_url` 还要访问的认证地址（门户、SSO），最多 4 个，见「门户和 SSO 登录」。声明时 `min_crab_version` 不低于 1.11.0 |
+| `auth.origins` | 可选（`driver: auth` 必填）。登录步骤除了 `base_url` 还要访问的认证地址（门户、SSO），最多 4 个，见「门户和 SSO 登录」与「授权器」。声明时 `min_crab_version` 不低于 1.11.0（`driver: auth` 为 1.13.0） |
+| `auth.exports`、`auth.allow_hosts` | 仅 `driver: auth`（1.13.0 起）。`exports` 声明登录步骤导出的秘密变量（最多 16 个）；`allow_hosts` 可选收紧允许引用的业务站点模式 |
+| `auth.use`、`auth.min_version`、`auth.exchange` | 仅 `driver: http`（1.13.0 起）。引用授权器名、最低版本及可选的业务站点换票步骤，见「授权器」 |
 | `groups` | 可选。能力分组目录（最多两级），用于 MCP 渐进式发现、Crab 按分组启停、API Key 按分组授权及 OpenAPI 标签，见「能力分组」。非空时 `min_crab_version` 不低于 1.10.0 |
-| `actions` | 能力映射，每个包含输入、步骤、输出和示例等，可选填 `group` 归入已声明的分组 |
+| `actions` | 能力映射（`driver: auth` 不写），每个包含输入、步骤、输出和示例等，可选填 `group` 归入已声明的分组 |
 | `health_check` | 目前仅解析/保存，没有自动执行器 |
 | `owner`、`tags`、`changelog` | 管理元数据 |
 
@@ -593,15 +595,15 @@ auth:
     - request: { method: GET, url: https://sso.example.com/ticket }
     - extract: { ticket: { jsonpath: "$.ticket" } }
     - request: { method: GET, path: /cas, query: { ticket: "{{ticket}}" } }
-    - assert: { status: 200 }   # 换票和登录步骤一样不自动检查状态码，要自己断言
+    - assert: { status: 200 }   # 若应用以 200 登录页或业务错误码拒票，仍需断言确认会话已建立
 ```
 
-- 能力步骤和 `exchange` 用 `{{auth.名字}}` 读授权器导出的值。导出值一律是秘密：输出、追踪里打码，普通脚本读不到，`set` 出来的副本也一样。
+- 能力步骤和 `exchange` 用 `{{auth.名字}}` 读授权器导出的值。导出值一律是秘密：输出、追踪里打码，普通脚本读不到，`set` 出来的副本也一样，也不能出现在 `output` 里（报 `LOGIN_IN_OUTPUT`）。
 - 写规则时可以用开发者 MCP 的 `hermit_dev__auth_list` 看本机有哪些授权器和它们导出的变量名。
 - 使用者在控制台把业务包的账号绑到一个授权器账号，绑定时确认业务包的站点地址。没绑定的账号调用返回 `NOT_CONFIGURED`。地址变了、包换了来源或授权器账号被删，绑定作废，要重新绑。授权器停用期间调用同样返回 `NOT_CONFIGURED`，重新启用后原来的绑定继续有效。
 - 授权器写了 `auth.allow_hosts` 时，只有站点地址在里面的业务包能绑；没写就只靠使用者确认。
 - 绑到同一个授权器账号的业务包共用它的 Cookie 和一把账号锁：非只读能力一次只跑一个。
-- `exchange` 按登录步骤执行：不自动检查 HTTP 状态码。应用拒绝票据（例如返回 403）时，没有 `assert` 的换票会被当成成功，要到能力步骤才发现没有会话。换票的最后写上 `assert`。
+- `exchange` 里未被后续 `assert.status` 或 `if.status` 覆盖的 4xx/5xx 会立即按换票失败（`AUTH_FAILED`）终止；若应用在拒票时仍返回 HTTP 200 登录页或业务错误码，请在换票末尾加上对应的 `assert`（如 `cookie_exists`、`json_equals` 或 `body_not_contains`）。
 - 绑到同一个授权器账号的业务包在同一台主机上时（`base_url` 路径不同），各自只删路径落在自己 `base_url` 下的 Cookie；`base_url` 是根路径的那个包不删，靠换票覆盖。
 - 写了 `exchange` 的包：自己的会话失效时只删发往自己 `base_url` 的 Cookie 并重新换票，不动授权器的登录；换票失败只记在这个业务包账号上。
 - 没写 `exchange` 的包（直接用导出的令牌）：失效时先跑授权器的 `alive_check`，不通过才重新登录；通过但能力仍失效（令牌比登录会话短命）时允许重新登录一次，同一个业务包账号 10 分钟内最多一次。导出令牌的授权器最好在 `alive_check` 里带上这个令牌。
@@ -946,13 +948,13 @@ steps:
 
 ### 保留变量与作用域
 
-- **保留变量**：`input`、`credential`、`config`、`response`、`now`、`login`、`loop` 是保留变量，不能通过 `set`/`extract`/`script.into`/`ask.into`/`collect` 覆盖；写入 `login` 或 `loop` 的 message 分别是「不能写入保留变量 login」「不能写入保留变量 loop」。
+- **保留变量**：`input`、`credential`、`config`、`response`、`now`、`login`、`auth`、`loop` 是保留变量，不能通过 `set`/`extract`/`script.into`/`ask.into`/`collect` 覆盖；写入 `login`、`auth` 或 `loop` 的 message 分别是「不能写入保留变量 login」「不能写入保留变量 auth」「不能写入保留变量 loop」。
 - **步骤内传递与入参校验**：`request` 更新 `response`，`extract`/`set`/`script.into` 产生同一步骤列表内后续步骤可用的变量（如登录里先提取 `viewstate` 再写 `{{viewstate}}`）。`{{input.page}}` 须在该能力的 `input` 中声明，否则报 `UNDECLARED_INPUT` 并带行号；登录步骤里的 `{{input.字段}}` 要求每个能力都声明该字段。
 - **未声明检查与 `default`**：`{{name | default(...)}}` 中未先声明的名字不算 `UNDECLARED_VARIABLE`（例如 `{{token | default('')}}`），但没加 `default` 的未声明名字（如 `{{vars.token}}`、`{{token}}`、`{{auth.token}}`）会在 `hermit_dev__validate` 报错并带行号；能力步骤直接引用只在登录步骤里声明、又没有 `default` 的名字，错误是「能力不能引用登录步骤里的变量。」（跨登录应改写 `{{login.名字}}`）。`credential.*` 和 `config.*` 不会因为加了 `default` 就放过未声明的凭证或配置。试跑遇到未定义变量时会点名该变量，不会报成上游故障。
 
 ### 输出与自动脱敏
 
-输出可采用映射模板，也可用说明式字段。说明式字段省略 `value` 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。校验器禁止在输出中直接引用 `credential`。
+输出可采用映射模板，也可用说明式字段。说明式字段省略 `value` 时引用同名变量；写 `value: '{{other}}'` 可显式映射，`value: ready` 返回常量。字段描述生成输出 Schema，但正常执行没有统一的最终 output Schema 校验；不要只依靠声明约束返回值。校验器禁止在输出中直接引用 `credential`、`login` 或 `auth`。
 
 实际输出与开发追踪的自动脱敏边界：
 

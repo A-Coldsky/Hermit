@@ -126,6 +126,105 @@ class ConchDestinationsTest {
                 .containsExactly("http://[::1]:9090");
     }
 
+    @Test
+    void authUseExchangeAndAllowHostsWideningAffectBoundary() {
+        ConchDoc plain = http("https://app.example/", """
+                - request: { method: GET, path: /ping }
+                """);
+        ConchDoc consumer = ConchParser.parse("""
+                conch: demo_status
+                version: 1.1.0
+                driver: http
+                min_crab_version: 1.13.0
+                base_url: https://app.example/
+                title: 标题
+                description: 说明够长可以通过
+                auth:
+                  use: corp_sso
+                  exchange:
+                    - request: { method: POST, url: "https://sso.example/exchange" }
+                actions:
+                  ping:
+                    title: 探测
+                    description: 返回标记说明。
+                    steps:
+                      - request: { method: GET, path: /ping }
+                    output:
+                      marker: { type: string, description: 标记, value: ok }
+                    examples:
+                      - input: {}
+                        output: { marker: ok }
+                    notes: 本地
+                    related: []
+                """);
+        ConchDestinations.Boundary switchedToConsumer = ConchDestinations.between(plain, consumer);
+        assertThat(switchedToConsumer.sameBoundary()).isFalse();
+        assertThat(switchedToConsumer.authChanged()).isTrue();
+        assertThat(switchedToConsumer.addedDestinations()).containsExactly("https://sso.example:443");
+
+        ConchDoc switchedSso = ConchParser.parse("""
+                conch: demo_status
+                version: 1.2.0
+                driver: http
+                min_crab_version: 1.13.0
+                base_url: https://app.example/
+                title: 标题
+                description: 说明够长可以通过
+                auth:
+                  use: other_sso
+                  exchange:
+                    - request: { method: POST, url: "https://sso.example/exchange" }
+                actions:
+                  ping:
+                    title: 探测
+                    description: 返回标记说明。
+                    steps:
+                      - request: { method: GET, path: /ping }
+                    output:
+                      marker: { type: string, description: 标记, value: ok }
+                    examples:
+                      - input: {}
+                        output: { marker: ok }
+                    notes: 本地
+                    related: []
+                """);
+        ConchDestinations.Boundary changedUse = ConchDestinations.between(consumer, switchedSso);
+        assertThat(changedUse.sameBoundary()).isFalse();
+        assertThat(changedUse.authChanged()).isTrue();
+
+        ConchDoc restrictedAuth = authenticator("[\"https://oa.corp.example\"]");
+        ConchDoc unrestrictedAuth = authenticator("[]");
+        ConchDoc widerAuth = authenticator("[\"https://oa.corp.example\", \"https://hr.corp.example\"]");
+        assertThat(ConchDestinations.between(restrictedAuth, unrestrictedAuth).sameBoundary()).isFalse();
+        assertThat(ConchDestinations.between(restrictedAuth, unrestrictedAuth).authChanged()).isTrue();
+        assertThat(ConchDestinations.between(unrestrictedAuth, restrictedAuth).sameBoundary()).isTrue();
+        assertThat(ConchDestinations.between(restrictedAuth, widerAuth).sameBoundary()).isFalse();
+        assertThat(ConchDestinations.between(widerAuth, restrictedAuth).sameBoundary()).isTrue();
+    }
+
+    private static ConchDoc authenticator(String allowHosts) {
+        return ConchParser.parse("""
+                conch: corp_sso
+                version: 1.0.0
+                driver: auth
+                min_crab_version: 1.13.0
+                title: 登录
+                description: 统一登录组件说明
+                credentials:
+                  password: { type: secret, label: 密码 }
+                auth:
+                  origins: ["https://sso.corp.example"]
+                  allow_hosts: %s
+                  steps:
+                    - request:
+                        method: POST
+                        url: https://sso.corp.example/login
+                        form: { p: "{{credential.password}}" }
+                  alive_check:
+                    request: { method: GET, url: https://sso.corp.example/me }
+                """.formatted(allowHosts));
+    }
+
     private static ConchDoc http(String baseUrl, String steps) {
         return ConchParser.parse(httpYaml(baseUrl, steps, ""));
     }

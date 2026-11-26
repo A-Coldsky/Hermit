@@ -7,15 +7,17 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import dev.hermit.common.http.AuthOrigins;
+import dev.hermit.common.http.HostNames;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.Auth;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.FlowSteps;
+import dev.hermit.common.model.ParamSpec;
 import dev.hermit.common.model.Step;
+import dev.hermit.common.template.TemplateEngine;
 import dev.hermit.common.version.SemVer;
 
 /**
@@ -40,10 +42,7 @@ public final class AuthenticatorChecks {
     private static final Pattern WILDCARD = Pattern.compile(
             "https?://\\*\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?",
             Pattern.CASE_INSENSITIVE);
-    private static final Pattern TEMPLATE = Pattern.compile("\\{\\{(.*?)}}", Pattern.DOTALL);
-    private static final Pattern AUTH_REF = Pattern.compile("(?<![\\w.])auth\\.([A-Za-z_][A-Za-z0-9_]*)");
-    private static final Pattern BARE_REF = Pattern.compile("auth\\.([A-Za-z_][A-Za-z0-9_]*)(?:[.\\[].*)?");
-    private static final Pattern SCRIPT_REF = Pattern.compile("\\bvars\\.auth\\.([A-Za-z_][A-Za-z0-9_]*)");
+    private static final TemplateEngine TEMPLATES = new TemplateEngine();
 
     private AuthenticatorChecks() {
     }
@@ -55,6 +54,11 @@ public final class AuthenticatorChecks {
     /** 业务包是否引用了授权器。 */
     public static boolean uses(ConchDoc doc) {
         return doc != null && "http".equals(doc.driver()) && doc.auth() != null && doc.auth().use() != null;
+    }
+
+    /** 导出变量名规则：ASCII 字母或下划线开头，后接 ASCII 字母、数字或下划线。 */
+    public static boolean isExportIdentifier(String name) {
+        return name != null && IDENTIFIER.matcher(name).matches();
     }
 
     static void version(ConchDoc doc, List<ValidationIssue> errors) {
@@ -156,7 +160,7 @@ public final class AuthenticatorChecks {
         }
         for (String name : auth.exports().keySet()) {
             String path = "auth.exports." + name;
-            if (!IDENTIFIER.matcher(name).matches()) {
+            if (!isExportIdentifier(name)) {
                 errors.add(issue(path, "导出名只能用字母、数字和下划线，不能以数字开头"));
             } else if (!loginVars.contains(name) && !auth.cookies().containsKey(name)) {
                 errors.add(issue(path, "登录步骤没有留下变量 " + name + "，auth.cookies 里也没有这个名字"));
@@ -165,15 +169,11 @@ public final class AuthenticatorChecks {
         if (auth.exports().isEmpty() || auth.aliveCheck() == null) {
             return;
         }
-        String request = String.valueOf(auth.aliveCheck().request());
         Set<String> probed = new LinkedHashSet<>();
-        Matcher template = TEMPLATE.matcher(request);
-        while (template.find()) {
-            Matcher ref = Pattern.compile("(?<![\\w.])login\\.([A-Za-z_][A-Za-z0-9_]*)").matcher(template.group(1));
-            while (ref.find()) {
-                probed.add(ref.group(1));
-            }
-        }
+        collectNodeTemplates(auth.aliveCheck().request(), "login", probed);
+        collectNodeTemplates(auth.aliveCheck().expectNotRedirect(), "login", probed);
+        collectNodeTemplates(auth.aliveCheck().expect(), "login", probed);
+        conditionReferences(auth.aliveCheck().expect(), "login", probed);
         if (auth.exports().keySet().stream().noneMatch(probed::contains)) {
             warnings.add(issue("auth.alive_check.request",
                     "alive_check 没有用到任何导出变量。导出的令牌比会话先过期时探活仍会通过，"
@@ -194,6 +194,13 @@ public final class AuthenticatorChecks {
                 ConfigField field = doc.config().get(name);
                 if (field == null || !"url".equals(field.type())) {
                     errors.add(issue(path, "config." + name + " 必须是声明过的 type: url 配置项"));
+                } else if (field.defaultValue() instanceof String text && !text.isBlank()) {
+                    String problem = AuthOrigins.literalProblem(text);
+                    if (problem != null) {
+                        errors.add(issue("config." + name + ".default", "被 auth.allow_hosts 引用，" + problem));
+                    } else {
+                        checkHostName("config." + name + ".default", text, errors);
+                    }
                 }
                 continue;
             }
@@ -203,13 +210,42 @@ public final class AuthenticatorChecks {
                 } else if (!WILDCARD.matcher(entry).matches()) {
                     errors.add(issue(path, "通配只能写成 scheme://*.域名[:port]，星号后面至少两级域名，"
                             + "例如 https://*.corp.example.com"));
+                } else if (!wildcardPortValid(entry)) {
+                    errors.add(issue(path, "端口必须在 1 到 65535 之间"));
                 }
                 continue;
             }
             String problem = AuthOrigins.literalProblem(entry);
             if (problem != null) {
                 errors.add(issue(path, problem));
+            } else {
+                checkHostName(path, entry, errors);
             }
+        }
+    }
+
+    private static boolean wildcardPortValid(String entry) {
+        int schemeEnd = entry.indexOf("://");
+        if (schemeEnd < 0) {
+            return false;
+        }
+        String authority = entry.substring(schemeEnd + 3);
+        int colon = authority.indexOf(':');
+        if (colon < 0) {
+            return true;
+        }
+        try {
+            int port = Integer.parseInt(authority.substring(colon + 1));
+            return port >= 1 && port <= 65535;
+        } catch (NumberFormatException ex) {
+            return false;
+        }
+    }
+
+    private static void checkHostName(String path, String url, List<ValidationIssue> errors) {
+        HostNames.Finding finding = HostNames.inspect(url);
+        if (finding != null && finding.problem() != HostNames.Problem.SINGLE_LABEL_HTTPS) {
+            errors.add(ConchValidator.issue(ValidationCodes.HOSTNAME, path, finding.message()));
         }
     }
 
@@ -261,34 +297,44 @@ public final class AuthenticatorChecks {
     }
 
     /** 判断里不带 {@code {{ }}} 的变量名。只接收判断本身（assert、if、until、expect、expired_when 的一条），不往请求体里找。 */
-    private static void conditionReferences(Map<?, ?> condition, Set<String> names) {
+    private static void conditionReferences(Map<?, ?> condition, String root, Set<String> names) {
+        if (condition == null) {
+            return;
+        }
         for (Map.Entry<?, ?> entry : condition.entrySet()) {
             String key = String.valueOf(entry.getKey());
             Object value = entry.getValue();
             if ("present".equals(key) || "not_present".equals(key)) {
                 for (Object name : value instanceof Collection<?> list ? list : Collections.singletonList(value)) {
-                    bareName(name, names);
+                    bareName(name, root, names);
                 }
             } else if (("equals".equals(key) || "not_equals".equals(key)) && value instanceof Map<?, ?> pairs) {
-                pairs.keySet().forEach(name -> bareName(name, names));
+                pairs.keySet().forEach(name -> bareName(name, root, names));
             }
         }
     }
 
     /** 步骤里的判断和脚本：assert、if、repeat 的 until 里直接写的变量名，script 里的 {@code vars.auth.名字}。 */
-    private static void stepReferences(List<Step> steps, Set<String> names) {
+    private static void stepReferences(List<Step> steps, Map<String, String> scripts, Set<String> names) {
         for (Step step : FlowSteps.flat(steps)) {
             switch (step.type()) {
-                case "assert", FlowSteps.IF -> conditionReferences(step.def(), names);
+                case "assert", FlowSteps.IF -> conditionReferences(step.def(), DRIVER, names);
                 case FlowSteps.REPEAT -> {
                     if (step.def().get("until") instanceof Map<?, ?> until) {
-                        conditionReferences(until, names);
+                        conditionReferences(until, DRIVER, names);
                     }
                 }
                 case "script" -> {
-                    Matcher script = SCRIPT_REF.matcher(String.valueOf(step.def()));
-                    while (script.find()) {
-                        names.add(script.group(1));
+                    if (step.def().get("code") instanceof String code) {
+                        scanScriptAuthRefs(code, names);
+                    }
+                    if (scripts != null && step.def().get("use") instanceof List<?> libs) {
+                        for (Object item : libs) {
+                            String lib = item instanceof String libName ? scripts.get(libName) : null;
+                            if (lib != null) {
+                                scanScriptAuthRefs(lib, names);
+                            }
+                        }
                     }
                 }
                 default -> {
@@ -298,19 +344,195 @@ public final class AuthenticatorChecks {
         }
     }
 
-    private static void bareName(Object name, Set<String> names) {
+    private static void bareName(Object name, String root, Set<String> names) {
         if (name instanceof String text) {
-            Matcher ref = BARE_REF.matcher(text);
-            if (ref.matches()) {
-                names.add(ref.group(1));
+            String field = rootField(text.trim(), root);
+            if (field != null) {
+                names.add(field);
             }
         }
+    }
+
+    private static void collectStepTemplates(List<Step> steps, String root, Set<String> names) {
+        if (steps == null) {
+            return;
+        }
+        for (Step step : FlowSteps.flat(steps)) {
+            if (FlowSteps.isFlow(step)) {
+                collectNodeTemplates(FlowSteps.own(step), root, names);
+            } else if ("script".equals(step.type())) {
+                for (Map.Entry<String, Object> entry : step.def().entrySet()) {
+                    if (!"code".equals(entry.getKey())) {
+                        collectNodeTemplates(entry.getValue(), root, names);
+                    }
+                }
+            } else {
+                collectNodeTemplates(step.def(), root, names);
+            }
+        }
+    }
+
+    private static void collectNodeTemplates(Object node, String root, Set<String> names) {
+        if (node instanceof String text) {
+            try {
+                for (String path : TEMPLATES.referencedPaths(text)) {
+                    String field = rootField(path, root);
+                    if (field != null) {
+                        names.add(field);
+                    }
+                }
+            } catch (RuntimeException ex) {
+                // 模板语法错误在 ConchValidator 里单独报 TEMPLATE_SYNTAX。
+            }
+            return;
+        }
+        if (node instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                collectNodeTemplates(entry.getKey(), root, names);
+                collectNodeTemplates(entry.getValue(), root, names);
+            }
+            return;
+        }
+        if (node instanceof List<?> list) {
+            for (Object item : list) {
+                collectNodeTemplates(item, root, names);
+            }
+        }
+    }
+
+    private static String rootField(String path, String root) {
+        if (path == null) {
+            return null;
+        }
+        String dotPrefix = root + ".";
+        if (path.startsWith(dotPrefix)) {
+            String rest = path.substring(dotPrefix.length());
+            int cut = rest.length();
+            for (int i = 0; i < rest.length(); i++) {
+                char c = rest.charAt(i);
+                if (c == '.' || c == '[') {
+                    cut = i;
+                    break;
+                }
+            }
+            String field = rest.substring(0, cut);
+            return isExportIdentifier(field) ? field : null;
+        }
+        String bracketPrefix = root + "['";
+        if (path.startsWith(bracketPrefix)) {
+            int end = path.indexOf("']", bracketPrefix.length());
+            if (end > bracketPrefix.length()) {
+                String field = path.substring(bracketPrefix.length(), end);
+                return isExportIdentifier(field) ? field : null;
+            }
+        }
+        return null;
+    }
+
+    /** 跳过 JS 注释与普通字符串字面量，提取 {@code vars.auth.x} 与 {@code vars.auth['x']} / {@code vars.auth["x"]}。 */
+    private static void scanScriptAuthRefs(String code, Set<String> names) {
+        int len = code.length();
+        int i = 0;
+        while (i < len) {
+            char c = code.charAt(i);
+            if (c == '/' && i + 1 < len) {
+                char next = code.charAt(i + 1);
+                if (next == '/') {
+                    i += 2;
+                    while (i < len && code.charAt(i) != '\n') {
+                        i++;
+                    }
+                    continue;
+                }
+                if (next == '*') {
+                    int end = code.indexOf("*/", i + 2);
+                    i = end < 0 ? len : end + 2;
+                    continue;
+                }
+            }
+            if (isVarsAuthBoundary(code, i) && code.startsWith("vars.auth", i)) {
+                int p = skipSpaces(code, i + "vars.auth".length());
+                if (p < len && code.charAt(p) == '.') {
+                    p = skipSpaces(code, p + 1);
+                    int end = p;
+                    while (end < len && (Character.isLetterOrDigit(code.charAt(end)) || code.charAt(end) == '_')) {
+                        end++;
+                    }
+                    String field = code.substring(p, end);
+                    if (isExportIdentifier(field)) {
+                        names.add(field);
+                    }
+                    i = Math.max(i + 1, end);
+                    continue;
+                }
+                if (p < len && code.charAt(p) == '[') {
+                    p = skipSpaces(code, p + 1);
+                    if (p < len && (code.charAt(p) == '\'' || code.charAt(p) == '"')) {
+                        char quote = code.charAt(p);
+                        int start = p + 1;
+                        int end = start;
+                        while (end < len && code.charAt(end) != quote && code.charAt(end) != '\\'
+                                && code.charAt(end) != '\n') {
+                            end++;
+                        }
+                        if (end < len && code.charAt(end) == quote) {
+                            int close = skipSpaces(code, end + 1);
+                            if (close < len && code.charAt(close) == ']') {
+                                String field = code.substring(start, end);
+                                if (isExportIdentifier(field)) {
+                                    names.add(field);
+                                }
+                                i = close + 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            if (c == '\'' || c == '"') {
+                i = skipStringLiteral(code, i, c);
+                continue;
+            }
+            i++;
+        }
+    }
+
+    private static boolean isVarsAuthBoundary(String code, int index) {
+        if (index == 0) {
+            return true;
+        }
+        char prev = code.charAt(index - 1);
+        return prev != '.' && prev != '$' && prev != '_' && !Character.isLetterOrDigit(prev);
+    }
+
+    private static int skipSpaces(String code, int index) {
+        int p = index;
+        while (p < code.length() && Character.isWhitespace(code.charAt(p))) {
+            p++;
+        }
+        return p;
+    }
+
+    private static int skipStringLiteral(String code, int start, char quote) {
+        int i = start + 1;
+        while (i < code.length()) {
+            char c = code.charAt(i);
+            if (c == '\\') {
+                i += 2;
+                continue;
+            }
+            if (c == quote || c == '\n') {
+                return i + 1;
+            }
+            i++;
+        }
+        return code.length();
     }
 
     /**
      * 业务包里用到的授权器导出名（顺序不保证）。模板 {@code {{auth.名字}}}、脚本里的 {@code vars.auth.名字}，
      * 以及判断键（{@code present}、{@code not_present}、{@code equals}、{@code not_equals}）里直接写的
-     * 变量名 {@code auth.名字} 都算。
+     * 变量名 {@code auth.名字} 都算。{@code actions.*.output} 禁止引用导出变量，不纳入收集。
      */
     public static Set<String> referencedExports(ConchDoc doc) {
         return referencedExports(doc, doc.actions().values());
@@ -322,31 +544,25 @@ public final class AuthenticatorChecks {
         if (!uses(doc)) {
             return names;
         }
-        ArrayList<Object> sources = new ArrayList<>();
-        sources.add(doc.auth().exchange());
-        stepReferences(doc.auth().exchange(), names);
+        collectStepTemplates(doc.auth().exchange(), DRIVER, names);
+        stepReferences(doc.auth().exchange(), doc.scripts(), names);
         if (doc.auth().aliveCheck() != null) {
-            sources.add(doc.auth().aliveCheck().request());
-            sources.add(doc.auth().aliveCheck().expectNotRedirect());
-            sources.add(doc.auth().aliveCheck().expect());
-            conditionReferences(doc.auth().aliveCheck().expect(), names);
+            collectNodeTemplates(doc.auth().aliveCheck().request(), DRIVER, names);
+            collectNodeTemplates(doc.auth().aliveCheck().expectNotRedirect(), DRIVER, names);
+            collectNodeTemplates(doc.auth().aliveCheck().expect(), DRIVER, names);
+            conditionReferences(doc.auth().aliveCheck().expect(), DRIVER, names);
         }
-        sources.add(doc.auth().expiredWhen());
-        doc.auth().expiredWhen().forEach(condition -> conditionReferences(condition, names));
+        collectNodeTemplates(doc.auth().expiredWhen(), DRIVER, names);
+        doc.auth().expiredWhen().forEach(condition -> conditionReferences(condition, DRIVER, names));
         for (Action action : actions) {
             if (action != null) {
-                sources.add(action.steps());
-                sources.add(action.output());
-                stepReferences(action.steps(), names);
-            }
-        }
-        for (Object source : sources) {
-            Matcher template = TEMPLATE.matcher(String.valueOf(source));
-            while (template.find()) {
-                Matcher ref = AUTH_REF.matcher(template.group(1));
-                while (ref.find()) {
-                    names.add(ref.group(1));
+                for (ParamSpec param : action.input().values()) {
+                    if (param != null) {
+                        collectNodeTemplates(param.defaultValue(), DRIVER, names);
+                    }
                 }
+                collectStepTemplates(action.steps(), DRIVER, names);
+                stepReferences(action.steps(), doc.scripts(), names);
             }
         }
         return names;

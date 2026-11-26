@@ -6,7 +6,7 @@ import java.util.Objects;
 import dev.hermit.crab.engine.SessionKey;
 
 /**
- * 引用授权器的包（{@code auth.use}）的一个账号指向授权器的一个账号。
+ * 业务包（{@code auth.use}）的一个账号指向授权器的一个账号。
  * {@code boundBaseUrl} 是绑定时使用者确认过的地址。
  */
 public record AuthBinding(SessionKey account, SessionKey authenticator, String boundBaseUrl, Instant boundAt) {

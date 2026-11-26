@@ -74,7 +74,7 @@ public enum AuditKind {
     IDENTITY_BOUND,
     /** 一个账号离开身份。不是使用者手动解除时 detail 有 reason。 */
     IDENTITY_UNBOUND,
-    /** 引用授权器的包的一个账号绑到授权器账号。target 是「来源/包/账号」，detail 有授权器那一边和确认过的地址。 */
+    /** 业务包的一个账号绑到授权器账号。target 是「来源/包/账号」，detail 有授权器那一边和确认过的地址。 */
     AUTH_BOUND,
     /** 解除授权器绑定。不是使用者手动解除时 detail 有 reason。 */
     AUTH_UNBOUND

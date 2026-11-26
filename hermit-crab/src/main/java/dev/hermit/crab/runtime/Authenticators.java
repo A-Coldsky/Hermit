@@ -14,7 +14,7 @@ import dev.hermit.common.http.SiteAddress;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.common.validate.ValidationIssue;
-import dev.hermit.crab.engine.AuthLinks;
+import dev.hermit.crab.engine.AuthBindings;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.engine.SessionManager;
@@ -31,11 +31,11 @@ import dev.hermit.crab.store.CredentialVault;
 import dev.hermit.crab.store.Origin;
 
 /**
- * 授权器绑定：引用授权器的包（{@code auth.use}）的账号指向授权器（{@code driver: auth}）的一个账号。
+ * 授权器绑定：业务包（{@code auth.use}）的账号指向授权器（{@code driver: auth}）的一个账号。
  * 只有控制台能改。绑定时使用者确认这个包的站点地址；地址变了、授权器换了来源或不再满足引用条件时绑定作废。
  * 调用路径每次问 {@link #resolve}：条件不满足时返回 null，对外只说「没有绑定可用的登录授权」，不带授权器和账号的名字。
  */
-public final class Authenticators implements AuthLinks {
+public final class Authenticators implements AuthBindings {
     /** 一个账号能不能绑到授权器的一个账号。{@code problem} 非空时不能绑；{@code baseUrl} 是要使用者确认的站点地址。 */
     public record Check(String problem, SessionKey authenticator, String baseUrl, List<String> warnings) {
         public Check {
@@ -367,7 +367,7 @@ public final class Authenticators implements AuthLinks {
     }
 
     @Override
-    public Link resolve(SessionKey key, ConchDoc conch, String site) {
+    public BoundAuth resolve(SessionKey key, ConchDoc conch, String site) {
         AuthBinding binding = store.find(key);
         if (binding == null || conch == null || !AuthenticatorChecks.uses(conch)) {
             return null;
@@ -407,7 +407,7 @@ public final class Authenticators implements AuthLinks {
                 siblings.add(other.boundBaseUrl());
             }
         }
-        return new Link(target, authenticator, secrets, DeclaredSettings.mergedConfig(authenticator, stored), siblings);
+        return new BoundAuth(target, authenticator, secrets, DeclaredSettings.mergedConfig(authenticator, stored), siblings);
     }
 
     private String site(Origin origin, ConchDoc doc) {

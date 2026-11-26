@@ -40,6 +40,7 @@ import dev.hermit.common.pkg.ConchManifest;
 import dev.hermit.common.pkg.ConchPackage;
 import dev.hermit.common.pkg.VerifiedConch;
 import dev.hermit.common.version.SemVer;
+import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.common.validate.ConchDiff;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.ValidationIssue;
@@ -885,7 +886,13 @@ public final class ConchSync {
                 false,
                 null,
                 null,
-                false);
+                false,
+                doc == null ? "http" : driverOf(doc),
+                doc != null && AuthenticatorChecks.uses(doc) ? doc.auth().use() : null);
+    }
+
+    private static String driverOf(ConchDoc doc) {
+        return doc.driver() == null || doc.driver().isBlank() ? "http" : doc.driver();
     }
 
     private ConchCatalog.Entry catalogRow(ReefClient.CatalogEntry entry) {
@@ -929,7 +936,9 @@ public final class ConchSync {
                 untrusted,
                 untrusted ? PackageReason.BAD_SIGNATURE.name() : null,
                 untrusted ? SignatureDamage.MESSAGE : ruleMessage,
-                ruleDisabled);
+                ruleDisabled,
+                entry.driver(),
+                entry.authUse());
     }
 
     /**

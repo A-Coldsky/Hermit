@@ -244,7 +244,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                 this::conchDisabled);
         this.identities.bindAuthenticators(authenticators);
         this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
-        this.engine.bindAuthLinks(authenticators);
+        this.engine.useAuthBindings(authenticators);
         this.contention = new SessionContention(clock);
         this.engine.bindContention(contention);
         this.mcpForwarder = new McpForwarder(
@@ -1245,8 +1245,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     null, paths, registry.scoped(Origin.OFFICIAL), disabledConches, subscriptions, database.dataSource(),
                     conch, actor, clock);
         }
-        // 正式包不在了：它的账号离开身份。同名的本地包不受影响。
-        identities.packageRemoved(Origin.OFFICIAL, conch, actor);
+        // 正式包不在了：它的账号离开身份，授权器绑定留着等重新订阅。同名的本地包不受影响。
+        identities.packageUnsubscribed(conch, actor);
     }
 
     public Optional<SyncReport> syncOnce(String requestedBy) {
@@ -1459,7 +1459,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      */
     public void setConchDisabled(String conch, boolean disabled, String actor) {
         synchronized (switchLock) {
-            // 授权器也能停用：停用后引用它的包按没有绑定处理。
+            // 授权器也能停用：停用后引用它的业务包按没有绑定处理。
             ConchRegistry.Active active = registry.installed(conch).orElse(null);
             boolean loaded = active != null;
             if (disabled ? !loaded : !loaded && !conchSwitchedOff.contains(conch)) {

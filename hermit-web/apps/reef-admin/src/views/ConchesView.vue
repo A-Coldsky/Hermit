@@ -5,6 +5,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
+import KindShell from '@shared/components/KindShell.vue'
 import HermitMark from '@shared/components/HermitMark.vue'
 import { formatTime, notifyError, relativeTime } from '@shared/format'
 import { api, type ConchSummary } from '../api'
@@ -21,9 +22,21 @@ const kind = ref<'all' | 'mcp' | 'http'>('all')
 const mode = ref<'cards' | 'table'>(localStorage.getItem('hermit.reef.conchesView') === 'table' ? 'table' : 'cards')
 watch(mode, (value) => localStorage.setItem('hermit.reef.conchesView', value))
 
+/** 页签：可调用的规则包，或只负责登录的授权器。类型筛选只在规则包页签里。 */
+const tab = ref<'packages' | 'authenticators'>('packages')
+const isAuthenticator = (s: ConchSummary) => s.driver === 'auth'
+const packages = computed(() => conches.value.filter((s) => !isAuthenticator(s)))
+const authenticators = computed(() => conches.value.filter(isAuthenticator))
+/** 引用这个授权器的规则包。 */
+function consumersOf(name: string): string[] {
+  return packages.value.filter((s) => s.authUse === name).map((s) => s.conch)
+}
+
 const filtered = computed(() => {
   const q = keyword.value.trim().toLowerCase()
-  const byKind = kind.value === 'all' ? conches.value : conches.value.filter((s) => isMcp(s) === (kind.value === 'mcp'))
+  const byKind = tab.value === 'authenticators'
+    ? authenticators.value
+    : kind.value === 'all' ? packages.value : packages.value.filter((s) => isMcp(s) === (kind.value === 'mcp'))
   if (!q) {
     return byKind
   }
@@ -42,8 +55,11 @@ const emptyText = computed(() => {
   if (!conches.value.length) {
     return isAdmin.value ? '还没有规则包，先上传一个 YAML' : '还没有规则包，可以点击右上角「提交规则包」提交审批'
   }
+  if (tab.value === 'authenticators') {
+    return keyword.value.trim() ? `没有匹配「${keyword.value}」的授权器` : '还没有授权器'
+  }
   if (kind.value === 'all') {
-    return `没有匹配「${keyword.value}」的规则包`
+    return keyword.value.trim() ? `没有匹配「${keyword.value}」的规则包` : '还没有规则包，现有的都是授权器'
   }
   return `没有符合筛选条件的${kind.value === 'mcp' ? '原生 MCP 规则包' : 'HTTP 规则包'}`
 })
@@ -76,9 +92,14 @@ onMounted(load)
       <el-button v-else type="primary" :icon="Upload" data-test="user-submit-btn" @click="router.push('/submissions')">提交规则包</el-button>
     </PageHeader>
 
+    <el-radio-group v-model="tab" class="tabs" data-test="kind-tabs">
+      <el-radio-button value="packages"><KindShell kind="http" :size="18" /> 规则包 {{ packages.length }}</el-radio-button>
+      <el-radio-button value="authenticators"><KindShell kind="auth" :size="18" /> 授权器 {{ authenticators.length }}</el-radio-button>
+    </el-radio-group>
+
     <div class="hm-toolbar bar">
       <el-input v-model="keyword" :prefix-icon="Search" placeholder="按名称、标题、负责人或标签筛选" clearable class="search" />
-      <el-radio-group v-model="kind" size="small" data-test="kind-filter">
+      <el-radio-group v-if="tab === 'packages'" v-model="kind" size="small" data-test="kind-filter">
         <el-radio-button value="all">全部</el-radio-button>
         <el-radio-button value="mcp">原生 MCP</el-radio-button>
         <el-radio-button value="http">HTTP 规则</el-radio-button>
@@ -120,7 +141,7 @@ onMounted(load)
       <div v-if="filtered.length" class="cards">
         <RouterLink v-for="row in filtered" :key="row.conch" :to="`/conches/${encodeURIComponent(row.conch)}`" class="hm-card conch" :class="{ off: row.disabled }">
           <div class="top">
-            <ConchAvatar :name="row.conch" :title="row.title" />
+            <ConchAvatar :name="row.conch" :title="row.title" :kind="row.driver" />
             <div class="name">
               <strong>{{ row.title || row.conch }}</strong>
               <span class="mono hm-muted">{{ row.conch }}</span>
@@ -133,6 +154,7 @@ onMounted(load)
             <DriverBadge :driver="row.driver" />
             <span v-if="isMcp(row)" class="mono hm-muted host" data-test="upstream-host">{{ upstreamHost(row.upstream?.url) ?? '上游地址未填' }}</span>
             <span v-if="row.authUse" class="mono hm-muted host" data-test="auth-use">授权器：{{ row.authUse }}</span>
+            <span v-if="row.driver === 'auth' && consumersOf(row.conch).length" class="mono hm-muted host" data-test="used-by">被引用：{{ consumersOf(row.conch).join('、') }}</span>
           </div>
           <p class="desc">{{ row.description || '没有描述' }}</p>
           <div class="tags">
@@ -161,7 +183,7 @@ onMounted(load)
         <el-table-column label="规则包" min-width="220">
           <template #default="{ row }">
             <div class="row-name">
-              <ConchAvatar :name="row.conch" :title="row.title" :size="32" />
+              <ConchAvatar :name="row.conch" :title="row.title" :size="32" :kind="row.driver" />
               <div class="name">
                 <strong>{{ row.title || row.conch }}</strong>
                 <span class="mono hm-muted">{{ row.conch }}</span>
@@ -173,6 +195,7 @@ onMounted(load)
           <template #default="{ row }">
             <DriverBadge :driver="row.driver" />
             <div v-if="isMcp(row)" class="mono hm-muted host">{{ upstreamHost(row.upstream?.url) ?? '上游地址未填' }}</div>
+            <div v-if="row.driver === 'auth' && consumersOf(row.conch).length" class="mono hm-muted host">被引用：{{ consumersOf(row.conch).join('、') }}</div>
           </template>
         </el-table-column>
         <el-table-column label="当前版本" width="190">
@@ -203,6 +226,16 @@ onMounted(load)
 </template>
 
 <style scoped>
+.tabs {
+  margin-bottom: 12px;
+}
+
+.tabs :deep(.el-radio-button__inner) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .load-failed {
   margin-bottom: 12px;
 }

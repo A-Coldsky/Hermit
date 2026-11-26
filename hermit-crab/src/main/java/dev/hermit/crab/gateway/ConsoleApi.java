@@ -307,7 +307,7 @@ final class ConsoleApi {
         putReefDisabled(runtime, source, doc.conch(), body);
         putUpdateFields(catalogByName(runtime).get(doc.conch()), body);
         putPrevious(runtime, doc.conch(), body);
-        body.put("authenticator", AuthenticatorChecks.isAuthenticator(doc));
+        body.put("isAuthenticator", AuthenticatorChecks.isAuthenticator(doc));
         if (AuthenticatorChecks.uses(doc)) {
             LinkedHashMap<String, Object> use = new LinkedHashMap<>();
             use.put("conch", doc.auth().use());
@@ -606,7 +606,7 @@ final class ConsoleApi {
             }));
             SessionKey key = new SessionKey(source, doc.conch(), account.account());
             AuthBinding binding = runtime.authenticators().find(key);
-            row.put("authenticator", binding == null ? null : bindingRow(runtime, binding));
+            row.put("authBinding", binding == null ? null : bindingRow(runtime, binding));
             if (AuthenticatorChecks.isAuthenticator(doc)) {
                 ArrayList<Map<String, Object>> consumers = new ArrayList<>();
                 for (AuthBinding consumer : runtime.authenticators().consumersOf(key)) {
@@ -721,6 +721,7 @@ final class ConsoleApi {
 
     /** 本机生效的授权器。只在控制台；规则包列表、OpenAPI、MCP 和 API Key 范围里都没有它们。 */
     private static void authenticators(CrabRuntime runtime, Context ctx) {
+        Map<String, ConchCatalog.Entry> catalog = catalogByName(runtime);
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (String name : runtime.registry().authenticators().keySet()) {
             ConchRegistry.Active active = runtime.registry().authenticator(name).orElse(null);
@@ -737,6 +738,8 @@ final class ConsoleApi {
             row.put("origins", List.copyOf(runtime.identities().addresses(active.origin(), doc.conch())));
             row.put("allowHosts", doc.auth().allowHosts());
             row.put("exports", List.copyOf(doc.auth().exports().keySet()));
+            row.put("subscribed", active.origin() == Origin.OFFICIAL && runtime.subscribed(doc.conch()));
+            putUpdateFields(active.origin() == Origin.OFFICIAL ? catalog.get(doc.conch()) : null, row);
             ArrayList<Map<String, Object>> accounts = new ArrayList<>();
             for (Account account : runtime.admin().listAccounts(active.origin(), doc.conch())) {
                 LinkedHashMap<String, Object> entry = new LinkedHashMap<>();
@@ -759,7 +762,7 @@ final class ConsoleApi {
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("allowed", check.allowed());
         body.put("problem", check.problem());
-        body.put("authenticator", check.authenticator() == null ? null : memberKey(check.authenticator()));
+        body.put("authAccount", check.authenticator() == null ? null : memberKey(check.authenticator()));
         body.put("baseUrl", check.baseUrl());
         body.put("warnings", check.warnings());
         return body;
@@ -1609,6 +1612,8 @@ final class ConsoleApi {
             row.put("repairReason", entry.repairReason());
             row.put("message", entry.message());
             row.put("ruleDisabled", entry.ruleDisabled());
+            row.put("driver", entry.driver());
+            row.put("authUse", entry.authUse());
             if (entry.ruleDisabled()) {
                 putRuleHint(runtime, entry.conch(), row);
             }

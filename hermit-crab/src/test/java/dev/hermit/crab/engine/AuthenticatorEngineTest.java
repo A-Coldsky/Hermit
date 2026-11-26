@@ -34,7 +34,7 @@ import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.crab.store.Origin;
 
 /**
- * 授权器（driver: auth）和引用它的包（auth.use）。认证中心在 localhost，两个应用在 127.0.0.1 的两个端口。
+ * 授权器（driver: auth）和引用它的业务包（auth.use）。认证中心在 localhost，两个应用在 127.0.0.1 的两个端口。
  * oa 写了 auth.exchange（拿认证中心的 Cookie 换自己的会话），api 没写（直接带导出的令牌）。
  */
 class AuthenticatorEngineTest {
@@ -274,7 +274,7 @@ class AuthenticatorEngineTest {
                 min_crab_version: 1.13.0
                 base_url: BASE
                 title: NAME
-                description: 引用授权器的包
+                description: 业务包
                 auth:
                   use: corp_sso
                   min_version: 1.2.0
@@ -533,9 +533,81 @@ class AuthenticatorEngineTest {
     }
 
     @Test
+    void anExportAddedByAnAuthenticatorUpdateIsFilledByOneRelogin() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+
+            // 授权器更新：多导出一个变量。已有的登录是旧版本做的，里面没有它。
+            fixture.install(authenticator()
+                    .replace("version: 1.2.0", "version: 1.3.0")
+                    .replace("- extract: { access_token: { jsonpath: \"$.token\" } }",
+                            "- extract: { access_token: { jsonpath: \"$.token\" }, api_token: { jsonpath: \"$.token\" } }")
+                    .replace("    access_token: { description: 访问令牌 }",
+                            "    access_token: { description: 访问令牌 }\n    api_token: { description: 接口令牌 }"));
+            fixture.install(consumer("api_new", apiUrl, "",
+                    "{ method: GET, path: /data, headers: { Authorization: \"Bearer {{auth.api_token}}\" } }"));
+            SessionKey fresh = new SessionKey(Origin.LOCAL, "api_new", "main");
+
+            assertThat(fixture.value(fresh)).as("授权器重新登录一次，补上新变量").isEqualTo("api-data");
+            assertThat(passwordLogins.get()).isEqualTo(2);
+            assertThat(fixture.value(fresh)).isEqualTo("api-data");
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            assertThat(passwordLogins.get()).as("补上以后不再重新登录").isEqualTo(2);
+        }
+    }
+
+    @Test
+    void aReadOnlyCallAlsoGetsTheExportAddedByAnUpdate() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            fixture.install(authenticator()
+                    .replace("version: 1.2.0", "version: 1.3.0")
+                    .replace("- extract: { access_token: { jsonpath: \"$.token\" } }",
+                            "- extract: { access_token: { jsonpath: \"$.token\" }, api_token: { jsonpath: \"$.token\" } }")
+                    .replace("    access_token: { description: 访问令牌 }",
+                            "    access_token: { description: 访问令牌 }\n    api_token: { description: 接口令牌 }"));
+            // 先用不涉及新变量的包把这个账号的会话热起来，只读调用才会走共享锁。
+            String reads = consumer("api_reads", apiUrl, "  concurrent_reads: true\n",
+                    "{ method: GET, path: /data, headers: { Authorization: \"Bearer {{auth.access_token}}\" } }")
+                    .replace("idempotent: true", "idempotent: true\n    mcp: {expose: true, read_only: true}");
+            fixture.install(reads);
+            SessionKey key = new SessionKey(Origin.LOCAL, "api_reads", "main");
+            assertThat(fixture.value(key)).isEqualTo("api-data");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+
+            fixture.install(reads.replace("version: 1.0.0", "version: 1.0.1").replace("auth.access_token", "auth.api_token"));
+            assertThat(fixture.value(key)).as("只读能力也要补上新变量").isEqualTo("api-data");
+            assertThat(passwordLogins.get()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void anExportOnlyAnotherActionUsesDoesNotTriggerALogin() {
+        try (Fixture fixture = new Fixture()) {
+            assertThat(fixture.value(OA)).isEqualTo("oa-data");
+            // 新版本多导出 api_token；已有的登录里没有它。
+            fixture.install(authenticator()
+                    .replace("version: 1.2.0", "version: 1.3.0")
+                    .replace("- extract: { access_token: { jsonpath: \"$.token\" } }",
+                            "- extract: { access_token: { jsonpath: \"$.token\" }, api_token: { jsonpath: \"$.token\" } }")
+                    .replace("    access_token: { description: 访问令牌 }",
+                            "    access_token: { description: 访问令牌 }\n    api_token: { description: 接口令牌 }"));
+            String run = "{ method: GET, path: /data, headers: { Authorization: \"Bearer {{auth.access_token}}\" } }";
+            String yaml = consumer("api_two", apiUrl, "", run);
+            String action = yaml.substring(yaml.indexOf("  run:"));
+            fixture.install(yaml + action.replace("  run:", "  other:").replace("auth.access_token", "auth.api_token"));
+            SessionKey key = new SessionKey(Origin.LOCAL, "api_two", "main");
+
+            assertThat(fixture.value(key)).isEqualTo("api-data");
+            assertThat(passwordLogins.get()).as("这个能力没用到缺的变量，不重新登录").isEqualTo(1);
+        }
+    }
+
+    @Test
     void anUnboundAccountIsRefusedWithoutNamingTheAuthenticator() {
         try (Fixture fixture = new Fixture()) {
-            fixture.links.remove(OA);
+            fixture.bindings.remove(OA);
             ExecutionResult refused = fixture.call(OA);
             assertThat(refused.error().code()).isEqualTo(ErrorCode.NOT_CONFIGURED);
             assertThat(EngineTestSupport.flatten(refused)).doesNotContain("corp_sso");
@@ -619,7 +691,7 @@ class AuthenticatorEngineTest {
             assertThat(passwordLogins.get()).isEqualTo(2);
             assertThat(fixture.value(OA)).isEqualTo("oa-data");
             assertThat(tickets.get()).isEqualTo(2);
-            // 引用授权器的包自己测试登录：只重新换票，不清授权器的会话。
+            // 业务包自己测试登录：只重新换票，不清授权器的会话。
             ExecutionResult own = fixture.engine.testLogin(fixture.request(OA, "run"));
             assertThat(own.success()).as(String.valueOf(own.error())).isTrue();
             assertThat(passwordLogins.get()).isEqualTo(2);
@@ -671,9 +743,26 @@ class AuthenticatorEngineTest {
     private final class Fixture implements AutoCloseable {
         private final SessionManager sessions;
         private final RuleEngine engine;
-        private final Map<SessionKey, SessionKey> links = new ConcurrentHashMap<>();
+        private final Map<SessionKey, SessionKey> bindings = new ConcurrentHashMap<>();
         private final AuthShared shared = new AuthShared();
+        private final ConchRegistry registry;
+        private volatile ConchDoc authenticator;
         private volatile String password = PASSWORD;
+
+        /** 授权器更新到新版本，或者装上一个新的业务包。 */
+        private void install(String yaml) {
+            ConchDoc doc = ConchParser.parse(yaml);
+            assertThat(ConchValidator.validate(doc, ConchValidator.Context.of(CrabVersion.CURRENT)).errors())
+                    .isEmpty();
+            registry.put(doc, Origin.LOCAL);
+            if (doc.conch().equals(SSO.conch())) {
+                authenticator = doc;
+            } else {
+                SessionKey key = new SessionKey(Origin.LOCAL, doc.conch(), "main");
+                bindings.put(key, SSO);
+                shared.bound.put(key, "auth:sso");
+            }
+        }
 
         private Fixture() {
             this(java.time.Clock.systemUTC(), false);
@@ -691,7 +780,7 @@ class AuthenticatorEngineTest {
             EngineSettings settings = new EngineSettings(Duration.ofSeconds(20), Duration.ofMinutes(10), 3);
             sessions = new SessionManager(
                     new NopSessionPersistence(), new NopLoginSnapshotStore(), shared, settings, clock);
-            ConchRegistry registry = new ConchRegistry();
+            registry = new ConchRegistry();
             ConchDoc auth = null;
             for (String yaml : List.of(
                     otp ? withOtp(authenticator()) : authenticator(),
@@ -711,15 +800,15 @@ class AuthenticatorEngineTest {
                     auth = doc;
                 }
             }
-            ConchDoc authenticator = auth;
+            authenticator = auth;
             shared.bound.put(SSO, "auth:sso");
             for (SessionKey key : List.of(OA, API, API2, COPY, PEEK, SUB, READS)) {
-                links.put(key, SSO);
+                bindings.put(key, SSO);
                 shared.bound.put(key, "auth:sso");
             }
             engine = new RuleEngine(registry, sessions, settings);
-            engine.bindAuthLinks((key, conch, site) -> links.containsKey(key)
-                    ? new AuthLinks.Link(links.get(key), authenticator,
+            engine.useAuthBindings((key, conch, site) -> bindings.containsKey(key)
+                    ? new AuthBindings.BoundAuth(bindings.get(key), authenticator,
                             Map.of("username", "zhang", "password", password), Map.of(),
                             key.equals(SUB) ? Set.of(oaUrl) : key.equals(OA) ? Set.of(oaUrl + "/sub") : Set.of())
                     : null);

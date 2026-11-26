@@ -31,6 +31,10 @@ final class CatalogCache {
                 text(node, "title", entry.title());
                 text(node, "description", entry.description());
                 node.put("capabilityCount", entry.capabilityCount());
+                node.put("driver", entry.driver());
+                if (entry.authUse() != null) {
+                    node.put("authUse", entry.authUse());
+                }
                 if (entry.requiredCredentialsKnown()) {
                     ArrayNode names = node.putArray("requiredCredentials");
                     for (String name : entry.requiredCredentials()) {
@@ -56,6 +60,10 @@ final class CatalogCache {
                 if (node == null || !node.isObject()) {
                     return Optional.empty();
                 }
+                if (!node.hasNonNull("driver")) {
+                    // 升级前存的缓存没有类型和引用的授权器：当作没有缓存，下次同步重新读清单。
+                    return Optional.empty();
+                }
                 JsonNode credentials = node.get("requiredCredentials");
                 boolean known = credentials != null && credentials.isArray();
                 entries.add(new ReefClient.CatalogEntry(
@@ -67,7 +75,9 @@ final class CatalogCache {
                         textOrNull(node, "description"),
                         countOrZero(node),
                         known ? credentialNames(credentials) : List.of(),
-                        known));
+                        known,
+                        textOrNull(node, "driver"),
+                        textOrNull(node, "authUse")));
             }
             return Optional.of(List.copyOf(entries));
         } catch (Exception ex) {

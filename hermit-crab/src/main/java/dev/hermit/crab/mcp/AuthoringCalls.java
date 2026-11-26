@@ -226,7 +226,7 @@ final class AuthoringCalls {
 
     /**
      * 本机生效的授权器。不含账号名、凭证和导出变量的值。
-     * 范围有限的 Key 只看到它点名的规则包所引用的授权器，{@code usedBy} 也只列它点名的包。
+     * 范围有限的 Key 只看到它点名的规则包所引用的授权器，{@code consumers} 也只列它点名的包。
      */
     McpSchema.CallToolResult authList(ApiKeyPrincipal principal, Map<String, Object> arguments, McpCalls.Attempt attempt) {
         if (!devMode()) {
@@ -236,16 +236,16 @@ final class AuthoringCalls {
             return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "未知字段 " + arguments.keySet().iterator().next() + "。");
         }
         boolean all = principal == null || principal.scope().grantsAllOfficial();
-        java.util.TreeMap<String, java.util.TreeSet<String>> usedBy = new java.util.TreeMap<>();
+        java.util.TreeMap<String, java.util.TreeSet<String>> consumers = new java.util.TreeMap<>();
         for (ConchDoc doc : runtime.registry().snapshot().values()) {
             if (dev.hermit.common.validate.AuthenticatorChecks.uses(doc)
                     && (all || visibleTo(principal, doc.conch()))) {
-                usedBy.computeIfAbsent(doc.auth().use(), key -> new java.util.TreeSet<>()).add(doc.conch());
+                consumers.computeIfAbsent(doc.auth().use(), key -> new java.util.TreeSet<>()).add(doc.conch());
             }
         }
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (ConchDoc doc : runtime.registry().authenticators().values()) {
-            if (!all && !usedBy.containsKey(doc.conch())) {
+            if (!all && !consumers.containsKey(doc.conch())) {
                 continue;
             }
             ArrayList<Map<String, Object>> exports = new ArrayList<>();
@@ -264,7 +264,7 @@ final class AuthoringCalls {
             row.put("origins", doc.auth().origins());
             row.put("allowHosts", doc.auth().allowHosts());
             row.put("exports", exports);
-            row.put("usedBy", List.copyOf(usedBy.getOrDefault(doc.conch(), new java.util.TreeSet<>())));
+            row.put("consumers", List.copyOf(consumers.getOrDefault(doc.conch(), new java.util.TreeSet<>())));
             rows.add(row);
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();

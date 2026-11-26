@@ -643,7 +643,7 @@ public class LocalConchBehaviorTest {
 
     @Test
     void authenticatorPackagesLoadButStayOutOfTheCallableView() throws Exception {
-        // 授权器能载入，但不在普通视图里（不能被调用、不进 OpenAPI 和 MCP）；引用它的包照常是普通包。
+        // 授权器能载入，但不在普通视图里（不能被调用、不进 OpenAPI 和 MCP）；引用它的业务包照常是普通包。
         try (OpenCrab crab = OpenCrab.open(temp.resolve("authenticator"))) {
             ConchRegistry registry = new ConchRegistry();
             LocalConches local = new LocalConches(crab.paths, registry.scoped(Origin.LOCAL), crab.dataSource);

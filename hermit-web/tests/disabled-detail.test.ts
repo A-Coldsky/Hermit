@@ -1,8 +1,10 @@
 import { flushPromises } from '@vue/test-utils'
+import { ElMessageBox } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
+  authenticators: vi.fn(async () => ({ authenticators: [] })),
   conch: vi.fn(),
   setConchEnabled: vi.fn(),
   setConchSource: vi.fn(),
@@ -223,5 +225,42 @@ describe('停用状态说真话', () => {
 
     expect(page.text().split('已停用').length - 1).toBe(1)
     expect(page.get('[data-test="rule-message"]').text()).toBe('能力不能引用登录步骤里的变量。第 12 行。')
+  })
+})
+
+describe('授权器相关的详情', () => {
+  const authUse = { conch: 'corp_sso', minVersion: null, installed: true, version: '1.0.0', source: 'REEF' }
+
+  it('业务包账号还没绑定授权器账号时不写「配置完整」', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), credentials: [], authUse })
+    crab.accounts.mockResolvedValue({ accounts: [{ ...account, authBinding: null }] })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' } })
+    await flushPromises()
+
+    expect(page.find('[data-test="ready"]').exists()).toBe(false)
+    expect(page.get('[data-test="setup-banner"]').text()).toContain('还没有绑定授权器账号')
+    expect(page.get('[data-test="unbound-accounts"]').text()).toContain('alice')
+  })
+
+  it('从授权器详情退订：列出绑在它上面的业务包账号，并说明绑定会保留', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), conch: 'corp_sso', isAuthenticator: true })
+    crab.authenticators.mockResolvedValue({
+      authenticators: [
+        {
+          conch: 'corp_sso',
+          source: 'REEF',
+          accounts: [{ name: 'zhang', consumers: [{ origin: 'OFFICIAL', conch: 'corp_oa', account: 'default' }] }],
+        },
+      ],
+    } as never)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const page = await mountPage(ConchDetailView, { props: { conch: 'corp_sso' } })
+    await flushPromises()
+
+    await page.findAll('button').find((b) => b.text() === '取消订阅')!.trigger('click')
+    await flushPromises()
+
+    expect(confirm.mock.calls[0][0]).toContain('corp_oa/default')
+    expect(confirm.mock.calls[0][0]).toContain('绑定都会保留')
   })
 })

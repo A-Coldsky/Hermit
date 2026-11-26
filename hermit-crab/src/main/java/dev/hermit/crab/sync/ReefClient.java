@@ -154,7 +154,9 @@ final class ReefClient {
                     textOrNull(node, "description"),
                     countOrZero(node),
                     known ? credentialNames(credentials) : List.of(),
-                    known));
+                    known,
+                    textOrNull(node, "driver"),
+                    textOrNull(node, "authUse")));
         }
         return entries;
     }
@@ -219,9 +221,17 @@ final class ReefClient {
             String description,
             int capabilityCount,
             List<String> requiredCredentials,
-            boolean requiredCredentialsKnown
+            boolean requiredCredentialsKnown,
+            String driver,
+            String authUse
     ) {
         CatalogEntry {
+            if (driver == null || driver.isBlank()) {
+                driver = "http";
+            }
+            if (authUse != null && authUse.isBlank()) {
+                authUse = null;
+            }
             if (title == null || title.isBlank()) {
                 title = conch == null ? "" : conch;
             }

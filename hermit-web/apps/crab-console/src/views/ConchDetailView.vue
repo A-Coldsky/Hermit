@@ -15,7 +15,7 @@ import ConfigPanel from '../components/ConfigPanel.vue'
 import DeveloperPanel from '../components/DeveloperPanel.vue'
 import ShellSwapLoader from '../components/ShellSwapLoader.vue'
 import { refreshPending } from '../status'
-import { unsubscribeMessage } from '../copy'
+import { unsubscribeAuthenticatorMessage, unsubscribeMessage } from '../copy'
 import { canRollback, previousBlockedNote } from '../previous'
 import { repairConch, updateConch } from '../update'
 import { disabledReasonOnly } from '../disabled'
@@ -44,6 +44,8 @@ const incompleteAccounts = computed(() =>
 )
 const unreadableAccounts = computed(() => accounts.value.filter((a) => a.credentialsUnreadable).map((a) => a.name))
 const pausedAccounts = computed(() => accounts.value.filter((a) => a.loginPaused))
+/** 业务包里还没绑到授权器账号的账号。 */
+const unboundAccounts = computed(() => (detail.value?.authUse ? accounts.value.filter((a) => !a.authBinding) : []))
 const needsAccount = computed(() => accounts.value.length === 0)
 const disabledReason = computed(() => disabledReasonOnly(detail.value?.message))
 const rollbackable = computed(() => (detail.value ? canRollback(detail.value) : false))
@@ -54,7 +56,9 @@ const ready = computed(
     !incompleteAccounts.value.length &&
     !unreadableAccounts.value.length &&
     !pausedAccounts.value.length &&
-    !needsAccount.value,
+    !needsAccount.value &&
+    !unboundAccounts.value.length &&
+    (!detail.value?.authUse || detail.value.authUse.installed),
 )
 
 /** 互相顶掉登录的包按原因分开：同网站的，和经同一个认证地址登录的。 */
@@ -156,7 +160,11 @@ const bannerTitle = computed(() => {
   if (detail.value?.switchedOff) return SWITCHED_OFF_BANNER
   if (missingConfig.value.length) return '缺少必填配置，调用会返回「待配置」'
   if (needsAccount.value) return '还没有账号，调用会返回「待配置」'
+  if (detail.value?.authUse && !detail.value.authUse.installed) return '本机没有授权器，调用会返回「待配置」'
   const account = defaultAccount.value
+  if (account && unboundAccounts.value.some((a) => a.name === account.name)) {
+    return `默认账号 ${account.name} 还没有绑定授权器账号，调用会返回「待配置」`
+  }
   const reason = account && blockReason(account)
   if (account && reason) return `默认账号 ${account.name} ${reason}，不带 X-Hermit-Account 的调用会失败`
   return '默认账号可以调用，部分账号需要处理'
@@ -457,9 +465,21 @@ async function update() {
   }
 }
 
+/** 绑在这个正式授权器上的业务包账号，形如 `corp_oa/default`。 */
+async function boundAccounts(): Promise<string[]> {
+  try {
+    const found = (await api.authenticators()).authenticators.find((a) => a.conch === props.conch && a.source !== 'LOCAL')
+    return (found?.accounts ?? []).flatMap((a) => a.consumers.map((c) => `${c.conch}/${c.account}`))
+  } catch {
+    return []
+  }
+}
+
 async function unsubscribe() {
   const ok = await confirmThen(
-    unsubscribeMessage(props.conch),
+    detail.value?.isAuthenticator
+      ? unsubscribeAuthenticatorMessage(props.conch, await boundAccounts())
+      : unsubscribeMessage(props.conch),
     `取消订阅 ${detail.value?.title || props.conch}`,
     '取消订阅',
   )
@@ -502,7 +522,7 @@ watch(
         <span class="hm-muted"> / {{ conch }}</span>
       </template>
       <template #icon>
-        <ConchAvatar :name="conch" :title="detail?.title" :size="48" />
+        <ConchAvatar :name="conch" :title="detail?.title" :size="48" :kind="detail ? (detail.isAuthenticator ? 'auth' : detail.driver ?? 'http') : null" />
       </template>
       <template #badge>
         <el-tag v-if="detail?.version && !detail.repairRequired" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
@@ -595,7 +615,7 @@ watch(
         </template>
       </el-alert>
       <el-alert
-        v-if="detail.authenticator"
+        v-if="detail.isAuthenticator"
         type="info"
         show-icon
         :closable="false"
@@ -603,7 +623,7 @@ watch(
         data-test="authenticator-note"
       >
         <template #default>
-          授权器只负责登录，没有能力，不出现在 API、MCP 和 API Key 的范围里。在「账号」里新建账号、填写凭证；引用它的规则包把账号绑到这里。
+          授权器只负责登录，没有能力，不出现在 API、MCP 和 API Key 的范围里。在「账号」里新建账号、填写凭证；引用它的业务包把账号绑到这里。
         </template>
       </el-alert>
       <el-alert
@@ -761,6 +781,9 @@ watch(
           <div v-if="unreadableAccounts.length">
             凭证无法解密，需全部重新填写：<span class="mono">{{ unreadableAccounts.join('、') }}</span>
           </div>
+          <div v-if="unboundAccounts.length" data-test="unbound-accounts">
+            账号还没有绑定授权器账号：<span class="mono">{{ unboundAccounts.map((a) => a.name).join('、') }}</span>
+          </div>
           <div v-if="incompleteAccounts.length">账号缺少凭证：<span class="mono">{{ incompleteAccounts.join('、') }}</span></div>
           <div v-for="a in pausedAccounts" :key="a.name">
             账号 <span class="mono">{{ a.name }}</span> 已暂停自动登录<template v-if="a.loginPauseReason">：{{ a.loginPauseReason }}</template>。重新填写凭证后在下方账号列表点「测试登录」，登录成功即恢复。
@@ -815,7 +838,7 @@ watch(
           :rule-disabled="detail.ruleDisabled === true"
           :shown="tab === 'accounts'"
           :auth-use="detail.authUse ?? null"
-          :authenticator="detail.authenticator === true"
+          :is-authenticator="detail.isAuthenticator === true"
           @changed="reloadParts"
         />
       </div>

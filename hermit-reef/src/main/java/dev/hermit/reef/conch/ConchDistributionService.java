@@ -172,7 +172,8 @@ public class ConchDistributionService {
                 verified.conchDoc().actions().size(),
                 requiredCredentialNames(verified.conchDoc()),
                 mcp.driver(),
-                mcp.upstreamHost());
+                mcp.upstreamHost(),
+                AuthDependencies.authUse(verified.conchDoc()));
     }
 
     private static ApiException notFound() {

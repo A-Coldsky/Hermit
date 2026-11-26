@@ -29,7 +29,9 @@ public record ConchCatalog(boolean configured, Instant syncedAt, List<Entry> con
             boolean repairRequired,
             String repairReason,
             String message,
-            boolean ruleDisabled
+            boolean ruleDisabled,
+            String driver,
+            String authUse
     ) {
         public Entry {
             newRequiredCredentials = newRequiredCredentials == null ? List.of() : List.copyOf(newRequiredCredentials);

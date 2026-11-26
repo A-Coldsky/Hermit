@@ -15,11 +15,13 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
+import KindShell from '@shared/components/KindShell.vue'
 import HermitMark from '@shared/components/HermitMark.vue'
 import { ApiError } from '@shared/http'
 import { formatTime, notifyError } from '@shared/format'
 import {
   api,
+  type AuthenticatorView,
   type ConchSummary,
   type LocalConchEntry,
   type LocalConchHistoryEntry,
@@ -42,6 +44,9 @@ const loading = ref(true)
 const loadFailed = ref(false)
 const conches = ref<ConchSummary[]>([])
 const broken = ref<LocalConchEntry[]>([])
+/** 页签：可调用的规则包，或只负责登录的授权器。 */
+const tab = ref<'packages' | 'authenticators'>('packages')
+const authenticators = ref<AuthenticatorView[]>([])
 const deleting = ref<string | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const importing = ref(false)
@@ -261,8 +266,12 @@ async function load() {
   loading.value = true
   pendingDropped.value = ''
   try {
-    const [installed, local, pendingResult, grantResult] = await Promise.all([
+    const [installed, authResult, local, pendingResult, grantResult] = await Promise.all([
       api.conches(),
+      api.authenticators().catch((error: unknown) => {
+        notifyError(error)
+        return null
+      }),
       api.localConches().catch((error: unknown) => {
         notifyError(error)
         return null
@@ -282,6 +291,7 @@ async function load() {
     grants.value = Array.isArray(grantResult?.grants) ? grantResult.grants : []
     await loadHistories(localNames(nextConches, nextBroken))
     conches.value = nextConches
+    if (authResult) authenticators.value = authResult.authenticators ?? []
     broken.value = nextBroken
     rememberPending(nextPending)
     loadFailed.value = false
@@ -405,7 +415,32 @@ async function restoreHistory(conch: string, entry: LocalConchHistoryEntry) {
   }
 }
 
-function open(row: ConchSummary) {
+function consumerCount(row: AuthenticatorView): number {
+  return new Set(row.accounts.flatMap((a) => a.consumers.map((c) => c.conch))).size
+}
+
+function consumerNames(row: AuthenticatorView): string[] {
+  return [...new Set(row.accounts.flatMap((a) => a.consumers.map((c) => c.conch)))].sort()
+}
+
+async function updateAuthenticator(row: AuthenticatorView) {
+  const key = updateKey(row.conch)
+  acting.value = key
+  try {
+    if (await updateConch({
+      conch: row.conch,
+      installedVersion: row.version,
+      latestVersion: row.latestVersion,
+      newRequiredCredentials: row.newRequiredCredentials ?? [],
+    })) {
+      await load()
+    }
+  } finally {
+    if (acting.value === key) acting.value = null
+  }
+}
+
+function open(row: { conch: string }) {
   void router.push(`/conches/${encodeURIComponent(row.conch)}`)
 }
 
@@ -553,6 +588,74 @@ onMounted(load)
       </article>
     </div>
 
+    <el-radio-group v-model="tab" class="tabs" data-test="kind-tabs">
+      <el-radio-button value="packages"><KindShell kind="http" :size="18" /> 规则包 {{ conches.length + broken.length }}</el-radio-button>
+      <el-radio-button value="authenticators">
+        <KindShell kind="auth" :size="18" /> 授权器 {{ authenticators.length }}
+        <span v-if="authenticators.some((a) => a.updateAvailable)" class="tab-dot" data-test="authenticator-update-dot" />
+      </el-radio-button>
+    </el-radio-group>
+
+    <template v-if="tab === 'authenticators'">
+      <p class="hm-muted tab-hint">
+        授权器只负责登录，没有能力，不能被调用。引用它的业务包把账号绑到授权器账号上，共用一份登录；账号之间的绑定在「授权与身份」里看。
+      </p>
+      <div v-if="authenticators.length" class="cards" data-test="authenticator-cards">
+        <div
+          v-for="row in authenticators"
+          :key="`${row.source}/${row.conch}`"
+          class="hm-card conch clickable"
+          role="link"
+          tabindex="0"
+          data-test="authenticator-card"
+          @click="open(row)"
+          @keyup.enter="open(row)"
+        >
+          <div class="top">
+            <ConchAvatar :name="row.conch" :title="row.title" kind="auth" />
+            <div class="name">
+              <strong>
+                {{ row.title || row.conch }}
+                <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
+                <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
+              </strong>
+              <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
+            </div>
+          </div>
+          <div class="status" :class="row.accounts.length ? 'ok' : 'idle'">
+            <el-icon><component :is="row.accounts.length ? CircleCheckFilled : User" /></el-icon>
+            <span v-if="!row.accounts.length">未建账号：先新建一个账号并填凭证</span>
+            <span v-else-if="consumerCount(row)" data-test="authenticator-used-by">被 {{ consumerNames(row).join('、') }} 使用</span>
+            <span v-else>还没有业务包的账号绑到它上面</span>
+          </div>
+          <p v-if="row.updateAvailable" class="update-note">
+            可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的业务包都用新版本登录。
+          </p>
+          <div class="foot hm-muted">
+            <span><b class="num">{{ row.accounts.length }}</b> 个账号</span>
+            <span><b class="num">{{ consumerCount(row) }}</b> 个业务包在用</span>
+            <span class="spacer" />
+            <el-button
+              v-if="row.updateAvailable"
+              link
+              type="primary"
+              class="card-action"
+              data-test="authenticator-update"
+              :loading="acting === updateKey(row.conch)"
+              @click.stop="updateAuthenticator(row)"
+              @keyup.enter.stop
+            >更新到 v{{ row.latestVersion }}</el-button>
+            <span class="manage">管理<el-icon><ArrowRight /></el-icon></span>
+          </div>
+        </div>
+      </div>
+      <div v-else-if="!loading" class="hm-card empty" data-test="authenticators-empty">
+        <KindShell kind="auth" :size="56" class="empty-mark" />
+        <span>本机还没有授权器。到<router-link to="/catalog">可订阅规则包</router-link>的「授权器」页签订阅，或导入本地授权器</span>
+      </div>
+    </template>
+
+    <template v-else>
     <div v-if="loading && !conches.length && !broken.length" class="cards">
       <div v-for="n in 2" :key="n" class="hm-card"><el-skeleton :rows="3" animated /></div>
     </div>
@@ -568,7 +671,7 @@ onMounted(load)
         @keyup.enter="open(row)"
       >
         <div class="top">
-          <ConchAvatar :name="row.conch" :title="row.title" />
+          <ConchAvatar :name="row.conch" :title="row.title" :kind="row.driver" />
           <div class="name">
             <strong>
               {{ row.title || row.conch }}
@@ -689,6 +792,7 @@ onMounted(load)
       <HermitMark variant="crab" :size="56" :tile="false" class="empty-mark" />
       <span>还没有规则包。到<router-link to="/catalog">可订阅规则包</router-link>订阅 Reef 上的规则包，或导入本地规则包</span>
     </div>
+    </template>
 
     <el-dialog v-model="report.open" :title="report.title" width="600px">
       <p v-if="report.summary" class="summary">{{ report.summary }}</p>
@@ -749,6 +853,28 @@ onMounted(load)
 
 /* 卡片上的「退回」「更新到」和正文同一字号。 */
 .card-action {
+  font-size: 12.5px;
+}
+
+.tabs {
+  margin-bottom: 14px;
+}
+
+.tabs :deep(.el-radio-button__inner) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--el-color-warning);
+}
+
+.tab-hint {
+  margin: 0 0 12px;
   font-size: 12.5px;
 }
 

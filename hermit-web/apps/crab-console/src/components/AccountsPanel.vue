@@ -23,7 +23,7 @@ const props = defineProps<{
   /** 这个包的登录由授权器提供：账号不填凭证，改为绑定授权器的账号。 */
   authUse?: AuthUse | null
   /** 这个包本身是授权器：每个账号列出绑到它的业务包账号。 */
-  authenticator?: boolean
+  isAuthenticator?: boolean
 }>()
 const emit = defineEmits<{ changed: [] }>()
 
@@ -42,7 +42,7 @@ async function openBinding(account: Account) {
     return
   }
   binding.account = account.name
-  binding.authAccount = account.authenticator?.account ?? ''
+  binding.authAccount = account.authBinding?.account ?? ''
   binding.check = null
   binding.options = []
   binding.open = true
@@ -252,7 +252,7 @@ async function testLogin(account: Account) {
   } catch (error) {
     if (error instanceof ApiError && error.code === 'LOGIN_INPUT_REQUIRED' && props.authUse) {
       // 等验证码的是授权器的账号，这个包的账号下没有可输入的验证码。
-      const at = account.authenticator
+      const at = account.authBinding
       Object.assign(testResult, {
         open: true,
         account: account.name,
@@ -699,8 +699,8 @@ async function disconnect(account: Account) {
       <span>账号</span>
       <el-button type="primary" plain :icon="Plus" @click="creating.open = true">新建账号</el-button>
     </div>
-    <p v-if="authenticator" class="hm-muted hint" data-test="authenticator-hint">
-      这是授权器：账号在这里填凭证、测试登录、输入验证码。引用它的规则包把自己的账号绑到这里的账号上，共用这份登录。授权器不能被 API Key 或 AI 调用。
+    <p v-if="isAuthenticator" class="hm-muted hint" data-test="authenticator-hint">
+      这是授权器：账号在这里填凭证、测试登录、输入验证码。引用它的业务包把自己的账号绑到这里的账号上，共用这份登录。授权器不能被 API Key 或 AI 调用。
     </p>
     <p v-else-if="authUse" class="hm-muted hint" data-test="auth-use-hint">
       调用时用请求头 <code>X-Hermit-Account</code> 选择账号，不带时使用默认账号。这个包的登录由授权器
@@ -725,16 +725,16 @@ async function disconnect(account: Account) {
       </el-table-column>
       <el-table-column v-if="authUse" label="授权器账号" min-width="240">
         <template #default="{ row }">
-          <template v-if="row.authenticator">
-            <router-link :to="`/conches/${encodeURIComponent(row.authenticator.conch)}`" class="mono strong" data-test="auth-binding">
-              {{ row.authenticator.conch }} / {{ row.authenticator.account }}
+          <template v-if="row.authBinding">
+            <router-link :to="`/conches/${encodeURIComponent(row.authBinding.conch)}`" class="mono strong" data-test="auth-binding">
+              {{ row.authBinding.conch }} / {{ row.authBinding.account }}
             </router-link>
-            <div class="hm-muted note">确认的地址：<span class="mono">{{ row.authenticator.baseUrl }}</span></div>
-            <div v-if="row.authenticator.loginInputRequired" class="note" data-test="auth-binding-input">
+            <div class="hm-muted note">确认的地址：<span class="mono">{{ row.authBinding.baseUrl }}</span></div>
+            <div v-if="row.authBinding.loginInputRequired" class="note" data-test="auth-binding-input">
               <el-tag type="warning" effect="plain" size="small">需要验证码</el-tag>
               到授权器的账号页输入。
             </div>
-            <div v-else-if="row.authenticator.loginPaused" class="note">
+            <div v-else-if="row.authBinding.loginPaused" class="note">
               <el-tag type="warning" effect="plain" size="small">授权器登录已暂停</el-tag>
             </div>
           </template>
@@ -744,7 +744,7 @@ async function disconnect(account: Account) {
           </template>
         </template>
       </el-table-column>
-      <el-table-column v-if="authenticator" label="使用它的账号" min-width="220">
+      <el-table-column v-if="isAuthenticator" label="使用它的账号" min-width="220">
         <template #default="{ row }">
           <template v-if="row.consumers?.length">
             <div v-for="c in row.consumers" :key="`${c.origin}/${c.conch}/${c.account}`" data-test="auth-consumer">
@@ -826,9 +826,9 @@ async function disconnect(account: Account) {
             </template>
             <template v-if="authUse">
               <el-button link type="primary" data-test="auth-bind" :disabled="!authUse.installed" @click="openBinding(row)">
-                {{ row.authenticator ? '改绑' : '绑定授权器' }}
+                {{ row.authBinding ? '改绑' : '绑定授权器' }}
               </el-button>
-              <el-button v-if="row.authenticator" link type="danger" data-test="auth-unbind" @click="unbind(row)">解除绑定</el-button>
+              <el-button v-if="row.authBinding" link type="danger" data-test="auth-unbind" @click="unbind(row)">解除绑定</el-button>
             </template>
             <el-button v-else link type="primary" :disabled="!credentials.length" @click="editCredentials(row)">填写凭证</el-button>
             <el-button

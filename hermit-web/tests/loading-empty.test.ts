@@ -11,6 +11,7 @@ const reef = vi.hoisted(() => ({
   tideRollbacks: vi.fn(),
 }))
 const crab = vi.hoisted(() => ({
+  authenticators: vi.fn(async () => ({ authenticators: [] })),
   conches: vi.fn(),
   localConches: vi.fn(async () => ({ conches: [] })),
   pendingLocalOverwrites: vi.fn(async () => ({ pending: [] })),

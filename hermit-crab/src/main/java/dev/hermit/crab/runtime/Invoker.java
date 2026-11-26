@@ -623,7 +623,7 @@ public final class Invoker {
 
     /**
      * 待输入登录不能缓存 24 小时，否则同一幂等键在用户提交之后仍回放 409。
-     * 引用授权器的包返回的 NOT_CONFIGURED（没有可用的绑定）同理：什么都没发出去，
+     * 业务包返回的 NOT_CONFIGURED（没有可用的绑定）同理：什么都没发出去，
      * 使用者绑好或重新启用授权器之后，同一个幂等键要能真正执行。其它包的 NOT_CONFIGURED 照旧缓存。
      */
     private static boolean notReplayable(InvokeOutcome outcome, boolean usesAuthenticator) {

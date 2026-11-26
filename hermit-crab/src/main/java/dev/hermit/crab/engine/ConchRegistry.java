@@ -28,7 +28,7 @@ public final class ConchRegistry {
     private static final Logger LOG = Logger.getLogger(ConchRegistry.class.getName());
 
     static final Set<String> RESERVED = Set.of("input", "credential", "config", "response", "now", "login", "loop");
-    /** 引用授权器的包里另外保留。没写 {@code auth.use} 的旧包可以继续把 auth 当普通变量名。 */
+    /** 业务包里另外保留。没写 {@code auth.use} 的旧包可以继续把 auth 当普通变量名。 */
     static final String AUTH_VAR = "auth";
     private static final Set<String> STEP_TYPES = Set.of(
             "request", "extract", "assert", "set", "script", "ask", "if", "repeat");

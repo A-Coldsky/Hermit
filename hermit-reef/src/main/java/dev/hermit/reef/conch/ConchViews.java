@@ -285,11 +285,20 @@ record ManifestEntry(
         int capabilityCount,
         List<String> requiredCredentials,
         String driver,
-        String upstreamHost) {
+        String upstreamHost,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        String authUse) {
     ManifestEntry {
         requiredCredentials = requiredCredentials == null ? List.of() : List.copyOf(requiredCredentials);
         if (driver == null || driver.isBlank()) {
             driver = "http";
         }
+    }
+
+    ManifestEntry(String conch, String version, String sha256, String minCrabVersion, String title,
+            String description, int capabilityCount, List<String> requiredCredentials, String driver,
+            String upstreamHost) {
+        this(conch, version, sha256, minCrabVersion, title, description, capabilityCount, requiredCredentials,
+                driver, upstreamHost, null);
     }
 }

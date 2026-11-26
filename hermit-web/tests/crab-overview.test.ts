@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { deferred, mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
+  authenticators: vi.fn(async () => ({ authenticators: [] })),
   conches: vi.fn(),
   calls: vi.fn(),
   debug: vi.fn(),
@@ -259,5 +260,21 @@ describe('Crab 概览', () => {
     const on = await mountPage(OverviewView)
     await flushPromises()
     expect(on.find('[data-test="shell-picker"]').exists()).toBe(true)
+  })
+
+  it('更新装好以后，上次同步结果里的「有新版本」不再显示', async () => {
+    crab.syncStatus.mockResolvedValue({
+      report: report({
+        notModified: false,
+        conches: [{ conch: 'corp_sso', version: '1.2.0', kind: 'UPDATE_AVAILABLE', reason: null }],
+      }),
+      latestCrab: null,
+    })
+    const wrapper = await mountPage(OverviewView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="updatable"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('corp_sso v1.2.0')
+    expect(wrapper.text()).not.toContain('去更新')
   })
 })

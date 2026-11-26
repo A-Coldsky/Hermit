@@ -150,8 +150,8 @@ class AuthenticatorHttpTest {
         assertThat(logins.get()).as("两个包共用授权器账号的一次登录").isEqualTo(1);
 
         JsonNode account = console("GET", "/console/api/conches/pkg_a/accounts", null).path("accounts").get(0);
-        assertThat(account.path("authenticator").path("conch").asText()).isEqualTo("corp_sso");
-        assertThat(account.path("authenticator").path("account").asText()).isEqualTo("zhang");
+        assertThat(account.path("authBinding").path("conch").asText()).isEqualTo("corp_sso");
+        assertThat(account.path("authBinding").path("account").asText()).isEqualTo("zhang");
         JsonNode listed = console("GET", "/console/api/authenticators", null).path("authenticators");
         assertThat(listed).hasSize(1);
         assertThat(listed.get(0).path("accounts").get(0).path("consumers")).hasSize(2);
@@ -182,7 +182,7 @@ class AuthenticatorHttpTest {
                 "sso", new ApiKeyScope(Set.of("corp_sso"), Set.of(), false, false), Actors.CLI))
                 .isInstanceOf(IllegalArgumentException.class);
         // 控制台仍能看授权器的详情和账号。
-        assertThat(console("GET", "/console/api/conches/corp_sso", null).path("authenticator").asBoolean()).isTrue();
+        assertThat(console("GET", "/console/api/conches/corp_sso", null).path("isAuthenticator").asBoolean()).isTrue();
         assertThat(console("GET", "/console/api/conches/corp_sso/accounts", null).path("accounts").get(0)
                 .path("consumers")).hasSize(1);
         assertThat(console("GET", "/console/api/conches/pkg_a", null).path("authUse").path("conch").asText())
@@ -274,6 +274,37 @@ class AuthenticatorHttpTest {
         runtime.registry().put(consumer("pkg_a", appUrl));
         runtime.registry().scoped(Origin.LOCAL).put(plain("corp_sso", appUrl));
         assertThat(runtime.authenticators().list()).as("授权器还没载入，不能据此作废绑定").hasSize(1);
+    }
+
+    @Test
+    void unsubscribingAnAuthenticatorKeepsBindingsUntilItComesBack() throws Exception {
+        installAll();
+        bind("pkg_a");
+        assertThat(call("pkg_a").status()).isEqualTo(200);
+        SessionKey account = new SessionKey(Origin.OFFICIAL, "pkg_a", "default");
+
+        // 退订授权器：包不在本机了，绑定和账号、凭证一样留着，调用被拒绝。
+        runtime.registry().remove("corp_sso");
+        runtime.identities().packageUnsubscribed("corp_sso", Actors.CONSOLE);
+        assertThat(runtime.authenticators().find(account)).as("退订授权器不作废绑定").isNotNull();
+        assertThat(call("pkg_a").json().path("error").path("code").asText()).isEqualTo("NOT_CONFIGURED");
+
+        // 重新订阅：不用重新绑定。
+        runtime.registry().put(authenticator());
+        runtime.identities().revalidate(Actors.SYNC);
+        assertThat(runtime.authenticators().find(account)).isNotNull();
+        assertThat(call("pkg_a").status()).isEqualTo(200);
+
+        // 退订业务包再订回来，它自己的绑定也还在。
+        runtime.registry().remove("pkg_a");
+        runtime.identities().packageUnsubscribed("pkg_a", Actors.CONSOLE);
+        assertThat(runtime.authenticators().find(account)).isNotNull();
+        runtime.registry().put(consumer("pkg_a", appUrl));
+        assertThat(call("pkg_a").status()).isEqualTo(200);
+
+        JsonNode row = console("GET", "/console/api/authenticators", null).path("authenticators").get(0);
+        assertThat(row.path("updateAvailable").asBoolean(true)).isFalse();
+        assertThat(row.has("subscribed")).isTrue();
     }
 
     private void installAll() {

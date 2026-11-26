@@ -193,7 +193,9 @@ class DevTraceFlowTest {
             assertThat(bigBody).doesNotContain(MARKER).contains("单步正文超过 256 KiB，已截断。");
 
             String sessionId = initialize(http, crab, localKey.plaintext());
-            JsonNode tools = mcp(http, crab, localKey.plaintext(), sessionId, 2, "tools/list", null);
+            JsonNode tools = dev.hermit.crab.mcp.DevToolList.expand(
+                    mcp(http, crab, localKey.plaintext(), sessionId, 2, "tools/list", null),
+                    mcp(http, crab, localKey.plaintext(), sessionId, 20, "tools/call", Map.of("name", "hermit_dev", "arguments", Map.of())));
             assertThat(toolNames(tools)).contains("hermit_dev__debug_trace");
             JsonNode debugTool = tool(tools, "hermit_dev__debug_trace");
             assertThat(debugTool.path("annotations").path("readOnlyHint").asBoolean()).isTrue();
@@ -246,7 +248,7 @@ class DevTraceFlowTest {
             assertThat(after.json.path("data").path("devTrace").isNull()).isTrue();
             String offSession = initialize(http, crab, localKey.plaintext());
             JsonNode offTools = mcp(http, crab, localKey.plaintext(), offSession, 7, "tools/list", null);
-            assertThat(toolNames(offTools)).doesNotContain("hermit_dev__debug_trace", "hermit_dev__debug_trace_list");
+            assertThat(toolNames(offTools)).doesNotContain("hermit_dev", "hermit_dev__debug_trace", "hermit_dev__debug_trace_list");
             JsonNode offCall = mcp(http, crab, localKey.plaintext(), offSession, 8, "tools/call",
                     Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolMessage(offCall)).contains("追踪已删").doesNotContain("没有这个工具");
@@ -357,7 +359,9 @@ class DevTraceFlowTest {
                     "other", new ApiKeyScope(Set.of("official_auth"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
 
             String allSession = initialize(http, crab, allKey.plaintext());
-            JsonNode listedTools = mcp(http, crab, allKey.plaintext(), allSession, 1, "tools/list", null);
+            JsonNode listedTools = dev.hermit.crab.mcp.DevToolList.expand(
+                    mcp(http, crab, allKey.plaintext(), allSession, 1, "tools/list", null),
+                    mcp(http, crab, allKey.plaintext(), allSession, 20, "tools/call", Map.of("name", "hermit_dev", "arguments", Map.of())));
             assertThat(toolNames(listedTools)).contains("hermit_dev__debug_trace", "hermit_dev__debug_trace_list");
 
             JsonNode listed = mcp(http, crab, allKey.plaintext(), allSession, 2, "tools/call",

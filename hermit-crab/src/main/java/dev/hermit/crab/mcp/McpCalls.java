@@ -133,6 +133,9 @@ final class McpCalls {
             return fail(attempt, "INVALID_INPUT", "name is required");
         }
         Map<String, Object> arguments = request.arguments() == null ? Map.of() : request.arguments();
+        if (McpCatalog.DEV_CONCH.equals(name)) {
+            return devEntry(principal, session, arguments, localCaller, attempt);
+        }
         if (McpCatalog.devToolName(name)) {
             return devCall(principal, session, name, arguments, localCaller, attempt);
         }
@@ -147,6 +150,40 @@ final class McpCalls {
     }
 
     /** 内置开发者工具包（hermit_dev）的工具。直接调用和 call_capability 都走这里。 */
+    /** 直接模式下开发者工具包的唯一入口：不带 tool 返回清单，带 tool 转给对应的开发者工具。 */
+    private McpSchema.CallToolResult devEntry(
+            ApiKeyPrincipal principal,
+            McpSession session,
+            Map<String, Object> arguments,
+            boolean localCaller,
+            Attempt attempt
+    ) {
+        if (principal != null && !principal.scope().devTools()) {
+            return fail(attempt, "FORBIDDEN", AuthoringCalls.NEEDS_DEV_SCOPE);
+        }
+        for (String key : arguments.keySet()) {
+            if (!"tool".equals(key) && !"arguments".equals(key)) {
+                return fail(attempt, "INVALID_INPUT", "不认识的字段 " + key + "。只接受 tool 和 arguments。");
+            }
+        }
+        Object tool = arguments.get("tool");
+        if (tool == null) {
+            if (!catalog.devVisible(principal)) {
+                return fail(attempt, "NOT_CONFIGURED", AuthoringCalls.DEV_MODE_CLOSED);
+            }
+            return ok(catalog.devOverview(principal, localCaller));
+        }
+        if (!(tool instanceof String text) || !McpCatalog.devToolName(text)) {
+            return fail(attempt, "INVALID_INPUT", "tool 不是开发者工具名。不带参数调用 hermit_dev 查看可用的工具。");
+        }
+        Object raw = arguments.get("arguments");
+        Map<String, Object> input = copyObject(raw);
+        if (raw != null && input == null) {
+            return fail(attempt, "INVALID_INPUT", "arguments must be an object");
+        }
+        return devCall(principal, session, text, input == null ? Map.of() : input, localCaller, attempt);
+    }
+
     private McpSchema.CallToolResult devCall(
             ApiKeyPrincipal principal,
             McpSession session,

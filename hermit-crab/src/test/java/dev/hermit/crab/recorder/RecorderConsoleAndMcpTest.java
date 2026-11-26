@@ -60,7 +60,7 @@ class RecorderConsoleAndMcpTest {
 
             String offSession = mcpInit(base, fullKey.plaintext());
             JsonNode offTools = mcpCall(base, fullKey.plaintext(), offSession, "tools/list", null);
-            assertThat(toolNames(offTools)).doesNotContain("hermit_dev__capture_list", "hermit_dev__capture_get");
+            assertThat(toolNames(offTools)).doesNotContain("hermit_dev", "hermit_dev__capture_list", "hermit_dev__capture_get");
             JsonNode offListCall = mcpCall(base, fullKey.plaintext(), offSession, "tools/call",
                     Map.of("name", "hermit_dev__capture_list", "arguments", Map.of()));
             assertThat(offListCall.path("result").path("isError").asBoolean()).isTrue();
@@ -188,7 +188,9 @@ class RecorderConsoleAndMcpTest {
 
             // Full-permission MCP key sees and reads the snapshot cleanly with UNTRUSTED marker.
             String fullSession = mcpInit(base, fullKey.plaintext());
-            JsonNode fullTools = mcpCall(base, fullKey.plaintext(), fullSession, "tools/list", null);
+            JsonNode fullTools = dev.hermit.crab.mcp.DevToolList.expand(
+                    mcpCall(base, fullKey.plaintext(), fullSession, "tools/list", null),
+                    mcpCall(base, fullKey.plaintext(), fullSession, "tools/call", Map.of("name", "hermit_dev", "arguments", Map.of())));
             assertThat(toolNames(fullTools)).contains("hermit_dev__capture_list", "hermit_dev__capture_get");
 
             JsonNode listResult = mcpCall(base, fullKey.plaintext(), fullSession, "tools/call",
@@ -219,7 +221,10 @@ class RecorderConsoleAndMcpTest {
 
             // Narrow-scoped API key must NOT see or read capture snapshots.
             String narrowSession = mcpInit(base, narrowKey.plaintext());
-            JsonNode narrowTools = mcpCall(base, narrowKey.plaintext(), narrowSession, "tools/list", null);
+            JsonNode narrowTools = dev.hermit.crab.mcp.DevToolList.expand(
+                    mcpCall(base, narrowKey.plaintext(), narrowSession, "tools/list", null),
+                    mcpCall(base, narrowKey.plaintext(), narrowSession, "tools/call", Map.of("name", "hermit_dev", "arguments", Map.of())));
+            assertThat(toolNames(narrowTools)).contains("hermit_dev__validate");
             assertThat(toolNames(narrowTools)).doesNotContain("hermit_dev__capture_list", "hermit_dev__capture_get");
             JsonNode narrowCall = mcpCall(base, narrowKey.plaintext(), narrowSession, "tools/call",
                     Map.of("name", "hermit_dev__capture_list", "arguments", Map.of()));

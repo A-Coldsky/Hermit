@@ -67,7 +67,17 @@ class AuthoringMcpTest {
                     .contains("hermit://conches/hermit_dev/guide")
                     .contains("Reef 订阅的正式包只读");
             String session = openedResponse.headers().firstValue("Mcp-Session-Id").orElseThrow();
-            JsonNode tools = server.rpc(session, 2, "tools/list", null);
+            JsonNode flat = server.rpc(session, 2, "tools/list", null);
+            // 开发者工具不平铺：tools/list 里只有一个入口 hermit_dev，清单由它返回。
+            assertThat(toolNames(flat)).contains("hermit_dev").noneMatch(name -> name.startsWith("hermit_dev__"));
+            assertThat(tool(flat, "hermit_dev").path("description").asText()).contains("只在用户要求编写、修改或调试规则包");
+            JsonNode tools = DevToolList.expand(flat, server.devOverview(server.key.plaintext(), session));
+            JsonNode viaEntry = structured(server.call(session, "hermit_dev",
+                    Map.of("tool", "hermit_dev__validate", "arguments", Map.of("yaml", "conch: x"))));
+            assertThat(viaEntry.has("ok")).isTrue();
+            assertThat(toolError(server.rpc(session, 21, "tools/call",
+                    Map.of("name", "hermit_dev", "arguments", Map.of("tool", "oa__list")))).path("code").asText())
+                    .isEqualTo("INVALID_INPUT");
             assertThat(toolNames(tools)).contains(
                     "hermit_dev__guide", "hermit_dev__read_yaml", "hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__trial_run", "hermit_dev__debug_trace");
             assertThat(tool(tools, "hermit_dev__guide").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
@@ -722,7 +732,9 @@ class AuthoringMcpTest {
                     "named-read-only", new ApiKeyScope(Set.of("ro_ping"), Set.of(), true, false, Set.of(), true), Actors.CONSOLE);
             String readOnlySession = server.initialize(readOnly.plaintext(), false);
             String namedSession = server.initialize(namedReadOnly.plaintext(), false);
-            JsonNode readOnlyTools = server.rpc(readOnly.plaintext(), readOnlySession, 2, "tools/list", null);
+            JsonNode readOnlyTools = DevToolList.expand(
+                    server.rpc(readOnly.plaintext(), readOnlySession, 2, "tools/list", null),
+                    server.devOverview(readOnly.plaintext(), readOnlySession));
             assertThat(toolNames(readOnlyTools)).doesNotContain("hermit_dev__save_local")
                     .contains("hermit_dev__validate", "hermit_dev__trial_run", "hermit_dev__debug_trace");
 
@@ -769,7 +781,9 @@ class AuthoringMcpTest {
         try (Harness server = Harness.open(temp.resolve("remote"), "0.0.0.0")) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String localSession = server.initialize(false);
-            JsonNode localTools = server.rpc(localSession, 2, "tools/list", null);
+            JsonNode localTools = DevToolList.expand(
+                    server.rpc(localSession, 2, "tools/list", null),
+                    server.devOverview(server.key.plaintext(), localSession));
             assertThat(toolNames(localTools)).contains("hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__trial_run", "hermit_dev__debug_trace");
             JsonNode localResources = server.rpc(localSession, 3, "resources/list", null);
             assertThat(resourceUris(localResources)).contains(AuthoringGuide.URI);
@@ -787,7 +801,12 @@ class AuthoringMcpTest {
             HttpResponse<String> remoteTools = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
                     {"jsonrpc":"2.0","id":2,"method":"tools/list"}
                     """, Map.of());
-            assertThat(remoteTools.body()).contains("hermit_dev__debug_trace")
+            HttpResponse<String> remoteOverview = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
+                    {"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"hermit_dev","arguments":{}}}
+                    """, Map.of());
+            assertThat(ApiJson.tree(remoteOverview.body()).path("result").path("structuredContent").path("tools")
+                    .findValuesAsText("name")).containsExactly("hermit_dev__debug_trace");
+            assertThat(remoteTools.body()).contains("\"name\":\"hermit_dev\"")
                     .doesNotContain("hermit_dev__debug_trace_list")
                     .doesNotContain("hermit_dev__guide")
                     .doesNotContain("hermit_dev__read_yaml")
@@ -1657,9 +1676,13 @@ class AuthoringMcpTest {
             String allSession = server.initialize(false);
 
             // 可写 Key 仍暴露 hermit_dev__save_local（可建新包）。
-            assertThat(toolNames(server.rpc(groupScoped.plaintext(), groupSession, 2, "tools/list", null)))
+            assertThat(toolNames(DevToolList.expand(
+                    server.rpc(groupScoped.plaintext(), groupSession, 2, "tools/list", null),
+                    server.devOverview(groupScoped.plaintext(), groupSession))))
                     .contains("hermit_dev__save_local");
-            assertThat(toolNames(server.rpc(actionScoped.plaintext(), actionSession, 2, "tools/list", null)))
+            assertThat(toolNames(DevToolList.expand(
+                    server.rpc(actionScoped.plaintext(), actionSession, 2, "tools/list", null),
+                    server.devOverview(actionScoped.plaintext(), actionSession))))
                     .contains("hermit_dev__save_local");
 
             // 1) 按分组限权的 Key 试图在同目的地边界下把管理能力改入 hr 组：必须 FORBIDDEN。
@@ -1879,9 +1902,13 @@ class AuthoringMcpTest {
             String session = server.initialize(false);
 
             // 开发者模式关着时不可用。
-            assertThat(toolNames(server.rpc(session, 2, "tools/list", null))).doesNotContain("hermit_dev__auth_list");
+            assertThat(toolNames(server.rpc(session, 2, "tools/list", null))).doesNotContain("hermit_dev");
+            assertThat(toolError(server.devOverview(server.key.plaintext(), session)).path("code").asText())
+                    .isEqualTo("NOT_CONFIGURED");
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
-            assertThat(toolNames(server.rpc(session, 3, "tools/list", null))).contains("hermit_dev__auth_list");
+            assertThat(toolNames(DevToolList.expand(
+                    server.rpc(session, 3, "tools/list", null),
+                    server.devOverview(server.key.plaintext(), session)))).contains("hermit_dev__auth_list");
             // 授权器不是可调用的工具。
             assertThat(server.rpc(session, 3, "tools/list", null).toString()).doesNotContain("corp_sso");
 
@@ -2298,6 +2325,10 @@ class AuthoringMcpTest {
             } catch (Exception ex) {
                 throw new IllegalStateException(ex);
             }
+        }
+
+        JsonNode devOverview(String apiKey, String session) throws Exception {
+            return rpc(apiKey, session, 30, "tools/call", Map.of("name", "hermit_dev", "arguments", Map.of()));
         }
 
         JsonNode rpc(String session, int id, String method, Object params) throws Exception {

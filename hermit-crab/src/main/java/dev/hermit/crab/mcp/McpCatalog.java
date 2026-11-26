@@ -53,7 +53,12 @@ final class McpCatalog {
                     + "写或改 YAML 前先用 hermit_dev__guide（或读取资源 hermit://conches/hermit_dev/guide）获取可直接复制修改的 starterTemplate、pitfalls 避坑清单、步骤速查与相关章节；"
                     + "修改已有规则包前先用 hermit_dev__read_yaml 读取原文（Reef 订阅的正式包只读不可直接修改，如需改动请用 hermit_dev__save_local 保存为本地规则包，可起新包名立即生效，或保存为同名本地副本再由用户在控制台切换来源）。"
                     + "推荐顺序：先和用户确认要做哪些功能 → hermit_dev__validate 校验至无错（失败可按 fixHints/suggestedSections 修正） → hermit_dev__save_local 保存 → 用户在控制台建账号填凭证并可点「测试登录」 → hermit_dev__trial_run 试跑；测试登录、验证码续登或试跑失败时，用 hermit_dev__debug_trace 查 traceId，或直接用 hermit_dev__debug_trace_list 列出最近本机开发追踪排查原因。"
-                    + "不要向用户索要口令、Cookie 或令牌，也不要写入 YAML。";
+                    + "不要向用户索要口令、Cookie 或令牌，也不要写入 YAML。"
+                    + "这些工具不直接出现在工具列表里：工具列表里有 hermit_dev 时用 hermit_dev(tool=工具名, arguments=参数) 调用，"
+                    + "有 call_capability 时用 call_capability(name=工具名, arguments=参数) 调用。";
+    static final String DEV_ENTRY_DESCRIPTION =
+            "Hermit Crab 内置的规则包开发工具入口，只在用户要求编写、修改或调试规则包（Conch）时使用。"
+                    + "不带参数调用，返回可用的开发者工具、各自的参数和推荐顺序；再用 tool 和 arguments 调用其中一个。";
     private static final String GUIDE_PREFIX = "hermit://conches/";
     private static final String GUIDE_SUFFIX = "/guide";
     private static final String LOCAL_PREFIX = "[本地] ";
@@ -101,9 +106,9 @@ final class McpCatalog {
                 tools.add(directTool(ref, visible, outputSchema));
             }
         }
-        if (!isDirectory(visible.size())) {
-            // 目录模式下开发者工具包和其它规则包一样收进 list_systems，不平铺。
-            tools.addAll(devTools(principal, outputSchema, localCaller));
+        if (!isDirectory(visible.size()) && !devTools(principal, false, localCaller).isEmpty()) {
+            // 开发者工具包从不平铺：目录模式下收进 list_systems，直接模式下只给一个入口工具。
+            tools.add(devEntryTool(principal));
         }
         return List.copyOf(tools);
     }
@@ -135,6 +140,39 @@ final class McpCatalog {
             tools.addAll(authoringTools(outputSchema, includeSave, includeCapture));
         }
         return List.copyOf(tools);
+    }
+
+    private static McpSchema.Tool devEntryTool(ApiKeyPrincipal principal) {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("tool", Map.of("type", "string",
+                "description", "要调用的开发者工具名，形如 hermit_dev__debug_trace。省略时返回工具清单。"));
+        properties.put("arguments", Map.of("type", "object", "description", "传给该工具的参数。"));
+        boolean canSave = principal == null || !principal.scope().readOnlyOnly();
+        return tool(DEV_CONCH, DEV_ENTRY_DESCRIPTION, objectSchema(properties), null, false, false, canSave);
+    }
+
+    /** 入口工具不带 tool 时的返回：这把 Key 现在能用的开发者工具和各自的参数。 */
+    Map<String, Object> devOverview(ApiKeyPrincipal principal, boolean localCaller) {
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (McpSchema.Tool tool : devTools(principal, false, localCaller)) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>(devSummary(tool));
+            row.put("description", tool.description());
+            row.put("inputSchema", tool.inputSchema());
+            if (tool.annotations() != null) {
+                LinkedHashMap<String, Object> hints = new LinkedHashMap<>();
+                hints.put("readOnlyHint", Boolean.TRUE.equals(tool.annotations().readOnlyHint()));
+                hints.put("destructiveHint", Boolean.TRUE.equals(tool.annotations().destructiveHint()));
+                hints.put("idempotentHint", Boolean.TRUE.equals(tool.annotations().idempotentHint()));
+                row.put("annotations", hints);
+            }
+            rows.add(row);
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("conch", DEV_CONCH);
+        body.put("title", DEV_TITLE);
+        body.put("description", DEV_DESCRIPTION);
+        body.put("tools", rows);
+        return body;
     }
 
     private static Map<String, Object> devSummary(McpSchema.Tool tool) {

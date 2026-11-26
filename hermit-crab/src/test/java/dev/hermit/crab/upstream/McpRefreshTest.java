@@ -687,7 +687,7 @@ class McpRefreshTest {
 
         static Lab open(Path root) throws Exception {
             CrabRuntime runtime = CrabRuntime.open(
-                    new CrabPaths(root), CrabConfig.defaults().withListen("127.0.0.1", 0), name -> null);
+                    new CrabPaths(root), CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40), name -> null);
             CrabHttpServer server = new CrabHttpServer(runtime);
             server.start();
             return new Lab(runtime, server);

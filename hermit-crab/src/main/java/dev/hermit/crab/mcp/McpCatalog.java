@@ -25,7 +25,6 @@ import dev.hermit.crab.store.Origin;
 import io.modelcontextprotocol.spec.McpSchema;
 
 final class McpCatalog {
-    static final int DIRECT_LIMIT = 40;
     /** 顶层未分组能力不超过此数量时，list_systems 直接附带轻量摘要，省去额外一轮浏览。 */
     static final int TOP_LEVEL_INLINE_LIMIT = 10;
     static final String ACCOUNT_PATTERN = "^[A-Za-z0-9_-]{1,64}$";
@@ -67,7 +66,7 @@ final class McpCatalog {
                     + "describe_capability 看参数，最后用 call_capability 调用。"
                     + "没有 list_systems 时，工具列表里的每个工具就是一个能力，名字是「系统__能力」，直接调用。\n"
                     + "这里没有对应的系统或能力时，如实告诉用户，不要编造结果。"
-                    + "工具列表为空，说明这把 API Key 当前没有可用的能力，请用户到 Crab 控制台检查 Key 的范围和规则包是否启用。";
+                    + "工具列表为空，或 list_systems 返回的系统是空的，说明这把 API Key 当前没有可用的能力，请用户到 Crab 控制台检查 Key 的范围和规则包是否启用。";
     static final String DEV_ENTRY_DESCRIPTION =
             "Hermit Crab 内置的规则包开发工具入口，只在用户要求编写、修改或调试规则包（Conch）时使用。"
                     + "不带参数调用，返回可用的开发者工具、各自的参数和推荐顺序；再用 tool 和 arguments 调用其中一个。";
@@ -79,14 +78,6 @@ final class McpCatalog {
     private final BiPredicate<String, String> disabled;
     private final BooleanSupplier devMode;
     private final int directLimit;
-
-    McpCatalog(ConchRegistry registry, BiPredicate<String, String> disabled) {
-        this(registry, disabled, () -> false, DIRECT_LIMIT);
-    }
-
-    McpCatalog(ConchRegistry registry, BiPredicate<String, String> disabled, BooleanSupplier devMode) {
-        this(registry, disabled, devMode, DIRECT_LIMIT);
-    }
 
     McpCatalog(ConchRegistry registry, BiPredicate<String, String> disabled, BooleanSupplier devMode, int directLimit) {
         this.registry = registry;
@@ -469,6 +460,10 @@ final class McpCatalog {
         body.put("idempotent", action.idempotent());
         body.put("inputSchema", action.inputJsonSchema());
         body.put("output", action.output());
+        if (action.tool() != null && action.tool().outputSchema() != null) {
+            // 转发的 MCP 工具没有 output 字段表，返回结构在上游声明的 outputSchema 里。
+            body.put("outputSchema", stripDialect(action.tool().outputSchema()));
+        }
         ArrayList<Map<String, Object>> examples = new ArrayList<>();
         for (Example example : action.examples()) {
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
@@ -1146,6 +1141,7 @@ final class McpCatalog {
         properties.put("idempotent", Map.of("type", "boolean"));
         properties.put("inputSchema", Map.of("type", "object"));
         properties.put("output", Map.of("type", "object"));
+        properties.put("outputSchema", Map.of("type", "object"));
         properties.put("examples", Map.of("type", "array"));
         return objectSchema(properties);
     }
@@ -1301,7 +1297,7 @@ final class McpCatalog {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("name", Map.of("type", "string", "description", "能力名，形如 conch__action"));
         properties.put("arguments", Map.of("type", "object", "description", "能力参数。不包含凭证。"));
-        properties.put("account", accountSchema("可选。覆盖请求头 X-Hermit-Account。"));
+        properties.put("account", accountSchema("可选。选择命名账号，覆盖请求头 X-Hermit-Account。账号选择只写在这里，不放进 arguments。"));
         LinkedHashMap<String, Object> schema = objectSchema(properties);
         schema.put("required", List.of("name"));
         return schema;
@@ -1473,7 +1469,8 @@ final class McpCatalog {
         }
         text.append("规则包：`").append(conch.conch()).append("`\n\n");
         text.append("## 账号\n\n");
-        text.append("用工具参数 `account`（若能力参数已占用该名字，则用 `_account`）或请求头 `X-Hermit-Account` 选择命名账号。");
+        text.append("经 `call_capability` 调用时，用它自己的 `account` 参数选择命名账号（与 `arguments` 并列，不放进 `arguments`）；");
+        text.append("直接调用能力工具时，用工具参数 `account`（若能力参数已占用该名字，则用 `_account`）。也可以用请求头 `X-Hermit-Account`。");
         text.append("参数优先于请求头；都不传则使用该规则包的默认账号。账号名匹配 `")
                 .append(ACCOUNT_PATTERN)
                 .append("`。\n\n");

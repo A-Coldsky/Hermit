@@ -23,7 +23,7 @@ class McpCatalogTest {
     void parseGuideUriRejectsOverlappingPrefixAndSuffixWithoutThrowing() {
         ConchRegistry registry = new ConchRegistry();
         registry.put(ConchParser.parse(groupedYaml("oa", 1)), Origin.OFFICIAL);
-        McpCatalog catalog = new McpCatalog(registry, (c, a) -> false, () -> false, McpCatalog.DIRECT_LIMIT);
+        McpCatalog catalog = new McpCatalog(registry, (c, a) -> false, () -> false, 40);
 
         assertThat(catalog.guide(ALL_KEY, "hermit://conches/guide")).isEmpty();
         assertThat(catalog.guide(ALL_KEY, "hermit://conches//guide")).isEmpty();
@@ -47,6 +47,53 @@ class McpCatalogTest {
     }
 
     @Test
+    void describeCarriesTheForwardedToolOutputSchemaAndGuideNamesTheDirectoryAccountSelector() {
+        ConchRegistry registry = new ConchRegistry();
+        registry.put(ConchParser.parse("""
+                conch: vendor_crm
+                version: 9.0.0
+                driver: mcp
+                min_crab_version: 1.1.0
+                title: 客户
+                description: 客户系统。
+                credentials:
+                  token: {type: secret, label: 令牌, required: true}
+                upstream:
+                  url: https://crm.example.com/mcp
+                  transport: streamable_http
+                  auth: {type: headers}
+                actions:
+                  search_customer:
+                    tool: searchCustomer
+                    title: 搜索客户
+                    description: 按名称搜索。
+                    mcp: {read_only: true}
+                    input_schema: {type: object}
+                    output_schema:
+                      $schema: https://json-schema.org/draft/2020-12/schema
+                      type: object
+                      properties:
+                        total: {type: integer}
+                  ping:
+                    tool: ping
+                    title: 探测
+                    description: 探测。
+                    mcp: {read_only: true}
+                    input_schema: {type: object}
+                """), Origin.OFFICIAL);
+        McpCatalog catalog = new McpCatalog(registry, (c, a) -> false, () -> false, 0);
+
+        Object schema = catalog.describe(ALL_KEY, "vendor_crm__search_customer").orElseThrow().get("outputSchema");
+        assertThat(schema).isInstanceOf(java.util.Map.class);
+        assertThat(schema.toString()).contains("total").doesNotContain("$schema");
+        assertThat(catalog.describe(ALL_KEY, "vendor_crm__ping").orElseThrow()).doesNotContainKey("outputSchema");
+
+        assertThat(catalog.guide(ALL_KEY, "hermit://conches/vendor_crm/guide").orElseThrow())
+                .contains("经 `call_capability` 调用时，用它自己的 `account` 参数")
+                .contains("不放进 `arguments`");
+    }
+
+    @Test
     void toolsScansVisibleCapabilitiesOnceToAvoidModeSplit() {
         ConchRegistry registry = new ConchRegistry();
         registry.put(ConchParser.parse(groupedYaml("oa", 1)), Origin.OFFICIAL);
@@ -58,7 +105,7 @@ class McpCatalogTest {
                     return false;
                 },
                 () -> false,
-                McpCatalog.DIRECT_LIMIT);
+                40);
 
         List<McpSchema.Tool> tools = catalog.tools(ALL_KEY, "2025-11-25");
         assertThat(tools).hasSize(2);
@@ -72,7 +119,7 @@ class McpCatalogTest {
         // 12 ungrouped (> TOP_LEVEL_INLINE_LIMIT) + 1 grouped = 13 visible capabilities
         registry.put(ConchParser.parse(groupedYaml("oa", 12)), Origin.OFFICIAL);
 
-        McpCatalog directCatalog = new McpCatalog(registry, (c, a) -> false, () -> false, McpCatalog.DIRECT_LIMIT);
+        McpCatalog directCatalog = new McpCatalog(registry, (c, a) -> false, () -> false, 40);
         assertThat(directCatalog.directory(ALL_KEY)).isFalse();
         String directGuide = directCatalog.guide(ALL_KEY, "hermit://conches/oa/guide").orElseThrow();
         assertThat(directGuide)

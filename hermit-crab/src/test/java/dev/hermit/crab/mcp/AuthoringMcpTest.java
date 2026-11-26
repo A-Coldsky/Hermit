@@ -579,7 +579,7 @@ class AuthoringMcpTest {
                     notes: 无
                     related: []
                 """;
-        for (int limit : new int[] {CrabConfig.defaults().mcpDirectLimit(), 0}) {
+        for (int limit : new int[] {40, 0}) {
             CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(limit);
             try (Harness server = Harness.open(temp.resolve("prefix-" + limit), config)) {
                 server.runtime.debug().setEnabled(true, Actors.CONSOLE);
@@ -672,7 +672,7 @@ class AuthoringMcpTest {
 
     @org.junit.jupiter.api.Test
     void fullAccessKeyWithoutDevToolsNeverSeesTheDeveloperPackage() throws Exception {
-        for (int limit : new int[] {CrabConfig.defaults().mcpDirectLimit(), 0}) {
+        for (int limit : new int[] {40, 0}) {
             CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(limit);
             try (Harness server = Harness.open(temp.resolve("no-dev-" + limit), config)) {
                 server.runtime.debug().setEnabled(true, Actors.CONSOLE);
@@ -2088,7 +2088,7 @@ class AuthoringMcpTest {
         Files.write(zipFile, signedZip);
         Files.writeString(paths.conches().resolve("corp_oa").resolve("current"), "1.0.0\n", StandardCharsets.UTF_8);
 
-        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withReef(null, null, reefPubPem);
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40).withReef(null, null, reefPubPem);
         try (Harness server = Harness.open(home, config)) {
             server.runtime.loadInstalledConches();
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
@@ -2185,7 +2185,7 @@ class AuthoringMcpTest {
         Files.write(zipFile, signedZip);
         Files.writeString(paths.conches().resolve("corp_oa").resolve("current"), "1.0.0\n", StandardCharsets.UTF_8);
 
-        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withReef(null, null, reefPubPem);
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40).withReef(null, null, reefPubPem);
         try (Harness server = Harness.open(home, config)) {
             server.runtime.loadInstalledConches();
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
@@ -2293,7 +2293,7 @@ class AuthoringMcpTest {
         }
 
         static Harness open(Path home, String host) throws Exception {
-            return open(home, CrabConfig.defaults().withListen(host, 0));
+            return open(home, CrabConfig.defaults().withListen(host, 0).withMcpDirectLimit(40));
         }
 
         static Harness open(Path home, CrabConfig config) throws Exception {

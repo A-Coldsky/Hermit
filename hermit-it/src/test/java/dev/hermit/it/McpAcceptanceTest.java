@@ -86,6 +86,8 @@ class McpAcceptanceTest {
                         server:
                           host: 127.0.0.1
                           port: 0
+                        mcp:
+                          direct_limit: 40
                         sync:
                           interval_seconds: 1
                         report:

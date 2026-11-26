@@ -240,7 +240,9 @@ public final class McpEndpoint {
         McpSchema.InitializeResult.Builder resultBuilder = McpSchema.InitializeResult.builder(
                 protocol, CAPABILITIES, SERVER_INFO);
         if (catalog.devVisible(principal) && Loopback.address(ctx.req().getRemoteAddr())) {
-            resultBuilder.instructions(McpCatalog.DEV_DESCRIPTION);
+            resultBuilder.instructions(McpCatalog.INSTRUCTIONS + "\n\n" + McpCatalog.DEV_DESCRIPTION);
+        } else {
+            resultBuilder.instructions(McpCatalog.INSTRUCTIONS);
         }
         McpSchema.InitializeResult result = resultBuilder.build();
         writeResult(ctx, id, result, session);

@@ -56,6 +56,18 @@ final class McpCatalog {
                     + "不要向用户索要口令、Cookie 或令牌，也不要写入 YAML。"
                     + "这些工具不直接出现在工具列表里：工具列表里有 hermit_dev 时用 hermit_dev(tool=工具名, arguments=参数) 调用，"
                     + "有 call_capability 时用 call_capability(name=工具名, arguments=参数) 调用。";
+    /**
+     * initialize 里给 AI 的使用说明。固定文字：不点名任何规则包、能力，提到工具时用条件句，
+     * 这样规则包增减、能力停用或 Key 范围变化后仍然成立。
+     */
+    static final String INSTRUCTIONS =
+            "Hermit Crab 把用户的内部系统（如 OA、报销、工单）的操作包装成可以调用的能力。"
+                    + "用户要查询或操作某个具体系统时，先在这里确认有没有对应的能力，不要猜网址，也不要直接让用户手动操作。\n"
+                    + "确认方法：工具列表里有 list_systems 时，先用它看有哪些系统，再用 search_capabilities 找能力、"
+                    + "describe_capability 看参数，最后用 call_capability 调用。"
+                    + "没有 list_systems 时，工具列表里的每个工具就是一个能力，名字是「系统__能力」，直接调用。\n"
+                    + "这里没有对应的系统或能力时，如实告诉用户，不要编造结果。"
+                    + "工具列表为空，说明这把 API Key 当前没有可用的能力，请用户到 Crab 控制台检查 Key 的范围和规则包是否启用。";
     static final String DEV_ENTRY_DESCRIPTION =
             "Hermit Crab 内置的规则包开发工具入口，只在用户要求编写、修改或调试规则包（Conch）时使用。"
                     + "不带参数调用，返回可用的开发者工具、各自的参数和推荐顺序；再用 tool 和 arguments 调用其中一个。";
@@ -617,7 +629,8 @@ final class McpCatalog {
 
     private static List<McpSchema.Tool> directoryTools(boolean outputSchema) {
         return List.of(
-                tool(LIST_SYSTEMS, "列出当前可以调用的规则包（Conch）、能力数量，以及已声明的一/二级分组目录。", objectSchema(Map.of()),
+                tool(LIST_SYSTEMS, "列出当前可以调用的系统（规则包 Conch）、能力数量，以及已声明的一/二级分组目录。"
+                        + "用户要查询或操作某个内部系统时，先调用它确认有没有对应的系统，再用 search_capabilities 找能力。", objectSchema(Map.of()),
                         outputSchema ? systemsOutputSchema() : null, true, true),
                 tool(SEARCH, "按关键词或分组查找/浏览能力，最多返回 20 条。指定 group 或 ungrouped=true 时可省略 query。", searchSchema(),
                         outputSchema ? searchOutputSchema() : null, true, true),

@@ -46,9 +46,9 @@ class RecorderConsoleAndMcpTest {
             String base = "http://127.0.0.1:" + server.port();
 
             CreatedApiKey fullKey = runtime.apiKeys().create(
-                    "full", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+                    "full", new ApiKeyScope(Set.of(), Set.of(), false, true, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey narrowKey = runtime.apiKeys().create(
-                    "narrow", new ApiKeyScope(Set.of("only_one"), Set.of(), false, false), Actors.CONSOLE);
+                    "narrow", new ApiKeyScope(Set.of("only_one"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
 
             // Developer mode OFF: status reports devMode=false; mutating endpoints & MCP tools blocked.
             HttpResponse<String> offStatus = consoleGet(base + "/console/api/recorder/status");
@@ -60,9 +60,9 @@ class RecorderConsoleAndMcpTest {
 
             String offSession = mcpInit(base, fullKey.plaintext());
             JsonNode offTools = mcpCall(base, fullKey.plaintext(), offSession, "tools/list", null);
-            assertThat(toolNames(offTools)).doesNotContain("conch_capture_list", "conch_capture_get");
+            assertThat(toolNames(offTools)).doesNotContain("hermit_dev__capture_list", "hermit_dev__capture_get");
             JsonNode offListCall = mcpCall(base, fullKey.plaintext(), offSession, "tools/call",
-                    Map.of("name", "conch_capture_list", "arguments", Map.of()));
+                    Map.of("name", "hermit_dev__capture_list", "arguments", Map.of()));
             assertThat(offListCall.path("result").path("isError").asBoolean()).isTrue();
             assertThat(toolErrorCode(offListCall)).isEqualTo("NOT_CONFIGURED");
 
@@ -189,19 +189,19 @@ class RecorderConsoleAndMcpTest {
             // Full-permission MCP key sees and reads the snapshot cleanly with UNTRUSTED marker.
             String fullSession = mcpInit(base, fullKey.plaintext());
             JsonNode fullTools = mcpCall(base, fullKey.plaintext(), fullSession, "tools/list", null);
-            assertThat(toolNames(fullTools)).contains("conch_capture_list", "conch_capture_get");
+            assertThat(toolNames(fullTools)).contains("hermit_dev__capture_list", "hermit_dev__capture_get");
 
             JsonNode listResult = mcpCall(base, fullKey.plaintext(), fullSession, "tools/call",
-                    Map.of("name", "conch_capture_list", "arguments", Map.of()));
+                    Map.of("name", "hermit_dev__capture_list", "arguments", Map.of()));
             JsonNode listStruct = listResult.path("result").path("structuredContent");
             assertThat(listStruct.path("total").asInt()).isEqualTo(1);
             assertThat(listStruct.path("untrusted").asBoolean()).isTrue();
-            assertThat(listStruct.path("next").asText()).contains("conch_capture_get").contains("conch_guide");
+            assertThat(listStruct.path("next").asText()).contains("hermit_dev__capture_get").contains("hermit_dev__guide");
             assertThat(listStruct.path("snapshots").get(0).path("captureId").asText()).isEqualTo(captureId);
             assertThat(textList(listStruct.path("snapshots").get(0).path("cookieNames"))).containsExactly("OA_SESSION");
 
             JsonNode getResult = mcpCall(base, fullKey.plaintext(), fullSession, "tools/call",
-                    Map.of("name", "conch_capture_get", "arguments", Map.of(
+                    Map.of("name", "hermit_dev__capture_get", "arguments", Map.of(
                             "captureId", captureId,
                             "indices", List.of(1, 2))));
             String getJson = ApiJson.write(getResult);
@@ -215,14 +215,14 @@ class RecorderConsoleAndMcpTest {
                     .contains("请假审批");
             JsonNode getStruct = getResult.path("result").path("structuredContent");
             assertThat(getStruct.path("untrusted").asBoolean()).isTrue();
-            assertThat(getStruct.path("next").asText()).contains("conch_guide").contains("conch_validate");
+            assertThat(getStruct.path("next").asText()).contains("hermit_dev__guide").contains("hermit_dev__validate");
 
             // Narrow-scoped API key must NOT see or read capture snapshots.
             String narrowSession = mcpInit(base, narrowKey.plaintext());
             JsonNode narrowTools = mcpCall(base, narrowKey.plaintext(), narrowSession, "tools/list", null);
-            assertThat(toolNames(narrowTools)).doesNotContain("conch_capture_list", "conch_capture_get");
+            assertThat(toolNames(narrowTools)).doesNotContain("hermit_dev__capture_list", "hermit_dev__capture_get");
             JsonNode narrowCall = mcpCall(base, narrowKey.plaintext(), narrowSession, "tools/call",
-                    Map.of("name", "conch_capture_list", "arguments", Map.of()));
+                    Map.of("name", "hermit_dev__capture_list", "arguments", Map.of()));
             assertThat(narrowCall.path("result").path("isError").asBoolean()).isTrue();
             assertThat(toolErrorCode(narrowCall)).isEqualTo("FORBIDDEN");
 
@@ -310,7 +310,7 @@ class RecorderConsoleAndMcpTest {
             String base = "http://127.0.0.1:" + server.port();
             String oaBase = "http://127.0.0.1:" + mockOa.getAddress().getPort();
             CreatedApiKey fullKey = runtime.apiKeys().create(
-                    "cdp", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+                    "cdp", new ApiKeyScope(Set.of(), Set.of(), false, true, Set.of(), true), Actors.CONSOLE);
 
             HttpResponse<String> started = consolePostJson(base + "/console/api/recorder/start", Map.of(
                     "mode", "launch",
@@ -365,7 +365,7 @@ class RecorderConsoleAndMcpTest {
 
             String session = mcpInit(base, fullKey.plaintext());
             JsonNode detail = mcpCall(base, fullKey.plaintext(), session, "tools/call",
-                    Map.of("name", "conch_capture_get", "arguments", Map.of("captureId", captureId)));
+                    Map.of("name", "hermit_dev__capture_get", "arguments", Map.of("captureId", captureId)));
             JsonNode detailEntries = detail.path("result").path("structuredContent").path("entries");
             assertThat(detailEntries).hasSize(3);
             // Hop 2 (/do-login 302) owns Set-Cookie, hop 3 (/api/me 200) sends Cookie and gets boolean cookieSeen=true.

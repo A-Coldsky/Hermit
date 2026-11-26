@@ -1755,7 +1755,7 @@ public final class LocalConches {
     }
 
     /**
-     * Validation outcome shared by import and {@code conch_validate}. {@code version} is null when
+     * Validation outcome shared by import and {@code hermit_dev__validate}. {@code version} is null when
      * the YAML did not validate. Empty {@code errors} means the YAML itself is acceptable.
      */
     public record CheckResult(

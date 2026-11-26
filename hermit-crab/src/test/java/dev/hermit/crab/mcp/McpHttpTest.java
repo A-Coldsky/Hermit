@@ -110,12 +110,12 @@ class McpHttpTest {
             assertThat(listed.header("X-Hermit-Trace")).isNull();
 
             Reply validate = server.post(server.apiKey.plaintext(), session, null, request(4, "tools/call",
-                    Map.of("name", "conch_validate", "arguments", Map.of("yaml", "conch: x"))));
+                    Map.of("name", "hermit_dev__validate", "arguments", Map.of("yaml", "conch: x"))));
             assertThat(validate.header("X-Hermit-Trace")).isNull();
             assertThat(toolError(validate).has("traceId")).isFalse();
             assertThat(toolError(validate).path("requestId").asText()).isNotBlank();
             Reply guide = server.post(server.apiKey.plaintext(), session, null, request(5, "resources/read",
-                    Map.of("uri", "hermit://authoring/guide")));
+                    Map.of("uri", "hermit://conches/hermit_dev/guide")));
             assertThat(guide.header("X-Hermit-Trace")).isNull();
             assertThat(guide.json().path("error").path("data").has("traceId")).isFalse();
             assertThat(guide.json().path("error").path("data").path("requestId").asText()).isNotBlank();
@@ -138,7 +138,7 @@ class McpHttpTest {
 
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             Reply official = server.post(server.apiKey.plaintext(), session, null, request(8, "tools/call",
-                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId))));
+                    Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId))));
             assertThat(toolError(official).path("message").asText()).isEqualTo(McpCalls.TRACE_OUT_OF_SCOPE);
         }
     }
@@ -238,7 +238,7 @@ class McpHttpTest {
             // 未加载的包名不能建 Key。墓碑里的名字可以，目录仍不含 legacy_oa。
             server.runtime.disabledConches().mark("missing_conch", "1.0.0", Instant.parse("2026-10-30T00:00:00Z"));
             CreatedApiKey narrow = server.runtime.admin().createApiKey(
-                    "narrow", new ApiKeyScope(Set.of("missing_conch"), Set.of(), false), Actors.CLI);
+                    "narrow", new ApiKeyScope(Set.of("missing_conch"), Set.of(), false, false, Set.of(), true), Actors.CLI);
             Reply narrowInit = server.post(narrow.plaintext(), null, null, initialize("{}"));
             String narrowSession = narrowInit.header("Mcp-Session-Id");
             Reply hidden = server.post(narrow.plaintext(), narrowSession, null, request(2, "tools/list", null));
@@ -347,7 +347,7 @@ class McpHttpTest {
 
             // 当前 Key 看不到的能力也不写出来。
             CreatedApiKey narrow = server.runtime.admin().createApiKey(
-                    "narrow-related", new ApiKeyScope(Set.of(), Set.of("legacy_oa.save_note"), false), Actors.CLI);
+                    "narrow-related", new ApiKeyScope(Set.of(), Set.of("legacy_oa.save_note"), false, false, Set.of(), true), Actors.CLI);
             String narrowSession = server.post(narrow.plaintext(), null, null, initialize("{}")).header("Mcp-Session-Id");
             Reply narrowListed = server.post(narrow.plaintext(), narrowSession, null, request(2, "tools/list", null));
             assertThat(tool(narrowListed.json().path("result").path("tools"), "legacy_oa__save_note").path("description").asText())
@@ -382,7 +382,7 @@ class McpHttpTest {
             server.runtime.registry().put(secret);
             server.runtime.admin().createAccount("bulk_conch", "main", Actors.CLI);
             CreatedApiKey scoped = server.runtime.admin().createApiKey(
-                    "bulk", new ApiKeyScope(Set.of("bulk_conch"), Set.of(), false), Actors.CLI);
+                    "bulk", new ApiKeyScope(Set.of("bulk_conch"), Set.of(), false, false, Set.of(), true), Actors.CLI);
 
             Reply initialized = server.post(scoped.plaintext(), null, null, initialize("{}"));
             String session = initialized.header("Mcp-Session-Id");
@@ -919,7 +919,7 @@ class McpHttpTest {
             SecretChecks.absent(badKey.body(), "not-a-real-key");
 
             CreatedApiKey revoked = server.runtime.admin().createApiKey(
-                    "revoked", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+                    "revoked", new ApiKeyScope(Set.of(), Set.of(), false, false, Set.of(), true), Actors.CLI);
             server.runtime.admin().revokeApiKey(revoked.id(), Actors.CLI);
             Reply revokedReply = server.post(revoked.plaintext(), null, null, initialize("2025-06-18", "{}"));
             assertThat(revokedReply.status()).isEqualTo(401);
@@ -957,7 +957,7 @@ class McpHttpTest {
             assertThat(unstarted.header("X-Hermit-Trace")).isNull();
 
             CreatedApiKey other = server.runtime.admin().createApiKey(
-                    "other", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+                    "other", new ApiKeyScope(Set.of(), Set.of(), false, false, Set.of(), true), Actors.CLI);
             Reply mismatch = server.post(other.plaintext(), session, null, request(5, "tools/list", null));
             assertThat(mismatch.status()).isEqualTo(401);
             assertThat(mismatch.json().path("error").path("data").path("code").asText()).isEqualTo(McpErrors.SESSION_MISMATCH);
@@ -1213,7 +1213,7 @@ class McpHttpTest {
                 runtime.registry().put(ConchParser.parse(legacyYaml()));
                 runtime.registry().put(ConchParser.parse(accountConch()));
                 CreatedApiKey apiKey = runtime.admin().createApiKey(
-                        "mcp", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+                        "mcp", new ApiKeyScope(Set.of(), Set.of(), false, false, Set.of(), true), Actors.CLI);
                 CrabHttpServer server = new CrabHttpServer(runtime);
                 server.start();
                 return new Harness(fixture, runtime, server, apiKey);
@@ -1527,7 +1527,7 @@ class McpHttpTest {
             endpoint.register(app);
             try {
                 CreatedApiKey apiKey = runtime.admin().createApiKey(
-                        "mcp-sessions", new ApiKeyScope(Set.of(), Set.of(), false), Actors.CLI);
+                        "mcp-sessions", new ApiKeyScope(Set.of(), Set.of(), false, false, Set.of(), true), Actors.CLI);
                 app.start("127.0.0.1", 0);
                 return new SessionServer(runtime, endpoint, app, apiKey);
             } catch (RuntimeException ex) {

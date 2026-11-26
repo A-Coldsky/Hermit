@@ -94,7 +94,7 @@ class LocalOverwriteAcceptanceTest {
 
     private void exercise() throws Exception {
         enableDevMode();
-        allKey = createKey("{\"name\":\"caller\",\"all\":true}");
+        allKey = createKey("{\"name\":\"caller\",\"all\":true,\"devTools\":true}");
         McpClient agent = new McpClient(allKey);
 
         String v1 = hop("1.0.0", alpha.port(), "第一版");
@@ -142,9 +142,9 @@ class LocalOverwriteAcceptanceTest {
 
         JsonNode other = save(agent, otherPack());
         assertThat(other.path("structuredContent").path("ok").asBoolean()).as(other.toString()).isTrue();
-        String namedKey = createKey("{\"name\":\"named\",\"conches\":[\"" + CONCH + "\"]}");
-        String otherKey = createKey("{\"name\":\"other\",\"conches\":[\"" + OTHER + "\"]}");
-        String readOnlyKey = createKey("{\"name\":\"reader\",\"all\":true,\"readOnly\":true}");
+        String namedKey = createKey("{\"name\":\"named\",\"conches\":[\"" + CONCH + "\"],\"devTools\":true}");
+        String otherKey = createKey("{\"name\":\"other\",\"conches\":[\"" + OTHER + "\"],\"devTools\":true}");
+        String readOnlyKey = createKey("{\"name\":\"reader\",\"all\":true,\"readOnly\":true,\"devTools\":true}");
         String v12 = hop("1.0.2", alpha.port(), "点名覆盖");
         JsonNode denied = save(new McpClient(otherKey), v12);
         assertToolError(denied, "FORBIDDEN", NOT_IN_SCOPE);
@@ -317,11 +317,11 @@ class LocalOverwriteAcceptanceTest {
     }
 
     private JsonNode save(McpClient client, String yaml) throws Exception {
-        return tool(client, "conch_save_local", Map.of("yaml", yaml));
+        return tool(client, "hermit_dev__save_local", Map.of("yaml", yaml));
     }
 
     private JsonNode saveConfirm(McpClient client, String yaml) throws Exception {
-        return tool(client, "conch_save_local", Map.of("yaml", yaml, "confirm", true));
+        return tool(client, "hermit_dev__save_local", Map.of("yaml", yaml, "confirm", true));
     }
 
     private JsonNode tool(McpClient client, String name, Map<String, Object> arguments) throws Exception {

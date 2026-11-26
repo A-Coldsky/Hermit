@@ -58,6 +58,8 @@ final class AuthoringCalls {
     static final String CONFIRM_PARAM = "不能用参数确认覆盖。覆盖已有本地规则包时，要在客户端里确认。";
     /** 请求字段不能创建自动确认。只有控制台勾选才行。 */
     static final String GRANT_PARAM = "不能用参数授权自动确认。请到控制台确认。";
+    static final String NEEDS_DEV_SCOPE =
+            "这把 API Key 没有勾选开发者工具。请在 Crab 控制台新建一把勾选了「开发者工具」的 API Key（命令行加 --dev-tools）。";
     static final String LOCAL_ONLY = "写规则包和这份指南只允许本机调用。请从本机连接 Crab。";
     static final String CAPTURE_SCOPE_DENIED = "这把 API Key 限定了规则包范围，不能读取浏览器抓包快照。请用全部权限的 Key。";
     static final String READ_ONLY_SAVE = "这把 API Key 只允许调用只读能力，不能保存本地规则包。";
@@ -78,33 +80,33 @@ final class AuthoringCalls {
             "已保存为本地规则包，原 Reef 正式包未被修改且仍为当前生效版本。请先到 Crab 控制台将该包来源切换为本地规则包，再为本地副本新建账号并填写凭证。不要把口令、Cookie 或令牌发给 AI。";
     static final String NEXT_READY = "凭证字段没变，可以直接试跑。不要把口令、Cookie 或令牌发给 AI。";
     static final String NEXT_LOGIN = "凭证字段有变化。请到控制台点该账号的「测试登录」，确认成功后再试跑。不要把口令、Cookie 或令牌发给 AI。";
-    static final String NEXT_VALIDATE_OK = "校验通过。如需保存并试跑，请调用 conch_save_local 保存为本地规则包。";
+    static final String NEXT_VALIDATE_OK = "校验通过。如需保存并试跑，请调用 hermit_dev__save_local 保存为本地规则包。";
     static final String NEXT_FIX_ERRORS =
-            "请按 errors 和 fixHints 逐条修复错误，必要时调用 conch_guide(section=...) 查阅 suggestedSections，修改后重新调用 conch_validate 直到 ok=true。";
+            "请按 errors 和 fixHints 逐条修复错误，必要时调用 hermit_dev__guide(section=...) 查阅 suggestedSections，修改后重新调用 hermit_dev__validate 直到 ok=true。";
     static final String NEXT_AUTH_LIST_EMPTY =
             "本机没有这把 Key 能看到的授权器。需要登录的规则包照常自己写 credentials 和 auth.steps；"
-                    + "多个规则包共用一份登录时，先写一个 driver: auth 的授权器（见 conch_guide 的「授权器」）。";
+                    + "多个规则包共用一份登录时，先写一个 driver: auth 的授权器（见 hermit_dev__guide 的「授权器」）。";
     static final String NEXT_AUTH_LIST =
             "要用其中一个授权器登录，在规则里写 auth.use: <conch>（可加 auth.min_version），用 {{auth.<导出变量名>}} 引用导出的值，"
                     + "不要写 credentials、auth.steps 和 auth.origins。保存后请用户在 Crab 控制台的规则包「账号」里绑定授权器账号，绑定前调用返回 NOT_CONFIGURED。";
     static final String NEXT_CAPTURE_LIST_EMPTY =
-            "当前还没有已确认的抓包快照。请让用户在 Crab 控制台「浏览器录制」完成录制或导入本地 .har 文件并生成快照后再调用 conch_capture_list；若无需抓包，请先调用 conch_guide 获取 starterTemplate 与 pitfalls 开始编写。";
+            "当前还没有已确认的抓包快照。请让用户在 Crab 控制台「浏览器录制」完成录制或导入本地 .har 文件并生成快照后再调用 hermit_dev__capture_list；若无需抓包，请先调用 hermit_dev__guide 获取 starterTemplate 与 pitfalls 开始编写。";
     static final String NEXT_CAPTURE_LIST =
             "第 1 步：只按方法、路径和用途向用户列出看起来像业务接口的请求，先和用户确认要做哪些功能（不要自己猜或全部做成能力）；"
-                    + "第 2 步：用 conch_capture_get 读取登录链及用户确认过的接口详情；"
-                    + "第 3 步：调用 conch_guide 获取 starterTemplate 与 pitfalls，按抓包编写 YAML（绝不写密码/Cookie/Bearer 原文），用 conch_validate 校验至 ok=true 后再用 conch_save_local 保存。";
+                    + "第 2 步：用 hermit_dev__capture_get 读取登录链及用户确认过的接口详情；"
+                    + "第 3 步：调用 hermit_dev__guide 获取 starterTemplate 与 pitfalls，按抓包编写 YAML（绝不写密码/Cookie/Bearer 原文），用 hermit_dev__validate 校验至 ok=true 后再用 hermit_dev__save_local 保存。";
     static final String NEXT_CAPTURE_GET =
-            "结合这些脱敏请求编写或修改规则包：1) 先调用 conch_guide 获取 starterTemplate 与 pitfalls（涉及登录/SSO/会话失效/文件上传下载时按 section 查阅对应章节）；"
+            "结合这些脱敏请求编写或修改规则包：1) 先调用 hermit_dev__guide 获取 starterTemplate 与 pitfalls（涉及登录/SSO/会话失效/文件上传下载时按 section 查阅对应章节）；"
                     + "2) 凭证只在 credentials 声明字段，Cookie 由 Crab 自动管理不要写 Cookie 请求头；"
-                    + "3) 写完先调用 conch_validate 校验至 ok=true，再调用 conch_save_local 保存。";
+                    + "3) 写完先调用 hermit_dev__validate 校验至 ok=true，再调用 hermit_dev__save_local 保存。";
     static final String GUIDE_OVERVIEW_NOTE =
-            "建议直接复制 starterTemplate 按抓包或接口结构修改，并对照 pitfalls 避坑；传 section（可填 starter、章节 id、章节标题、子标题，或 all 获取全文）按需阅读；也可传 query 按关键词定位章节。同源资源 URI 为 hermit://authoring/guide。";
+            "建议直接复制 starterTemplate 按抓包或接口结构修改，并对照 pitfalls 避坑；传 section（可填 starter、章节 id、章节标题、子标题，或 all 获取全文）按需阅读；也可传 query 按关键词定位章节。同源资源 URI 为 hermit://conches/hermit_dev/guide。";
     static final String REEF_READ_ONLY_NOTE =
-            "这是从 Reef 订阅的正式规则包，只读不可直接修改。如需改动，请基于这份 YAML 修改后用 conch_save_local 保存为本地规则包（可起新包名立即生效，或沿用同名保存为本地副本后再到控制台切换来源）。";
+            "这是从 Reef 订阅的正式规则包，只读不可直接修改。如需改动，请基于这份 YAML 修改后用 hermit_dev__save_local 保存为本地规则包（可起新包名立即生效，或沿用同名保存为本地副本后再到控制台切换来源）。";
     static final String REEF_READ_ONLY_WITH_LOCAL_NOTE =
-            "这是从 Reef 订阅的正式规则包，只读不可直接修改。本机已有同名本地副本，可用 source=\"local\" 读取本地副本，或修改后用 conch_save_local 保存到本地规则包（可沿用同名或起新包名；同名本地副本需在控制台切换来源后生效）。";
+            "这是从 Reef 订阅的正式规则包，只读不可直接修改。本机已有同名本地副本，可用 source=\"local\" 读取本地副本，或修改后用 hermit_dev__save_local 保存到本地规则包（可沿用同名或起新包名；同名本地副本需在控制台切换来源后生效）。";
     static final String LOCAL_ACTIVE_NOTE =
-            "这是本地规则包，修改后可用 conch_validate 校验并用 conch_save_local 保存。";
+            "这是本地规则包，修改后可用 hermit_dev__validate 校验并用 hermit_dev__save_local 保存。";
     static final String LOCAL_INACTIVE_NOTE =
             "这是本地规则包，但当前生效的是同名 Reef 正式包；修改保存不会影响 Reef 正式包，试跑前需先在 Crab 控制台将来源切换为本地规则包。";
 
@@ -166,7 +168,7 @@ final class AuthoringCalls {
                 return McpCalls.failAsRequest(
                         attempt,
                         "INVALID_INPUT",
-                        "没有这个章节：" + section + "。请先不传参数调用 conch_guide 查看目录。",
+                        "没有这个章节：" + section + "。请先不传参数调用 hermit_dev__guide 查看目录。",
                         "section");
             }
             AuthoringGuide.SectionMatch found = matched.get();
@@ -498,7 +500,7 @@ final class AuthoringCalls {
         Optional<CaptureSnapshot> found = runtime.recorder().getSnapshot(captureId.trim());
         if (found.isEmpty()) {
             return McpCalls.failAsRequest(attempt, "NOT_FOUND",
-                    "没有找到抓包快照 " + captureId.trim() + "。请先调用 conch_capture_list 查看当前可用快照。", "captureId");
+                    "没有找到抓包快照 " + captureId.trim() + "。请先调用 hermit_dev__capture_list 查看当前可用快照。", "captureId");
         }
         CaptureSnapshot snapshot = found.get();
         if (requestedIndices.isEmpty()) {
@@ -1061,7 +1063,7 @@ final class AuthoringCalls {
             String code = issue == null || issue.code() == null ? "" : issue.code();
             switch (code) {
                 case "PARSE" -> {
-                    hints.add("YAML 解析或层级结构有误：请检查缩进、冒号、引号（含 {{...}} 模板值建议加双引号）以及是否写了该层不支持的键，可对照 conch_guide(section=\"starter\") 核对骨架。");
+                    hints.add("YAML 解析或层级结构有误：请检查缩进、冒号、引号（含 {{...}} 模板值建议加双引号）以及是否写了该层不支持的键，可对照 hermit_dev__guide(section=\"starter\") 核对骨架。");
                     sections.add(AuthoringGuide.STARTER_SECTION);
                     sections.add("fields");
                 }
@@ -1192,7 +1194,7 @@ final class AuthoringCalls {
                     sections.add("mcp_upstream");
                 }
                 default -> {
-                    hints.add("请根据 errors 中的 path、line 和 message 逐条修正，必要时调用 conch_guide(section=\"starter\") 对照完整模板。");
+                    hints.add("请根据 errors 中的 path、line 和 message 逐条修正，必要时调用 hermit_dev__guide(section=\"starter\") 对照完整模板。");
                     sections.add(AuthoringGuide.QUICK_REFERENCE_ID);
                     sections.add(AuthoringGuide.STARTER_SECTION);
                 }

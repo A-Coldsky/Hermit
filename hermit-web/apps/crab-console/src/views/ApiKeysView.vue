@@ -25,6 +25,7 @@ const form = reactive({
   name: '',
   readOnly: true,
   all: false,
+  devTools: false,
   conches: [] as string[],
   groups: [] as string[],
   actions: [] as string[],
@@ -241,7 +242,7 @@ async function loadConches() {
 }
 
 function openCreate() {
-  Object.assign(form, { open: true, name: '', readOnly: true, all: false, conches: [], groups: [], actions: [] })
+  Object.assign(form, { open: true, name: '', readOnly: true, all: false, devTools: false, conches: [], groups: [], actions: [] })
   void loadConches()
 }
 
@@ -272,10 +273,10 @@ async function create() {
   }
   form.saving = true
   try {
-    const payload = groups.length
+    const base = groups.length
       ? { name: form.name.trim(), readOnly: form.readOnly, all: form.all, conches, groups, actions }
       : { name: form.name.trim(), readOnly: form.readOnly, all: form.all, conches, actions }
-    created.value = await api.createApiKey(payload)
+    created.value = await api.createApiKey(form.devTools ? { ...base, devTools: true } : base)
     form.open = false
     await load()
   } catch (error) {
@@ -372,6 +373,7 @@ onMounted(load)
           <template #default="{ row }">
             <div class="scope">
               <el-tag v-if="row.scope.readOnly" size="small" type="success" effect="plain">仅只读能力</el-tag>
+              <el-tag v-if="row.scope.devTools" size="small" type="warning" effect="plain" data-test="scope-dev">开发者工具</el-tag>
               <template v-if="row.scope.all">
                 <el-tag size="small" type="danger" effect="plain" data-test="scope-all">全部权限</el-tag>
                 <span class="hm-muted">全部规则包的全部能力，包括本地规则包</span>
@@ -411,6 +413,13 @@ onMounted(load)
         </el-form-item>
         <el-form-item>
           <el-checkbox v-model="form.readOnly">只允许调用只读能力</el-checkbox>
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="form.devTools" data-test="scope-dev-tools">开发者工具（写规则包用）</el-checkbox>
+          <div class="hm-muted dev-hint">
+            勾选后，这把 Key 在本机开发者模式打开时能看到内置的 <span class="mono">hermit_dev</span> 工具包（校验、保存本地规则包、试跑、读开发追踪）。
+            「全部权限」不包含它；只用来调用能力的 Key 不要勾选。
+          </div>
         </el-form-item>
         <el-form-item label="范围" required>
           <el-radio-group v-model="form.all" data-test="scope-mode">
@@ -533,6 +542,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.dev-hint {
+  line-height: 1.5;
+  font-size: 12px;
+}
 .connect {
   margin-bottom: 16px;
 }

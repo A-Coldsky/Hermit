@@ -393,6 +393,8 @@ export interface ApiKeyScope {
   groups?: string[] | null
   actions: string[] | null
   readOnly: boolean
+  /** 能否使用内置开发者工具包 hermit_dev。全部权限不包含它；旧 Key 没有这个字段。 */
+  devTools?: boolean
 }
 
 export interface ApiKey {
@@ -1171,7 +1173,7 @@ export const api = {
     ),
 
   apiKeys: () => http.get<{ apiKeys: ApiKey[] }>(`${base}/apikeys`),
-  createApiKey: (body: { name: string; readOnly: boolean; all: boolean; conches: string[]; groups?: string[]; actions: string[] }) =>
+  createApiKey: (body: { name: string; readOnly: boolean; all: boolean; conches: string[]; groups?: string[]; actions: string[]; devTools?: boolean }) =>
     http.post<CreatedApiKey>(`${base}/apikeys`, body),
   revokeApiKey: (id: string) => http.del<{ revoked: boolean }>(`${base}/apikeys/${seg(id)}`),
 

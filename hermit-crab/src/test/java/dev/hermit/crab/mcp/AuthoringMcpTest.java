@@ -62,33 +62,33 @@ class AuthoringMcpTest {
             assertThat(openedResponse.statusCode()).isEqualTo(200);
             JsonNode openedInit = ApiJson.tree(openedResponse.body()).path("result");
             assertThat(openedInit.path("instructions").asText())
-                    .contains("conch_guide")
-                    .contains("conch_read_yaml")
-                    .contains("hermit://authoring/guide")
+                    .contains("hermit_dev__guide")
+                    .contains("hermit_dev__read_yaml")
+                    .contains("hermit://conches/hermit_dev/guide")
                     .contains("Reef 订阅的正式包只读");
             String session = openedResponse.headers().firstValue("Mcp-Session-Id").orElseThrow();
             JsonNode tools = server.rpc(session, 2, "tools/list", null);
             assertThat(toolNames(tools)).contains(
-                    "conch_guide", "conch_read_yaml", "conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
-            assertThat(tool(tools, "conch_guide").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
-            assertThat(tool(tools, "conch_guide").path("annotations").path("destructiveHint").asBoolean()).isFalse();
-            assertThat(tool(tools, "conch_read_yaml").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
-            assertThat(tool(tools, "conch_read_yaml").path("annotations").path("destructiveHint").asBoolean()).isFalse();
-            assertThat(tool(tools, "conch_read_yaml").path("description").asText()).contains("Reef 订阅的正式包只读");
-            assertThat(tool(tools, "conch_validate").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
-            assertThat(tool(tools, "conch_validate").path("annotations").path("destructiveHint").asBoolean()).isFalse();
-            assertThat(tool(tools, "conch_validate").path("description").asText())
+                    "hermit_dev__guide", "hermit_dev__read_yaml", "hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__trial_run", "hermit_dev__debug_trace");
+            assertThat(tool(tools, "hermit_dev__guide").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
+            assertThat(tool(tools, "hermit_dev__guide").path("annotations").path("destructiveHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "hermit_dev__read_yaml").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
+            assertThat(tool(tools, "hermit_dev__read_yaml").path("annotations").path("destructiveHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "hermit_dev__read_yaml").path("description").asText()).contains("Reef 订阅的正式包只读");
+            assertThat(tool(tools, "hermit_dev__validate").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
+            assertThat(tool(tools, "hermit_dev__validate").path("annotations").path("destructiveHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "hermit_dev__validate").path("description").asText())
                     .contains("先和用户确认要做哪些功能")
-                    .contains("conch_guide")
-                    .contains("hermit://authoring/guide");
-            assertThat(tool(tools, "conch_save_local").path("annotations").path("readOnlyHint").asBoolean()).isFalse();
-            assertThat(tool(tools, "conch_save_local").path("annotations").path("destructiveHint").asBoolean()).isTrue();
-            assertThat(tool(tools, "conch_save_local").path("description").asText())
-                    .contains("conch_read_yaml")
+                    .contains("hermit_dev__guide")
+                    .contains("hermit://conches/hermit_dev/guide");
+            assertThat(tool(tools, "hermit_dev__save_local").path("annotations").path("readOnlyHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "hermit_dev__save_local").path("annotations").path("destructiveHint").asBoolean()).isTrue();
+            assertThat(tool(tools, "hermit_dev__save_local").path("description").asText())
+                    .contains("hermit_dev__read_yaml")
                     .contains("绝不修改 Reef 订阅的正式规则包");
-            assertThat(tool(tools, "conch_trial_run").path("annotations").path("readOnlyHint").asBoolean()).isFalse();
-            assertThat(tool(tools, "conch_trial_run").path("annotations").path("destructiveHint").asBoolean()).isFalse();
-            assertThat(tool(tools, "conch_trial_run").path("annotations").path("idempotentHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "hermit_dev__trial_run").path("annotations").path("readOnlyHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "hermit_dev__trial_run").path("annotations").path("destructiveHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "hermit_dev__trial_run").path("annotations").path("idempotentHint").asBoolean()).isFalse();
 
             JsonNode resources = server.rpc(session, 3, "resources/list", null);
             assertThat(resourceUris(resources)).contains(AuthoringGuide.URI);
@@ -105,20 +105,20 @@ class AuthoringMcpTest {
             String closed = closedResponse.headers().firstValue("Mcp-Session-Id").orElseThrow();
             JsonNode hiddenTools = server.rpc(closed, 2, "tools/list", null);
             assertThat(toolNames(hiddenTools)).doesNotContain(
-                    "conch_guide", "conch_read_yaml", "conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
+                    "hermit_dev__guide", "hermit_dev__read_yaml", "hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__trial_run", "hermit_dev__debug_trace");
             JsonNode hiddenResources = server.rpc(closed, 3, "resources/list", null);
             assertThat(resourceUris(hiddenResources)).doesNotContain(AuthoringGuide.URI);
 
             for (Map<String, Object> call : List.of(
-                    Map.of("name", "conch_guide", "arguments", Map.of()),
-                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "demo")),
-                    Map.of("name", "conch_validate", "arguments", Map.of("yaml", "conch: x\n")))) {
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of()),
+                    Map.of("name", "hermit_dev__read_yaml", "arguments", Map.of("conch", "demo")),
+                    Map.of("name", "hermit_dev__validate", "arguments", Map.of("yaml", "conch: x\n")))) {
                 JsonNode called = server.rpc(closed, 4, "tools/call", call);
                 assertThat(toolMessage(called)).as(String.valueOf(call.get("name"))).isEqualTo(AuthoringCalls.DEV_MODE_CLOSED);
                 assertThat(toolError(called).path("code").asText()).isEqualTo("NOT_CONFIGURED");
             }
             JsonNode trace = server.rpc(closed, 5, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", "missing")));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", "missing")));
             assertThat(toolMessage(trace)).isEqualTo(AuthoringCalls.DEV_MODE_CLOSED).doesNotContain("没有这个工具");
 
             HttpResponse<String> denied = server.post(Map.of(
@@ -150,9 +150,9 @@ class AuthoringMcpTest {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String session = server.initialize(false);
             String yaml = LocalConchBehaviorTest.ping("saved_ping", "1.0.0");
-            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
             String widened = yaml.replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
-            JsonNode refused = server.call(session, "conch_save_local", Map.of("yaml", widened));
+            JsonNode refused = server.call(session, "hermit_dev__save_local", Map.of("yaml", widened));
             assertThat(toolError(refused).path("code").asText()).isEqualTo("CONFIRM_REQUIRED");
 
             dev.hermit.crab.sync.LocalConches.PendingOverwrite pending =
@@ -164,7 +164,7 @@ class AuthoringMcpTest {
 
             String again = widened.replace("version: 1.0.0", "version: 1.1.0")
                     .replace("base_url: http://127.0.0.1:10/", "base_url: http://127.0.0.1:11/");
-            JsonNode saved = server.call(session, "conch_save_local", Map.of("yaml", again));
+            JsonNode saved = server.call(session, "hermit_dev__save_local", Map.of("yaml", again));
             assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();
             assertThat(structured(saved).path("replaced").asBoolean()).isTrue();
             assertThat(server.runtime.localConches().pending()).isEmpty();
@@ -172,16 +172,16 @@ class AuthoringMcpTest {
             assertThat(Files.readString(file)).contains("127.0.0.1:11");
 
             String other = LocalConchBehaviorTest.ping("other_ping", "1.0.0");
-            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", other))).path("ok").asBoolean()).isTrue();
+            assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", other))).path("ok").asBoolean()).isTrue();
             String otherWide = other.replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:12/");
-            JsonNode still = server.call(session, "conch_save_local", Map.of("yaml", otherWide));
+            JsonNode still = server.call(session, "hermit_dev__save_local", Map.of("yaml", otherWide));
             assertThat(toolError(still).path("code").asText()).isEqualTo("CONFIRM_REQUIRED");
             assertThat(Files.readString(server.runtime.paths().localConches().resolve("other_ping.yaml"))).isEqualTo(other);
 
             String blocked = again.replace("version: 1.1.0", "version: 1.2.0")
                     .replace("base_url: http://127.0.0.1:11/", "base_url: http://127.0.0.1:13/");
             for (String field : java.util.List.of("remember", "autoApprove", "auto_approve", "skipConfirm", "grant")) {
-                JsonNode denied = server.call(session, "conch_save_local", Map.of("yaml", blocked, field, true));
+                JsonNode denied = server.call(session, "hermit_dev__save_local", Map.of("yaml", blocked, field, true));
                 assertThat(toolError(denied).path("code").asText()).as(field).isEqualTo("FORBIDDEN");
                 assertThat(toolMessage(denied)).isEqualTo(AuthoringCalls.GRANT_PARAM);
             }
@@ -229,7 +229,7 @@ class AuthoringMcpTest {
         try (Harness server = Harness.open(temp.resolve("literal"))) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String session = server.initialize(false);
-            JsonNode validated = server.call(session, "conch_validate", Map.of("yaml", yaml));
+            JsonNode validated = server.call(session, "hermit_dev__validate", Map.of("yaml", yaml));
             assertThat(validated.path("result").path("isError").asBoolean(true)).isFalse();
             JsonNode body = structured(validated);
             assertThat(body.path("ok").asBoolean()).isFalse();
@@ -274,7 +274,7 @@ class AuthoringMcpTest {
                         notes: 只有警告。
                         related: []
                     """.formatted(token);
-            JsonNode warned = server.call(session, "conch_validate", Map.of("yaml", warningOnly));
+            JsonNode warned = server.call(session, "hermit_dev__validate", Map.of("yaml", warningOnly));
             JsonNode warnedBody = structured(warned);
             assertThat(warnedBody.path("ok").asBoolean()).isFalse();
             assertThat(codes(warnedBody.path("errors"))).containsExactly("PLAINTEXT_CREDENTIAL");
@@ -283,7 +283,7 @@ class AuthoringMcpTest {
             assertThat(warnedBody.path("errors").get(0).path("path").asText())
                     .isEqualTo("actions.ping.steps[0].request.headers.X-Note");
             assertThat(warnedBody.toString()).doesNotContain(token);
-            JsonNode blocked = server.call(session, "conch_save_local", Map.of("yaml", warningOnly));
+            JsonNode blocked = server.call(session, "hermit_dev__save_local", Map.of("yaml", warningOnly));
             assertThat(structured(blocked).path("ok").asBoolean()).isFalse();
             assertThat(server.runtime.paths().localConches().resolve("note_ping.yaml")).doesNotExist();
         }
@@ -295,7 +295,7 @@ class AuthoringMcpTest {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String yaml = LocalConchBehaviorTest.ping("saved_ping", "1.0.0");
             String session = server.initialize(false);
-            JsonNode saved = server.call(session, "conch_save_local", Map.of("yaml", yaml));
+            JsonNode saved = server.call(session, "hermit_dev__save_local", Map.of("yaml", yaml));
             assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();
             assertThat(structured(saved).path("replaced").asBoolean()).isFalse();
             assertThat(structured(saved).path("next").asText())
@@ -305,7 +305,7 @@ class AuthoringMcpTest {
             assertThat(Files.readString(file)).isEqualTo(yaml);
 
             String next = yaml.replace("version: 1.0.0", "version: 1.0.1");
-            JsonNode silent = server.call(session, "conch_save_local", Map.of("yaml", next));
+            JsonNode silent = server.call(session, "hermit_dev__save_local", Map.of("yaml", next));
             assertThat(structured(silent).path("ok").asBoolean()).as(silent.toString()).isTrue();
             assertThat(structured(silent).path("replaced").asBoolean()).isTrue();
             assertThat(structured(silent).path("previousVersion").asText()).isEqualTo("1.0.0");
@@ -314,7 +314,7 @@ class AuthoringMcpTest {
             assertThat(server.runtime.localConches().pending()).isEmpty();
 
             String widened = next.replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
-            JsonNode refused = server.call(session, "conch_save_local", Map.of("yaml", widened));
+            JsonNode refused = server.call(session, "hermit_dev__save_local", Map.of("yaml", widened));
             assertThat(toolError(refused).path("code").asText()).isEqualTo("CONFIRM_REQUIRED");
             assertThat(toolMessage(refused)).isEqualTo(AuthoringCalls.confirmRequiredMessage(
                     dev.hermit.common.validate.ConchDestinations.between(
@@ -324,7 +324,7 @@ class AuthoringMcpTest {
             assertThat(Files.readString(file)).isEqualTo(next);
             assertThat(server.runtime.localConches().pending()).hasSize(1);
 
-            JsonNode param = server.call(session, "conch_save_local", Map.of("yaml", widened, "confirm", true));
+            JsonNode param = server.call(session, "hermit_dev__save_local", Map.of("yaml", widened, "confirm", true));
             assertThat(toolMessage(param)).isEqualTo(AuthoringCalls.CONFIRM_PARAM);
             assertThat(Files.readString(file)).isEqualTo(next);
 
@@ -333,7 +333,7 @@ class AuthoringMcpTest {
                 sse.awaitPrefix(": open");
                 AtomicReference<JsonNode> declined = new AtomicReference<>();
                 Thread decline = new Thread(() -> declined.set(
-                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", widened))));
+                        server.callUnchecked(confirming, "hermit_dev__save_local", Map.of("yaml", widened))));
                 decline.start();
                 JsonNode question = sse.awaitMethod("elicitation/create");
                 assertThat(question.path("params").path("message").asText())
@@ -347,7 +347,7 @@ class AuthoringMcpTest {
 
                 AtomicReference<JsonNode> accepted = new AtomicReference<>();
                 Thread accept = new Thread(() -> accepted.set(
-                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", widened))));
+                        server.callUnchecked(confirming, "hermit_dev__save_local", Map.of("yaml", widened))));
                 accept.start();
                 JsonNode again = sse.awaitMethod("elicitation/create");
                 server.answer(confirming, again, "accept", true);
@@ -358,7 +358,7 @@ class AuthoringMcpTest {
 
                 server.runtime.admin().createAccount("saved_ping", "main", Actors.CONSOLE);
                 String later = widened.replace("version: 1.0.1", "version: 1.0.2");
-                JsonNode checked = server.call(confirming, "conch_save_local", Map.of("yaml", later));
+                JsonNode checked = server.call(confirming, "hermit_dev__save_local", Map.of("yaml", later));
                 assertThat(structured(checked).path("next").asText())
                         .doesNotContain("新建账号")
                         .contains("可以直接试跑")
@@ -368,7 +368,7 @@ class AuthoringMcpTest {
                         .replace("credentials: {}", """
                                 credentials:
                                   password: { type: secret, required: true, label: 密码 }""");
-                JsonNode relogin = server.call(confirming, "conch_save_local", Map.of("yaml", changed));
+                JsonNode relogin = server.call(confirming, "hermit_dev__save_local", Map.of("yaml", changed));
                 assertThat(structured(relogin).path("next").asText())
                         .contains("测试登录")
                         .contains("凭证字段有变化")
@@ -379,17 +379,17 @@ class AuthoringMcpTest {
             server.runtime.registry().put(ConchParser.parse(LocalConchBehaviorTest.ping("official_ping", "1.0.0")));
             String official = LocalConchBehaviorTest.ping("official_ping", "1.0.0");
             // 没有本地那份时不能试跑正式包。
-            JsonNode trial = server.call(session, "conch_trial_run", Map.of("conch", "official_ping", "action", "ping"));
+            JsonNode trial = server.call(session, "hermit_dev__trial_run", Map.of("conch", "official_ping", "action", "ping"));
             assertThat(toolMessage(trial)).isEqualTo(AuthoringCalls.OFFICIAL);
-            JsonNode blocked = server.call(session, "conch_save_local", Map.of("yaml", official));
+            JsonNode blocked = server.call(session, "hermit_dev__save_local", Map.of("yaml", official));
             // 和正式包同名可以保存；本地这份不生效，试跑要先切来源。
             assertThat(blocked.path("result").path("isError").asBoolean()).as(blocked.toString()).isFalse();
             assertThat(server.runtime.paths().localConches().resolve("official_ping.yaml")).exists();
             assertThat(server.runtime.registry().origin("official_ping")).isEqualTo(dev.hermit.crab.store.Origin.OFFICIAL);
-            JsonNode inactive = server.call(session, "conch_trial_run", Map.of("conch", "official_ping", "action", "ping"));
+            JsonNode inactive = server.call(session, "hermit_dev__trial_run", Map.of("conch", "official_ping", "action", "ping"));
             assertThat(toolMessage(inactive)).isEqualTo(AuthoringCalls.LOCAL_INACTIVE);
             assertThat(server.runtime.registry().activate("official_ping", dev.hermit.crab.store.Origin.LOCAL)).isTrue();
-            JsonNode ran = server.call(session, "conch_trial_run", Map.of("conch", "official_ping", "action", "ping"));
+            JsonNode ran = server.call(session, "hermit_dev__trial_run", Map.of("conch", "official_ping", "action", "ping"));
             assertThat(toolMessage(ran)).isNotEqualTo(AuthoringCalls.LOCAL_INACTIVE);
         }
     }
@@ -399,7 +399,7 @@ class AuthoringMcpTest {
         try (Harness server = Harness.open(temp.resolve("hosts"))) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String session = server.initialize(false);
-            JsonNode saved = server.call(session, "conch_save_local",
+            JsonNode saved = server.call(session, "hermit_dev__save_local",
                     Map.of("yaml", hostYaml("1.0.0", "https://old.example/mcp")));
             assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();
             server.runtime.admin().createAccount("host_mcp", "ada", Actors.CONSOLE);
@@ -407,7 +407,7 @@ class AuthoringMcpTest {
 
             String same = hostYaml("1.0.1", "https://old.example:443/mcp/v2");
             String moved = hostYaml("1.0.2", "https://new.example/mcp");
-            JsonNode kept = server.call(session, "conch_save_local", Map.of("yaml", same));
+            JsonNode kept = server.call(session, "hermit_dev__save_local", Map.of("yaml", same));
             assertThat(structured(kept).path("ok").asBoolean()).as(kept.toString()).isTrue();
             assertThat(structured(kept).path("replaced").asBoolean()).isTrue();
             assertThat(server.runtime.admin().credentialNames("host_mcp", "ada")).contains(McpOAuthToken.FIELD);
@@ -417,7 +417,7 @@ class AuthoringMcpTest {
                 sse.awaitPrefix(": open");
                 AtomicReference<JsonNode> replaced = new AtomicReference<>();
                 Thread second = new Thread(() -> replaced.set(
-                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", moved))));
+                        server.callUnchecked(confirming, "hermit_dev__save_local", Map.of("yaml", moved))));
                 second.start();
                 JsonNode again = sse.awaitMethod("elicitation/create");
                 assertThat(again.path("params").path("message").asText())
@@ -477,8 +477,8 @@ class AuthoringMcpTest {
                         related: []
                     """.formatted(base);
             String session = server.initialize(false);
-            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
-            JsonNode missing = server.call(session, "conch_trial_run", Map.of("conch", "trial_ping", "action", "ping"));
+            assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            JsonNode missing = server.call(session, "hermit_dev__trial_run", Map.of("conch", "trial_ping", "action", "ping"));
             assertThat(toolMessage(missing)).isEqualTo(
                     "还没有账号。请到控制台为本地规则包 trial_ping 新建账号并填写凭证。不要把口令、Cookie 或令牌发给 AI。");
             assertThat(hits).hasValue(0);
@@ -486,12 +486,12 @@ class AuthoringMcpTest {
             server.runtime.admin().createAccount("trial_ping", "main", Actors.CONSOLE);
             // 整包停用时试跑报整包停用，不让人去启用单个能力。
             server.runtime.setConchDisabled("trial_ping", true, Actors.CONSOLE);
-            JsonNode off = server.call(session, "conch_trial_run", Map.of("conch", "trial_ping", "action", "ping"));
+            JsonNode off = server.call(session, "hermit_dev__trial_run", Map.of("conch", "trial_ping", "action", "ping"));
             assertThat(toolError(off).path("code").asText()).isEqualTo("CONCH_DISABLED");
             assertThat(toolMessage(off)).isEqualTo(dev.hermit.crab.runtime.Invoker.CONCH_SWITCHED_OFF_CALL);
             assertThat(hits).hasValue(0);
             server.runtime.setConchDisabled("trial_ping", false, Actors.CONSOLE);
-            JsonNode ran = server.call(session, "conch_trial_run", Map.of("conch", "trial_ping", "action", "ping"));
+            JsonNode ran = server.call(session, "hermit_dev__trial_run", Map.of("conch", "trial_ping", "action", "ping"));
             JsonNode body = structured(ran);
             assertThat(ran.path("result").path("isError").asBoolean(true)).as(ran.toString()).isFalse();
             assertThat(body.path("data").path("message").asText()).isEqualTo("ok");
@@ -501,12 +501,12 @@ class AuthoringMcpTest {
             assertThat(traceId).isNotBlank();
             assertThat(hits).hasValue(1);
 
-            // 另一把点名了该本地包的 Key 也不能通过 debug_trace 读取别把 Key 的 conch_trial_run 追踪。
+            // 另一把点名了该本地包的 Key 也不能通过 hermit_dev__debug_trace 读取别把 Key 的 hermit_dev__trial_run 追踪。
             CreatedApiKey named = server.runtime.apiKeys().create(
-                    "named", new ApiKeyScope(Set.of("trial_ping"), Set.of(), false), Actors.CONSOLE);
+                    "named", new ApiKeyScope(Set.of("trial_ping"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             String namedSession = server.initialize(named.plaintext(), false);
             JsonNode crossKeyDenied = server.rpc(named.plaintext(), namedSession, 2, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolError(crossKeyDenied).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(crossKeyDenied)).isEqualTo(McpCalls.TRACE_DENIED);
 
@@ -515,13 +515,13 @@ class AuthoringMcpTest {
                     "trial_ping", "ping", java.util.Optional.of("main"), Map.of(), "console-trial-ping");
             assertThat(consoleRan.success()).isTrue();
             JsonNode seen = server.rpc(named.plaintext(), namedSession, 3, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", consoleRan.traceId())));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", consoleRan.traceId())));
             assertThat(seen.path("result").path("isError").asBoolean(true)).as(seen.toString()).isFalse();
             JsonNode trace = ApiJson.tree(seen.path("result").path("content").get(0).path("text").asText());
             assertThat(trace.path("note").asText()).contains("正文已脱敏").isNotEqualTo(AuthoringCalls.UNTRUSTED);
 
             JsonNode own = server.rpc(session, 9, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(own.path("result").path("isError").asBoolean(true)).as(own.toString()).isFalse();
             JsonNode ownBody = ApiJson.tree(own.path("result").path("content").get(0).path("text").asText());
             assertThat(ownBody.path("traceId").asText()).isEqualTo(traceId);
@@ -529,10 +529,10 @@ class AuthoringMcpTest {
             assertThat(ownBody.path("conch").asText()).isEqualTo("trial_ping");
 
             CreatedApiKey all = server.runtime.apiKeys().create(
-                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true, Set.of(), true), Actors.CONSOLE);
             String allSession = server.initialize(all.plaintext(), false);
             JsonNode hidden = server.rpc(all.plaintext(), allSession, 2, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolMessage(hidden)).isEqualTo(McpCalls.TRACE_DENIED);
             assertThat(toolMessage(hidden)).doesNotContain("没有这个工具");
         } finally {
@@ -574,12 +574,25 @@ class AuthoringMcpTest {
                         """.formatted(i, i));
             }
             String session = server.initialize(false);
-            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml.toString()))).path("ok").asBoolean())
+            assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", yaml.toString()))).path("ok").asBoolean())
                     .isTrue();
             JsonNode tools = server.rpc(session, 8, "tools/list", null);
-            assertThat(toolNames(tools)).contains(
-                    "list_systems", "conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
-            assertThat(toolNames(tools)).doesNotContain("bulk_local__act_00");
+            // 目录模式：开发者工具包和其它规则包一样收进 list_systems，不平铺在 tools/list 里。
+            assertThat(toolNames(tools)).contains("list_systems", "call_capability");
+            assertThat(toolNames(tools)).doesNotContain("bulk_local__act_00")
+                    .noneMatch(name -> name.startsWith("hermit_dev__"));
+            JsonNode systems = structured(server.call(session, "list_systems", Map.of())).path("systems");
+            assertThat(systems.findValuesAsText("conch")).contains("bulk_local", "hermit_dev");
+            JsonNode found = structured(server.call(session, "search_capabilities",
+                    Map.of("conch", "hermit_dev", "ungrouped", true)));
+            assertThat(found.path("matches").findValuesAsText("name")).contains(
+                    "hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__trial_run", "hermit_dev__debug_trace");
+            JsonNode described = structured(server.call(session, "describe_capability",
+                    Map.of("name", "hermit_dev__validate")));
+            assertThat(described.path("inputSchema").path("properties").has("yaml")).isTrue();
+            JsonNode viaCall = structured(server.call(session, "call_capability",
+                    Map.of("name", "hermit_dev__validate", "arguments", Map.of("yaml", yaml.toString()))));
+            assertThat(viaCall.path("ok").asBoolean()).isTrue();
 
             HttpResponse<String> badKey = server.postRaw("not-a-real-key", null, """
                     {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}
@@ -592,6 +605,41 @@ class AuthoringMcpTest {
                     """, Map.of("Origin", "http://evil.example"));
             assertThat(evil.statusCode()).isEqualTo(403);
             assertThat(ApiJson.tree(evil.body()).path("error").path("data").path("code").asText()).isEqualTo(McpErrors.ORIGIN_REJECTED);
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void fullAccessKeyWithoutDevToolsNeverSeesTheDeveloperPackage() throws Exception {
+        for (int limit : new int[] {CrabConfig.defaults().mcpDirectLimit(), 0}) {
+            CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(limit);
+            try (Harness server = Harness.open(temp.resolve("no-dev-" + limit), config)) {
+                server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+                CreatedApiKey plain = server.runtime.apiKeys().create(
+                        "plain-all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+                HttpResponse<String> init = server.postRaw(plain.plaintext(), null, """
+                        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}
+                        """, Map.of());
+                assertThat(ApiJson.tree(init.body()).path("result").has("instructions")).isFalse();
+                String session = init.headers().firstValue("Mcp-Session-Id").orElseThrow();
+
+                assertThat(toolNames(server.rpc(plain.plaintext(), session, 2, "tools/list", null)))
+                        .noneMatch(name -> name.startsWith("hermit_dev__"));
+                assertThat(server.rpc(plain.plaintext(), session, 3, "resources/list", null).toString())
+                        .doesNotContain("hermit_dev");
+                JsonNode denied = server.rpc(plain.plaintext(), session, 4, "tools/call",
+                        Map.of("name", "hermit_dev__validate", "arguments", Map.of("yaml", "conch: x")));
+                assertThat(toolError(denied).path("code").asText()).isEqualTo("FORBIDDEN");
+                assertThat(toolMessage(denied)).isEqualTo(AuthoringCalls.NEEDS_DEV_SCOPE);
+                if (limit == 0) {
+                    JsonNode systems = server.rpc(plain.plaintext(), session, 5, "tools/call",
+                            Map.of("name", "list_systems", "arguments", Map.of()));
+                    assertThat(systems.toString()).doesNotContain("hermit_dev");
+                    JsonNode viaCall = server.rpc(plain.plaintext(), session, 6, "tools/call",
+                            Map.of("name", "call_capability", "arguments",
+                                    Map.of("name", "hermit_dev__guide", "arguments", Map.of())));
+                    assertThat(toolError(viaCall).path("code").asText()).isEqualTo("FORBIDDEN");
+                }
+            }
         }
     }
 
@@ -613,49 +661,49 @@ class AuthoringMcpTest {
             String base = "http://127.0.0.1:" + upstream.getAddress().getPort();
             String yaml = readWritePackage("ro_ping", "1.0.0", base);
             String session = server.initialize(false);
-            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
             server.runtime.admin().createAccount("ro_ping", "main", Actors.CONSOLE);
             Path stored = server.runtime.paths().localConches().resolve("ro_ping.yaml");
             Path other = server.runtime.paths().localConches().resolve("ro_other.yaml");
 
             CreatedApiKey readOnly = server.runtime.apiKeys().create(
-                    "read-only", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+                    "read-only", new ApiKeyScope(Set.of(), Set.of(), true, true, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey namedReadOnly = server.runtime.apiKeys().create(
-                    "named-read-only", new ApiKeyScope(Set.of("ro_ping"), Set.of(), true), Actors.CONSOLE);
+                    "named-read-only", new ApiKeyScope(Set.of("ro_ping"), Set.of(), true, false, Set.of(), true), Actors.CONSOLE);
             String readOnlySession = server.initialize(readOnly.plaintext(), false);
             String namedSession = server.initialize(namedReadOnly.plaintext(), false);
             JsonNode readOnlyTools = server.rpc(readOnly.plaintext(), readOnlySession, 2, "tools/list", null);
-            assertThat(toolNames(readOnlyTools)).doesNotContain("conch_save_local")
-                    .contains("conch_validate", "conch_trial_run", "debug_trace");
+            assertThat(toolNames(readOnlyTools)).doesNotContain("hermit_dev__save_local")
+                    .contains("hermit_dev__validate", "hermit_dev__trial_run", "hermit_dev__debug_trace");
 
             JsonNode validated = server.rpc(readOnly.plaintext(), readOnlySession, 3, "tools/call", Map.of(
-                    "name", "conch_validate", "arguments", Map.of("yaml", yaml)));
+                    "name", "hermit_dev__validate", "arguments", Map.of("yaml", yaml)));
             assertThat(validated.path("result").path("isError").asBoolean(true)).isFalse();
             assertThat(structured(validated).path("ok").asBoolean()).isTrue();
 
             String replacement = yaml.replace("version: 1.0.0", "version: 1.0.1");
             JsonNode saveDenied = server.rpc(readOnly.plaintext(), readOnlySession, 4, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", replacement)));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", replacement)));
             assertThat(toolMessage(saveDenied)).isEqualTo(AuthoringCalls.READ_ONLY_SAVE);
             assertThat(toolError(saveDenied).path("code").asText()).isEqualTo("FORBIDDEN");
             String fresh = readWritePackage("ro_other", "1.0.0", base);
             JsonNode freshDenied = server.rpc(namedReadOnly.plaintext(), namedSession, 4, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", fresh)));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", fresh)));
             assertThat(toolMessage(freshDenied)).isEqualTo(AuthoringCalls.READ_ONLY_SAVE);
             assertThat(Files.readString(stored)).contains("version: 1.0.0").doesNotContain("version: 1.0.1");
             assertThat(other).doesNotExist();
 
             JsonNode shown = server.rpc(readOnly.plaintext(), readOnlySession, 5, "tools/call", Map.of(
-                    "name", "conch_trial_run",
+                    "name", "hermit_dev__trial_run",
                     "arguments", Map.of("conch", "ro_ping", "action", "show", "account", "main")));
             assertThat(shown.path("result").path("isError").asBoolean(true)).as(shown.toString()).isFalse();
             assertThat(structured(shown).path("data").path("message").asText()).isEqualTo("seen");
             JsonNode ownTrace = server.rpc(readOnly.plaintext(), readOnlySession, 6, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", structured(shown).path("traceId").asText())));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", structured(shown).path("traceId").asText())));
             assertThat(ownTrace.path("result").path("isError").asBoolean(true)).as(ownTrace.toString()).isFalse();
 
             JsonNode writeDenied = server.rpc(readOnly.plaintext(), readOnlySession, 7, "tools/call", Map.of(
-                    "name", "conch_trial_run",
+                    "name", "hermit_dev__trial_run",
                     "arguments", Map.of("conch", "ro_ping", "action", "save_note", "account", "main")));
             assertThat(toolMessage(writeDenied)).isEqualTo(AuthoringCalls.READ_ONLY_TRIAL_PREFIX + "save_note 不是只读，已拒绝。");
             assertThat(writes).hasValue(0);
@@ -672,7 +720,7 @@ class AuthoringMcpTest {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String localSession = server.initialize(false);
             JsonNode localTools = server.rpc(localSession, 2, "tools/list", null);
-            assertThat(toolNames(localTools)).contains("conch_validate", "conch_save_local", "conch_trial_run", "debug_trace");
+            assertThat(toolNames(localTools)).contains("hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__trial_run", "hermit_dev__debug_trace");
             JsonNode localResources = server.rpc(localSession, 3, "resources/list", null);
             assertThat(resourceUris(localResources)).contains(AuthoringGuide.URI);
             JsonNode localGuide = server.rpc(localSession, 4, "resources/read", Map.of("uri", AuthoringGuide.URI));
@@ -689,40 +737,40 @@ class AuthoringMcpTest {
             HttpResponse<String> remoteTools = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
                     {"jsonrpc":"2.0","id":2,"method":"tools/list"}
                     """, Map.of());
-            assertThat(remoteTools.body()).contains("debug_trace")
-                    .doesNotContain("debug_trace_list")
-                    .doesNotContain("conch_guide")
-                    .doesNotContain("conch_read_yaml")
-                    .doesNotContain("conch_capture_list")
-                    .doesNotContain("conch_capture_get")
-                    .doesNotContain("conch_validate")
-                    .doesNotContain("conch_save_local")
-                    .doesNotContain("conch_trial_run");
+            assertThat(remoteTools.body()).contains("hermit_dev__debug_trace")
+                    .doesNotContain("hermit_dev__debug_trace_list")
+                    .doesNotContain("hermit_dev__guide")
+                    .doesNotContain("hermit_dev__read_yaml")
+                    .doesNotContain("hermit_dev__capture_list")
+                    .doesNotContain("hermit_dev__capture_get")
+                    .doesNotContain("hermit_dev__validate")
+                    .doesNotContain("hermit_dev__save_local")
+                    .doesNotContain("hermit_dev__trial_run");
             HttpResponse<String> remoteResources = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
                     {"jsonrpc":"2.0","id":3,"method":"resources/list"}
                     """, Map.of());
             assertThat(remoteResources.body()).doesNotContain(AuthoringGuide.URI);
             for (String tool : java.util.List.of(
-                    "debug_trace_list", "conch_guide", "conch_read_yaml", "conch_auth_list", "conch_capture_list", "conch_capture_get",
-                    "conch_validate", "conch_save_local", "conch_trial_run")) {
+                    "hermit_dev__debug_trace_list", "hermit_dev__guide", "hermit_dev__read_yaml", "hermit_dev__auth_list", "hermit_dev__capture_list", "hermit_dev__capture_get",
+                    "hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__trial_run")) {
                 String payload = switch (tool) {
-                    case "debug_trace_list" -> """
-                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"debug_trace_list","arguments":{}}}
+                    case "hermit_dev__debug_trace_list" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__debug_trace_list","arguments":{}}}
                             """;
-                    case "conch_guide" -> """
-                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_guide","arguments":{}}}
+                    case "hermit_dev__guide" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__guide","arguments":{}}}
                             """;
-                    case "conch_read_yaml" -> """
-                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_read_yaml","arguments":{"conch":"remote_ping"}}}
+                    case "hermit_dev__read_yaml" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__read_yaml","arguments":{"conch":"remote_ping"}}}
                             """;
-                    case "conch_capture_list" -> """
-                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_capture_list","arguments":{}}}
+                    case "hermit_dev__capture_list" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__capture_list","arguments":{}}}
                             """;
-                    case "conch_auth_list" -> """
-                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_auth_list","arguments":{}}}
+                    case "hermit_dev__auth_list" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__auth_list","arguments":{}}}
                             """;
-                    case "conch_capture_get" -> """
-                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_capture_get","arguments":{"captureId":"cap_00000000"}}}
+                    case "hermit_dev__capture_get" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__capture_get","arguments":{"captureId":"cap_00000000"}}}
                             """;
                     default -> callJson(tool, yaml);
                 };
@@ -749,7 +797,7 @@ class AuthoringMcpTest {
             assertThat(console.statusCode()).isEqualTo(403);
             assertThat(console.body()).contains("控制台只接受本机访问。");
 
-            JsonNode saved = server.call(localSession, "conch_save_local", Map.of("yaml", yaml));
+            JsonNode saved = server.call(localSession, "hermit_dev__save_local", Map.of("yaml", yaml));
             assertThat(structured(saved).path("ok").asBoolean()).as(saved.toString()).isTrue();
             assertThat(server.runtime.paths().localConches().resolve("remote_ping.yaml")).exists();
 
@@ -759,10 +807,10 @@ class AuthoringMcpTest {
             server.runtime.admin().testLogin(
                     dev.hermit.crab.store.Origin.LOCAL, savedDoc, "alice", "remote-console-login", Actors.CONSOLE);
             assertThat(server.runtime.devTraces().find("remote-console-login")).isPresent();
-            JsonNode localSeen = server.call(localSession, "debug_trace", Map.of("traceId", "remote-console-login"));
+            JsonNode localSeen = server.call(localSession, "hermit_dev__debug_trace", Map.of("traceId", "remote-console-login"));
             assertThat(localSeen.path("result").path("isError").asBoolean(true)).as(localSeen.toString()).isFalse();
             HttpResponse<String> remoteDenied = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
-                    {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"debug_trace","arguments":{"traceId":"remote-console-login"}}}
+                    {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"hermit_dev__debug_trace","arguments":{"traceId":"remote-console-login"}}}
                     """, Map.of());
             assertThat(remoteDenied.statusCode()).isEqualTo(200);
             JsonNode remoteDeniedBody = ApiJson.tree(remoteDenied.body());
@@ -805,9 +853,9 @@ class AuthoringMcpTest {
                         related: []
                     """;
             String session = server.initialize(false);
-            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
             HttpResponse<String> noAccount = server.postRaw(server.key.plaintext(), session, """
-                    {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"conch_trial_run","arguments":{"conch":"needs_password","action":"show"}}}
+                    {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"hermit_dev__trial_run","arguments":{"conch":"needs_password","action":"show"}}}
                     """, Map.of());
             assertThat(noAccount.headers().firstValue("X-Hermit-Trace")).isEmpty();
             JsonNode noAccountBody = ApiJson.tree(noAccount.body());
@@ -817,12 +865,12 @@ class AuthoringMcpTest {
             String requestId = toolError(noAccountBody).path("requestId").asText();
             assertThat(requestId).isNotBlank();
             JsonNode rejectedTrace = server.rpc(session, 8, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", requestId)));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", requestId)));
             assertThat(toolMessage(rejectedTrace)).doesNotContain("试跑被拒").doesNotContain("没有这个工具");
 
             server.runtime.admin().createAccount("needs_password", "main", Actors.CONSOLE);
             HttpResponse<String> rejected = server.postRaw(server.key.plaintext(), session, """
-                    {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"conch_trial_run","arguments":{"conch":"needs_password","action":"show","account":"main"}}}
+                    {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__trial_run","arguments":{"conch":"needs_password","action":"show","account":"main"}}}
                     """, Map.of());
             assertThat(rejected.headers().firstValue("X-Hermit-Trace")).isEmpty();
             JsonNode missing = ApiJson.tree(rejected.body());
@@ -831,7 +879,7 @@ class AuthoringMcpTest {
                     .doesNotContain("missing credentials");
             assertThat(missing.toString()).contains("不可查追踪").doesNotContain("s3cret-value");
 
-            JsonNode illegal = server.call(session, "conch_trial_run", Map.of(
+            JsonNode illegal = server.call(session, "hermit_dev__trial_run", Map.of(
                     "conch", "needs_password", "action", "show", "account", "s3cret-value!!"));
             assertThat(toolMessage(illegal)).isEqualTo(CrabRuntime.TRIAL_ACCOUNT_INVALID);
             assertThat(toolError(illegal).path("field").asText()).isEqualTo("account");
@@ -864,14 +912,14 @@ class AuthoringMcpTest {
         try (Harness server = Harness.open(temp.resolve("timeout"))) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String yaml = LocalConchBehaviorTest.ping("timeout_ping", "1.0.0");
-            assertThat(structured(server.call(server.initialize(false), "conch_save_local", Map.of("yaml", yaml)))
+            assertThat(structured(server.call(server.initialize(false), "hermit_dev__save_local", Map.of("yaml", yaml)))
                     .path("ok").asBoolean()).isTrue();
             String next = yaml.replace("version: 1.0.0", "version: 1.0.1")
                     .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
             String confirming = server.initialize(true);
             try (Sse sse = Sse.open(server, confirming)) {
                 sse.awaitPrefix(": open");
-                JsonNode timed = server.call(confirming, "conch_save_local", Map.of("yaml", next));
+                JsonNode timed = server.call(confirming, "hermit_dev__save_local", Map.of("yaml", next));
                 assertThat(toolMessage(timed)).contains("等待确认超时").doesNotContain("内部错误");
                 assertThat(toolError(timed).path("code").asText()).isNotEqualTo("INTERNAL");
                 assertThat(toolError(timed).path("hint").asText()).doesNotContain("内部错误");
@@ -886,7 +934,7 @@ class AuthoringMcpTest {
         try (Harness server = Harness.open(temp.resolve("stale-confirm"))) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String yaml = LocalConchBehaviorTest.ping("stale_ping", "1.0.0");
-            assertThat(structured(server.call(server.initialize(false), "conch_save_local", Map.of("yaml", yaml)))
+            assertThat(structured(server.call(server.initialize(false), "hermit_dev__save_local", Map.of("yaml", yaml)))
                     .path("ok").asBoolean()).isTrue();
             String widened = yaml.replace("version: 1.0.0", "version: 1.0.1")
                     .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
@@ -895,7 +943,7 @@ class AuthoringMcpTest {
                 sse.awaitPrefix(": open");
                 AtomicReference<JsonNode> accepted = new AtomicReference<>();
                 Thread accept = new Thread(() -> accepted.set(
-                        server.callUnchecked(confirming, "conch_save_local", Map.of("yaml", widened))));
+                        server.callUnchecked(confirming, "hermit_dev__save_local", Map.of("yaml", widened))));
                 accept.start();
                 JsonNode question = sse.awaitMethod("elicitation/create");
                 String moved = yaml.replace("version: 1.0.0", "version: 1.0.2");
@@ -988,7 +1036,7 @@ class AuthoringMcpTest {
         try (Harness server = Harness.open(temp.resolve("undef"))) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String session = server.initialize(false);
-            JsonNode validated = server.call(session, "conch_validate", Map.of("yaml", yaml));
+            JsonNode validated = server.call(session, "hermit_dev__validate", Map.of("yaml", yaml));
             JsonNode errors = structured(validated).path("errors");
             assertThat(structured(validated).path("ok").asBoolean()).isFalse();
             assertThat(errors).hasSize(3);
@@ -1001,7 +1049,7 @@ class AuthoringMcpTest {
                 String ref = message.substring("引用了未定义的变量 ".length(), message.length() - 1);
                 assertThat(lines[error.path("line").asInt() - 1]).contains("{{" + ref + "}}");
             }
-            JsonNode ok = server.call(session, "conch_validate", Map.of("yaml", declared));
+            JsonNode ok = server.call(session, "hermit_dev__validate", Map.of("yaml", declared));
             assertThat(structured(ok).path("ok").asBoolean()).as(ok.toString()).isTrue();
             assertThat(McpErrors.toolHint("RULE_MISMATCH", "引用了未定义的变量 token。"))
                     .doesNotContain("上游").doesNotContain("版本不一致");
@@ -1048,12 +1096,12 @@ class AuthoringMcpTest {
         try (Harness server = Harness.open(temp.resolve("partial"))) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             String session = server.initialize(false);
-            assertThat(structured(server.call(session, "conch_save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
+            assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", yaml))).path("ok").asBoolean()).isTrue();
             dev.hermit.common.model.ConchDoc doc = server.runtime.registry().find("partial_ping").orElseThrow();
             server.runtime.admin().createAccount("partial_ping", "ada", Actors.CONSOLE);
             server.runtime.admin().writeCredentials(doc, "ada", Map.of("password", "filled-secret"), Actors.CONSOLE);
 
-            JsonNode trial = server.call(session, "conch_trial_run", Map.of(
+            JsonNode trial = server.call(session, "hermit_dev__trial_run", Map.of(
                     "conch", "partial_ping", "action", "show", "account", "ada"));
             JsonNode mcp = server.call(session, "partial_ping__show", Map.of("account", "ada"));
             HttpResponse<String> api = server.http.send(java.net.http.HttpRequest.newBuilder(
@@ -1079,7 +1127,7 @@ class AuthoringMcpTest {
     }
 
     private static void assertSameIssues(Harness server, String session, String yaml) throws Exception {
-        JsonNode validated = server.call(session, "conch_validate", Map.of("yaml", yaml));
+        JsonNode validated = server.call(session, "hermit_dev__validate", Map.of("yaml", yaml));
         assertThat(validated.path("result").path("isError").asBoolean(true)).isFalse();
         JsonNode body = structured(validated);
         assertThat(body.path("ok").asBoolean()).isFalse();
@@ -1225,7 +1273,7 @@ class AuthoringMcpTest {
 
     private static String callJson(String tool, String yaml) {
         java.util.LinkedHashMap<String, Object> arguments = new java.util.LinkedHashMap<>();
-        if ("conch_trial_run".equals(tool)) {
+        if ("hermit_dev__trial_run".equals(tool)) {
             arguments.put("conch", "remote_ping");
             arguments.put("action", "ping");
         } else {
@@ -1268,11 +1316,11 @@ class AuthoringMcpTest {
             assertThat(server.consoleImport(writable("other_pkg", "1.0.0")).statusCode()).isEqualTo(200);
             server.runtime.admin().createAccount("other_pkg", "main", Actors.CONSOLE);
             CreatedApiKey named = server.runtime.apiKeys().create(
-                    "mine-only", new ApiKeyScope(Set.of("mine_pkg"), Set.of(), false), Actors.CONSOLE);
+                    "mine-only", new ApiKeyScope(Set.of("mine_pkg"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             String session = server.initialize(named.plaintext(), false);
 
             JsonNode trial = server.rpc(named.plaintext(), session, 3, "tools/call", Map.of(
-                    "name", "conch_trial_run", "arguments", Map.of("conch", "other_pkg", "action", "write_note")));
+                    "name", "hermit_dev__trial_run", "arguments", Map.of("conch", "other_pkg", "action", "write_note")));
             assertThat(toolError(trial).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(trial)).isEqualTo(AuthoringCalls.NOT_IN_SCOPE_PREFIX + "other_pkg"
                     + AuthoringCalls.NOT_IN_SCOPE_SUFFIX);
@@ -1281,7 +1329,7 @@ class AuthoringMcpTest {
             Path stored = server.runtime.paths().localConches().resolve("other_pkg.yaml");
             String before = Files.readString(stored);
             JsonNode overwrite = server.rpc(named.plaintext(), session, 4, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", writable("other_pkg", "1.0.1"))));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", writable("other_pkg", "1.0.1"))));
             assertThat(toolError(overwrite).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(overwrite)).startsWith(AuthoringCalls.NOT_IN_SCOPE_PREFIX + "other_pkg");
             assertThat(Files.readString(stored)).isEqualTo(before);
@@ -1290,14 +1338,14 @@ class AuthoringMcpTest {
             String widened = writable("other_pkg", "1.0.2")
                     .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
             JsonNode widenedOverwrite = server.rpc(named.plaintext(), session, 6, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", widened)));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", widened)));
             assertThat(toolError(widenedOverwrite).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(widenedOverwrite)).startsWith(AuthoringCalls.NOT_IN_SCOPE_PREFIX + "other_pkg");
             assertThat(Files.readString(stored)).isEqualTo(before);
             assertThat(server.runtime.localConches().pending()).isEmpty();
 
             JsonNode fresh = server.rpc(named.plaintext(), session, 5, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", writable("new_pkg", "1.0.0"))));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", writable("new_pkg", "1.0.0"))));
             assertThat(structured(fresh).path("ok").asBoolean()).as(fresh.toString()).isTrue();
         }
     }
@@ -1311,7 +1359,7 @@ class AuthoringMcpTest {
             server.runtime.admin().createAccount("write_pkg", "main", Actors.CONSOLE);
 
             String plain = server.initialize(false);
-            JsonNode refused = server.call(plain, "conch_trial_run", Map.of("conch", "write_pkg", "action", "write_note"));
+            JsonNode refused = server.call(plain, "hermit_dev__trial_run", Map.of("conch", "write_pkg", "action", "write_note"));
             assertThat(toolError(refused).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(refused)).isEqualTo(McpCalls.NO_CONFIRM);
 
@@ -1320,7 +1368,7 @@ class AuthoringMcpTest {
                 sse.awaitPrefix(": open");
                 AtomicReference<JsonNode> accepted = new AtomicReference<>();
                 Thread accept = new Thread(() -> accepted.set(server.callUnchecked(
-                        confirming, "conch_trial_run", Map.of("conch", "write_pkg", "action", "write_note"))));
+                        confirming, "hermit_dev__trial_run", Map.of("conch", "write_pkg", "action", "write_note"))));
                 accept.start();
                 server.answer(confirming, sse.awaitMethod("elicitation/create"), "accept", true);
                 accept.join(15_000);
@@ -1329,7 +1377,7 @@ class AuthoringMcpTest {
 
                 AtomicReference<JsonNode> swapped = new AtomicReference<>();
                 Thread swap = new Thread(() -> swapped.set(server.callUnchecked(
-                        confirming, "conch_trial_run", Map.of("conch", "write_pkg", "action", "write_note"))));
+                        confirming, "hermit_dev__trial_run", Map.of("conch", "write_pkg", "action", "write_note"))));
                 swap.start();
                 JsonNode question = sse.awaitMethod("elicitation/create");
                 server.runtime.registry().put(
@@ -1384,10 +1432,10 @@ class AuthoringMcpTest {
 
             // 窄 Key 试跑不在范围的包（即使尚未加载或为正式包），应返回 FORBIDDEN。
             CreatedApiKey narrow = server.runtime.apiKeys().create(
-                    "narrow", new ApiKeyScope(Set.of("mine_only"), Set.of(), false), Actors.CONSOLE);
+                    "narrow", new ApiKeyScope(Set.of("mine_only"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             String narrowSession = server.initialize(narrow.plaintext(), false);
             JsonNode absentDenied = server.rpc(narrow.plaintext(), narrowSession, 2, "tools/call", Map.of(
-                    "name", "conch_trial_run", "arguments", Map.of("conch", "missing_pkg", "action", "show")));
+                    "name", "hermit_dev__trial_run", "arguments", Map.of("conch", "missing_pkg", "action", "show")));
             assertThat(toolError(absentDenied).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(absentDenied)).isEqualTo(
                     AuthoringCalls.NOT_IN_SCOPE_PREFIX + "missing_pkg" + AuthoringCalls.NOT_IN_SCOPE_SUFFIX);
@@ -1418,7 +1466,7 @@ class AuthoringMcpTest {
                             .isEqualTo(dev.hermit.common.error.ErrorCode.FORBIDDEN));
 
             CreatedApiKey roKey = server.runtime.apiKeys().create(
-                    "ro-all", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+                    "ro-all", new ApiKeyScope(Set.of(), Set.of(), true, true, Set.of(), true), Actors.CONSOLE);
             dev.hermit.crab.store.ApiKeyPrincipal roPrincipal =
                     server.runtime.apiKeys().authenticate(roKey.plaintext()).orElseThrow();
             org.assertj.core.api.Assertions.assertThatThrownBy(() -> server.runtime.trialLocal(
@@ -1445,17 +1493,17 @@ class AuthoringMcpTest {
             server.runtime.registry().put(ConchParser.parse(dualV1), dev.hermit.crab.store.Origin.OFFICIAL);
             server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.OFFICIAL, "dual_pkg", "prod", Actors.CONSOLE);
             String fullSession = server.initialize(false);
-            assertThat(structured(server.call(fullSession, "conch_save_local", Map.of("yaml", dualV1)))
+            assertThat(structured(server.call(fullSession, "hermit_dev__save_local", Map.of("yaml", dualV1)))
                     .path("ok").asBoolean()).isTrue();
             String dualV2 = dualV1.replace("version: 1.0.0", "version: 1.0.1");
-            JsonNode replaced = server.call(fullSession, "conch_save_local", Map.of("yaml", dualV2));
+            JsonNode replaced = server.call(fullSession, "hermit_dev__save_local", Map.of("yaml", dualV2));
             assertThat(structured(replaced).path("ok").asBoolean()).as(replaced.toString()).isTrue();
             assertThat(structured(replaced).path("replaced").asBoolean()).isTrue();
             assertThat(structured(replaced).path("next").asText()).isEqualTo(AuthoringCalls.NEXT_ACCOUNT);
         }
     }
 
-    /** Issue 5c: debug_trace 核对 read_only 必须查 Origin.LOCAL，不能被同名生效的 OFFICIAL 只读定义放行。 */
+    /** Issue 5c: hermit_dev__debug_trace 核对 read_only 必须查 Origin.LOCAL，不能被同名生效的 OFFICIAL 只读定义放行。 */
     @org.junit.jupiter.api.Test
     void debugTraceUsesLocalReadOnlyNotActiveOfficial() throws Exception {
         try (Harness server = Harness.open(temp.resolve("dual-trace"))) {
@@ -1491,7 +1539,7 @@ class AuthoringMcpTest {
             assertThat(server.consoleImport(localWrite).statusCode()).isEqualTo(200);
             server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "dual_trace", "main", Actors.CONSOLE);
             String fullSession = server.initialize(false);
-            JsonNode mcpRan = server.call(fullSession, "conch_trial_run", Map.of("conch", "dual_trace", "action", "act"));
+            JsonNode mcpRan = server.call(fullSession, "hermit_dev__trial_run", Map.of("conch", "dual_trace", "action", "act"));
             assertThat(mcpRan.path("result").path("isError").asBoolean(true)).as(mcpRan.toString()).isFalse();
             String mcpTraceId = structured(mcpRan).path("traceId").asText();
             assertThat(mcpTraceId).isNotBlank();
@@ -1508,23 +1556,23 @@ class AuthoringMcpTest {
             assertThat(server.runtime.registry().origin("dual_trace")).isEqualTo(dev.hermit.crab.store.Origin.OFFICIAL);
 
             CreatedApiKey namedReadOnly = server.runtime.apiKeys().create(
-                    "named-ro", new ApiKeyScope(Set.of("dual_trace"), Set.of(), true), Actors.CONSOLE);
+                    "named-ro", new ApiKeyScope(Set.of("dual_trace"), Set.of(), true, false, Set.of(), true), Actors.CONSOLE);
             String roSession = server.initialize(namedReadOnly.plaintext(), false);
             JsonNode denied = server.rpc(namedReadOnly.plaintext(), roSession, 2, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolError(denied).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(denied)).isEqualTo(McpCalls.TRACE_DENIED);
 
             CreatedApiKey namedRw = server.runtime.apiKeys().create(
-                    "named-rw", new ApiKeyScope(Set.of("dual_trace"), Set.of(), false), Actors.CONSOLE);
+                    "named-rw", new ApiKeyScope(Set.of("dual_trace"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             String rwSession = server.initialize(namedRw.plaintext(), false);
             JsonNode allowed = server.rpc(namedRw.plaintext(), rwSession, 2, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(allowed.path("result").path("isError").asBoolean(true)).as(allowed.toString()).isFalse();
 
-            // 其他 Key 通过 conch_trial_run 产生的追踪对 namedRw 保持不可见。
+            // 其他 Key 通过 hermit_dev__trial_run 产生的追踪对 namedRw 保持不可见。
             JsonNode otherKeyDenied = server.rpc(namedRw.plaintext(), rwSession, 3, "tools/call", Map.of(
-                    "name", "debug_trace", "arguments", Map.of("traceId", mcpTraceId)));
+                    "name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", mcpTraceId)));
             assertThat(toolError(otherKeyDenied).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(otherKeyDenied)).isEqualTo(McpCalls.TRACE_DENIED);
         }
@@ -1542,15 +1590,15 @@ class AuthoringMcpTest {
 
             CreatedApiKey groupScoped = server.runtime.apiKeys().create(
                     "group-scoped",
-                    ApiKeyScope.explicit(false, Set.of("scoped_local"), Set.of("scoped_local:hr"), Set.of(), false),
+                    ApiKeyScope.explicit(false, Set.of("scoped_local"), Set.of("scoped_local:hr"), Set.of(), false, true),
                     Actors.CONSOLE);
             CreatedApiKey actionScoped = server.runtime.apiKeys().create(
                     "action-scoped",
-                    ApiKeyScope.explicit(false, Set.of("scoped_local"), Set.of(), Set.of("scoped_local.safe_op"), false),
+                    ApiKeyScope.explicit(false, Set.of("scoped_local"), Set.of(), Set.of("scoped_local.safe_op"), false, true),
                     Actors.CONSOLE);
             CreatedApiKey wholePackage = server.runtime.apiKeys().create(
                     "whole-pkg",
-                    ApiKeyScope.explicit(false, Set.of("scoped_local"), Set.of(), Set.of(), false),
+                    ApiKeyScope.explicit(false, Set.of("scoped_local"), Set.of(), Set.of(), false, true),
                     Actors.CONSOLE);
 
             String groupSession = server.initialize(groupScoped.plaintext(), false);
@@ -1558,16 +1606,16 @@ class AuthoringMcpTest {
             String wholeSession = server.initialize(wholePackage.plaintext(), false);
             String allSession = server.initialize(false);
 
-            // 可写 Key 仍暴露 conch_save_local（可建新包）。
+            // 可写 Key 仍暴露 hermit_dev__save_local（可建新包）。
             assertThat(toolNames(server.rpc(groupScoped.plaintext(), groupSession, 2, "tools/list", null)))
-                    .contains("conch_save_local");
+                    .contains("hermit_dev__save_local");
             assertThat(toolNames(server.rpc(actionScoped.plaintext(), actionSession, 2, "tools/list", null)))
-                    .contains("conch_save_local");
+                    .contains("hermit_dev__save_local");
 
             // 1) 按分组限权的 Key 试图在同目的地边界下把管理能力改入 hr 组：必须 FORBIDDEN。
             String groupEscalation = groupedLocal("scoped_local", "1.0.1").replace("group: admin", "group: hr");
             JsonNode groupDenied = server.rpc(groupScoped.plaintext(), groupSession, 3, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", groupEscalation)));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", groupEscalation)));
             assertThat(toolError(groupDenied).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(groupDenied)).isEqualTo(
                     AuthoringCalls.NARROWED_SAVE_PREFIX + "scoped_local" + AuthoringCalls.NARROWED_SAVE_SUFFIX);
@@ -1578,7 +1626,7 @@ class AuthoringMcpTest {
             String widened = groupedLocal("scoped_local", "1.0.2")
                     .replace("base_url: http://127.0.0.1:9/", "base_url: http://127.0.0.1:10/");
             JsonNode groupWidenedDenied = server.rpc(groupScoped.plaintext(), groupSession, 4, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", widened)));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", widened)));
             assertThat(toolError(groupWidenedDenied).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(groupWidenedDenied)).isEqualTo(
                     AuthoringCalls.NARROWED_SAVE_PREFIX + "scoped_local" + AuthoringCalls.NARROWED_SAVE_SUFFIX);
@@ -1588,7 +1636,7 @@ class AuthoringMcpTest {
             // 2) 按能力限权的 Key 试图在同目的地边界下篡改 safe_op：必须 FORBIDDEN。
             String actionEscalation = groupedLocal("scoped_local", "1.0.1").replace("safe-scoped_local", "hijacked");
             JsonNode actionDenied = server.rpc(actionScoped.plaintext(), actionSession, 3, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", actionEscalation)));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", actionEscalation)));
             assertThat(toolError(actionDenied).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(actionDenied)).isEqualTo(
                     AuthoringCalls.NARROWED_SAVE_PREFIX + "scoped_local" + AuthoringCalls.NARROWED_SAVE_SUFFIX);
@@ -1597,29 +1645,29 @@ class AuthoringMcpTest {
 
             // 3) 限权 Key 仍可新建全新本地包，并试跑授权范围内的能力（范围外能力拒绝）。
             JsonNode created = server.rpc(groupScoped.plaintext(), groupSession, 5, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", writable("brand_new_pkg", "1.0.0"))));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", writable("brand_new_pkg", "1.0.0"))));
             assertThat(structured(created).path("ok").asBoolean()).as(created.toString()).isTrue();
             assertThat(structured(created).path("replaced").asBoolean()).isFalse();
 
             JsonNode allowedTrial = server.rpc(groupScoped.plaintext(), groupSession, 6, "tools/call", Map.of(
-                    "name", "conch_trial_run", "arguments", Map.of("conch", "scoped_local", "action", "safe_op")));
+                    "name", "hermit_dev__trial_run", "arguments", Map.of("conch", "scoped_local", "action", "safe_op")));
             assertThat(allowedTrial.path("result").path("isError").asBoolean(true)).as(allowedTrial.toString()).isFalse();
             assertThat(structured(allowedTrial).path("data").path("message").asText()).isEqualTo("safe-scoped_local");
 
             JsonNode deniedTrial = server.rpc(groupScoped.plaintext(), groupSession, 7, "tools/call", Map.of(
-                    "name", "conch_trial_run", "arguments", Map.of("conch", "scoped_local", "action", "admin_op")));
+                    "name", "hermit_dev__trial_run", "arguments", Map.of("conch", "scoped_local", "action", "admin_op")));
             assertThat(toolError(deniedTrial).path("code").asText()).isEqualTo("FORBIDDEN");
 
             // 4) 整包范围 Key（conches 点名且未限分组/能力）与全部权限 Key 仍可覆盖已有本地包。
             String wholeUpdate = groupedLocal("scoped_local", "1.0.1");
             JsonNode wholeSaved = server.rpc(wholePackage.plaintext(), wholeSession, 3, "tools/call", Map.of(
-                    "name", "conch_save_local", "arguments", Map.of("yaml", wholeUpdate)));
+                    "name", "hermit_dev__save_local", "arguments", Map.of("yaml", wholeUpdate)));
             assertThat(structured(wholeSaved).path("ok").asBoolean()).as(wholeSaved.toString()).isTrue();
             assertThat(structured(wholeSaved).path("replaced").asBoolean()).isTrue();
             assertThat(Files.readString(stored)).contains("version: 1.0.1");
 
             String allUpdate = groupedLocal("scoped_local", "1.0.2");
-            JsonNode allSaved = server.call(allSession, "conch_save_local", Map.of("yaml", allUpdate));
+            JsonNode allSaved = server.call(allSession, "hermit_dev__save_local", Map.of("yaml", allUpdate));
             assertThat(structured(allSaved).path("ok").asBoolean()).as(allSaved.toString()).isTrue();
             assertThat(structured(allSaved).path("replaced").asBoolean()).isTrue();
             assertThat(Files.readString(stored)).contains("version: 1.0.2");
@@ -1781,13 +1829,13 @@ class AuthoringMcpTest {
             String session = server.initialize(false);
 
             // 开发者模式关着时不可用。
-            assertThat(toolNames(server.rpc(session, 2, "tools/list", null))).doesNotContain("conch_auth_list");
+            assertThat(toolNames(server.rpc(session, 2, "tools/list", null))).doesNotContain("hermit_dev__auth_list");
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
-            assertThat(toolNames(server.rpc(session, 3, "tools/list", null))).contains("conch_auth_list");
+            assertThat(toolNames(server.rpc(session, 3, "tools/list", null))).contains("hermit_dev__auth_list");
             // 授权器不是可调用的工具。
             assertThat(server.rpc(session, 3, "tools/list", null).toString()).doesNotContain("corp_sso");
 
-            JsonNode all = structured(server.call(session, "conch_auth_list", Map.of()));
+            JsonNode all = structured(server.call(session, "hermit_dev__auth_list", Map.of()));
             assertThat(all.path("total").asInt()).isEqualTo(2);
             JsonNode first = all.path("authenticators").get(0);
             assertThat(first.path("conch").asText()).isEqualTo("corp_sso");
@@ -1796,19 +1844,19 @@ class AuthoringMcpTest {
             assertThat(all.toString()).doesNotContain("zhangsan_secret_name");
 
             CreatedApiKey narrow = server.runtime.apiKeys().create(
-                    "only-a", new ApiKeyScope(Set.of("pkg_a"), Set.of(), false), Actors.CONSOLE);
+                    "only-a", new ApiKeyScope(Set.of("pkg_a"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             String narrowSession = server.initialize(narrow.plaintext(), false);
             JsonNode mine = structured(server.rpc(narrow.plaintext(), narrowSession, 4, "tools/call",
-                    Map.of("name", "conch_auth_list", "arguments", Map.of())));
+                    Map.of("name", "hermit_dev__auth_list", "arguments", Map.of())));
             assertThat(mine.path("total").asInt()).isEqualTo(1);
             assertThat(mine.toString()).contains("corp_sso").doesNotContain("other_sso").doesNotContain("pkg_b");
 
             // 只点名了本地包的某个能力，不算能看到这个本地包，也就看不到它引用的授权器。
             CreatedApiKey actionOnly = server.runtime.apiKeys().create(
-                    "only-local-read", new ApiKeyScope(Set.of(), Set.of("pkg_local.read"), false), Actors.CONSOLE);
+                    "only-local-read", new ApiKeyScope(Set.of(), Set.of("pkg_local.read"), false, false, Set.of(), true), Actors.CONSOLE);
             String actionSession = server.initialize(actionOnly.plaintext(), false);
             JsonNode none = structured(server.rpc(actionOnly.plaintext(), actionSession, 5, "tools/call",
-                    Map.of("name", "conch_auth_list", "arguments", Map.of())));
+                    Map.of("name", "hermit_dev__auth_list", "arguments", Map.of())));
             assertThat(none.path("total").asInt()).isZero();
             assertThat(none.toString()).doesNotContain("other_sso").doesNotContain("pkg_local");
         }
@@ -1820,16 +1868,20 @@ class AuthoringMcpTest {
         try (Harness server = Harness.open(temp.resolve("guide-tool"), directoryConfig)) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             CreatedApiKey readOnly = server.runtime.apiKeys().create(
-                    "ro", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+                    "ro", new ApiKeyScope(Set.of(), Set.of(), true, true, Set.of(), true), Actors.CONSOLE);
             String session = server.initialize(readOnly.plaintext(), false);
 
-            // 目录模式下、只读 Key 依然看得到并能调用 conch_guide，看不到 conch_save_local
+            // 目录模式下、只读 Key 在 hermit_dev 包里看得到并能调用 hermit_dev__guide，看不到 hermit_dev__save_local
             JsonNode tools = server.rpc(readOnly.plaintext(), session, 2, "tools/list", null);
-            assertThat(toolNames(tools)).contains("list_systems", "conch_guide", "conch_read_yaml", "conch_validate")
-                    .doesNotContain("conch_save_local");
+            assertThat(toolNames(tools)).contains("list_systems").noneMatch(name -> name.startsWith("hermit_dev__"));
+            JsonNode devList = server.rpc(readOnly.plaintext(), session, 20, "tools/call",
+                    Map.of("name", "search_capabilities", "arguments", Map.of("conch", "hermit_dev", "ungrouped", true)));
+            assertThat(structured(devList).path("matches").findValuesAsText("name"))
+                    .contains("hermit_dev__guide", "hermit_dev__read_yaml", "hermit_dev__validate")
+                    .doesNotContain("hermit_dev__save_local");
 
             JsonNode overview = server.rpc(readOnly.plaintext(), session, 3, "tools/call",
-                    Map.of("name", "conch_guide", "arguments", Map.of()));
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of()));
             assertThat(overview.path("result").path("isError").asBoolean()).isFalse();
             JsonNode overData = structured(overview);
             assertThat(overData.path("crabVersion").asText()).isEqualTo(dev.hermit.crab.engine.CrabVersion.CURRENT.toString());
@@ -1844,41 +1896,41 @@ class AuthoringMcpTest {
             assertThat(overData.path("sections").size()).isGreaterThanOrEqualTo(10);
 
             JsonNode starterSec = server.rpc(readOnly.plaintext(), session, 31, "tools/call",
-                    Map.of("name", "conch_guide", "arguments", Map.of("section", "starter")));
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of("section", "starter")));
             assertThat(structured(starterSec).path("id").asText()).isEqualTo("starter");
             assertThat(structured(starterSec).path("content").asText()).contains("conch: my_system").contains("❌");
 
             JsonNode byId = server.rpc(readOnly.plaintext(), session, 4, "tools/call",
-                    Map.of("name", "conch_guide", "arguments", Map.of("section", "session_expiry")));
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of("section", "session_expiry")));
             assertThat(structured(byId).path("id").asText()).isEqualTo("session_expiry");
             assertThat(structured(byId).path("content").asText()).contains("expired_when").doesNotContain("](");
 
             JsonNode bySub = server.rpc(readOnly.plaintext(), session, 5, "tools/call",
-                    Map.of("name", "conch_guide", "arguments", Map.of("section", "上传和下载文件")));
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of("section", "上传和下载文件")));
             assertThat(structured(bySub).path("parentId").asText()).isEqualTo("steps");
             assertThat(structured(bySub).path("content").asText()).contains("multipart").contains("download");
 
             JsonNode full = server.rpc(readOnly.plaintext(), session, 6, "tools/call",
-                    Map.of("name", "conch_guide", "arguments", Map.of("section", "all")));
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of("section", "all")));
             assertThat(structured(full).path("content").asText()).isEqualTo(AuthoringGuide.text());
 
             JsonNode search = server.rpc(readOnly.plaintext(), session, 7, "tools/call",
-                    Map.of("name", "conch_guide", "arguments", Map.of("query", "expired_when")));
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of("query", "expired_when")));
             assertThat(structured(search).path("total").asInt()).isPositive();
             assertThat(structured(search).path("matches").get(0).path("id").asText()).isEqualTo("session_expiry");
 
             JsonNode both = server.rpc(readOnly.plaintext(), session, 8, "tools/call",
-                    Map.of("name", "conch_guide", "arguments", Map.of("section", "steps", "query", "repeat")));
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of("section", "steps", "query", "repeat")));
             assertThat(toolError(both).path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(toolError(both).path("field").asText()).isEqualTo("section");
 
             JsonNode missing = server.rpc(readOnly.plaintext(), session, 9, "tools/call",
-                    Map.of("name", "conch_guide", "arguments", Map.of("section", "unknown_chapter")));
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of("section", "unknown_chapter")));
             assertThat(toolError(missing).path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(toolError(missing).path("field").asText()).isEqualTo("section");
 
             JsonNode unknownArg = server.rpc(readOnly.plaintext(), session, 10, "tools/call",
-                    Map.of("name", "conch_guide", "arguments", Map.of("extra", "1")));
+                    Map.of("name", "hermit_dev__guide", "arguments", Map.of("extra", "1")));
             assertThat(toolError(unknownArg).path("code").asText()).isEqualTo("INVALID_INPUT");
         }
     }
@@ -1908,7 +1960,7 @@ class AuthoringMcpTest {
                         output:
                           ok: {type: string, description: 结果, value: ok}
                     """;
-            for (String toolName : List.of("conch_validate", "conch_save_local")) {
+            for (String toolName : List.of("hermit_dev__validate", "hermit_dev__save_local")) {
                 JsonNode resp = server.call(session, toolName, Map.of("yaml", broken));
                 assertThat(resp.path("result").path("isError").asBoolean(true)).isFalse();
                 JsonNode body = structured(resp);
@@ -1922,22 +1974,22 @@ class AuthoringMcpTest {
                 assertThat(body.path("suggestedSections").isArray()).isTrue();
                 assertThat(body.path("suggestedSections").size()).isGreaterThanOrEqualTo(2);
                 for (JsonNode sec : body.path("suggestedSections")) {
-                    JsonNode guide = server.call(session, "conch_guide", Map.of("section", sec.asText()));
+                    JsonNode guide = server.call(session, "hermit_dev__guide", Map.of("section", sec.asText()));
                     assertThat(guide.path("result").path("isError").asBoolean(true))
-                            .as("suggested section %s should be readable via conch_guide", sec.asText())
+                            .as("suggested section %s should be readable via hermit_dev__guide", sec.asText())
                             .isFalse();
                 }
-                assertThat(body.path("next").asText()).contains("fixHints").contains("conch_validate");
+                assertThat(body.path("next").asText()).contains("fixHints").contains("hermit_dev__validate");
             }
 
-            JsonNode okResp = server.call(session, "conch_validate",
+            JsonNode okResp = server.call(session, "hermit_dev__validate",
                     Map.of("yaml", AuthoringGuide.starterTemplate()));
             JsonNode okBody = structured(okResp);
             assertThat(okBody.path("ok").asBoolean()).isTrue();
             assertThat(okBody.path("errors").isEmpty()).isTrue();
             assertThat(okBody.path("warnings").isEmpty()).isTrue();
             assertThat(okBody.has("fixHints")).isFalse();
-            assertThat(okBody.path("next").asText()).contains("conch_save_local");
+            assertThat(okBody.path("next").asText()).contains("hermit_dev__save_local");
         }
     }
 
@@ -1962,7 +2014,7 @@ class AuthoringMcpTest {
             String session = server.initialize(false);
 
             // 1. 默认读取已订阅的 Reef 正式包：只读、验签、原文完整
-            JsonNode readReef = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa"));
+            JsonNode readReef = server.call(session, "hermit_dev__read_yaml", Map.of("conch", "corp_oa"));
             assertThat(readReef.path("result").path("isError").asBoolean()).as(readReef.toString()).isFalse();
             JsonNode reefData = structured(readReef);
             assertThat(reefData.path("conch").asText()).isEqualTo("corp_oa");
@@ -1974,23 +2026,23 @@ class AuthoringMcpTest {
             assertThat(reefData.path("version").asText()).isEqualTo("1.0.0");
             assertThat(reefData.path("yaml").asText()).isEqualTo(reefYaml);
             assertThat(reefData.path("sha256").asText()).hasSize(64);
-            assertThat(reefData.path("note").asText()).contains("只读不可直接修改").contains("conch_save_local");
+            assertThat(reefData.path("note").asText()).contains("只读不可直接修改").contains("hermit_dev__save_local");
 
             // 2. 篡改磁盘 zip 正文字节后重新读取：验签失败，绝不返回被篡改内容
             byte[] tampered = signedZip.clone();
             tampered[tampered.length / 2] ^= 0x5A;
             Files.write(zipFile, tampered);
-            JsonNode tamperedRead = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa", "source", "reef"));
+            JsonNode tamperedRead = server.call(session, "hermit_dev__read_yaml", Map.of("conch", "corp_oa", "source", "reef"));
             assertThat(toolError(tamperedRead).path("code").asText()).as(tamperedRead.toString()).isEqualTo("NOT_FOUND");
             Files.write(zipFile, signedZip);
 
             // 3. 基于读出的 Reef YAML 起新包名保存到本地：新本地包立即生效，原 Reef 正式包不受任何影响
             String forkedYaml = reefYaml.replace("conch: corp_oa", "conch: corp_oa_custom")
                     .replace("version: 1.0.0", "version: 1.0.1");
-            JsonNode savedFork = server.call(session, "conch_save_local", Map.of("yaml", forkedYaml));
+            JsonNode savedFork = server.call(session, "hermit_dev__save_local", Map.of("yaml", forkedYaml));
             assertThat(structured(savedFork).path("ok").asBoolean()).isTrue();
             assertThat(structured(savedFork).path("active").asBoolean()).isTrue();
-            JsonNode readFork = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa_custom"));
+            JsonNode readFork = server.call(session, "hermit_dev__read_yaml", Map.of("conch", "corp_oa_custom"));
             assertThat(structured(readFork).path("source").asText()).isEqualTo("local");
             assertThat(structured(readFork).path("readOnly").asBoolean()).isFalse();
             assertThat(structured(readFork).path("active").asBoolean()).isTrue();
@@ -1999,7 +2051,7 @@ class AuthoringMcpTest {
 
             // 4. 基于读出的 Reef YAML 保存为同名本地副本：原 Reef 正式包保持生效且文件字节未变
             String shadowYaml = reefYaml.replace("version: 1.0.0", "version: 1.0.2");
-            JsonNode savedShadow = server.call(session, "conch_save_local", Map.of("yaml", shadowYaml));
+            JsonNode savedShadow = server.call(session, "hermit_dev__save_local", Map.of("yaml", shadowYaml));
             assertThat(structured(savedShadow).path("ok").asBoolean()).isTrue();
             assertThat(structured(savedShadow).path("replaced").asBoolean()).isFalse();
             assertThat(structured(savedShadow).path("active").asBoolean()).isFalse();
@@ -2008,14 +2060,14 @@ class AuthoringMcpTest {
             assertThat(server.runtime.registry().origin("corp_oa")).isEqualTo(dev.hermit.crab.store.Origin.OFFICIAL);
 
             // 默认仍读当前生效的 Reef 正式包，但 hasLocal=true 提示已有同名本地副本
-            JsonNode defaultDual = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa"));
+            JsonNode defaultDual = server.call(session, "hermit_dev__read_yaml", Map.of("conch", "corp_oa"));
             assertThat(structured(defaultDual).path("source").asText()).isEqualTo("reef");
             assertThat(structured(defaultDual).path("active").asBoolean()).isTrue();
             assertThat(structured(defaultDual).path("hasLocal").asBoolean()).isTrue();
             assertThat(structured(defaultDual).path("yaml").asText()).isEqualTo(reefYaml);
 
             // 指定 source=local 可读出尚未切换生效的同名本地副本
-            JsonNode localDual = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa", "source", "local"));
+            JsonNode localDual = server.call(session, "hermit_dev__read_yaml", Map.of("conch", "corp_oa", "source", "local"));
             assertThat(structured(localDual).path("source").asText()).isEqualTo("local");
             assertThat(structured(localDual).path("readOnly").asBoolean()).isFalse();
             assertThat(structured(localDual).path("active").asBoolean()).isFalse();
@@ -2025,12 +2077,12 @@ class AuthoringMcpTest {
 
             // 控制台切换来源为 LOCAL 后：默认读本地副本，显式 source=reef 仍读到原封不动的 Reef 正式包
             assertThat(server.runtime.registry().activate("corp_oa", dev.hermit.crab.store.Origin.LOCAL)).isTrue();
-            JsonNode activeLocal = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa"));
+            JsonNode activeLocal = server.call(session, "hermit_dev__read_yaml", Map.of("conch", "corp_oa"));
             assertThat(structured(activeLocal).path("source").asText()).isEqualTo("local");
             assertThat(structured(activeLocal).path("active").asBoolean()).isTrue();
             assertThat(structured(activeLocal).path("yaml").asText()).isEqualTo(shadowYaml);
 
-            JsonNode inactiveReef = server.call(session, "conch_read_yaml", Map.of("conch", "corp_oa", "source", "reef"));
+            JsonNode inactiveReef = server.call(session, "hermit_dev__read_yaml", Map.of("conch", "corp_oa", "source", "reef"));
             assertThat(structured(inactiveReef).path("source").asText()).isEqualTo("reef");
             assertThat(structured(inactiveReef).path("readOnly").asBoolean()).isTrue();
             assertThat(structured(inactiveReef).path("active").asBoolean()).isFalse();
@@ -2058,57 +2110,57 @@ class AuthoringMcpTest {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
 
             CreatedApiKey namedFull = server.runtime.apiKeys().create(
-                    "named-full", new ApiKeyScope(Set.of("corp_oa"), Set.of(), false, false), Actors.CONSOLE);
+                    "named-full", new ApiKeyScope(Set.of("corp_oa"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey namedReadOnly = server.runtime.apiKeys().create(
-                    "named-ro", new ApiKeyScope(Set.of("corp_oa"), Set.of(), true, false), Actors.CONSOLE);
+                    "named-ro", new ApiKeyScope(Set.of("corp_oa"), Set.of(), true, false, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey otherKey = server.runtime.apiKeys().create(
-                    "other", new ApiKeyScope(Set.of("other_pkg"), Set.of(), false, false), Actors.CONSOLE);
+                    "other", new ApiKeyScope(Set.of("other_pkg"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey groupKey = server.runtime.apiKeys().create(
-                    "group", new ApiKeyScope(Set.of("corp_oa"), Set.of(), false, false, Set.of("corp_oa:hr")), Actors.CONSOLE);
+                    "group", new ApiKeyScope(Set.of("corp_oa"), Set.of(), false, false, Set.of("corp_oa:hr"), true), Actors.CONSOLE);
             CreatedApiKey actionKey = server.runtime.apiKeys().create(
-                    "action", new ApiKeyScope(Set.of(), Set.of("corp_oa.ping"), false, false), Actors.CONSOLE);
+                    "action", new ApiKeyScope(Set.of(), Set.of("corp_oa.ping"), false, false, Set.of(), true), Actors.CONSOLE);
 
             String namedSession = server.initialize(namedFull.plaintext(), false);
             assertThat(structured(server.rpc(namedFull.plaintext(), namedSession, 2, "tools/call",
-                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa"))))
+                    Map.of("name", "hermit_dev__read_yaml", "arguments", Map.of("conch", "corp_oa"))))
                     .path("yaml").asText()).isEqualTo(reefYaml);
 
             String roSession = server.initialize(namedReadOnly.plaintext(), false);
             assertThat(structured(server.rpc(namedReadOnly.plaintext(), roSession, 2, "tools/call",
-                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa"))))
+                    Map.of("name", "hermit_dev__read_yaml", "arguments", Map.of("conch", "corp_oa"))))
                     .path("yaml").asText()).isEqualTo(reefYaml);
 
             // 未授权 Key 读存在的包和不存在的包都直接 FORBIDDEN，不泄露存在性
             String otherSession = server.initialize(otherKey.plaintext(), false);
             JsonNode deniedExisting = server.rpc(otherKey.plaintext(), otherSession, 2, "tools/call",
-                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa")));
+                    Map.of("name", "hermit_dev__read_yaml", "arguments", Map.of("conch", "corp_oa")));
             JsonNode deniedGhost = server.rpc(otherKey.plaintext(), otherSession, 3, "tools/call",
-                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "ghost_pkg")));
+                    Map.of("name", "hermit_dev__read_yaml", "arguments", Map.of("conch", "ghost_pkg")));
             assertThat(toolError(deniedExisting).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolError(deniedGhost).path("code").asText()).isEqualTo("FORBIDDEN");
 
             // 限定分组或能力的 Key 不能读完整规则包 YAML
             String groupSession = server.initialize(groupKey.plaintext(), false);
             JsonNode deniedGroup = server.rpc(groupKey.plaintext(), groupSession, 2, "tools/call",
-                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa")));
+                    Map.of("name", "hermit_dev__read_yaml", "arguments", Map.of("conch", "corp_oa")));
             assertThat(toolError(deniedGroup).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(deniedGroup)).contains("限定了具体分组或能力");
 
             String actionSession = server.initialize(actionKey.plaintext(), false);
             JsonNode deniedAction = server.rpc(actionKey.plaintext(), actionSession, 2, "tools/call",
-                    Map.of("name", "conch_read_yaml", "arguments", Map.of("conch", "corp_oa")));
+                    Map.of("name", "hermit_dev__read_yaml", "arguments", Map.of("conch", "corp_oa")));
             assertThat(toolError(deniedAction).path("code").asText()).isEqualTo("FORBIDDEN");
             assertThat(toolMessage(deniedAction)).contains("限定了具体分组或能力");
 
             // 非法包名、非法 source 与未知字段校验
             String fullSession = server.initialize(false);
-            assertThat(toolError(server.call(fullSession, "conch_read_yaml", Map.of("conch", "../etc")))
+            assertThat(toolError(server.call(fullSession, "hermit_dev__read_yaml", Map.of("conch", "../etc")))
                     .path("code").asText()).isEqualTo("INVALID_INPUT");
-            assertThat(toolError(server.call(fullSession, "conch_read_yaml", Map.of("conch", "corp_oa", "source", "other")))
+            assertThat(toolError(server.call(fullSession, "hermit_dev__read_yaml", Map.of("conch", "corp_oa", "source", "other")))
                     .path("code").asText()).isEqualTo("INVALID_INPUT");
-            assertThat(toolError(server.call(fullSession, "conch_read_yaml", Map.of("conch", "corp_oa", "extra", true)))
+            assertThat(toolError(server.call(fullSession, "hermit_dev__read_yaml", Map.of("conch", "corp_oa", "extra", true)))
                     .path("code").asText()).isEqualTo("INVALID_INPUT");
-            assertThat(toolError(server.call(fullSession, "conch_read_yaml", Map.of("conch", "missing_pkg")))
+            assertThat(toolError(server.call(fullSession, "hermit_dev__read_yaml", Map.of("conch", "missing_pkg")))
                     .path("code").asText()).isEqualTo("NOT_FOUND");
         }
     }
@@ -2167,7 +2219,7 @@ class AuthoringMcpTest {
             CrabRuntime runtime = CrabRuntime.open(new CrabPaths(home), config);
             CrabHttpServer server = new CrabHttpServer(runtime);
             server.start();
-            CreatedApiKey key = runtime.apiKeys().create("authoring", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+            CreatedApiKey key = runtime.apiKeys().create("authoring", new ApiKeyScope(Set.of(), Set.of(), false, true, Set.of(), true), Actors.CONSOLE);
             return new Harness(runtime, server, key);
         }
 

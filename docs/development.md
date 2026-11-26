@@ -98,7 +98,7 @@ Java 结果位于各模块 `target/surefire-reports/`。2026-10-16 同步到 `48
 
 给一个模型打分：
 
-1. 新开一个不带仓库上下文的模型会话，只给它 `docs/conch-reference.md`（等同 `hermit://authoring/guide`）和一道题的题面，让它交一份 `conch.yaml`，存成 `<目录>/<题号>/1.yaml`。
+1. 新开一个不带仓库上下文的模型会话，只给它 `docs/conch-reference.md`（等同 `hermit://conches/hermit_dev/guide`）和一道题的题面，让它交一份 `conch.yaml`，存成 `<目录>/<题号>/1.yaml`。
 2. 运行 `./mvnw -pl hermit-it -am test -Dhermit.web.skip=true -Dtest=RuleQuizTest -Dsurefire.failIfNoSpecifiedTests=false -Dquiz.answers=<目录的绝对路径>`。每份答案旁边会写出 `1.feedback.txt`：校验错误，或试跑的输出、请求和期望的差别。
 3. 没通过的题，把 feedback 原样交还给同一个会话，让它改，存成 `2.yaml`，再运行。最多 3 轮。
 4. `<目录>/report.md` 是汇总：第 1 轮校验通过率、第 1 轮试跑正确率、最终正确率和平均轮数。

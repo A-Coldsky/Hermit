@@ -274,7 +274,7 @@ async function refreshTools() {
           {{ refresh.result.traceId }}
         </router-link>
         <el-button link :icon="CopyDocument" aria-label="复制追踪编号" @click="copyText(refresh.result.traceId, '追踪编号已复制')" />
-        已记下，刷新没有对应的调用记录，可点击查看或交给 AI 用 <code class="mono">debug_trace</code> 排查。
+        已记下，刷新没有对应的调用记录，可点击查看或交给 AI 用 <code class="mono">hermit_dev__debug_trace</code> 排查。
       </p>
     </template>
   </el-dialog>

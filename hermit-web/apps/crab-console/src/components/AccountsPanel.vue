@@ -933,7 +933,7 @@ async function disconnect(account: Account) {
                 aria-label="复制追踪编号"
                 @click="copyText(loginInput.result.traceId ?? '', '追踪编号已复制')"
               />
-              <span class="hm-muted">可发给 AI 用 <code class="mono">debug_trace</code> 查看</span>
+              <span class="hm-muted">可发给 AI 用 <code class="mono">hermit_dev__debug_trace</code> 查看</span>
             </div>
           </template>
         </el-result>
@@ -956,7 +956,7 @@ async function disconnect(account: Account) {
                 aria-label="复制追踪编号"
                 @click="copyText(loginInput.result.traceId ?? '', '追踪编号已复制')"
               />
-              <span class="hm-muted">可发给 AI 用 <code class="mono">debug_trace</code> 排查，也可点击查看</span>
+              <span class="hm-muted">可发给 AI 用 <code class="mono">hermit_dev__debug_trace</code> 排查，也可点击查看</span>
             </div>
             <template v-else-if="loginInput.result.requestId">
               <span class="hm-muted">请求编号</span>
@@ -1048,7 +1048,7 @@ async function disconnect(account: Account) {
             {{ testResult.traceId }}
           </router-link>
           <el-button link :icon="CopyDocument" aria-label="复制追踪编号" @click="copyText(testResult.traceId, '追踪编号已复制')" />
-          <span class="hm-muted">可发给 AI 用 <code class="mono">debug_trace</code> 查看</span>
+          <span class="hm-muted">可发给 AI 用 <code class="mono">hermit_dev__debug_trace</code> 查看</span>
         </div>
       </template>
     </el-result>
@@ -1066,7 +1066,7 @@ async function disconnect(account: Account) {
             {{ testResult.traceId }}
           </router-link>
           <el-button link :icon="CopyDocument" aria-label="复制追踪编号" @click="copyText(testResult.traceId, '追踪编号已复制')" />
-          <span class="hm-muted">可发给 AI 用 <code class="mono">debug_trace</code> 排查，也可点击查看</span>
+          <span class="hm-muted">可发给 AI 用 <code class="mono">hermit_dev__debug_trace</code> 排查，也可点击查看</span>
         </div>
         <template v-else-if="testResult.requestId">
           <span class="hm-muted">请求编号</span>

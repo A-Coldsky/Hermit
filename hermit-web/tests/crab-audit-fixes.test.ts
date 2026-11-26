@@ -651,7 +651,7 @@ describe('M13 & M14: 错误与空态分离、ReportsView、AccountsPanel 与 Ove
     const traceBox = document.body.querySelector('[data-test="test-login-trace"]')
     expect(traceBox).not.toBeNull()
     expect(traceBox?.textContent).toContain('trace-login-1')
-    expect(traceBox?.textContent).toContain('debug_trace')
+    expect(traceBox?.textContent).toContain('hermit_dev__debug_trace')
     expect(traceBox?.querySelector('a')?.getAttribute('href')).toContain('trace-login-1')
     wrapper.unmount()
   })

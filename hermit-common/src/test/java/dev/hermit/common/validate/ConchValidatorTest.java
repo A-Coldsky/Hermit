@@ -750,6 +750,16 @@ class ConchValidatorTest {
     }
 
     @Test
+    void developerPackageNameIsReserved() {
+        ValidationResult result = ConchValidator.validate(
+                ConchParser.parse(named(ConchValidator.DEV_CONCH, "list_todo")), ConchValidator.Context.of(null));
+        assertThat(codes(result)).contains(ValidationCodes.CONCH_NAME);
+        assertThat(codes(ConchValidator.validate(
+                ConchParser.parse(named("hermit_dev2", "list_todo")), ConchValidator.Context.of(null))))
+                .doesNotContain(ValidationCodes.CONCH_NAME);
+    }
+
+    @Test
     void nameLengthBoundaries() {
         assertThat(codes(ConchValidator.validate(
                 ConchParser.parse(named("ab", "list_todo")), ConchValidator.Context.of(null))))

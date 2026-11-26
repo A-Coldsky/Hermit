@@ -577,7 +577,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     /** 试跑在执行前找不到本地包或能力。控制台和 MCP 用同一句。 */
     public static final String TRIAL_NOT_FOUND = "没有这个本地规则包或能力。";
 
-    /** Records a trial that was refused before execution, so a later debug_trace can explain it. */
+    /** Records a trial that was refused before execution, so a later hermit_dev__debug_trace can explain it. */
     public void noteRejectedTrial(String traceId) {
         traceMemory.reject(traceId);
     }
@@ -594,7 +594,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      * Runs one local HTTP or MCP action without reporting to Tide.
      * Official packages, developer mode that is off, and a disabled capability are rejected
      * before execution. MCP does not go through {@code Invoker}, so there is no confirm header.
-     * {@code apiKeyId} is recorded only for {@code conch_trial_run}; console and CLI trials pass null.
+     * {@code apiKeyId} is recorded only for {@code hermit_dev__trial_run}; console and CLI trials pass null.
      */
     public ExecutionResult trialLocal(
             String conch,

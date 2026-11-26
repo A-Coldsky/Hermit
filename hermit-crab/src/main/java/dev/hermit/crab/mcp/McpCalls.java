@@ -35,7 +35,7 @@ final class McpCalls {
     static final String NO_CONFIRM = "客户端不支持确认，拒绝执行写操作";
     static final String REJECTED = "用户拒绝执行";
     static final String TRACE_DENIED =
-            "这把 API Key 不能读取这条追踪。点名了该本地规则包的读写 Key 可以读，本机全部权限读写 Key 可读自己用 conch_trial_run 试跑出来的以及控制台触发的本地调试追踪。其他 API Key 和正式包的追踪不能读。";
+            "这把 API Key 不能读取这条追踪。点名了该本地规则包的读写 Key 可以读，本机全部权限读写 Key 可读自己用 hermit_dev__trial_run 试跑出来的以及控制台触发的本地调试追踪。其他 API Key 和正式包的追踪不能读。";
     static final String TRACE_ABSENT = "没有这条追踪。编号不存在。";
     /** 编号对得上一条调用记录，但那次调用没有开发追踪（正式规则包，或开发者模式关着时的调用）。 */
     static final String TRACE_OUT_OF_SCOPE =
@@ -133,18 +133,72 @@ final class McpCalls {
             return fail(attempt, "INVALID_INPUT", "name is required");
         }
         Map<String, Object> arguments = request.arguments() == null ? Map.of() : request.arguments();
+        if (McpCatalog.DEV_CONCH.equals(name)) {
+            return devEntry(principal, session, arguments, localCaller, attempt);
+        }
+        if (McpCatalog.devToolName(name)) {
+            return devCall(principal, session, name, arguments, localCaller, attempt);
+        }
+        if (attempt.directory()) {
+            return directory(principal, session, headerAccount, name, arguments, localCaller, attempt);
+        }
+        Optional<McpCatalog.CapabilityRef> found = catalog.find(principal, name);
+        if (found.isEmpty()) {
+            return missingTool(attempt, name);
+        }
+        return invokeDirect(principal, session, headerAccount, found.get(), arguments, attempt);
+    }
+
+    /** 内置开发者工具包（hermit_dev）的工具。直接调用和 call_capability 都走这里。 */
+    /** 直接模式下开发者工具包的唯一入口：不带 tool 返回清单，带 tool 转给对应的开发者工具。 */
+    private McpSchema.CallToolResult devEntry(
+            ApiKeyPrincipal principal,
+            McpSession session,
+            Map<String, Object> arguments,
+            boolean localCaller,
+            Attempt attempt
+    ) {
+        if (principal != null && !principal.scope().devTools()) {
+            return fail(attempt, "FORBIDDEN", AuthoringCalls.NEEDS_DEV_SCOPE);
+        }
+        for (String key : arguments.keySet()) {
+            if (!"tool".equals(key) && !"arguments".equals(key)) {
+                return fail(attempt, "INVALID_INPUT", "不认识的字段 " + key + "。只接受 tool 和 arguments。");
+            }
+        }
+        Object tool = arguments.get("tool");
+        if (tool == null) {
+            if (!catalog.devVisible(principal)) {
+                return fail(attempt, "NOT_CONFIGURED", AuthoringCalls.DEV_MODE_CLOSED);
+            }
+            return ok(catalog.devOverview(principal, localCaller));
+        }
+        if (!(tool instanceof String text) || !McpCatalog.devToolName(text)) {
+            return fail(attempt, "INVALID_INPUT", "tool 不是开发者工具名。不带参数调用 hermit_dev 查看可用的工具。");
+        }
+        Object raw = arguments.get("arguments");
+        Map<String, Object> input = copyObject(raw);
+        if (raw != null && input == null) {
+            return fail(attempt, "INVALID_INPUT", "arguments must be an object");
+        }
+        return devCall(principal, session, text, input == null ? Map.of() : input, localCaller, attempt);
+    }
+
+    private McpSchema.CallToolResult devCall(
+            ApiKeyPrincipal principal,
+            McpSession session,
+            String name,
+            Map<String, Object> arguments,
+            boolean localCaller,
+            Attempt attempt
+    ) {
+        if (principal != null && !principal.scope().devTools()) {
+            return fail(attempt, "FORBIDDEN", AuthoringCalls.NEEDS_DEV_SCOPE);
+        }
         if (McpCatalog.DEBUG_TRACE.equals(name)) {
             return readTrace(principal, arguments, attempt, localCaller);
         }
-        if (McpCatalog.DEBUG_TRACE_LIST.equals(name)
-                || McpCatalog.GUIDE.equals(name)
-                || McpCatalog.READ_YAML.equals(name)
-                || McpCatalog.AUTH_LIST.equals(name)
-                || McpCatalog.CAPTURE_LIST.equals(name)
-                || McpCatalog.CAPTURE_GET.equals(name)
-                || McpCatalog.VALIDATE.equals(name)
-                || McpCatalog.SAVE_LOCAL.equals(name)
-                || McpCatalog.TRIAL_RUN.equals(name)) {
+        if (!McpCatalog.DEBUG_TRACE.equals(name)) {
             if (!localCaller) {
                 return fail(attempt, "FORBIDDEN", AuthoringCalls.LOCAL_ONLY);
             }
@@ -176,14 +230,7 @@ final class McpCalls {
         if (McpCatalog.TRIAL_RUN.equals(name)) {
             return authoring.trial(principal, session, arguments, attempt);
         }
-        if (attempt.directory()) {
-            return directory(principal, session, headerAccount, name, arguments, attempt);
-        }
-        Optional<McpCatalog.CapabilityRef> found = catalog.find(principal, name);
-        if (found.isEmpty()) {
-            return missingTool(attempt, name);
-        }
-        return invokeDirect(principal, session, headerAccount, found.get(), arguments, attempt);
+        return failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL);
     }
 
     private McpSchema.CallToolResult directory(
@@ -192,18 +239,20 @@ final class McpCalls {
             Optional<String> headerAccount,
             String name,
             Map<String, Object> arguments,
+            boolean localCaller,
             Attempt attempt
     ) {
         return switch (name) {
-            case McpCatalog.LIST_SYSTEMS -> ok(catalog.listSystems(principal));
-            case McpCatalog.SEARCH -> search(principal, arguments, attempt);
-            case McpCatalog.DESCRIBE -> describe(principal, arguments, attempt);
-            case McpCatalog.CALL -> callCapability(principal, session, headerAccount, arguments, attempt);
+            case McpCatalog.LIST_SYSTEMS -> ok(catalog.listSystems(principal, localCaller));
+            case McpCatalog.SEARCH -> search(principal, arguments, localCaller, attempt);
+            case McpCatalog.DESCRIBE -> describe(principal, arguments, localCaller, attempt);
+            case McpCatalog.CALL -> callCapability(principal, session, headerAccount, arguments, localCaller, attempt);
             default -> failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL);
         };
     }
 
-    private McpSchema.CallToolResult search(ApiKeyPrincipal principal, Map<String, Object> arguments, Attempt attempt) {
+    private McpSchema.CallToolResult search(
+            ApiKeyPrincipal principal, Map<String, Object> arguments, boolean localCaller, Attempt attempt) {
         Object rawQuery = arguments.get("query");
         String query = null;
         if (rawQuery != null) {
@@ -238,15 +287,16 @@ final class McpCalls {
         if (query == null && group == null && !ungrouped) {
             return fail(attempt, "INVALID_INPUT", "query is required", "query");
         }
-        return ok(catalog.search(principal, query, conch, group, ungrouped));
+        return ok(catalog.search(principal, query, conch, group, ungrouped, localCaller));
     }
 
-    private McpSchema.CallToolResult describe(ApiKeyPrincipal principal, Map<String, Object> arguments, Attempt attempt) {
+    private McpSchema.CallToolResult describe(
+            ApiKeyPrincipal principal, Map<String, Object> arguments, boolean localCaller, Attempt attempt) {
         Object name = arguments.get("name");
         if (!(name instanceof String text) || text.isBlank()) {
             return fail(attempt, "INVALID_INPUT", "name is required");
         }
-        return catalog.describe(principal, text)
+        return catalog.describe(principal, text, localCaller)
                 .map(McpCalls::ok)
                 .orElseGet(() -> failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL));
     }
@@ -256,11 +306,20 @@ final class McpCalls {
             McpSession session,
             Optional<String> headerAccount,
             Map<String, Object> arguments,
+            boolean localCaller,
             Attempt attempt
     ) {
         Object name = arguments.get("name");
         if (!(name instanceof String text) || text.isBlank()) {
             return fail(attempt, "INVALID_INPUT", "name is required");
+        }
+        if (McpCatalog.devToolName(text)) {
+            Object raw = arguments.get("arguments");
+            Map<String, Object> devInput = copyObject(raw);
+            if (raw != null && devInput == null) {
+                return fail(attempt, "INVALID_INPUT", "arguments must be an object");
+            }
+            return devCall(principal, session, text, devInput == null ? Map.of() : devInput, localCaller, attempt);
         }
         Optional<McpCatalog.CapabilityRef> found = catalog.find(principal, text);
         if (found.isEmpty()) {
@@ -517,15 +576,15 @@ final class McpCalls {
         body.put("traces", traces);
         body.put("total", traces.size());
         body.put("note", traces.isEmpty()
-                ? "当前没有可见的本机开发追踪。请在控制台执行测试登录/试跑，或调用 conch_trial_run 后再查。"
-                : "调用 debug_trace(traceId=...) 查看完整脱敏步骤详情。");
+                ? "当前没有可见的本机开发追踪。请在控制台执行测试登录/试跑，或调用 hermit_dev__trial_run 后再查。"
+                : "调用 hermit_dev__debug_trace(traceId=...) 查看完整脱敏步骤详情。");
         return ok(body);
     }
 
     /**
      * Local traces only. A call recorded under another API key always stays hidden.
      * A named key that lists the local conch can read console/CLI traces within its permission scope.
-     * A full-scope key can read its own {@code conch_trial_run} traces, and when connecting locally
+     * A full-scope key can read its own {@code hermit_dev__trial_run} traces, and when connecting locally
      * without read-only restriction in developer mode, can also read console/CLI local traces
      * ({@code test_login}, {@code login_input}, {@code mcp_refresh}, and console trials where {@code apiKeyId == null}).
      * Official traces are never stored and stay hidden.

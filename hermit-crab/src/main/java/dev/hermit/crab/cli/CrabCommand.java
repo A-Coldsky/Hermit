@@ -88,7 +88,7 @@ public final class CrabCommand {
               crab config set <conch> <key> <value>
               crab config unset <conch> <key>
               crab audit list [--conch NAME] [--account NAME] [--limit N] [--page N]
-              crab apikey create <name> [--all] [--conches a,b] [--groups conch:group] [--actions conch.action] [--read-only]
+              crab apikey create <name> [--all] [--conches a,b] [--groups conch:group] [--actions conch.action] [--read-only] [--dev-tools]
               crab apikey list
               crab apikey revoke <id>
               crab local import <file> [--replace]
@@ -474,7 +474,7 @@ public final class CrabCommand {
         }
         String verb = parsed.positionals.get(1);
         if ("list".equals(verb)) {
-            if (parsed.positionals.size() != 4 || parsed.fromEnv != null || parsed.readOnly || parsed.all
+            if (parsed.positionals.size() != 4 || parsed.fromEnv != null || parsed.readOnly || parsed.all || parsed.devTools
                     || parsed.conches != null || parsed.groups != null || parsed.actions != null) {
                 err.print(USAGE);
                 return 1;
@@ -501,7 +501,7 @@ public final class CrabCommand {
             err.println("凭证不能写在命令行参数里。");
             return 1;
         }
-        if (parsed.positionals.size() != 5 || parsed.readOnly || parsed.all
+        if (parsed.positionals.size() != 5 || parsed.readOnly || parsed.all || parsed.devTools
                 || parsed.conches != null || parsed.groups != null || parsed.actions != null) {
             err.print(USAGE);
             return 1;
@@ -925,6 +925,9 @@ public final class CrabCommand {
                     + " actions=" + joinScope(scope.actions());
         }
         line += " read-only=" + scope.readOnlyOnly();
+        if (scope.devTools()) {
+            line += " dev-tools=true";
+        }
         if (key.revokedAt() != null) {
             line += " revoked";
         }
@@ -967,7 +970,7 @@ public final class CrabCommand {
         return switch (verb) {
             case "list" -> {
                 if (parsed.positionals.size() != 2 || parsed.fromEnv != null || parsed.conches != null
-                        || parsed.groups != null || parsed.actions != null || parsed.readOnly || parsed.all) {
+                        || parsed.groups != null || parsed.actions != null || parsed.readOnly || parsed.all || parsed.devTools) {
                     err.print(USAGE);
                     yield 1;
                 }
@@ -980,7 +983,7 @@ public final class CrabCommand {
             }
             case "revoke" -> {
                 if (parsed.positionals.size() != 3 || parsed.fromEnv != null || parsed.conches != null
-                        || parsed.groups != null || parsed.actions != null || parsed.readOnly || parsed.all) {
+                        || parsed.groups != null || parsed.actions != null || parsed.readOnly || parsed.all || parsed.devTools) {
                     err.print(USAGE);
                     yield 1;
                 }
@@ -1002,7 +1005,7 @@ public final class CrabCommand {
                 Set<String> actions = parsed.actions == null ? Set.of() : parsed.actions;
                 ApiKeyScope scope;
                 try {
-                    scope = ApiKeyScope.explicit(parsed.all, conches, groups, actions, parsed.readOnly);
+                    scope = ApiKeyScope.explicit(parsed.all, conches, groups, actions, parsed.readOnly, parsed.devTools);
                 } catch (IllegalArgumentException ex) {
                     err.println(clientMessage(ex));
                     yield 1;
@@ -1036,7 +1039,7 @@ public final class CrabCommand {
             return 1;
         }
         if (parsed.positionals.size() != 2 || !"password".equals(parsed.positionals.get(1))
-                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.groups != null
+                || parsed.readOnly || parsed.all || parsed.devTools || parsed.conches != null || parsed.groups != null
                 || parsed.actions != null) {
             err.print(USAGE);
             return 1;
@@ -1080,7 +1083,7 @@ public final class CrabCommand {
         if ("trace".equals(verb)) {
             return debugTrace(parsed, env, in, out, err);
         }
-        if (parsed.positionals.size() != 2 || parsed.readOnly || parsed.all
+        if (parsed.positionals.size() != 2 || parsed.readOnly || parsed.all || parsed.devTools
                 || parsed.conches != null || parsed.groups != null || parsed.actions != null || parsed.account != null) {
             if (parsed.positionals.size() > 2 && isDebugVerb(verb)) {
                 err.println("口令不能写在命令行参数里。");
@@ -1115,7 +1118,7 @@ public final class CrabCommand {
             PrintStream err
     ) {
         if (parsed.positionals.size() != 4 || parsed.account == null || parsed.account.isBlank()
-                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.groups != null
+                || parsed.readOnly || parsed.all || parsed.devTools || parsed.conches != null || parsed.groups != null
                 || parsed.actions != null) {
             err.print(USAGE);
             return 1;
@@ -1161,7 +1164,7 @@ public final class CrabCommand {
             PrintStream out,
             PrintStream err
     ) {
-        if (parsed.positionals.size() != 3 || parsed.account != null || parsed.readOnly || parsed.all
+        if (parsed.positionals.size() != 3 || parsed.account != null || parsed.readOnly || parsed.all || parsed.devTools
                 || parsed.conches != null || parsed.groups != null || parsed.actions != null) {
             err.print(USAGE);
             return 1;
@@ -1313,6 +1316,7 @@ public final class CrabCommand {
         Set<String> actions = null;
         boolean readOnly = false;
         boolean all = false;
+        boolean devTools = false;
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             if ("--all".equals(arg)) {
@@ -1341,6 +1345,10 @@ public final class CrabCommand {
                 readOnly = true;
                 continue;
             }
+            if ("--dev-tools".equals(arg)) {
+                devTools = true;
+                continue;
+            }
             if (arg.startsWith("--")) {
                 err.println("不认识的选项 " + arg + "。");
                 return null;
@@ -1351,7 +1359,7 @@ public final class CrabCommand {
             err.println("不认识的选项 --account。");
             return null;
         }
-        return new Parsed(positionals, fromEnv, conches, groups, actions, readOnly, all, account);
+        return new Parsed(positionals, fromEnv, conches, groups, actions, readOnly, all, devTools, account);
     }
 
     private int mcp(
@@ -1366,7 +1374,7 @@ public final class CrabCommand {
             return 1;
         }
         if (parsed.positionals.size() != 3 || !"refresh".equals(parsed.positionals.get(1))
-                || parsed.readOnly || parsed.all || parsed.conches != null || parsed.groups != null
+                || parsed.readOnly || parsed.all || parsed.devTools || parsed.conches != null || parsed.groups != null
                 || parsed.actions != null) {
             err.print(USAGE);
             return 1;
@@ -1471,6 +1479,7 @@ public final class CrabCommand {
             Set<String> actions,
             boolean readOnly,
             boolean all,
+            boolean devTools,
             String account
     ) {
     }

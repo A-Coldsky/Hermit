@@ -157,11 +157,11 @@ class DevTraceFlowTest {
             assertThat(detail.json.path("data").path("steps").get(0).has("responseBody")).isFalse();
 
             CreatedApiKey localKey = runtime.apiKeys().create(
-                    "local", new ApiKeyScope(Set.of("local_echo"), Set.of(), false), Actors.CONSOLE);
+                    "local", new ApiKeyScope(Set.of("local_echo"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey otherKey = runtime.apiKeys().create(
-                    "other", new ApiKeyScope(Set.of("official_ping"), Set.of(), false), Actors.CONSOLE);
+                    "other", new ApiKeyScope(Set.of("official_ping"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey allKey = runtime.apiKeys().create(
-                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true, Set.of(), true), Actors.CONSOLE);
             InvokeOutcome invoked = runtime.invoker().invoke(
                     InvokeRequest.of(
                                     new ApiKeyPrincipal(localKey.id(), localKey.name(), localKey.scope()),
@@ -193,14 +193,16 @@ class DevTraceFlowTest {
             assertThat(bigBody).doesNotContain(MARKER).contains("单步正文超过 256 KiB，已截断。");
 
             String sessionId = initialize(http, crab, localKey.plaintext());
-            JsonNode tools = mcp(http, crab, localKey.plaintext(), sessionId, 2, "tools/list", null);
-            assertThat(toolNames(tools)).contains("debug_trace");
-            JsonNode debugTool = tool(tools, "debug_trace");
+            JsonNode tools = dev.hermit.crab.mcp.DevToolList.expand(
+                    mcp(http, crab, localKey.plaintext(), sessionId, 2, "tools/list", null),
+                    mcp(http, crab, localKey.plaintext(), sessionId, 20, "tools/call", Map.of("name", "hermit_dev", "arguments", Map.of())));
+            assertThat(toolNames(tools)).contains("hermit_dev__debug_trace");
+            JsonNode debugTool = tool(tools, "hermit_dev__debug_trace");
             assertThat(debugTool.path("annotations").path("readOnlyHint").asBoolean()).isTrue();
             assertThat(debugTool.path("annotations").path("destructiveHint").asBoolean()).isFalse();
 
             JsonNode seen = mcp(http, crab, localKey.plaintext(), sessionId, 3, "tools/call",
-                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(seen.has("result")).as(seen.path("error").toString()).isTrue();
             assertThat(seen.path("result").path("isError").asBoolean(true)).isFalse();
             JsonNode content = ApiJson.tree(seen.path("result").path("content").get(0).path("text").asText());
@@ -210,26 +212,26 @@ class DevTraceFlowTest {
             assertThat(content.toString()).doesNotContain(PASSWORD).doesNotContain(COOKIE);
 
             CreatedApiKey allReadOnlyKey = runtime.apiKeys().create(
-                    "all-ro", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+                    "all-ro", new ApiKeyScope(Set.of(), Set.of(), true, true, Set.of(), true), Actors.CONSOLE);
             String allSession = initialize(http, crab, allKey.plaintext());
 
             JsonNode hidden = mcp(http, crab, otherKey.plaintext(), initialize(http, crab, otherKey.plaintext()),
-                    4, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    4, "tools/call", Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolMessage(hidden)).contains("这把 API Key 不能读取这条追踪");
             assertThat(toolMessage(hidden)).doesNotContain("没有这个工具");
             // 本机全部权限读写 Key 在开发者模式下可读控制台试跑追踪，但仍不能读其他 API Key 的追踪，只读 Key 亦不可读。
             JsonNode allConsoleSeen = mcp(http, crab, allKey.plaintext(), allSession,
-                    5, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    5, "tools/call", Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(allConsoleSeen.path("result").path("isError").asBoolean(true)).as(allConsoleSeen.toString()).isFalse();
             JsonNode allOtherKeyHidden = mcp(http, crab, allKey.plaintext(), allSession,
-                    51, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", "key-trace")));
+                    51, "tools/call", Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", "key-trace")));
             assertThat(toolMessage(allOtherKeyHidden)).isEqualTo(toolMessage(hidden));
             JsonNode allRoHidden = mcp(http, crab, allReadOnlyKey.plaintext(), initialize(http, crab, allReadOnlyKey.plaintext()),
-                    52, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    52, "tools/call", Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolMessage(allRoHidden)).isEqualTo(toolMessage(hidden));
 
             JsonNode officialHidden = mcp(http, crab, allKey.plaintext(), allSession,
-                    9, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", "official-trace")));
+                    9, "tools/call", Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", "official-trace")));
             // 正式包的调用有调用记录但没有开发追踪：说「不在可查范围」，不说成编号不存在。
             assertThat(toolMessage(officialHidden)).contains("不在可查范围").contains("调用记录").doesNotContain("没有这个工具");
             assertThat(officialHidden.toString()).doesNotContain("devTrace");
@@ -246,21 +248,21 @@ class DevTraceFlowTest {
             assertThat(after.json.path("data").path("devTrace").isNull()).isTrue();
             String offSession = initialize(http, crab, localKey.plaintext());
             JsonNode offTools = mcp(http, crab, localKey.plaintext(), offSession, 7, "tools/list", null);
-            assertThat(toolNames(offTools)).doesNotContain("debug_trace", "debug_trace_list");
+            assertThat(toolNames(offTools)).doesNotContain("hermit_dev", "hermit_dev__debug_trace", "hermit_dev__debug_trace_list");
             JsonNode offCall = mcp(http, crab, localKey.plaintext(), offSession, 8, "tools/call",
-                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolMessage(offCall)).contains("追踪已删").doesNotContain("没有这个工具");
             JsonNode closedUnknown = mcp(http, crab, localKey.plaintext(), offSession, 11, "tools/call",
-                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", "never-opened")));
+                    Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", "never-opened")));
             assertThat(toolMessage(closedUnknown)).contains("开发者模式没有打开").doesNotContain("没有这个工具");
 
             runtime.debug().setEnabled(true, Actors.CONSOLE);
             String reopened = initialize(http, crab, localKey.plaintext());
             JsonNode deletedAgain = mcp(http, crab, localKey.plaintext(), reopened, 12, "tools/call",
-                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", traceId)));
+                    Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", traceId)));
             assertThat(toolMessage(deletedAgain)).contains("追踪已删").doesNotContain("编号不存在");
             JsonNode stillMissing = mcp(http, crab, localKey.plaintext(), reopened, 13, "tools/call",
-                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", "never-opened")));
+                    Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", "never-opened")));
             assertThat(toolMessage(stillMissing)).contains("编号不存在").doesNotContain("追踪已删");
         } finally {
             server.close();
@@ -343,32 +345,34 @@ class DevTraceFlowTest {
             assertThat(consoleDetail.json.path("data").path("devTrace").path("kind").asText()).isEqualTo("http");
             assertThat(consoleDetail.json.path("data").path("devTrace").path("session").path("loginOk").asBoolean()).isFalse();
 
-            // 4. 本机全部权限读写 Key 与点名该本地包的读写 Key 均可通过 debug_trace_list 与 debug_trace 调试；
+            // 4. 本机全部权限读写 Key 与点名该本地包的读写 Key 均可通过 hermit_dev__debug_trace_list 与 hermit_dev__debug_trace 调试；
             //    只读 Key、其他包 Key 保持隔离。
             CreatedApiKey allKey = runtime.apiKeys().create(
-                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey allRoKey = runtime.apiKeys().create(
-                    "all-ro", new ApiKeyScope(Set.of(), Set.of(), true, true), Actors.CONSOLE);
+                    "all-ro", new ApiKeyScope(Set.of(), Set.of(), true, true, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey namedKey = runtime.apiKeys().create(
-                    "named", new ApiKeyScope(Set.of("local_echo"), Set.of(), false), Actors.CONSOLE);
+                    "named", new ApiKeyScope(Set.of("local_echo"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey namedRoKey = runtime.apiKeys().create(
-                    "named-ro", new ApiKeyScope(Set.of("local_echo"), Set.of(), true), Actors.CONSOLE);
+                    "named-ro", new ApiKeyScope(Set.of("local_echo"), Set.of(), true, false, Set.of(), true), Actors.CONSOLE);
             CreatedApiKey otherKey = runtime.apiKeys().create(
-                    "other", new ApiKeyScope(Set.of("official_auth"), Set.of(), false), Actors.CONSOLE);
+                    "other", new ApiKeyScope(Set.of("official_auth"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
 
             String allSession = initialize(http, crab, allKey.plaintext());
-            JsonNode listedTools = mcp(http, crab, allKey.plaintext(), allSession, 1, "tools/list", null);
-            assertThat(toolNames(listedTools)).contains("debug_trace", "debug_trace_list");
+            JsonNode listedTools = dev.hermit.crab.mcp.DevToolList.expand(
+                    mcp(http, crab, allKey.plaintext(), allSession, 1, "tools/list", null),
+                    mcp(http, crab, allKey.plaintext(), allSession, 20, "tools/call", Map.of("name", "hermit_dev", "arguments", Map.of())));
+            assertThat(toolNames(listedTools)).contains("hermit_dev__debug_trace", "hermit_dev__debug_trace_list");
 
             JsonNode listed = mcp(http, crab, allKey.plaintext(), allSession, 2, "tools/call",
-                    Map.of("name", "debug_trace_list", "arguments", Map.of("conch", "local_echo", "action", "test_login")));
+                    Map.of("name", "hermit_dev__debug_trace_list", "arguments", Map.of("conch", "local_echo", "action", "test_login")));
             assertThat(listed.path("result").path("isError").asBoolean(true)).as(listed.toString()).isFalse();
             JsonNode listedBody = ApiJson.tree(listed.path("result").path("content").get(0).path("text").asText());
             assertThat(listedBody.path("total").asInt()).isEqualTo(1);
             assertThat(listedBody.path("traces").get(0).path("traceId").asText()).isEqualTo(failTraceId);
 
             JsonNode allRead = mcp(http, crab, allKey.plaintext(), allSession, 3, "tools/call",
-                    Map.of("name", "debug_trace", "arguments", Map.of("traceId", failTraceId)));
+                    Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", failTraceId)));
             assertThat(allRead.path("result").path("isError").asBoolean(true)).as(allRead.toString()).isFalse();
             JsonNode allReadBody = ApiJson.tree(allRead.path("result").path("content").get(0).path("text").asText());
             assertThat(allReadBody.path("action").asText()).isEqualTo(DevTraceStore.TEST_LOGIN_ACTION);
@@ -376,17 +380,17 @@ class DevTraceFlowTest {
             assertThat(allReadBody.toString()).doesNotContain(PASSWORD).doesNotContain(COOKIE);
 
             JsonNode namedRead = mcp(http, crab, namedKey.plaintext(), initialize(http, crab, namedKey.plaintext()),
-                    4, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", failTraceId)));
+                    4, "tools/call", Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", failTraceId)));
             assertThat(namedRead.path("result").path("isError").asBoolean(true)).as(namedRead.toString()).isFalse();
 
             for (CreatedApiKey deniedKey : List.of(allRoKey, namedRoKey, otherKey)) {
                 String deniedSession = initialize(http, crab, deniedKey.plaintext());
                 JsonNode deniedRead = mcp(http, crab, deniedKey.plaintext(), deniedSession,
-                        5, "tools/call", Map.of("name", "debug_trace", "arguments", Map.of("traceId", failTraceId)));
+                        5, "tools/call", Map.of("name", "hermit_dev__debug_trace", "arguments", Map.of("traceId", failTraceId)));
                 assertThat(deniedRead.path("result").path("isError").asBoolean(false)).as(deniedKey.name()).isTrue();
                 assertThat(toolMessage(deniedRead)).contains("不能读取这条追踪");
                 JsonNode deniedList = mcp(http, crab, deniedKey.plaintext(), deniedSession,
-                        6, "tools/call", Map.of("name", "debug_trace_list", "arguments", Map.of("conch", "local_echo")));
+                        6, "tools/call", Map.of("name", "hermit_dev__debug_trace_list", "arguments", Map.of("conch", "local_echo")));
                 JsonNode deniedListBody = ApiJson.tree(deniedList.path("result").path("content").get(0).path("text").asText());
                 assertThat(deniedListBody.path("total").asInt()).as(deniedKey.name()).isZero();
             }
@@ -576,7 +580,7 @@ class DevTraceFlowTest {
             runtime.localConches().importBytes(gapYaml().getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
             runtime.admin().createAccount("gap_ping", "ada", Actors.CONSOLE);
             CreatedApiKey key = runtime.apiKeys().create(
-                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true), Actors.CONSOLE);
+                    "all", new ApiKeyScope(Set.of(), Set.of(), false, true, Set.of(), true), Actors.CONSOLE);
             HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
             String crab = "http://127.0.0.1:" + server.port();
 

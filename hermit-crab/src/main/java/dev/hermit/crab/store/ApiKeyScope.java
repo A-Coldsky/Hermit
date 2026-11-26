@@ -16,13 +16,17 @@ import java.util.Set;
  * sets still grant every loaded conch, including local ones. {@link #grantsAllOfficial()}
  * is that runtime meaning. Console and CLI creation reject both sets empty unless {@code all}
  * is requested. {@link ApiKeyPrincipal} does not read {@code all}.
+ *
+ * <p>{@code devTools} admits the built-in developer package ({@code hermit_dev}) on MCP.
+ * No other field grants it, {@code all} included; rows written before the flag read it as false.
  */
 public record ApiKeyScope(
         Set<String> conches,
         Set<String> actions,
         boolean readOnlyOnly,
         boolean all,
-        Set<String> groups
+        Set<String> groups,
+        boolean devTools
 ) {
     public static final String MISSING_SCOPE =
             "必须指定范围：选择全部权限（包括本地规则包），或填写 conches、groups、actions";
@@ -36,6 +40,11 @@ public record ApiKeyScope(
         if (all && (!conches.isEmpty() || !actions.isEmpty() || !groups.isEmpty())) {
             throw new IllegalArgumentException(ALL_EXCLUDES_NAMES);
         }
+    }
+
+    /** Without the developer package. Existing callers and stored rows use this shape. */
+    public ApiKeyScope(Set<String> conches, Set<String> actions, boolean readOnlyOnly, boolean all, Set<String> groups) {
+        this(conches, actions, readOnlyOnly, all, groups, false);
     }
 
     /** Same as {@code all == false}, without groups. Existing callers and stored rows use this shape. */
@@ -67,6 +76,18 @@ public record ApiKeyScope(
             Set<String> actions,
             boolean readOnlyOnly
     ) {
+        return explicit(all, conches, groups, actions, readOnlyOnly, false);
+    }
+
+    /** As above; {@code devTools} additionally admits the built-in developer package. */
+    public static ApiKeyScope explicit(
+            boolean all,
+            Set<String> conches,
+            Set<String> groups,
+            Set<String> actions,
+            boolean readOnlyOnly,
+            boolean devTools
+    ) {
         Set<String> namedConches = conches == null ? Set.of() : Set.copyOf(conches);
         Set<String> namedGroups = groups == null ? Set.of() : Set.copyOf(groups);
         Set<String> namedActions = actions == null ? Set.of() : Set.copyOf(actions);
@@ -78,9 +99,9 @@ public record ApiKeyScope(
             throw new IllegalArgumentException(MISSING_SCOPE);
         }
         if (all) {
-            return new ApiKeyScope(Set.of(), Set.of(), readOnlyOnly, true, Set.of());
+            return new ApiKeyScope(Set.of(), Set.of(), readOnlyOnly, true, Set.of(), devTools);
         }
-        return new ApiKeyScope(namedConches, namedActions, readOnlyOnly, false, namedGroups);
+        return new ApiKeyScope(namedConches, namedActions, readOnlyOnly, false, namedGroups, devTools);
     }
 
     /**

@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
  * Markdown links are removed so the text does not point at the repository or the web.
  */
 final class AuthoringGuide {
-    static final String URI = "hermit://authoring/guide";
+    static final String URI = "hermit://conches/hermit_dev/guide";
     static final String ALL_SECTION = "all";
     static final String STARTER_SECTION = "starter";
     static final String QUICK_REFERENCE_ID = "quick_reference";
@@ -111,7 +111,7 @@ final class AuthoringGuide {
             "❌ 同一 request 同时写 json 和 body/form/multipart，或需要 302 跳转时漏写 follow_redirects: true → ✅ body/form/json/multipart 四选一互斥；默认不跟随重定向，需跟随写 follow_redirects: true；跨认证域名登录要在 auth.origins 声明。",
             "❌ HTTP 规则包漏写 actions.<name>.examples、output，或省略 related 产生警告 → ✅ 每个 HTTP 能力必须写 title、description、output、examples；无关联能力显式写 related: []；只读查询标 idempotent: true 与 mcp: {expose: true, read_only: true}。",
             "❌ 在 script 里把 vars.response 当字符串、不写 credential: true 就读 vars.credential，或直接 return Uint8Array/Date → ✅ 响应正文是 vars.response.body（JSON 先 JSON.parse）；读凭证加 credential: true；字节数组先转 hermit.hex/base64，不能用 class/async/fetch。",
-            "❌ HTTP 200 业务错误码或登录页 HTML 只靠默认 401/403，或试图修改 Reef 正式包/换包名绕过确认 → ✅ 业务码/登录页失效写 auth.expired_when（如 json_equals: {\"$.code\": 40100}）；Reef 正式包只读，改规则用 conch_save_local 存本地包，改已有本地包保持同名。");
+            "❌ HTTP 200 业务错误码或登录页 HTML 只靠默认 401/403，或试图修改 Reef 正式包/换包名绕过确认 → ✅ 业务码/登录页失效写 auth.expired_when（如 json_equals: {\"$.code\": 40100}）；Reef 正式包只读，改规则用 hermit_dev__save_local 存本地包，改已有本地包保持同名。");
 
     private static final String STARTER_SECTION_CONTENT = buildStarterSection();
 
@@ -432,7 +432,7 @@ final class AuthoringGuide {
     private static String buildStarterSection() {
         StringBuilder sb = new StringBuilder();
         sb.append("## 可直接复制的 HTTP 规则起始模板\n\n");
-        sb.append("下面是一份能直接通过 `conch_validate`（0 错误、0 警告）的完整 HTTP 规则包骨架，可直接复制后按抓包结果修改：\n\n");
+        sb.append("下面是一份能直接通过 `hermit_dev__validate`（0 错误、0 警告）的完整 HTTP 规则包骨架，可直接复制后按抓包结果修改：\n\n");
         sb.append("```yaml\n");
         sb.append(STARTER_TEMPLATE);
         if (!STARTER_TEMPLATE.endsWith("\n")) {

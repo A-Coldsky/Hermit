@@ -1250,7 +1250,7 @@ final class ConsoleApi {
         GatewayResponses.writeData(ctx, Map.of("apiKeys", rows));
     }
 
-    private static final Set<String> API_KEY_FIELDS = Set.of("name", "readOnly", "all", "conches", "groups", "actions");
+    private static final Set<String> API_KEY_FIELDS = Set.of("name", "readOnly", "all", "conches", "groups", "actions", "devTools");
 
     private static void createApiKey(CrabRuntime runtime, Context ctx) throws Exception {
         JsonNode body = object(ctx);
@@ -1262,7 +1262,7 @@ final class ConsoleApi {
         Set<String> groups = stringSet(body.get("groups"));
         Set<String> actions = stringSet(body.get("actions"));
         CreatedApiKey created = runtime.admin().createApiKey(
-                name, ApiKeyScope.explicit(all, conches, groups, actions, readOnly), Actors.CONSOLE);
+                name, ApiKeyScope.explicit(all, conches, groups, actions, readOnly, bool(body, "devTools", false)), Actors.CONSOLE);
         LinkedHashMap<String, Object> data = new LinkedHashMap<>();
         data.put("id", created.id());
         data.put("name", created.name());
@@ -2376,6 +2376,7 @@ final class ConsoleApi {
         row.put("groups", scope.groups());
         row.put("actions", scope.actions());
         row.put("readOnly", scope.readOnlyOnly());
+        row.put("devTools", scope.devTools());
         return row;
     }
 

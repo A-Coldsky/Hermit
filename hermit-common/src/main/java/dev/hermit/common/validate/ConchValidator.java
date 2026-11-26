@@ -93,6 +93,9 @@ public final class ConchValidator {
     private ConchValidator() {
     }
 
+    /** Crab 内置开发者工具包的名字，规则包不能使用。 */
+    public static final String DEV_CONCH = "hermit_dev";
+
     /** Conch 名，规则 {@code ^[a-z][a-z0-9_]{1,63}$}。 */
     public static boolean isConchName(String name) {
         return name != null && NAME.matcher(name).matches();
@@ -105,6 +108,8 @@ public final class ConchValidator {
         ArrayList<ValidationIssue> warnings = new ArrayList<>();
         if (!NAME.matcher(doc.conch()).matches()) {
             errors.add(issue(ValidationCodes.CONCH_NAME, "conch", "conch 不符合 ^[a-z][a-z0-9_]{1,63}$"));
+        } else if (DEV_CONCH.equals(doc.conch())) {
+            errors.add(issue(ValidationCodes.CONCH_NAME, "conch", "conch 不能叫 " + DEV_CONCH + "：这是 Crab 内置开发者工具包的名字"));
         }
         boolean mcp = "mcp".equals(doc.driver());
         if (!mcp && !"http".equals(doc.driver()) && !AuthenticatorChecks.isAuthenticator(doc)) {

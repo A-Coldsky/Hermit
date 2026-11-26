@@ -182,6 +182,36 @@ describe('Crab API Keys', () => {
     expect(wrapper.text()).toContain('legacy_oa')
   })
 
+  it('勾选开发者工具才在创建时带 devTools，列表里显示标签', async () => {
+    crab.apiKeys.mockResolvedValue({ apiKeys: [
+      { id: 'k1', name: 'dev', prefix: 'hk_a', scope: { all: true, readOnly: false, devTools: true, conches: [], actions: [] }, createdAt: '2026-11-04T00:00:00Z' },
+      { id: 'k2', name: 'plain', prefix: 'hk_b', scope: { all: true, readOnly: false, conches: [], actions: [] }, createdAt: '2026-11-04T00:00:00Z' },
+    ] })
+    crab.createApiKey.mockResolvedValue({ id: 'k3', name: 'ops', prefix: 'hk_c', plaintext: 'hk_c_secret', scope: { all: true, readOnly: true, devTools: true, conches: [], actions: [] }, createdAt: '2026-11-04T00:00:00Z' })
+    const wrapper = await mountPage(ApiKeysView, { attach: true })
+    await flushPromises()
+    expect(wrapper.findAll('[data-test="scope-dev"]')).toHaveLength(1)
+
+    await wrapper.findAll('button').find((b) => b.text().includes('创建 API Key'))!.trigger('click')
+    await flushPromises()
+    const dialog = () => document.body.querySelector('.el-dialog') as HTMLElement
+    const input = dialog().querySelector('input[placeholder^="用途说明"]') as HTMLInputElement
+    input.value = 'ops'
+    input.dispatchEvent(new Event('input'))
+    const radios = [...dialog().querySelectorAll('.el-radio')] as HTMLElement[]
+    radios.find((r) => r.textContent?.includes('全部权限'))!.click()
+    await flushPromises()
+    const dev = dialog().querySelector('[data-test="scope-dev-tools"]') as HTMLElement
+    expect(dev.classList.contains('is-checked')).toBe(false)
+    dev.click()
+    await flushPromises()
+    ;[...dialog().querySelectorAll('button')].find((b) => b.textContent?.trim() === '创建')!.click()
+    await flushPromises()
+    expect(crab.createApiKey).toHaveBeenCalledWith({ name: 'ops', readOnly: true, all: true, conches: [], actions: [], devTools: true })
+    crab.createApiKey.mockClear()
+    wrapper.unmount()
+  })
+
   it('选中全部权限时提示风险，创建时传 all 且不带范围', async () => {
     crab.apiKeys.mockResolvedValue({ apiKeys: [] })
     crab.createApiKey.mockResolvedValue({ id: 'k1', name: 'ops', prefix: 'hk_a', plaintext: 'hk_a_secret', scope: { all: true, readOnly: false, conches: [], actions: [] }, createdAt: '2026-11-04T00:00:00Z' })

@@ -1313,6 +1313,15 @@ public final class LocalConches {
     }
 
     /** 同一把锁、同一次写入里丢掉最旧的备份，只留 {@link #HISTORY_KEEP} 份。当前 yaml 不在这个目录里。 */
+    /** 读不出来的备份当作不相同，照常参加修剪，不挡住这次写入。 */
+    private static boolean sameBytes(Path file, byte[] expected) {
+        try {
+            return Files.size(file) == expected.length && Arrays.equals(Files.readAllBytes(file), expected);
+        } catch (IOException ex) {
+            return false;
+        }
+    }
+
     private static void pruneHistory(Path dir) {
         pruneHistory(dir, null);
     }
@@ -1331,9 +1340,7 @@ public final class LocalConches {
                 }
                 String name = child.getFileName().toString();
                 if (name.endsWith(SUFFIX) && Files.isRegularFile(child, LinkOption.NOFOLLOW_LINKS)) {
-                    if (incoming != null
-                            && Files.size(child) == incoming.length
-                            && Arrays.equals(Files.readAllBytes(child), incoming)) {
+                    if (incoming != null && sameBytes(child, incoming)) {
                         continue;
                     }
                     files.add(child);

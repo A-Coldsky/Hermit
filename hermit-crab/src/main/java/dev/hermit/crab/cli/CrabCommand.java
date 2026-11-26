@@ -512,7 +512,7 @@ public final class CrabCommand {
         CrabRuntime runtime = open(env);
         try {
             runtime.loadInstalledConches();
-            ConchDoc doc = runtime.registry().find(conch).orElse(null);
+            ConchDoc doc = installedDoc(runtime, conch);
             if (doc == null) {
                 err.println("本机没有这个规则包。");
                 return 1;
@@ -557,7 +557,7 @@ public final class CrabCommand {
                 String key = args.length == 4 ? args[3] : null;
                 yield withRuntime(env, runtime -> {
                     runtime.loadInstalledConches();
-                    if (runtime.registry().find(conch).isEmpty()) {
+                    if (installedDoc(runtime, conch) == null) {
                         err.println(missingConch(conch));
                         return 1;
                     }
@@ -1420,10 +1420,15 @@ public final class CrabCommand {
         }
     }
 
+    /** 账号、凭证和配置的命令对授权器同样适用：授权器不能调用，但凭证要填在它上面。 */
+    private static ConchDoc installedDoc(CrabRuntime runtime, String conch) {
+        return runtime.registry().installed(conch).map(active -> active.doc()).orElse(null);
+    }
+
     private int withDeclaration(Function<String, String> env, String conch, PrintStream err, DeclaredTask task) {
         return withRuntime(env, runtime -> {
             runtime.loadInstalledConches();
-            ConchDoc doc = runtime.registry().find(conch).orElse(null);
+            ConchDoc doc = installedDoc(runtime, conch);
             if (doc == null) {
                 err.println("本机没有这个规则包。");
                 return 1;

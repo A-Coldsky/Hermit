@@ -177,7 +177,10 @@ class LoginCaptchaAcceptanceTest {
                 JsonNode wrongBody = json(wrong);
                 assertThat(wrongBody.path("error").path("code").asText()).isEqualTo("AUTH_FAILED");
                 assertThat(wrongBody.path("error").path("message").asText()).contains("期望 200").contains("实际 401");
-                assertThat(wrongBody.path("requestNote").asText()).isEqualTo("请求编号，不可查追踪");
+                // 开发者模式开着：登录输入的失败也存追踪（#187），响应带 traceId，不再是「请求编号，不可查追踪」。
+                assertThat(wrongBody.path("traceId").asText()).as(wrong.body()).isNotBlank();
+                assertThat(wrongBody.has("requestNote")).isFalse();
+                watchTrace(crab, wrong, watched);
                 assertThat(site.logins()).hasSize(1);
                 MockCaptchaSite.LoginHit rejected = site.logins().get(0);
                 assertThat(rejected.accepted()).isFalse();

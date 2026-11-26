@@ -642,10 +642,11 @@ public class LocalConchBehaviorTest {
     }
 
     @Test
-    void authenticatorPackagesAreRejectedUntilTheRuntimeLands() throws Exception {
-        // 1.13.0 的写法已经能解析和校验，运行时还没有：兼容版本停在 1.12.0，本机不能载入。
+    void authenticatorPackagesLoadButStayOutOfTheCallableView() throws Exception {
+        // 授权器能载入，但不在普通视图里（不能被调用、不进 OpenAPI 和 MCP）；引用它的包照常是普通包。
         try (OpenCrab crab = OpenCrab.open(temp.resolve("authenticator"))) {
-            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource);
+            ConchRegistry registry = new ConchRegistry();
+            LocalConches local = new LocalConches(crab.paths, registry.scoped(Origin.LOCAL), crab.dataSource);
             String authenticator = """
                     conch: corp_sso
                     version: 1.0.0
@@ -666,17 +667,18 @@ public class LocalConchBehaviorTest {
                     .replace("credentials: {}", "auth:\n  use: corp_sso");
             for (String yaml : List.of(authenticator, consumer)) {
                 LocalConches.CheckResult checked = local.check(yaml.getBytes(StandardCharsets.UTF_8));
-                assertThat(checked.ok()).isFalse();
-                assertThat(checked.errors()).extracting(issue -> issue.code()).containsExactly("MIN_CRAB_VERSION");
-                assertThatThrownBy(() -> local.importBytes(yaml.getBytes(StandardCharsets.UTF_8), Actors.CLI))
-                        .isInstanceOf(LocalConchException.class);
+                assertThat(checked.errors()).isEmpty();
+                local.importBytes(yaml.getBytes(StandardCharsets.UTF_8), Actors.CLI);
             }
+            assertThat(registry.snapshot()).containsOnlyKeys("corp_oa");
+            assertThat(registry.active("corp_sso")).isEmpty();
+            assertThat(registry.authenticators()).containsOnlyKeys("corp_sso");
+            assertThat(registry.authenticator("corp_oa")).isEmpty();
+            assertThat(registry.installed()).containsOnlyKeys("corp_sso", "corp_oa");
             // 不抬高版本也进不来：新写法本身要求 1.13.0。
             String lowered = authenticator.replace("min_crab_version: 1.13.0", "min_crab_version: 1.12.0");
             assertThat(local.check(lowered.getBytes(StandardCharsets.UTF_8)).errors())
                     .anyMatch(issue -> issue.code().equals("MIN_CRAB_VERSION"));
-            assertThat(crab.paths.localConches().resolve("corp_sso.yaml")).doesNotExist();
-            assertThat(crab.paths.localConches().resolve("corp_oa.yaml")).doesNotExist();
         }
     }
 

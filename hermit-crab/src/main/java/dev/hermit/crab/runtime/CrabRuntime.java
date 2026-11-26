@@ -94,6 +94,7 @@ import dev.hermit.crab.store.EncryptedLoginSnapshotStore;
 import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
+import dev.hermit.crab.store.AuthBindingStore;
 import dev.hermit.crab.store.Identity;
 import dev.hermit.crab.store.IdentityStore;
 import dev.hermit.crab.store.Origin;
@@ -139,6 +140,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     private final EngineSettings settings;
     private final SessionManager sessions;
     private final Identities identities;
+    private final Authenticators authenticators;
     private final RuleEngine engine;
     private final McpForwarder mcpForwarder;
     private final CallLogStore callLogs;
@@ -228,14 +230,21 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.apiKeys = new ApiKeyService(database.dataSource(), clock);
         this.settings = config.engineSettings();
         IdentityStore identityStore = new IdentityStore(database.dataSource(), cipher, clock);
+        AuthBindingStore authBindings = new AuthBindingStore(database.dataSource(), clock);
+        EncryptedSessionPersistence sessionPersistence = new EncryptedSessionPersistence(database.dataSource(), cipher);
         this.sessions = new SessionManager(
-                new EncryptedSessionPersistence(database.dataSource(), cipher),
+                sessionPersistence,
                 new EncryptedLoginSnapshotStore(database.dataSource(), cipher),
-                identityStore,
+                Authenticators.shared(identityStore, authBindings, registry, sessionPersistence),
                 settings,
                 clock);
         this.identities = new Identities(identityStore, sessions, registry, conchConfig, accounts, vault);
+        this.authenticators = new Authenticators(
+                authBindings, sessions, registry, conchConfig, accounts, vault, identities,
+                this::conchDisabled);
+        this.identities.bindAuthenticators(authenticators);
         this.engine = new RuleEngine(registry, sessions, settings, knownSecrets);
+        this.engine.bindAuthLinks(authenticators);
         this.contention = new SessionContention(clock);
         this.engine.bindContention(contention);
         this.mcpForwarder = new McpForwarder(
@@ -349,8 +358,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     private Set<String> probeTargets() {
         LinkedHashSet<String> targets = new LinkedHashSet<>();
-        for (String name : registry.snapshot().keySet()) {
-            ConchRegistry.Active active = registry.active(name).orElse(null);
+        // 授权器的认证地址同样要连，证书也要能检测和信任。
+        for (String name : registry.installed().keySet()) {
+            ConchRegistry.Active active = registry.installed(name).orElse(null);
             if (active == null) {
                 continue;
             }
@@ -523,6 +533,14 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     public Identities identities() {
         return identities;
+    }
+
+    private boolean conchDisabled(String conch) {
+        return disabledConches.contains(conch) || conchSwitchedOff.contains(conch);
+    }
+
+    public Authenticators authenticators() {
+        return authenticators;
     }
 
     public ConchAdmin admin() {
@@ -1441,7 +1459,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      */
     public void setConchDisabled(String conch, boolean disabled, String actor) {
         synchronized (switchLock) {
-            ConchRegistry.Active active = registry.active(conch).orElse(null);
+            // 授权器也能停用：停用后引用它的包按没有绑定处理。
+            ConchRegistry.Active active = registry.installed(conch).orElse(null);
             boolean loaded = active != null;
             if (disabled ? !loaded : !loaded && !conchSwitchedOff.contains(conch)) {
                 throw new IllegalArgumentException("conch not found");

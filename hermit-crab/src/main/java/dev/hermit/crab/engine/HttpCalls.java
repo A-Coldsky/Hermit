@@ -535,6 +535,10 @@ final class HttpCalls {
             } else {
                 collectSecrets(raw, login, 0);
             }
+            // 引用授权器的包里 auth 是授权器导出值的视图；旧包里叫 auth 的普通变量不算秘密。
+            if (vars.get(ConchRegistry.AUTH_VAR) instanceof SecretSource source) {
+                collectSecrets(raw, source.knownValues(), 0);
+            }
         }
         raw.addAll(CallSecrets.current());
         DevTraceDraft draft = DevTraceScope.current();

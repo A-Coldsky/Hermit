@@ -1811,7 +1811,7 @@ class AuthoringMcpTest {
                 assertThat(body.path("ok").asBoolean()).isFalse();
                 assertThat(body.path("fixHints").isArray()).isTrue();
                 assertThat(body.path("fixHints").toString())
-                        .contains("1.12.0")
+                        .contains("1.13.0")
                         .contains("credentials: {}")
                         .contains("examples")
                         .contains("{{login.xxx}}");

@@ -391,6 +391,12 @@ Reef 上传时的 `SAME_AUTH` 和 `AUTH_ORIGIN_ADDED` 警告见规则包参考�
 | POST | `/console/api/identities/{id}/check` | 正文 `{conch, account}`，只检查不绑定。返回 `{allowed, problem, peers, warnings}`；`peers[]`：`origin`、`conch`、`account`、`addresses`（和它相同的地址）、`credentials`（`SAME` / `DIFFERENT` / `UNKNOWN`）。包按当前生效的来源算；混合未签名的 `LOCAL` 包与 `OFFICIAL` 包时会在 `warnings` 中提示 |
 | POST | `/console/api/identities/{id}/members` | 正文 `{conch, account, confirm: true}`。没有 `confirm: true` 返回 400；检查不通过返回 400，`message` 是原因 |
 | DELETE | `/console/api/identities/{id}/members/{origin}/{conch}/{account}` | 解除绑定。`origin` 是 `OFFICIAL` 或 `LOCAL` |
+| GET | `/console/api/authenticators` | 本机生效的授权器（只在控制台，规则包列表、OpenAPI、MCP 里没有）。`{authenticators: [{conch, version, title, description, source, origins, allowHosts, exports, accounts}]}`；`accounts[]`：`name`、`consumers`（绑到它的业务包账号 `{origin, conch, account}`） |
+| POST | `/console/api/conches/{conch}/accounts/{account}/authenticator/check` | 正文 `{authAccount}`，只检查不绑定。返回 `{allowed, problem, authenticator, baseUrl, warnings}`；`baseUrl` 是要使用者确认的站点地址 |
+| PUT | `/console/api/conches/{conch}/accounts/{account}/authenticator` | 正文 `{authAccount, baseUrl, confirm: true}`。没有 `confirm: true`、检查不通过或 `baseUrl` 和现在的站点地址不一致返回 400 |
+| DELETE | `/console/api/conches/{conch}/accounts/{account}/authenticator` | 解除绑定，返回 `{unbound}` |
+
+授权器的账号、凭证、测试登录和验证码回答用规则包的同名接口（`/console/api/conches/{授权器}/accounts/...`）。`GET /console/api/conches/{conch}` 多了 `authenticator`（是不是授权器）和 `authUse`（`{conch, minVersion, installed, version, source}` 或 null）；账号列表每行多了 `authenticator`（绑定：`origin`、`conch`、`account`、`baseUrl`、`boundAt`、`loginInputRequired`、`loginPaused`，或 null），授权器的账号行多了 `consumers`。
 
 账号列表（`GET /console/api/conches/{conch}/accounts`）每行多一个 `identity`：`{id, name}` 或 null。
 

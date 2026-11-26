@@ -19,6 +19,7 @@ import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.Step;
+import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.engine.SessionManager;
@@ -87,6 +88,12 @@ public final class Identities {
     private final ConchConfigStore conchConfig;
     private final AccountStore accounts;
     private final CredentialVault vault;
+    /** 授权器绑定和身份互斥；包和账号的变化也要告诉它。 */
+    private volatile Authenticators authenticators;
+
+    void bindAuthenticators(Authenticators authenticators) {
+        this.authenticators = authenticators;
+    }
 
     Identities(
             IdentityStore store,
@@ -115,7 +122,9 @@ public final class Identities {
 
     /** 这个本地包有没有任意账号绑到了身份。不查库。 */
     public boolean hasBoundLocal(String conch) {
-        return conch != null && !store.boundAccounts(Origin.LOCAL, conch).isEmpty();
+        Authenticators linked = authenticators;
+        return conch != null && (!store.boundAccounts(Origin.LOCAL, conch).isEmpty()
+                || (linked != null && linked.hasBoundLocal(conch)));
     }
 
     public SessionManager.Cleared lastCleared(String identity) {
@@ -176,6 +185,12 @@ public final class Identities {
         }
         if (doc.upstream() != null) {
             return new Check("driver: mcp 的包没有 Cookie 会话，不能绑定身份", List.of(), List.of());
+        }
+        if (AuthenticatorChecks.isAuthenticator(doc)) {
+            return new Check("授权器的账号不能绑定身份，引用它的包在包详情里绑定授权器账号", List.of(), List.of());
+        }
+        if (AuthenticatorChecks.uses(doc)) {
+            return new Check("这个包用授权器登录（auth.use），不能再绑定身份", List.of(), List.of());
         }
         if (!hasAccount(origin, conch, account)) {
             return new Check("账号不存在", List.of(), List.of());
@@ -263,6 +278,10 @@ public final class Identities {
     }
 
     void accountDeleted(SessionKey key, String actor) {
+        Authenticators linked = authenticators;
+        if (linked != null) {
+            linked.accountDeleted(key, actor);
+        }
         leave(key, REASON_ACCOUNT_DELETED, actor);
     }
 
@@ -271,6 +290,10 @@ public final class Identities {
         if (registry.find(conch, origin).isPresent()) {
             return;
         }
+        Authenticators linked = authenticators;
+        if (linked != null) {
+            linked.packageRemoved(origin, conch, actor);
+        }
         for (SessionKey key : store.boundAccounts(origin, conch)) {
             leave(key, REASON_PACKAGE_REMOVED, actor);
         }
@@ -278,6 +301,10 @@ public final class Identities {
 
     /** 本地包的地址范围扩大了：它的账号都离开身份，新地址拿不到别的包登录出来的 Cookie。 */
     void widened(String conch) {
+        Authenticators linked = authenticators;
+        if (linked != null) {
+            linked.widened(conch);
+        }
         for (SessionKey key : store.boundAccounts(Origin.LOCAL, conch)) {
             leave(key, REASON_WIDENED, Actors.SYNC);
         }
@@ -289,6 +316,10 @@ public final class Identities {
      */
     public List<SessionKey> revalidate(String actor) {
         ArrayList<SessionKey> left = new ArrayList<>();
+        Authenticators linked = authenticators;
+        if (linked != null) {
+            left.addAll(linked.revalidate(actor));
+        }
         LinkedHashMap<SessionKey, String> detached = new LinkedHashMap<>();
         synchronized (judging) {
             if (!store.anyBound()) {

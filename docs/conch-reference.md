@@ -73,7 +73,7 @@
 
 凭证只能声明字段。真实口令、Cookie 和 Bearer 令牌由用户在控制台填写，不能写进 YAML，也不能发给 AI。`credentials` 必须出现，没有凭证时写 `{}`。包名匹配 `^[a-z][a-z0-9_]{1,63}$`；本地规则包可以与正式包同名，两份各自保留账号、凭证和配置，同一时刻只有一份生效，在控制台切换来源。
 
-`min_crab_version` 填 SemVer，不要高于当前 Crab（当前兼容版本是 1.12.0；新规则包推荐直接写 `1.12.0`）。用到以下特性时须满足最低版本要求：
+`min_crab_version` 填 SemVer，不要高于当前 Crab（当前兼容版本是 1.13.0；新规则包推荐直接写 `1.12.0`）。用到以下特性时须满足最低版本要求：
 
 - `1.1.0`：`driver: mcp`。
 - `1.2.0`：顶层 `scripts` 或 script 步骤的 `use`。
@@ -86,6 +86,7 @@
 - `1.10.0`：顶层 `groups` 或能力的 `group`（否则 message 为「使用能力分组时 min_crab_version 必须不低于 1.10.0」）。
 - `1.11.0`：`driver: http` 的 `auth.origins`（`driver: mcp` 的包不能用）。
 - `1.12.0`：`driver: http` 的 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail`、`equals`、`not_equals`、`present`、`not_present`（`driver: mcp` 的包不能用）。
+- `1.13.0`：授权器（`driver: auth`），或 `driver: http` 的 `auth.use`、`auth.min_version`、`auth.exchange`（见「授权器」）。
 
 ### 令牌
 
@@ -247,7 +248,7 @@ actions:
 | 字段 | 当前规则 |
 | --- | --- |
 | `conch`、action 名、分组名 | `^[a-z][a-z0-9_]{1,63}$` |
-| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.12.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时不低于 1.8.0（`driver: mcp` 不能用）。用了 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时不低于 1.9.0；不低于 1.9.0 的包里 request、extract、assert 的未知键是错误（更低的包仍是警告）。用了 `groups` 或能力的 `group` 时不低于 1.10.0。`driver: http` 用了 `auth.origins` 时不低于 1.11.0（`driver: mcp` 不能用）。`driver: http` 用了 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail: session_expired` / 变量断言键（`equals`、`not_equals`、`present`、`not_present`）时不低于 1.12.0（`driver: mcp` 不能用） |
+| `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.13.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时不低于 1.8.0（`driver: mcp` 不能用）。用了 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时不低于 1.9.0；不低于 1.9.0 的包里 request、extract、assert 的未知键是错误（更低的包仍是警告）。用了 `groups` 或能力的 `group` 时不低于 1.10.0。`driver: http` 用了 `auth.origins` 时不低于 1.11.0（`driver: mcp` 不能用）。`driver: http` 用了 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail: session_expired` / 变量断言键（`equals`、`not_equals`、`present`、`not_present`）时不低于 1.12.0（`driver: mcp` 不能用） |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
 | `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
@@ -515,6 +516,61 @@ actions:
 规则按名字读 Cookie（`cookie_exists`、`auth.cookies`）只能读到会发往自己 `base_url` 的 Cookie，读不到认证中心或别的应用的。绑了身份的账号，`base_url` 是 `http` 时也读不到带 `Secure` 的 Cookie。
 
 测试登录总是先清空身份的 Cookie 再登录，验证的是这个账号自己填的凭证。自动登录暂停跟着账号走，绑定或解除不会解除暂停。
+
+## 授权器
+
+几个规则包用同一个认证中心登录时，可以把登录写成一个授权器（`driver: auth`），业务包用 `auth.use` 引用它。密码只在授权器账号上填一次，登录步骤只维护一处。1.13.0 起可用；现在只能用本地包，Reef 还不接受上传。
+
+授权器只有登录，没有能力，不能被调用，也不出现在规则包列表、OpenAPI、MCP 和 API Key 范围里：
+
+```yaml
+conch: corp_sso
+version: 1.2.0
+driver: auth
+min_crab_version: 1.13.0
+title: 公司统一登录
+description: 公司 SSO 的登录
+credentials:
+  username: { type: text, label: 用户名, required: true }
+  password: { type: secret, label: 密码, required: true }
+auth:
+  origins: ["https://sso.example.com"]
+  steps:
+    - request:
+        method: POST
+        url: https://sso.example.com/login
+        form: { username: "{{credential.username}}", password: "{{credential.password}}" }
+    - assert: { status: 200 }
+    - extract: { access_token: { jsonpath: "$.token" } }
+  alive_check:
+    request: { method: GET, url: https://sso.example.com/me }
+  exports:
+    access_token: { description: 访问令牌 }
+```
+
+业务包不写 `credentials`、`auth.steps` 和 `auth.origins`：
+
+```yaml
+auth:
+  use: corp_sso
+  min_version: 1.2.0        # 可选，不低于这个版本
+  exchange:                 # 可选，带着授权器的 Cookie 换本应用的会话
+    - request: { method: GET, url: https://sso.example.com/ticket }
+    - extract: { ticket: { jsonpath: "$.ticket" } }
+    - request: { method: GET, path: /cas, query: { ticket: "{{ticket}}" } }
+    - assert: { status: 200 }   # 换票和登录步骤一样不自动检查状态码，要自己断言
+```
+
+- 能力步骤和 `exchange` 用 `{{auth.名字}}` 读授权器导出的值。导出值一律是秘密：输出、追踪里打码，普通脚本读不到，`set` 出来的副本也一样。
+- 使用者在控制台把业务包的账号绑到一个授权器账号，绑定时确认业务包的站点地址。没绑定的账号调用返回 `NOT_CONFIGURED`。地址变了、包换了来源或授权器账号被删，绑定作废，要重新绑。授权器停用期间调用同样返回 `NOT_CONFIGURED`，重新启用后原来的绑定继续有效。
+- 授权器写了 `auth.allow_hosts` 时，只有站点地址在里面的业务包能绑；没写就只靠使用者确认。
+- 绑到同一个授权器账号的业务包共用它的 Cookie 和一把账号锁：非只读能力一次只跑一个。
+- `exchange` 按登录步骤执行：不自动检查 HTTP 状态码。应用拒绝票据（例如返回 403）时，没有 `assert` 的换票会被当成成功，要到能力步骤才发现没有会话。换票的最后写上 `assert`。
+- 绑到同一个授权器账号的业务包在同一台主机上时（`base_url` 路径不同），各自只删路径落在自己 `base_url` 下的 Cookie；`base_url` 是根路径的那个包不删，靠换票覆盖。
+- 写了 `exchange` 的包：自己的会话失效时只删发往自己 `base_url` 的 Cookie 并重新换票，不动授权器的登录；换票失败只记在这个业务包账号上。
+- 没写 `exchange` 的包（直接用导出的令牌）：失效时先跑授权器的 `alive_check`，不通过才重新登录；通过但能力仍失效（令牌比登录会话短命）时允许重新登录一次，同一个业务包账号 10 分钟内最多一次。导出令牌的授权器最好在 `alive_check` 里带上这个令牌。
+- 密码错误的次数、自动登录暂停和验证码等待都记在授权器账号上，所有绑到它的包一起受影响。一个授权器账号同一时刻只有一个验证码等待，只能在控制台回答；等待期间别的包的调用直接返回 `LOGIN_INPUT_REQUIRED`，不会重发验证码。
+- 引用授权器的包和授权器都不能加入「身份」。
 
 ## 非 401/403 的会话失效判定
 

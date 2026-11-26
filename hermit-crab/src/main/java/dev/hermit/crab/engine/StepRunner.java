@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -353,8 +354,8 @@ final class StepRunner {
     ) {
         Map<String, Object> before = capture ? new LinkedHashMap<>(vars) : null;
         int count = Extractors.apply(spec, vars, filters, templates, deadlineNanos);
-        if (!auth && taintedVars != null) {
-            Set<String> taintedBefore = taintedVars.isEmpty() ? Set.of() : Set.copyOf(taintedVars);
+        if (tracksSecrets(auth, vars) && taintedVars != null) {
+            Set<String> taintedBefore = withAuthView(taintedVars, vars);
             for (Map.Entry<String, Object> entry : spec.entrySet()) {
                 String key = entry.getKey();
                 Map<String, Object> child = Values.map(entry.getValue());
@@ -385,14 +386,14 @@ final class StepRunner {
             boolean auth,
             Set<String> taintedVars
     ) {
-        Set<String> taintedBefore = taintedVars == null || taintedVars.isEmpty() ? Set.of() : Set.copyOf(taintedVars);
+        Set<String> taintedBefore = withAuthView(taintedVars, vars);
         for (Map.Entry<String, Object> entry : spec.entrySet()) {
             String key = entry.getKey();
             if (ConchRegistry.RESERVED.contains(key)) {
                 throw new RuleProblem(ErrorCode.RULE_MISMATCH, "不能写入保留变量", null, null, null);
             }
             vars.put(key, entry.getValue());
-            if (!auth) {
+            if (tracksSecrets(auth, vars)) {
                 Object rawValue = rawDef == null ? null : rawDef.get(key);
                 if (referencesLoginOrTainted(rawValue, taintedBefore)) {
                     CallSecrets.remember(entry.getValue());
@@ -421,16 +422,17 @@ final class StepRunner {
             Set<String> taintedVars
     ) {
         boolean mask = Boolean.TRUE.equals(spec.get("credential"));
-        boolean trackChanges = capture || mask || (!auth && taintedVars != null && !taintedVars.isEmpty());
+        boolean tracked = tracksSecrets(auth, vars);
+        boolean trackChanges = capture || mask || (tracked && taintedVars != null && !taintedVars.isEmpty());
         Map<String, Object> before = trackChanges ? new LinkedHashMap<>(vars) : null;
-        Set<String> hidden = (!auth && taintedVars != null && !taintedVars.isEmpty())
+        Set<String> hidden = (tracked && taintedVars != null && !taintedVars.isEmpty())
                 ? Set.copyOf(taintedVars)
                 : Set.of();
         Outcome outcome = scripts.run(spec, vars, deadlineNanos, libraries, hidden);
         Map<String, Object> produced = trackChanges ? changed(before, vars) : Map.of();
         if (mask) {
             CallSecrets.remember(produced);
-        } else if (!auth && taintedVars != null && !produced.isEmpty()) {
+        } else if (tracked && taintedVars != null && !produced.isEmpty()) {
             taintedVars.removeAll(produced.keySet());
         }
         rememberDerived(produced);
@@ -439,6 +441,31 @@ final class StepRunner {
         }
         return new Outcome(outcome.method(), outcome.path(), outcome.status(), outcome.extractCount(),
                 outcome.sessionLost(), DevTraceDraft.variablePiece("script", produced));
+    }
+
+    /**
+     * 引用授权器的包里 {@code auth} 是授权器导出值的视图，和 {@code login} 一样是秘密的来源；
+     * 别的包里 {@code auth} 只是一个普通变量名，不受影响。
+     */
+    /**
+     * 能力步骤一律追踪从 login.* 派生的变量。登录步骤里凭证是这个包自己的，不追踪；
+     * 但引用授权器的包换票（auth.exchange）时，auth.* 是别的包的秘密，同样要追踪，不让它流进普通 script。
+     */
+    static boolean tracksSecrets(boolean auth, Map<String, Object> vars) {
+        return !auth || vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource;
+    }
+
+    private static Set<String> withAuthView(Set<String> taintedVars, Map<String, Object> vars) {
+        boolean view = vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource;
+        if (taintedVars == null || taintedVars.isEmpty()) {
+            return view ? Set.of(ConchRegistry.AUTH_VAR) : Set.of();
+        }
+        if (!view) {
+            return Set.copyOf(taintedVars);
+        }
+        LinkedHashSet<String> all = new LinkedHashSet<>(taintedVars);
+        all.add(ConchRegistry.AUTH_VAR);
+        return all;
     }
 
     private boolean referencesLoginOrTainted(Object rawNode, Set<String> taintedVars) {

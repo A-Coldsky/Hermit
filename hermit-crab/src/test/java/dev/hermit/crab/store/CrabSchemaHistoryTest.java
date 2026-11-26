@@ -71,6 +71,11 @@ class CrabSchemaHistoryTest {
                         assertThat(rows.getInt(1)).as(table).isZero();
                     }
                 }
+                // 23：授权器绑定从空开始，升级前的账号都没有绑定。
+                try (ResultSet rows = statement.executeQuery("SELECT COUNT(*) FROM auth_bindings")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getInt(1)).isZero();
+                }
                 // 22：存量 idempotency 行保留且 api_key_id 回填为 ''；不同 api_key_id 同键共存不冲突。
                 try (ResultSet rows = statement.executeQuery(
                         "SELECT api_key_id, body_sha256 FROM idempotency WHERE \"key\" = 'legacy-k1'")) {
@@ -99,7 +104,7 @@ class CrabSchemaHistoryTest {
         }
 
         assertThat(upgraded).contains(
-                "version 16", "version 17", "version 18", "version 19", "version 20", "version 21", "version 22");
+                "version 16", "version 17", "version 18", "version 19", "version 20", "version 21", "version 22", "version 23");
         assertThat(upgraded)
                 .as("已发布的库升级后和全新安装的结构不一致：已发布的升级步骤不能就地改，结构变化请新增版本")
                 .containsExactlyElementsOf(fresh);

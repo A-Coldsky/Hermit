@@ -1010,7 +1010,7 @@ final class AuthoringCalls {
                     sections.add("fields");
                 }
                 case ValidationCodes.MIN_CRAB_VERSION -> {
-                    hints.add("将顶层 min_crab_version 调整为 " + CrabVersion.CURRENT + "（当前 Crab 兼容版本），即可支持 1.1–1.12 全部规则特性。");
+                    hints.add("将顶层 min_crab_version 调整为 " + CrabVersion.CURRENT + "（当前 Crab 兼容版本），即可支持 1.1–1.13 全部规则特性。");
                     sections.add("fields");
                 }
                 case ValidationCodes.CONCH_NAME, ValidationCodes.ACTION_NAME -> {

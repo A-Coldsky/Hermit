@@ -1370,11 +1370,10 @@ public final class LocalConches {
                 for (Path child : children.toList()) {
                     if (Files.isSymbolicLink(child)
                             || !child.getFileName().toString().endsWith(SUFFIX)
-                            || !Files.isRegularFile(child, LinkOption.NOFOLLOW_LINKS)
-                            || Files.size(child) != current.length) {
+                            || !Files.isRegularFile(child, LinkOption.NOFOLLOW_LINKS)) {
                         continue;
                     }
-                    if (Arrays.equals(Files.readAllBytes(child), current)) {
+                    if (sameBytes(child, current)) {
                         Files.deleteIfExists(child);
                     }
                 }

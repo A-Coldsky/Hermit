@@ -36,7 +36,7 @@ import { notifySameSite, sameAuthText, sameSiteText } from '../same-site'
 import LocalHistoryList from '../components/LocalHistoryList.vue'
 import { formatImportIssue } from '../import-issue'
 import { refreshPending } from '../status'
-import { canRollback, previousBlockedNote } from '../previous'
+import { canRollback, previousBlockedNote, type PreviousFields } from '../previous'
 import { disabledReasonOnly } from '../disabled'
 import { updateConch } from '../update'
 
@@ -57,7 +57,7 @@ let tabChosen = false
 const inTab = (row: ConchSummary, source: 'reef' | 'local') =>
   Boolean(row.localVersion && row.reefVersion) || (row.source === 'LOCAL') === (source === 'local')
 const authInTab = (row: AuthenticatorView, source: 'reef' | 'local') =>
-  (row.source === 'LOCAL') === (source === 'local')
+  Boolean(row.localVersion && row.reefVersion) || (row.source === 'LOCAL') === (source === 'local')
 const driverOf = (row: ConchSummary) => (row.driver === 'mcp' ? 'mcp' : 'http')
 
 const tabConches = computed(() => conches.value.filter((row) => inTab(row, tab.value)))
@@ -67,15 +67,20 @@ const shownConches = computed(() =>
   kind.value === 'auth' ? [] : tabConches.value.filter((row) => kind.value === 'all' || driverOf(row) === kind.value))
 const shownAuthenticators = computed(() =>
   kind.value === 'all' || kind.value === 'auth' ? tabAuthenticators.value : [])
-/** 坏包读不出类型，只在「全部」里。 */
-const shownBroken = computed(() => (kind.value === 'all' ? tabBroken.value : []))
+/** 解析失败读不出类型的坏包只在「全部」里；能读出类型的校验停用本地包也归入对应类型页签。 */
+const shownBroken = computed(() =>
+  tabBroken.value.filter((row) => kind.value === 'all' || (Boolean(row.driver) && row.driver === kind.value)))
 const shownCount = computed(() =>
   shownConches.value.length + shownAuthenticators.value.length + shownBroken.value.length)
 const sourceCount = (source: 'reef' | 'local') =>
   conches.value.filter((row) => inTab(row, source)).length
   + authenticators.value.filter((row) => authInTab(row, source)).length
   + (source === 'local' ? broken.value.length : 0)
-const kindCount = (value: 'http' | 'mcp') => tabConches.value.filter((row) => driverOf(row) === value).length
+const kindCount = (value: 'http' | 'mcp') =>
+  tabConches.value.filter((row) => driverOf(row) === value).length
+  + tabBroken.value.filter((row) => row.driver === value).length
+const authKindCount = computed(() =>
+  tabAuthenticators.value.length + tabBroken.value.filter((row) => row.driver === 'auth').length)
 const updateDot = (source: 'reef' | 'local') =>
   authenticators.value.some((row) => row.updateAvailable && authInTab(row, source))
 const deleting = ref<string | null>(null)
@@ -248,9 +253,16 @@ function historyOf(conch: string): LocalConchHistoryEntry[] {
   return histories.value[conch] ?? []
 }
 
-function localNames(installed: ConchSummary[], brokenRows: LocalConchEntry[]): string[] {
+function localNames(
+  installed: ConchSummary[],
+  authRows: AuthenticatorView[],
+  brokenRows: LocalConchEntry[],
+): string[] {
   const names = new Set<string>()
   for (const row of installed) {
+    if (row.source === 'LOCAL') names.add(row.conch)
+  }
+  for (const row of authRows) {
     if (row.source === 'LOCAL') names.add(row.conch)
   }
   for (const row of brokenRows) names.add(row.conch)
@@ -317,12 +329,13 @@ async function load() {
       }),
     ])
     const nextConches = installed.conches
+    const nextAuth = authResult ? (authResult.authenticators ?? []) : authenticators.value
     const nextBroken = local ? local.conches.filter((row) => row.broken) : []
     const nextPending = Array.isArray(pendingResult?.pending) ? pendingResult.pending : []
     grants.value = Array.isArray(grantResult?.grants) ? grantResult.grants : []
-    await loadHistories(localNames(nextConches, nextBroken))
+    await loadHistories(localNames(nextConches, nextAuth, nextBroken))
     conches.value = nextConches
-    if (authResult) authenticators.value = authResult.authenticators ?? []
+    if (authResult) authenticators.value = nextAuth
     broken.value = nextBroken
     if (!tabChosen) {
       tabChosen = true
@@ -484,7 +497,7 @@ function openBroken(row: LocalConchEntry) {
   void router.push(`/conches/${encodeURIComponent(row.conch)}`)
 }
 
-async function rollbackListed(row: ConchSummary) {
+async function rollbackListed(row: PreviousFields & { conch: string }) {
   if (!canRollback(row)) return
   try {
     await ElMessageBox.confirm(
@@ -638,7 +651,7 @@ onMounted(load)
         <el-radio-button value="all">全部 {{ tabConches.length + tabAuthenticators.length + tabBroken.length }}</el-radio-button>
         <el-radio-button value="http">HTTP 规则 {{ kindCount('http') }}</el-radio-button>
         <el-radio-button value="mcp">原生 MCP {{ kindCount('mcp') }}</el-radio-button>
-        <el-radio-button value="auth">授权器 {{ tabAuthenticators.length }}</el-radio-button>
+        <el-radio-button value="auth">授权器 {{ authKindCount }}</el-radio-button>
       </el-radio-group>
     </div>
 
@@ -690,7 +703,7 @@ onMounted(load)
               <span v-else-if="row.switchedOff" data-test="switched-off-status">已停用：不能调用，进入详情可以重新启用</span>
               <span v-else-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
               <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
-              <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>
+              <span v-else-if="row.needsConfiguration">{{ row.usesAuthenticator ? '待配置：账号未绑定授权器或缺少配置' : '待配置：还缺凭证或配置项' }}</span>
               <span v-else>可用：可以通过 OpenAPI 和 MCP 调用</span>
             </div>
             <p v-if="row.ruleDisabled && disabledReasonOnly(row.message)" class="broken-reason" data-test="rule-message">{{ disabledReasonOnly(row.message) }}</p>
@@ -740,6 +753,7 @@ onMounted(load)
         v-for="row in shownAuthenticators"
         :key="`${row.source}/${row.conch}`"
         class="hm-card conch clickable"
+        :class="{ warn: Boolean(row.needsConfiguration) && !row.ruleDisabled, broken: Boolean(row.ruleDisabled) }"
         role="link"
         tabindex="0"
         data-test="authenticator-card"
@@ -750,32 +764,68 @@ onMounted(load)
           <ConchAvatar :name="row.conch" :title="row.title" />
           <div class="name">
             <strong :title="row.title || row.conch">{{ row.title || row.conch }}</strong>
-            <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
+            <span class="mono hm-muted">{{ row.conch }} · {{ versionLabel(row.version) }}</span>
           </div>
         </div>
         <div class="marks">
           <KindBadge kind="auth" />
           <el-tag v-if="row.source === 'LOCAL' && tab !== 'local'" type="info" effect="plain" size="small" class="local" data-test="local-tag">本地</el-tag>
+          <el-tag v-if="row.localVersion && row.reefVersion" type="info" effect="plain" size="small" class="local" data-test="two-sources-tag">{{ row.source === 'LOCAL' ? '本地这份在生效' : '订阅这份在生效' }}</el-tag>
+          <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
+          <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
+          <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
           <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
         </div>
         <div class="hm-kind-body">
           <div class="hm-kind-main">
-            <div class="status" :class="row.accounts.length ? 'ok' : 'idle'">
-              <el-icon><component :is="row.accounts.length ? CircleCheckFilled : User" /></el-icon>
-              <span v-if="!row.accounts.length">未建账号：先新建一个账号并填凭证</span>
+            <div
+              class="status"
+              :class="row.ruleDisabled || row.switchedOff ? 'bad' : row.needsConfiguration ? 'warn' : (row.accountCount ?? row.accounts.length) ? 'ok' : 'idle'"
+            >
+              <el-icon>
+                <component
+                  :is="row.ruleDisabled || row.switchedOff ? CircleCloseFilled : row.needsConfiguration ? WarningFilled : (row.accountCount ?? row.accounts.length) ? CircleCheckFilled : User"
+                />
+              </el-icon>
+              <span v-if="row.ruleDisabled">这版授权器暂时不能使用</span>
+              <span v-else-if="row.switchedOff" data-test="switched-off-status">已停用：绑定已作废，进入详情可以重新启用</span>
+              <span v-else-if="row.loginPaused">已暂停：有授权器账号自动登录已暂停，进入详情查看恢复方法</span>
+              <span v-else-if="!(row.accountCount ?? row.accounts.length)">未建账号：先新建一个账号并填凭证</span>
+              <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>
               <span v-else-if="consumerCount(row)" data-test="authenticator-used-by">被 {{ consumerNames(row).join('、') }} 使用</span>
               <span v-else>还没有业务包的账号绑到它上面</span>
             </div>
-            <p v-if="row.updateAvailable" class="update-note">
+            <p v-if="row.ruleDisabled && disabledReasonOnly(row.message)" class="broken-reason" data-test="rule-message">{{ disabledReasonOnly(row.message) }}</p>
+            <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
+            <p v-if="previousBlockedNote(row)" class="broken-reason" data-test="previous-note">{{ previousBlockedNote(row) }}</p>
+            <p v-if="row.reefDisabled" class="reef-off-note">Reef 已停用：本机版本仍可使用，但不会再更新</p>
+            <p v-else-if="row.updateAvailable" class="update-note">
               可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的业务包都用新版本登录。
             </p>
+            <LocalHistoryList
+              v-if="row.source === 'LOCAL'"
+              :entries="historyOf(row.conch)"
+              :error="historyErrors[row.conch] ?? null"
+              :loading-id="restoreLoadingId(row.conch)"
+              @restore="restoreHistory(row.conch, $event)"
+            />
           </div>
           <KindShell kind="auth" :size="56" class="hm-kind-water" aria-hidden="true" />
         </div>
         <div class="foot hm-muted">
-          <span><b class="num">{{ row.accounts.length }}</b> 个账号</span>
+          <span><b class="num">{{ row.accountCount ?? row.accounts.length }}</b> 个账号</span>
           <span><b class="num">{{ consumerCount(row) }}</b> 个业务包在用</span>
           <span class="spacer" />
+          <el-button
+            v-if="canRollback(row)"
+            link
+            type="primary"
+            class="card-action"
+            data-test="rollback"
+            :loading="acting === rollbackKey(row.conch)"
+            @click.stop="rollbackListed(row)"
+            @keyup.enter.stop
+          >退回 v{{ row.previousVersion }}</el-button>
           <el-button
             v-if="row.updateAvailable"
             link

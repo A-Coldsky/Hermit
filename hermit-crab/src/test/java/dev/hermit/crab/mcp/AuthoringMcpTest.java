@@ -1969,7 +1969,7 @@ class AuthoringMcpTest {
             assertThat(overData.path("quickReference").asText()).contains("- if:").contains("- repeat:");
             assertThat(overData.path("starterTemplate").asText())
                     .contains("conch: my_system")
-                    .contains("min_crab_version: 1.12.0")
+                    .contains("min_crab_version: 1.13.0")
                     .contains("related: []");
             assertThat(overData.path("pitfalls").isArray()).isTrue();
             assertThat(overData.path("pitfalls").size()).isGreaterThanOrEqualTo(8);

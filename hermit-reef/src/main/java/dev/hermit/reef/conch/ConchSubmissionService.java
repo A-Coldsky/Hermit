@@ -36,8 +36,10 @@ public class ConchSubmissionService {
         String note = validateOptionalText(rawNote, MAX_NOTE_LENGTH, "提交说明");
         ConchUploadService.PreparedUpload prepared = ConchUploadService.prepare(body);
         List<ValidationIssue> sameSite = uploadTransaction.sameSiteWarnings(prepared.doc());
-        synchronized (locks.monitor(prepared.doc().conch())) {
-            return transaction.create(actor, prepared, sameSite, note);
+        synchronized (locks.monitor("actor:" + actor)) {
+            synchronized (locks.monitor(prepared.doc().conch())) {
+                return transaction.create(actor, prepared, sameSite, note);
+            }
         }
     }
 

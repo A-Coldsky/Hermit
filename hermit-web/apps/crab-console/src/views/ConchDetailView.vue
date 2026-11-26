@@ -41,12 +41,21 @@ const partsFailed = ref(false)
 
 const missingConfig = computed(() => Object.entries(config.value).filter(([, f]) => f.missing).map(([name]) => name))
 const incompleteAccounts = computed(() =>
-  accounts.value.filter((a) => a.needsConfiguration && !a.credentialsUnreadable).map((a) => a.name),
+  detail.value?.authUse
+    ? []
+    : accounts.value.filter((a) => a.needsConfiguration && !a.credentialsUnreadable).map((a) => a.name),
 )
 const unreadableAccounts = computed(() => accounts.value.filter((a) => a.credentialsUnreadable).map((a) => a.name))
 const pausedAccounts = computed(() => accounts.value.filter((a) => a.loginPaused))
 /** 业务包里还没绑到授权器账号的账号。 */
 const unboundAccounts = computed(() => (detail.value?.authUse ? accounts.value.filter((a) => !a.authBinding) : []))
+/** 业务包里已绑定授权器账号、但授权器侧尚未就绪的账号。 */
+const unreadyBoundAccounts = computed(() =>
+  detail.value?.authUse ? accounts.value.filter((a) => a.authBinding && a.authBinding.ready === false) : [],
+)
+const pausedBoundAccounts = computed(() =>
+  detail.value?.authUse ? accounts.value.filter((a) => a.authBinding?.loginPaused) : [],
+)
 const needsAccount = computed(() => accounts.value.length === 0)
 const disabledReason = computed(() => disabledReasonOnly(detail.value?.message))
 const rollbackable = computed(() => (detail.value ? canRollback(detail.value) : false))
@@ -57,8 +66,10 @@ const ready = computed(
     !incompleteAccounts.value.length &&
     !unreadableAccounts.value.length &&
     !pausedAccounts.value.length &&
+    !pausedBoundAccounts.value.length &&
     !needsAccount.value &&
     !unboundAccounts.value.length &&
+    !unreadyBoundAccounts.value.length &&
     (!detail.value?.authUse || detail.value.authUse.installed),
 )
 
@@ -87,6 +98,16 @@ const accountAttention = computed(() => {
   const current = detail.value
   if (!current || partsFailed.value || current.repairRequired) return false
   if (accounts.value.some((account) => account.loginPaused || account.loginInputRequired)) return true
+  if (current.authUse) {
+    if (!current.authUse.installed || accounts.value.length === 0) return true
+    return accounts.value.some(
+      (account) =>
+        !account.authBinding ||
+        account.authBinding.ready === false ||
+        account.authBinding.loginPaused ||
+        account.authBinding.loginInputRequired,
+    )
+  }
   const required = new Set(current.credentials.filter((field) => field.required).map((field) => field.name))
   if (required.size === 0) return false
   if (accounts.value.length === 0) return true
@@ -98,12 +119,14 @@ const accountAttention = computed(() => {
 })
 
 function tabChoices(): DetailTab[] {
+  if (detail.value?.isAuthenticator) return ['accounts', 'config']
   const names: DetailTab[] = ['capabilities', 'accounts', 'config']
   if (detail.value?.source === 'LOCAL') names.push('developer')
   return names
 }
 
 function fallbackTab(): DetailTab {
+  if (detail.value?.isAuthenticator) return 'accounts'
   return accountAttention.value ? 'accounts' : 'capabilities'
 }
 
@@ -142,6 +165,13 @@ function settleTabs() {
 }
 
 function blockReason(account: Account): string | null {
+  if (detail.value?.authUse) {
+    if (!account.authBinding) return '还没有绑定授权器账号'
+    if (account.authBinding.problem) return account.authBinding.problem
+    if (account.authBinding.loginPaused) return '绑定的授权器账号已暂停自动登录'
+    if (account.loginPaused) return '已暂停换票登录'
+    return null
+  }
   if (account.credentialsUnreadable) return '凭证无法解密'
   if (account.needsConfiguration) return '缺少凭证'
   if (account.loginPaused) return '已暂停自动登录'
@@ -159,6 +189,11 @@ const SWITCHED_OFF_BANNER = '规则包已停用。重新启用前，下面这些
 const bannerTitle = computed(() => {
   if (detail.value?.ruleDisabled) return RULE_DISABLED_BANNER
   if (detail.value?.switchedOff) return SWITCHED_OFF_BANNER
+  if (detail.value?.isAuthenticator) {
+    if (missingConfig.value.length) return '缺少必填配置，绑到它的业务包暂时无法登录'
+    if (needsAccount.value) return '还没有账号，先新建账号并填好凭证后再给业务包绑定'
+    return '部分授权器账号需要处理，绑到它的业务包可能无法登录'
+  }
   if (missingConfig.value.length) return '缺少必填配置，调用会返回「待配置」'
   if (needsAccount.value) return '还没有账号，调用会返回「待配置」'
   if (detail.value?.authUse && !detail.value.authUse.installed) return '本机没有授权器，调用会返回「待配置」'
@@ -757,10 +792,21 @@ watch(
       <div v-if="!detail.ruleDisabled && rollbackable">
         <el-button class="update-btn" data-test="rollback" :loading="working" @click="rollback">退回 v{{ detail.previousVersion }}</el-button>
       </div>
-      <el-alert v-if="local" type="info" show-icon :closable="false" title="本地规则包：未经 Reef 签名，只在本机可用">
+      <el-alert
+        v-if="local"
+        type="info"
+        show-icon
+        :closable="false"
+        :title="detail.isAuthenticator ? '本地授权器：未经 Reef 签名，只在本机可用' : '本地规则包：未经 Reef 签名，只在本机可用'"
+      >
         <template #default>
-          <template v-if="!detail.switchedOff">全部权限的 Key 可以调用这个本地规则包。</template><template v-else>规则包启用时，全部权限的 Key 可以调用这个本地规则包。</template>在范围里点名了它的 Key 也可以调用。调用不会上报 Reef。
-          导出的 YAML 可以直接在 Reef「上传规则包」页面上传，校验签名后发布给其他 Crab。
+          <template v-if="detail.isAuthenticator">
+            授权器没有能力，不能被 API Key 调用；本机引用它的业务包把账号绑到它的账号后共用登录，不会上报 Reef。导出的 YAML 可以直接在 Reef「上传规则包」或「提交审核」上传。
+          </template>
+          <template v-else>
+            <template v-if="!detail.switchedOff">全部权限的 Key 可以调用这个本地规则包。</template><template v-else>规则包启用时，全部权限的 Key 可以调用这个本地规则包。</template>在范围里点名了它的 Key 也可以调用。调用不会上报 Reef。
+            导出的 YAML 可以直接在 Reef「上传规则包」页面上传，校验签名后发布给其他 Crab。
+          </template>
         </template>
       </el-alert>
       <el-alert v-if="partsFailed" type="error" show-icon :closable="false" title="账号或配置没有加载出来，下面的状态可能不完整">
@@ -786,16 +832,22 @@ watch(
           <div v-if="unboundAccounts.length" data-test="unbound-accounts">
             账号还没有绑定授权器账号：<span class="mono">{{ unboundAccounts.map((a) => a.name).join('、') }}</span>
           </div>
+          <div v-for="a in unreadyBoundAccounts" :key="`unready-${a.name}`" data-test="unready-bound-account">
+            账号 <span class="mono">{{ a.name }}</span> 绑定的授权器暂不可用：{{ a.authBinding?.problem || '请前往授权器检查账号与配置' }}
+          </div>
+          <div v-for="a in pausedBoundAccounts" :key="`paused-bound-${a.name}`" data-test="paused-bound-account">
+            账号 <span class="mono">{{ a.name }}</span> 绑定的授权器账号已暂停自动登录，请前往授权器账号页填写凭证并点「测试登录」恢复。
+          </div>
           <div v-if="incompleteAccounts.length">账号缺少凭证：<span class="mono">{{ incompleteAccounts.join('、') }}</span></div>
           <div v-for="a in pausedAccounts" :key="a.name">
-            账号 <span class="mono">{{ a.name }}</span> 已暂停自动登录<template v-if="a.loginPauseReason">：{{ a.loginPauseReason }}</template>。重新填写凭证后在下方账号列表点「测试登录」，登录成功即恢复。
+            账号 <span class="mono">{{ a.name }}</span> 已暂停自动登录<template v-if="a.loginPauseReason">：{{ a.loginPauseReason }}</template>。{{ detail.authUse ? '核对授权器绑定后在下方账号列表点「测试登录」，换票成功即恢复。' : '重新填写凭证后在下方账号列表点「测试登录」，登录成功即恢复。' }}
           </div>
         </template>
       </el-alert>
 
       <div class="tab-block">
         <el-tabs v-model="tab" class="tabs" :class="{ 'resident-open': tab === 'accounts' }" data-test="detail-tabs">
-          <el-tab-pane :label="capabilityLabel" name="capabilities">
+          <el-tab-pane v-if="!detail.isAuthenticator" :label="capabilityLabel" name="capabilities">
             <CapabilityToggles
               :conch="conch"
               :capabilities="detail.capabilities"
@@ -820,7 +872,7 @@ watch(
               @changed="reloadDetailAndParts"
             />
           </el-tab-pane>
-          <el-tab-pane v-if="local" label="开发者" name="developer">
+          <el-tab-pane v-if="local && !detail.isAuthenticator" label="开发者" name="developer">
             <DeveloperPanel
               :conch="conch"
               :driver="detail.driver === 'mcp' ? 'mcp' : 'http'"

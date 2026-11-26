@@ -41,7 +41,7 @@ final class SessionExpiry {
         if (rules == null || rules.isEmpty() || result == null || result.status() >= 500) {
             return -1;
         }
-        ResponseView view = new ResponseView(result, cookies, base);
+        ResponseView view = new ResponseView(result, cookies, base, AuthReach.NONE);
         for (int i = 0; i < rules.size(); i++) {
             Map<String, Object> rule = rules.get(i);
             if (rule == null || rule.isEmpty()) {
@@ -62,10 +62,21 @@ final class SessionExpiry {
             URI base,
             long deadlineNanos
     ) {
+        return firstUnmetExpect(expect, result, cookies, base, AuthReach.NONE, deadlineNanos);
+    }
+
+    static String firstUnmetExpect(
+            Map<String, Object> expect,
+            HttpResult result,
+            BasicCookieStore cookies,
+            URI base,
+            AuthReach reach,
+            long deadlineNanos
+    ) {
         if (expect == null || expect.isEmpty() || result == null) {
             return null;
         }
-        return firstUnmet(expect, new ResponseView(result, cookies, base), deadlineNanos);
+        return firstUnmet(expect, new ResponseView(result, cookies, base, reach), deadlineNanos);
     }
 
     private static String firstUnmet(Map<String, Object> rule, ResponseView view, long deadlineNanos) {
@@ -76,7 +87,7 @@ final class SessionExpiry {
                 case "status" -> statusMatches(view.status(), expected);
                 case "header_exists" -> headerExists(view.headers(), expected);
                 case "header_contains" -> headerContains(view.headers(), expected);
-                case "cookie_exists" -> cookieExists(view.cookies(), view.base(), expected);
+                case "cookie_exists" -> cookieExists(view.cookies(), view.base(), view.reach(), expected);
                 case "contains" -> view.hasTextBody()
                         && expected instanceof String text && !text.isEmpty()
                         && view.body().contains(text);
@@ -155,12 +166,12 @@ final class SessionExpiry {
         return true;
     }
 
-    private static boolean cookieExists(BasicCookieStore cookies, URI base, Object expected) {
+    private static boolean cookieExists(BasicCookieStore cookies, URI base, AuthReach reach, Object expected) {
         if (cookies == null || !(expected instanceof String name) || name.isEmpty()) {
             return false;
         }
         for (Cookie cookie : cookies.getCookies()) {
-            if (name.equals(cookie.getName()) && AuthReach.readable(cookie, base, cookies)) {
+            if (name.equals(cookie.getName()) && AuthReach.cookieReadable(cookie, base, reach, cookies)) {
                 return true;
             }
         }
@@ -325,14 +336,16 @@ final class SessionExpiry {
         private final HttpResult result;
         private final BasicCookieStore cookies;
         private final URI base;
+        private final AuthReach reach;
         private boolean jsonParsed;
         private DocumentContext jsonDoc;
         private String jsonText;
 
-        private ResponseView(HttpResult result, BasicCookieStore cookies, URI base) {
+        private ResponseView(HttpResult result, BasicCookieStore cookies, URI base, AuthReach reach) {
             this.result = result;
             this.cookies = cookies;
             this.base = base;
+            this.reach = reach == null ? AuthReach.NONE : reach;
         }
 
         private int status() {
@@ -349,6 +362,10 @@ final class SessionExpiry {
 
         private URI base() {
             return base;
+        }
+
+        private AuthReach reach() {
+            return reach;
         }
 
         private boolean hasTextBody() {

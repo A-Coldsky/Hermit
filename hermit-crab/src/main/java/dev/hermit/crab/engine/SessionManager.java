@@ -340,7 +340,7 @@ public final class SessionManager implements AutoCloseable {
 
     private void seedIdentity(SessionKey key, Seed seed) {
         String identity = shared.identityOf(key);
-        if (identity == null || seed == null || seed.cookies().isEmpty() || closed) {
+        if (identity == null || shared.borrows(key) || seed == null || seed.cookies().isEmpty() || closed) {
             return;
         }
         if (invalidationGen(key) != seed.gen()) {
@@ -357,7 +357,7 @@ public final class SessionManager implements AutoCloseable {
 
     private boolean seedIdentity(SessionKey key, Seed seed, long deadlineNanos) throws InterruptedException {
         String identity = shared.identityOf(key);
-        if (identity == null || seed == null || seed.cookies().isEmpty() || closed) {
+        if (identity == null || shared.borrows(key) || seed == null || seed.cookies().isEmpty() || closed) {
             return true;
         }
         if (invalidationGen(key) != seed.gen()) {
@@ -377,7 +377,7 @@ public final class SessionManager implements AutoCloseable {
     }
 
     private void seedIdentityUnderLock(SessionKey key, String identity, Jar jar, Seed seed) {
-        if (closed || !identity.equals(shared.identityOf(key))) {
+        if (closed || shared.borrows(key) || !identity.equals(shared.identityOf(key))) {
             if (jars.get(identity) == jar
                     && (closed || (shared.members(identity).isEmpty() && !hasStateForJar(jar)))) {
                 jars.remove(identity, jar);
@@ -516,10 +516,31 @@ public final class SessionManager implements AutoCloseable {
         jar.gate.writeLock().lock();
         try {
             jars.remove(identity, jar);
+            for (Map.Entry<SessionKey, AccountState> entry : List.copyOf(states.entrySet())) {
+                if (entry.getValue().jar == jar) {
+                    carry(entry.getKey(), entry.getValue());
+                    states.remove(entry.getKey(), entry.getValue());
+                }
+            }
             cleared.remove(identity);
             closeClient(jar);
         } finally {
             jar.gate.writeLock().unlock();
+        }
+    }
+
+    /** 释放给定前缀下的所有共享罐及客户端连接池；{@code clearData} 为 true 时先清空会话与持久化 Cookie。 */
+    public void dropIdentitiesByPrefix(String prefix, boolean clearData) {
+        if (prefix == null || prefix.isEmpty()) {
+            return;
+        }
+        for (String id : List.copyOf(jars.keySet())) {
+            if (id.startsWith(prefix)) {
+                if (clearData) {
+                    clearIdentity(id);
+                }
+                dropIdentity(id);
+            }
         }
     }
 
@@ -621,13 +642,18 @@ public final class SessionManager implements AutoCloseable {
         return true;
     }
 
+    void dropOwnCookies(SessionKey key, URI base, Set<String> authHosts) {
+        dropOwnCookies(key, base, authHosts, Set.of());
+    }
+
     /**
-     * 只让这个账号登出，并删掉罐里只属于它的站点的 Cookie：域名就是 {@code base} 的主机（父域的不动）；
-     * {@code authHosts} 是认证地址和同一个授权器账号下其它业务包所在的主机：
-     * 主机同时是认证地址之一时，只删路径落在 {@code base} 路径下的。授权器和其它包的 Cookie 都留着。
+     * 只让这个账号登出，并删掉罐里只属于它的站点的 Cookie：
+     * 带显式 {@code Domain} 属性且同时覆盖授权器或其它业务包主机的父域共享 Cookie 一律保留；
+     * 主机本身就是认证地址且业务包在根路径 {@code /} 时不删；
+     * 同主机仅有其它子路径业务包、而当前包在根路径 {@code /} 时，只删精确根路径 Cookie，保留子路径业务包 Cookie。
      * 调用方持有账号锁。
      */
-    void dropOwnCookies(SessionKey key, URI base, Set<String> authHosts) {
+    void dropOwnCookies(SessionKey key, URI base, Set<String> authOriginHosts, Set<String> siblingHosts) {
         AccountState state = state(key);
         markLoggedOut(key);
         if (base == null || base.getHost() == null || state.jar.cookies == null || state.jar.identity == null) {
@@ -635,8 +661,9 @@ public final class SessionManager implements AutoCloseable {
         }
         String host = base.getHost().toLowerCase(java.util.Locale.ROOT);
         String prefix = base.getRawPath() == null || base.getRawPath().isEmpty() ? "/" : base.getRawPath();
-        boolean sharedHost = authHosts != null && authHosts.contains(host);
-        if (sharedHost && "/".equals(prefix)) {
+        boolean authHost = authOriginHosts != null && authOriginHosts.contains(host);
+        boolean siblingHost = siblingHosts != null && siblingHosts.contains(host);
+        if (authHost && "/".equals(prefix)) {
             return;
         }
         List<Cookie> kept = new ArrayList<>();
@@ -646,7 +673,18 @@ public final class SessionManager implements AutoCloseable {
             if (domain.startsWith(".")) {
                 domain = domain.substring(1);
             }
-            boolean own = domain.equals(host) && (!sharedHost || underPath(cookie.getPath(), prefix));
+            boolean sharedDomainCookie = cookie.containsAttribute(Cookie.DOMAIN_ATTR)
+                    && (coversAnyHost(domain, authOriginHosts) || coversAnyHost(domain, siblingHosts));
+            boolean pathMatches;
+            if (!authHost && !siblingHost) {
+                pathMatches = true;
+            } else if ("/".equals(prefix)) {
+                String cp = cookie.getPath();
+                pathMatches = cp == null || cp.isEmpty() || "/".equals(cp);
+            } else {
+                pathMatches = underPath(cookie.getPath(), prefix);
+            }
+            boolean own = !sharedDomainCookie && domain.equals(host) && pathMatches;
             if (own) {
                 removed = true;
             } else {
@@ -663,6 +701,18 @@ public final class SessionManager implements AutoCloseable {
             }
         }
         persist(key);
+    }
+
+    private static boolean coversAnyHost(String cookieDomain, Set<String> hosts) {
+        if (cookieDomain == null || cookieDomain.isEmpty() || hosts == null || hosts.isEmpty()) {
+            return false;
+        }
+        for (String h : hosts) {
+            if (h != null && (h.equals(cookieDomain) || h.endsWith("." + cookieDomain))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean underPath(String cookiePath, String prefix) {

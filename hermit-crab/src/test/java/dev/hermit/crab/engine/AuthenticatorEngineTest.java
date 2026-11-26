@@ -699,6 +699,77 @@ class AuthenticatorEngineTest {
         }
     }
 
+    @Test
+    void runtimeBlocksOverwritingAuthSecretSourceAndPropagatesTaintAcrossCredentialScripts() {
+        try (Fixture fixture = new Fixture()) {
+            // C2(1): script 无 into 返回 { auth: "x" } 试图覆盖 auth 视图时，运行时直接按保留变量拒绝。
+            String clobber = apiYaml("api_clobber") + """
+                          - set: { copied: "{{auth.access_token}}" }
+                          - script:
+                              code: |
+                                return { auth: "clobbered" };
+                    """;
+            fixture.install(clobber);
+            ExecutionResult rejected = fixture.call(new SessionKey(Origin.LOCAL, "api_clobber", "main"));
+            assertThat(rejected.success()).isFalse();
+            assertThat(rejected.error().code()).isEqualTo(ErrorCode.RULE_MISMATCH);
+
+            // C2(2): credential: true 脚本基于污点变量产出的新变量继续带污点，后续普通脚本看不到它。
+            String chain = apiYaml("api_chain")
+                    .replace("      value: { type: string, description: 值 }\n",
+                            "      value: { type: string, description: 值 }\n"
+                                    + "      leaked: { type: string, description: 普通脚本看到的 }\n")
+                    + """
+                          - set: { copied: "{{auth.access_token}}" }
+                          - script:
+                              credential: true
+                              into: derived
+                              code: |
+                                return "wrapped:" + String(vars.copied);
+                          - script:
+                              into: leaked
+                              code: |
+                                return typeof vars.derived === "undefined" ? "hidden" : String(vars.derived);
+                    """;
+            fixture.install(chain);
+            ExecutionResult chained = fixture.call(new SessionKey(Origin.LOCAL, "api_chain", "main"));
+            assertThat(chained.success()).as(String.valueOf(chained.error())).isTrue();
+            assertThat(((Map<?, ?>) chained.data()).get("leaked")).isEqualTo("hidden");
+        }
+    }
+
+    @Test
+    void borrowingAccountNeverSeedsOldStandaloneCookiesIntoAuthenticatorJar() {
+        ConcurrentHashMap<SessionKey, List<StoredCookie>> standalone = new ConcurrentHashMap<>();
+        standalone.put(OA, List.of(new StoredCookie("TGC", "stale-oa-cookie", "localhost", "/", null, false, true)));
+        SessionPersistence persistence = new SessionPersistence() {
+            @Override
+            public List<StoredCookie> load(SessionKey key) {
+                return standalone.getOrDefault(key, List.of());
+            }
+
+            @Override
+            public void save(SessionKey key, List<StoredCookie> cookies) {
+                standalone.put(key, List.copyOf(cookies));
+            }
+
+            @Override
+            public void delete(SessionKey key) {
+                standalone.remove(key);
+            }
+        };
+        AuthShared shared = new AuthShared();
+        shared.bound.put(SSO, "auth:sso");
+        shared.bound.put(OA, "auth:sso");
+        EngineSettings settings = new EngineSettings(Duration.ofSeconds(20), Duration.ofMinutes(10), 3);
+        try (SessionManager manager = new SessionManager(
+                persistence, new NopLoginSnapshotStore(), shared, settings, java.time.Clock.systemUTC())) {
+            manager.rebound(OA);
+            assertThat(standalone).doesNotContainKey(OA);
+            assertThat(shared.load("auth:sso")).as("借用方旧独立 Cookie 绝不能反向灌进授权器共享罐").isEmpty();
+        }
+    }
+
     private static final class AuthShared implements SharedSessions {
         private final Map<SessionKey, String> bound = new ConcurrentHashMap<>();
         private final Map<String, List<StoredCookie>> saved = new ConcurrentHashMap<>();

@@ -191,9 +191,13 @@ async function remove(account: Account) {
   const identityNote = account.identity
     ? `它已绑定到身份「${account.identity.name}」，删除后会同时从该身份解除绑定。`
     : ''
+  const consumerNote =
+    props.isAuthenticator && account.consumers?.length
+      ? `当前有 ${account.consumers.length} 个业务包账号（${account.consumers.map((c) => `${c.conch}/${c.account}`).join('、')}）绑在它上面，删除后这些绑定都会作废并需要重新绑定。`
+      : ''
   try {
     await ElMessageBox.confirm(
-      `删除账号 ${account.name} 会同时删除它保存的凭证和登录会话，删除后不可恢复。${identityNote}${account.default ? '它是默认账号，删除后不带 X-Hermit-Account 的调用将无法选中账号。' : ''}`,
+      `删除账号 ${account.name} 会同时删除它保存的凭证和登录会话，删除后不可恢复。${identityNote}${consumerNote}${!props.isAuthenticator && account.default ? '它是默认账号，删除后不带 X-Hermit-Account 的调用将无法选中账号。' : ''}`,
       '删除账号',
       { confirmButtonText: '删除', cancelButtonText: '保留', type: 'warning', confirmButtonType: 'danger' },
     )
@@ -792,19 +796,38 @@ async function disconnect(account: Account) {
           <template v-if="row.loginPaused">
             <el-tag type="warning" effect="plain" size="small">已暂停</el-tag>
             <div v-if="row.loginPauseReason" class="note">{{ row.loginPauseReason }}</div>
-            <div class="hm-muted note">重新填写凭证后点「测试登录」，登录成功即恢复。</div>
-          </template>
-          <div v-if="row.loginInputRequired" data-test="login-input-required">
-            <el-tag type="warning" effect="plain" size="small">需要验证码</el-tag>
             <div class="hm-muted note">
-              登录停在验证码，请在输入框里填写后提交。
-              <template v-if="row.loginInputExpiresAt">过期时间：{{ formatTime(row.loginInputExpiresAt) }}。</template>
+              {{ authUse ? '核对授权器绑定后点「测试登录」，换票成功即恢复。' : '重新填写凭证后点「测试登录」，登录成功即恢复。' }}
             </div>
-            <el-button link type="primary" data-test="login-input-open" @click="openFromRow(row)">输入验证码</el-button>
-          </div>
-          <span v-if="!row.loginPaused && !row.loginInputRequired && row.credentialsUnreadable" class="hm-muted">无法登录：凭证无法解密</span>
-          <span v-else-if="!row.loginPaused && !row.loginInputRequired && row.needsConfiguration" class="hm-muted">无法登录：缺少凭证</span>
-          <span v-else-if="!row.loginPaused && !row.loginInputRequired" class="hm-muted">正常</span>
+          </template>
+          <template v-else-if="authUse">
+            <span v-if="!row.authBinding" class="hm-muted">待绑定授权器账号</span>
+            <div v-else-if="row.authBinding.loginInputRequired" data-test="auth-binding-input-required">
+              <el-tag type="warning" effect="plain" size="small">授权器待验证码</el-tag>
+              <div class="hm-muted note">登录停在验证码，请前往授权器账号页输入。</div>
+            </div>
+            <div v-else-if="row.authBinding.loginPaused" data-test="auth-binding-paused">
+              <el-tag type="warning" effect="plain" size="small">授权器已暂停</el-tag>
+              <div class="hm-muted note">绑定的授权器账号已暂停自动登录，请前往授权器恢复。</div>
+            </div>
+            <span v-else-if="row.authBinding.ready === false" class="hm-muted" data-test="auth-binding-unready">
+              无法登录：{{ row.authBinding.problem || '授权器账号未就绪' }}
+            </span>
+            <span v-else class="hm-muted">正常</span>
+          </template>
+          <template v-else>
+            <div v-if="row.loginInputRequired" data-test="login-input-required">
+              <el-tag type="warning" effect="plain" size="small">需要验证码</el-tag>
+              <div class="hm-muted note">
+                登录停在验证码，请在输入框里填写后提交。
+                <template v-if="row.loginInputExpiresAt">过期时间：{{ formatTime(row.loginInputExpiresAt) }}。</template>
+              </div>
+              <el-button link type="primary" data-test="login-input-open" @click="openFromRow(row)">输入验证码</el-button>
+            </div>
+            <span v-if="!row.loginInputRequired && row.credentialsUnreadable" class="hm-muted">无法登录：凭证无法解密</span>
+            <span v-else-if="!row.loginInputRequired && row.needsConfiguration" class="hm-muted">无法登录：缺少凭证</span>
+            <span v-else-if="!row.loginInputRequired" class="hm-muted">正常</span>
+          </template>
         </template>
       </el-table-column>
       <el-table-column label="操作" :width="narrow ? 96 : usesOAuth ? 420 : 300" align="right" fixed="right">

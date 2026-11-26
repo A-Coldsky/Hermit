@@ -49,6 +49,8 @@ export interface ConchSummary {
   reefDisabled: boolean
   /** 整个规则包在本机被停用：所有能力不可调用，也不出现在 MCP 和 OpenAPI 里。未载入的包没有这个字段。 */
   switchedOff?: boolean
+  /** 这个包是否通过 `auth.use` 引用授权器登录（不含授权器名）。 */
+  usesAuthenticator?: boolean
   /**
    * 本机其它已启用、实际访问同一网站（协议、主机、端口相同）的规则包名，已排序。
    * 按生效的 `base_url` 判断，配置里填的优先。只是提示：它们各自登录，不共用 Cookie。
@@ -161,8 +163,8 @@ export interface ConchDetail {
   loginPaused: boolean
   /** `LOCAL` 为本机未签名包，`REEF` 为已安装的正式包。签名损坏且未载入时仍是 `REEF`。 */
   source: 'LOCAL' | 'REEF'
-  /** 缺省或空白为 `http`。签名损坏且未载入时为 null，不从损坏的包里读。 */
-  driver: 'http' | 'mcp' | null
+  /** 缺省或空白为 `http`。授权器为 `auth`。签名损坏且未载入时为 null，不从损坏的包里读。 */
+  driver: 'http' | 'mcp' | 'auth' | null
   /** Reef 已停用。本机仍保留已安装版本并可调用。本地包为 false。 */
   reefDisabled: boolean
   /** 整个规则包在本机被停用：所有能力不可调用，也不出现在 MCP 和 OpenAPI 里。未载入的包没有这个字段。 */
@@ -275,6 +277,10 @@ export interface AuthBindingView {
   /** 授权器账号的登录停在验证码。只能在授权器的账号页输入。 */
   loginInputRequired: boolean
   loginPaused: boolean
+  /** 授权器在本机可用且该账号凭证与配置齐全。 */
+  ready?: boolean
+  /** 未就绪时的原因说明；就绪时为 null。 */
+  problem?: string | null
 }
 
 export interface AuthConsumer {
@@ -283,10 +289,10 @@ export interface AuthConsumer {
   account: string
 }
 
-/** 本机生效的授权器。只在控制台里有，不能被 API Key 或 MCP 调用。 */
+/** 本机生效（或已订阅但校验停用）的授权器。只在控制台里有，不能被 API Key 或 MCP 调用。 */
 export interface AuthenticatorView {
   conch: string
-  version: string
+  version: string | null
   title: string
   description: string
   source: string
@@ -295,10 +301,30 @@ export interface AuthenticatorView {
   exports: string[]
   /** 正式包并且本机订阅着。本地授权器为 false。 */
   subscribed: boolean
+  accountCount?: number
+  needsConfiguration?: boolean
+  loginPaused?: boolean
+  switchedOff?: boolean
+  ruleDisabled?: boolean
+  message?: string | null
+  fixHint?: string | null
+  localVersion?: string | null
+  reefVersion?: string | null
+  reefDisabled?: boolean
+  reefDisabledAt?: string | null
+  previousVersion?: string | null
+  previousDisabled?: boolean
+  previousPresent?: boolean
   updateAvailable: boolean
   latestVersion: string | null
   newRequiredCredentials: string[]
-  accounts: { name: string; consumers: AuthConsumer[] }[]
+  accounts: {
+    name: string
+    needsConfiguration?: boolean
+    loginPaused?: boolean
+    loginInputRequired?: boolean
+    consumers: AuthConsumer[]
+  }[]
 }
 
 /** 绑定授权器账号前的检查结果。 */
@@ -911,6 +937,8 @@ export interface LocalConchEntry {
   file: string
   /** 已载入的版本。坏包为 null，不表示已安装。 */
   version: string | null
+  /** 能解析出文档时为 `http`、`mcp` 或 `auth`；解析失败时为 null。 */
+  driver?: string | null
   loaded: boolean
   broken: boolean
   /** 坏包为中文原因，含文件名、包名和原因；已载入为 null。 */

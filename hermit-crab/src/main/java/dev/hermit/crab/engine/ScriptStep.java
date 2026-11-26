@@ -430,7 +430,11 @@ final class ScriptStep {
     }
 
     private static void apply(String into, Object converted, Map<String, Object> vars) {
+        boolean authReserved = vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource;
         if (into != null) {
+            if (authReserved && ConchRegistry.AUTH_VAR.equals(into)) {
+                throw mismatch("不能写入保留变量");
+            }
             vars.put(into, converted);
             return;
         }
@@ -439,7 +443,7 @@ final class ScriptStep {
             throw faulted(RETURN_OBJECT);
         }
         for (String key : map.keySet()) {
-            if (ConchRegistry.RESERVED.contains(key)) {
+            if (ConchRegistry.RESERVED.contains(key) || (authReserved && ConchRegistry.AUTH_VAR.equals(key))) {
                 throw mismatch("不能写入保留变量");
             }
         }

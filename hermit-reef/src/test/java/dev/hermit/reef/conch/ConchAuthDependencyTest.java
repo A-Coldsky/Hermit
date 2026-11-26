@@ -201,6 +201,55 @@ class ConchAuthDependencyTest {
                 .andExpect(jsonPath("$.data[?(@.conch=='corp_sso')].authUse").doesNotExist());
     }
 
+    @Test
+    void submissionApprovalReportsDependencyConflictAndExposesAuthenticatorMetadata() throws Exception {
+        String authWithAllow = AUTHENTICATOR.replace("  exports:",
+                "  allow_hosts: [\"https://*.corp.example\"]\n  exports:");
+        MvcResult authUpload = upload(authWithAllow).andExpect(status().isOk()).andReturn();
+        String uploadBody = authUpload.getResponse().getContentAsString();
+        assertThat(uploadBody).doesNotContain("除了 base_url");
+        publish("corp_sso", "1.2.0").andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/admin/conches/corp_sso").header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.authAllowHosts[0]").value("https://*.corp.example"));
+
+        // 业务包站点若与引用的授权器认证地址相同，不应误报「各自登录互相顶掉」的 SAME_AUTH 警告。
+        String sameHostConsumer = CONSUMER.replace("https://oa.corp.example", "https://sso.corp.example")
+                .replace("corp_oa", "sso_portal");
+        MvcResult consumerUpload = upload(sameHostConsumer).andExpect(status().isOk()).andReturn();
+        assertThat(consumerUpload.getResponse().getContentAsString()).doesNotContain("SAME_AUTH");
+
+        // 提交待审后若授权器被停用，批准应返回 409 并带出具体原因，详情包含 authUse / authMinVersion。
+        MvcResult subRes = mockMvc.perform(multipart("/api/admin/submissions")
+                        .file(new MockMultipartFile("file", "oa.yaml", "application/yaml",
+                                CONSUMER.getBytes(StandardCharsets.UTF_8)))
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.authUse").value("corp_sso"))
+                .andExpect(jsonPath("$.data.authMinVersion").value("1.2.0"))
+                .andReturn();
+        long subId = objectMapper.readTree(subRes.getResponse().getContentAsString()).path("data").path("id").asLong();
+
+        disable("corp_sso").andExpect(status().isOk());
+        mockMvc.perform(post("/api/admin/submissions/" + subId + "/approve")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value(org.hamcrest.Matchers.containsString("已停用")));
+
+        // Emoji 代理对截断不会产生孤立高代理项，且悲观锁冲突映射为 409 CONFLICT。
+        String emojiTitle = "A".repeat(255) + "\uD83E\uDD80";
+        String truncated = ConchSubmissionTransaction.safeTitle(emojiTitle, "corp_oa");
+        assertThat(truncated).hasSize(255);
+        assertThat(Character.isHighSurrogate(truncated.charAt(truncated.length() - 1))).isFalse();
+
+        dev.hermit.reef.web.GlobalExceptionHandler handler = new dev.hermit.reef.web.GlobalExceptionHandler();
+        var lockResp = handler.lockConflict(
+                new org.springframework.dao.CannotAcquireLockException("deadlock"),
+                new org.springframework.mock.web.MockHttpServletRequest());
+        assertThat(lockResp.getStatusCode().value()).isEqualTo(409);
+    }
+
     private void publishBoth() throws Exception {
         upload(AUTHENTICATOR).andExpect(status().isOk());
         publish("corp_sso", "1.2.0").andExpect(status().isOk());

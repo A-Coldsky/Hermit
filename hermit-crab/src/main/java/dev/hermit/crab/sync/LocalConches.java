@@ -46,6 +46,7 @@ import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.ConchDestinations;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.DuplicateActions;
+import dev.hermit.common.validate.DuplicateExports;
 import dev.hermit.common.validate.DuplicateGroups;
 import dev.hermit.common.validate.DuplicateScripts;
 import dev.hermit.common.validate.ValidationIssue;
@@ -1198,6 +1199,7 @@ public final class LocalConches {
         duplicates.addAll(DuplicateActions.find(yaml));
         duplicates.addAll(DuplicateScripts.find(yaml));
         duplicates.addAll(DuplicateGroups.find(yaml));
+        duplicates.addAll(DuplicateExports.find(yaml));
         if (!structural.isEmpty() || !duplicates.isEmpty()) {
             ArrayList<ValidationIssue> errors = new ArrayList<>(duplicates);
             errors.addAll(ImportIssueLines.locate(yaml, structural));

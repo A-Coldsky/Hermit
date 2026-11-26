@@ -33,6 +33,9 @@ const empty = computed(() => {
     v.removedGroups,
     v.changedGroups,
     v.actionGroupChanges,
+    v.addedExports,
+    v.removedExports,
+    v.authChanges,
   ].some((list) => list && list.length)
 })
 
@@ -172,6 +175,21 @@ function show(value: unknown): string {
           <li v-for="change in d.configDefaultChanges" :key="change.name">
             <span class="mono">~ {{ change.name }}</span>
             <span class="hm-muted">默认值 {{ show(change.before) }} → {{ show(change.after) }}</span>
+          </li>
+        </ul>
+      </section>
+      <section
+        v-if="d.addedExports?.length || d.removedExports?.length || d.authChanges?.length"
+        data-test="auth-changes"
+      >
+        <h4>登录与授权</h4>
+        <div v-if="d.addedExports?.length || d.removedExports?.length" class="chips">
+          <el-tag v-for="name in d.addedExports" :key="`ea-${name}`" type="success" class="mono">+ 导出 {{ name }}</el-tag>
+          <el-tag v-for="name in d.removedExports" :key="`er-${name}`" type="danger" class="mono">− 导出 {{ name }}</el-tag>
+        </div>
+        <ul v-if="d.authChanges?.length" class="changes">
+          <li v-for="item in d.authChanges" :key="item">
+            <el-tag size="small" type="warning" effect="plain">{{ item }}</el-tag>
           </li>
         </ul>
       </section>

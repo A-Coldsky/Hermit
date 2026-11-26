@@ -199,6 +199,10 @@ public final class Identities {
         if (current != null && !current.equals(id)) {
             return new Check("这个账号已经绑到另一个身份，先解除再绑定", List.of(), List.of());
         }
+        Authenticators bindings = authenticators;
+        if (bindings != null && bindings.bound(key)) {
+            return new Check("这个账号已经绑定了授权器，先解除再绑定身份", List.of(), List.of());
+        }
         Set<String> mine = addresses(origin, conch);
         if (mine.isEmpty()) {
             return new Check("这个包的站点地址还没定下来，先填好 base_url", List.of(), List.of());
@@ -305,7 +309,18 @@ public final class Identities {
         if (registry.find(conch, Origin.OFFICIAL).isPresent()) {
             return;
         }
+        Authenticators bindings = authenticators;
+        if (bindings != null) {
+            bindings.packageUnsubscribed(conch);
+        }
         leaveAll(Origin.OFFICIAL, conch, actor);
+    }
+
+    void resetConsumerLoginPauses(SessionKey authenticator) {
+        Authenticators bindings = authenticators;
+        if (bindings != null) {
+            bindings.resetConsumerLoginPauses(authenticator);
+        }
     }
 
     private void leaveAll(Origin origin, String conch, String actor) {
@@ -348,6 +363,12 @@ public final class Identities {
                     ConchDoc doc = registry.find(member.conch(), member.origin()).orElse(null);
                     if (doc == null) {
                         hasMissingPackage = true;
+                        continue;
+                    }
+                    if (doc.upstream() != null
+                            || AuthenticatorChecks.isAuthenticator(doc)
+                            || AuthenticatorChecks.uses(doc)) {
+                        invalidMembers.add(member);
                         continue;
                     }
                     Set<String> mine = addresses(member.origin(), member.conch());
@@ -489,6 +510,9 @@ public final class Identities {
 
     /** 这个账号填了的 {@code type: text} 凭证值。{@code secret} 不读出来比较。 */
     private Set<String> textValues(SessionKey key, ConchDoc doc) {
+        if (doc.credentials() == null || doc.credentials().isEmpty()) {
+            return Set.of();
+        }
         LinkedHashSet<String> names = new LinkedHashSet<>();
         for (Map.Entry<String, CredentialField> entry : doc.credentials().entrySet()) {
             if ("text".equals(entry.getValue().type())) {

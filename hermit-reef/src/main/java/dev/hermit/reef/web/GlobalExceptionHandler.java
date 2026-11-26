@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.MethodParameter;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -82,6 +83,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
     public ResponseEntity<ApiResponse<Void>> notFound(Exception ex, HttpServletRequest request) {
         return fail(HttpStatus.NOT_FOUND, ReefErrorCode.NOT_FOUND, ReefErrorCode.NOT_FOUND.message(), request);
+    }
+
+    @ExceptionHandler(PessimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> lockConflict(
+            PessimisticLockingFailureException ex, HttpServletRequest request) {
+        log.warn("Concurrent lock conflict traceId={}: {}", TraceIds.current(request), ex.getClass().getSimpleName());
+        return fail(HttpStatus.CONFLICT, ReefErrorCode.CONFLICT, "并发操作冲突，请稍后重试", request);
     }
 
     @ExceptionHandler(Exception.class)

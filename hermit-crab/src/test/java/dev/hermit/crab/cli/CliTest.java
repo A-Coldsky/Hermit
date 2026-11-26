@@ -542,7 +542,7 @@ class CliTest {
         String driverText = driverErr.toString(StandardCharsets.UTF_8);
         assertThat(driverCode).isEqualTo(1);
         assertThat(driverOut.toString(StandardCharsets.UTF_8)).isEmpty();
-        assertThat(driverText).contains("规则包校验失败").contains("DRIVER").contains("driver 只允许 http 或 mcp").contains("第 3 行");
+        assertThat(driverText).contains("规则包校验失败").contains("DRIVER").contains("driver 只允许 http、mcp 或 auth").contains("第 3 行");
         assertThat(driverText).doesNotContain("shell").doesNotContain("com.fasterxml");
         assertThat(home.resolve("local-conches").resolve("bad_driver.yaml")).doesNotExist();
 

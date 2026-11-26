@@ -37,6 +37,7 @@ final class AuthoringGuide {
             Map.entry("HTTP 方法、只读和幂等是不同概念", "http_semantics"),
             Map.entry("同一账号的只读能力并行", "concurrent_reads"),
             Map.entry("门户和 SSO 登录", "sso_login"),
+            Map.entry("授权器", "auth_component"),
             Map.entry("非 401/403 的会话失效判定", "session_expiry"),
             Map.entry("步骤", "steps"),
             Map.entry("模板、输出与脚本", "templates_scripts"),
@@ -47,7 +48,7 @@ final class AuthoringGuide {
             conch: my_system
             version: 1.0.0
             driver: http
-            min_crab_version: 1.12.0
+            min_crab_version: 1.13.0
             base_url: http://127.0.0.1:8080
             title: 示例系统（请替换为实际系统名）
             description: 登录后查询业务数据。凭证只声明字段，真实值由用户在 Crab 控制台填写。
@@ -103,7 +104,7 @@ final class AuthoringGuide {
             """;
 
     private static final List<String> PITFALLS = List.of(
-            "❌ 省略或写旧的 min_crab_version: 1.0.0（导致 if/repeat/retry/groups/origins/expired_when/引号下标 报错） → ✅ 新规则包统一写 min_crab_version: 1.12.0。",
+            "❌ 省略或写旧的 min_crab_version: 1.0.0（导致 if/repeat/retry/groups/origins/expired_when/授权器/引号下标 报错） → ✅ 新规则包统一写 min_crab_version: 1.13.0。",
             "❌ 省略 credentials、把密钥放进 config(type: secret) 或把抓包里的密码/Cookie/Bearer 原文写进 YAML → ✅ 无登录写 credentials: {}；有秘密放 credentials(type: secret)，步骤里写 {{credential.xxx}}，绝不把真值写进 YAML。",
             "❌ 在能力步骤里直接写 {{token}} 引用登录提取值，或手写 Cookie/Host/Content-Length 请求头 → ✅ 跨登录读取一律写 {{login.token}}（带连字符 Cookie 先在 auth.cookies 映射）；Cookie 由 Crab 自动管理，不要写 Cookie/Host/Content-Length 头。",
             "❌ 写成 assert: {status: \"200\"}（带引号）或 if: \"{{count}} > 0\" / while / elif → ✅ status 写数字（200 或 [200, 302]）；分支和循环用 if / repeat + until，比较大小先用 script 算成变量再用 equals 判断。",

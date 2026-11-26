@@ -94,6 +94,8 @@ import dev.hermit.crab.store.EncryptedLoginSnapshotStore;
 import dev.hermit.crab.http.OutboundHttp;
 import dev.hermit.crab.store.EncryptedSessionPersistence;
 import dev.hermit.crab.store.IdempotencyStore;
+import dev.hermit.common.validate.AuthenticatorChecks;
+import dev.hermit.crab.store.AuthBinding;
 import dev.hermit.crab.store.AuthBindingStore;
 import dev.hermit.crab.store.Identity;
 import dev.hermit.crab.store.IdentityStore;
@@ -293,6 +295,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.invoker.bindKnownSecrets(knownSecrets);
         this.invoker.bindMcpForwarder(mcpForwarder);
         this.invoker.bindRuleDisabled(this::ruleDisabled);
+        this.invoker.bindAuthenticatorCheck(this::isKnownAuthenticator);
         this.invoker.bindSwitchedOff(this::conchSwitchedOff);
         this.invoker.bindRivals(this::contendingWith);
         this.fileStage = new FileStage(
@@ -307,6 +310,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.invoker.bindFileStage(fileStage, fileBase());
         this.admin = new ConchAdmin(
                 database.dataSource(), accounts, vault, conchConfig, apiKeys, sessions, engine, registry, disabledConches, clock);
+        this.admin.bindAuthenticatorCheck(this::isKnownAuthenticator);
         this.localConches = new LocalConches(
                 paths, registry.scoped(Origin.LOCAL), database.dataSource(), () -> debug.get().enabled(), clock);
         this.localConches.onWidened(this::clearWidenedSessions);
@@ -900,20 +904,23 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         return official;
     }
 
-    /** 启动载入本地包后，把已离线删除的本地包成员从共享身份中解绑，避免它永久挡住同身份其余成员的 revalidate。 */
+    /** 启动载入本地包后，把已离线删除的本地包成员从共享身份和授权器绑定中解绑，避免残留绑定被后续同名导入直接复活。 */
     private void reconcileMissingLocalMembers() {
         LinkedHashSet<String> missing = new LinkedHashSet<>();
         for (Identity identity : identities.list()) {
             for (SessionKey member : identity.members()) {
-                if (member.origin() != Origin.LOCAL) {
-                    continue;
+                if (member.origin() == Origin.LOCAL && isLocalMissingOnDisk(member.conch())) {
+                    missing.add(member.conch());
                 }
-                String conch = member.conch();
-                if (registry.find(conch, Origin.LOCAL).isEmpty()
-                        && !localConches.occupies(conch)
-                        && !localConches.hasYamlFile(conch)) {
-                    missing.add(conch);
-                }
+            }
+        }
+        for (AuthBinding binding : authenticators.list()) {
+            if (binding.account().origin() == Origin.LOCAL && isLocalMissingOnDisk(binding.account().conch())) {
+                missing.add(binding.account().conch());
+            }
+            if (binding.authenticator().origin() == Origin.LOCAL
+                    && isLocalMissingOnDisk(binding.authenticator().conch())) {
+                missing.add(binding.authenticator().conch());
             }
         }
         if (missing.isEmpty()) {
@@ -923,6 +930,12 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             identities.packageRemoved(Origin.LOCAL, conch, Actors.SYNC);
         }
         identities.revalidate(Actors.SYNC);
+    }
+
+    private boolean isLocalMissingOnDisk(String conch) {
+        return registry.find(conch, Origin.LOCAL).isEmpty()
+                && !localConches.occupies(conch)
+                && !localConches.hasYamlFile(conch);
     }
 
     public LocalConches localConches() {
@@ -965,7 +978,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
      * 但它不是「不存在」：控制台和外部调用要明说已停用。
      */
     public boolean ruleDisabled(String conch) {
-        if (conch == null || registry.find(conch).isPresent()) {
+        if (conch == null || registry.installed(conch).isPresent()) {
             return false;
         }
         LocalConches.LocalPackage local = localPackage(conch);
@@ -974,6 +987,44 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
         ConchSync sync = conchSync;
         return sync != null && sync.disabledRule(conch).isPresent();
+    }
+
+    /**
+     * 本机已知它是 {@code driver: auth} 授权器（生效、另一来源槽、校验停用或已撤下留档）。
+     * 若当前生效的是同名可调用规则包，则按可调用包处理。
+     */
+    public boolean isKnownAuthenticator(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return false;
+        }
+        if (registry.authenticator(conch).isPresent()) {
+            return true;
+        }
+        if (registry.find(conch).isPresent()) {
+            return false;
+        }
+        ConchDoc localLoaded = registry.find(conch, Origin.LOCAL).orElse(null);
+        if (localLoaded != null) {
+            return AuthenticatorChecks.isAuthenticator(localLoaded);
+        }
+        ConchDoc officialLoaded = registry.find(conch, Origin.OFFICIAL).orElse(null);
+        if (officialLoaded != null) {
+            return AuthenticatorChecks.isAuthenticator(officialLoaded);
+        }
+        if (localConches != null) {
+            ConchDoc localReadable = localConches.readableDoc(conch).orElse(null);
+            if (localReadable != null) {
+                return AuthenticatorChecks.isAuthenticator(localReadable);
+            }
+        }
+        ConchSync sync = conchSync;
+        if (sync != null) {
+            ConchDoc officialReadable = sync.readableAnyInstalled(conch).orElse(null);
+            if (officialReadable != null) {
+                return AuthenticatorChecks.isAuthenticator(officialReadable);
+            }
+        }
+        return false;
     }
 
     /** 本地包被停用时下一步是改规则重新导入；正式包是更新或退回。 */
@@ -1196,7 +1247,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
         UpdateResult result = conchSync.update(conch, actor);
         result.credentialChange().ifPresent(change -> recordCredentialChange(change, Actors.SYNC));
-        if (result.fromVersion() != null && result.toVersion() != null && reportQueue != null) {
+        if (result.fromVersion() != null && result.toVersion() != null && reportQueue != null
+                && !isKnownAuthenticator(conch)) {
             try {
                 reportQueue.enqueueVersionChange(
                         conch,
@@ -1507,7 +1559,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     for (Map.Entry<String, String> entry
                             : vault.decryptForExecution(Origin.LOCAL, conch, account.account()).entrySet()) {
                         // OAuth 令牌由系统写入，不复制；正式包上重新连接一次。
-                        if (target.credentials().containsKey(entry.getKey())
+                        if (target.credentials() != null
+                                && target.credentials().containsKey(entry.getKey())
                                 && !dev.hermit.crab.upstream.McpOAuthToken.FIELD.equals(entry.getKey())) {
                             fields.put(entry.getKey(), entry.getValue());
                         }
@@ -1521,7 +1574,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     }
                 }
                 for (Map.Entry<String, String> entry : conchConfig.all(Origin.LOCAL, conch).entrySet()) {
-                    if (target.config().containsKey(entry.getKey()) && !entry.getValue().isEmpty()) {
+                    if (target.config() != null
+                            && target.config().containsKey(entry.getKey())
+                            && !entry.getValue().isEmpty()) {
                         DeclaredSettings.checkConfigValue(target.config().get(entry.getKey()), entry.getValue());
                         values.put(entry.getKey(), entry.getValue());
                     }

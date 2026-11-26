@@ -621,6 +621,135 @@ class DevTraceFlowTest {
         }
     }
 
+    @Test
+    void boundOfficialAuthenticatorSuspendsConsumerDevTraceWhileLocalAuthenticatorRecordsTestLogin() throws Exception {
+        HttpServer sso = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        sso.createContext("/sso-internal-login", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            respond(exchange, 200, "{\"token\":\"tok-secret-9999\"}", true);
+        });
+        sso.createContext("/sso-me", exchange -> respond(exchange, 200, "{\"ok\":true}", false));
+        sso.start();
+        HttpServer app = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        app.createContext("/biz-data", exchange -> respond(exchange, 200, "{\"item\":\"visible-biz\"}", false));
+        app.start();
+        String ssoBase = "http://127.0.0.1:" + sso.getAddress().getPort();
+        String appBase = "http://127.0.0.1:" + app.getAddress().getPort();
+
+        CrabRuntime runtime = CrabRuntime.open(
+                new CrabPaths(temp.resolve("auth-trace")),
+                CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40));
+        CrabHttpServer server = new CrabHttpServer(runtime);
+        try {
+            server.start();
+            runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String authYaml = """
+                    conch: official_sso
+                    version: 1.0.0
+                    driver: auth
+                    min_crab_version: 1.13.0
+                    title: 正式统一登录
+                    description: 正式授权器内部步骤不应写进本地业务包追踪。
+                    credentials:
+                      password: { type: secret, label: 密码, required: true }
+                    auth:
+                      origins: ["%s"]
+                      steps:
+                        - request:
+                            method: POST
+                            url: %s/sso-internal-login
+                            json: { password: "{{credential.password}}" }
+                        - assert: { status: 200 }
+                        - extract: { access_token: { jsonpath: "$.token" } }
+                      alive_check:
+                        request: { method: GET, url: %s/sso-me }
+                      exports:
+                        access_token: { description: 令牌 }
+                    """.formatted(ssoBase, ssoBase, ssoBase);
+            dev.hermit.common.model.ConchDoc officialSso = dev.hermit.common.parse.ConchParser.parse(authYaml);
+            runtime.registry().put(officialSso, Origin.OFFICIAL);
+            runtime.admin().createAccount(Origin.OFFICIAL, "official_sso", "corp", Actors.CONSOLE);
+            runtime.admin().writeCredentials(Origin.OFFICIAL, officialSso, "corp", Map.of("password", PASSWORD), Actors.CONSOLE);
+
+            String localConsumerYaml = """
+                    conch: local_biz
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.13.0
+                    base_url: %s
+                    title: 本地业务包
+                    description: 引用正式授权器的本地包。
+                    auth:
+                      use: official_sso
+                    actions:
+                      fetch:
+                        title: 查业务
+                        description: 查询业务条目。
+                        idempotent: true
+                        mcp: { expose: true, read_only: true }
+                        steps:
+                          - request:
+                              method: GET
+                              path: /biz-data
+                              headers: { Authorization: "Bearer {{auth.access_token}}" }
+                          - extract: { item: { jsonpath: "$.item" } }
+                        output:
+                          item: { type: string, description: 条目 }
+                        examples:
+                          - input: {}
+                            output: { item: ok }
+                        notes: 无
+                        related: []
+                    """.formatted(appBase);
+            runtime.localConches().importBytes(localConsumerYaml.getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            runtime.admin().createAccount(Origin.LOCAL, "local_biz", "alice", Actors.CONSOLE);
+
+            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+            String crab = "http://127.0.0.1:" + server.port();
+            HttpResponse<String> bound = http.send(HttpRequest.newBuilder(
+                    URI.create(crab + "/console/api/conches/local_biz/accounts/alice/authenticator"))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("X-Hermit-Console", "1")
+                    .header("Content-Type", "application/json")
+                    .PUT(HttpRequest.BodyPublishers.ofString(
+                            "{\"authAccount\":\"corp\",\"baseUrl\":\"" + appBase + "\",\"confirm\":true}"))
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(bound.statusCode()).as(bound.body()).isEqualTo(200);
+
+            Reply ran = post(http, crab, "/console/api/local-conches/local_biz/actions/fetch/run",
+                    "{\"account\":\"alice\",\"input\":{}}");
+            assertThat(ran.status).as(ran.body).isEqualTo(200);
+            String bizTraceId = ran.json.path("traceId").asText();
+            DevTraceStore.Trace bizTrace = runtime.devTraces().find(bizTraceId).orElseThrow();
+            assertThat(bizTrace.body())
+                    .contains("/biz-data")
+                    .doesNotContain("sso-internal-login")
+                    .doesNotContain("official_sso")
+                    .doesNotContain("tok-secret-9999");
+
+            // 本地 driver: auth 自己点「测试登录」时，应当生成开发追踪便于排障。
+            String localAuthYaml = authYaml.replace("conch: official_sso", "conch: local_sso");
+            runtime.localConches().importBytes(localAuthYaml.getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+            runtime.admin().createAccount(Origin.LOCAL, "local_sso", "alice", Actors.CONSOLE);
+            runtime.admin().writeCredentials(
+                    Origin.LOCAL,
+                    runtime.registry().authenticator("local_sso").orElseThrow().doc(),
+                    "alice",
+                    Map.of("password", PASSWORD),
+                    Actors.CONSOLE);
+            Reply tested = post(http, crab, "/console/api/conches/local_sso/accounts/alice/test-login", "{}");
+            assertThat(tested.status).as(tested.body).isEqualTo(200);
+            String localAuthTraceId = tested.json.path("data").path("traceId").asText();
+            assertThat(localAuthTraceId).isNotBlank();
+            assertThat(runtime.devTraces().find(localAuthTraceId)).isPresent();
+        } finally {
+            server.close();
+            runtime.close();
+            app.stop(0);
+            sso.stop(0);
+        }
+    }
+
     private static void assertTraceOmitted(HttpResponse<String> response) {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(409);
         assertThat(response.headers().firstValue("X-Hermit-Trace")).isEmpty();

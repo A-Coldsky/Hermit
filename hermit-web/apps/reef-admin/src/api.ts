@@ -76,6 +76,10 @@ export interface ConchDiff {
   removedGroups?: string[]
   changedGroups?: string[]
   actionGroupChanges?: ActionGroupChange[]
+  /** 授权器导出变量增删与登录/授权配置变化。 */
+  addedExports?: string[]
+  removedExports?: string[]
+  authChanges?: string[]
 }
 
 /** 只含 `auth.type`。请求头模板和 OAuth 的 client_id、端点不在这个对象里。 */
@@ -181,6 +185,8 @@ export interface ConchDetail {
   authUse?: string | null
   /** 授权器（`driver` 为 `auth`）导出的变量名；其它包为空数组。 */
   authExports?: string[]
+  /** 授权器允许引用的业务站点模式（`auth.allow_hosts`）；未配置或非授权器为空数组。 */
+  authAllowHosts?: string[]
   minCrabVersion: string
   baseUrl: string | null
   /**
@@ -426,6 +432,10 @@ export interface SubmissionDetail {
   sha256: string
   minCrabVersion: string
   driver: string
+  authUse?: string | null
+  authMinVersion?: string | null
+  authExports?: string[]
+  authAllowHosts?: string[]
   title: string
   status: SubmissionStatus
   submitNote: string | null

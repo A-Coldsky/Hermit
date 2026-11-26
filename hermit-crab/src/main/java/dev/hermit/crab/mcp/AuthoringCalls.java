@@ -20,12 +20,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.common.validate.ConchDestinations;
 import dev.hermit.common.validate.ValidationCodes;
 import dev.hermit.common.validate.ValidationIssue;
 import dev.hermit.crab.engine.ConchRegistry;
 import dev.hermit.crab.engine.CrabVersion;
 import dev.hermit.crab.engine.ExecutionResult;
+import dev.hermit.crab.engine.SessionKey;
 import dev.hermit.crab.recorder.CaptureSnapshot;
 import dev.hermit.crab.recorder.RecordedEntry;
 import dev.hermit.crab.runtime.ApiEnvelope;
@@ -872,19 +874,70 @@ final class AuthoringCalls {
 
     private McpSchema.CallToolResult saved(LocalConches.ImportResult result, Set<String> beforeKeys) {
         boolean active = runtime.registry().origin(result.conch()) == Origin.LOCAL;
-        String next = !Boolean.TRUE.equals(result.replaced()) && !active ? NEXT_SWITCH_SOURCE : NEXT_ACCOUNT;
-        if (Boolean.TRUE.equals(result.replaced())) {
+        ConchDoc after = runtime.registry().find(result.conch(), Origin.LOCAL).orElse(null);
+        String next;
+        if (!Boolean.TRUE.equals(result.replaced()) && !active) {
+            if (after != null && AuthenticatorChecks.isAuthenticator(after)) {
+                next = "已保存为本地授权器，原 Reef 正式授权器未被修改且仍为当前生效版本。"
+                        + "请先到 Crab 控制台将该授权器来源切换为本地（已有绑定会自动作废需重新确认），再为本地授权器新建账号填凭证并点「测试登录」。"
+                        + "不要把口令、Cookie 或令牌发给 AI。";
+            } else if (after != null && AuthenticatorChecks.uses(after)) {
+                next = "已保存为本地规则包，原 Reef 正式包未被修改且仍为当前生效版本。"
+                        + "请先到 Crab 控制台将该包来源切换为本地规则包，再为本地副本新建账号并绑定授权器账号。";
+            } else {
+                next = NEXT_SWITCH_SOURCE;
+            }
+        } else if (after != null && AuthenticatorChecks.isAuthenticator(after)) {
+            List<dev.hermit.crab.store.Account> existing = List.of();
             try {
-                if (!runtime.admin().listAccounts(Origin.LOCAL, result.conch()).isEmpty()) {
-                    ConchDoc after = runtime.registry().find(result.conch(), Origin.LOCAL).orElse(null);
-                    if (beforeKeys == null || after == null || !beforeKeys.equals(credentialNames(after))) {
-                        next = NEXT_LOGIN;
-                    } else {
-                        next = NEXT_READY;
-                    }
+                existing = runtime.admin().listAccounts(Origin.LOCAL, result.conch());
+            } catch (RuntimeException ignored) {
+            }
+            if (!Boolean.TRUE.equals(result.replaced()) || existing.isEmpty()) {
+                next = "请到控制台的「授权器」为这个本地授权器新建账号、填写凭证并点「测试登录」验证（授权器没有能力，不能用 hermit_dev__trial_run 试跑）。"
+                        + "不要把口令、Cookie 或令牌发给 AI。";
+            } else if (beforeKeys == null || !beforeKeys.equals(credentialNames(after))) {
+                next = "凭证字段有变化。请到控制台补齐该授权器账号的凭证并点「测试登录」验证（授权器不能用 hermit_dev__trial_run 试跑）。"
+                        + "不要把口令、Cookie 或令牌发给 AI。";
+            } else {
+                next = "授权器已更新（凭证字段没变）。请到控制台点「测试登录」验证登录与导出变量（授权器没有能力，不能用 hermit_dev__trial_run 试跑）。"
+                        + "不要把口令、Cookie 或令牌发给 AI。";
+            }
+        } else if (after != null && AuthenticatorChecks.uses(after)) {
+            List<dev.hermit.crab.store.Account> existing = List.of();
+            try {
+                existing = runtime.admin().listAccounts(Origin.LOCAL, result.conch());
+            } catch (RuntimeException ignored) {
+            }
+            boolean anyReady = false;
+            for (dev.hermit.crab.store.Account account : existing) {
+                if (runtime.authenticators().bindingProblem(
+                        new SessionKey(Origin.LOCAL, result.conch(), account.account()), after) == null) {
+                    anyReady = true;
+                    break;
                 }
-            } catch (RuntimeException ex) {
-                next = NEXT_LOGIN;
+            }
+            if (anyReady) {
+                next = "规则已更新且授权器绑定有效，可以直接用 hermit_dev__trial_run 试跑。";
+            } else if (!existing.isEmpty()) {
+                next = "请到控制台为这个本地规则包的账号绑定授权器账号（无需在此包填写密码），绑定后再用 hermit_dev__trial_run 试跑。";
+            } else {
+                next = "请到控制台为这个本地规则包新建账号并绑定授权器账号（无需在此包填写密码），绑定后再用 hermit_dev__trial_run 试跑。";
+            }
+        } else {
+            next = NEXT_ACCOUNT;
+            if (Boolean.TRUE.equals(result.replaced())) {
+                try {
+                    if (!runtime.admin().listAccounts(Origin.LOCAL, result.conch()).isEmpty()) {
+                        if (beforeKeys == null || after == null || !beforeKeys.equals(credentialNames(after))) {
+                            next = NEXT_LOGIN;
+                        } else {
+                            next = NEXT_READY;
+                        }
+                    }
+                } catch (RuntimeException ex) {
+                    next = NEXT_LOGIN;
+                }
             }
         }
         return issues(true, result.conch(), result.version(), List.of(), result.warnings(), null, result.replaced(),
@@ -1076,8 +1129,12 @@ final class AuthoringCalls {
                     sections.add("fields");
                 }
                 case ValidationCodes.DRIVER -> {
-                    hints.add("driver 只允许 http 或 mcp（普通网站与接口规则包请写 driver: http）。");
+                    hints.add("driver 只允许 http、mcp 或 auth（普通网站与接口写 driver: http，多包共用登录组件写 driver: auth）。");
                     sections.add("fields");
+                }
+                case ValidationCodes.AUTHENTICATOR -> {
+                    hints.add("检查可复用授权器写法：driver: auth 必须写 auth.origins 与 auth.alive_check（request 写完整 url），不能写 base_url/actions/groups；引用方业务包写 auth.use: <授权器名>，用 {{auth.xxx}} 读取导出值，不能写 credentials/auth.steps/auth.origins，且 min_crab_version 不低于 1.13.0。");
+                    sections.add("auth_component");
                 }
                 case ValidationCodes.MISSING_TITLE, ValidationCodes.MISSING_DESCRIPTION -> {
                     hints.add("顶层规则包和每个 action 都必须填写非空的 title 与 description。");

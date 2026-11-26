@@ -386,11 +386,11 @@ public final class RuleEngine implements ConchExecutor {
                 scope.exportsNeeded = AuthenticatorChecks.referencedExports(conch, List.of(action));
             }
             if (shared && scope.bound != null && !boundReady(scope)) {
-                handoff.seen = scope.seenLogin;
+                handoff.seen = new LinkedHashSet<>(scope.redactionValues());
                 return null;
             }
             if (shared) {
-                handoff.seen = scope.seenLogin;
+                handoff.seen = new LinkedHashSet<>(scope.redactionValues());
             } else if (handoff != null && handoff.seen != null) {
                 // 共享锁下那一次读到的登录值：快照可能已被清掉或换掉，它留下的步骤记录和追踪仍要打码。
                 scope.seenLogin.addAll(handoff.seen);
@@ -401,7 +401,7 @@ public final class RuleEngine implements ConchExecutor {
                 requireStepLoginRefs(scope, action.steps());
                 Attempt first = runAction(action, scope);
                 if (first.lost) {
-                    handoff.seen.addAll(sessions.redactionValues(key));
+                    handoff.seen.addAll(scope.redactionValues());
                     handoff.lost = first;
                     return null;
                 }
@@ -441,7 +441,7 @@ public final class RuleEngine implements ConchExecutor {
             return settle(attempt, action, scope, key, version, request, credentials, start);
         } catch (NeedsExclusive ex) {
             if (handoff != null && handoff.seen != null) {
-                handoff.seen.addAll(sessions.redactionValues(key));
+                handoff.seen.addAll(scope != null ? scope.redactionValues() : sessions.redactionValues(key));
             }
             return null;
         } catch (StepFailure ex) {
@@ -493,7 +493,12 @@ public final class RuleEngine implements ConchExecutor {
             }
             Object data;
             try {
-                data = templates.render(action.outputTemplate(), attempt.vars);
+                Map<String, Object> outputVars = attempt.vars;
+                if (outputVars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource) {
+                    outputVars = new LinkedHashMap<>(outputVars);
+                    outputVars.remove(ConchRegistry.AUTH_VAR);
+                }
+                data = templates.render(action.outputTemplate(), outputVars);
             } catch (TemplateException ex) {
                 String text = undefinedOr(ex);
                 return finish(false, null, ErrorCode.RULE_MISMATCH, text, null, null, text,
@@ -629,6 +634,18 @@ public final class RuleEngine implements ConchExecutor {
         if (spec == null) {
             throw new StepFailure(ErrorCode.RULE_MISMATCH, "alive_check 无效", -1, "request", List.of());
         }
+        URI probeBase = scope.base;
+        AuthReach probeReach = scope.reach(false);
+        if (scope.authenticator) {
+            probeBase = authenticatorProbeBase(spec, scope.authOrigins);
+            String probeSite = SiteAddress.of(probeBase);
+            LinkedHashSet<String> otherOrigins = new LinkedHashSet<>(scope.authOrigins);
+            if (probeSite != null) {
+                otherOrigins.remove(probeSite);
+            }
+            // 授权器探活只访问自己目标认证地址，若 302 跳往另一个认证地址则视为会话已失效，不跨源跟随。
+            probeReach = AuthReach.of(otherOrigins, false, true);
+        }
         long started = System.nanoTime();
         HttpResult result;
         try {
@@ -636,13 +653,13 @@ public final class RuleEngine implements ConchExecutor {
                     spec,
                     sessions.client(scope.key),
                     () -> sessions.persist(scope.key),
-                    scope.base,
+                    probeBase,
                     alive.expectNotRedirect(),
                     scope.deadline,
                     HttpCalls.sensitiveValues(vars, sessions.cookies(scope.key),
                             sessions.seenCookieValues(scope.key)),
                     settings.bodyIdleTimeout(),
-                    scope.reach(false));
+                    probeReach);
         } catch (RuleProblem ex) {
             recordAlive(spec, ex.method, ex.path, ex.status, ex.responseHeaders, ex.responseBody, ex.wire, started,
                     false, ex.transport, ex.warnings);
@@ -653,7 +670,7 @@ public final class RuleEngine implements ConchExecutor {
         try {
             if (aliveOk && auth != null && !auth.expiredWhen().isEmpty()) {
                 int matched = SessionExpiry.matchExpired(
-                        auth.expiredWhen(), result, sessions.cookies(scope.key), scope.base, scope.deadline);
+                        auth.expiredWhen(), result, sessions.cookies(scope.key), probeBase, scope.deadline);
                 if (matched >= 0) {
                     aliveOk = false;
                     aliveWarnings.add(new TraceWarning(
@@ -662,8 +679,11 @@ public final class RuleEngine implements ConchExecutor {
                 }
             }
             if (aliveOk && !alive.expect().isEmpty()) {
+                AuthReach cookieReach = scope.authenticator
+                        ? AuthReach.of(scope.authOrigins, false, true)
+                        : AuthReach.NONE;
                 String failed = SessionExpiry.firstUnmetExpect(
-                        alive.expect(), result, sessions.cookies(scope.key), scope.base, scope.deadline);
+                        alive.expect(), result, sessions.cookies(scope.key), probeBase, cookieReach, scope.deadline);
                 if (failed != null) {
                     aliveOk = false;
                     aliveWarnings.add(new TraceWarning(
@@ -682,16 +702,35 @@ public final class RuleEngine implements ConchExecutor {
         return aliveOk;
     }
 
+    private static URI authenticatorProbeBase(Map<String, Object> spec, Set<String> authOrigins) {
+        Object raw = spec.get("url");
+        if (!(raw instanceof String text) || text.isBlank()) {
+            throw new StepFailure(ErrorCode.RULE_MISMATCH, "授权器的 alive_check 必须写 url", -1, "request", List.of());
+        }
+        try {
+            URI uri = HostNames.withoutTrailingDot(URI.create(text.trim()));
+            String site = SiteAddress.of(uri);
+            if (site != null && authOrigins.contains(site)) {
+                return URI.create(site);
+            }
+        } catch (IllegalArgumentException ignored) {
+            // 统一落到下面报错
+        }
+        throw new StepFailure(ErrorCode.RULE_MISMATCH,
+                "授权器的 alive_check 必须以 auth.origins 里的地址开头", -1, "request", List.of());
+    }
+
     /**
      * 业务包：先保证授权器账号登录着，再保证这个包自己换过票。两者共用一把账号锁，调用方已经持有。
      * 这个包上一次被判为会话失效时，先探授权器：授权器的会话没了才重新登录它；还在的话，写了
      * {@code auth.exchange} 的包只重新换票，没写的包（直接用导出值）在限流之内让授权器重新登录一次。
      * 换票失败只算这个包自己的，不记到授权器账号上。
+     * 授权器登录与探活期间挂起业务包的 DevTraceScope 并隐去授权器步骤日志，防止跨来源/跨权限泄露内部报文。
      */
     private void ensureBound(LoginScope scope) {
         LoginScope a = scope.bound;
         Auth auth = scope.conch.auth();
-        try {
+        try (DevTraceScope.Suspended ignored = DevTraceScope.suspend()) {
             if (sessions.loginPaused(a.key)) {
                 throw new StepFailure(ErrorCode.AUTH_FAILED, LINK_PAUSED, -1, "request", List.of());
             }
@@ -720,11 +759,11 @@ public final class RuleEngine implements ConchExecutor {
             }
         } catch (StepFailure ex) {
             if (ex.code == ErrorCode.LOGIN_INPUT_REQUIRED) {
-                // 等的是授权器账号的验证码；对外只说这个包，授权器的包名不出现在调用结果里。
-                throw new StepFailure(ex.code, LoginInputMessages.required(scope.conch.conch()), ex.index, ex.type,
-                        ex.logs);
+                // 等的是授权器账号的验证码；对外只说这个包，授权器的包名和内部步骤日志不出现在调用结果里。
+                throw new StepFailure(ex.code, LoginInputMessages.required(scope.conch.conch()), -1, ex.type,
+                        List.of());
             }
-            throw ex;
+            throw new StepFailure(ex.code, ex.summary, -1, ex.type, List.of());
         }
         long epoch = sessions.epoch(a.key);
         if (sessions.loggedIn(scope.key) && sessions.boundEpoch(scope.key) == epoch) {
@@ -761,19 +800,19 @@ public final class RuleEngine implements ConchExecutor {
         if (scope.conch.auth().exchange().isEmpty()) {
             sessions.markLoggedOut(scope.key);
         } else {
-            // 认证地址和别的业务包所在的主机上，只删路径落在自己 base_url 下的 Cookie。
-            Set<String> sharedHosts = scope.bound.hosts();
+            Set<String> authOriginHosts = scope.bound.hosts();
+            LinkedHashSet<String> siblingHosts = new LinkedHashSet<>();
             for (String site : scope.siblingSites) {
                 try {
                     String host = URI.create(site).getHost();
                     if (host != null) {
-                        sharedHosts.add(host.toLowerCase(java.util.Locale.ROOT));
+                        siblingHosts.add(host.toLowerCase(java.util.Locale.ROOT));
                     }
                 } catch (IllegalArgumentException ex) {
                     // 不是地址，跳过
                 }
             }
-            sessions.dropOwnCookies(scope.key, scope.base, sharedHosts);
+            sessions.dropOwnCookies(scope.key, scope.base, authOriginHosts, siblingHosts);
         }
     }
 
@@ -1619,20 +1658,20 @@ public final class RuleEngine implements ConchExecutor {
                         outcome.status(),
                         outcome.extractCount()));
                 if (capture && outcome.capture() != null && draft != null) {
-                    stampCredential(outcome.capture(), credentialBearingRequest(loginPhase, step));
+                    stampCredential(outcome.capture(),
+                            credentialBearingRequest(loginPhase, step, vars, block.taintedVars));
                     if (block.round > 0) {
                         outcome.capture().put("round", block.round);
                     }
                     draft.add(phase, at, elapsed(started), outcome.capture());
                 }
                 if (!loginPhase && "request".equals(step.type())) {
-                    block.deriveNext = templates.referencesCredential(step.def());
+                    block.deriveNext = referencesSecretInRequest(step.def(), vars, block.taintedVars);
                 }
                 block.previousRequest = "request".equals(step.type());
                 block.previousBytes = block.previousRequest ? outcome.bodyBytes() : null;
-                // 只打断能力请求。登录步骤仍走 assert，失败保持 AUTH_FAILED。
-                // 下标用这一段里的位置：能力步骤的 indexBase 是 0，登录续跑不会进这里。
-                rejectCapabilityStatus(auth, outcome, i, at, step.type(), logs, definitions, continuation);
+                // 只打断能力请求，以及业务包 auth.exchange 里无断言兜底的 4xx/5xx。
+                rejectCapabilityStatus(auth, vars, outcome, i, at, step.type(), logs, definitions, continuation);
             } catch (StepFailure | SessionLost ex) {
                 // 子步骤已经记过日志和追踪。
                 throw ex;
@@ -1647,13 +1686,15 @@ public final class RuleEngine implements ConchExecutor {
                 }
                 logs.add(new StepLog(at, step.type(), elapsed(started), ex.method, ex.path, ex.status, null));
                 recordFailure(
-                        phase, at, step, elapsed(started), ex, summary, credentialBearingRequest(loginPhase, step));
+                        phase, at, step, elapsed(started), ex, summary,
+                        credentialBearingRequest(loginPhase, step, vars, block.taintedVars));
                 throw new StepFailure(code, summary, at, step.type(), logs);
             } catch (TemplateException ex) {
                 String summary = undefinedOr(ex);
                 logs.add(new StepLog(at, step.type(), elapsed(started), null, null, null, null));
                 recordFailure(
-                        phase, at, step, elapsed(started), null, summary, credentialBearingRequest(loginPhase, step));
+                        phase, at, step, elapsed(started), null, summary,
+                        credentialBearingRequest(loginPhase, step, vars, block.taintedVars));
                 ErrorCode code = auth ? ErrorCode.AUTH_FAILED : ErrorCode.RULE_MISMATCH;
                 throw new StepFailure(code, summary, at, step.type(), logs);
             } catch (DeadlineExceeded ex) {
@@ -1693,7 +1734,7 @@ public final class RuleEngine implements ConchExecutor {
         DevTraceDraft draft = DevTraceScope.current();
         if (FlowSteps.IF.equals(step.type())) {
             Map<String, Object> condition = Values.map(templates.render(FlowSteps.condition(step), vars));
-            boolean holds = steps.test(condition, vars, sessions.cookies(key), base);
+            boolean holds = steps.test(condition, vars, sessions.cookies(key), base, reach);
             String branch = holds ? "then" : "else";
             List<Step> chosen = FlowSteps.branch(step, branch);
             if (draft != null) {
@@ -1719,8 +1760,13 @@ public final class RuleEngine implements ConchExecutor {
         Map<String, Object> collect = Values.map(step.def().get("collect"));
         Map<String, Object> until = Values.map(step.def().get("until"));
         LinkedHashMap<String, List<Object>> gathered = new LinkedHashMap<>();
+        boolean authReserved = vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource;
         if (collect != null) {
             for (String target : collect.keySet()) {
+                if (ConchRegistry.RESERVED.contains(target)
+                        || (authReserved && ConchRegistry.AUTH_VAR.equals(target))) {
+                    throw new RuleProblem(ErrorCode.RULE_MISMATCH, "不能写入保留变量", null, null, null);
+                }
                 gathered.put(target, new ArrayList<>());
             }
         }
@@ -1751,7 +1797,10 @@ public final class RuleEngine implements ConchExecutor {
                         }
                         if (value instanceof List<?> list) {
                             gathered.get(entry.getKey()).addAll(list);
-                            if (StepRunner.tracksSecrets(auth, vars) && StepRunner.referencesAny(sourcePath, block.taintedVars)) {
+                            if (StepRunner.tracksSecrets(auth, vars)
+                                    && (StepRunner.referencesAny(sourcePath, block.taintedVars)
+                                            || (authReserved && StepRunner.referencesAny(
+                                                    sourcePath, Set.of(ConchRegistry.AUTH_VAR))))) {
                                 CallSecrets.remember(list);
                                 block.taintedVars.add(entry.getKey());
                             }
@@ -1765,7 +1814,7 @@ public final class RuleEngine implements ConchExecutor {
                 }
                 if (until != null) {
                     stopped = steps.test(Values.map(templates.render(until, vars)), vars, sessions.cookies(key),
-                            base);
+                            base, reach);
                 }
             }
         } finally {
@@ -2050,8 +2099,8 @@ public final class RuleEngine implements ConchExecutor {
         if (doc == null) {
             doc = liveConch(request);
         }
-        // HTTP steps only. A forwarder records MCP JSON-RPC with DevTraceStore.recordJsonRpc.
-        if (doc == null || !"http".equals(doc.driver())) {
+        // HTTP and auth login steps. A forwarder records MCP JSON-RPC with DevTraceStore.recordJsonRpc.
+        if (doc == null || (!"http".equals(doc.driver()) && !AuthenticatorChecks.isAuthenticator(doc))) {
             return null;
         }
         try {
@@ -2090,8 +2139,35 @@ public final class RuleEngine implements ConchExecutor {
         draft.add("alive_check", -1, elapsed(started), piece);
     }
 
-    private boolean credentialBearingRequest(boolean loginPhase, Step step) {
-        return "request".equals(step.type()) && (loginPhase || templates.referencesCredential(step.def()));
+    private boolean credentialBearingRequest(
+            boolean loginPhase, Step step, Map<String, Object> vars, Set<String> taintedVars) {
+        return "request".equals(step.type())
+                && (loginPhase || referencesSecretInRequest(step.def(), vars, taintedVars));
+    }
+
+    private boolean referencesSecretInRequest(Object node, Map<String, Object> vars, Set<String> taintedVars) {
+        if (templates.referencesCredential(node)) {
+            return true;
+        }
+        Set<String> paths;
+        try {
+            paths = templates.referencedPaths(node);
+        } catch (RuntimeException ex) {
+            return false;
+        }
+        boolean hasAuthView = vars != null && vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource;
+        for (String path : paths) {
+            if ("login".equals(path) || path.startsWith("login.") || path.startsWith("login[")) {
+                return true;
+            }
+            if (hasAuthView && ("auth".equals(path) || path.startsWith("auth.") || path.startsWith("auth["))) {
+                return true;
+            }
+            if (StepRunner.referencesAny(path, taintedVars)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void stampCredential(Map<String, Object> piece, boolean credentialBearing) {
@@ -2292,7 +2368,7 @@ public final class RuleEngine implements ConchExecutor {
                     // 看下一个
                 }
             }
-            throw new RuleProblem(ErrorCode.INTERNAL, "授权器没有可用的认证地址", null, null, null);
+            throw new RuleProblem(ErrorCode.NOT_CONFIGURED, "授权器的认证地址尚未配置", null, null, null);
         }
         String configured = config.get("base_url");
         String raw = configured == null || configured.isBlank() ? conch.baseUrl() : configured;
@@ -2315,9 +2391,11 @@ public final class RuleEngine implements ConchExecutor {
      * 其它非 2xx（含 400）：后续有覆盖该状态码的断言/分支/until，或有 {@code on_fail: session_expired} 断言时放行；
      * 非 GET 的 3xx 且不是登录重定向时放行。其余 400 仍按 {@code INVALID_INPUT}，其它非 2xx 按 {@code UPSTREAM_ERROR}，
      * 避免直接进入 extract 抽成空列表。无法解析的 Location 停在 3xx 上时，GET 的调用错误说明未跟随，不单报状态码。
+     * 业务包换票（auth.exchange）里无断言兜底的 4xx/5xx 同样直接判为 AUTH_FAILED，避免把换票失败记成换票成功。
      */
     private static void rejectCapabilityStatus(
             boolean auth,
+            Map<String, Object> vars,
             Outcome outcome,
             int position,
             int index,
@@ -2327,6 +2405,14 @@ public final class RuleEngine implements ConchExecutor {
             Continuation continuation
     ) {
         if (auth) {
+            if (vars != null
+                    && vars.get(ConchRegistry.AUTH_VAR) instanceof HttpCalls.SecretSource
+                    && outcome != null
+                    && outcome.status() != null
+                    && outcome.status() >= 400
+                    && !statusExpectationCovers(definitions, position, outcome.status(), continuation)) {
+                throw new StepFailure(ErrorCode.AUTH_FAILED, "登录失败", index, type, logs);
+            }
             return;
         }
         if (lostSession(outcome)) {
@@ -2677,8 +2763,8 @@ public final class RuleEngine implements ConchExecutor {
         }
 
         private AuthReach reach(boolean login) {
-            // 授权器的请求（含探活）都发往认证地址。
-            return AuthReach.of(authOrigins, login || authenticator);
+            // 授权器的登录步骤可访问全部认证地址；探活在 probe() 里单独收紧为单目标。
+            return AuthReach.of(authOrigins, login || authenticator, authenticator);
         }
 
         private String lookup(String name) {

@@ -50,7 +50,7 @@ class AuthDependencies {
         if (current == null) {
             return List.of(issue("auth.use", "授权器 " + name + " 还没有在 Reef 上发布，先发布授权器"));
         }
-        if (availability.isDisabled(name)) {
+        if (isLockedDisabled(name)) {
             return List.of(issue("auth.use", "授权器 " + name + " 已停用"));
         }
         return AuthenticatorChecks.link(consumer, read(current));
@@ -63,7 +63,7 @@ class AuthDependencies {
     List<String> brokenConsumers(String conch, ConchDoc next) {
         ArrayList<String> broken = new ArrayList<>();
         for (VersionRow row : repository.listCurrentUsing(conch)) {
-            if (availability.isDisabled(row.conch())) {
+            if (isLockedDisabled(row.conch())) {
                 continue;
             }
             List<ValidationIssue> problems = AuthenticatorChecks.link(read(row), next);
@@ -92,7 +92,7 @@ class AuthDependencies {
     List<String> activeConsumers(String conch) {
         return repository.listCurrentUsing(conch).stream()
                 .map(VersionRow::conch)
-                .filter(name -> !availability.isDisabled(name))
+                .filter(name -> !isLockedDisabled(name))
                 .toList();
     }
 
@@ -110,10 +110,15 @@ class AuthDependencies {
         if (current(repository.lockConch(name)) == null) {
             return List.of(issue("auth.use", "授权器 " + name + " 还没有在 Reef 上发布，先发布授权器"));
         }
-        if (availability.isDisabled(name)) {
+        if (isLockedDisabled(name)) {
             return List.of(issue("auth.use", "授权器 " + name + " 已停用"));
         }
         return List.of();
+    }
+
+    private boolean isLockedDisabled(String conch) {
+        AvailabilityRow row = availability.lock(conch);
+        return row != null && row.disabled();
     }
 
     private static VersionRow current(List<VersionRow> rows) {

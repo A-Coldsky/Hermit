@@ -264,6 +264,7 @@ public final class Authenticators implements AuthBindings {
             store.bind(key, check.authenticator(), check.baseUrl(), actor);
         }
         sessions.rebound(key);
+        sessions.resetLoginPause(key);
         return check;
     }
 
@@ -276,15 +277,25 @@ public final class Authenticators implements AuthBindings {
         return store.find(key) != null;
     }
 
-    /** 账号被删：它自己的绑定作废；它是授权器账号时，绑到它的账号都作废。 */
+    /** 授权器账号更新凭证或测试登录恢复后，联动解除其下游业务包账号因换票失败触发的自动登录暂停。 */
+    void resetConsumerLoginPauses(SessionKey authenticator) {
+        for (AuthBinding binding : store.consumersOf(authenticator)) {
+            sessions.resetLoginPause(binding.account());
+        }
+    }
+
+    /** 账号被删：它自己的绑定作废；它是授权器账号时，绑到它的账号都作废，并彻底释放授权器共享罐和连接池。 */
     void accountDeleted(SessionKey key, String actor) {
         leave(key, REASON_ACCOUNT_DELETED, actor);
         for (AuthBinding binding : store.consumersOf(key)) {
             leave(binding.account(), REASON_AUTH_ACCOUNT_DELETED, actor);
         }
+        String jar = jarId(key);
+        sessions.clearIdentity(jar);
+        sessions.dropIdentity(jar);
     }
 
-    /** 使用者退订或删掉了一个包（某个来源那一份）：它的账号的绑定作废；它是授权器时，绑到它的都作废。 */
+    /** 使用者删掉了某个来源的包：它的账号的绑定作废；它是授权器时，绑到它的都作废，并销毁共享罐与连接池。 */
     public void packageRemoved(Origin origin, String conch, String actor) {
         if (registry.find(conch, origin).isPresent()) {
             return;
@@ -295,6 +306,15 @@ public final class Authenticators implements AuthBindings {
         for (AuthBinding binding : store.consumersOf(origin, conch)) {
             leave(binding.account(), REASON_PACKAGE_REMOVED, actor);
         }
+        sessions.dropIdentitiesByPrefix(PREFIX + origin.name() + "/" + conch + "/", true);
+    }
+
+    /** 退订正式包保留绑定与凭证，但关闭内存里的共享客户端连接池，避免退订后长期滞留连接池。 */
+    void packageUnsubscribed(String conch) {
+        if (registry.find(conch, Origin.OFFICIAL).isPresent()) {
+            return;
+        }
+        sessions.dropIdentitiesByPrefix(PREFIX + Origin.OFFICIAL.name() + "/" + conch + "/", false);
     }
 
     /** 本地包的地址范围扩大了：它的绑定作废；它是授权器时，绑到它的都作废。 */
@@ -408,6 +428,56 @@ public final class Authenticators implements AuthBindings {
             }
         }
         return new BoundAuth(target, authenticator, secrets, DeclaredSettings.mergedConfig(authenticator, stored), siblings);
+    }
+
+    /**
+     * 控制台展示用的就绪诊断：与 {@link #resolve} 保持同一组判定条件。返回 {@code null} 表示绑定完整且授权器凭证齐全。
+     */
+    public String bindingProblem(SessionKey key, ConchDoc conch) {
+        AuthBinding binding = store.find(key);
+        if (binding == null || conch == null || !AuthenticatorChecks.uses(conch)) {
+            return "还没有绑定授权器账号";
+        }
+        SessionKey target = binding.authenticator();
+        ConchRegistry.Active active = registry.authenticator(conch.auth().use()).orElse(null);
+        if (active == null) {
+            return "本机没有授权器 " + conch.auth().use();
+        }
+        if (active.origin() != target.origin() || !active.doc().conch().equals(target.conch())) {
+            return "授权器生效来源已变化，请重新绑定";
+        }
+        if (disabled.test(target.conch())) {
+            return "授权器 " + target.conch() + " 在本机已停用";
+        }
+        ConchDoc authenticator = active.doc();
+        List<ValidationIssue> issues = AuthenticatorChecks.link(conch, authenticator);
+        if (!issues.isEmpty()) {
+            return issues.get(0).message();
+        }
+        String site = site(key.origin(), conch);
+        if (site == null || !site.equals(binding.boundBaseUrl())) {
+            return "站点地址已变化，请重新绑定";
+        }
+        if (!allowed(authenticator, target.origin(), site)) {
+            return "授权器 " + target.conch() + " 不允许用于 " + site + "（auth.allow_hosts）";
+        }
+        if (!hasAccount(target.origin(), target.conch(), target.account())) {
+            return "授权器账号 " + target.account() + " 已不存在";
+        }
+        Map<String, String> stored = conchConfig.all(target.origin(), target.conch());
+        if (!DeclaredSettings.missingConfig(authenticator, stored).isEmpty()) {
+            return "授权器 " + target.conch() + " 还缺配置项";
+        }
+        if (!DeclaredSettings.missingCredentials(
+                authenticator, vault.fieldNames(target.origin(), target.conch(), target.account())).isEmpty()) {
+            return "授权器账号 " + target.account() + " 还没填好凭证";
+        }
+        try {
+            vault.decryptForExecution(target.origin(), target.conch(), target.account());
+        } catch (RuntimeException ex) {
+            return "授权器账号 " + target.account() + " 的凭证无法读取";
+        }
+        return null;
     }
 
     private String site(Origin origin, ConchDoc doc) {

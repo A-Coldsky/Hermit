@@ -82,6 +82,10 @@ export const importIssueLabels: Record<string, string> = {
   EMPTY_GROUP: '分组无能力',
   /** `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 扩展写法有误。错误，阻止保存。 */
   SESSION_EXPIRY: '会话失效规则有误',
+  /** `driver: auth` 授权器或业务包 `auth.use` / `auth.exchange` / `auth.exports` / `auth.allow_hosts` 写法有误。 */
+  AUTHENTICATOR: '授权器配置有误',
+  /** 返回值引用了登录变量或授权器导出变量。 */
+  LOGIN_IN_OUTPUT: '输出含登录或导出秘密',
 }
 
 /**

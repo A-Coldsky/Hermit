@@ -1,28 +1,33 @@
 package dev.hermit.common.validate;
 
+import java.net.URI;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
 import dev.hermit.common.http.AuthOrigins;
+import dev.hermit.common.http.SiteAddress;
 import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.ConfigField;
+import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.McpAuth;
 import dev.hermit.common.model.Step;
 
 /**
  * 一份规则包静态能发往的地址。每项是规范化后的 {@code scheme://host:port}。
  * {@code auth.origins} 里的认证地址计入：字面量直接算，引用配置项的算它的默认值。
- * 新集合是旧集合的子集，且两边都能静态确定、MCP 认证类型没变，才是同一边界。
+ * 新集合是旧集合的子集，且两边都能静态确定、驱动/授权引用/MCP 认证类型没变、授权器 {@code allow_hosts} 未放宽，才是同一边界。
  *
- * <p>集合里有两类地址：请求真正能发过去的（{@code base_url}、认证地址、MCP 上游和它的认证端点），
+ * <p>集合里有两类地址：请求真正能发过去的（{@code base_url}、认证地址、换票请求地址、MCP 上游和它的认证端点），
  * 和只是在步骤文本里出现过的。旧版本只在文本里提到过的地址，新版本把它变成能发请求的地址，
- * 同样算扩大：凭证从这一版起才会发到那里。新引用一个配置项当认证地址也算。
+ * 同样算扩大：凭证从这一版起才会发到那里。新引用一个配置项当认证地址或允许主机也算。
  *
  * <p>OAuth 的 issuer 和 registration 目前不是包字段，发现到的端点仍由上游允许主机在运行时拦住。
  * {@code allowed_hosts} 本身不计入这个集合。{@code health_check} 没有执行链，不计入。
@@ -48,9 +53,16 @@ public final class ConchDestinations {
             return new Boundary(false, texts(next.destinations), true, false);
         }
         Analysis previous = analyze(before);
-        boolean authChanged = !java.util.Objects.equals(previous.authType, next.authType);
+        boolean newAllowConfig = "auth".equals(previous.driver)
+                && "auth".equals(next.driver)
+                && previous.allowHostsRestricted
+                && !previous.allowHostConfigs.keySet().containsAll(next.allowHostConfigs.keySet());
+        boolean authChanged = !Objects.equals(previous.driver, next.driver)
+                || !Objects.equals(previous.authType, next.authType)
+                || !Objects.equals(previous.authUse, next.authUse)
+                || allowHostsWidened(previous, next);
         // 新引用的配置项：地址是这台 Crab 上填的值，静态看不出来。
-        boolean newAuthConfig = !previous.authConfig.containsAll(next.authConfig);
+        boolean newAuthConfig = !previous.authConfig.containsAll(next.authConfig) || newAllowConfig;
         boolean undetermined = previous.undetermined || next.undetermined || newAuthConfig;
         boolean same = !authChanged
                 && !undetermined
@@ -62,6 +74,30 @@ public final class ConchDestinations {
         promoted.removeAll(previous.reachable);
         added.addAll(promoted);
         return new Boundary(same, texts(added), undetermined, authChanged);
+    }
+
+    private static boolean allowHostsWidened(Analysis previous, Analysis next) {
+        if (!"auth".equals(previous.driver) || !"auth".equals(next.driver)) {
+            return false;
+        }
+        // 旧版未写 allow_hosts 代表不限制允许站点，新版写什么都只会收紧或维持不变。
+        if (!previous.allowHostsRestricted) {
+            return false;
+        }
+        // 旧版限制了 allow_hosts，新版删空则变为不限制（放宽）。
+        if (!next.allowHostsRestricted) {
+            return true;
+        }
+        if (!previous.allowHostLiterals.containsAll(next.allowHostLiterals)) {
+            return true;
+        }
+        for (Map.Entry<String, String> entry : next.allowHostConfigs.entrySet()) {
+            if (!previous.allowHostConfigs.containsKey(entry.getKey())
+                    || !Objects.equals(previous.allowHostConfigs.get(entry.getKey()), entry.getValue())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 用顿号连接新增地址。有无法静态确定的部分时另加一句；两边都空时也用那句。 */
@@ -78,12 +114,14 @@ public final class ConchDestinations {
 
     private static Analysis analyze(ConchDoc doc) {
         Analysis analysis = new Analysis();
+        analysis.driver = doc.driver();
         analysis.reach(doc.baseUrl());
         ConfigField configured = doc.config().get("base_url");
         if (configured != null && configured.defaultValue() instanceof String text) {
             analysis.reach(text);
         }
         if (doc.auth() != null) {
+            analysis.authUse = doc.auth().use();
             for (String origin : doc.auth().origins()) {
                 String name = AuthOrigins.configName(origin);
                 if (name == null) {
@@ -100,8 +138,36 @@ public final class ConchDestinations {
             for (Step step : doc.auth().steps()) {
                 analysis.walk(step.def());
             }
+            for (Step step : FlowSteps.flat(doc.auth().exchange())) {
+                if ("request".equals(step.type())) {
+                    analysis.walkExchangeRequest(step.def());
+                } else if (!FlowSteps.isFlow(step)) {
+                    analysis.walk(step.def());
+                } else {
+                    analysis.walk(FlowSteps.own(step));
+                }
+            }
             if (doc.auth().aliveCheck() != null) {
                 analysis.walk(doc.auth().aliveCheck().request());
+            }
+            if (AuthenticatorChecks.isAuthenticator(doc) && !doc.auth().allowHosts().isEmpty()) {
+                analysis.allowHostsRestricted = true;
+                for (String raw : doc.auth().allowHosts()) {
+                    String entry = raw == null ? "" : raw.trim();
+                    String cfg = AuthOrigins.configName(entry);
+                    if (cfg != null) {
+                        ConfigField field = doc.config().get(cfg);
+                        String def = field != null && field.defaultValue() instanceof String text
+                                ? SiteAddress.of(text)
+                                : null;
+                        analysis.allowHostConfigs.put(cfg, def == null ? "" : def);
+                    } else if (entry.contains("*")) {
+                        analysis.allowHostLiterals.add(normalizeWildcard(entry));
+                    } else {
+                        String site = SiteAddress.of(entry);
+                        analysis.allowHostLiterals.add(site == null ? entry.toLowerCase(Locale.ROOT) : site);
+                    }
+                }
             }
         }
         for (Action action : doc.actions().values()) {
@@ -124,6 +190,21 @@ public final class ConchDestinations {
         return analysis;
     }
 
+    private static String normalizeWildcard(String entry) {
+        try {
+            URI parsed = URI.create(entry.replace("*.", "x."));
+            if (parsed.getScheme() != null && parsed.getHost() != null) {
+                String scheme = parsed.getScheme().toLowerCase(Locale.ROOT);
+                int port = parsed.getPort() >= 0 ? parsed.getPort() : ("https".equals(scheme) ? 443 : 80);
+                String suffix = parsed.getHost().substring(1).toLowerCase(Locale.ROOT);
+                return scheme + "://*" + suffix + ":" + port;
+            }
+        } catch (RuntimeException ignored) {
+            // 非法通配由 ConchValidator 拒绝，这里退回小写原串兜底。
+        }
+        return entry.toLowerCase(Locale.ROOT);
+    }
+
     private static List<String> texts(Set<Destination> destinations) {
         ArrayList<String> texts = new ArrayList<>();
         for (Destination destination : destinations) {
@@ -134,10 +215,10 @@ public final class ConchDestinations {
 
     /**
      * @param sameBoundary 新目的地是旧目的地的子集（含相等），请求能发过去的地址也没有变多，
-     *                     且没有无法静态确定的地址，认证类型也没变
+     *                     且没有无法静态确定的地址，驱动/认证方式/授权器引用没变，allow_hosts 未放宽
      * @param addedDestinations 新出现的，或从这一版起请求才能发过去的 {@code scheme://host:port}，已排序
-     * @param undetermined 任一侧有 scheme 或主机里的模板，旧文档读不出来，或新版本新引用了配置项当认证地址
-     * @param authChanged MCP {@code auth.type} 发生变化。HTTP 包两侧都是 null
+     * @param undetermined 任一侧有 scheme 或主机里的模板，旧文档读不出来，或新版本新引用了配置项当认证/允许地址
+     * @param authChanged 驱动、MCP {@code auth.type}、{@code auth.use} 变化，或授权器 {@code allow_hosts} 放宽
      */
     public record Boundary(
             boolean sameBoundary,
@@ -167,7 +248,12 @@ public final class ConchDestinations {
         /** 请求真正能发过去的地址，是 {@link #destinations} 的子集。 */
         private final TreeSet<Destination> reachable = new TreeSet<>();
         private boolean undetermined;
+        private String driver;
         private String authType;
+        private String authUse;
+        private boolean allowHostsRestricted;
+        private final TreeSet<String> allowHostLiterals = new TreeSet<>();
+        private final Map<String, String> allowHostConfigs = new LinkedHashMap<>();
         /** auth.origins 引用的配置项。以它开头的地址已经算在认证地址里，不算无法静态确定。 */
         private final Set<String> authConfig = new TreeSet<>();
 
@@ -181,6 +267,17 @@ public final class ConchDestinations {
             if (parsed.ok()) {
                 McpAddresses.Parsed url = parsed.url();
                 reachable.add(new Destination(url.scheme(), url.host(), url.port()));
+            }
+        }
+
+        private void walkExchangeRequest(Map<String, Object> request) {
+            for (Map.Entry<String, Object> entry : request.entrySet()) {
+                Object value = entry.getValue();
+                if (URL_KEYS.contains(entry.getKey()) && value instanceof String text) {
+                    reach(text);
+                } else {
+                    walk(value);
+                }
             }
         }
 

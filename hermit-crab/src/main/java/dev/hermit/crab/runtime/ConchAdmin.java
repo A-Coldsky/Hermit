@@ -51,6 +51,7 @@ public final class ConchAdmin {
     private volatile Identities identities;
     private volatile Function<String, Optional<ConchDoc>> stagedDeclarations = name -> Optional.empty();
     private volatile Function<String, Origin> originFallback = name -> null;
+    private volatile java.util.function.Predicate<String> authenticatorCheck = name -> false;
 
     public ConchAdmin(
             DataSource dataSource,
@@ -106,6 +107,11 @@ public final class ConchAdmin {
     /** Used when the package is not in the registry, for example a disabled local file. */
     public void bindOriginFallback(Function<String, Origin> lookup) {
         this.originFallback = lookup == null ? name -> null : lookup;
+    }
+
+    /** Rejects tombstoned or unloaded authenticators from API key conch scopes. */
+    public void bindAuthenticatorCheck(java.util.function.Predicate<String> lookup) {
+        this.authenticatorCheck = lookup == null ? name -> false : lookup;
     }
 
     public Account createAccount(String conch, String name, String actor) {
@@ -213,7 +219,12 @@ public final class ConchAdmin {
         requireAccount(source, doc.conch(), account);
         DeclaredSettings.checkCredentialFields(doc, stagedFor(source, doc.conch()), fields);
         vault.write(source, doc.conch(), account, fields, actor);
-        sessions.invalidate(new SessionKey(source, doc.conch(), account));
+        SessionKey key = new SessionKey(source, doc.conch(), account);
+        sessions.invalidate(key);
+        Identities bound = identities;
+        if (bound != null && dev.hermit.common.validate.AuthenticatorChecks.isAuthenticator(doc)) {
+            bound.resetConsumerLoginPauses(key);
+        }
     }
 
     public Map<String, String> storedConfig(String conch) {
@@ -333,7 +344,12 @@ public final class ConchAdmin {
                 Map.of(),
                 resolved.account(),
                 new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
-        return engine.testLogin(request);
+        ExecutionResult result = engine.testLogin(request);
+        Identities bound = identities;
+        if (result.success() && bound != null && dev.hermit.common.validate.AuthenticatorChecks.isAuthenticator(doc)) {
+            bound.resetConsumerLoginPauses(key);
+        }
+        return result;
     }
 
     public PendingLogins.View loginInput(String conch, String account) {
@@ -443,7 +459,7 @@ public final class ConchAdmin {
     }
 
     public CreatedApiKey createApiKey(String name, ApiKeyScope scope, String actor) {
-        ApiKeyScopes.requireInstalled(registry, scope, disabledConches);
+        ApiKeyScopes.requireInstalled(registry, scope, disabledConches, authenticatorCheck);
         return apiKeys.create(name, scope, actor);
     }
 

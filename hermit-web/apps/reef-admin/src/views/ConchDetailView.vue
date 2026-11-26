@@ -287,14 +287,20 @@ watch(
                 <dt>最低 Crab 版本</dt>
                 <dd class="mono">{{ detail.minCrabVersion }}</dd>
                 <template v-if="!mcp">
-                  <dt>老系统地址</dt>
-                  <dd class="mono">{{ detail.baseUrl ?? '由 Crab 端配置' }}</dd>
+                  <template v-if="detail.driver !== 'auth'">
+                    <dt>老系统地址</dt>
+                    <dd class="mono">{{ detail.baseUrl ?? '由 Crab 端配置' }}</dd>
+                  </template>
                   <template v-if="detail.authOrigins?.length">
                     <dt>认证地址</dt>
                     <dd data-test="auth-origins">
                       <span class="mono">{{ detail.authOrigins.map(authOriginLabel).join('、') }}</span>
                       <div class="hm-muted">登录步骤还会访问这些地址，账号密码会提交到那里。</div>
                     </dd>
+                  </template>
+                  <template v-if="detail.authAllowHosts?.length">
+                    <dt>允许的业务站点</dt>
+                    <dd class="mono" data-test="auth-allow-hosts">{{ detail.authAllowHosts.join('、') }}</dd>
                   </template>
                 </template>
                 <dt>负责人</dt>

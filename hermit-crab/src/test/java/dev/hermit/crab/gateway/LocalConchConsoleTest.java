@@ -383,7 +383,7 @@ class LocalConchConsoleTest {
             }
             assertThat(driverIssue).isNotNull();
             assertThat(driverIssue.path("path").asText()).isEqualTo("driver");
-            assertThat(driverIssue.path("message").asText()).isEqualTo("driver 只允许 http 或 mcp");
+            assertThat(driverIssue.path("message").asText()).isEqualTo("driver 只允许 http、mcp 或 auth");
             assertThat(driverIssue.path("line").asInt()).isEqualTo(sourceLine(driver, "driver:"));
             assertThat(badDriver.body()).doesNotContain(marker).doesNotContain("shell").doesNotContain("com.fasterxml");
             assertThat(server.paths.localConches().resolve("bad_driver.yaml")).doesNotExist();

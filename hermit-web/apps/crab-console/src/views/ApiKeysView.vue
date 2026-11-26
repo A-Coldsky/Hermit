@@ -420,6 +420,9 @@ onMounted(load)
             勾选后，这把 Key 在本机开发者模式打开时能看到内置的 <span class="mono">hermit_dev</span> 工具包（校验、保存本地规则包、试跑、读开发追踪）。
             「全部权限」不包含它；只用来调用能力的 Key 不要勾选。
           </div>
+          <div v-if="form.devTools && form.readOnly" class="hm-muted dev-hint" data-test="scope-dev-readonly-hint">
+            同时勾选只读时，只能读编写指南、读 YAML、校验语法和试跑只读能力（全部权限时还可读抓包快照），<strong>不能保存本地规则包，也不能读取控制台触发的开发追踪</strong>。
+          </div>
         </el-form-item>
         <el-form-item label="范围" required>
           <el-radio-group v-model="form.all" data-test="scope-mode">

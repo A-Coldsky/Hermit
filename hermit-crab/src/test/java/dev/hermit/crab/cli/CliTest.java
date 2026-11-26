@@ -599,7 +599,10 @@ class CliTest {
         String warnings = err.toString(StandardCharsets.UTF_8);
         assertThat(code).isZero();
         assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("local_ping 1.0.0 已导入\n");
-        assertThat(warnings).isEqualTo("MISSING_RELATED actions.ping.related 缺少 related\n");
+        assertThat(warnings).isEqualTo(
+                "VAGUE_DESCRIPTION description description 不足 6 个字；其它 AI 靠它判断该不该用，请写清能做什么、用户平时怎么称呼\n"
+                        + "VAGUE_DESCRIPTION actions.ping.description description 不足 6 个字；其它 AI 靠它判断该不该用，请写清能做什么、用户平时怎么称呼\n"
+                        + "MISSING_RELATED actions.ping.related 缺少 related\n");
         assertThat(warnings).doesNotContain("本地探测").doesNotContain("base_url").doesNotContain("com.fasterxml");
         assertThat(Files.readString(home.resolve("local-conches").resolve("local_ping.yaml"))).isEqualTo(yaml);
 

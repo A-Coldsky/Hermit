@@ -96,6 +96,24 @@ class LocalConchHistoryTest {
     }
 
     @Test
+    void startupDropsALegacyCopyOfTheCurrentBeforePruning() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-23T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("legacy-dup"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            String current = LocalConchBehaviorTest.ping("hist_ping", "1.0.0");
+            local.importBytes(current.getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            java.nio.file.Path dir = crab.paths.localConches().resolve(".history").resolve("hist_ping");
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("20261122000000003-1.0.0.yaml"), current);
+            Files.writeString(dir.resolve("20261122000000002-0.2.0.yaml"), LocalConchBehaviorTest.ping("hist_ping", "0.2.0"));
+            Files.writeString(dir.resolve("20261122000000001-0.1.0.yaml"), LocalConchBehaviorTest.ping("hist_ping", "0.1.0"));
+            local.loadStartup();
+            assertThat(local.history("hist_ping")).extracting(LocalConches.HistoryEntry::version)
+                    .containsExactly("0.2.0", "0.1.0");
+        }
+    }
+
+    @Test
     void sameContentAndRestoreDoNotTakeAHistorySlot() throws Exception {
         MutableClock clock = new MutableClock(Instant.parse("2026-11-20T00:00:00Z"));
         try (OpenCrab crab = OpenCrab.open(temp.resolve("dedupe"))) {

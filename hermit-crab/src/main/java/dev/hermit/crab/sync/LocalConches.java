@@ -1392,11 +1392,28 @@ public final class LocalConches {
         try (var children = Files.list(history)) {
             for (Path dir : children.toList()) {
                 if (!Files.isSymbolicLink(dir) && Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
+                    dropHistoryEqualToCurrent(history.getParent(), dir.getFileName().toString());
                     pruneHistory(dir);
                 }
             }
         } catch (IOException | RuntimeException ex) {
             LOG.warning("local conch history was not pruned: " + ex.getClass().getName());
+        }
+    }
+
+    /** 旧版本留下的、和当前内容相同的备份先去掉，不让它挤掉一份真正能回退的版本。 */
+    private void dropHistoryEqualToCurrent(Path root, String conch) {
+        if (!ConchValidator.isConchName(conch) || !ConchFiles.safeSegment(conch)) {
+            return;
+        }
+        Path current = root.resolve(conch + SUFFIX);
+        if (Files.isSymbolicLink(current) || !Files.isRegularFile(current, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        try {
+            dropHistoryEqualTo(conch, Files.readAllBytes(current));
+        } catch (IOException ex) {
+            LOG.warning("local conch history was not deduplicated: " + ex.getClass().getName());
         }
     }
 

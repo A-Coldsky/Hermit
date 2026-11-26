@@ -25,6 +25,8 @@ vi.mock('../apps/crab-console/src/status', () => ({ refreshPending: vi.fn() }))
 vi.mock('../apps/reef-admin/src/api', () => ({ api: reef }))
 
 import KindShell from '../shared/components/KindShell.vue'
+import KindBadge from '../shared/components/KindBadge.vue'
+import ConchAvatar from '../shared/components/ConchAvatar.vue'
 import CatalogView from '../apps/crab-console/src/views/CatalogView.vue'
 import CrabConchesView from '../apps/crab-console/src/views/ConchesView.vue'
 import ReefConchesView from '../apps/reef-admin/src/views/ConchesView.vue'
@@ -107,6 +109,32 @@ describe('三种螺壳', () => {
     expect(small.find('.m-ridge').exists()).toBe(false)
     expect(small.find('.m-hole').exists()).toBe(true)
   })
+
+  it('单色版三种都有，HTTP 不用彩色的螺壳', () => {
+    const kinds = ['http', 'mcp', 'auth'].map((kind) => mount(KindShell, { props: { kind, size: 13, mono: true } }))
+    expect(kinds.every((w) => w.classes().includes('mono'))).toBe(true)
+    expect(kinds[0].find('.hm-shell').exists()).toBe(false)
+    expect(kinds[0].find('.cut').exists()).toBe(true)
+    expect(kinds[1].find('.m-hole').exists()).toBe(true)
+    expect(kinds[2].find('.a-hole').exists()).toBe(true)
+  })
+
+  it('头像只有字母，不带螺壳', () => {
+    const avatar = mount(ConchAvatar, { props: { name: 'corp_sso', title: '统一认证' } })
+    expect(avatar.text()).toBe('统')
+    expect(avatar.find('svg').exists()).toBe(false)
+  })
+
+  it('类型徽标：默认单色小螺壳，large 是彩色螺壳', () => {
+    const small = mount(KindBadge, { props: { kind: 'auth' } })
+    expect(small.text()).toBe('授权器')
+    expect(small.attributes('data-kind')).toBe('auth')
+    expect(small.find('svg').classes()).toContain('mono')
+    const large = mount(KindBadge, { props: { kind: 'mcp', large: true } })
+    expect(large.text()).toBe('原生 MCP')
+    expect(large.find('svg').classes()).not.toContain('mono')
+    expect(mount(KindBadge, { props: { kind: null } }).attributes('data-kind')).toBe('http')
+  })
 })
 
 describe('Crab 可订阅规则包：规则包 / 授权器页签', () => {
@@ -122,6 +150,8 @@ describe('Crab 可订阅规则包：规则包 / 授权器页签', () => {
     expect(wrapper.find('[data-test="needs-authenticator"]').text()).toContain('corp_sso')
     expect(wrapper.find('[data-test="needs-authenticator"]').text()).toContain('本机还没有')
     expect(wrapper.findAll('.el-table__row')).toHaveLength(1)
+    expect(wrapper.find('[data-test="kind-tabs"] svg').exists()).toBe(false)
+    expect(wrapper.find('.el-table__row [data-test="kind-badge"]').attributes('data-kind')).toBe('http')
 
     await pick(wrapper, 'authenticators')
     expect(wrapper.findAll('.el-table__row')).toHaveLength(1)
@@ -255,6 +285,12 @@ describe('Crab 规则包与账号：授权器页签', () => {
     expect(card.find('[data-test="authenticator-used-by"]').text()).toContain('corp_oa')
     expect(card.text()).toContain('有新版本 v1.1.0')
     expect(card.find('[data-test="authenticator-update"]').exists()).toBe(true)
+    // 名字单独一行并带全名的 title；类型徽标和标签在名字下面的一行里，不跟在名字后面。
+    const title = card.find('.name strong')
+    expect(title.attributes('title')).toBe(title.text())
+    expect(title.find('.el-tag, [data-test="kind-badge"]').exists()).toBe(false)
+    expect(card.find('.marks [data-test="kind-badge"]').attributes('data-kind')).toBe('auth')
+    expect(card.find('.marks').text()).toContain('有新版本 v1.1.0')
   })
 })
 
@@ -288,7 +324,12 @@ describe('Reef 规则包目录：授权器页签', () => {
     expect(wrapper.find('[data-test="conch-count"]').text()).toBe('共 1 个')
     expect(wrapper.find('[data-test="kind-filter"]').exists()).toBe(true)
 
+    expect(wrapper.find('[data-test="kind-tabs"] svg').exists()).toBe(false)
+    expect(wrapper.find('.hm-card.conch > .hm-kind-water').attributes('data-kind')).toBe('http')
+    expect(wrapper.find('.hm-card.conch [data-test="driver-badge"]').attributes('data-kind')).toBe('http')
+
     await pick(wrapper, 'authenticators')
+    expect(wrapper.find('.hm-card.conch > .hm-kind-water').attributes('data-kind')).toBe('auth')
     expect(wrapper.find('[data-test="conch-count"]').text()).toBe('共 1 个')
     expect(wrapper.find('[data-test="kind-filter"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="used-by"]').text()).toContain('corp_oa')

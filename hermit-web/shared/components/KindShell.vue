@@ -2,23 +2,26 @@
 /**
  * 规则包的三种螺壳，按类型区分形状：HTTP 规则是斜尖海螺，原生 MCP 是壳口为插座的鹦鹉螺，
  * 授权器是螺塔带钥匙齿、壳口为钥匙孔的尖塔螺。28px 以下去掉细线，只留轮廓和特征。
+ * `mono` 是单色剪影，跟随文字颜色，用在类型徽标这类 16px 以下的地方；壳口用 `--kind-hole` 镂空（默认是页面底色）。
  */
 import { computed } from 'vue'
 import MascotShell from './MascotShell.vue'
 
 export type ShellKind = 'http' | 'mcp' | 'auth'
 
-const props = withDefaults(defineProps<{ kind?: ShellKind | string | null; size?: number }>(), { kind: 'http', size: 24 })
+const props = withDefaults(defineProps<{ kind?: ShellKind | string | null; size?: number; mono?: boolean }>(),
+  { kind: 'http', size: 24, mono: false },
+)
 
 const shape = computed<ShellKind>(() => (props.kind === 'mcp' || props.kind === 'auth' ? props.kind : 'http'))
-const small = computed(() => props.size < 28)
+const small = computed(() => props.mono || props.size < 28)
 const label = computed(() => ({ http: 'HTTP 规则包', mcp: '原生 MCP', auth: '授权器' })[shape.value])
 </script>
 
 <template>
   <svg
     class="kind-shell"
-    :class="[`kind-${shape}`, { small }]"
+    :class="[`kind-${shape}`, { small, mono }]"
     :width="size"
     :height="size"
     viewBox="4 2 58 56"
@@ -26,7 +29,13 @@ const label = computed(() => ({ http: 'HTTP 规则包', mcp: '原生 MCP', auth:
     :aria-label="label"
     :data-kind="shape"
   >
-    <g v-if="shape === 'http'"><MascotShell /></g>
+    <g v-if="shape === 'http' && mono">
+      <path d="M37.2 13.6 L50.4 8.0 C52.3 7.2 53.8 8.7 52.7 10.6 L46.2 22.4 Z" />
+      <path d="M22.2 22.0 C26.8 12.4 38.4 10.6 47.2 14.3 C50.9 16.0 50.3 23.3 44.4 28.2 L20.4 27.7 Z" />
+      <path d="M11.6 39.4 C10.0 24.8 21.0 16.8 35.6 18.6 C48.4 20.1 54.2 29.8 50.3 41.3 C46.4 49.0 16.8 49.4 11.6 39.4 Z" />
+      <ellipse class="cut" cx="31.6" cy="42.7" rx="13.4" ry="5.6" />
+    </g>
+    <g v-else-if="shape === 'http'"><MascotShell /></g>
 
     <g v-else-if="shape === 'mcp'">
       <path class="m-mid" d="M36 27 C44 22 56 26 57 37 C58 46 50 50.5 41 49.4 C33 48.4 29 42 31 35 Z" />
@@ -73,45 +82,45 @@ const label = computed(() => ({ http: 'HTTP 规则包', mcp: '原生 MCP', auth:
 }
 
 .m-base {
-  fill: var(--hm-shell-alt);
+  fill: var(--hm-shell-mcp);
 }
 
 .m-mid {
-  fill: var(--hm-shell-alt-mid);
+  fill: var(--hm-shell-mcp-mid);
 }
 
 .m-deep {
-  fill: var(--hm-shell-alt-deep);
+  fill: var(--hm-shell-mcp-deep);
 }
 
 .m-ridge {
   fill: none;
-  stroke: var(--hm-shell-alt-ridge);
+  stroke: var(--hm-shell-mcp-ridge);
   stroke-width: 1.9;
   stroke-linecap: round;
 }
 
 .m-shine {
   fill: none;
-  stroke: var(--hm-shell-alt-shine);
+  stroke: var(--hm-shell-mcp-shine);
   stroke-width: 2.5;
   stroke-linecap: round;
 }
 
 .m-spark {
-  fill: var(--hm-shell-alt-shine);
+  fill: var(--hm-shell-mcp-shine);
 }
 
 /* 插座的底色很深，深色主题下靠亮边和亮插孔认出来。 */
 .m-socket {
-  fill: var(--hm-shell-alt-inner);
-  stroke: var(--hm-shell-alt-shine);
+  fill: var(--hm-shell-mcp-inner);
+  stroke: var(--hm-shell-mcp-shine);
   stroke-width: 1.2;
 }
 
 .m-hole {
   fill: none;
-  stroke: var(--hm-shell-alt-shine);
+  stroke: var(--hm-shell-mcp-shine);
   stroke-width: 2.6;
   stroke-linecap: round;
 }
@@ -157,5 +166,28 @@ const label = computed(() => ({ http: 'HTTP 规则包', mcp: '原生 MCP', auth:
 
 .a-hole {
   fill: var(--hm-shell-key-inner);
+}
+
+.mono path,
+.mono ellipse {
+  fill: currentColor;
+  stroke: none;
+  opacity: 1;
+}
+
+.mono .cut,
+.mono .m-socket,
+.mono .a-hole {
+  fill: var(--kind-hole, var(--hm-surface));
+}
+
+.mono .a-rim {
+  display: none;
+}
+
+.mono .m-hole {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3.8;
 }
 </style>

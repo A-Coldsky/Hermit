@@ -93,8 +93,8 @@ onMounted(load)
     </PageHeader>
 
     <el-radio-group v-model="tab" class="tabs" data-test="kind-tabs">
-      <el-radio-button value="packages"><KindShell kind="http" :size="18" /> 规则包 {{ packages.length }}</el-radio-button>
-      <el-radio-button value="authenticators"><KindShell kind="auth" :size="18" /> 授权器 {{ authenticators.length }}</el-radio-button>
+      <el-radio-button value="packages">规则包 {{ packages.length }}</el-radio-button>
+      <el-radio-button value="authenticators">授权器 {{ authenticators.length }}</el-radio-button>
     </el-radio-group>
 
     <div class="hm-toolbar bar">
@@ -141,9 +141,9 @@ onMounted(load)
       <div v-if="filtered.length" class="cards">
         <RouterLink v-for="row in filtered" :key="row.conch" :to="`/conches/${encodeURIComponent(row.conch)}`" class="hm-card conch" :class="{ off: row.disabled }">
           <div class="top">
-            <ConchAvatar :name="row.conch" :title="row.title" :kind="row.driver" />
+            <ConchAvatar :name="row.conch" :title="row.title" />
             <div class="name">
-              <strong>{{ row.title || row.conch }}</strong>
+              <strong :title="row.title || row.conch">{{ row.title || row.conch }}</strong>
               <span class="mono hm-muted">{{ row.conch }}</span>
             </div>
             <el-tag v-if="row.disabled" type="warning" effect="light" round>已停用</el-tag>
@@ -160,6 +160,7 @@ onMounted(load)
           <div class="tags">
             <el-tag v-for="tag in row.tags" :key="tag" size="small" effect="plain" round>{{ tag }}</el-tag>
           </div>
+          <KindShell :kind="row.driver" :size="56" class="hm-kind-water" aria-hidden="true" />
           <div class="foot hm-muted">
             <span><b class="num">{{ row.capabilityCount }}</b> 个{{ isMcp(row) ? '工具' : '能力' }}</span>
             <span :title="`${pullCountHint}，各版本合计`">拉取次数 <b class="num">{{ row.pullCount }}</b></span>
@@ -183,7 +184,7 @@ onMounted(load)
         <el-table-column label="规则包" min-width="220">
           <template #default="{ row }">
             <div class="row-name">
-              <ConchAvatar :name="row.conch" :title="row.title" :size="32" :kind="row.driver" />
+              <ConchAvatar :name="row.conch" :title="row.title" :size="32" />
               <div class="name">
                 <strong>{{ row.title || row.conch }}</strong>
                 <span class="mono hm-muted">{{ row.conch }}</span>
@@ -253,16 +254,47 @@ onMounted(load)
   gap: 16px;
 }
 
+/*
+ * 卡片分五个区：标题、类型行、描述、标签、底部信息。支持 subgrid 时，同一排卡片的每个区等高，
+ * 各区的起始位置横向对齐；类型水印在描述和标签右边，靠下。
+ */
 .conch {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
+  align-content: start;
   color: inherit;
+}
+
+.conch > * {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.conch > .desc,
+.conch > .tags {
+  grid-column: 1;
+}
+
+.conch > .tags {
+  align-content: flex-start;
+}
+
+.conch > .hm-kind-water {
+  grid-area: 3 / 2 / span 2 / auto;
+  align-self: end;
+}
+
+@supports (grid-template-rows: subgrid) {
+  .conch {
+    grid-row: span 5;
+    grid-template-rows: subgrid;
+  }
 }
 
 .top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
 }
 
@@ -273,6 +305,14 @@ onMounted(load)
 
 .top strong {
   font-size: 15px;
+}
+
+/* 卡片上名字和包标识各占一行，放不下的用省略号，全名在 title 里。 */
+.conch .name strong,
+.conch .name .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .desc {
@@ -294,7 +334,15 @@ onMounted(load)
   min-width: 0;
 }
 
+/* 卡片里类型行放不下时，上游地址或授权器名折到徽标下面一行，不截断成省略号。 */
+.conch .kind {
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 4px 8px;
+}
+
 .host {
+  max-width: 100%;
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;

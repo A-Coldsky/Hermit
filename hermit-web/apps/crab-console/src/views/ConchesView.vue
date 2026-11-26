@@ -15,6 +15,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
+import KindBadge from '@shared/components/KindBadge.vue'
 import KindShell from '@shared/components/KindShell.vue'
 import HermitMark from '@shared/components/HermitMark.vue'
 import { ApiError } from '@shared/http'
@@ -589,9 +590,9 @@ onMounted(load)
     </div>
 
     <el-radio-group v-model="tab" class="tabs" data-test="kind-tabs">
-      <el-radio-button value="packages"><KindShell kind="http" :size="18" /> 规则包 {{ conches.length + broken.length }}</el-radio-button>
+      <el-radio-button value="packages">规则包 {{ conches.length + broken.length }}</el-radio-button>
       <el-radio-button value="authenticators">
-        <KindShell kind="auth" :size="18" /> 授权器 {{ authenticators.length }}
+        授权器 {{ authenticators.length }}
         <span v-if="authenticators.some((a) => a.updateAvailable)" class="tab-dot" data-test="authenticator-update-dot" />
       </el-radio-button>
     </el-radio-group>
@@ -612,25 +613,31 @@ onMounted(load)
           @keyup.enter="open(row)"
         >
           <div class="top">
-            <ConchAvatar :name="row.conch" :title="row.title" kind="auth" />
+            <ConchAvatar :name="row.conch" :title="row.title" />
             <div class="name">
-              <strong>
-                {{ row.title || row.conch }}
-                <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
-                <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
-              </strong>
+              <strong :title="row.title || row.conch">{{ row.title || row.conch }}</strong>
               <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
             </div>
           </div>
-          <div class="status" :class="row.accounts.length ? 'ok' : 'idle'">
-            <el-icon><component :is="row.accounts.length ? CircleCheckFilled : User" /></el-icon>
-            <span v-if="!row.accounts.length">未建账号：先新建一个账号并填凭证</span>
-            <span v-else-if="consumerCount(row)" data-test="authenticator-used-by">被 {{ consumerNames(row).join('、') }} 使用</span>
-            <span v-else>还没有业务包的账号绑到它上面</span>
+          <div class="marks">
+            <KindBadge kind="auth" />
+            <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
+            <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
           </div>
-          <p v-if="row.updateAvailable" class="update-note">
-            可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的业务包都用新版本登录。
-          </p>
+          <div class="hm-kind-body">
+            <div class="hm-kind-main">
+              <div class="status" :class="row.accounts.length ? 'ok' : 'idle'">
+                <el-icon><component :is="row.accounts.length ? CircleCheckFilled : User" /></el-icon>
+                <span v-if="!row.accounts.length">未建账号：先新建一个账号并填凭证</span>
+                <span v-else-if="consumerCount(row)" data-test="authenticator-used-by">被 {{ consumerNames(row).join('、') }} 使用</span>
+                <span v-else>还没有业务包的账号绑到它上面</span>
+              </div>
+              <p v-if="row.updateAvailable" class="update-note">
+                可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的业务包都用新版本登录。
+              </p>
+            </div>
+            <KindShell kind="auth" :size="56" class="hm-kind-water" aria-hidden="true" />
+          </div>
           <div class="foot hm-muted">
             <span><b class="num">{{ row.accounts.length }}</b> 个账号</span>
             <span><b class="num">{{ consumerCount(row) }}</b> 个业务包在用</span>
@@ -671,49 +678,55 @@ onMounted(load)
         @keyup.enter="open(row)"
       >
         <div class="top">
-          <ConchAvatar :name="row.conch" :title="row.title" :kind="row.driver" />
+          <ConchAvatar :name="row.conch" :title="row.title" />
           <div class="name">
-            <strong>
-              {{ row.title || row.conch }}
-              <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
-              <el-tag v-if="row.localVersion && row.reefVersion" type="info" effect="plain" size="small" class="local" data-test="two-sources-tag">{{ row.source === 'LOCAL' ? '另有同名正式包' : '另有同名本地包' }}</el-tag>
-              <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
-              <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
-              <el-tooltip v-if="row.sameSite?.length" :content="`${sameSiteText(row.sameSite)}`" placement="top">
-                <el-tag type="info" effect="plain" size="small" class="local" data-test="same-site-tag">同网站 {{ row.sameSite.length }} 个包</el-tag>
-              </el-tooltip>
-              <el-tooltip v-if="row.sameAuth?.length" :content="`${sameAuthText(row.sameAuth)}`" placement="top">
-                <el-tag type="info" effect="plain" size="small" class="local" data-test="same-auth-tag">共用认证 {{ row.sameAuth.length }} 个包</el-tag>
-              </el-tooltip>
-              <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
-              <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
-            </strong>
+            <strong :title="row.title || row.conch">{{ row.title || row.conch }}</strong>
             <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
           </div>
         </div>
-        <div class="status" :class="row.ruleDisabled || row.switchedOff ? 'bad' : row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
-          <el-icon><component :is="row.ruleDisabled || row.switchedOff ? CircleCloseFilled : row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
-          <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
-          <span v-else-if="row.switchedOff" data-test="switched-off-status">已停用：不能调用，进入详情可以重新启用</span>
-          <span v-else-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
-          <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
-          <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>
-          <span v-else>可用：可以通过 OpenAPI 和 MCP 调用</span>
+        <div class="marks">
+          <KindBadge :kind="row.driver" />
+          <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
+          <el-tag v-if="row.localVersion && row.reefVersion" type="info" effect="plain" size="small" class="local" data-test="two-sources-tag">{{ row.source === 'LOCAL' ? '另有同名正式包' : '另有同名本地包' }}</el-tag>
+          <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
+          <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
+          <el-tooltip v-if="row.sameSite?.length" :content="`${sameSiteText(row.sameSite)}`" placement="top">
+            <el-tag type="info" effect="plain" size="small" class="local" data-test="same-site-tag">同网站 {{ row.sameSite.length }} 个包</el-tag>
+          </el-tooltip>
+          <el-tooltip v-if="row.sameAuth?.length" :content="`${sameAuthText(row.sameAuth)}`" placement="top">
+            <el-tag type="info" effect="plain" size="small" class="local" data-test="same-auth-tag">共用认证 {{ row.sameAuth.length }} 个包</el-tag>
+          </el-tooltip>
+          <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
+          <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
         </div>
-        <p v-if="row.ruleDisabled && disabledReasonOnly(row.message)" class="broken-reason" data-test="rule-message">{{ disabledReasonOnly(row.message) }}</p>
-        <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
-        <p v-if="previousBlockedNote(row)" class="broken-reason" data-test="previous-note">{{ previousBlockedNote(row) }}</p>
-        <p v-if="row.reefDisabled" class="reef-off-note">Reef 已停用：本机版本仍可调用，但不会再更新</p>
-        <p v-else-if="row.updateAvailable" class="update-note">
-          可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。进入详情更新
-        </p>
-        <LocalHistoryList
-          v-if="row.source === 'LOCAL'"
-          :entries="historyOf(row.conch)"
-          :error="historyErrors[row.conch] ?? null"
-          :loading-id="restoreLoadingId(row.conch)"
-          @restore="restoreHistory(row.conch, $event)"
-        />
+        <div class="hm-kind-body">
+          <div class="hm-kind-main">
+            <div class="status" :class="row.ruleDisabled || row.switchedOff ? 'bad' : row.needsConfiguration ? 'warn' : row.accountCount ? 'ok' : 'idle'">
+              <el-icon><component :is="row.ruleDisabled || row.switchedOff ? CircleCloseFilled : row.needsConfiguration ? WarningFilled : row.accountCount ? CircleCheckFilled : User" /></el-icon>
+              <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
+              <span v-else-if="row.switchedOff" data-test="switched-off-status">已停用：不能调用，进入详情可以重新启用</span>
+              <span v-else-if="row.loginPaused">已暂停：有账号自动登录已暂停，进入详情查看恢复方法</span>
+              <span v-else-if="!row.accountCount">未建账号：先新建一个账号</span>
+              <span v-else-if="row.needsConfiguration">待配置：还缺凭证或配置项</span>
+              <span v-else>可用：可以通过 OpenAPI 和 MCP 调用</span>
+            </div>
+            <p v-if="row.ruleDisabled && disabledReasonOnly(row.message)" class="broken-reason" data-test="rule-message">{{ disabledReasonOnly(row.message) }}</p>
+            <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
+            <p v-if="previousBlockedNote(row)" class="broken-reason" data-test="previous-note">{{ previousBlockedNote(row) }}</p>
+            <p v-if="row.reefDisabled" class="reef-off-note">Reef 已停用：本机版本仍可调用，但不会再更新</p>
+            <p v-else-if="row.updateAvailable" class="update-note">
+              可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。进入详情更新
+            </p>
+            <LocalHistoryList
+              v-if="row.source === 'LOCAL'"
+              :entries="historyOf(row.conch)"
+              :error="historyErrors[row.conch] ?? null"
+              :loading-id="restoreLoadingId(row.conch)"
+              @restore="restoreHistory(row.conch, $event)"
+            />
+          </div>
+          <KindShell :kind="row.driver" :size="56" class="hm-kind-water" aria-hidden="true" />
+        </div>
         <div class="foot hm-muted">
           <span v-if="!(row.ruleDisabled && row.capabilityCount === 0)"><b class="num">{{ row.capabilityCount }}</b> 个能力</span>
           <span><b class="num">{{ row.accountCount }}</b> 个账号</span>
@@ -751,29 +764,31 @@ onMounted(load)
         <div class="top">
           <ConchAvatar :name="row.conch" />
           <div class="name">
-            <strong>
-              {{ row.conch }}
-              <el-tag type="info" effect="plain" size="small" class="local">本地</el-tag>
-              <el-tag type="danger" effect="plain" size="small" class="local" data-test="broken-tag">{{ row.ruleDisabled ? '已停用' : '文件损坏，无法加载' }}</el-tag>
-            </strong>
+            <strong :title="row.conch">{{ row.conch }}</strong>
             <span class="mono hm-muted">{{ row.file }}</span>
           </div>
         </div>
-        <div class="status bad">
-          <el-icon><CircleCloseFilled /></el-icon>
-          <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
-          <span v-else>未载入，不能调用。修好文件后重新导入覆盖，或先删除再导入</span>
+        <div class="marks">
+          <el-tag type="info" effect="plain" size="small" class="local">本地</el-tag>
+          <el-tag type="danger" effect="plain" size="small" class="local" data-test="broken-tag">{{ row.ruleDisabled ? '已停用' : '文件损坏，无法加载' }}</el-tag>
         </div>
-        <p v-if="row.ruleDisabled ? disabledReasonOnly(row.reason) : row.reason" class="broken-reason" data-test="broken-reason">
-          {{ row.ruleDisabled ? disabledReasonOnly(row.reason) : row.reason }}
-        </p>
-        <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
-        <LocalHistoryList
-          :entries="historyOf(row.conch)"
-          :error="historyErrors[row.conch] ?? null"
-          :loading-id="restoreLoadingId(row.conch)"
-          @restore="restoreHistory(row.conch, $event)"
-        />
+        <div class="hm-kind-main">
+          <div class="status bad">
+            <el-icon><CircleCloseFilled /></el-icon>
+            <span v-if="row.ruleDisabled">这版规则暂时不能调用</span>
+            <span v-else>未载入，不能调用。修好文件后重新导入覆盖，或先删除再导入</span>
+          </div>
+          <p v-if="row.ruleDisabled ? disabledReasonOnly(row.reason) : row.reason" class="broken-reason" data-test="broken-reason">
+            {{ row.ruleDisabled ? disabledReasonOnly(row.reason) : row.reason }}
+          </p>
+          <p v-if="row.fixHint" class="broken-reason" data-test="fix-hint">{{ row.fixHint }}</p>
+          <LocalHistoryList
+            :entries="historyOf(row.conch)"
+            :error="historyErrors[row.conch] ?? null"
+            :loading-id="restoreLoadingId(row.conch)"
+            @restore="restoreHistory(row.conch, $event)"
+          />
+        </div>
         <div class="foot hm-muted">
           <span class="spacer" />
           <el-button
@@ -884,16 +899,33 @@ onMounted(load)
   gap: 16px;
 }
 
+/*
+ * 卡片分四个区：标题、类型和标签、状态与说明、底部操作。支持 subgrid 时，同一排卡片的每个区等高，
+ * 状态条和底部一行横向对齐。
+ */
 .conch {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
+  align-content: start;
+  --hm-kind-gap: 14px;
+}
+
+@supports (grid-template-rows: subgrid) {
+  .conch {
+    grid-row: span 4;
+    grid-template-rows: subgrid;
+  }
 }
 
 .top {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.conch > .top {
+  align-items: flex-start;
 }
 
 .name {
@@ -905,6 +937,31 @@ onMounted(load)
 
 .name strong {
   font-size: 15px;
+}
+
+/* 卡片上名字只占一行，放不下的用省略号，全名在 title 里；标签另起一行，不跟在名字后面。 */
+.conch .name {
+  flex: 1;
+}
+
+.conch .name strong,
+.conch .name .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: center;
+  gap: 6px;
+}
+
+.marks .local {
+  margin-left: 0;
+  vertical-align: 0;
 }
 
 .name .mono {
@@ -956,6 +1013,8 @@ onMounted(load)
   display: flex;
   align-items: center;
   gap: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hm-border);
   font-size: 12.5px;
 }
 

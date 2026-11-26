@@ -280,6 +280,11 @@ body,
   margin: 0;
 }
 
+/* 始终给滚动条留位置：内容长短变化时页面宽度不变，卡片列数不会跟着跳。 */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   background: var(--hm-bg);
   color: var(--hm-text);

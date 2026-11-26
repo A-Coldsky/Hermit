@@ -541,6 +541,56 @@ class AuthoringMcpTest {
     }
 
     @org.junit.jupiter.api.Test
+    void conchWhoseNameStartsWithTheDeveloperPrefixStaysAnOrdinaryPackage() throws Exception {
+        String yaml = """
+                conch: hermit_dev__sandbox
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:9
+                title: 沙盒
+                description: 名字以内置开发者工具包的前缀开头。
+                credentials: {}
+                actions:
+                  ping:
+                    title: 探测
+                    description: 返回常量。
+                    idempotent: true
+                    mcp: {expose: true, read_only: true}
+                    steps:
+                      - set: {message: ready}
+                    output:
+                      message: {type: string, description: 文本}
+                    examples:
+                      - input: {}
+                        output: {message: ready}
+                    notes: 无
+                    related: []
+                """;
+        for (int limit : new int[] {CrabConfig.defaults().mcpDirectLimit(), 0}) {
+            CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(limit);
+            try (Harness server = Harness.open(temp.resolve("prefix-" + limit), config)) {
+                server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+                String session = server.initialize(false);
+                assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", yaml)))
+                        .path("ok").asBoolean()).isTrue();
+                if (limit == 0) {
+                    JsonNode described = server.call(session, "describe_capability",
+                            Map.of("name", "hermit_dev__sandbox__ping"));
+                    assertThat(described.path("result").path("isError").asBoolean()).as(described.toString()).isFalse();
+                    JsonNode called = server.call(session, "call_capability",
+                            Map.of("name", "hermit_dev__sandbox__ping", "arguments", Map.of()));
+                    // 还没建账号：走到了普通能力的调用链，而不是被当成开发者工具拒绝。
+                    assertThat(toolError(called).path("code").asText()).as(called.toString()).isEqualTo("NOT_CONFIGURED");
+                } else {
+                    JsonNode direct = server.call(session, "hermit_dev__sandbox__ping", Map.of());
+                    assertThat(toolError(direct).path("code").asText()).as(direct.toString()).isEqualTo("NOT_CONFIGURED");
+                }
+            }
+        }
+    }
+
+    @org.junit.jupiter.api.Test
     void authoringToolsStayInDirectoryModeAndKeepTheExistingAccessChecks() throws Exception {
         try (Harness server = Harness.open(temp.resolve("access"))) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);

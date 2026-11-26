@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
 
@@ -112,8 +113,13 @@ final class McpCatalog {
         return devMode.getAsBoolean() && (principal == null || principal.scope().devTools());
     }
 
+    private static final Set<String> DEV_TOOL_NAMES = Set.of(
+            DEBUG_TRACE, DEBUG_TRACE_LIST, GUIDE, READ_YAML, AUTH_LIST,
+            CAPTURE_LIST, CAPTURE_GET, VALIDATE, SAVE_LOCAL, TRIAL_RUN);
+
+    /** 只认内置的那几个名字：hermit_dev__sandbox 这类包的能力名同样以 hermit_dev__ 开头，仍按普通能力走。 */
     static boolean devToolName(String name) {
-        return name != null && name.startsWith(DEV_PREFIX);
+        return name != null && DEV_TOOL_NAMES.contains(name);
     }
 
     List<McpSchema.Tool> devTools(ApiKeyPrincipal principal, boolean outputSchema, boolean localCaller) {

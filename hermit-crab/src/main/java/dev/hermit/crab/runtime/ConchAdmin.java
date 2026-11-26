@@ -309,7 +309,12 @@ public final class ConchAdmin {
         return testLogin(origin(doc.conch()), doc, account, traceId, actor);
     }
 
+    public static final String MCP_NO_TEST_LOGIN = "MCP 规则包没有登录步骤，请通过「连接上游」或「刷新工具列表」验证。";
+
     public ExecutionResult testLogin(Origin source, ConchDoc doc, String account, String traceId, String actor) {
+        if ("mcp".equals(doc.driver())) {
+            return failed(doc, traceId, MCP_NO_TEST_LOGIN);
+        }
         Account resolved = requireAccount(source, doc.conch(), account);
         SessionKey key = new SessionKey(source, doc.conch(), resolved.account());
         AuditLog.record(
@@ -323,6 +328,13 @@ public final class ConchAdmin {
         List<String> missingConfig = DeclaredSettings.missingConfig(doc, stored);
         if (!missingConfig.isEmpty()) {
             return failed(doc, traceId, Invoker.missingConfig(missingConfig));
+        }
+        Identities bound = identities;
+        if (bound != null && dev.hermit.common.validate.AuthenticatorChecks.uses(doc)) {
+            String problem = bound.authenticatorBindingProblem(key, doc);
+            if (problem != null) {
+                return failed(doc, traceId, problem);
+            }
         }
         List<String> missingCredentials = missingCredentials(source, doc, resolved.account());
         if (!missingCredentials.isEmpty()) {
@@ -345,7 +357,6 @@ public final class ConchAdmin {
                 resolved.account(),
                 new MappedAccount(secrets, DeclaredSettings.mergedConfig(doc, stored)));
         ExecutionResult result = engine.testLogin(request);
-        Identities bound = identities;
         if (result.success() && bound != null && dev.hermit.common.validate.AuthenticatorChecks.isAuthenticator(doc)) {
             bound.resetConsumerLoginPauses(key);
         }
@@ -385,7 +396,13 @@ public final class ConchAdmin {
     }
 
     public ExecutionResult submitLoginInput(Origin source, ConchDoc doc, String account, String traceId, String value) {
-        return runLoginInput(source, doc, account, traceId, request -> engine.continueLogin(request, value));
+        ExecutionResult result = runLoginInput(source, doc, account, traceId, request -> engine.continueLogin(request, value));
+        Identities bound = identities;
+        if (result.success() && bound != null && dev.hermit.common.validate.AuthenticatorChecks.isAuthenticator(doc)) {
+            Account resolved = requireAccount(source, doc.conch(), account);
+            bound.resetConsumerLoginPauses(new SessionKey(source, doc.conch(), resolved.account()));
+        }
+        return result;
     }
 
     public ExecutionResult resendLoginInput(ConchDoc doc, String account, String traceId) {

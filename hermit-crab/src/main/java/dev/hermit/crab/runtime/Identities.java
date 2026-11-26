@@ -323,6 +323,14 @@ public final class Identities {
         }
     }
 
+    String authenticatorBindingProblem(SessionKey key, ConchDoc doc) {
+        Authenticators bindings = authenticators;
+        if (bindings == null || doc == null || !AuthenticatorChecks.uses(doc)) {
+            return null;
+        }
+        return bindings.bindingProblem(key, doc);
+    }
+
     private void leaveAll(Origin origin, String conch, String actor) {
         for (SessionKey key : store.boundAccounts(origin, conch)) {
             leave(key, REASON_PACKAGE_REMOVED, actor);

@@ -35,7 +35,7 @@ final class McpCalls {
     static final String NO_CONFIRM = "客户端不支持确认，拒绝执行写操作";
     static final String REJECTED = "用户拒绝执行";
     static final String TRACE_DENIED =
-            "这把 API Key 不能读取这条追踪。点名了该本地规则包的读写 Key 可以读，本机全部权限读写 Key 可读自己用 hermit_dev__trial_run 试跑出来的以及控制台触发的本地调试追踪。其他 API Key 和正式包的追踪不能读。";
+            "这把 API Key 不能读取这条追踪。点名了该本地规则包的读写 Key 可以读，本机全部权限读写 Key 可读自己用 hermit_dev__trial_run 试跑出来的以及控制台触发的本地调试追踪（含授权器测试登录）。其他 API Key 和正式包的追踪不能读。";
     static final String TRACE_ABSENT = "没有这条追踪。编号不存在。";
     /** 编号对得上一条调用记录，但那次调用没有开发追踪（正式规则包，或开发者模式关着时的调用）。 */
     static final String TRACE_OUT_OF_SCOPE =
@@ -226,6 +226,12 @@ final class McpCalls {
         }
         if (McpCatalog.SAVE_LOCAL.equals(name)) {
             return authoring.save(principal, session, arguments, attempt);
+        }
+        if (McpCatalog.TEST_LOGIN.equals(name)) {
+            return authoring.testLogin(principal, arguments, attempt);
+        }
+        if (McpCatalog.MCP_REFRESH.equals(name)) {
+            return authoring.mcpRefresh(principal, arguments, attempt);
         }
         if (McpCatalog.TRIAL_RUN.equals(name)) {
             return authoring.trial(principal, session, arguments, attempt);

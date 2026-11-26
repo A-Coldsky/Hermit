@@ -39,15 +39,18 @@ class ConchUploadTransaction {
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final AuthDependencies authDependencies;
 
     ConchUploadTransaction(ConchRepository repository, ConchAvailabilityRepository availability,
-            ConchStorage storage, AuditService auditService, ObjectMapper objectMapper, Clock clock) {
+            ConchStorage storage, AuditService auditService, ObjectMapper objectMapper, Clock clock,
+            AuthDependencies authDependencies) {
         this.repository = repository;
         this.availability = availability;
         this.storage = storage;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.authDependencies = authDependencies;
     }
 
     @Transactional
@@ -75,6 +78,10 @@ class ConchUploadTransaction {
         }
         if (highest != null && doc.version().compareTo(highest) <= 0) {
             throw conflict(ConchUploadService.VERSION_NOT_GREATER);
+        }
+        List<ValidationIssue> dependencyProblems = authDependencies.uploadProblems(doc);
+        if (!dependencyProblems.isEmpty()) {
+            throw ConchUploadService.dependencyFailed(prepared, dependencyProblems);
         }
         ConchDoc previous = currentDoc(existing);
         JsonNode diff = previous == null
@@ -105,7 +112,8 @@ class ConchUploadTransaction {
                             false,
                             validationJson,
                             diffJson,
-                            0),
+                            0,
+                            AuthDependencies.authUse(doc)),
                     "conches/" + conch + "/" + version + "/conch.yaml",
                     validationJson,
                     diffJson);

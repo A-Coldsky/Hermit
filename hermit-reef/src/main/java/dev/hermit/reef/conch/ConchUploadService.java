@@ -3,8 +3,6 @@ package dev.hermit.reef.conch;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParseException;
 import dev.hermit.common.parse.ConchParser;
-import dev.hermit.common.validate.AuthenticatorChecks;
-import dev.hermit.common.validate.ValidationCodes;
 import dev.hermit.common.validate.ConchValidator;
 import dev.hermit.common.validate.DuplicateActions;
 import dev.hermit.common.validate.DuplicateGroups;
@@ -75,31 +73,17 @@ public class ConchUploadService {
                     new ParseFailure(ex.path(), ex.getMessage()));
         }
         ValidationResult result = ConchValidator.validate(doc, ConchValidator.Context.of(null));
-        ValidationIssue unsupported = authenticatorNotYetPublishable(doc);
-        if (!result.errors().isEmpty() || !duplicates.isEmpty() || unsupported != null) {
+        if (!result.errors().isEmpty() || !duplicates.isEmpty()) {
             ArrayList<ValidationIssue> errors = new ArrayList<>(result.errors());
             errors.addAll(duplicates);
-            if (unsupported != null) {
-                errors.add(unsupported);
-            }
             throw validationFailed(yaml, errors, result.warnings());
         }
         return new PreparedUpload(yamlBytes, doc, result.warnings());
     }
 
-    /**
-     * 授权器（{@code driver: auth}）和引用它的包（{@code auth.use}）的写法已经能解析和校验，
-     * 但 Reef 还没有依赖校验和分发，Crab 也还不能运行，先一律拒绝上传。
-     */
-    private static ValidationIssue authenticatorNotYetPublishable(ConchDoc doc) {
-        boolean authenticator = AuthenticatorChecks.isAuthenticator(doc);
-        if (!authenticator && (doc.auth() == null || !doc.auth().sharedDeclared())) {
-            return null;
-        }
-        return new ValidationIssue(
-                ValidationCodes.AUTHENTICATOR,
-                authenticator ? "driver" : "auth",
-                "这个版本的 Reef 还不能发布授权器（driver: auth）和引用授权器的规则包");
+    /** 依赖检查没过：和规则校验失败是同一种 422，带上行号。 */
+    static ConchRequestException dependencyFailed(PreparedUpload prepared, List<ValidationIssue> errors) {
+        return validationFailed(new String(prepared.yaml(), StandardCharsets.UTF_8), errors, prepared.warnings());
     }
 
     private static ConchRequestException validationFailed(

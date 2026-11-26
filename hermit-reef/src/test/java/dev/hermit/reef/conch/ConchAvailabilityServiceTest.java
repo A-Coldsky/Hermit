@@ -65,7 +65,7 @@ class ConchAvailabilityServiceTest {
                 return 0;
             }
         };
-        return new ConchAvailabilityService(conches, flags, null, new ObjectMapper(), Clock.systemUTC());
+        return new ConchAvailabilityService(conches, flags, null, new ObjectMapper(), Clock.systemUTC(), null);
     }
 
     private static void assertNotFound(ThrowingCallable call) {

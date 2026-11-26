@@ -26,7 +26,8 @@ class ConchRepository {
             rs.getBoolean("is_current"),
             rs.getString("validation_json"),
             rs.getString("diff_json"),
-            rs.getLong("pull_count"));
+            rs.getLong("pull_count"),
+            rs.getString("auth_use"));
 
     private final JdbcTemplate jdbc;
 
@@ -37,19 +38,31 @@ class ConchRepository {
     List<VersionRow> listAll() {
         return jdbc.query(
                 "SELECT id, conch, version, sha256, min_crab_version, package_path, status, uploaded_by, uploaded_at, "
-                        + "published_by, published_at, is_current, validation_json, diff_json, pull_count "
+                        + "published_by, published_at, is_current, validation_json, diff_json, pull_count, auth_use "
                         + "FROM hermit_conch_versions ORDER BY conch, id",
                 ROWS);
     }
 
     private static final String COLUMNS =
             "SELECT id, conch, version, sha256, min_crab_version, package_path, status, uploaded_by, uploaded_at, "
-                    + "published_by, published_at, is_current, validation_json, diff_json, pull_count "
+                    + "published_by, published_at, is_current, validation_json, diff_json, pull_count, auth_use "
                     + "FROM hermit_conch_versions ";
 
     /** 各规则包当前发布的那一行。Crab 每次轮询清单都会走到这里，不读其它版本。 */
     List<VersionRow> listCurrent() {
         return jdbc.query(COLUMNS + "WHERE is_current = TRUE ORDER BY conch, id", ROWS);
+    }
+
+    /** 当前发布、引用授权器 {@code authenticator} 的业务包。加锁读，调用方必须在事务里。 */
+    List<VersionRow> listCurrentUsing(String authenticator) {
+        // 加锁读：读到的是已提交的最新结果，不受本事务早先快照的影响（MySQL 默认是可重复读）。
+        return jdbc.query(
+                        COLUMNS + "WHERE is_current = TRUE AND auth_use = ? ORDER BY conch, id FOR UPDATE",
+                        ROWS,
+                        authenticator)
+                .stream()
+                .filter(row -> authenticator.equals(row.authUse()))
+                .toList();
     }
 
     List<VersionRow> listByConch(String conch) {
@@ -74,7 +87,7 @@ class ConchRepository {
         }
         return jdbc.query(
                 "SELECT id, conch, version, sha256, min_crab_version, package_path, status, uploaded_by, uploaded_at, "
-                        + "published_by, published_at, is_current, validation_json, diff_json, pull_count "
+                        + "published_by, published_at, is_current, validation_json, diff_json, pull_count, auth_use "
                         + "FROM hermit_conch_versions WHERE conch = ? ORDER BY id FOR UPDATE",
                 ROWS,
                 conch);
@@ -83,8 +96,8 @@ class ConchRepository {
     void insertUploaded(VersionRow row, String packagePath, String validationJson, String diffJson) {
         jdbc.update(
                 "INSERT INTO hermit_conch_versions (conch, version, sha256, min_crab_version, package_path, status, "
-                        + "uploaded_by, uploaded_at, published_by, published_at, is_current, validation_json, diff_json) "
-                        + "VALUES (?, ?, ?, ?, ?, 'UPLOADED', ?, ?, NULL, NULL, FALSE, ?, ?)",
+                        + "uploaded_by, uploaded_at, published_by, published_at, is_current, validation_json, diff_json, auth_use) "
+                        + "VALUES (?, ?, ?, ?, ?, 'UPLOADED', ?, ?, NULL, NULL, FALSE, ?, ?, ?)",
                 row.conch(),
                 row.version(),
                 row.sha256(),
@@ -93,7 +106,8 @@ class ConchRepository {
                 row.uploadedBy(),
                 Timestamp.from(row.uploadedAt()),
                 validationJson,
-                diffJson);
+                diffJson,
+                row.authUse());
     }
 
     /**

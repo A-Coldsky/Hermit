@@ -11,6 +11,10 @@ import dev.hermit.reef.web.ApiException;
 import dev.hermit.reef.web.ReefErrorCode;
 import java.time.Clock;
 import java.time.Instant;
+import dev.hermit.common.model.ConchDoc;
+import dev.hermit.common.parse.ConchParser;
+import dev.hermit.common.validate.ValidationIssue;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,10 +36,11 @@ public class ConchPublishService {
     private final ConchAvailabilityRepository availability;
     private final AuditService auditService;
     private final Clock clock;
+    private final AuthDependencies authDependencies;
 
     public ConchPublishService(ConchRepository repository, ConchStorage storage, SigningKeyStore keys,
             PackageVerifier verifier, ConchAvailabilityRepository availability, AuditService auditService,
-            Clock clock) {
+            Clock clock, AuthDependencies authDependencies) {
         this.repository = repository;
         this.storage = storage;
         this.keys = keys;
@@ -43,6 +48,7 @@ public class ConchPublishService {
         this.availability = availability;
         this.auditService = auditService;
         this.clock = clock;
+        this.authDependencies = authDependencies;
     }
 
     @Transactional
@@ -55,6 +61,7 @@ public class ConchPublishService {
         }
         rejectIfNotHigher(target);
         byte[] yaml = storage.readYaml(target.conch(), target.version());
+        rejectIfDependenciesBreak(yaml);
         byte[] zip = ConchPackage.write(yaml, keys.privateKey());
         storage.writeZip(target.conch(), target.version(), zip);
         Instant publishedAt = clock.instant();
@@ -78,6 +85,15 @@ public class ConchPublishService {
         }
         auditService.record(actor, AuditAction.PUBLISH, target.conch(), target.version(), null);
         return new PublishResponse(target.conch(), target.version());
+    }
+
+    /** 上传之后授权器或依赖它的包可能变了，发布时按当前状态再查一次。 */
+    private void rejectIfDependenciesBreak(byte[] yaml) {
+        ConchDoc doc = ConchParser.parse(new String(yaml, StandardCharsets.UTF_8));
+        List<ValidationIssue> problems = authDependencies.uploadProblems(doc);
+        if (!problems.isEmpty()) {
+            throw conflict(problems.get(0).message());
+        }
     }
 
     private void rejectIfNotHigher(VersionRow target) {

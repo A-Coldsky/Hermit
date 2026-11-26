@@ -31,14 +31,17 @@ public class ConchAvailabilityService {
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final AuthDependencies authDependencies;
 
     public ConchAvailabilityService(ConchRepository conches, ConchAvailabilityRepository availability,
-            AuditService auditService, ObjectMapper objectMapper, Clock clock) {
+            AuditService auditService, ObjectMapper objectMapper, Clock clock,
+            AuthDependencies authDependencies) {
         this.conches = conches;
         this.availability = availability;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.authDependencies = authDependencies;
     }
 
     @Transactional
@@ -46,6 +49,10 @@ public class ConchAvailabilityService {
         requireActor(actor);
         String stored = normalizeReason(reason);
         List<VersionRow> rows = lockExisting(conch);
+        List<String> consumers = authDependencies.activeConsumers(conch);
+        if (!consumers.isEmpty()) {
+            throw conflict("还有规则包在用这个授权器：" + String.join("、", consumers) + "。先停用它们");
+        }
         AvailabilityRow current = availability.lock(conch);
         Instant at = clock.instant();
         if (current == null) {
@@ -62,6 +69,10 @@ public class ConchAvailabilityService {
         requireActor(actor);
         String stored = normalizeReason(reason);
         List<VersionRow> rows = lockExisting(conch);
+        List<dev.hermit.common.validate.ValidationIssue> problems = authDependencies.currentConsumerProblems(rows);
+        if (!problems.isEmpty()) {
+            throw conflict(problems.get(0).message());
+        }
         AvailabilityRow current = availability.lock(conch);
         if (current == null || !current.disabled() || availability.clearDisabled(conch) != 1) {
             throw conflict(NOT_DISABLED);

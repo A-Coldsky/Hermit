@@ -332,7 +332,32 @@ class AuthenticatorValidationTest {
         ConchDoc doc = ConchParser.parse(CONSUMER.replace("    - extract: { ticket: \"$.ticket\" }",
                 "    - extract: { ticket: \"$.ticket\" }\n    - script:\n        credential: true\n        into: sig\n"
                         + "        code: \"return vars.auth.refresh_token + '.';\""));
-        assertThat(AuthenticatorChecks.referencedExports(doc)).containsExactly("access_token", "refresh_token");
+        assertThat(AuthenticatorChecks.referencedExports(doc)).containsExactlyInAnyOrder("access_token", "refresh_token");
+    }
+
+    @Test
+    void bareVariableNamesInConditionsCountAsReferences() {
+        String yaml = CONSUMER.replace("    - extract: { ticket: \"$.ticket\" }",
+                "    - extract: { ticket: \"$.ticket\" }\n    - assert: { present: auth.refresh_token }\n"
+                        + "    - assert: { not_equals: { auth.id_token: \"\" } }");
+        assertThat(validate(yaml).errors()).isEmpty();
+        ConchDoc doc = ConchParser.parse(yaml);
+        assertThat(AuthenticatorChecks.referencedExports(doc))
+                .containsExactlyInAnyOrder("access_token", "refresh_token", "id_token");
+        assertThat(AuthenticatorChecks.link(doc, ConchParser.parse(AUTHENTICATOR)))
+                .extracting(ValidationIssue::message)
+                .anyMatch(message -> message.contains("没有导出变量 refresh_token"));
+    }
+
+    @Test
+    void literalTextThatLooksLikeAReferenceIsNotOne() {
+        // 请求体里的键、响应里要找的字样都是字面量，不是对导出变量的引用。
+        String yaml = CONSUMER.replace("    - extract: { ticket: \"$.ticket\" }",
+                "    - extract: { ticket: \"$.ticket\" }\n"
+                        + "    - request: { method: POST, path: /q, json: { present: auth.example.com, equals: { auth.host: x } } }\n"
+                        + "    - assert: { not_contains: \"vars.auth.redirect\" }");
+        assertThat(validate(yaml).errors()).isEmpty();
+        assertThat(AuthenticatorChecks.referencedExports(ConchParser.parse(yaml))).containsExactly("access_token");
     }
 
     @Test

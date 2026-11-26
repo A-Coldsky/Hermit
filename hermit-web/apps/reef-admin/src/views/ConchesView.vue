@@ -150,14 +150,14 @@ onMounted(load)
             <el-tag v-if="row.version" :type="row.disabled ? 'info' : 'success'" effect="light" round class="mono">v{{ row.version }}</el-tag>
             <el-tag v-else type="info" effect="light" round>未发布</el-tag>
           </div>
+          <div class="kind">
+            <DriverBadge :driver="row.driver" />
+            <span v-if="isMcp(row)" class="mono hm-muted host" data-test="upstream-host">{{ upstreamHost(row.upstream?.url) ?? '上游地址未填' }}</span>
+            <span v-if="row.authUse" class="mono hm-muted host" data-test="auth-use">授权器：{{ row.authUse }}</span>
+            <span v-if="row.driver === 'auth' && consumersOf(row.conch).length" class="mono hm-muted host" data-test="used-by">被引用：{{ consumersOf(row.conch).join('、') }}</span>
+          </div>
           <div class="hm-kind-body">
             <div class="hm-kind-main">
-              <div class="kind">
-                <DriverBadge :driver="row.driver" />
-                <span v-if="isMcp(row)" class="mono hm-muted host" data-test="upstream-host">{{ upstreamHost(row.upstream?.url) ?? '上游地址未填' }}</span>
-                <span v-if="row.authUse" class="mono hm-muted host" data-test="auth-use">授权器：{{ row.authUse }}</span>
-                <span v-if="row.driver === 'auth' && consumersOf(row.conch).length" class="mono hm-muted host" data-test="used-by">被引用：{{ consumersOf(row.conch).join('、') }}</span>
-              </div>
               <p class="desc">{{ row.description || '没有描述' }}</p>
               <div class="tags">
                 <el-tag v-for="tag in row.tags" :key="tag" size="small" effect="plain" round>{{ tag }}</el-tag>

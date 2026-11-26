@@ -624,6 +624,7 @@ html.dark .el-pagination.is-background .el-pager li.is-active {
   display: flex;
   flex: 1;
   flex-direction: column;
+  align-self: flex-start;
   gap: var(--hm-kind-gap, 12px);
   min-width: 0;
 }

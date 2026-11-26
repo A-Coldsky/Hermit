@@ -15,6 +15,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
+import KindBadge from '@shared/components/KindBadge.vue'
 import KindShell from '@shared/components/KindShell.vue'
 import HermitMark from '@shared/components/HermitMark.vue'
 import { ApiError } from '@shared/http'
@@ -589,9 +590,9 @@ onMounted(load)
     </div>
 
     <el-radio-group v-model="tab" class="tabs" data-test="kind-tabs">
-      <el-radio-button value="packages"><KindShell kind="http" :size="18" /> 规则包 {{ conches.length + broken.length }}</el-radio-button>
+      <el-radio-button value="packages">规则包 {{ conches.length + broken.length }}</el-radio-button>
       <el-radio-button value="authenticators">
-        <KindShell kind="auth" :size="18" /> 授权器 {{ authenticators.length }}
+        授权器 {{ authenticators.length }}
         <span v-if="authenticators.some((a) => a.updateAvailable)" class="tab-dot" data-test="authenticator-update-dot" />
       </el-radio-button>
     </el-radio-group>
@@ -611,11 +612,13 @@ onMounted(load)
           @click="open(row)"
           @keyup.enter="open(row)"
         >
+          <KindShell kind="auth" :size="56" class="hm-kind-water" aria-hidden="true" />
           <div class="top">
-            <ConchAvatar :name="row.conch" :title="row.title" kind="auth" />
+            <ConchAvatar :name="row.conch" :title="row.title" />
             <div class="name">
               <strong>
                 {{ row.title || row.conch }}
+                <KindBadge kind="auth" />
                 <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
                 <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
               </strong>
@@ -670,11 +673,13 @@ onMounted(load)
         @click="open(row)"
         @keyup.enter="open(row)"
       >
+        <KindShell :kind="row.driver" :size="56" class="hm-kind-water" aria-hidden="true" />
         <div class="top">
-          <ConchAvatar :name="row.conch" :title="row.title" :kind="row.driver" />
+          <ConchAvatar :name="row.conch" :title="row.title" />
           <div class="name">
             <strong>
               {{ row.title || row.conch }}
+              <KindBadge :kind="row.driver" />
               <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
               <el-tag v-if="row.localVersion && row.reefVersion" type="info" effect="plain" size="small" class="local" data-test="two-sources-tag">{{ row.source === 'LOCAL' ? '另有同名正式包' : '另有同名本地包' }}</el-tag>
               <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
@@ -885,6 +890,7 @@ onMounted(load)
 }
 
 .conch {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 14px;

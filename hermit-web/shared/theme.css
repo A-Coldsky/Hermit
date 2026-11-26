@@ -119,6 +119,22 @@ html:root {
   --hm-shell-alt-ridge: #0284c7;
   --hm-shell-alt-inner: #0c4a6e;
   --hm-shell-alt-shine: #f0f9ff;
+  /* 原生 MCP 的螺壳：青绿，靠近主色。 */
+  --hm-shell-mcp: #b5ece4;
+  --hm-shell-mcp-mid: #6fd6ca;
+  --hm-shell-mcp-deep: #12a594;
+  --hm-shell-mcp-ridge: #0b7f73;
+  --hm-shell-mcp-inner: #0a4a44;
+  --hm-shell-mcp-shine: #f0fffc;
+  /* 类型徽标的文字色和底色。 */
+  --hm-kind-http: #9a5b24;
+  --hm-kind-http-bg: #fbf1e3;
+  --hm-kind-mcp: #0b7f73;
+  --hm-kind-mcp-bg: #e3f6f3;
+  --hm-kind-auth: #a16207;
+  --hm-kind-auth-bg: #fdf3d2;
+  --hm-kind-water: 0.26;
+  --hm-kind-water-http: 0.5;
   /* 授权器的螺壳：金色，和钥匙对应。 */
   --hm-shell-key: #fde9a8;
   --hm-shell-key-mid: #f9c74f;
@@ -226,6 +242,14 @@ html.dark {
   --hm-shadow-lg: 0 8px 24px -6px rgba(0, 0, 0, 0.55);
   --hm-subtle: #182024;
   --hm-mark-tile: #0a1719;
+  --hm-kind-http: #e6b98a;
+  --hm-kind-http-bg: #2b241b;
+  --hm-kind-mcp: #5fd4c7;
+  --hm-kind-mcp-bg: #12302d;
+  --hm-kind-auth: #f2c94c;
+  --hm-kind-auth-bg: #2e2710;
+  --hm-kind-water: 0.2;
+  --hm-kind-water-http: 0.2;
   --hm-shell-old: #56696f;
   --hm-shell-old-mid: #44565c;
   --hm-shell-old-deep: #33454a;
@@ -586,4 +610,17 @@ html.dark .el-radio-button {
 
 html.dark .el-pagination.is-background .el-pager li.is-active {
   color: #0b1620;
+}
+
+/* 卡片右下角的类型水印：一只淡螺壳，整只在卡片内，不挡点击。卡片自己要 position: relative。 */
+.hm-kind-water {
+  position: absolute;
+  right: 12px;
+  bottom: 52px;
+  opacity: var(--hm-kind-water);
+  pointer-events: none;
+}
+
+.hm-kind-water.kind-http {
+  opacity: var(--hm-kind-water-http);
 }

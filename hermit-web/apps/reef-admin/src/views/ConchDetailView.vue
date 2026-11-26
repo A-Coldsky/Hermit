@@ -172,7 +172,7 @@ watch(
         <span class="hm-muted"> / {{ conch }}</span>
       </template>
       <template #icon>
-        <ConchAvatar :name="conch" :title="detail?.title" :size="48" :kind="detail?.driver" />
+        <ConchAvatar :name="conch" :title="detail?.title" :size="48" />
       </template>
       <template #badge>
         <el-tag v-if="neverPublished" type="info" effect="light" round data-test="unpublished-badge">未发布</el-tag>

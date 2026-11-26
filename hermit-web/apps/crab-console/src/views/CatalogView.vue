@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
 import HermitDuet from '@shared/components/HermitDuet.vue'
-import KindShell from '@shared/components/KindShell.vue'
+import KindBadge from '@shared/components/KindBadge.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { notifyError } from '@shared/format'
 import { useNarrow } from '@shared/narrow'
@@ -262,8 +262,8 @@ onMounted(load)
         <el-button size="small" :loading="loading" @click="load">重试</el-button>
       </el-alert>
       <el-radio-group v-if="catalog" v-model="tab" class="tabs" data-test="kind-tabs">
-        <el-radio-button value="packages"><KindShell kind="http" :size="18" /> 规则包 {{ packages.length }}</el-radio-button>
-        <el-radio-button value="authenticators"><KindShell kind="auth" :size="18" /> 授权器 {{ authenticators.length }}</el-radio-button>
+        <el-radio-button value="packages">规则包 {{ packages.length }}</el-radio-button>
+        <el-radio-button value="authenticators">授权器 {{ authenticators.length }}</el-radio-button>
       </el-radio-group>
       <p v-if="catalog && tab === 'authenticators'" class="hm-muted tab-hint">
         授权器只负责登录，没有能力，不能被调用。引用它的业务包把账号绑到授权器账号上，共用一份登录。
@@ -290,9 +290,9 @@ onMounted(load)
         <el-table-column :label="tab === 'authenticators' ? '授权器' : '规则包'" min-width="260">
           <template #default="{ row }">
             <div class="name">
-              <ConchAvatar :name="row.conch" :title="row.title" :size="32" :kind="row.driver" />
+              <ConchAvatar :name="row.conch" :title="row.title" :size="32" />
               <div class="text">
-                <strong>{{ row.title || row.conch }}</strong>
+                <strong>{{ row.title || row.conch }} <KindBadge :kind="row.driver" /></strong>
                 <span class="mono hm-muted">{{ row.conch }}</span>
                 <span v-if="row.description" class="desc hm-muted">{{ row.description }}</span>
                 <span v-if="row.authUse" class="desc" data-test="needs-authenticator">

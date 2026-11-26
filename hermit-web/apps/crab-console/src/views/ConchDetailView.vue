@@ -5,6 +5,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
+import KindBadge from '@shared/components/KindBadge.vue'
 import TimeText from '@shared/components/TimeText.vue'
 import { ApiError } from '@shared/http'
 import { notifyError } from '@shared/format'
@@ -522,9 +523,10 @@ watch(
         <span class="hm-muted"> / {{ conch }}</span>
       </template>
       <template #icon>
-        <ConchAvatar :name="conch" :title="detail?.title" :size="48" :kind="detail ? (detail.isAuthenticator ? 'auth' : detail.driver ?? 'http') : null" />
+        <ConchAvatar :name="conch" :title="detail?.title" :size="48" />
       </template>
       <template #badge>
+        <KindBadge v-if="detail" :kind="detail.isAuthenticator ? 'auth' : detail.driver ?? 'http'" large />
         <el-tag v-if="detail?.version && !detail.repairRequired" type="info" effect="light" round class="mono">v{{ detail.version }}</el-tag>
         <el-tag v-if="local" type="info" effect="plain" round>本地</el-tag>
         <el-tag v-if="detail?.ruleDisabled" type="danger" effect="plain" round>已停用</el-tag>

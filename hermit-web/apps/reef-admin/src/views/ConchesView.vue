@@ -93,8 +93,8 @@ onMounted(load)
     </PageHeader>
 
     <el-radio-group v-model="tab" class="tabs" data-test="kind-tabs">
-      <el-radio-button value="packages"><KindShell kind="http" :size="18" /> 规则包 {{ packages.length }}</el-radio-button>
-      <el-radio-button value="authenticators"><KindShell kind="auth" :size="18" /> 授权器 {{ authenticators.length }}</el-radio-button>
+      <el-radio-button value="packages">规则包 {{ packages.length }}</el-radio-button>
+      <el-radio-button value="authenticators">授权器 {{ authenticators.length }}</el-radio-button>
     </el-radio-group>
 
     <div class="hm-toolbar bar">
@@ -140,8 +140,9 @@ onMounted(load)
     <template v-else-if="mode === 'cards'">
       <div v-if="filtered.length" class="cards">
         <RouterLink v-for="row in filtered" :key="row.conch" :to="`/conches/${encodeURIComponent(row.conch)}`" class="hm-card conch" :class="{ off: row.disabled }">
+          <KindShell :kind="row.driver" :size="56" class="hm-kind-water" aria-hidden="true" />
           <div class="top">
-            <ConchAvatar :name="row.conch" :title="row.title" :kind="row.driver" />
+            <ConchAvatar :name="row.conch" :title="row.title" />
             <div class="name">
               <strong>{{ row.title || row.conch }}</strong>
               <span class="mono hm-muted">{{ row.conch }}</span>
@@ -183,7 +184,7 @@ onMounted(load)
         <el-table-column label="规则包" min-width="220">
           <template #default="{ row }">
             <div class="row-name">
-              <ConchAvatar :name="row.conch" :title="row.title" :size="32" :kind="row.driver" />
+              <ConchAvatar :name="row.conch" :title="row.title" :size="32" />
               <div class="name">
                 <strong>{{ row.title || row.conch }}</strong>
                 <span class="mono hm-muted">{{ row.conch }}</span>
@@ -254,6 +255,7 @@ onMounted(load)
 }
 
 .conch {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;

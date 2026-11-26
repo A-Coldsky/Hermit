@@ -1411,6 +1411,9 @@ public final class LocalConches {
             return;
         }
         try {
+            if (Files.size(current) > MAX_BYTES) {
+                return;
+            }
             dropHistoryEqualTo(conch, Files.readAllBytes(current));
         } catch (IOException ex) {
             LOG.warning("local conch history was not deduplicated: " + ex.getClass().getName());

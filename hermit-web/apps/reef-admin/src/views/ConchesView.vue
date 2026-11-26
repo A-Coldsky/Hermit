@@ -143,7 +143,7 @@ onMounted(load)
           <div class="top">
             <ConchAvatar :name="row.conch" :title="row.title" />
             <div class="name">
-              <strong>{{ row.title || row.conch }}</strong>
+              <strong :title="row.title || row.conch">{{ row.title || row.conch }}</strong>
               <span class="mono hm-muted">{{ row.conch }}</span>
             </div>
             <el-tag v-if="row.disabled" type="warning" effect="light" round>已停用</el-tag>
@@ -305,6 +305,14 @@ onMounted(load)
 
 .top strong {
   font-size: 15px;
+}
+
+/* 卡片上名字和包标识各占一行，放不下的用省略号，全名在 title 里。 */
+.conch .name strong,
+.conch .name .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .desc {

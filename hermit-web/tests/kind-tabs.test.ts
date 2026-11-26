@@ -285,6 +285,12 @@ describe('Crab 规则包与账号：授权器页签', () => {
     expect(card.find('[data-test="authenticator-used-by"]').text()).toContain('corp_oa')
     expect(card.text()).toContain('有新版本 v1.1.0')
     expect(card.find('[data-test="authenticator-update"]').exists()).toBe(true)
+    // 名字单独一行并带全名的 title；类型徽标和标签在名字下面的一行里，不跟在名字后面。
+    const title = card.find('.name strong')
+    expect(title.attributes('title')).toBe(title.text())
+    expect(title.find('.el-tag, [data-test="kind-badge"]').exists()).toBe(false)
+    expect(card.find('.marks [data-test="kind-badge"]').attributes('data-kind')).toBe('auth')
+    expect(card.find('.marks').text()).toContain('有新版本 v1.1.0')
   })
 })
 

@@ -615,14 +615,14 @@ onMounted(load)
           <div class="top">
             <ConchAvatar :name="row.conch" :title="row.title" />
             <div class="name">
-              <strong>
-                {{ row.title || row.conch }}
-                <KindBadge kind="auth" />
-                <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
-                <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
-              </strong>
+              <strong :title="row.title || row.conch">{{ row.title || row.conch }}</strong>
               <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
             </div>
+          </div>
+          <div class="marks">
+            <KindBadge kind="auth" />
+            <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
+            <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
           </div>
           <div class="hm-kind-body">
             <div class="hm-kind-main">
@@ -680,24 +680,24 @@ onMounted(load)
         <div class="top">
           <ConchAvatar :name="row.conch" :title="row.title" />
           <div class="name">
-            <strong>
-              {{ row.title || row.conch }}
-              <KindBadge :kind="row.driver" />
-              <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
-              <el-tag v-if="row.localVersion && row.reefVersion" type="info" effect="plain" size="small" class="local" data-test="two-sources-tag">{{ row.source === 'LOCAL' ? '另有同名正式包' : '另有同名本地包' }}</el-tag>
-              <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
-              <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
-              <el-tooltip v-if="row.sameSite?.length" :content="`${sameSiteText(row.sameSite)}`" placement="top">
-                <el-tag type="info" effect="plain" size="small" class="local" data-test="same-site-tag">同网站 {{ row.sameSite.length }} 个包</el-tag>
-              </el-tooltip>
-              <el-tooltip v-if="row.sameAuth?.length" :content="`${sameAuthText(row.sameAuth)}`" placement="top">
-                <el-tag type="info" effect="plain" size="small" class="local" data-test="same-auth-tag">共用认证 {{ row.sameAuth.length }} 个包</el-tag>
-              </el-tooltip>
-              <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
-              <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
-            </strong>
+            <strong :title="row.title || row.conch">{{ row.title || row.conch }}</strong>
             <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
           </div>
+        </div>
+        <div class="marks">
+          <KindBadge :kind="row.driver" />
+          <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
+          <el-tag v-if="row.localVersion && row.reefVersion" type="info" effect="plain" size="small" class="local" data-test="two-sources-tag">{{ row.source === 'LOCAL' ? '另有同名正式包' : '另有同名本地包' }}</el-tag>
+          <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
+          <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
+          <el-tooltip v-if="row.sameSite?.length" :content="`${sameSiteText(row.sameSite)}`" placement="top">
+            <el-tag type="info" effect="plain" size="small" class="local" data-test="same-site-tag">同网站 {{ row.sameSite.length }} 个包</el-tag>
+          </el-tooltip>
+          <el-tooltip v-if="row.sameAuth?.length" :content="`${sameAuthText(row.sameAuth)}`" placement="top">
+            <el-tag type="info" effect="plain" size="small" class="local" data-test="same-auth-tag">共用认证 {{ row.sameAuth.length }} 个包</el-tag>
+          </el-tooltip>
+          <el-tag v-if="row.reefDisabled" type="warning" effect="plain" size="small" class="local reef-off">Reef 已停用</el-tag>
+          <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
         </div>
         <div class="hm-kind-body">
           <div class="hm-kind-main">
@@ -764,13 +764,13 @@ onMounted(load)
         <div class="top">
           <ConchAvatar :name="row.conch" />
           <div class="name">
-            <strong>
-              {{ row.conch }}
-              <el-tag type="info" effect="plain" size="small" class="local">本地</el-tag>
-              <el-tag type="danger" effect="plain" size="small" class="local" data-test="broken-tag">{{ row.ruleDisabled ? '已停用' : '文件损坏，无法加载' }}</el-tag>
-            </strong>
+            <strong :title="row.conch">{{ row.conch }}</strong>
             <span class="mono hm-muted">{{ row.file }}</span>
           </div>
+        </div>
+        <div class="marks">
+          <el-tag type="info" effect="plain" size="small" class="local">本地</el-tag>
+          <el-tag type="danger" effect="plain" size="small" class="local" data-test="broken-tag">{{ row.ruleDisabled ? '已停用' : '文件损坏，无法加载' }}</el-tag>
         </div>
         <div class="hm-kind-main">
           <div class="status bad">
@@ -900,7 +900,7 @@ onMounted(load)
 }
 
 /*
- * 卡片分三个区：标题、状态与说明、底部操作。支持 subgrid 时，同一排卡片的每个区等高，
+ * 卡片分四个区：标题、类型和标签、状态与说明、底部操作。支持 subgrid 时，同一排卡片的每个区等高，
  * 状态条和底部一行横向对齐。
  */
 .conch {
@@ -913,7 +913,7 @@ onMounted(load)
 
 @supports (grid-template-rows: subgrid) {
   .conch {
-    grid-row: span 3;
+    grid-row: span 4;
     grid-template-rows: subgrid;
   }
 }
@@ -937,6 +937,31 @@ onMounted(load)
 
 .name strong {
   font-size: 15px;
+}
+
+/* 卡片上名字只占一行，放不下的用省略号，全名在 title 里；标签另起一行，不跟在名字后面。 */
+.conch .name {
+  flex: 1;
+}
+
+.conch .name strong,
+.conch .name .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: center;
+  gap: 6px;
+}
+
+.marks .local {
+  margin-left: 0;
+  vertical-align: 0;
 }
 
 .name .mono {

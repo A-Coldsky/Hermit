@@ -1037,7 +1037,7 @@ public final class LocalConches {
                 String version = before != null && ConchFiles.safeSegment(before.version().toString())
                         ? before.version().toString()
                         : "unknown";
-                backupId = backup(doc.conch(), version, previous);
+                backupId = backup(doc.conch(), version, previous, raw);
             }
             boolean widened = replaced && !boundary.sameBoundary();
             boolean clearSessions = replaced && (widened || boundToIdentity.test(doc.conch()));
@@ -1278,7 +1278,7 @@ public final class LocalConches {
         }
     }
 
-    private String backup(String conch, String version, byte[] previous) {
+    private String backup(String conch, String version, byte[] previous, byte[] incoming) {
         if (!ConchFiles.safeSegment(version)) {
             version = "unknown";
         }
@@ -1307,13 +1307,21 @@ public final class LocalConches {
             throw LocalConchException.invalid("history path escapes local-conches");
         }
         atomicWrite(target, previous);
-        pruneHistory(dir);
+        pruneHistory(dir, incoming);
         String name = target.getFileName().toString();
         return name.substring(0, name.length() - SUFFIX.length());
     }
 
     /** 同一把锁、同一次写入里丢掉最旧的备份，只留 {@link #HISTORY_KEEP} 份。当前 yaml 不在这个目录里。 */
     private static void pruneHistory(Path dir) {
+        pruneHistory(dir, null);
+    }
+
+    /**
+     * 和 {@code incoming} 内容相同的备份不占名额也不在这里删：回退成功后它由
+     * {@link #dropHistoryEqualTo} 去掉，其余两份都留得住；写入失败时它还在。
+     */
+    private static void pruneHistory(Path dir, byte[] incoming) {
         try (var children = Files.list(dir)) {
             ArrayList<Path> files = new ArrayList<>();
             for (Path child : children.toList()) {
@@ -1323,6 +1331,11 @@ public final class LocalConches {
                 }
                 String name = child.getFileName().toString();
                 if (name.endsWith(SUFFIX) && Files.isRegularFile(child, LinkOption.NOFOLLOW_LINKS)) {
+                    if (incoming != null
+                            && Files.size(child) == incoming.length
+                            && Arrays.equals(Files.readAllBytes(child), incoming)) {
+                        continue;
+                    }
                     files.add(child);
                 }
             }
@@ -1339,7 +1352,11 @@ public final class LocalConches {
     private void dropHistoryEqualTo(String conch, byte[] current) {
         try {
             Path dir = historyDir(conch);
-            if (Files.isSymbolicLink(dir) || !Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
+            Path historyRoot = dir.getParent();
+            if (historyRoot == null
+                    || Files.isSymbolicLink(historyRoot)
+                    || Files.isSymbolicLink(dir)
+                    || !Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
                 return;
             }
             try (var children = Files.list(dir)) {

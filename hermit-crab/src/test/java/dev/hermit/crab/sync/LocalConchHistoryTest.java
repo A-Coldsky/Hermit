@@ -122,6 +122,44 @@ class LocalConchHistoryTest {
     }
 
     @Test
+    void restoringTheNewestBackupKeepsTheOlderOne() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-21T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("newest"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            local.importBytes(LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            for (int i = 1; i <= 2; i++) {
+                clock.advance(Duration.ofMillis(1));
+                local.importBytes(
+                        LocalConchBehaviorTest.ping("hist_ping", "1.0." + i).getBytes(StandardCharsets.UTF_8),
+                        Actors.CLI,
+                        true);
+            }
+            List<LocalConches.HistoryEntry> history = local.history("hist_ping");
+            assertThat(history).extracting(LocalConches.HistoryEntry::version).containsExactly("1.0.1", "1.0.0");
+            clock.advance(Duration.ofMillis(1));
+            local.restore("hist_ping", history.get(0).id(), Actors.CONSOLE);
+            assertThat(local.history("hist_ping")).extracting(LocalConches.HistoryEntry::version)
+                    .containsExactly("1.0.2", "1.0.0");
+        }
+    }
+
+    @Test
+    void identicalSaveDoesNotTouchALinkedHistoryRoot() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-22T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("linked"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            byte[] raw = LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8);
+            local.importBytes(raw, Actors.CLI);
+            java.nio.file.Path outside = temp.resolve("outside").resolve("hist_ping");
+            Files.createDirectories(outside);
+            Files.write(outside.resolve("keep.yaml"), raw);
+            Files.createSymbolicLink(crab.paths.localConches().resolve(".history"), outside.getParent());
+            local.importBytes(raw, Actors.CLI, true);
+            assertThat(outside.resolve("keep.yaml")).exists();
+        }
+    }
+
+    @Test
     void sameMillisecondBackupGetsASuffix() throws Exception {
         MutableClock clock = new MutableClock(Instant.parse("2026-11-18T00:00:00Z"));
         try (OpenCrab crab = OpenCrab.open(temp.resolve("collide"))) {

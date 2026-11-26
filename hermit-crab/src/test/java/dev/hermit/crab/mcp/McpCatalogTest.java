@@ -47,6 +47,83 @@ class McpCatalogTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void searchSplitsTheQueryIntoTermsAndAlsoMatchesTheConchAndCapabilityName() {
+        ConchRegistry registry = new ConchRegistry();
+        registry.put(ConchParser.parse("""
+                conch: group_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:8080
+                title: 集团 OA
+                description: 办公自动化系统。
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 查询待办
+                    description: 列出等我处理的事项。
+                    mcp: {read_only: true}
+                    steps: []
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                  leave_apply:
+                    title: 提交请假申请
+                    description: 提交请假（休假、调休）申请，进入审批。
+                    steps: []
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                """), Origin.OFFICIAL);
+        registry.put(ConchParser.parse("""
+                conch: expense
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:8081
+                title: 报销系统
+                description: 费用报销。
+                credentials: {}
+                actions:
+                  submit:
+                    title: 提交报销单
+                    description: 提交费用报销，进入审批。
+                    steps: []
+                    output:
+                      ok: {type: string, description: 结果}
+                    examples:
+                      - input: {}
+                        output: {ok: yes}
+                """), Origin.OFFICIAL);
+        McpCatalog catalog = new McpCatalog(registry, (c, a) -> false, () -> false, 0);
+        java.util.function.Function<String, List<String>> names = query ->
+                ((List<java.util.Map<String, Object>>) catalog.search(ALL_KEY, query, null, null, false).get("matches"))
+                        .stream().map(row -> (String) row.get("name")).toList();
+
+        // 只写在规则包标题、说明里的词也能搜到这个包的能力。
+        assertThat(names.apply("OA")).containsExactly("group_oa__list_todo", "group_oa__leave_apply");
+        assertThat(names.apply("办公自动化")).hasSize(2);
+        // 多个词不必连在一起；全部命中的能力存在时只给这些。
+        assertThat(names.apply("审批 休假")).containsExactly("group_oa__leave_apply");
+        assertThat(names.apply("OA 待办")).containsExactly("group_oa__list_todo");
+        // 中文输入法的全角空格也算分隔。
+        assertThat(names.apply("　OA　待办 ")).containsExactly("group_oa__list_todo");
+        // 没有能力命中全部词时退到部分命中，命中多的在前，同分时能力自己命中的在前。
+        assertThat(names.apply("OA 审批 出差"))
+                .containsExactly("group_oa__leave_apply", "expense__submit", "group_oa__list_todo");
+        // 能力的英文名也可以搜。
+        assertThat(names.apply("leave_apply")).containsExactly("group_oa__leave_apply");
+        assertThat(names.apply("GROUP_OA__LEAVE_APPLY")).containsExactly("group_oa__leave_apply");
+        assertThat(names.apply("不存在的词")).isEmpty();
+        assertThat(catalog.search(ALL_KEY, "审批", null, null, false).get("total")).isEqualTo(2);
+    }
+
+    @Test
     void describeCarriesTheForwardedToolOutputSchemaAndGuideNamesTheDirectoryAccountSelector() {
         ConchRegistry registry = new ConchRegistry();
         registry.put(ConchParser.parse("""

@@ -38,6 +38,7 @@ export const importIssueLabels: Record<string, string> = {
   TEMPLATE_SYNTAX: '模板有误',
   MISSING_NOTES: '缺少使用注意',
   MISSING_RELATED: '缺少相关能力',
+  VAGUE_DESCRIPTION: '说明过于简略',
   UNKNOWN_RELATED: '相关能力不存在',
   SCRIPT_STEP: '脚本不合规',
   MCP_UPSTREAM: '上游无效',

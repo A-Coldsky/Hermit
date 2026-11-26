@@ -92,6 +92,10 @@ export const issueHints: Record<string, IssueHint> = {
     title: '能力没有写使用注意',
     hint: 'notes 会写进 MCP 工具说明，帮 AI 少犯错，例如分页从 1 开始、提交前先查询。不写也能发布。',
   },
+  VAGUE_DESCRIPTION: {
+    title: '说明过于简略',
+    hint: '规则包或能力的 description 和 title 相同，或不足 6 个字。其它 AI 靠这段文字判断该不该用，请写清能做什么、用户平时怎么称呼。不改也能发布。',
+  },
   MISSING_RELATED: {
     title: '能力没有写相关能力',
     hint: 'related 让调用方发现前后衔接的能力，例如查待办后再审批。不写也能发布。',

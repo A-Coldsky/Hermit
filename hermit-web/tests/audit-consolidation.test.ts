@@ -262,6 +262,7 @@ describe('M15: Reef 8 个校验码说明与 DevTracePanel shared_session_cleared
       'GROUP_DEPTH',
       'UNKNOWN_GROUP',
       'EMPTY_GROUP',
+      'VAGUE_DESCRIPTION',
     ]
     for (const code of codes) {
       expect(issueHints[code]?.title).toBeTruthy()

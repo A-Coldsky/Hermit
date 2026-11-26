@@ -261,7 +261,12 @@ class ConchApiTest {
                 """;
         JsonNode uploaded = json(upload(once.getBytes(StandardCharsets.UTF_8)));
         assertThat(uploaded.get("success").asBoolean()).as(uploaded.toString()).isTrue();
-        assertCodes(uploaded.get("data").get("warnings"), List.of(ValidationCodes.MISSING_RELATED));
+        assertCodes(
+                uploaded.get("data").get("warnings"),
+                List.of(
+                        ValidationCodes.VAGUE_DESCRIPTION,
+                        ValidationCodes.VAGUE_DESCRIPTION,
+                        ValidationCodes.MISSING_RELATED));
     }
 
     @Test

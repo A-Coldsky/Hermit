@@ -43,6 +43,11 @@ public final class ValidationCodes {
     public static final String TEMPLATE_SYNTAX = "TEMPLATE_SYNTAX";
     public static final String MISSING_NOTES = "MISSING_NOTES";
     public static final String MISSING_RELATED = "MISSING_RELATED";
+    /**
+     * 规则包或能力的 description 和 title 相同，或不足 {@link ConchValidator#MIN_DESCRIPTION_CHARS} 个字。
+     * 其它 AI 靠这些文字判断有没有对应的系统和能力。警告，不阻止保存。
+     */
+    public static final String VAGUE_DESCRIPTION = "VAGUE_DESCRIPTION";
     public static final String UNKNOWN_RELATED = "UNKNOWN_RELATED";
     public static final String SCRIPT_STEP = "SCRIPT_STEP";
     public static final String MCP_UPSTREAM = "MCP_UPSTREAM";

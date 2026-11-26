@@ -96,7 +96,7 @@ class AuthoringGuideTest {
         List<AuthoringGuide.Section> sections = AuthoringGuide.sections();
         assertThat(sections).isNotEmpty();
         assertThat(sections).extracting(AuthoringGuide.Section::id)
-                .contains("quick_reference", "from_har", "fields", "groups", "mcp_upstream",
+                .contains("quick_reference", "from_har", "fields", "discoverability", "groups", "mcp_upstream",
                         "sso_login", "session_expiry", "steps", "templates_scripts", "local_dev");
         assertThat(AuthoringGuide.quickReference().id()).isEqualTo("quick_reference");
         assertThat(AuthoringGuide.quickReference().bytes()).isLessThanOrEqualTo(3 * 1024);

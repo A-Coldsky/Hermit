@@ -183,7 +183,7 @@ class RequestBodyValidationTest {
                 driver: http
                 min_crab_version: 1.2.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 scripts:
                   pack: |
                     function pack(text) {
@@ -193,7 +193,7 @@ class RequestBodyValidationTest {
                 actions:
                   list:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       value: {type: string, description: 结果, value: ok}
                     examples:
@@ -241,14 +241,14 @@ class RequestBodyValidationTest {
                 driver: http
                 min_crab_version: %s
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: {type: secret, required: true, label: 密码}
                 %s
                 actions:
                   list:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       fid: {type: integer, description: 文件夹}
                       order: {type: string, description: 排序}

@@ -31,6 +31,7 @@ final class AuthoringGuide {
             Map.entry("从 HAR 写规则", "from_har"),
             Map.entry("最小规则", "minimal"),
             Map.entry("字段与语义", "fields"),
+            Map.entry("让其他 AI 找得到", "discoverability"),
             Map.entry("能力分组", "groups"),
             Map.entry("MCP 上游包", "mcp_upstream"),
             Map.entry("HTTP 方法、只读和幂等是不同概念", "http_semantics"),
@@ -443,6 +444,10 @@ final class AuthoringGuide {
         for (int i = 0; i < PITFALLS.size(); i++) {
             sb.append(i + 1).append(". ").append(PITFALLS.get(i)).append('\n');
         }
+        sb.append("\n## 写完后确认别的 AI 找得到\n\n");
+        sb.append("其它 AI 的工具列表里看不到你写的能力，只能用 `list_systems` 和 `search_capabilities` 按文字查找。");
+        sb.append("包和能力的 `title`、`description` 要用用户平时的叫法并带上同义说法，");
+        sb.append("写法见章节 `discoverability`（让其他 AI 找得到）。\n");
         return sb.toString().stripTrailing();
     }
 

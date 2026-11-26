@@ -132,6 +132,7 @@ onMounted(load)
           <div class="kind">
             <DriverBadge :driver="row.driver" />
             <span v-if="isMcp(row)" class="mono hm-muted host" data-test="upstream-host">{{ upstreamHost(row.upstream?.url) ?? '上游地址未填' }}</span>
+            <span v-if="row.authUse" class="mono hm-muted host" data-test="auth-use">授权器：{{ row.authUse }}</span>
           </div>
           <p class="desc">{{ row.description || '没有描述' }}</p>
           <div class="tags">

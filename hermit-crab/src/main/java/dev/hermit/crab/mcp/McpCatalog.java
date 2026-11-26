@@ -36,6 +36,7 @@ final class McpCatalog {
     static final String DEBUG_TRACE_LIST = "debug_trace_list";
     static final String GUIDE = "conch_guide";
     static final String READ_YAML = "conch_read_yaml";
+    static final String AUTH_LIST = "conch_auth_list";
     static final String CAPTURE_LIST = "conch_capture_list";
     static final String CAPTURE_GET = "conch_capture_get";
     static final String VALIDATE = "conch_validate";
@@ -619,6 +620,15 @@ final class McpCatalog {
                 true,
                 true,
                 false));
+        tools.add(tool(AUTH_LIST,
+                "列出本机生效的授权器（driver: auth 的规则包，只负责登录）：包名、版本、来源、认证地址、导出的变量名，以及引用它的规则包。"
+                        + "写需要登录的规则包前先看有没有现成的授权器：有的话在规则里写 auth.use 引用它，不要再写 credentials 和登录步骤。"
+                        + "不含账号、凭证和导出变量的值；绑定账号和输入验证码只能由用户在 Crab 控制台做。",
+                captureListSchema(),
+                outputSchema ? authListOutputSchema() : null,
+                true,
+                true,
+                false));
         if (includeCapture) {
             tools.add(tool(CAPTURE_LIST,
                     "列出用户在 Crab 控制台录制或导入并已确认脱敏的浏览器抓包快照清单（含 captureId、涉及域名 origins、观察到的 Cookie 名及请求目录）。"
@@ -674,6 +684,27 @@ final class McpCatalog {
         LinkedHashMap<String, Object> schema = objectSchema(Map.of());
         schema.put("additionalProperties", false);
         return schema;
+    }
+
+    private static Map<String, Object> authListOutputSchema() {
+        LinkedHashMap<String, Object> export = new LinkedHashMap<>();
+        export.put("name", Map.of("type", "string"));
+        export.put("description", Map.of());
+        LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+        item.put("conch", Map.of("type", "string"));
+        item.put("version", Map.of("type", "string"));
+        item.put("source", Map.of("type", "string"));
+        item.put("title", Map.of("type", "string"));
+        item.put("description", Map.of("type", "string"));
+        item.put("origins", Map.of("type", "array", "items", Map.of("type", "string")));
+        item.put("allowHosts", Map.of("type", "array", "items", Map.of("type", "string")));
+        item.put("exports", Map.of("type", "array", "items", objectSchema(export)));
+        item.put("usedBy", Map.of("type", "array", "items", Map.of("type", "string")));
+        LinkedHashMap<String, Object> output = new LinkedHashMap<>();
+        output.put("authenticators", Map.of("type", "array", "items", objectSchema(item)));
+        output.put("total", Map.of("type", "integer"));
+        output.put("next", Map.of("type", "string"));
+        return objectSchema(output);
     }
 
     private static Map<String, Object> captureListOutputSchema() {

@@ -81,6 +81,12 @@ final class AuthoringCalls {
     static final String NEXT_VALIDATE_OK = "校验通过。如需保存并试跑，请调用 conch_save_local 保存为本地规则包。";
     static final String NEXT_FIX_ERRORS =
             "请按 errors 和 fixHints 逐条修复错误，必要时调用 conch_guide(section=...) 查阅 suggestedSections，修改后重新调用 conch_validate 直到 ok=true。";
+    static final String NEXT_AUTH_LIST_EMPTY =
+            "本机没有这把 Key 能看到的授权器。需要登录的规则包照常自己写 credentials 和 auth.steps；"
+                    + "多个规则包共用一份登录时，先写一个 driver: auth 的授权器（见 conch_guide 的「授权器」）。";
+    static final String NEXT_AUTH_LIST =
+            "要用其中一个授权器登录，在规则里写 auth.use: <conch>（可加 auth.min_version），用 {{auth.<导出变量名>}} 引用导出的值，"
+                    + "不要写 credentials、auth.steps 和 auth.origins。保存后请用户在 Crab 控制台的规则包「账号」里绑定授权器账号，绑定前调用返回 NOT_CONFIGURED。";
     static final String NEXT_CAPTURE_LIST_EMPTY =
             "当前还没有已确认的抓包快照。请让用户在 Crab 控制台「浏览器录制」完成录制或导入本地 .har 文件并生成快照后再调用 conch_capture_list；若无需抓包，请先调用 conch_guide 获取 starterTemplate 与 pitfalls 开始编写。";
     static final String NEXT_CAPTURE_LIST =
@@ -215,6 +221,56 @@ final class AuthoringCalls {
         body.put("pitfalls", AuthoringGuide.pitfalls());
         body.put("sections", catalog);
         body.put("note", GUIDE_OVERVIEW_NOTE);
+        return McpCalls.ok(body);
+    }
+
+    /**
+     * 本机生效的授权器。不含账号名、凭证和导出变量的值。
+     * 范围有限的 Key 只看到它点名的规则包所引用的授权器，{@code usedBy} 也只列它点名的包。
+     */
+    McpSchema.CallToolResult authList(ApiKeyPrincipal principal, Map<String, Object> arguments, McpCalls.Attempt attempt) {
+        if (!devMode()) {
+            return McpCalls.fail(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
+        }
+        if (!arguments.isEmpty()) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "未知字段 " + arguments.keySet().iterator().next() + "。");
+        }
+        boolean all = principal == null || principal.scope().grantsAllOfficial();
+        java.util.TreeMap<String, java.util.TreeSet<String>> usedBy = new java.util.TreeMap<>();
+        for (ConchDoc doc : runtime.registry().snapshot().values()) {
+            if (dev.hermit.common.validate.AuthenticatorChecks.uses(doc)
+                    && (all || visibleTo(principal, doc.conch()))) {
+                usedBy.computeIfAbsent(doc.auth().use(), key -> new java.util.TreeSet<>()).add(doc.conch());
+            }
+        }
+        ArrayList<Map<String, Object>> rows = new ArrayList<>();
+        for (ConchDoc doc : runtime.registry().authenticators().values()) {
+            if (!all && !usedBy.containsKey(doc.conch())) {
+                continue;
+            }
+            ArrayList<Map<String, Object>> exports = new ArrayList<>();
+            doc.auth().exports().forEach((name, export) -> {
+                LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+                item.put("name", name);
+                item.put("description", export == null ? null : export.description());
+                exports.add(item);
+            });
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            row.put("conch", doc.conch());
+            row.put("version", doc.version().toString());
+            row.put("source", runtime.registry().origin(doc.conch()) == Origin.LOCAL ? "local" : "reef");
+            row.put("title", doc.title());
+            row.put("description", doc.description());
+            row.put("origins", doc.auth().origins());
+            row.put("allowHosts", doc.auth().allowHosts());
+            row.put("exports", exports);
+            row.put("usedBy", List.copyOf(usedBy.getOrDefault(doc.conch(), new java.util.TreeSet<>())));
+            rows.add(row);
+        }
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("authenticators", rows);
+        body.put("total", rows.size());
+        body.put("next", rows.isEmpty() ? NEXT_AUTH_LIST_EMPTY : NEXT_AUTH_LIST);
         return McpCalls.ok(body);
     }
 
@@ -1238,6 +1294,14 @@ final class AuthoringCalls {
     private static String officialShadowDenied(String conch) {
         return "这把 API Key 没有正式规则包 " + conch
                 + " 的完整权限，不能创建同名本地规则包。请用全部权限的 Key，或在 conches 里点名该包且不限分组与能力的 Key。";
+    }
+
+    /** 范围有限的 Key 能不能看到这个包：正式包按点名的包、分组或能力算，本地包必须点名包本身。 */
+    private boolean visibleTo(ApiKeyPrincipal principal, String conch) {
+        if (runtime.registry().origin(conch) == Origin.LOCAL) {
+            return principal.scope().allowsLocal(conch);
+        }
+        return referencesConch(principal, conch);
     }
 
     private static boolean referencesConch(ApiKeyPrincipal principal, String conch) {

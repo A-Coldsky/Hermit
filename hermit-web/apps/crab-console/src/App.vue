@@ -10,7 +10,7 @@ const items = computed<NavItem[]>(() => [
   { to: '/', label: '概览', icon: House },
   { to: '/catalog', label: '可订阅规则包', icon: Shop },
   { to: '/conches', label: '规则包与账号', icon: Box, badge: pendingConches.value },
-  { to: '/identities', label: '身份', icon: User },
+  { to: '/identities', label: '授权与身份', icon: User },
   { to: '/apikeys', label: 'API Key', icon: Key },
   { to: '/calls', label: '调用记录', icon: List },
   { to: '/audit', label: '配置审计', icon: Document },

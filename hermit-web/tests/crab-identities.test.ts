@@ -5,6 +5,7 @@ import { deferred, mountPage } from './helpers'
 
 const crab = vi.hoisted(() => ({
   identities: vi.fn(),
+  authenticators: vi.fn(),
   conches: vi.fn(),
   accounts: vi.fn(),
   createIdentity: vi.fn(),
@@ -43,6 +44,7 @@ describe('身份页面', () => {
     vi.clearAllMocks()
     document.body.innerHTML = ''
     crab.identities.mockResolvedValue({ identities: [identity] })
+    crab.authenticators.mockResolvedValue({ authenticators: [] })
     crab.conches.mockResolvedValue({
       conches: [
         { conch: 'oa_leave', title: '请假', driver: 'http', source: 'REEF' },

@@ -14,6 +14,11 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * 用于识别 HTTP 200 返回业务错误码、JS/HTML 登录页、自定义响应头或 419/440/400 等非常规失效响应。
  * {@code originsDeclared} 与 {@code expiredWhenDeclared} 仅用于区分「没写」和「显式写了空/null」以便检查版本门槛，
  * 不进规范 JSON，也不参与文档相等性。
+ *
+ * <p>1.13.0 起：{@code driver: auth} 的包（授权器）可以写 {@code exports}（对外导出的登录变量）和
+ * {@code allowHosts}（可选，收紧哪些业务地址能用它）；{@code driver: http} 的包可以写 {@code use}
+ * （引用的授权器包名）、{@code minVersion}（授权器最低版本）和 {@code exchange}（不交凭证的换票步骤）。
+ * {@code sharedDeclared} 记录 YAML 里是否出现过这五个键之一，只用于版本门槛。
  */
 public record Auth(
         List<Step> steps,
@@ -23,7 +28,13 @@ public record Auth(
         List<String> origins,
         @JsonIgnore boolean originsDeclared,
         List<Map<String, Object>> expiredWhen,
-        @JsonIgnore boolean expiredWhenDeclared
+        @JsonIgnore boolean expiredWhenDeclared,
+        String use,
+        String minVersion,
+        Map<String, AuthExport> exports,
+        List<String> allowHosts,
+        List<Step> exchange,
+        @JsonIgnore boolean sharedDeclared
 ) {
     public Auth {
         steps = steps == null ? List.of() : List.copyOf(steps);
@@ -32,6 +43,18 @@ public record Auth(
         originsDeclared = originsDeclared || !origins.isEmpty();
         expiredWhen = expiredWhen == null || expiredWhen.isEmpty() ? List.of() : Frozen.mapList(expiredWhen);
         expiredWhenDeclared = expiredWhenDeclared || !expiredWhen.isEmpty();
+        exports = exports == null || exports.isEmpty() ? Map.of() : Frozen.ordered(exports);
+        allowHosts = allowHosts == null || allowHosts.isEmpty() ? List.of() : List.copyOf(allowHosts);
+        exchange = exchange == null ? List.of() : List.copyOf(exchange);
+        sharedDeclared = sharedDeclared || use != null || minVersion != null || !exports.isEmpty()
+                || !allowHosts.isEmpty() || !exchange.isEmpty();
+    }
+
+    public Auth(List<Step> steps, AliveCheck aliveCheck, Map<String, String> cookies,
+            boolean concurrentReads, List<String> origins, boolean originsDeclared,
+            List<Map<String, Object>> expiredWhen, boolean expiredWhenDeclared) {
+        this(steps, aliveCheck, cookies, concurrentReads, origins, originsDeclared, expiredWhen,
+                expiredWhenDeclared, null, null, Map.of(), List.of(), List.of(), false);
     }
 
     public Auth(List<Step> steps, AliveCheck aliveCheck, Map<String, String> cookies,
@@ -97,6 +120,43 @@ public record Auth(
         return expiredWhenDeclared;
     }
 
+    /** 没写时不进规范 JSON，旧包的快照令牌不变。 */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @Override
+    public String use() {
+        return use;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @Override
+    public String minVersion() {
+        return minVersion;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Override
+    public Map<String, AuthExport> exports() {
+        return exports;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Override
+    public List<String> allowHosts() {
+        return allowHosts;
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    @Override
+    public List<Step> exchange() {
+        return exchange;
+    }
+
+    @JsonIgnore
+    @Override
+    public boolean sharedDeclared() {
+        return sharedDeclared;
+    }
+
     @Override
     public boolean equals(Object other) {
         if (this == other) {
@@ -110,11 +170,17 @@ public record Auth(
                 && Objects.equals(aliveCheck, auth.aliveCheck)
                 && Objects.equals(cookies, auth.cookies)
                 && Objects.equals(origins, auth.origins)
-                && Objects.equals(expiredWhen, auth.expiredWhen);
+                && Objects.equals(expiredWhen, auth.expiredWhen)
+                && Objects.equals(use, auth.use)
+                && Objects.equals(minVersion, auth.minVersion)
+                && Objects.equals(exports, auth.exports)
+                && Objects.equals(allowHosts, auth.allowHosts)
+                && Objects.equals(exchange, auth.exchange);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(steps, aliveCheck, cookies, concurrentReads, origins, expiredWhen);
+        return Objects.hash(steps, aliveCheck, cookies, concurrentReads, origins, expiredWhen,
+                use, minVersion, exports, allowHosts, exchange);
     }
 }

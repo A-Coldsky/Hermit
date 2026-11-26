@@ -20,6 +20,7 @@ import dev.hermit.common.mcp.McpAddresses;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
+import dev.hermit.common.model.AuthExport;
 import dev.hermit.common.model.ConfigField;
 import dev.hermit.common.model.CredentialField;
 import dev.hermit.common.model.Example;
@@ -55,7 +56,11 @@ public final class ConchParser {
     private static final Set<String> PARAM_KEYS = Set.of(
             "type", "description", "default", "enum", "minimum", "maximum", "items", "required");
     private static final Set<String> AUTH_KEYS = Set.of(
-            "steps", "alive_check", "cookies", "concurrent_reads", "origins", "expired_when");
+            "steps", "alive_check", "cookies", "concurrent_reads", "origins", "expired_when",
+            "use", "min_version", "exports", "allow_hosts", "exchange");
+    private static final Set<String> SHARED_AUTH_KEYS = Set.of(
+            "use", "min_version", "exports", "allow_hosts", "exchange");
+    private static final Set<String> EXPORT_KEYS = Set.of("description");
     private static final Set<String> ALIVE_KEYS = Set.of("request", "expect_not_redirect", "expect");
     private static final Set<String> MCP_KEYS = Set.of("expose", "read_only", "destructive");
     private static final Set<String> EXAMPLE_KEYS = Set.of("input", "output");
@@ -311,8 +316,37 @@ public final class ConchParser {
         List<String> origins = stringList(obj.get("origins"), child(path, "origins"));
         boolean expiredWhenDeclared = obj.has("expired_when");
         List<Map<String, Object>> expiredWhen = expiredWhen(obj.get("expired_when"), child(path, "expired_when"));
+        String use = text(obj.get("use"), child(path, "use"));
+        String minVersion = text(obj.get("min_version"), child(path, "min_version"));
+        Map<String, AuthExport> exports = exports(obj.get("exports"), child(path, "exports"));
+        List<String> allowHosts = stringList(obj.get("allow_hosts"), child(path, "allow_hosts"));
+        List<Step> exchange = steps(obj.get("exchange"), child(path, "exchange"));
+        boolean sharedDeclared = SHARED_AUTH_KEYS.stream().anyMatch(obj::has);
         return new Auth(steps, alive, cookies, concurrentReads, origins, originsDeclared,
-                expiredWhen, expiredWhenDeclared);
+                expiredWhen, expiredWhenDeclared, use, minVersion, exports, allowHosts, exchange,
+                sharedDeclared);
+    }
+
+    private static Map<String, AuthExport> exports(JsonNode node, String path) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return Map.of();
+        }
+        if (!node.isObject()) {
+            throw new ConchParseException(path, "必须是映射");
+        }
+        LinkedHashMap<String, AuthExport> exports = new LinkedHashMap<>();
+        node.properties().forEach(entry -> {
+            String itemPath = child(path, entry.getKey());
+            JsonNode value = entry.getValue();
+            if (value == null || value.isNull() || (value.isTextual() && value.textValue().isEmpty())) {
+                exports.put(entry.getKey(), new AuthExport(null));
+                return;
+            }
+            ObjectNode item = object(value, itemPath);
+            rejectUnknown(item, itemPath, EXPORT_KEYS);
+            exports.put(entry.getKey(), new AuthExport(text(item.get("description"), child(itemPath, "description"))));
+        });
+        return exports;
     }
 
     private static List<Map<String, Object>> expiredWhen(JsonNode node, String path) {

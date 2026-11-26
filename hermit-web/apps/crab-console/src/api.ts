@@ -1278,7 +1278,7 @@ export const api = {
   revokeLocalOverrideGrant: (conch: string) =>
     http.del<{ conch: string; revoked: boolean }>(`${base}/local-conches/grants/${seg(conch)}`),
   /**
-   * 当前 yaml 之外保留的最近备份，最多 3 份。`data` 为 `{history}`。
+   * 当前 yaml 之外保留的最近备份，最多 2 份。`data` 为 `{history}`。
    * 删除包后历史仍在，再次导入同名包可以继续回退。
    */
   localConchHistory: (conch: string) =>

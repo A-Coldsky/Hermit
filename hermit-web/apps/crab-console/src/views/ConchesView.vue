@@ -11,7 +11,7 @@ import {
   WarningFilled,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '@shared/components/PageHeader.vue'
 import ConchAvatar from '@shared/components/ConchAvatar.vue'
@@ -45,9 +45,39 @@ const loading = ref(true)
 const loadFailed = ref(false)
 const conches = ref<ConchSummary[]>([])
 const broken = ref<LocalConchEntry[]>([])
-/** 页签：可调用的规则包，或只负责登录的授权器。 */
-const tab = ref<'packages' | 'authenticators'>('packages')
+/** 第一层页签：从 Reef 订阅的，还是只在本机的。 */
+const tab = ref<'reef' | 'local'>('reef')
+/** 第二层筛选：三种类型。 */
+const kind = ref<'all' | 'http' | 'mcp' | 'auth'>('all')
 const authenticators = ref<AuthenticatorView[]>([])
+/** 第一次读到数据时，订阅是空的而本地有内容就直接落在「本地」。之后不替使用者切换。 */
+let tabChosen = false
+
+/** 同名的本地包和订阅包并存时列表里只有生效的那一份，两个页签都显示它。 */
+const inTab = (row: ConchSummary, source: 'reef' | 'local') =>
+  Boolean(row.localVersion && row.reefVersion) || (row.source === 'LOCAL') === (source === 'local')
+const authInTab = (row: AuthenticatorView, source: 'reef' | 'local') =>
+  (row.source === 'LOCAL') === (source === 'local')
+const driverOf = (row: ConchSummary) => (row.driver === 'mcp' ? 'mcp' : 'http')
+
+const tabConches = computed(() => conches.value.filter((row) => inTab(row, tab.value)))
+const tabAuthenticators = computed(() => authenticators.value.filter((row) => authInTab(row, tab.value)))
+const tabBroken = computed(() => (tab.value === 'local' ? broken.value : []))
+const shownConches = computed(() =>
+  kind.value === 'auth' ? [] : tabConches.value.filter((row) => kind.value === 'all' || driverOf(row) === kind.value))
+const shownAuthenticators = computed(() =>
+  kind.value === 'all' || kind.value === 'auth' ? tabAuthenticators.value : [])
+/** 坏包读不出类型，只在「全部」里。 */
+const shownBroken = computed(() => (kind.value === 'all' ? tabBroken.value : []))
+const shownCount = computed(() =>
+  shownConches.value.length + shownAuthenticators.value.length + shownBroken.value.length)
+const sourceCount = (source: 'reef' | 'local') =>
+  conches.value.filter((row) => inTab(row, source)).length
+  + authenticators.value.filter((row) => authInTab(row, source)).length
+  + (source === 'local' ? broken.value.length : 0)
+const kindCount = (value: 'http' | 'mcp') => tabConches.value.filter((row) => driverOf(row) === value).length
+const updateDot = (source: 'reef' | 'local') =>
+  authenticators.value.some((row) => row.updateAvailable && authInTab(row, source))
 const deleting = ref<string | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const importing = ref(false)
@@ -294,6 +324,10 @@ async function load() {
     conches.value = nextConches
     if (authResult) authenticators.value = authResult.authenticators ?? []
     broken.value = nextBroken
+    if (!tabChosen) {
+      tabChosen = true
+      if (!sourceCount('reef') && sourceCount('local')) tab.value = 'local'
+    }
     rememberPending(nextPending)
     loadFailed.value = false
     void refreshPending()
@@ -589,86 +623,35 @@ onMounted(load)
       </article>
     </div>
 
-    <el-radio-group v-model="tab" class="tabs" data-test="kind-tabs">
-      <el-radio-button value="packages">规则包 {{ conches.length + broken.length }}</el-radio-button>
-      <el-radio-button value="authenticators">
-        授权器 {{ authenticators.length }}
-        <span v-if="authenticators.some((a) => a.updateAvailable)" class="tab-dot" data-test="authenticator-update-dot" />
-      </el-radio-button>
-    </el-radio-group>
+    <div class="filters">
+      <el-radio-group v-model="tab" class="tabs" data-test="source-tabs">
+        <el-radio-button value="reef">
+          订阅 {{ sourceCount('reef') }}
+          <span v-if="updateDot('reef')" class="tab-dot" data-test="authenticator-update-dot" />
+        </el-radio-button>
+        <el-radio-button value="local">
+          本地 {{ sourceCount('local') }}
+          <span v-if="updateDot('local')" class="tab-dot" data-test="authenticator-update-dot" />
+        </el-radio-button>
+      </el-radio-group>
+      <el-radio-group v-model="kind" size="small" class="kinds" data-test="kind-tabs">
+        <el-radio-button value="all">全部 {{ tabConches.length + tabAuthenticators.length + tabBroken.length }}</el-radio-button>
+        <el-radio-button value="http">HTTP 规则 {{ kindCount('http') }}</el-radio-button>
+        <el-radio-button value="mcp">原生 MCP {{ kindCount('mcp') }}</el-radio-button>
+        <el-radio-button value="auth">授权器 {{ tabAuthenticators.length }}</el-radio-button>
+      </el-radio-group>
+    </div>
 
-    <template v-if="tab === 'authenticators'">
-      <p class="hm-muted tab-hint">
-        授权器只负责登录，没有能力，不能被调用。引用它的业务包把账号绑到授权器账号上，共用一份登录；账号之间的绑定在「授权与身份」里看。
-      </p>
-      <div v-if="authenticators.length" class="cards" data-test="authenticator-cards">
-        <div
-          v-for="row in authenticators"
-          :key="`${row.source}/${row.conch}`"
-          class="hm-card conch clickable"
-          role="link"
-          tabindex="0"
-          data-test="authenticator-card"
-          @click="open(row)"
-          @keyup.enter="open(row)"
-        >
-          <div class="top">
-            <ConchAvatar :name="row.conch" :title="row.title" />
-            <div class="name">
-              <strong :title="row.title || row.conch">{{ row.title || row.conch }}</strong>
-              <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
-            </div>
-          </div>
-          <div class="marks">
-            <KindBadge kind="auth" />
-            <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
-            <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
-          </div>
-          <div class="hm-kind-body">
-            <div class="hm-kind-main">
-              <div class="status" :class="row.accounts.length ? 'ok' : 'idle'">
-                <el-icon><component :is="row.accounts.length ? CircleCheckFilled : User" /></el-icon>
-                <span v-if="!row.accounts.length">未建账号：先新建一个账号并填凭证</span>
-                <span v-else-if="consumerCount(row)" data-test="authenticator-used-by">被 {{ consumerNames(row).join('、') }} 使用</span>
-                <span v-else>还没有业务包的账号绑到它上面</span>
-              </div>
-              <p v-if="row.updateAvailable" class="update-note">
-                可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的业务包都用新版本登录。
-              </p>
-            </div>
-            <KindShell kind="auth" :size="56" class="hm-kind-water" aria-hidden="true" />
-          </div>
-          <div class="foot hm-muted">
-            <span><b class="num">{{ row.accounts.length }}</b> 个账号</span>
-            <span><b class="num">{{ consumerCount(row) }}</b> 个业务包在用</span>
-            <span class="spacer" />
-            <el-button
-              v-if="row.updateAvailable"
-              link
-              type="primary"
-              class="card-action"
-              data-test="authenticator-update"
-              :loading="acting === updateKey(row.conch)"
-              @click.stop="updateAuthenticator(row)"
-              @keyup.enter.stop
-            >更新到 v{{ row.latestVersion }}</el-button>
-            <span class="manage">管理<el-icon><ArrowRight /></el-icon></span>
-          </div>
-        </div>
-      </div>
-      <div v-else-if="!loading" class="hm-card empty" data-test="authenticators-empty">
-        <KindShell kind="auth" :size="56" class="empty-mark" />
-        <span>本机还没有授权器。到<router-link to="/catalog">可订阅规则包</router-link>的「授权器」页签订阅，或导入本地授权器</span>
-      </div>
-    </template>
+    <p v-if="kind === 'auth'" class="hm-muted tab-hint">
+      授权器只负责登录，没有能力，不能被调用。引用它的业务包把账号绑到授权器账号上，共用一份登录；账号之间的绑定在「授权与身份」里看。
+    </p>
 
-    <template v-else>
     <div v-if="loading && !conches.length && !broken.length" class="cards">
       <div v-for="n in 2" :key="n" class="hm-card"><el-skeleton :rows="3" animated /></div>
     </div>
-    <div v-else-if="conches.length || broken.length" class="cards">
+    <div v-else-if="shownCount" class="cards" data-test="conch-cards">
       <div
-        v-for="row in conches"
+        v-for="row in shownConches"
         :key="row.conch"
         class="hm-card conch clickable"
         :class="{ warn: row.needsConfiguration && !row.ruleDisabled, broken: row.ruleDisabled }"
@@ -686,8 +669,8 @@ onMounted(load)
         </div>
         <div class="marks">
           <KindBadge :kind="row.driver" />
-          <el-tag v-if="row.source === 'LOCAL'" type="info" effect="plain" size="small" class="local">本地</el-tag>
-          <el-tag v-if="row.localVersion && row.reefVersion" type="info" effect="plain" size="small" class="local" data-test="two-sources-tag">{{ row.source === 'LOCAL' ? '另有同名正式包' : '另有同名本地包' }}</el-tag>
+          <el-tag v-if="row.source === 'LOCAL' && tab !== 'local'" type="info" effect="plain" size="small" class="local" data-test="local-tag">本地</el-tag>
+          <el-tag v-if="row.localVersion && row.reefVersion" type="info" effect="plain" size="small" class="local" data-test="two-sources-tag">{{ row.source === 'LOCAL' ? '本地这份在生效' : '订阅这份在生效' }}</el-tag>
           <el-tag v-if="row.ruleDisabled" type="danger" effect="plain" size="small" class="local" data-test="rule-disabled-tag">已停用</el-tag>
           <el-tag v-if="row.switchedOff" type="danger" effect="plain" size="small" class="local" data-test="switched-off-tag">本机已停用</el-tag>
           <el-tooltip v-if="row.sameSite?.length" :content="`${sameSiteText(row.sameSite)}`" placement="top">
@@ -754,7 +737,60 @@ onMounted(load)
         </div>
       </div>
       <div
-        v-for="row in broken"
+        v-for="row in shownAuthenticators"
+        :key="`${row.source}/${row.conch}`"
+        class="hm-card conch clickable"
+        role="link"
+        tabindex="0"
+        data-test="authenticator-card"
+        @click="open(row)"
+        @keyup.enter="open(row)"
+      >
+        <div class="top">
+          <ConchAvatar :name="row.conch" :title="row.title" />
+          <div class="name">
+            <strong :title="row.title || row.conch">{{ row.title || row.conch }}</strong>
+            <span class="mono hm-muted">{{ row.conch }} · v{{ row.version }}</span>
+          </div>
+        </div>
+        <div class="marks">
+          <KindBadge kind="auth" />
+          <el-tag v-if="row.source === 'LOCAL' && tab !== 'local'" type="info" effect="plain" size="small" class="local" data-test="local-tag">本地</el-tag>
+          <el-tag v-if="row.updateAvailable" type="warning" effect="plain" size="small" class="local mono">有新版本 v{{ row.latestVersion }}</el-tag>
+        </div>
+        <div class="hm-kind-body">
+          <div class="hm-kind-main">
+            <div class="status" :class="row.accounts.length ? 'ok' : 'idle'">
+              <el-icon><component :is="row.accounts.length ? CircleCheckFilled : User" /></el-icon>
+              <span v-if="!row.accounts.length">未建账号：先新建一个账号并填凭证</span>
+              <span v-else-if="consumerCount(row)" data-test="authenticator-used-by">被 {{ consumerNames(row).join('、') }} 使用</span>
+              <span v-else>还没有业务包的账号绑到它上面</span>
+            </div>
+            <p v-if="row.updateAvailable" class="update-note">
+              可以更新到 v{{ row.latestVersion }}<template v-if="row.newRequiredCredentials?.length">，新版本需要凭证 {{ row.newRequiredCredentials.join('、') }}</template>。更新后绑到它的业务包都用新版本登录。
+            </p>
+          </div>
+          <KindShell kind="auth" :size="56" class="hm-kind-water" aria-hidden="true" />
+        </div>
+        <div class="foot hm-muted">
+          <span><b class="num">{{ row.accounts.length }}</b> 个账号</span>
+          <span><b class="num">{{ consumerCount(row) }}</b> 个业务包在用</span>
+          <span class="spacer" />
+          <el-button
+            v-if="row.updateAvailable"
+            link
+            type="primary"
+            class="card-action"
+            data-test="authenticator-update"
+            :loading="acting === updateKey(row.conch)"
+            @click.stop="updateAuthenticator(row)"
+            @keyup.enter.stop
+          >更新到 v{{ row.latestVersion }}</el-button>
+          <span class="manage">管理<el-icon><ArrowRight /></el-icon></span>
+        </div>
+      </div>
+      <div
+        v-for="row in shownBroken"
         :key="`broken-${row.conch}`"
         class="hm-card conch broken"
         :class="{ clickable: row.ruleDisabled }"
@@ -769,7 +805,6 @@ onMounted(load)
           </div>
         </div>
         <div class="marks">
-          <el-tag type="info" effect="plain" size="small" class="local">本地</el-tag>
           <el-tag type="danger" effect="plain" size="small" class="local" data-test="broken-tag">{{ row.ruleDisabled ? '已停用' : '文件损坏，无法加载' }}</el-tag>
         </div>
         <div class="hm-kind-main">
@@ -803,11 +838,18 @@ onMounted(load)
         </div>
       </div>
     </div>
-    <div v-else-if="!loading && !loadFailed && !pendingOverwrites.length" class="hm-card empty">
-      <HermitMark variant="crab" :size="56" :tile="false" class="empty-mark" />
-      <span>还没有规则包。到<router-link to="/catalog">可订阅规则包</router-link>订阅 Reef 上的规则包，或导入本地规则包</span>
+    <div v-else-if="!loading && kind === 'auth'" class="hm-card empty" data-test="authenticators-empty">
+      <KindShell kind="auth" :size="56" class="empty-mark" />
+      <span v-if="tab === 'reef'">还没有订阅授权器。到<router-link to="/catalog">可订阅规则包</router-link>的「授权器」页签订阅</span>
+      <span v-else>本机还没有本地授权器。可以导入本地授权器</span>
     </div>
-    </template>
+    <div v-else-if="!loading && !loadFailed && (kind !== 'all' || !pendingOverwrites.length)" class="hm-card empty" data-test="conches-empty">
+      <KindShell v-if="kind !== 'all'" :kind="kind" :size="56" class="empty-mark" />
+      <HermitMark v-else variant="crab" :size="56" :tile="false" class="empty-mark" />
+      <span v-if="kind !== 'all'">这里没有{{ kind === 'mcp' ? '原生 MCP' : 'HTTP 规则' }}包</span>
+      <span v-else-if="tab === 'reef'">还没有订阅规则包。到<router-link to="/catalog">可订阅规则包</router-link>订阅 Reef 上的规则包</span>
+      <span v-else>还没有本地规则包。可以导入本地规则包</span>
+    </div>
 
     <el-dialog v-model="report.open" :title="report.title" width="600px">
       <p v-if="report.summary" class="summary">{{ report.summary }}</p>
@@ -871,11 +913,15 @@ onMounted(load)
   font-size: 12.5px;
 }
 
-.tabs {
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
   margin-bottom: 14px;
 }
 
-.tabs :deep(.el-radio-button__inner) {
+.filters :deep(.el-radio-button__inner) {
   display: inline-flex;
   align-items: center;
   gap: 6px;

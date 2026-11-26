@@ -268,7 +268,46 @@ describe('Crab 可订阅规则包：规则包 / 授权器页签', () => {
   })
 })
 
-describe('Crab 规则包与账号：授权器页签', () => {
+describe('Crab 规则包与账号：先分订阅 / 本地，再分类型', () => {
+  it('同名的本地包和订阅包并存时两个页签都显示，并标出哪一份在生效', async () => {
+    const row = (over: Record<string, unknown>) => ({
+      conch: 'oa', version: '1.0.0', title: 'OA', capabilityCount: 1, subscribed: true, accountCount: 0,
+      needsConfiguration: false, loginPaused: false, source: 'REEF', driver: 'http', ...over,
+    })
+    crab.conches.mockResolvedValue({
+      conches: [
+        row({}),
+        row({ conch: 'both', source: 'LOCAL', localVersion: '0.2.0', reefVersion: '1.0.0' }),
+        row({ conch: 'tools', source: 'LOCAL', driver: 'mcp', subscribed: false }),
+      ],
+    })
+    crab.authenticators.mockResolvedValue({ authenticators: [authenticator({})] })
+    const wrapper = await mountPage(CrabConchesView)
+    await flushPromises()
+    const names = () => wrapper.findAll('.hm-card.conch .name .mono').map((node) => node.text().split(' ')[0])
+
+    expect(wrapper.find('[data-test="source-tabs"]').text()).toMatch(/订阅 3\s*本地 2/)
+    expect(names()).toEqual(['oa', 'both', 'corp_sso'])
+    const both = wrapper.findAll('.hm-card.conch')[1]
+    expect(both.find('[data-test="local-tag"]').exists()).toBe(true)
+    expect(both.find('[data-test="two-sources-tag"]').text()).toBe('本地这份在生效')
+
+    await pick(wrapper, 'http')
+    expect(names()).toEqual(['oa', 'both'])
+    await pick(wrapper, 'mcp')
+    expect(names()).toEqual([])
+    expect(wrapper.find('[data-test="conches-empty"]').text()).toContain('原生 MCP')
+
+    await wrapper.find('[data-test="source-tabs"] input[value="local"]').setValue(true)
+    await flushPromises()
+    expect(names()).toEqual(['tools'])
+    await pick(wrapper, 'all')
+    expect(names()).toEqual(['both', 'tools'])
+    expect(wrapper.find('[data-test="local-tag"]').exists()).toBe(false)
+    await pick(wrapper, 'auth')
+    expect(wrapper.find('[data-test="authenticators-empty"]').exists()).toBe(true)
+  })
+
   it('列出授权器、谁在用，有新版本时能更新', async () => {
     crab.authenticators.mockResolvedValue({
       authenticators: [authenticator({ updateAvailable: true, latestVersion: '1.1.0' })],
@@ -276,10 +315,11 @@ describe('Crab 规则包与账号：授权器页签', () => {
     crab.update.mockResolvedValue({ outcome: { kind: 'INSTALLED' } })
     const wrapper = await mountPage(CrabConchesView)
     await flushPromises()
-    expect(wrapper.find('[data-test="authenticator-card"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="authenticator-update-dot"]').exists()).toBe(true)
+    await pick(wrapper, 'http')
+    expect(wrapper.find('[data-test="authenticator-card"]').exists()).toBe(false)
 
-    await pick(wrapper, 'authenticators')
+    await pick(wrapper, 'auth')
     const card = wrapper.find('[data-test="authenticator-card"]')
     expect(card.text()).toContain('corp_sso')
     expect(card.find('[data-test="authenticator-used-by"]').text()).toContain('corp_oa')

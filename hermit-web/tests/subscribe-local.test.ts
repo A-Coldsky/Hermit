@@ -184,7 +184,7 @@ describe('可订阅规则包', () => {
 })
 
 describe('本地规则包', () => {
-  it('列表给本地包加「本地」标签', async () => {
+  it('本地包和订阅的包分在两个页签里', async () => {
     crab.conches.mockResolvedValue({
       conches: [
         { conch: 'mine', version: '0.1.0', title: '我的', capabilityCount: 1, subscribed: false, accountCount: 0, needsConfiguration: false, loginPaused: false, source: 'LOCAL' },
@@ -193,9 +193,18 @@ describe('本地规则包', () => {
     })
     const wrapper = await mountPage(ConchesView)
     await flushPromises()
-    const cards = wrapper.findAll('.conch')
-    expect(cards[0].find('.local').text()).toBe('本地')
-    expect(cards[1].find('.local').exists()).toBe(false)
+    expect(wrapper.find('[data-test="source-tabs"]').text()).toMatch(/订阅 1\s*本地 1/)
+    let cards = wrapper.findAll('.conch')
+    expect(cards).toHaveLength(1)
+    expect(cards[0].text()).toContain('legacy_oa')
+
+    await wrapper.find('[data-test="source-tabs"] input[value="local"]').setValue(true)
+    await flushPromises()
+    cards = wrapper.findAll('.conch')
+    expect(cards).toHaveLength(1)
+    expect(cards[0].text()).toContain('mine')
+    // 页签已经说明是本地的，卡片上不再重复「本地」标签。
+    expect(cards[0].find('[data-test="local-tag"]').exists()).toBe(false)
   })
 
   it('没有账号时提示先新建，并标成待配置', async () => {
@@ -521,14 +530,14 @@ describe('本地规则包', () => {
     expect(card.text()).toContain('不能调用')
     expect(card.text()).not.toContain('可用：')
     expect(card.attributes('role')).toBeUndefined()
-    expect(wrapper.text()).not.toContain('还没有规则包')
+    expect(wrapper.text()).not.toContain('还没有本地规则包')
 
     await card.find('button').trigger('click')
     await flushPromises()
     expect(confirm.mock.calls[0][1]).toBe('删除本地规则包 local_ping')
     expect(crab.deleteLocalConch).toHaveBeenCalledWith('local_ping')
     expect(wrapper.findAll('[data-test="broken-conch"]')).toHaveLength(0)
-    expect(wrapper.text()).toContain('还没有规则包')
+    expect(wrapper.text()).toContain('还没有本地规则包')
     confirm.mockRestore()
   })
 

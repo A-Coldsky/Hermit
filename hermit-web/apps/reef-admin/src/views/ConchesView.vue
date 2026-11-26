@@ -329,6 +329,7 @@ onMounted(load)
 /* 卡片里类型行放不下时，上游地址或授权器名折到徽标下面一行，不截断成省略号。 */
 .conch .kind {
   flex-wrap: wrap;
+  align-content: flex-start;
   gap: 4px 8px;
 }
 

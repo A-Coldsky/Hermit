@@ -1169,7 +1169,7 @@ class McpForwardTest {
         static Lab open(Path root, Upstream upstream, int concurrency, int timeoutSeconds) throws Exception {
             CrabRuntime runtime = CrabRuntime.open(
                     new CrabPaths(root),
-                    CrabConfig.defaults().withListen("127.0.0.1", 0).withLimits(timeoutSeconds, concurrency),
+                    CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40).withLimits(timeoutSeconds, concurrency),
                     name -> null);
             ConchDoc doc = ConchParser.parse(packageYaml(upstream.port(), "1.0.0", "headers", null, ""));
             runtime.registry().put(doc);

@@ -1208,7 +1208,7 @@ class McpHttpTest {
 
         static Harness open(Path root, String password) throws Exception {
             LegacyOaFixture fixture = new LegacyOaFixture(password);
-            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(root), CrabConfig.defaults().withListen("127.0.0.1", 0), name -> null);
+            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(root), CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40), name -> null);
             try {
                 runtime.registry().put(ConchParser.parse(legacyYaml()));
                 runtime.registry().put(ConchParser.parse(accountConch()));
@@ -1517,7 +1517,7 @@ class McpHttpTest {
         static SessionServer open(Path root, Clock clock, int maxSessions, List<String> allowedOrigins) {
             CrabRuntime runtime = CrabRuntime.open(
                     new CrabPaths(root),
-                    CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpAllowedOrigins(allowedOrigins),
+                    CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40).withMcpAllowedOrigins(allowedOrigins),
                     name -> null);
             McpEndpoint endpoint = new McpEndpoint(runtime, clock, McpEndpoint.IDLE_LIMIT, maxSessions);
             Javalin app = Javalin.create(config -> {

@@ -56,7 +56,7 @@ class LocalConchMcpTest {
             ApiKeyPrincipal namedPrincipal = runtime.apiKeys().authenticate(namedKey.plaintext()).orElseThrow();
             ApiKeyPrincipal narrowPrincipal = runtime.apiKeys().authenticate(narrowKey.plaintext()).orElseThrow();
             ApiKeyPrincipal actionPrincipal = runtime.apiKeys().authenticate(actionKey.plaintext()).orElseThrow();
-            McpCatalog catalog = new McpCatalog(runtime.registry(), runtime::disabled);
+            McpCatalog catalog = new McpCatalog(runtime.registry(), runtime::disabled, () -> false, 40);
             McpCalls calls = new McpCalls(runtime, catalog);
 
             McpSchema.Tool localTool = tool(catalog, openPrincipal, "local_ping__ping");

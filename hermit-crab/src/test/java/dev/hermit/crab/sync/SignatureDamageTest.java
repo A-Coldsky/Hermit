@@ -56,7 +56,7 @@ class SignatureDamageTest {
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
             reef.publish(ConchTexts.standard("other_sys", "1.0.0"));
             reef.publish(ConchTexts.standard("not_yet", "1.0.0"));
-            CrabConfig config = config(reef).withListen("127.0.0.1", 0);
+            CrabConfig config = config(reef).withListen("127.0.0.1", 0).withMcpDirectLimit(40);
             try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("sig")), config, name -> null);
                  CrabServer server = CrabServer.start(runtime)) {
                 HttpClient http = HttpClient.newHttpClient();
@@ -175,7 +175,7 @@ class SignatureDamageTest {
     void pointerMissingStaysRepairRequiredWithoutASignatureDetail() throws Exception {
         try (FakeReef reef = new FakeReef()) {
             reef.publish(ConchTexts.standard("legacy_oa", "1.0.0"));
-            CrabConfig config = config(reef).withListen("127.0.0.1", 0);
+            CrabConfig config = config(reef).withListen("127.0.0.1", 0).withMcpDirectLimit(40);
             try (CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("pointer")), config, name -> null);
                  CrabServer server = CrabServer.start(runtime)) {
                 HttpClient http = HttpClient.newHttpClient();

@@ -522,8 +522,9 @@ MCP 工具 `hermit_dev__debug_trace` 只在开发者模式打开时出现在 `to
 - 非 `initialize` 的 POST，以及 GET、DELETE：带了 `MCP-Protocol-Version` 且不是 `2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25` 时返回 HTTP 400。不带该头时不拒绝，继续使用该会话在 `initialize` 里协商到的版本。多个版本头同样拒绝。已支持但和会话不一致的版本头放行，不改写会话版本。
 - `initialize` 不看 `MCP-Protocol-Version` 头。请求体里的 `protocolVersion` 不在支持列表时，响应仍返回一个支持的版本（当前 `2025-11-25`）。是否改为直接拒绝只由 `McpTransportPolicy.NEGOTIATE_UNKNOWN_PROTOCOL` 决定，当前为协商。
 
-- 可见能力不超过 `mcp.direct_limit`（默认 40，可在 `config.yml` 配置 `0–500`）时，直接工具名 `conch__action`。已分组的能力在直接工具说明中附带「分组：<分组显示名>」。本地规则包的直接工具说明、资源说明、`list_systems` 里该包的说明，以及 `describe_capability` 的说明，都以 `[本地] ` 开头。使用指南里也会标明这是本地规则包。`all: true` 以及旧的空范围 Key 能看见并调用这些工具。写了 `conches`、`groups` 或 `actions` 的 Key 必须在 `conches` 里点名本地规则包，才能看见并调用。只读 Key 仍不能看见或调用非只读能力。
-- 可见能力超过 `mcp.direct_limit`（或 `mcp.direct_limit: 0` 强制启用目录模式）时，提供 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个目录工具：
+- 默认是目录模式（`mcp.direct_limit` 默认 `0`）：`tools/list` 固定只有下面四个目录工具，能力的说明和参数按需取，不随订阅的规则包增长。代价是每个能力都经 `call_capability` 调用：AI 客户端里无法对单个能力设置「始终允许」，客户端也不会按能力的入参结构预先检查参数。
+- 在 `config.yml` 把 `mcp.direct_limit` 设成 `1–500` 可以打开直接模式：可见能力不超过这个数时，每个能力是一个工具，直接工具名 `conch__action`。已分组的能力在直接工具说明中附带「分组：<分组显示名>」。本地规则包的直接工具说明、资源说明、`list_systems` 里该包的说明，以及 `describe_capability` 的说明，都以 `[本地] ` 开头。使用指南里也会标明这是本地规则包。`all: true` 以及旧的空范围 Key 能看见并调用这些工具。写了 `conches`、`groups` 或 `actions` 的 Key 必须在 `conches` 里点名本地规则包，才能看见并调用。只读 Key 仍不能看见或调用非只读能力。
+- 目录模式（`mcp.direct_limit: 0`，或可见能力超过 `mcp.direct_limit`）提供 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个目录工具：
   - `list_systems`：列出可见规则包；带分组的包返回可见的一/二级 `groups` 目录树（含 `group`、`title`、可选 `description`、`capabilities` 计数和可选 `children`），空分组不返回；如果包内还有未归组的顶层能力，返回 `ungroupedCount`，并在 `ungroupedCount <= 10` 时附带轻量 `topLevelCapabilities`（`name`、`title`、`readOnly`，不含 schema），超过 10 个时不内联以控制上下文体积。未声明分组的旧包省略 `groups` 和 `topLevelCapabilities`。
   - `search_capabilities`：除 `query`、`conch`、`limit` 外，新增可选 `group`（一级分组同时命中直属能力与二级子分组）与 `ungrouped`（布尔，与 `group` 互斥）。指定了 `group` 或 `ungrouped: true` 时可省略 `query`；关键词搜索同时匹配分组路径、标题与说明。返回 `matches`（已分组项附带 `group` 与 `groupTitle`）与 `total`。
   - `describe_capability`：已分组能力额外返回 `group` 与 `groupTitle`。

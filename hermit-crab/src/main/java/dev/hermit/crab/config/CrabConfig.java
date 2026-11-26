@@ -35,7 +35,7 @@ public record CrabConfig(
         String publicUrl,
         int mcpDirectLimit
 ) {
-    public static final int DEFAULT_MCP_DIRECT_LIMIT = 40;
+    public static final int DEFAULT_MCP_DIRECT_LIMIT = 0;
 
     /** 不带 {@code server.public_url} 与 {@code mcp.direct_limit} 的写法。 */
     public CrabConfig(

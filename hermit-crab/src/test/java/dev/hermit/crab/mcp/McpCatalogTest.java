@@ -23,7 +23,7 @@ class McpCatalogTest {
     void parseGuideUriRejectsOverlappingPrefixAndSuffixWithoutThrowing() {
         ConchRegistry registry = new ConchRegistry();
         registry.put(ConchParser.parse(groupedYaml("oa", 1)), Origin.OFFICIAL);
-        McpCatalog catalog = new McpCatalog(registry, (c, a) -> false, () -> false, McpCatalog.DIRECT_LIMIT);
+        McpCatalog catalog = new McpCatalog(registry, (c, a) -> false, () -> false, 40);
 
         assertThat(catalog.guide(ALL_KEY, "hermit://conches/guide")).isEmpty();
         assertThat(catalog.guide(ALL_KEY, "hermit://conches//guide")).isEmpty();
@@ -58,7 +58,7 @@ class McpCatalogTest {
                     return false;
                 },
                 () -> false,
-                McpCatalog.DIRECT_LIMIT);
+                40);
 
         List<McpSchema.Tool> tools = catalog.tools(ALL_KEY, "2025-11-25");
         assertThat(tools).hasSize(2);
@@ -72,7 +72,7 @@ class McpCatalogTest {
         // 12 ungrouped (> TOP_LEVEL_INLINE_LIMIT) + 1 grouped = 13 visible capabilities
         registry.put(ConchParser.parse(groupedYaml("oa", 12)), Origin.OFFICIAL);
 
-        McpCatalog directCatalog = new McpCatalog(registry, (c, a) -> false, () -> false, McpCatalog.DIRECT_LIMIT);
+        McpCatalog directCatalog = new McpCatalog(registry, (c, a) -> false, () -> false, 40);
         assertThat(directCatalog.directory(ALL_KEY)).isFalse();
         String directGuide = directCatalog.guide(ALL_KEY, "hermit://conches/oa/guide").orElseThrow();
         assertThat(directGuide)

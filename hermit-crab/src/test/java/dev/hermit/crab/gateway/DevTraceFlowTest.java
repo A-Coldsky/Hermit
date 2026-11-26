@@ -79,7 +79,7 @@ class DevTraceFlowTest {
         upstream.start();
         CrabRuntime runtime = CrabRuntime.open(
                 new CrabPaths(temp.resolve("crab")),
-                CrabConfig.defaults().withListen("127.0.0.1", 0));
+                CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40));
         CrabHttpServer server = new CrabHttpServer(runtime);
         try {
             server.start();
@@ -286,7 +286,7 @@ class DevTraceFlowTest {
         upstream.start();
         CrabRuntime runtime = CrabRuntime.open(
                 new CrabPaths(temp.resolve("test-login-trace")),
-                CrabConfig.defaults().withListen("127.0.0.1", 0));
+                CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40));
         CrabHttpServer server = new CrabHttpServer(runtime);
         try {
             server.start();
@@ -572,7 +572,7 @@ class DevTraceFlowTest {
     void missingCredentialTrialOmitsTheTraceIdFromBodyAndHeader() throws Exception {
         CrabRuntime runtime = CrabRuntime.open(
                 new CrabPaths(temp.resolve("gap")),
-                CrabConfig.defaults().withListen("127.0.0.1", 0));
+                CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40));
         CrabHttpServer server = new CrabHttpServer(runtime);
         try {
             server.start();

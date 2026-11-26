@@ -132,6 +132,20 @@ class CapabilityGroupsEndToEndTest {
                 """, StandardCharsets.UTF_8);
         assertThat(CrabConfigLoader.load(cfg).mcpDirectLimit()).isEqualTo(0);
 
+        Path unset = temp.resolve("unset.yml");
+        Files.writeString(unset, """
+                server:
+                  port: 7777
+                """, StandardCharsets.UTF_8);
+        assertThat(CrabConfigLoader.load(unset).mcpDirectLimit()).as("默认只给目录工具").isEqualTo(0);
+
+        Path direct = temp.resolve("direct.yml");
+        Files.writeString(direct, """
+                mcp:
+                  direct_limit: 40
+                """, StandardCharsets.UTF_8);
+        assertThat(CrabConfigLoader.load(direct).mcpDirectLimit()).isEqualTo(40);
+
         Path invalid = temp.resolve("bad.yml");
         Files.writeString(invalid, """
                 mcp:
@@ -412,7 +426,7 @@ class CapabilityGroupsEndToEndTest {
     @Test
     void malformedGuideUriReturnsResourceNotFoundInsteadOfInternalError() throws Exception {
         CrabPaths paths = new CrabPaths(temp.resolve("crab-malformed-uri"));
-        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40);
         try (CrabRuntime runtime = CrabRuntime.open(paths, config);
              CrabHttpServer server = new CrabHttpServer(runtime)) {
             server.start();
@@ -437,9 +451,9 @@ class CapabilityGroupsEndToEndTest {
     }
 
     @Test
-    void directLimitZeroExposesDirectoryToolsEvenWithZeroVisibleCapabilities() throws Exception {
+    void defaultConfigExposesDirectoryToolsEvenWithZeroVisibleCapabilities() throws Exception {
         CrabPaths paths = new CrabPaths(temp.resolve("crab-zero-limit"));
-        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(0);
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0);
         try (CrabRuntime runtime = CrabRuntime.open(paths, config);
              CrabHttpServer server = new CrabHttpServer(runtime)) {
             server.start();
@@ -471,12 +485,12 @@ class CapabilityGroupsEndToEndTest {
     @Test
     void directModeGroupedGuideListsAllTopLevelAndOmitsSearchCapabilities() throws Exception {
         CrabPaths directPaths = new CrabPaths(temp.resolve("crab-direct-guide"));
-        CrabConfig directConfig = CrabConfig.defaults().withListen("127.0.0.1", 0);
+        CrabConfig directConfig = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40);
         try (CrabRuntime runtime = CrabRuntime.open(directPaths, directConfig);
              CrabHttpServer server = new CrabHttpServer(runtime)) {
             server.start();
             String baseUrl = "http://127.0.0.1:" + server.port();
-            // 13 ungrouped (> 10) + 5 grouped = 18 visible capabilities (<= default direct_limit 40 -> direct mode)
+            // 13 ungrouped (> 10) + 5 grouped = 18 visible capabilities (<= direct_limit 40 -> direct mode)
             runtime.registry().put(ConchParser.parse(groupedConchYaml("direct_oa", 12)), Origin.OFFICIAL);
             CreatedApiKey key = runtime.admin().createApiKey(
                     "full", ApiKeyScope.explicit(true, Set.of(), Set.of(), Set.of(), false), Actors.CLI);

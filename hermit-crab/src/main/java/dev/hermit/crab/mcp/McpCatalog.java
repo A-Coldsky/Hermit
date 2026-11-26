@@ -460,6 +460,10 @@ final class McpCatalog {
         body.put("idempotent", action.idempotent());
         body.put("inputSchema", action.inputJsonSchema());
         body.put("output", action.output());
+        if (action.tool() != null && action.tool().outputSchema() != null) {
+            // 转发的 MCP 工具没有 output 字段表，返回结构在上游声明的 outputSchema 里。
+            body.put("outputSchema", stripDialect(action.tool().outputSchema()));
+        }
         ArrayList<Map<String, Object>> examples = new ArrayList<>();
         for (Example example : action.examples()) {
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
@@ -1137,6 +1141,7 @@ final class McpCatalog {
         properties.put("idempotent", Map.of("type", "boolean"));
         properties.put("inputSchema", Map.of("type", "object"));
         properties.put("output", Map.of("type", "object"));
+        properties.put("outputSchema", Map.of("type", "object"));
         properties.put("examples", Map.of("type", "array"));
         return objectSchema(properties);
     }
@@ -1292,7 +1297,7 @@ final class McpCatalog {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("name", Map.of("type", "string", "description", "能力名，形如 conch__action"));
         properties.put("arguments", Map.of("type", "object", "description", "能力参数。不包含凭证。"));
-        properties.put("account", accountSchema("可选。覆盖请求头 X-Hermit-Account。"));
+        properties.put("account", accountSchema("可选。选择命名账号，覆盖请求头 X-Hermit-Account。账号选择只写在这里，不放进 arguments。"));
         LinkedHashMap<String, Object> schema = objectSchema(properties);
         schema.put("required", List.of("name"));
         return schema;
@@ -1464,7 +1469,8 @@ final class McpCatalog {
         }
         text.append("规则包：`").append(conch.conch()).append("`\n\n");
         text.append("## 账号\n\n");
-        text.append("用工具参数 `account`（若能力参数已占用该名字，则用 `_account`）或请求头 `X-Hermit-Account` 选择命名账号。");
+        text.append("经 `call_capability` 调用时，用它自己的 `account` 参数选择命名账号（与 `arguments` 并列，不放进 `arguments`）；");
+        text.append("直接调用能力工具时，用工具参数 `account`（若能力参数已占用该名字，则用 `_account`）。也可以用请求头 `X-Hermit-Account`。");
         text.append("参数优先于请求头；都不传则使用该规则包的默认账号。账号名匹配 `")
                 .append(ACCOUNT_PATTERN)
                 .append("`。\n\n");

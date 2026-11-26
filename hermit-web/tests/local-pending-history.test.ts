@@ -292,6 +292,8 @@ describe('本地包历史', () => {
     await flushPromises()
 
     expect(crab.localConchHistory.mock.calls.map((call) => call[0])).toEqual(['local_ping'])
+    await wrapper.find('[data-test="source-tabs"] input[value="local"]').setValue(true)
+    await flushPromises()
     const lists = wrapper.findAll('[data-test="local-history"]')
     expect(lists).toHaveLength(1)
     const versions = lists[0].findAll('[data-test="history-version"]').map((node) => node.text())

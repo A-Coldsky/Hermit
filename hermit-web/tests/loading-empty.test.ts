@@ -262,6 +262,6 @@ describe('Crab 规则包列表', () => {
 
     pending.resolve({ conches: [] })
     await flushPromises()
-    expect(wrapper.text()).toContain('还没有规则包。')
+    expect(wrapper.text()).toContain('还没有订阅规则包。')
   })
 })

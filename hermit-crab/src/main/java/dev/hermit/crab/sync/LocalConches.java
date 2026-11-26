@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -78,9 +79,10 @@ public final class LocalConches {
     public static final Duration PENDING_TTL = Duration.ofMinutes(30);
     /**
      * {@code .history} 里每个包保留的份数。正在使用的 {@code {conch}.yaml} 不占这名额，
-     * 所以这是「当前版本之外的最近 3 份」。启动和 reload 不删；下一次写入在同一把锁里备份后修剪。
+     * 所以这是「当前版本之外的最近 2 份」，连当前一共 3 份。写入在同一把锁里备份后修剪；
+     * 启动和 reload 也修剪，旧安装里多出来的不会留到下一次写入。和当前内容相同的不进历史。
      */
-    static final int HISTORY_KEEP = 3;
+    static final int HISTORY_KEEP = 2;
     /** 带 API Key 的请求不能创建或撤销自动确认，即使同时带了控制台头。 */
     public static final String GRANT_API_KEY = "API Key 不能授权或撤销自动确认。";
 
@@ -428,7 +430,7 @@ public final class LocalConches {
             }
             files.sort(Comparator.comparing((Path path) -> path.getFileName().toString()).reversed());
             ArrayList<HistoryEntry> rows = new ArrayList<>();
-            for (Path file : files) {
+            for (Path file : files.subList(0, Math.min(files.size(), HISTORY_KEEP))) {
                 String name = file.getFileName().toString();
                 String id = name.substring(0, name.length() - SUFFIX.length());
                 rows.add(new HistoryEntry(id, historyVersion(file), historySavedAt(id)));
@@ -702,6 +704,7 @@ public final class LocalConches {
 
     private List<FileResult> scan(String actor, boolean auditChanges, List<String> deletedOut) {
         Path root = paths.localConches().toAbsolutePath().normalize();
+        pruneAllHistory();
         Map<String, ConchDoc> beforeDocs = localDocs();
         Map<String, String> beforeVersions = localVersions();
         Set<String> beforeBroken = Set.copyOf(broken.keySet());
@@ -1030,11 +1033,11 @@ public final class LocalConches {
             ConchDoc before = baseline(doc.conch(), previous);
             ConchDestinations.Boundary boundary = ConchDestinations.between(before, doc);
             String backupId = null;
-            if (previous != null) {
+            if (previous != null && !Arrays.equals(previous, raw)) {
                 String version = before != null && ConchFiles.safeSegment(before.version().toString())
                         ? before.version().toString()
                         : "unknown";
-                backupId = backup(doc.conch(), version, previous);
+                backupId = backup(doc.conch(), version, previous, raw);
             }
             boolean widened = replaced && !boundary.sameBoundary();
             boolean clearSessions = replaced && (widened || boundToIdentity.test(doc.conch()));
@@ -1059,6 +1062,7 @@ public final class LocalConches {
                 deleteUpstreamSecrets(doc.conch());
             }
             pending.remove(doc.conch());
+            dropHistoryEqualTo(doc.conch(), raw);
             return new WriteOutcome(
                     replaced,
                     before == null ? null : before.version().toString(),
@@ -1274,7 +1278,7 @@ public final class LocalConches {
         }
     }
 
-    private String backup(String conch, String version, byte[] previous) {
+    private String backup(String conch, String version, byte[] previous, byte[] incoming) {
         if (!ConchFiles.safeSegment(version)) {
             version = "unknown";
         }
@@ -1303,13 +1307,30 @@ public final class LocalConches {
             throw LocalConchException.invalid("history path escapes local-conches");
         }
         atomicWrite(target, previous);
-        pruneHistory(dir);
+        pruneHistory(dir, incoming);
         String name = target.getFileName().toString();
         return name.substring(0, name.length() - SUFFIX.length());
     }
 
     /** 同一把锁、同一次写入里丢掉最旧的备份，只留 {@link #HISTORY_KEEP} 份。当前 yaml 不在这个目录里。 */
+    /** 读不出来的备份当作不相同，照常参加修剪，不挡住这次写入。 */
+    private static boolean sameBytes(Path file, byte[] expected) {
+        try {
+            return Files.size(file) == expected.length && Arrays.equals(Files.readAllBytes(file), expected);
+        } catch (IOException ex) {
+            return false;
+        }
+    }
+
     private static void pruneHistory(Path dir) {
+        pruneHistory(dir, null);
+    }
+
+    /**
+     * 和 {@code incoming} 内容相同的备份不占名额也不在这里删：回退成功后它由
+     * {@link #dropHistoryEqualTo} 去掉，其余两份都留得住；写入失败时它还在。
+     */
+    private static void pruneHistory(Path dir, byte[] incoming) {
         try (var children = Files.list(dir)) {
             ArrayList<Path> files = new ArrayList<>();
             for (Path child : children.toList()) {
@@ -1319,6 +1340,9 @@ public final class LocalConches {
                 }
                 String name = child.getFileName().toString();
                 if (name.endsWith(SUFFIX) && Files.isRegularFile(child, LinkOption.NOFOLLOW_LINKS)) {
+                    if (incoming != null && sameBytes(child, incoming)) {
+                        continue;
+                    }
                     files.add(child);
                 }
             }
@@ -1328,6 +1352,71 @@ public final class LocalConches {
             }
         } catch (IOException ex) {
             throw new IllegalStateException("local conch history was not pruned");
+        }
+    }
+
+    /** 回退之后历史里那一份和当前内容相同，不再占名额。删不掉只记日志，写入已经完成。 */
+    private void dropHistoryEqualTo(String conch, byte[] current) {
+        try {
+            Path dir = historyDir(conch);
+            Path historyRoot = dir.getParent();
+            if (historyRoot == null
+                    || Files.isSymbolicLink(historyRoot)
+                    || Files.isSymbolicLink(dir)
+                    || !Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
+                return;
+            }
+            try (var children = Files.list(dir)) {
+                for (Path child : children.toList()) {
+                    if (Files.isSymbolicLink(child)
+                            || !child.getFileName().toString().endsWith(SUFFIX)
+                            || !Files.isRegularFile(child, LinkOption.NOFOLLOW_LINKS)) {
+                        continue;
+                    }
+                    if (sameBytes(child, current)) {
+                        Files.deleteIfExists(child);
+                    }
+                }
+            }
+        } catch (IOException | RuntimeException ex) {
+            LOG.warning("local conch history was not deduplicated: " + ex.getClass().getName());
+        }
+    }
+
+    /** 启动和 reload 时把每个包的历史修剪到 {@link #HISTORY_KEEP} 份。失败只记日志，不挡加载。 */
+    private void pruneAllHistory() {
+        Path history = paths.localConches().toAbsolutePath().normalize().resolve(".history");
+        if (Files.isSymbolicLink(history) || !Files.isDirectory(history, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        try (var children = Files.list(history)) {
+            for (Path dir : children.toList()) {
+                if (!Files.isSymbolicLink(dir) && Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
+                    dropHistoryEqualToCurrent(history.getParent(), dir.getFileName().toString());
+                    pruneHistory(dir);
+                }
+            }
+        } catch (IOException | RuntimeException ex) {
+            LOG.warning("local conch history was not pruned: " + ex.getClass().getName());
+        }
+    }
+
+    /** 旧版本留下的、和当前内容相同的备份先去掉，不让它挤掉一份真正能回退的版本。 */
+    private void dropHistoryEqualToCurrent(Path root, String conch) {
+        if (!ConchValidator.isConchName(conch) || !ConchFiles.safeSegment(conch)) {
+            return;
+        }
+        Path current = root.resolve(conch + SUFFIX);
+        if (Files.isSymbolicLink(current) || !Files.isRegularFile(current, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        try {
+            if (Files.size(current) > MAX_BYTES) {
+                return;
+            }
+            dropHistoryEqualTo(conch, Files.readAllBytes(current));
+        } catch (IOException ex) {
+            LOG.warning("local conch history was not deduplicated: " + ex.getClass().getName());
         }
     }
 

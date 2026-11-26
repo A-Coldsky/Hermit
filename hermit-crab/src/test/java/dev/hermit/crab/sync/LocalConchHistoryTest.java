@@ -27,7 +27,7 @@ class LocalConchHistoryTest {
     java.nio.file.Path temp;
 
     @Test
-    void historyKeepsThreePreviousVersionsAndSurvivesDelete() throws Exception {
+    void historyKeepsTwoPreviousVersionsAndSurvivesDelete() throws Exception {
         MutableClock clock = new MutableClock(Instant.parse("2026-11-18T00:00:00Z"));
         try (OpenCrab crab = OpenCrab.open(temp.resolve("keep"))) {
             LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
@@ -41,9 +41,9 @@ class LocalConchHistoryTest {
             }
             List<LocalConches.HistoryEntry> history = local.history("hist_ping");
             assertThat(history).hasSize(LocalConches.HISTORY_KEEP);
-            assertThat(LocalConches.HISTORY_KEEP).isEqualTo(3);
+            assertThat(LocalConches.HISTORY_KEEP).isEqualTo(2);
             assertThat(history.get(0).version()).isEqualTo("1.0.10");
-            assertThat(history.get(history.size() - 1).version()).isEqualTo("1.0.8");
+            assertThat(history.get(history.size() - 1).version()).isEqualTo("1.0.9");
             assertThat(history).extracting(LocalConches.HistoryEntry::version).doesNotContain("1.0.0");
             assertThat(history.get(0).id()).startsWith("20261118").doesNotContain(".yaml");
             assertThat(history.get(0).savedAt()).isNotNull();
@@ -60,7 +60,7 @@ class LocalConchHistoryTest {
     }
 
     @Test
-    void startupLeavesExtraHistoryUntilTheNextWrite() throws Exception {
+    void startupPrunesExtraHistoryFromOlderInstalls() throws Exception {
         MutableClock clock = new MutableClock(Instant.parse("2026-11-19T00:00:00Z"));
         try (OpenCrab crab = OpenCrab.open(temp.resolve("seeded"))) {
             LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
@@ -73,21 +73,107 @@ class LocalConchHistoryTest {
                         LocalConchBehaviorTest.ping("hist_ping", "0." + i + ".0"));
             }
             local.loadStartup();
-            assertThat(local.history("hist_ping")).hasSize(5);
+            assertThat(local.history("hist_ping")).extracting(LocalConches.HistoryEntry::version)
+                    .containsExactly("0.5.0", "0.4.0");
+            try (var left = Files.list(dir)) {
+                assertThat(left.count()).isEqualTo(2);
+            }
 
             local.importBytes(
                     LocalConchBehaviorTest.ping("hist_ping", "1.0.1").getBytes(StandardCharsets.UTF_8),
                     Actors.CLI,
                     true);
             List<LocalConches.HistoryEntry> history = local.history("hist_ping");
-            assertThat(history).hasSize(3);
             assertThat(history).extracting(LocalConches.HistoryEntry::version)
-                    .containsExactly("1.0.0", "0.5.0", "0.4.0");
+                    .containsExactly("1.0.0", "0.5.0");
             LocalConches.HistoryEntry oldest = history.get(history.size() - 1);
             LocalConches.ImportResult restored = local.restore("hist_ping", oldest.id(), Actors.CONSOLE);
-            assertThat(restored.version()).isEqualTo("0.4.0");
-            assertThat(local.packages()).extracting(pkg -> pkg.version()).containsExactly("0.4.0");
-            assertThat(local.history("hist_ping")).hasSize(LocalConches.HISTORY_KEEP);
+            assertThat(restored.version()).isEqualTo("0.5.0");
+            assertThat(local.packages()).extracting(pkg -> pkg.version()).containsExactly("0.5.0");
+            assertThat(local.history("hist_ping")).extracting(LocalConches.HistoryEntry::version)
+                    .containsExactly("1.0.1", "1.0.0");
+        }
+    }
+
+    @Test
+    void startupDropsALegacyCopyOfTheCurrentBeforePruning() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-23T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("legacy-dup"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            String current = LocalConchBehaviorTest.ping("hist_ping", "1.0.0");
+            local.importBytes(current.getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            java.nio.file.Path dir = crab.paths.localConches().resolve(".history").resolve("hist_ping");
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("20261122000000003-1.0.0.yaml"), current);
+            Files.writeString(dir.resolve("20261122000000002-0.2.0.yaml"), LocalConchBehaviorTest.ping("hist_ping", "0.2.0"));
+            Files.writeString(dir.resolve("20261122000000001-0.1.0.yaml"), LocalConchBehaviorTest.ping("hist_ping", "0.1.0"));
+            local.loadStartup();
+            assertThat(local.history("hist_ping")).extracting(LocalConches.HistoryEntry::version)
+                    .containsExactly("0.2.0", "0.1.0");
+        }
+    }
+
+    @Test
+    void sameContentAndRestoreDoNotTakeAHistorySlot() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-20T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("dedupe"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            byte[] first = LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8);
+            local.importBytes(first, Actors.CLI);
+            clock.advance(Duration.ofMillis(1));
+            LocalConches.ImportResult same = local.importBytes(first, Actors.CLI, true);
+            assertThat(same.replaced()).isTrue();
+            assertThat(local.history("hist_ping")).isEmpty();
+
+            clock.advance(Duration.ofMillis(1));
+            local.importBytes(
+                    LocalConchBehaviorTest.ping("hist_ping", "1.0.1").getBytes(StandardCharsets.UTF_8), Actors.CLI, true);
+            List<LocalConches.HistoryEntry> history = local.history("hist_ping");
+            assertThat(history).extracting(LocalConches.HistoryEntry::version).containsExactly("1.0.0");
+
+            clock.advance(Duration.ofMillis(1));
+            local.restore("hist_ping", history.get(0).id(), Actors.CONSOLE);
+            assertThat(local.packages()).extracting(pkg -> pkg.version()).containsExactly("1.0.0");
+            assertThat(local.history("hist_ping")).extracting(LocalConches.HistoryEntry::version)
+                    .containsExactly("1.0.1");
+        }
+    }
+
+    @Test
+    void restoringTheNewestBackupKeepsTheOlderOne() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-21T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("newest"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            local.importBytes(LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8), Actors.CLI);
+            for (int i = 1; i <= 2; i++) {
+                clock.advance(Duration.ofMillis(1));
+                local.importBytes(
+                        LocalConchBehaviorTest.ping("hist_ping", "1.0." + i).getBytes(StandardCharsets.UTF_8),
+                        Actors.CLI,
+                        true);
+            }
+            List<LocalConches.HistoryEntry> history = local.history("hist_ping");
+            assertThat(history).extracting(LocalConches.HistoryEntry::version).containsExactly("1.0.1", "1.0.0");
+            clock.advance(Duration.ofMillis(1));
+            local.restore("hist_ping", history.get(0).id(), Actors.CONSOLE);
+            assertThat(local.history("hist_ping")).extracting(LocalConches.HistoryEntry::version)
+                    .containsExactly("1.0.2", "1.0.0");
+        }
+    }
+
+    @Test
+    void identicalSaveDoesNotTouchALinkedHistoryRoot() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-22T00:00:00Z"));
+        try (OpenCrab crab = OpenCrab.open(temp.resolve("linked"))) {
+            LocalConches local = new LocalConches(crab.paths, new ConchRegistry(), crab.dataSource, () -> false, clock);
+            byte[] raw = LocalConchBehaviorTest.ping("hist_ping", "1.0.0").getBytes(StandardCharsets.UTF_8);
+            local.importBytes(raw, Actors.CLI);
+            java.nio.file.Path outside = temp.resolve("outside").resolve("hist_ping");
+            Files.createDirectories(outside);
+            Files.write(outside.resolve("keep.yaml"), raw);
+            Files.createSymbolicLink(crab.paths.localConches().resolve(".history"), outside.getParent());
+            local.importBytes(raw, Actors.CLI, true);
+            assertThat(outside.resolve("keep.yaml")).exists();
         }
     }
 

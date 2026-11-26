@@ -216,7 +216,7 @@ curl -X POST "http://127.0.0.1:7777/api/-/files?name=a.pdf" \
 | DELETE | `/local-conches/{conch}/pending` | 拒绝这条待确认覆盖，不写文件，不写审计。成功 `{conch, rejected: true}`。没有这条时 404 |
 | GET | `/local-conches/grants` | 这次开发者模式里已经勾选「本次开发者模式内不再询问」的包，按包名排序。每项 `{conch, since}`，`since` 是 ISO-8601。没有授权时 `grants` 为空。只在内存：关掉开发者模式、24 小时到期、撤销或重启后为空。开发者模式关着时读取会先清空 |
 | DELETE | `/local-conches/grants/{conch}` | 撤销这一个包的自动确认。成功 `{conch, revoked: true}`。没有这项授权是 404「没有这项自动确认。」。带着 `Authorization: Bearer` 或非空 `X-Hermit-Key` 是 403 `FORBIDDEN`，message 为「API Key 不能授权或撤销自动确认。」，授权还在。没有全局撤销 |
-| GET | `/local-conches/{conch}/history` | 这个包的备份，最近的在前，最多 3 条。这是当前正在使用的 `{conch}.yaml` 之外的最近 3 份。每项 `{id, version, savedAt}`。`id` 是文件名去掉 `.yaml`。包已经删除时，历史还在就能列出。没有历史时 `history` 为空。启动和 reload 不删除多余备份；下一次写入在同一把锁里备份后删掉最旧的。已经多于 3 份的旧安装也是下一次写入才修剪。回退只对还留着的那几份 |
+| GET | `/local-conches/{conch}/history` | 这个包的备份，最近的在前，最多 2 条。这是当前正在使用的 `{conch}.yaml` 之外的最近 3 份。每项 `{id, version, savedAt}`。`id` 是文件名去掉 `.yaml`。包已经删除时，历史还在就能列出。没有历史时 `history` 为空。启动和 reload 不删除多余备份；下一次写入在同一把锁里备份后删掉最旧的。已经多于 3 份的旧安装也是下一次写入才修剪。回退只对还留着的那几份 |
 | POST | `/local-conches/{conch}/history/{id}/restore` | 用这份历史覆盖当前文件。覆盖前先备份当前版本；地址范围扩大时先清掉该包全部账号的会话和登录快照，写入成功后再清一次。成功形状与导入相同。没有这份历史是 404「没有这份历史。」。编号含空白、`..` 或其它非法字符是 400「历史编号无效。」 |
 | POST | `/local-conches/{conch}/mcp/refresh` | 开发者模式打开时，用上游 `tools/list` 重写本地 MCP 包。查询参数 `account` 可省略，表示默认账号。不需要 JSON 正文。成功 `data` 为 `{version, added, removed, changed, traceId}`，名字是本地 action。`version` 不变。`traceId` 指向 `action` 为 `mcp_refresh` 的 JSON-RPC 追踪，没有对应调用记录。门禁与失败见下方「刷新」 |
 | GET | `/files` | 文件暂存区：`{settings, usage, files}`。`files` 每项 `{fileId, name, size, mime, expiresAt, createdAt, shared, apiKeyId}`，不带下载链接 |

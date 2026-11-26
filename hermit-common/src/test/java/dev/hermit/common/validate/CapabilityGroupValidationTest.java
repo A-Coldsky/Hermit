@@ -26,7 +26,7 @@ class CapabilityGroupValidationTest {
                 min_crab_version: %s
                 base_url: http://127.0.0.1:8080
                 title: 示例系统
-                description: 测试分组
+                description: 测试分组，用于校验测试
                 credentials: {}
                 %s
                 actions:
@@ -39,7 +39,7 @@ class CapabilityGroupValidationTest {
         return """
                   %s:
                 %s    title: 能力 %s
-                    description: 说明 %s
+                    description: 用于校验测试的说明 %s
                     method: GET
                     idempotent: true
                     mcp: {expose: true, read_only: true}
@@ -61,7 +61,7 @@ class CapabilityGroupValidationTest {
                 groups:
                   approval:
                     title: 审批管理
-                    description: 流程审批
+                    description: 流程审批，用于校验测试
                     children:
                       leave:
                         title: 请假审批
@@ -251,7 +251,7 @@ class CapabilityGroupValidationTest {
                 driver: mcp
                 min_crab_version: 1.10.0
                 title: 客户系统
-                description: 源站 MCP
+                description: 源站 MCP，用于校验测试
                 credentials: {}
                 upstream:
                   url: https://crm.intra.example.com/mcp
@@ -278,7 +278,7 @@ class CapabilityGroupValidationTest {
                   ping_crm:
                     tool: ping
                     title: 健康探测
-                    description: 顶层直挂能力
+                    description: 顶层直挂能力，用于校验测试
                     input_schema: {type: object}
                     examples:
                       - input: {}

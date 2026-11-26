@@ -26,7 +26,7 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials: {}
                 auth:
                   steps:
@@ -40,7 +40,7 @@ class ConchValidatorTest {
                 actions:
                   ping:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       ok: {type: string, description: 结果}
                     examples:
@@ -94,7 +94,7 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials: {}
                 auth:
                   steps:
@@ -104,7 +104,7 @@ class ConchValidatorTest {
                 actions:
                   ping:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       expected: { type: string, description: 期望状态 }
                       flag: { type: boolean, description: 是否可选 }
@@ -202,12 +202,12 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials: {}
                 actions:
                   ping:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       ok: { type: string, description: 结果 }
                     examples:
@@ -232,12 +232,12 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials: {}
                 actions:
                   ping:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       ok: {type: string, description: 结果}
                     examples:
@@ -342,12 +342,12 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials: {}
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                     output:
@@ -365,6 +365,52 @@ class ConchValidatorTest {
                 .containsExactly("actions.list_todo.related[0]", "actions.list_todo.related[1]");
         assertThat(result.warnings()).extracting(ValidationIssue::message)
                 .containsExactly("related 指向不存在的能力 approve", "related 指向不存在的能力 list_done");
+    }
+
+    @Test
+    void vagueDescriptionsWarnWithoutBlockingSave() {
+        ValidationResult result = ConchValidator.validate(ConchParser.parse("""
+                conch: sample_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:8080
+                title: 集团 OA
+                description: 集团 oa
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 查询待办
+                    description: 待办。
+                    input: {}
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: {}
+                        output: { items: ok }
+                    notes: 注意
+                    related: []
+                  list_done:
+                    title: 查询已办
+                    description: 查询已办列表
+                    input: {}
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: {}
+                        output: { items: ok }
+                    notes: 注意
+                    related: []
+                """), ConchValidator.Context.of(null));
+        assertThat(result.errors()).isEmpty();
+        assertThat(result.warnings()).extracting(ValidationIssue::code, ValidationIssue::path)
+                .containsExactly(
+                        tuple(ValidationCodes.VAGUE_DESCRIPTION, "description"),
+                        tuple(ValidationCodes.VAGUE_DESCRIPTION, "actions.list_todo.description"));
+        assertThat(result.warnings()).extracting(ValidationIssue::message)
+                .containsExactly(
+                        "description 和 title 相同；其它 AI 靠它判断该不该用，请写清能做什么、用户平时怎么称呼",
+                        "description 不足 6 个字；其它 AI 靠它判断该不该用，请写清能做什么、用户平时怎么称呼");
     }
 
     @Test
@@ -406,7 +452,7 @@ class ConchValidatorTest {
                     - request: { method: GET, path: /login.aspx }
                 actions:
                   list_todo:
-                    description: 查询待办列表
+                    description: 查询待办列表，用于校验测试
                     input:
                       page: { type: integer, default: 1 }
                     output:
@@ -476,13 +522,13 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true }
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                       token: { type: string, description: 令牌 }
@@ -521,13 +567,13 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true }
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                     output:
@@ -622,7 +668,7 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true }
                 config:
@@ -631,7 +677,7 @@ class ConchValidatorTest {
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                     output:
@@ -660,7 +706,7 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true }
                 config:
@@ -668,7 +714,7 @@ class ConchValidatorTest {
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                     output:
@@ -793,12 +839,12 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials: {}
                 actions:
                   %s:
                     title: 标题
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                     output:
@@ -818,13 +864,13 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true }
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                     examples:
@@ -848,13 +894,13 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true }
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                     output:
@@ -890,7 +936,7 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true, label: 密码 }
                 auth:
@@ -906,7 +952,7 @@ class ConchValidatorTest {
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                     output:
@@ -935,7 +981,7 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true, label: 密码 }
                 auth:
@@ -945,7 +991,7 @@ class ConchValidatorTest {
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       items: { type: string, description: 结果, value: ok }
                     examples:
@@ -990,13 +1036,13 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true }
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码, default: "{{input.other}}" }
                     output:
@@ -1075,7 +1121,7 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials: {}
                 auth:
                   steps:
@@ -1090,7 +1136,7 @@ class ConchValidatorTest {
                 actions:
                   first:
                     title: 甲
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       %s: { type: string, description: 字段 }
                     output:
@@ -1102,7 +1148,7 @@ class ConchValidatorTest {
                     related: []
                   second:
                     title: 乙
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       %s
                     output:
@@ -1122,12 +1168,12 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials: {}
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     input:
                       page: { type: integer, description: 页码 }
                     output:
@@ -1151,13 +1197,13 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 base_url: http://my_host.corp/a
                 credentials: {}
                 actions:
                   ping:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       ok: {type: string, description: 结果}
                     examples:
@@ -1181,13 +1227,13 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 base_url: https://例子.测试/
                 credentials: {}
                 actions:
                   ping:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       ok: {type: string, description: 结果}
                     examples:
@@ -1209,7 +1255,7 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 base_url: https://hr/
                 credentials: {}
                 config:
@@ -1223,7 +1269,7 @@ class ConchValidatorTest {
                 actions:
                   ping:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       ok: {type: string, description: 结果}
                     examples:
@@ -1255,7 +1301,7 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.0.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 base_url: https://hr.corp./
                 credentials: {}
                 config:
@@ -1263,7 +1309,7 @@ class ConchValidatorTest {
                 actions:
                   ping:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       ok: {type: string, description: 结果}
                     examples:
@@ -1408,14 +1454,14 @@ class ConchValidatorTest {
                 driver: http
                 min_crab_version: 1.3.0
                 title: 标题
-                description: 说明
+                description: 用于校验测试的说明文字
                 credentials:
                   password: { type: secret, required: true, label: 密码 }
                 %s
                 actions:
                   list_todo:
                     title: 查询
-                    description: 说明
+                    description: 用于校验测试的说明文字
                     output:
                       %s
                     examples:

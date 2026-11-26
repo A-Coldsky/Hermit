@@ -357,12 +357,11 @@ final class McpCatalog {
             boolean ungrouped,
             boolean localCaller
     ) {
-        String needle = query == null ? "" : query.toLowerCase(Locale.ROOT).trim();
+        List<String> terms = terms(query);
         String groupFilter = group == null ? "" : group.trim();
-        boolean hasQuery = !needle.isEmpty();
+        boolean hasQuery = !terms.isEmpty();
         boolean hasGroup = !groupFilter.isEmpty();
-        ArrayList<Map<String, Object>> matches = new ArrayList<>();
-        int total = 0;
+        ArrayList<Hit> hits = new ArrayList<>();
         if (hasQuery || hasGroup || ungrouped) {
             for (CapabilityRef ref : visible(principal)) {
                 if (conch != null && !conch.isBlank() && !ref.conch().conch().equals(conch)) {
@@ -374,42 +373,90 @@ final class McpCatalog {
                 if (hasGroup && !CapabilityGroups.matches(ref.action().group(), groupFilter)) {
                     continue;
                 }
-                if (hasQuery && !haystack(ref.conch(), ref.action()).contains(needle)) {
+                Hit hit = Hit.of(
+                        terms,
+                        ref.toolName(),
+                        haystack(ref.conch(), ref.action(), ref.toolName()),
+                        conchHaystack(ref.conch()));
+                if (hasQuery && hit.matched() == 0) {
                     continue;
                 }
-                total++;
-                // Result window, not an input pageSize. Callers cannot pass page or pageSize.
-                if (matches.size() < 20) {
-                    LinkedHashMap<String, Object> row = new LinkedHashMap<>();
-                    row.put("name", ref.toolName());
-                    row.put("title", ref.action().title());
-                    row.put("readOnly", CapabilityHttp.readOnly(ref.action()));
-                    if (ref.action().group() != null) {
-                        row.put("group", ref.action().group());
-                        row.put("groupTitle", CapabilityGroups.displayTitle(ref.conch(), ref.action().group()));
-                    }
-                    matches.add(row);
+                LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+                row.put("name", ref.toolName());
+                row.put("title", ref.action().title());
+                row.put("readOnly", CapabilityHttp.readOnly(ref.action()));
+                if (ref.action().group() != null) {
+                    row.put("group", ref.action().group());
+                    row.put("groupTitle", CapabilityGroups.displayTitle(ref.conch(), ref.action().group()));
                 }
+                hits.add(hit.with(row));
             }
         }
         boolean devConch = DEV_CONCH.equals(conch);
         if (!hasGroup && (hasQuery || ungrouped) && (conch == null || conch.isBlank() || devConch)) {
             for (McpSchema.Tool tool : devTools(principal, false, localCaller)) {
-                String text = (tool.name() + " " + tool.description()).toLowerCase(Locale.ROOT);
                 // 不点名这个包时只按工具自己的名字和说明匹配；点名后空查询列出全部。
-                if (hasQuery && !text.contains(needle)) {
+                Hit hit = Hit.of(
+                        terms, tool.name(), (tool.name() + " " + tool.description()).toLowerCase(Locale.ROOT), "");
+                if (hasQuery && hit.matched() == 0) {
                     continue;
                 }
-                total++;
-                if (matches.size() < 20) {
-                    matches.add(devSummary(tool));
-                }
+                hits.add(hit.with(devSummary(tool)));
             }
+        }
+        if (hasQuery) {
+            // 有能力命中全部词时只给这些；否则退到命中部分词的，命中多的在前。同分保持原来的顺序。
+            int best = hits.stream().mapToInt(Hit::matched).max().orElse(0);
+            if (best == terms.size()) {
+                hits.removeIf(hit -> hit.matched() < best);
+            }
+            hits.sort(java.util.Comparator.comparingInt(Hit::matched).reversed()
+                    .thenComparing(java.util.Comparator.comparingInt(Hit::inCapability).reversed()));
+        }
+        ArrayList<Map<String, Object>> matches = new ArrayList<>();
+        // Result window, not an input pageSize. Callers cannot pass page or pageSize.
+        for (Hit hit : hits.subList(0, Math.min(20, hits.size()))) {
+            matches.add(hit.row());
         }
         LinkedHashMap<String, Object> result = new LinkedHashMap<>();
         result.put("matches", matches);
-        result.put("total", total);
+        result.put("total", hits.size());
         return result;
+    }
+
+    /** 查询按空白拆成词，去重，最多取前 8 个。 */
+    private static List<String> terms(String query) {
+        if (query == null) {
+            return List.of();
+        }
+        java.util.LinkedHashSet<String> terms = new java.util.LinkedHashSet<>();
+        for (String term : query.toLowerCase(Locale.ROOT).trim().split("\\s+")) {
+            if (!term.isEmpty() && terms.size() < 8) {
+                terms.add(term);
+            }
+        }
+        return List.copyOf(terms);
+    }
+
+    /** matched：命中了几个词；inCapability：其中几个是能力自己的文字命中的（其余只命中规则包的名字或说明）。 */
+    private record Hit(int matched, int inCapability, Map<String, Object> row) {
+        static Hit of(List<String> terms, String toolName, String capabilityText, String conchText) {
+            int matched = 0;
+            int inCapability = 0;
+            for (String term : terms) {
+                if (capabilityText.contains(term) || toolName.toLowerCase(Locale.ROOT).equals(term)) {
+                    matched++;
+                    inCapability++;
+                } else if (conchText.contains(term)) {
+                    matched++;
+                }
+            }
+            return new Hit(matched, inCapability, null);
+        }
+
+        Hit with(Map<String, Object> row) {
+            return new Hit(matched, inCapability, row);
+        }
     }
 
     Optional<Map<String, Object>> describe(ApiKeyPrincipal principal, String name) {
@@ -1279,7 +1326,7 @@ final class McpCatalog {
 
     private static Map<String, Object> searchSchema() {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
-        properties.put("query", Map.of("type", "string", "description", "可选（未指定 group/ungrouped 时必填）。匹配标题、说明、分组、备注和参数说明"));
+        properties.put("query", Map.of("type", "string", "description", "可选（未指定 group/ungrouped 时必填）。用空格分开多个关键词；匹配规则包的名字、标题、说明，以及能力的名字、标题、说明、分组、备注和参数说明。全部关键词都命中的能力优先，没有时返回命中部分关键词的"));
         properties.put("conch", Map.of("type", "string", "description", "可选。只搜索或浏览这个规则包"));
         properties.put("group", Map.of("type", "string", "description", "可选。按分组筛选，形如 approval 或 approval/leave（一级分组包含其二级子分组）"));
         properties.put("ungrouped", Map.of("type", "boolean", "description", "可选。设为 true 时只列出顶层未分组能力，不能与 group 同时使用"));
@@ -1303,8 +1350,19 @@ final class McpCatalog {
         return schema;
     }
 
-    private static String haystack(ConchDoc conch, Action action) {
+    private static String conchHaystack(ConchDoc conch) {
         StringBuilder text = new StringBuilder();
+        append(text, conch.conch());
+        append(text, conch.title());
+        append(text, conch.description());
+        return text.toString().toLowerCase(Locale.ROOT);
+    }
+
+    private static String haystack(ConchDoc conch, Action action, String toolName) {
+        StringBuilder text = new StringBuilder();
+        // 只放「__」后面的能力名：工具全名带规则包名，放进来会让包名的命中算成能力自己的命中。
+        int split = toolName.indexOf("__");
+        append(text, split < 0 ? toolName : toolName.substring(split + 2));
         append(text, action.title());
         append(text, action.description());
         append(text, action.notes());

@@ -250,7 +250,7 @@ actions:
 | `conch`、action 名、分组名 | `^[a-z][a-z0-9_]{1,63}$` |
 | `version`、`min_crab_version` | SemVer。当前 Crab 兼容版本为 1.13.0。`driver: mcp` 还要求不低于 1.1.0。用了 `scripts` 或 script 的 `use` 时还要求不低于 1.2.0。用了 `login` 或非空 `auth.cookies` 时不低于 1.3.0。用了 `ask` 时不低于 1.4.0。需要 query 的 URL 编码时写 1.5.0；只写 `query_style` 不必抬高，旧 Crab 会忽略它。用了引号下标时不低于 1.6.0。用了 request 的 `body` 或 `xml_escape` 时不低于 1.7.0。headers 里声明 Content-Type 盖过 form/json 的默认值，不必因此抬高。`driver: http` 用了 `type: file` 入参、request 的 `multipart` 或 `download` 时不低于 1.8.0（`driver: mcp` 不能用）。用了 `if`、`repeat`、request 的 `retry` 或 `auth.concurrent_reads` 时不低于 1.9.0；不低于 1.9.0 的包里 request、extract、assert 的未知键是错误（更低的包仍是警告）。用了 `groups` 或能力的 `group` 时不低于 1.10.0。`driver: http` 用了 `auth.origins` 时不低于 1.11.0（`driver: mcp` 不能用）。`driver: http` 用了 `auth.expired_when`、`auth.alive_check.expect` 或 `assert` 的 `on_fail: session_expired` / 变量断言键（`equals`、`not_equals`、`present`、`not_present`）时不低于 1.12.0（`driver: mcp` 不能用） |
 | `driver` | `http` 或 `mcp`。mcp 的字段见「MCP 上游包」。Crab 按 `headers` 转发，也做 `oauth` 的 PKCE 登录、令牌保存和刷新。开发者模式打开时，本地 MCP 包可以刷新 `tools/list` |
-| `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求 |
+| `title`、`description` | Conch/action 均需要；输入参数和输出说明也有描述要求。其它 AI 靠这些文字找到规则包和能力，写法见「让其他 AI 找得到」 |
 | `credentials` | 必须显式声明，无凭证时写 `{}`；遗漏会报错 |
 | `config` | 可选字段映射；字段支持默认值；不用于保存秘密 |
 | `auth.steps` | 登录步骤；可省略；没有登录步骤也会创建账号会话 |
@@ -277,6 +277,33 @@ actions:
 Action 还支持 `group`、`method`、`input`、`output`、`steps`、`idempotent`、`examples`、`notes`、`related`、`mcp`。HTTP 包缺 examples 是校验错误。mcp 包缺 examples 改为警告，见「MCP 上游包」。notes/related 等说明质量问题可能产生警告。不写 related 键时警告是「缺少 related」；写成 `related: []` 表示没有关联能力，不产生这条警告。`related: null` 与省略相同，仍是「缺少 related」。related 指向包内没有的能力时警告是「related 指向不存在的能力 …」，发布仍然可以通过。Crab 把 related 交给 Agent：直接工具说明末尾多一行「相关能力：conch__action、…」，`describe_capability` 返回 `related` 数组，使用指南里每个能力多一行「相关能力」。只写出同一规则包里当前 Key 看得到的能力；指向自己、不存在、未暴露、已停用或没有权限的名字不写。上面的 `sample_oa` 只有 `list_todo`，所以 `related` 写成 `[]`。
 
 输入参数可用 `type`、`description`、`default`、`enum`、`minimum`、`maximum`、`items`、`required`；由输入层转换并按生成的 JSON Schema 校验。生成的 schema 含 `additionalProperties: false`。GET 查询参数以字符串进入，数值/布尔转换由输入层处理。缺必填、类型无法转换、小于 `minimum` 或大于 `maximum`（例如负页码、过大的 `pageSize`），以及未声明字段，都会抛出输入错误，最终是 `INVALID_INPUT`，不会把越界值夹进范围内、也不会丢掉多余字段再当成功。HTTP 网关和 MCP 走同一条校验，所以两边相同。MCP 在校验前去掉账号选择（直接工具的 `account`，或能力入参已占用该名字时的 `_account`）。MCP 工具失败时 `isError` 为 true，`structuredContent.error` 含 `code`、`message`、`hint`、`traceId`，能定位到单个字段时还有 `field`。`traceId` 与响应头 `X-Hermit-Trace` 相同。未声明 `minimum` / `maximum` 的整数没有额外的隐式上下界。页码、每页条数这类参数应写明范围，否则负值会原样传给上游，由老系统自行处理；上面 `sample_oa` 的 `page` 声明了 `minimum: 1`。
+
+## 让其他 AI 找得到
+
+写好的规则包是给别的 AI 调用的。Crab 的 MCP 默认是目录模式：AI 的工具列表里只有 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个工具，看不到任何一个能力。它只能靠你写的文字判断「这里有没有用户要的系统和能力」，写得含糊就搜不到，也就不会调用。
+
+AI 分两步找：
+
+| 步骤 | AI 看到什么 | 来自哪些字段 |
+| --- | --- | --- |
+| `list_systems` | 每个规则包一行 | 包的 `conch`、`title`、`description`，以及 `groups` 的 `title`、`description` |
+| `search_capabilities` | 命中关键词的能力，最多 20 条 | 包的 `conch`、`title`、`description`；能力的名字、`title`、`description`、`notes`、所属分组的名字、`title`、`description`、各入参的 `description` |
+
+搜索是不区分大小写的字面匹配，不懂同义词：查询按空格拆成关键词，逐个看有没有出现在上面的文字里。全部关键词都命中的能力优先返回；没有时返回命中部分关键词的，命中多的在前。用户说「休假」而你只写了「请假」，就搜不到。`examples`、`output`、`tags` 不参与搜索。
+
+写法：
+
+- **包的 `title`**：写用户平时叫的系统名，例如「集团 OA」，不要写内部代号或域名。
+- **包的 `description`**：一两句话写清这是什么系统、能办哪些事，带上常见叫法和英文缩写，例如「集团 OA（办公自动化、协同办公）：请假、报销、公文审批和待办查询」。
+- **能力的 `title`**：动词加对象，例如「提交请假申请」，不要只写「提交」「查询」。
+- **能力的 `description`**：写用户会怎么说这件事，带上同义说法，例如「提交请假（休假、调休、年假）申请，提交后进入上级审批」。不要和 `title` 一样。
+- **入参的 `description`**：写业务含义和格式，例如「开始日期，yyyy-MM-dd」。
+- **`notes`**：写调用前要知道的事，例如「会真实提交，提交前先向用户确认」「先用 list_leave_types 取假别编号」。
+- **分组**：能力超过 10 个时用 `groups` 按业务分组，并给分组写 `description`。未分组的能力不超过 10 个时，`list_systems` 会直接列出它们的名字和标题；超过后 AI 只能靠搜索。
+
+不要为了被搜到而堆砌无关的词，也不要在说明里写给 AI 的指令或网址（`driver: mcp` 的包会因此得到 `MCP_DESCRIPTION` 警告）。
+
+校验会对两种情况给出警告 `VAGUE_DESCRIPTION`（不阻止保存和发布）：包或能力的 `description` 和 `title` 相同，或不足 6 个字。没有警告不代表写得好，保存后用 `search_capabilities` 按用户可能说的几种说法各搜一次，确认能搜到。
 
 ## 能力分组
 

@@ -121,6 +121,7 @@ public final class ConchValidator {
         if (blank(doc.description())) {
             errors.add(issue(ValidationCodes.MISSING_DESCRIPTION, "description", "缺少 description"));
         }
+        checkVague(doc.title(), doc.description(), "description", warnings);
         if (doc.credentials() == null && !AuthenticatorChecks.uses(doc)) {
             errors.add(issue(ValidationCodes.MISSING_CREDENTIALS, "credentials", "缺少 credentials"));
         }
@@ -391,6 +392,7 @@ public final class ConchValidator {
         if (blank(action.description())) {
             errors.add(issue(ValidationCodes.MISSING_DESCRIPTION, path + ".description", "缺少 description"));
         }
+        checkVague(action.title(), action.description(), path + ".description", warnings);
         Set<String> inputFields = action.input().keySet();
         for (Map.Entry<String, ParamSpec> param : action.input().entrySet()) {
             String paramPath = path + ".input." + param.getKey();
@@ -444,6 +446,27 @@ public final class ConchValidator {
             warnings.add(issue(ValidationCodes.MISSING_NOTES, path + ".notes", "缺少 notes"));
         }
         checkRelated(action, doc, path, warnings);
+    }
+
+    /** description 不足这么多个字时给 {@link ValidationCodes#VAGUE_DESCRIPTION} 警告。 */
+    public static final int MIN_DESCRIPTION_CHARS = 6;
+
+    private static void checkVague(String title, String description, String path, List<ValidationIssue> warnings) {
+        if (blank(description)) {
+            return;
+        }
+        String text = description.trim();
+        if (!blank(title) && text.equalsIgnoreCase(title.trim())) {
+            warnings.add(issue(
+                    ValidationCodes.VAGUE_DESCRIPTION,
+                    path,
+                    "description 和 title 相同；其它 AI 靠它判断该不该用，请写清能做什么、用户平时怎么称呼"));
+        } else if (text.codePointCount(0, text.length()) < MIN_DESCRIPTION_CHARS) {
+            warnings.add(issue(
+                    ValidationCodes.VAGUE_DESCRIPTION,
+                    path,
+                    "description 不足 " + MIN_DESCRIPTION_CHARS + " 个字；其它 AI 靠它判断该不该用，请写清能做什么、用户平时怎么称呼"));
+        }
     }
 
     private static void checkRelated(
@@ -2156,6 +2179,7 @@ public final class ConchValidator {
         } else {
             checkDescription(path + ".description", action.description(), warnings);
         }
+        checkVague(action.title(), action.description(), path + ".description", warnings);
         if (action.method() != null) {
             errors.add(issue(ValidationCodes.MCP_UPSTREAM, path + ".method", "driver 为 mcp 时不能写 method"));
         }

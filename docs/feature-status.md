@@ -378,3 +378,5 @@ Reef 表、索引、唯一约束和检查约束现为 `hermit_` 前缀，Flyway 
 2026-11-26 MCP 增加给 AI 的使用说明（不改数据库，不改规则格式）。`initialize` 的 `instructions` 原来只在开发者模式下有，现在对所有连接都返回一段固定文字：用户要查询或操作某个内部系统时先在这里确认有没有对应的能力，以及怎么确认（有 `list_systems` 就按目录查，没有就直接调用工具列表里的能力），没有就如实告诉用户。文字不点名任何规则包和能力，不随 Key、规则包和能力开关变化。`list_systems` 的工具描述里加了一句同样的引导。
 
 2026-11-26 MCP 默认改为目录模式（不改数据库，不改规则格式）。`mcp.direct_limit` 的默认值从 40 改成 0：`tools/list` 固定只有 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability`，不再把 40 个以内的能力连同入参和返回结构全部给 AI。升级影响：没有配置 `mcp.direct_limit` 的 Crab 升级后，已接入的 AI 不再看到 `conch__action` 这样的直接工具，要经 `call_capability` 调用；想保持原样在 `config.yml` 写 `mcp.direct_limit: 40`。目录模式下 AI 客户端无法对单个能力设置「始终允许」，API Key 的范围和只读限制不受影响。
+
+2026-11-26 让规则包更容易被其它 AI 找到（不改数据库，不改规则格式）。`search_capabilities` 原来把整句 `query` 当成一个词，只在能力自己的文字里找；现在按空格拆成关键词，并把规则包的名字、标题、说明和能力名也纳入，全部命中的优先，否则返回部分命中的。校验新增警告 `VAGUE_DESCRIPTION`（规则包或能力的 `description` 和 `title` 相同，或不足 6 个字），不阻止保存和发布，存量规则包重新校验时可能多出这条警告。规则包参考和写规则指南新增「让其他 AI 找得到」一节（`hermit_dev__guide` 的 `discoverability`）。

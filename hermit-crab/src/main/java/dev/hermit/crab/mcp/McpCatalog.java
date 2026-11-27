@@ -482,7 +482,7 @@ final class McpCatalog {
                 Hit hit = Hit.of(
                         terms,
                         tool.name(),
-                        (tool.name() + " " + tool.description()).toLowerCase(Locale.ROOT),
+                        (tool.name() + " " + devTitle(tool) + " " + tool.description()).toLowerCase(Locale.ROOT),
                         devConchText);
                 if (hasQuery && hit.matched() == 0) {
                     continue;

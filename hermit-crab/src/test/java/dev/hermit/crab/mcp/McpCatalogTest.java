@@ -249,6 +249,10 @@ class McpCatalogTest {
         List<java.util.Map<String, Object>> byWriting = (List<java.util.Map<String, Object>>)
                 catalog.search(devKey, "写规则", null, null, false, true).get("matches");
         assertThat(byWriting).extracting(row -> (String) row.get("name")).contains("hermit_dev__guide");
+        // 短标题也要能搜到：标题里的词不一定出现在说明里
+        List<java.util.Map<String, Object>> byShortTitle = (List<java.util.Map<String, Object>>)
+                catalog.search(devKey, "生成测试用文件", null, null, false, true).get("matches");
+        assertThat(byShortTitle).extracting(row -> (String) row.get("name")).contains("hermit_dev__stage_text_file");
     }
 
     private static String groupedYaml(String conch, int ungroupedCount) {

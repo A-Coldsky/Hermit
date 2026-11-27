@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.CapabilityKind;
 import dev.hermit.common.model.FlowSteps;
 import dev.hermit.common.model.HttpMethod;
 import dev.hermit.common.model.ConchDoc;
@@ -81,7 +82,7 @@ public final class Invoker {
     public static final String CONCH_SWITCHED_OFF_CALL =
             "该规则包已在本机停用，调用前需要在 Crab 控制台的规则包详情里重新启用。";
     /** 等待确认期间规则包被更新、回滚或重新导入。409，不执行。 */
-    public static final String CHANGED_AFTER_CONFIRM = "确认期间规则包已经变化，没有执行。请重新发起，并确认新版本。";
+    public static final String CHANGED_AFTER_CONFIRM = "规则包刚刚变化，没有执行。请重新查看这个能力后再发起。";
     private final ConchRegistry registry;
     private final AccountStore accounts;
     private final CredentialVault vault;
@@ -384,7 +385,8 @@ public final class Invoker {
         if (!principal.permits(conch, action, capability.group(), CapabilityHttp.readOnly(capability))) {
             return requestOnly(traceId, ErrorCode.FORBIDDEN, "forbidden");
         }
-        if (recorded == CallChannel.MCP && capability.effectiveConfirm() && confirmedAgainst == null) {
+        // MCP 入口每次都带快照。没带的写能力不执行：它没有经过按类别放行的检查。
+        if (recorded == CallChannel.MCP && capability.kind() != CapabilityKind.READ && confirmedAgainst == null) {
             return requestOnly(traceId, ErrorCode.CONFLICT, CHANGED_AFTER_CONFIRM);
         }
         Account resolved;
@@ -687,7 +689,7 @@ public final class Invoker {
             String traceId
     ) {
         String presented = presentedConfirmToken(confirmToken);
-        boolean needsConfirm = capability.effectiveConfirm();
+        boolean needsConfirm = capability.effectiveDestructive();
         if (!needsConfirm && presented == null) {
             return null;
         }

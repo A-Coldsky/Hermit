@@ -457,7 +457,7 @@ class McpForwardTest {
     }
 
     @Test
-    void confirmHeaderIdempotencyAndDirectMcpRefusal() throws Exception {
+    void confirmHeaderIdempotencyAndDirectMcpCall() throws Exception {
         try (Upstream upstream = new Upstream();
                 Lab lab = Lab.open(temp.resolve("confirm"), upstream, 4, 30)) {
             JsonNode missing = lab.call("create_ticket", Map.of(), "same-key", null);
@@ -509,8 +509,9 @@ class McpForwardTest {
             JsonNode refused = lab.mcp("tools/call", Map.of(
                     "name", "vendor_crm__create_ticket",
                     "arguments", Map.of()));
-            assertThat(refused.toString()).contains(McpCallsNeed.NO_CONFIRM);
-            assertThat(upstream.tools()).isEqualTo(1);
+            // MCP 上的确认交给客户端的工具审批，Crab 不再因为客户端不支持 elicitation 而拒绝。
+            assertThat(refused.path("result").path("isError").asBoolean(false)).as(refused.toString()).isFalse();
+            assertThat(upstream.tools()).isEqualTo(2);
         }
     }
 
@@ -941,7 +942,7 @@ class McpForwardTest {
                 """;
     }
 
-    private static String mcpYaml(String url, String confirm) {
+    private static String mcpYaml(String url, String destructive) {
         return """
                 conch: vendor_crm
                 version: 1.0.0
@@ -958,9 +959,8 @@ class McpForwardTest {
                     tool: createTicket
                     title: 创建工单
                     description: 创建一张工单。
-                    confirm: %s
-                    mcp: {read_only: false, destructive: true}
-                """.formatted(url, confirm);
+                    mcp: {read_only: false, destructive: %s}
+                """.formatted(url, destructive);
     }
 
     private static String maskingYaml(int port) {
@@ -1135,11 +1135,6 @@ class McpForwardTest {
                         q: {type: string}
                       required: [q]
                 """.formatted(port, port, port);
-    }
-
-    /** 测试里要断言的确认文案。生产常量在 mcp 包，这里只锁同一句。 */
-    private static final class McpCallsNeed {
-        static final String NO_CONFIRM = "客户端不支持确认，拒绝执行写操作";
     }
 
     private enum Mode {

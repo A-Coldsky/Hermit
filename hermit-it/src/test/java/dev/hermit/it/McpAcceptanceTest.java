@@ -43,7 +43,6 @@ class McpAcceptanceTest {
     private static final String V2_SHA = "b".repeat(64);
     private static final String V1_FETCHED = "2026-11-01T00:00:00Z";
     private static final String V2_FETCHED = "2026-11-05T08:00:00Z";
-    private static final String NO_CONFIRM = "客户端不支持确认，拒绝执行写操作";
     private static final Duration POLL = Duration.ofSeconds(30);
 
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -164,14 +163,11 @@ class McpAcceptanceTest {
                     assertThat(upstream.toolHits().get(beforeConfirm).tool()).isEqualTo("create_ticket");
                     assertThat(upstream.toolHits().get(beforeConfirm).authorization()).isEqualTo("Bearer " + UPSTREAM_TOKEN);
 
+                    // MCP 上的确认交给客户端的工具审批：没声明 elicitation 的客户端也能调敏感能力。
                     int beforeMcpWrite = upstream.toolHits().size();
-                    JsonNode refused = mcp.call("tools/call", callParams(CONCH + "__create_ticket", null));
-                    assertThat(refused.path("result").path("isError").asBoolean()).isTrue();
-                    assertThat(refused.path("result").path("structuredContent").path("error").path("code").asText())
-                            .isEqualTo("FORBIDDEN");
-                    assertThat(refused.path("result").path("structuredContent").path("error").path("message").asText())
-                            .isEqualTo(NO_CONFIRM);
-                    assertThat(upstream.toolHits()).hasSize(beforeMcpWrite);
+                    JsonNode written = mcp.call("tools/call", callParams(CONCH + "__create_ticket", null));
+                    assertThat(written.path("result").path("isError").asBoolean(false)).as(written.toString()).isFalse();
+                    assertThat(upstream.toolHits()).hasSize(beforeMcpWrite + 1);
 
                     String readOnlyKey = createApiKey(crabBase, "{\"name\":\"reader\",\"all\":true,\"readOnly\":true}");
                     secrets.add(readOnlyKey);
@@ -301,11 +297,9 @@ class McpAcceptanceTest {
         assertThat(echo.path("upstreamName").asText()).isEqualTo(echoUpstream);
         assertThat(echo.path("readOnly").asBoolean()).isTrue();
         assertThat(echo.path("destructive").asBoolean()).isFalse();
-        assertThat(echo.path("confirm").asBoolean()).isFalse();
         assertThat(ticket.path("upstreamName").asText()).isEqualTo("create_ticket");
         assertThat(ticket.path("readOnly").asBoolean()).isFalse();
         assertThat(ticket.path("destructive").asBoolean()).isTrue();
-        assertThat(ticket.path("confirm").asBoolean()).isTrue();
 
         HttpResponse<String> manifestResponse = get(base, "/agent/conches/manifest", null, AGENT_TOKEN);
         assertThat(manifestResponse.statusCode()).as(safe(manifestResponse.body())).isEqualTo(200);

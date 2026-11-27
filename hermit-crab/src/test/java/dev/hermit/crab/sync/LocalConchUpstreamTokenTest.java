@@ -200,7 +200,6 @@ class LocalConchUpstreamTokenTest {
                     title: 搜索
                     description: 查询。
                     mcp: {read_only: true, destructive: false}
-                    confirm: false
                     input_schema: {type: object}
                 """.formatted(conch, version, upstream);
     }
@@ -226,7 +225,6 @@ class LocalConchUpstreamTokenTest {
                     title: 搜索
                     description: 查询。
                     mcp: {read_only: true, destructive: false}
-                    confirm: false
                     input_schema: {type: object}
                 """.formatted(conch, version, url);
     }

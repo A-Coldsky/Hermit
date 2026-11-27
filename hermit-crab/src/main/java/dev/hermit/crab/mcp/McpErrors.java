@@ -276,11 +276,8 @@ final class McpErrors {
             return "去掉 confirm。覆盖已有本地规则包时，在客户端确认。";
         }
         if ("FORBIDDEN".equals(code)) {
-            if (McpCalls.NO_CONFIRM.equals(message)) {
-                return "客户端需在 initialize 中声明 elicitation，并保持 GET /mcp 的 SSE 连接后再执行写操作。";
-            }
-            if (McpCalls.REJECTED.equals(message)) {
-                return "确认被拒绝，本次未执行。如需执行，请在确认时接受。";
+            if (McpCalls.READ_ONLY_KEY.equals(message)) {
+                return "换一把没有勾选「只允许调用只读能力」的 Key。";
             }
             return "当前 API Key 无权调用该能力。请在 Crab 控制台或 CLI 调整范围后重试。";
         }

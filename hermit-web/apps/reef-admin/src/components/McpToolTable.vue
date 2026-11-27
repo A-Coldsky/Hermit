@@ -46,8 +46,7 @@ function groupLabel(row: McpToolRow): string {
       <template #default="{ row }">
         <el-tag v-if="row.readOnly" size="small" type="success" effect="plain">只读</el-tag>
         <el-tag v-else size="small" effect="plain">写入</el-tag>
-        <el-tag v-if="row.destructive" size="small" type="danger" effect="plain" class="gap">破坏性</el-tag>
-        <el-tag v-if="row.confirm" size="small" type="warning" effect="plain" class="gap">需确认</el-tag>
+        <el-tag v-if="row.destructive" size="small" type="danger" effect="plain" class="gap">敏感</el-tag>
       </template>
     </el-table-column>
     <el-table-column label="上游注解（包里记下的）" min-width="220">

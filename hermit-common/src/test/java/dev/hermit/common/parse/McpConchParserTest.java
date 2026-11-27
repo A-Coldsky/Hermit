@@ -9,6 +9,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 import dev.hermit.common.McpFixtures;
+import dev.hermit.common.model.CapabilityKind;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.HttpMethod;
 
@@ -40,7 +41,7 @@ class McpConchParserTest {
         assertThat(action.mcp().readOnly()).isTrue();
         assertThat(action.mcp().destructiveSpecified()).isFalse();
         assertThat(action.effectiveDestructive()).isFalse();
-        assertThat(action.effectiveConfirm()).isFalse();
+        assertThat(action.kind()).isEqualTo(CapabilityKind.READ);
         assertThat(action.tool().upstreamAnnotations()).containsEntry("readOnlyHint", true);
     }
 
@@ -69,7 +70,6 @@ class McpConchParserTest {
                     title: 创建工单
                     description: 为客户创建服务工单。
                     mcp: {read_only: false, destructive: true}
-                    confirm: true
                     input_schema: {type: object}
                     upstream_annotations: {destructiveHint: true}
                 """);
@@ -82,8 +82,7 @@ class McpConchParserTest {
         assertThat(action.effectiveMethod()).isEqualTo(HttpMethod.POST);
         assertThat(action.mcp().destructiveSpecified()).isTrue();
         assertThat(action.effectiveDestructive()).isTrue();
-        assertThat(action.effectiveConfirm()).isTrue();
-        assertThat(action.tool().confirm()).isTrue();
+        assertThat(action.kind()).isEqualTo(CapabilityKind.SENSITIVE);
     }
 
     @Test
@@ -93,13 +92,24 @@ class McpConchParserTest {
                 upstream_annotations: {destructiveHint: false}
                 """));
         assertThat(hinted.actions().get("search_customer").effectiveDestructive()).isFalse();
-        assertThat(hinted.actions().get("search_customer").effectiveConfirm()).isFalse();
+        assertThat(hinted.actions().get("search_customer").kind()).isEqualTo(CapabilityKind.WRITE);
 
         ConchDoc implied = ConchParser.parse(action("""
                 mcp: {read_only: false}
                 """));
         assertThat(implied.actions().get("search_customer").effectiveDestructive()).isTrue();
-        assertThat(implied.actions().get("search_customer").effectiveConfirm()).isTrue();
+        assertThat(implied.actions().get("search_customer").kind()).isEqualTo(CapabilityKind.SENSITIVE);
+    }
+
+    @Test
+    void confirmIsRejectedOnAnyAction() {
+        assertThatThrownBy(() -> ConchParser.parse(action("""
+                mcp: {read_only: false, destructive: true}
+                confirm: true
+                """)))
+                .isInstanceOf(ConchParseException.class)
+                .hasMessageContaining(ConchParser.CONFIRM_REMOVED)
+                .hasMessageContaining("actions.search_customer.confirm");
     }
 
     @Test

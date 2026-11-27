@@ -23,7 +23,6 @@ const tool = {
   upstreamName: 'search',
   readOnly: true,
   destructive: false,
-  confirm: false,
   upstreamAnnotations: { readOnlyHint: true },
   schemaSha256: 'abcdef0123456789abcdef',
 }
@@ -42,7 +41,7 @@ const mcpSummary = {
   driver: 'mcp',
   upstream: { url: 'https://tracker.intra.example:8443/mcp', transport: 'streamable_http', auth: { type: 'oauth' }, allowedHosts: ['tracker.intra.example'] },
   snapshot: { fetchedAt: '2026-11-04T08:00:00Z', protocolVersion: '2025-11-25', server: { name: 'tracker-mcp', version: '2.1.0' }, toolsSha256: '0123456789abcdef0123' },
-  tools: [tool, { ...tool, name: 'close_issue', upstreamName: 'close_issue', readOnly: false, destructive: true, confirm: true, upstreamAnnotations: {} }],
+  tools: [tool, { ...tool, name: 'close_issue', upstreamName: 'close_issue', readOnly: false, destructive: true, upstreamAnnotations: {} }],
 }
 
 const httpSummary = {
@@ -119,7 +118,7 @@ describe('Reef 原生 MCP 展示：详情', () => {
     expect(wrapper.text()).toContain('工具（2）')
   })
 
-  it('工具页是工具表：上游名称、只读、破坏性、需确认', async () => {
+  it('工具页是工具表：上游名称、只读、敏感', async () => {
     reef.conch.mockResolvedValue({ ...mcpSummary, ...detailBase })
     const wrapper = await mountPage(ConchDetailView, { props: { conch: 'tracker' }, path: '/?tab=capabilities' })
     await flushPromises()
@@ -128,8 +127,8 @@ describe('Reef 原生 MCP 展示：详情', () => {
     expect(table).toContain('search_issues')
     expect(table).toContain('search')
     expect(table).toContain('只读')
-    expect(table).toContain('破坏性')
-    expect(table).toContain('需确认')
+    expect(table).toContain('敏感')
+    expect(table).not.toContain('需确认')
     expect(table).toContain('abcdef012345')
   })
 
@@ -164,7 +163,7 @@ describe('Reef 原生 MCP 展示：详情', () => {
 })
 
 describe('Reef 原生 MCP 展示：版本对比', () => {
-  it('列出新增、移除和变更的工具，新增破坏性工具时提醒核对', () => {
+  it('列出新增、移除和变更的工具，新增敏感工具时提醒核对', () => {
     const change = (over: Record<string, unknown>) => ({
       name: 'x',
       kind: 'changed',
@@ -178,15 +177,13 @@ describe('Reef 原生 MCP 展示：版本对比', () => {
       readOnly: true,
       previousDestructive: false,
       destructive: false,
-      previousConfirm: false,
-      confirm: false,
       ...over,
     })
     const wrapper = mount(DiffSummary, {
       props: {
         diff: {
           toolChanges: [
-            change({ name: 'close_issue', kind: 'added', destructive: true, confirm: true, previousDestructive: null }),
+            change({ name: 'close_issue', kind: 'added', destructive: true, previousDestructive: null }),
             change({ name: 'old_tool', kind: 'removed' }),
             change({ name: 'search_issues', schemaSha256: 'b', previousReadOnly: true, readOnly: false }),
           ],
@@ -201,7 +198,7 @@ describe('Reef 原生 MCP 展示：版本对比', () => {
     expect(text).toContain('~ search_issues')
     expect(text).toContain('参数')
     expect(text).toContain('改为写入')
-    expect(text).toContain('有新的破坏性工具')
+    expect(text).toContain('有新的敏感工具')
     expect(wrapper.text()).not.toContain('没有结构变化')
   })
 

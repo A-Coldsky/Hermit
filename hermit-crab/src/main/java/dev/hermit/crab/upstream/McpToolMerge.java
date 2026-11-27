@@ -186,7 +186,7 @@ public final class McpToolMerge {
 
     /**
      * 在原地修改本地 {@code driver: mcp} 规则包的分组、过滤与能力元数据（{@code title}、{@code description}、
-     * {@code group}、{@code mcp}、{@code confirm}、{@code notes}、{@code related}），
+     * {@code group}、{@code mcp}、{@code notes}、{@code related}），
      * 原样保留 {@code input_schema}、{@code output_schema}、{@code upstream_annotations}、
      * {@code schema_sha256} 与 {@code snapshot}，避免 AI 为多工具 MCP 包回传整份巨型 YAML。
      */
@@ -359,9 +359,12 @@ public final class McpToolMerge {
 
     private static void applyActionPatch(ObjectNode action, Map<?, ?> patch, boolean isBulkDefault) {
         Set<String> allowed = isBulkDefault
-                ? Set.of("match", "group", "expose", "readOnly", "read_only", "destructive", "confirm")
-                : Set.of("title", "description", "group", "expose", "readOnly", "read_only", "destructive", "confirm",
+                ? Set.of("match", "group", "expose", "readOnly", "read_only", "destructive")
+                : Set.of("title", "description", "group", "expose", "readOnly", "read_only", "destructive",
                         "notes", "related", "mcp");
+        if (patch.containsKey("confirm")) {
+            throw new Rejected(ErrorCode.INVALID_INPUT, ConchParser.CONFIRM_REMOVED);
+        }
         for (Object rawKey : patch.keySet()) {
             String key = String.valueOf(rawKey);
             if (!allowed.contains(key)) {
@@ -424,16 +427,6 @@ public final class McpToolMerge {
         putBoolIfPresent(mcp, "read_only", patch, "read_only");
         putBoolIfPresent(mcp, "read_only", patch, "readOnly");
         putBoolIfPresent(mcp, "destructive", patch, "destructive");
-        if (patch.containsKey("confirm")) {
-            Object c = patch.get("confirm");
-            if (c == null) {
-                action.remove("confirm");
-            } else if (c instanceof Boolean b) {
-                action.put("confirm", b);
-            } else {
-                throw new Rejected(ErrorCode.INVALID_INPUT, "confirm 必须是布尔值。");
-            }
-        }
     }
 
     private static void putBoolIfPresent(ObjectNode target, String targetField, Map<?, ?> source, String key) {
@@ -588,7 +581,6 @@ public final class McpToolMerge {
         mcp.put("expose", true);
         mcp.put("read_only", false);
         mcp.put("destructive", true);
-        action.put("confirm", true);
         action.set("input_schema", YAML.valueToTree(input));
         if (output != null) {
             action.set("output_schema", YAML.valueToTree(output));

@@ -273,7 +273,6 @@ describe('Reef 分组展示与版本差异', () => {
             group: 'approval/leave',
             readOnly: true,
             destructive: false,
-            confirm: false,
             upstreamAnnotations: {},
             schemaSha256: '0123456789abcdef0123456789abcdef',
           },

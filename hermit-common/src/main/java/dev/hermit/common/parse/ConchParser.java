@@ -48,6 +48,7 @@ public final class ConchParser {
     private static final Set<String> CREDENTIAL_KEYS = Set.of("type", "label", "required", "description", "options");
     private static final Set<String> CONFIG_KEYS = Set.of(
             "type", "label", "required", "description", "options", "default");
+    // confirm 留在这里，是为了让 mcpTool 给出「已删除」的专门提示，而不是「未知字段」。
     private static final Set<String> ACTION_KEYS = Set.of(
             "title", "description", "method", "input", "output", "steps", "idempotent",
             "examples", "notes", "related", "mcp", "tool", "input_schema", "output_schema",
@@ -641,9 +642,16 @@ public final class ConchParser {
                 text(obj.get("version"), child(path, "version")));
     }
 
+    /** MCP 转发包以前可以单独写 confirm。现在是否敏感只看 mcp.destructive。 */
+    public static final String CONFIRM_REMOVED =
+            "confirm 字段已删除。调用前需要用户同意的操作请写 mcp.destructive: true。";
+
     private static McpTool mcpTool(ObjectNode obj, String path) {
+        if (obj.has("confirm")) {
+            throw new ConchParseException(child(path, "confirm"), CONFIRM_REMOVED);
+        }
         boolean present = obj.has("tool") || obj.has("input_schema") || obj.has("output_schema")
-                || obj.has("upstream_annotations") || obj.has("schema_sha256") || obj.has("confirm");
+                || obj.has("upstream_annotations") || obj.has("schema_sha256");
         if (!present) {
             return null;
         }
@@ -661,8 +669,7 @@ public final class ConchParser {
                 inputSchema,
                 outputSchema,
                 annotations,
-                text(obj.get("schema_sha256"), child(path, "schema_sha256")),
-                confirm(obj.get("confirm"), child(path, "confirm")));
+                text(obj.get("schema_sha256"), child(path, "schema_sha256")));
     }
 
     private static Map<String, Object> schemaMap(JsonNode node, String path) {
@@ -673,16 +680,6 @@ public final class ConchParser {
             throw new ConchParseException(path, "必须是映射");
         }
         return castMap(toTree(node, path));
-    }
-
-    private static Boolean confirm(JsonNode node, String path) {
-        if (node == null || node.isNull() || node.isMissingNode()) {
-            return null;
-        }
-        if (!node.isBoolean()) {
-            throw new ConchParseException(path, "必须是布尔值");
-        }
-        return node.booleanValue();
     }
 
     private static List<Step> steps(JsonNode node, String path) {

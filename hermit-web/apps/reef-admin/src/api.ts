@@ -45,8 +45,6 @@ export interface ToolChange {
   readOnly: boolean | null
   previousDestructive: boolean | null
   destructive: boolean | null
-  previousConfirm: boolean | null
-  confirm: boolean | null
 }
 
 export interface ActionGroupChange {
@@ -108,7 +106,6 @@ export interface McpToolRow {
   group?: string | null
   readOnly: boolean
   destructive: boolean
-  confirm: boolean
   upstreamAnnotations: Record<string, unknown>
   schemaSha256: string
 }

@@ -193,7 +193,7 @@ public final class OpenApiDocument {
         if (method == HttpMethod.POST) {
             parameters.add(parameter("Idempotency-Key", "header", false, Map.of("type", "string", "maxLength", 128)));
         }
-        if (action.effectiveConfirm()) {
+        if (action.effectiveDestructive()) {
             parameters.add(parameter("X-Hermit-Confirm", "header", true, Map.of(
                     "type", "string",
                     "enum", List.of("true"),

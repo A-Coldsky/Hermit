@@ -177,7 +177,7 @@ class CapabilityGroupsEndToEndTest {
             String session = mcpInit(baseUrl, fullKey.plaintext());
             JsonNode tools = mcpPost(baseUrl, fullKey.plaintext(), session, 2, "tools/list", null)
                     .path("result").path("tools");
-            assertThat(tools).hasSize(4);
+            assertThat(tools).hasSize(6);
 
             // 2) list_systems returns 1st/2nd level group tree + inline topLevelCapabilities (<=10)
             //    and omits groups on old flat package
@@ -468,17 +468,14 @@ class CapabilityGroupsEndToEndTest {
 
             JsonNode tools = mcpPost(baseUrl, key.plaintext(), session, 2, "tools/list", null)
                     .path("result").path("tools");
-            assertThat(tools).hasSize(4);
-            assertThat(List.of(
-                    tools.get(0).path("name").asText(),
-                    tools.get(1).path("name").asText(),
-                    tools.get(2).path("name").asText(),
-                    tools.get(3).path("name").asText()))
-                    .containsExactlyInAnyOrder(
-                            McpCatalog.LIST_SYSTEMS,
-                            McpCatalog.SEARCH,
-                            McpCatalog.DESCRIBE,
-                            McpCatalog.CALL);
+            assertThat(tools).hasSize(6);
+            assertThat(tools.findValuesAsText("name")).contains(
+                    McpCatalog.LIST_SYSTEMS,
+                    McpCatalog.SEARCH,
+                    McpCatalog.DESCRIBE,
+                    McpCatalog.CALL,
+                    McpCatalog.CALL_WRITE,
+                    McpCatalog.CALL_SENSITIVE);
 
             JsonNode systems = mcpCall(baseUrl, key.plaintext(), session, 3, McpCatalog.LIST_SYSTEMS, Map.of());
             assertThat(systems.path("result").path("isError").asBoolean(true)).as(systems.toString()).isFalse();

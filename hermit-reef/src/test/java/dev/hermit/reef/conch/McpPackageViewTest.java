@@ -93,7 +93,6 @@ class McpPackageViewTest {
         assertThat(view.tools().get(0).upstreamName()).isEqualTo("searchCustomer");
         assertThat(view.tools().get(0).readOnly()).isTrue();
         assertThat(view.tools().get(0).destructive()).isFalse();
-        assertThat(view.tools().get(0).confirm()).isFalse();
         assertThat(view.upstream().toString()).doesNotContain("hermit-crab");
         assertThat(view.upstream().toString()).doesNotContain("credential.token");
         assertThat(view.tools().toString()).doesNotContain("authorize");

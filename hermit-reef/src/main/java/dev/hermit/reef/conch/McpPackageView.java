@@ -75,7 +75,6 @@ final class McpPackageView {
                     action.group(),
                     action.mcp().readOnly(),
                     action.effectiveDestructive(),
-                    action.effectiveConfirm(),
                     tool.upstreamAnnotations(),
                     ToolSnapshots.schemaSha256(tool.inputSchema(), tool.outputSchema())));
         }

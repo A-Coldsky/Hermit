@@ -31,7 +31,7 @@ function onOpenChange(v: string | number | Array<string | number>) {
           <span class="label">{{ cap.title }}</span>
           <el-tag v-if="!cap.mcp.expose" size="small" type="info" effect="plain">不暴露给 MCP</el-tag>
           <el-tag v-if="cap.mcp.readOnly" size="small" effect="plain">只读</el-tag>
-          <el-tag v-if="cap.mcp.destructive" size="small" type="danger" effect="plain">破坏性</el-tag>
+          <el-tag v-if="cap.mcp.destructive" size="small" type="danger" effect="plain">敏感</el-tag>
         </div>
       </template>
       <p class="desc">{{ cap.description }}</p>

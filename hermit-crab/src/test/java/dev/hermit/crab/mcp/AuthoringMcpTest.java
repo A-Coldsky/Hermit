@@ -1443,72 +1443,55 @@ class AuthoringMcpTest {
         }
     }
 
-    /** 破坏性能力的试跑和普通调用一样要确认；确认期间包被换掉就不执行。 */
+    /**
+     * 敏感能力不再由 Crab 反向确认：不支持 elicitation 的客户端也能试跑和调用，确认交给客户端的工具审批。
+     * 按类别放行之后包被换掉的拒绝（审计 A01）见 trialLocalEnforcesSnapshotPrincipalAndLocalAccountGuidance
+     * 和 AuthorizedSnapshotTest。
+     */
     @org.junit.jupiter.api.Test
-    void destructiveTrialNeedsConfirmationOfTheSameSnapshot() throws Exception {
+    void sensitiveTrialAndCallRunWithoutServerSideConfirmation() throws Exception {
         try (Harness server = Harness.open(temp.resolve("trial-confirm"))) {
             server.runtime.debug().setEnabled(true, Actors.CONSOLE);
             assertThat(server.consoleImport(writable("write_pkg", "1.0.0")).statusCode()).isEqualTo(200);
             server.runtime.admin().createAccount("write_pkg", "main", Actors.CONSOLE);
+            assertThat(server.runtime.registry().active("write_pkg").orElseThrow().doc()
+                    .actions().get("write_note").kind()).isEqualTo(dev.hermit.common.model.CapabilityKind.SENSITIVE);
 
             String plain = server.initialize(false);
-            JsonNode refused = server.call(plain, "hermit_dev__trial_run", Map.of("conch", "write_pkg", "action", "write_note"));
-            assertThat(toolError(refused).path("code").asText()).isEqualTo("FORBIDDEN");
-            assertThat(toolMessage(refused)).isEqualTo(McpCalls.NO_CONFIRM);
-
-            String confirming = server.initialize(true);
-            try (Sse sse = Sse.open(server, confirming)) {
-                sse.awaitPrefix(": open");
-                AtomicReference<JsonNode> accepted = new AtomicReference<>();
-                Thread accept = new Thread(() -> accepted.set(server.callUnchecked(
-                        confirming, "hermit_dev__trial_run", Map.of("conch", "write_pkg", "action", "write_note"))));
-                accept.start();
-                server.answer(confirming, sse.awaitMethod("elicitation/create"), "accept", true);
-                accept.join(15_000);
-                assertThat(structured(accepted.get()).path("data").path("message").asText())
-                        .as(String.valueOf(accepted.get())).isEqualTo("wrote-write_pkg");
-
-                AtomicReference<JsonNode> swapped = new AtomicReference<>();
-                Thread swap = new Thread(() -> swapped.set(server.callUnchecked(
-                        confirming, "hermit_dev__trial_run", Map.of("conch", "write_pkg", "action", "write_note"))));
-                swap.start();
-                JsonNode question = sse.awaitMethod("elicitation/create");
-                server.runtime.registry().put(
-                        ConchParser.parse(writable("write_pkg", "1.0.0").replace("wrote-write_pkg", "changed")),
-                        dev.hermit.crab.store.Origin.LOCAL);
-                server.answer(confirming, question, "accept", true);
-                swap.join(15_000);
-                assertThat(toolError(swapped.get()).path("code").asText()).isEqualTo("CONFLICT");
-                assertThat(toolMessage(swapped.get())).isEqualTo(dev.hermit.crab.runtime.Invoker.CHANGED_AFTER_CONFIRM);
-                assertThat(swapped.get().toString()).doesNotContain("\"changed\"");
-            }
+            JsonNode tried = server.call(plain, "hermit_dev__trial_run", Map.of("conch", "write_pkg", "action", "write_note"));
+            assertThat(structured(tried).path("data").path("message").asText())
+                    .as(tried.toString()).isEqualTo("wrote-write_pkg");
+            JsonNode called = server.call(plain, "write_pkg__write_note", Map.of());
+            assertThat(called.toString()).contains("wrote-write_pkg");
         }
     }
 
-    /** 普通工具调用：确认的是旧版本，执行前发现注册表换了版本就拒绝（审计 A01 的 MCP 部分）。 */
+    /** 目录模式下试跑按被试跑能力的类别选调用工具：用更松的入口不执行，并指明该用的工具。 */
     @org.junit.jupiter.api.Test
-    void confirmedToolCallRefusesAVersionSwappedDuringConfirmation() throws Exception {
-        try (Harness server = Harness.open(temp.resolve("call-confirm"))) {
-            assertThat(server.consoleImport(writable("swap_pkg", "1.0.0")).statusCode()).isEqualTo(200);
-            server.runtime.admin().createAccount("swap_pkg", "main", Actors.CONSOLE);
-            String confirming = server.initialize(true);
-            try (Sse sse = Sse.open(server, confirming)) {
-                sse.awaitPrefix(": open");
-                AtomicReference<JsonNode> result = new AtomicReference<>();
-                Thread call = new Thread(() -> result.set(server.callUnchecked(
-                        confirming, "swap_pkg__write_note", Map.of())));
-                call.start();
-                JsonNode question = sse.awaitMethod("elicitation/create");
-                server.runtime.registry().put(
-                        ConchParser.parse(writable("swap_pkg", "1.0.1").replace("wrote-swap_pkg", "changed")),
-                        dev.hermit.crab.store.Origin.LOCAL);
-                server.answer(confirming, question, "accept", true);
-                call.join(15_000);
-                assertThat(result.get().toString()).as(String.valueOf(result.get()))
-                        .contains("CONFLICT")
-                        .contains(dev.hermit.crab.runtime.Invoker.CHANGED_AFTER_CONFIRM)
-                        .doesNotContain("\"changed\"");
+    void directoryTrialIsRoutedByTheKindOfTheTrialedCapability() throws Exception {
+        CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(0);
+        try (Harness server = Harness.open(temp.resolve("trial-kinds"), config)) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            assertThat(server.consoleImport(writable("write_pkg", "1.0.0")).statusCode()).isEqualTo(200);
+            server.runtime.admin().createAccount("write_pkg", "main", Actors.CONSOLE);
+            String session = server.initialize(false);
+            Map<String, Object> trial = Map.of(
+                    "name", "hermit_dev__trial_run",
+                    "arguments", Map.of("conch", "write_pkg", "action", "write_note"));
+
+            for (String entry : List.of("call_capability", "call_write_capability")) {
+                JsonNode refused = server.call(session, entry, trial);
+                assertThat(refused.path("result").path("isError").asBoolean()).as(entry).isTrue();
+                assertThat(refused.toString()).as(entry)
+                        .contains("call_sensitive_capability(name=\\\"hermit_dev__trial_run\\\"")
+                        .contains("取得同意")
+                        .doesNotContain("wrote-write_pkg");
             }
+            assertThat(server.runtime.callLogs().list("write_pkg", "write_note", 5)).isEmpty();
+
+            JsonNode tried = server.call(session, "call_sensitive_capability", trial);
+            assertThat(structured(tried).path("data").path("message").asText())
+                    .as(tried.toString()).isEqualTo("wrote-write_pkg");
         }
     }
 
@@ -2625,12 +2608,17 @@ class AuthoringMcpTest {
                     .contains("hermit_dev__read_yaml")
                     .contains("hermit_dev__mcp_configure");
 
-            // 新刷出来的工具默认保守需要确认，不支持 elicitation 的会话直接试跑会被拦下
-            JsonNode unreviewedTrial = server.call(session, "hermit_dev__trial_run",
-                    Map.of("conch", "local_mcp", "action", "pingtool", "input", Map.of("q", "hello")));
-            assertThat(toolMessage(unreviewedTrial)).isEqualTo(McpCalls.NO_CONFIRM);
+            // 新刷出来的工具默认按敏感处理，不再写 confirm
+            assertThat(server.runtime.registry().find("local_mcp", dev.hermit.crab.store.Origin.LOCAL).orElseThrow()
+                    .actions().get("pingtool").kind()).isEqualTo(dev.hermit.common.model.CapabilityKind.SENSITIVE);
+            assertThat(structured(server.call(session, "hermit_dev__read_yaml", Map.of("conch", "local_mcp")))
+                    .path("yaml").asText()).doesNotContain("confirm");
+            // mcp_configure 传 confirm 会被拒绝并提示改用 destructive
+            JsonNode legacy = server.call(session, "hermit_dev__mcp_configure", Map.of(
+                    "conch", "local_mcp", "defaults", Map.of("read_only", true, "confirm", false)));
+            assertThat(toolMessage(legacy)).contains(ConchParser.CONFIRM_REMOVED);
 
-            // 使用 omitSchemas=true 轻量读取不含膨胀 input_schema，再用 hermit_dev__mcp_configure 原地配置只读与确认标志
+            // 使用 omitSchemas=true 轻量读取不含膨胀 input_schema，再用 hermit_dev__mcp_configure 原地配置只读与敏感标志
             JsonNode compactRead = structured(server.call(session, "hermit_dev__read_yaml",
                     Map.of("conch", "local_mcp", "omitSchemas", true)));
             assertThat(compactRead.path("schemasOmitted").asBoolean()).isTrue();
@@ -2640,7 +2628,7 @@ class AuthoringMcpTest {
                     Map.of(
                             "conch", "local_mcp",
                             "groups", Map.of("diag", Map.of("title", "诊断")),
-                            "defaults", Map.of("read_only", true, "destructive", false, "confirm", false),
+                            "defaults", Map.of("read_only", true, "destructive", false),
                             "actions", Map.of("pingtool", Map.of("title", "连通性探测", "group", "diag")))));
             assertThat(configured.path("ok").asBoolean()).as(configured.toString()).isTrue();
             assertThat(configured.path("replaced").asBoolean()).isTrue();
@@ -3001,14 +2989,14 @@ class AuthoringMcpTest {
                     """.formatted(appUrl);
             JsonNode v1 = structured(server.call(session, "hermit_dev__validate", Map.of("yaml", misplacedMcpConfirm)));
             assertThat(v1.path("ok").asBoolean()).isFalse();
-            assertThat(v1.path("fixHints").toString()).contains("driver: http 能力不写 confirm 字段");
+            assertThat(v1.path("fixHints").toString()).contains("没有 confirm 字段").contains("mcp.destructive: true");
 
             String misplacedActionConfirm = misplacedMcpConfirm.replace(
                     "mcp: { expose: true, read_only: false, destructive: true, confirm: true }",
                     "mcp: { expose: true, read_only: false, destructive: true }\n    confirm: true");
             JsonNode v2 = structured(server.call(session, "hermit_dev__validate", Map.of("yaml", misplacedActionConfirm)));
             assertThat(v2.path("ok").asBoolean()).isFalse();
-            assertThat(v2.path("fixHints").toString()).contains("driver: http 能力不支持 confirm");
+            assertThat(v2.toString()).contains(ConchParser.CONFIRM_REMOVED);
 
             // 3. hermit_dev__mcp_configure 设置 tools.exclude 后立即原地裁剪被排除 action，无需二次 mcp_refresh
             String mcpSkeleton = """
@@ -3034,7 +3022,7 @@ class AuthoringMcpTest {
             JsonNode configured = structured(server.call(session, "hermit_dev__mcp_configure", Map.of(
                     "conch", "devops_mcp",
                     "tools", Map.of("exclude", List.of("debug_*")),
-                    "actions", Map.of("keep_query", Map.of("readOnly", true, "destructive", false, "confirm", false)))));
+                    "actions", Map.of("keep_query", Map.of("readOnly", true, "destructive", false)))));
             assertThat(configured.path("ok").asBoolean()).as(configured.toString()).isTrue();
             assertThat(configured.path("removed")).extracting(JsonNode::asText).containsExactly("debug_raw_dump");
             assertThat(configured.path("warnings").toString()).doesNotContain("debug_raw_dump");

@@ -382,7 +382,7 @@ public final class ConchValidator {
             errors.add(issue(
                     ValidationCodes.MCP_UPSTREAM,
                     path,
-                    "只有 driver 为 mcp 时才能写 tool、input_schema、output_schema、upstream_annotations、schema_sha256 或 confirm"));
+                    "只有 driver 为 mcp 时才能写 tool、input_schema、output_schema、upstream_annotations 或 schema_sha256"));
         }
         if (!NAME.matcher(name).matches()) {
             errors.add(issue(ValidationCodes.ACTION_NAME, path, "能力名不符合 ^[a-z][a-z0-9_]{1,63}$"));
@@ -394,6 +394,7 @@ public final class ConchValidator {
             errors.add(issue(ValidationCodes.MISSING_DESCRIPTION, path + ".description", "缺少 description"));
         }
         checkVague(action.title(), action.description(), path + ".description", warnings);
+        checkKind(action, path, warnings);
         Set<String> inputFields = action.input().keySet();
         for (Map.Entry<String, ParamSpec> param : action.input().entrySet()) {
             String paramPath = path + ".input." + param.getKey();
@@ -447,6 +448,16 @@ public final class ConchValidator {
             warnings.add(issue(ValidationCodes.MISSING_NOTES, path + ".notes", "缺少 notes"));
         }
         checkRelated(action, doc, path, warnings);
+    }
+
+    private static void checkKind(Action action, String path, List<ValidationIssue> warnings) {
+        if (action.mcp().readOnly() && action.effectiveDestructive()) {
+            warnings.add(issue(
+                    ValidationCodes.READ_ONLY_DESTRUCTIVE,
+                    path + ".mcp",
+                    "同时是只读和敏感（mcp.read_only 与 mcp.destructive 都为 true），按敏感处理；"
+                            + "不改数据的能力请去掉 destructive，会改数据的请去掉 read_only"));
+        }
     }
 
     /** description 不足这么多个字时给 {@link ValidationCodes#VAGUE_DESCRIPTION} 警告。 */
@@ -2188,6 +2199,7 @@ public final class ConchValidator {
             checkDescription(path + ".description", action.description(), warnings);
         }
         checkVague(action.title(), action.description(), path + ".description", warnings);
+        checkKind(action, path, warnings);
         if (action.method() != null) {
             errors.add(issue(ValidationCodes.MCP_UPSTREAM, path + ".method", "driver 为 mcp 时不能写 method"));
         }

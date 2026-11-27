@@ -1023,7 +1023,6 @@ class IdentityHttpTest {
                     title: 搜索
                     description: 查询。
                     mcp: { read_only: true, destructive: false }
-                    confirm: false
                     input_schema: { type: object }
                 """.formatted(name, name));
     }

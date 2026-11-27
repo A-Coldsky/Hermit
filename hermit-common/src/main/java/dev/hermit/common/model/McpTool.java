@@ -4,15 +4,14 @@ import java.util.Map;
 
 /**
  * 一个 action 对应的上游工具。{@code inputSchema} 为 null 表示文档没写 {@code input_schema}。
- * {@code outputSchema} 为 null 表示没写 {@code output_schema}。{@code confirm} 为 null 表示沿用破坏性。
+ * {@code outputSchema} 为 null 表示没写 {@code output_schema}。
  */
 public record McpTool(
         String name,
         Map<String, Object> inputSchema,
         Map<String, Object> outputSchema,
         Map<String, Object> upstreamAnnotations,
-        String schemaSha256,
-        Boolean confirm
+        String schemaSha256
 ) {
     public McpTool {
         inputSchema = inputSchema == null ? null : Frozen.map(inputSchema);

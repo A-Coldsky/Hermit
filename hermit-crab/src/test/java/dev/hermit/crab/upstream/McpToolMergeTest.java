@@ -62,7 +62,6 @@ class McpToolMergeTest {
         assertThat(search.mcp().expose()).isFalse();
         assertThat(search.mcp().readOnly()).isTrue();
         assertThat(search.mcp().destructive()).isFalse();
-        assertThat(search.tool().confirm()).isFalse();
         assertThat(search.tool().inputSchema()).containsKey("properties");
         assertThat(search.tool().schemaSha256())
                 .isEqualTo(ToolSnapshots.schemaSha256(search.tool().inputSchema(), search.tool().outputSchema()));
@@ -74,7 +73,6 @@ class McpToolMergeTest {
         assertThat(lookup.title()).isEqualTo("保留标题");
         assertThat(lookup.description()).isEqualTo("保留的说明");
         assertThat(lookup.mcp().destructive()).isTrue();
-        assertThat(lookup.tool().confirm()).isTrue();
 
         Action stayed = doc.actions().get("gzip_file");
         assertThat(stayed.tool().name()).isEqualTo("stayTool");
@@ -85,7 +83,6 @@ class McpToolMergeTest {
         assertThat(gzip.mcp().readOnly()).isFalse();
         assertThat(gzip.mcp().destructive()).isTrue();
         assertThat(gzip.mcp().destructiveSpecified()).isTrue();
-        assertThat(gzip.tool().confirm()).isTrue();
         assertThat(gzip.idempotent()).isFalse();
         assertThat(gzip.tool().upstreamAnnotations()).containsEntry("idempotentHint", true);
         assertThat(gzip.tool().upstreamAnnotations()).containsEntry("readOnlyHint", false);
@@ -94,14 +91,12 @@ class McpToolMergeTest {
         Action note = doc.actions().get("create_note");
         assertThat(note.mcp().readOnly()).isFalse();
         assertThat(note.mcp().destructive()).isTrue();
-        assertThat(note.tool().confirm()).isTrue();
         assertThat(note.tool().upstreamAnnotations()).containsEntry("readOnlyHint", true);
         assertThat(note.idempotent()).isFalse();
 
         Action drop = doc.actions().get("drop_row");
         assertThat(drop.mcp().readOnly()).isFalse();
         assertThat(drop.mcp().destructive()).isTrue();
-        assertThat(drop.tool().confirm()).isTrue();
 
         Action reset = doc.actions().get("fa_reset");
         assertThat(reset.description()).isEqualTo(McpToolMerge.DESCRIPTION_FALLBACK);
@@ -212,7 +207,6 @@ class McpToolMergeTest {
                     title: 搜索客户
                     description: "按名称搜索。\u200B"
                     mcp: {expose: false, read_only: true, destructive: false}
-                    confirm: false
                     idempotent: true
                     input_schema: {type: object}
                     output_schema: {type: object}
@@ -225,7 +219,6 @@ class McpToolMergeTest {
                     title: 留下
                     description: 原样留下。
                     mcp: {read_only: true, destructive: false}
-                    confirm: false
                     input_schema:
                       type: object
                       properties:
@@ -235,7 +228,6 @@ class McpToolMergeTest {
                     title: 保留标题
                     description: 保留的说明
                     mcp: {read_only: false, destructive: true}
-                    confirm: true
                     input_schema:
                       type: object
                       properties:
@@ -245,7 +237,6 @@ class McpToolMergeTest {
                     title: 创建
                     description: 将被删除。
                     mcp: {read_only: false, destructive: true}
-                    confirm: true
                     input_schema: {type: object}
                 """;
     }

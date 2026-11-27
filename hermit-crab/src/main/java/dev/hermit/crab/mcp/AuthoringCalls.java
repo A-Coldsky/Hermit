@@ -109,7 +109,7 @@ final class AuthoringCalls {
     static final String NEXT_CAPTURE_MULTI_ORIGIN =
             "检测到抓包跨越多个源站（如统一认证 SSO 与业务系统分离）：落盘前请先询问用户该登录是否会被多个内部系统共用——若多系统共用，建议拆分为可复用授权器（driver: auth）+ 业务包（auth.use）；若仅当前单一系统使用，直接在业务包配置 auth.origins 即可。";
     static final String GUIDE_OVERVIEW_NOTE =
-            "建议直接复制 starterTemplate（或按 section 传 starter_auth / starter_auth_use / starter_mcp 获取授权器、引用授权器、MCP 起始模板）按抓包或接口结构修改，并对照 pitfalls 避坑；传 section（章节 id、章节标题、子标题，或 all 获取全文）按需阅读；也可传 query 按关键词定位章节。同源资源 URI 为 hermit://conches/hermit_dev/guide。";
+            "写规则按 workflow 的顺序做。建议直接复制 starterTemplate（或按 section 传 starter_auth / starter_auth_use / starter_mcp 获取授权器、引用授权器、MCP 起始模板）按抓包或接口结构修改，并对照 pitfalls 避坑；传 section（章节 id、章节标题、子标题，或 all 获取全文）按需阅读；也可传 query 按关键词定位章节。同源资源 URI 为 hermit://conches/hermit_dev/guide。";
     static final String REEF_READ_ONLY_NOTE =
             "这是从 Reef 订阅的正式规则包，只读不可直接修改。如需改动，请基于这份 YAML 修改后用 hermit_dev__save_local 保存为本地规则包（可起新包名立即生效，或沿用同名保存为本地副本后再到控制台切换来源）。";
     static final String REEF_READ_ONLY_WITH_LOCAL_NOTE =
@@ -237,6 +237,7 @@ final class AuthoringCalls {
             catalog.add(row);
         }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("workflow", AuthoringGuide.workflow());
         body.put("crabVersion", crabVersion);
         body.put("quickReference", quick.content());
         body.put("starterTemplate", AuthoringGuide.starterTemplate());

@@ -54,17 +54,36 @@ final class McpCatalog {
     static final String DEV_CONCH = dev.hermit.common.validate.ConchValidator.DEV_CONCH;
     static final String DEV_PREFIX = DEV_CONCH + "__";
     static final String DEV_TITLE = "规则包开发工具（内置）";
+    /**
+     * 内置包的说明：只说用途、第一步和调用方式。完整流程只在 hermit_dev__guide 不带参数的返回（workflow）里，
+     * 这里和 initialize 都不重复，免得只来调用能力的 Key 也读一遍。
+     */
     static final String DEV_DESCRIPTION =
-            "Hermit Crab 内置的开发者工具包，用于编写或修改规则包（Conch），只在本机开发者模式打开、并且 API Key 勾选了开发者工具时出现。"
-                    + "如果用户在 Crab 控制台录制或导入并保存了脱敏抓包快照，优先用 hermit_dev__capture_list 查看快照目录，再用 hermit_dev__capture_get 按序号读取详情；"
-                    + "写操作或不便重放的接口可用 hermit_dev__dry_run_response 基于抓包或模拟响应离线验证 extract、script、expired_when 与 output 模板；"
-                    + "涉及单点登录或多系统共用认证时，先用 hermit_dev__auth_list 查看本机可复用的 driver: auth 授权器组件与导出变量；"
-                    + "写或改 YAML 前先用 hermit_dev__guide（或读取资源 hermit://conches/hermit_dev/guide）获取可直接复制修改的 starterTemplate（以及 starter_auth / starter_auth_use / starter_mcp 起始模板）、pitfalls 避坑清单、步骤速查与相关章节；"
-                    + "修改已有规则包前先用 hermit_dev__read_yaml 读取原文（MCP 多工具包可传 omitSchemas=true 省略大体积 schema，并用 hermit_dev__mcp_configure 在原地批量配置分组与权限标志；Reef 订阅的正式包只读不可直接修改，如需改动请用 hermit_dev__save_local 保存为本地规则包）。"
-                    + "推荐顺序：先和用户确认要做哪些功能 → hermit_dev__validate 校验至无错（失败可按 fixHints/suggestedSections 修正） → hermit_dev__save_local 保存 → 用户在控制台建账号填凭证（或绑定授权器账号、连接 MCP OAuth） → HTTP/授权器用 hermit_dev__test_login 验证登录与导出变量，MCP 包用 hermit_dev__mcp_refresh 拉取工具快照并用 hermit_dev__mcp_configure 整理只读/确认/分组 → 如需测文件上传可用 hermit_dev__stage_text_file 生成测试 fileId → hermit_dev__trial_run 试跑；失败时用 hermit_dev__debug_trace 或 hermit_dev__debug_trace_list 排查。"
-                    + "不要向用户索要口令、Cookie 或令牌，也不要写入 YAML。"
-                    + "这些工具不直接出现在工具列表里：工具列表里有 hermit_dev 时用 hermit_dev(tool=工具名, arguments=参数) 调用，"
-                    + "有 call_capability 时用查到的 callWith 指明的工具调用，形如 call_capability(name=工具名, arguments=参数)。";
+            "Hermit Crab 内置的开发者工具包，用于写规则：编写、修改或调试规则包（Conch）。"
+                    + "开始前先调用 hermit_dev__guide（不带参数），按返回的 workflow 做。"
+                    + "工具列表里有 hermit_dev 时用 hermit_dev(tool=工具名, arguments=参数) 调用，否则按 search_capabilities(conch=hermit_dev) 列出的 callWith 调用。"
+                    + "不要向用户索要口令、Cookie 或令牌。";
+    /** initialize 里对看得到开发者工具的 Key 多说的一句。 */
+    static final String DEV_INSTRUCTIONS =
+            "list_systems 或工具列表里有 hermit_dev 时，可以写规则（编写、修改或调试规则包）："
+                    + "先调用 hermit_dev__guide（不带参数）拿流程和模板。";
+    /** 开发者工具在清单和搜索结果里的标题，每个不超过 20 个字。新增工具要在这里补一条。 */
+    static final Map<String, String> DEV_TITLES = Map.ofEntries(
+            Map.entry(DEBUG_TRACE, "查看一条开发追踪"),
+            Map.entry(DEBUG_TRACE_LIST, "列出最近的开发追踪"),
+            Map.entry(GUIDE, "查询写规则指南和流程"),
+            Map.entry(READ_YAML, "读取规则包 YAML"),
+            Map.entry(AUTH_LIST, "列出可复用的授权器"),
+            Map.entry(CAPTURE_LIST, "列出抓包快照"),
+            Map.entry(CAPTURE_GET, "读取抓包里的请求"),
+            Map.entry(DRY_RUN_RESPONSE, "离线测试提取和输出"),
+            Map.entry(VALIDATE, "校验规则包 YAML"),
+            Map.entry(SAVE_LOCAL, "保存为本地规则包"),
+            Map.entry(TEST_LOGIN, "测试账号登录"),
+            Map.entry(MCP_REFRESH, "刷新上游 MCP 工具"),
+            Map.entry(MCP_CONFIGURE, "配置 MCP 包的分组和类别"),
+            Map.entry(STAGE_TEXT_FILE, "生成测试用文件"),
+            Map.entry(TRIAL_RUN, "试跑本地规则包的能力"));
     /**
      * initialize 里给 AI 的使用说明。固定文字：不点名任何规则包、能力，提到工具时用条件句，
      * 这样规则包增减、能力停用或 Key 范围变化后仍然成立。
@@ -238,6 +257,10 @@ final class McpCatalog {
     }
 
     private static String devTitle(McpSchema.Tool tool) {
+        String title = DEV_TITLES.get(tool.name());
+        if (title != null) {
+            return title;
+        }
         String description = tool.description() == null ? "" : tool.description();
         int stop = description.indexOf('。');
         return stop < 0 ? description : description.substring(0, stop);
@@ -459,7 +482,7 @@ final class McpCatalog {
                 Hit hit = Hit.of(
                         terms,
                         tool.name(),
-                        (tool.name() + " " + tool.description()).toLowerCase(Locale.ROOT),
+                        (tool.name() + " " + devTitle(tool) + " " + tool.description()).toLowerCase(Locale.ROOT),
                         devConchText);
                 if (hasQuery && hit.matched() == 0) {
                     continue;
@@ -884,8 +907,8 @@ final class McpCatalog {
         Map<String, Object> issues = outputSchema ? issueOutputSchema() : null;
         ArrayList<McpSchema.Tool> tools = new ArrayList<>();
         tools.add(tool(GUIDE,
-                "按章节查询 Hermit 规则包（Conch）YAML 编写指南与语法参考（与资源 hermit://conches/hermit_dev/guide 同源）。"
-                        + "不传参数返回当前支持的 Crab 版本、步骤速查、可直接复制修改的 HTTP 起始模板（starterTemplate）、多驱动起始模板列表（starterSections）、高频避坑清单（pitfalls）和章节目录；"
+                "写规则指南：按章节查询 Hermit 规则包（Conch）YAML 的编写流程与语法参考（与资源 hermit://conches/hermit_dev/guide 同源）。"
+                        + "不传参数返回写规则的完整流程（workflow）、当前支持的 Crab 版本、步骤速查、可直接复制修改的 HTTP 起始模板（starterTemplate）、多驱动起始模板列表（starterSections）、高频避坑清单（pitfalls）和章节目录；"
                         + "传 section 按 starter / starter_auth / starter_auth_use / starter_mcp、章节 id、标题或子标题读取（传 all 获取全文）；传 query 按关键词定位章节。"
                         + "写或改规则包 YAML 之前应先调用此工具。",
                 guideSchema(),
@@ -1120,6 +1143,7 @@ final class McpCatalog {
         match.put("excerpts", arraySchema(Map.of("type", "string")));
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("crabVersion", Map.of("type", "string"));
+        properties.put("workflow", arraySchema(Map.of("type", "string")));
         properties.put("quickReference", Map.of("type", "string"));
         properties.put("starterTemplate", Map.of("type", "string"));
         properties.put("starterSections", arraySchema(objectSchema(starterSection)));

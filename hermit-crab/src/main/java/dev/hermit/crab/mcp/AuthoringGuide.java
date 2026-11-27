@@ -220,6 +220,31 @@ final class AuthoringGuide {
             actions: {}
             """;
 
+    /**
+     * 写规则的完整流程，只此一份：initialize、list_systems 和控制台复制的提示词都只说「先调用 hermit_dev__guide」。
+     * 每一步点名要用的工具；没有那个工具（只读 Key、没有抓包权限）时那一步跳过并告诉用户。
+     */
+    private static final List<String> WORKFLOW = List.of(
+            "1. 先和用户确认要做哪些功能，只为确认过的功能写能力。用户在 Crab 控制台录制或导入过抓包时，用 hermit_dev__capture_list 看快照目录，"
+                    + "按方法、路径和用途向用户列出像业务接口的请求，再用 hermit_dev__capture_get 按序号读登录链和确认过的接口。",
+            "2. 涉及单点登录或多个系统共用登录时，先用 hermit_dev__auth_list 看本机有没有可复用的授权器（driver: auth）；有就在业务包里写 auth.use 引用它。",
+            "3. 修改已有规则包前先用 hermit_dev__read_yaml 读原文。Reef 订阅的正式包只读，要改就另存为本地规则包。"
+                    + "MCP 多工具包可传 omitSchemas=true 只看结构；省略了 schema 的这份不能拿去校验和保存，"
+                    + "改它的分组、标题和类别用 hermit_dev__mcp_configure 在原地改。",
+            "4. 复制本次返回的 starterTemplate（授权器、引用授权器、MCP 包按 section 取 starter_auth / starter_auth_use / starter_mcp）按接口修改，对照 pitfalls；"
+                    + "拿不准的语法用 section 或 query 查对应章节。每个能力写清 title 和 description，并标类别："
+                    + "不改数据写 mcp.read_only: true；撤不回、涉及钱、影响别人或一次影响很多条的写 mcp.destructive: true；其余写操作 driver: http 的包两个都不写，"
+                    + "driver: mcp 的包要明确写 mcp.destructive: false（刷新出的工具默认是敏感）。",
+            "5. 用 hermit_dev__validate 校验到没有错误，失败按 fixHints 和 suggestedSections 修正。"
+                    + "写操作或不便重放的接口，可用 hermit_dev__dry_run_response 基于抓包或模拟响应离线验证 extract、script、expired_when 和 output。",
+            "6. 用 hermit_dev__save_local 保存成本地规则包。改已有包沿用原包名；覆盖已有包需要确认时，Crab 会向用户发起确认，由用户决定。",
+            "7. 请用户在 Crab 控制台建账号并填凭证（或绑定授权器账号、连接 MCP OAuth）。不要向用户索要口令、Cookie 或令牌，也不要写进 YAML。",
+            "8. HTTP 包和授权器用 hermit_dev__test_login 验证登录和导出变量；MCP 包用 hermit_dev__mcp_refresh 拉取上游工具，"
+                    + "再用 hermit_dev__mcp_configure 整理分组、只读和敏感。",
+            "9. 用 hermit_dev__trial_run 试跑每个能力；要测文件上传先用 hermit_dev__stage_text_file 生成 fileId。"
+                    + "试跑会真实调用上游：会修改数据的能力先告诉用户，敏感能力先取得用户同意。",
+            "10. 失败时用 hermit_dev__debug_trace_list 找到追踪，再用 hermit_dev__debug_trace 看每一步的请求和响应，改完从第 5 步重来，只重新试跑失败的那个能力；已经成功的写能力不要重复试跑，免得重复写入。");
+
     private static final List<String> PITFALLS = List.of(
             "❌ 省略或写旧的 min_crab_version: 1.0.0（导致 if/repeat/retry/groups/origins/expired_when/授权器/加解密函数 报错） → ✅ 新规则包统一写 min_crab_version: 1.14.0。",
             "❌ 省略 credentials、把密钥放进 config(type: secret) 或把抓包里的密码/Cookie/Bearer 原文写进 YAML → ✅ 无登录写 credentials: {}；有秘密放 credentials(type: secret)，步骤里写 {{credential.xxx}}，绝不把真值写进 YAML。",
@@ -228,7 +253,7 @@ final class AuthoringGuide {
             "❌ 在 if/until/assert 的 equals/not_equals/present/not_present 里写 {{var}}（如 present: \"{{next}}\"） → ✅ 变量判断键直接写变量名，不加双花括号：present: next、equals: {code: \"0\"}；repeat 的 collect 也写变量名：collect: {all_rows: rows}。",
             "❌ 用点号读带连字符的响应头（{{response.headers.content-type}}）或在 credential/login/input 后写方括号 → ✅ 带连字符用点号加引号下标：{{response.headers['content-type']}}；credential/login/config/input/now 一律用点号。",
             "❌ 同一 request 同时写 json 和 body/form/multipart，GBK 老系统错写 charset: GBK，或需 302 跳转时漏写 follow_redirects: true → ✅ body/form/json/multipart 互斥；字符集写 encoding: GBK；需跟随跳转写 follow_redirects: true。",
-            "❌ HTTP 规则包漏写 actions.<name>.examples、output，省略 related 产生警告 → ✅ 每个 HTTP 能力必须写 title、description、output、examples 与 related: []；只读查询标 idempotent: true 与 mcp: {expose: true, read_only: true}，会修改数据但影响小、能撤回的（保存草稿、提交审查、打卡）标 mcp: {expose: true, read_only: false}，敏感操作（撤不回、涉及钱、影响别人或一次影响很多条）再加 destructive: true。没有 confirm 字段。",
+            "❌ HTTP 规则包漏写 actions.<name>.examples、output，省略 related 产生警告 → ✅ 每个 HTTP 能力必须写 title、description、output、examples 与 related: []；只读查询标 idempotent: true 与 mcp: {expose: true, read_only: true}，会修改数据但影响小、能撤回的（保存草稿、提交审查、打卡）标 mcp: {expose: true}（read_only 和 destructive 都不写），敏感操作（撤不回、涉及钱、影响别人或一次影响很多条）标 mcp: {expose: true, destructive: true}。能力上不能写 confirm。",
             "❌ 在 script 里不写 credential: true 就读 vars.credential/vars.login/vars.auth，手写百行 RSA/AES，或直接 return Uint8Array/Date → ✅ 读凭证/登录/授权器变量加 credential: true；md5/sha1/sha256/sha512/hmacSha1/hmacSha256/aesEncrypt/rsaEncrypt/gbk 均返回 Uint8Array，返回前必须包一层 hermit.hex(...) 或 hermit.base64(...)。",
             "❌ HTTP 200 业务错误码或登录页 HTML 只靠默认 401/403，或试图修改 Reef 正式包/换包名绕过确认 → ✅ 业务码/登录页失效写 auth.expired_when（如 json_equals: {\"$.code\": 40100}）；Reef 正式包只读，改规则用 hermit_dev__save_local 存本地包，改已有本地包保持同名。");
 
@@ -306,6 +331,10 @@ final class AuthoringGuide {
                 Map.of("id", STARTER_AUTH_SECTION, "driver", "auth", "title", "可复用授权器（driver: auth）起始模板"),
                 Map.of("id", STARTER_AUTH_USE_SECTION, "driver", "http", "title", "引用授权器的 HTTP 业务包（auth.use）起始模板"),
                 Map.of("id", STARTER_MCP_SECTION, "driver", "mcp", "title", "上游 MCP 规则包（driver: mcp）起始骨架模板"));
+    }
+
+    static List<String> workflow() {
+        return WORKFLOW;
     }
 
     static List<String> pitfalls() {

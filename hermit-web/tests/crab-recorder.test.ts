@@ -200,7 +200,8 @@ describe('Crab 浏览器录制页面', () => {
     expect(writeText).toHaveBeenCalledTimes(1)
     const copiedPrompt = String(writeText.mock.calls[0][0])
     expect(copiedPrompt).toContain('cap_a1b2c3d4')
-    expect(copiedPrompt).toContain('hermit_dev__capture_list')
+    expect(copiedPrompt).toContain('hermit_dev__guide（不带参数）')
+    expect(copiedPrompt).not.toContain('hermit_dev__save_local')
     expect(copiedPrompt).toContain('hermit_dev__capture_get')
 
     // Delete snapshot asks for confirmation and calls API.

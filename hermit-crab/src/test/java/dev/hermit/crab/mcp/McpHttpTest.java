@@ -530,6 +530,32 @@ class McpHttpTest {
         }
     }
 
+    /** 直接模式：同时写了 read_only 和 destructive 的能力按敏感处理，不能对外标成只读。 */
+    @Test
+    void directModeDoesNotAdvertiseADualMarkedCapabilityAsReadOnly() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("kinds-direct"), PASSWORD)) {
+            server.runtime.registry().put(ConchParser.parse(kindsYaml()));
+            CreatedApiKey full = server.runtime.admin().createApiKey(
+                    "kinds", new ApiKeyScope(Set.of("kinds_conch"), Set.of(), false, false, Set.of(), true), Actors.CLI);
+            String session = server.post(full.plaintext(), null, null, initialize("{}")).header("Mcp-Session-Id");
+            JsonNode tools = server.post(full.plaintext(), session, null, request(2, "tools/list", null))
+                    .json().path("result").path("tools");
+            JsonNode both = null;
+            JsonNode look = null;
+            for (JsonNode tool : tools) {
+                if ("kinds_conch__both".equals(tool.path("name").asText())) {
+                    both = tool.path("annotations");
+                } else if ("kinds_conch__look".equals(tool.path("name").asText())) {
+                    look = tool.path("annotations");
+                }
+            }
+            assertThat(both).isNotNull();
+            assertThat(both.path("readOnlyHint").asBoolean()).isFalse();
+            assertThat(both.path("destructiveHint").asBoolean()).isTrue();
+            assertThat(look.path("readOnlyHint").asBoolean()).isTrue();
+        }
+    }
+
     @Test
     void directoryRoutesTheThreeKindsToTheirCallTools() throws Exception {
         try (Harness server = Harness.open(temp.resolve("kinds"), PASSWORD, 0)) {

@@ -763,7 +763,8 @@ final class McpCatalog {
 
     private McpSchema.Tool directTool(CapabilityRef ref, List<CapabilityRef> visible, boolean outputSchema) {
         Action action = ref.action();
-        boolean readOnly = CapabilityHttp.readOnly(action);
+        // 同时写了 read_only 和 destructive 的按敏感处理：不能对外标只读，否则自动放行只读工具的客户端不会询问。
+        boolean readOnly = action.kind() == CapabilityKind.READ;
         boolean mcp = action.tool() != null;
         String groupTitle = action.group() == null ? null : CapabilityGroups.displayTitle(ref.conch(), action.group());
         McpSchema.Tool.Builder builder = McpSchema.Tool.builder(ref.toolName(), withAccount(action))

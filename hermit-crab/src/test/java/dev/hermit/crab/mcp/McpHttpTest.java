@@ -449,6 +449,18 @@ class McpHttpTest {
             assertThat(unseen.json().path("result").path("structuredContent").path("hint").asText())
                     .isEqualTo(McpCatalog.SEARCH_NO_CONCH);
             // 目录工具不认识的字段要报错，不能悄悄丢掉。
+            // 公布的 inputSchema 也要写明不收多余字段，和实际行为一致。
+            Reply schemas = server.post(scoped.plaintext(), session, null, request(90, "tools/list", null));
+            int closed = 0;
+            for (JsonNode tool : schemas.json().path("result").path("tools")) {
+                String toolName = tool.path("name").asText();
+                if (List.of("search_capabilities", "describe_capability", "call_capability").contains(toolName)) {
+                    assertThat(tool.path("inputSchema").path("additionalProperties").isBoolean()).as(toolName).isTrue();
+                    assertThat(tool.path("inputSchema").path("additionalProperties").asBoolean()).as(toolName).isFalse();
+                    closed++;
+                }
+            }
+            assertThat(closed).isEqualTo(3);
             Reply searchExtra = call(server, scoped.plaintext(), session, "search_capabilities",
                     Map.of("query", "只读项", "page", 2));
             assertThat(toolError(searchExtra).path("code").asText()).isEqualTo("INVALID_INPUT");

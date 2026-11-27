@@ -1526,13 +1526,17 @@ final class McpCatalog {
         properties.put("conch", Map.of("type", "string", "description", "可选。只搜索或浏览这个规则包；只传它时列出该规则包的全部能力"));
         properties.put("group", Map.of("type", "string", "description", "可选。按分组筛选，形如 approval 或 approval/leave（一级分组包含其二级子分组）"));
         properties.put("ungrouped", Map.of("type", "boolean", "description", "可选。设为 true 时只列出顶层未分组能力，不能与 group 同时使用"));
-        return objectSchema(properties);
+        LinkedHashMap<String, Object> schema = objectSchema(properties);
+        // 和 McpCalls.unknownField 一致：多出的字段会被拒绝，schema 里也要写明。
+        schema.put("additionalProperties", false);
+        return schema;
     }
 
     private static Map<String, Object> nameSchema() {
         LinkedHashMap<String, Object> schema = objectSchema(Map.of(
                 "name", Map.of("type", "string", "description", "能力名，形如 conch__action")));
         schema.put("required", List.of("name"));
+        schema.put("additionalProperties", false);
         return schema;
     }
 
@@ -1543,6 +1547,7 @@ final class McpCatalog {
         properties.put("account", accountSchema("可选。选择命名账号，覆盖请求头 X-Hermit-Account。账号选择只写在这里，不放进 arguments。"));
         LinkedHashMap<String, Object> schema = objectSchema(properties);
         schema.put("required", List.of("name"));
+        schema.put("additionalProperties", false);
         return schema;
     }
 

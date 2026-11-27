@@ -62,11 +62,12 @@ class AuthoringMcpTest {
             assertThat(openedResponse.statusCode()).isEqualTo(200);
             JsonNode openedInit = ApiJson.tree(openedResponse.body()).path("result");
             assertThat(openedInit.path("instructions").asText())
-                    .startsWith(McpCatalog.INSTRUCTIONS)
+                    .isEqualTo(McpCatalog.INSTRUCTIONS + "\n" + McpCatalog.DEV_INSTRUCTIONS)
                     .contains("hermit_dev__guide")
-                    .contains("hermit_dev__read_yaml")
-                    .contains("hermit://conches/hermit_dev/guide")
-                    .contains("Reef 订阅的正式包只读");
+                    // 完整流程不再拼进 initialize，只在 hermit_dev__guide 的 workflow 里
+                    .doesNotContain("hermit_dev__read_yaml")
+                    .doesNotContain("hermit_dev__save_local");
+            assertThat(McpCatalog.DEV_INSTRUCTIONS.length()).isLessThanOrEqualTo(100);
             String session = openedResponse.headers().firstValue("Mcp-Session-Id").orElseThrow();
             JsonNode flat = server.rpc(session, 2, "tools/list", null);
             // 开发者工具不平铺：tools/list 里只有一个入口 hermit_dev，清单由它返回。
@@ -1987,6 +1988,11 @@ class AuthoringMcpTest {
                     .contains("min_crab_version: 1.14.0")
                     .contains("related: []");
             assertThat(overData.path("pitfalls").isArray()).isTrue();
+            assertThat(overData.path("workflow").isArray()).isTrue();
+            assertThat(overData.path("workflow").toString()).contains(
+                    "hermit_dev__capture_list", "hermit_dev__auth_list", "hermit_dev__read_yaml", "hermit_dev__validate",
+                    "hermit_dev__save_local", "hermit_dev__test_login", "hermit_dev__mcp_refresh", "hermit_dev__mcp_configure",
+                    "hermit_dev__trial_run", "hermit_dev__debug_trace_list", "mcp.destructive: true");
             assertThat(overData.path("pitfalls").size()).isGreaterThanOrEqualTo(8);
             assertThat(overData.path("sections").isArray()).isTrue();
             assertThat(overData.path("sections").size()).isGreaterThanOrEqualTo(10);

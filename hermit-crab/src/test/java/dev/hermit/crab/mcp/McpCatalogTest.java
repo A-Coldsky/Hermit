@@ -235,7 +235,20 @@ class McpCatalogTest {
         List<java.util.Map<String, Object>> byTitle = (List<java.util.Map<String, Object>>)
                 catalog.search(devKey, "开发工具", null, null, false, true).get("matches");
         assertThat(byTitle).isNotEmpty();
-        assertThat(McpCatalog.DEV_DESCRIPTION).contains("hermit_dev__auth_list");
+        // 完整流程只在 hermit_dev__guide 的 workflow 里：说明只留用途和第一步，标题各自写短
+        assertThat(McpCatalog.DEV_DESCRIPTION).contains("hermit_dev__guide").doesNotContain("hermit_dev__auth_list");
+        assertThat(McpCatalog.DEV_DESCRIPTION.length()).isLessThanOrEqualTo(200);
+        assertThat(AuthoringGuide.workflow().toString()).contains(
+                "hermit_dev__auth_list", "hermit_dev__capture_list", "hermit_dev__validate", "hermit_dev__save_local",
+                "hermit_dev__test_login", "hermit_dev__mcp_refresh", "hermit_dev__trial_run", "hermit_dev__debug_trace");
+        assertThat(allDev).hasSize(15).allSatisfy(row -> {
+            String title = (String) row.get("title");
+            assertThat(title).isNotBlank();
+            assertThat(title.length()).as(title).isLessThanOrEqualTo(20);
+        });
+        List<java.util.Map<String, Object>> byWriting = (List<java.util.Map<String, Object>>)
+                catalog.search(devKey, "写规则", null, null, false, true).get("matches");
+        assertThat(byWriting).extracting(row -> (String) row.get("name")).contains("hermit_dev__guide");
     }
 
     private static String groupedYaml(String conch, int ungroupedCount) {

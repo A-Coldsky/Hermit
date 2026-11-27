@@ -220,6 +220,28 @@ final class AuthoringGuide {
             actions: {}
             """;
 
+    /**
+     * 写规则的完整流程，只此一份：initialize、list_systems 和控制台复制的提示词都只说「先调用 hermit_dev__guide」。
+     * 每一步点名要用的工具；没有那个工具（只读 Key、没有抓包权限）时那一步跳过并告诉用户。
+     */
+    private static final List<String> WORKFLOW = List.of(
+            "1. 先和用户确认要做哪些功能，只为确认过的功能写能力。用户在 Crab 控制台录制或导入过抓包时，用 hermit_dev__capture_list 看快照目录，"
+                    + "按方法、路径和用途向用户列出像业务接口的请求，再用 hermit_dev__capture_get 按序号读登录链和确认过的接口。",
+            "2. 涉及单点登录或多个系统共用登录时，先用 hermit_dev__auth_list 看本机有没有可复用的授权器（driver: auth）；有就在业务包里写 auth.use 引用它。",
+            "3. 修改已有规则包前先用 hermit_dev__read_yaml 读原文（MCP 多工具包可传 omitSchemas=true）。Reef 订阅的正式包只读，要改就另存为本地规则包。",
+            "4. 复制本次返回的 starterTemplate（授权器、引用授权器、MCP 包按 section 取 starter_auth / starter_auth_use / starter_mcp）按接口修改，对照 pitfalls；"
+                    + "拿不准的语法用 section 或 query 查对应章节。每个能力写清 title 和 description，并标类别："
+                    + "不改数据写 mcp.read_only: true；撤不回、涉及钱、影响别人或一次影响很多条的写 mcp.destructive: true；其余写操作两个都不写。",
+            "5. 用 hermit_dev__validate 校验到没有错误，失败按 fixHints 和 suggestedSections 修正。"
+                    + "写操作或不便重放的接口，可用 hermit_dev__dry_run_response 基于抓包或模拟响应离线验证 extract、script、expired_when 和 output。",
+            "6. 用 hermit_dev__save_local 保存成本地规则包。改已有包沿用原包名；需要确认时由用户确认，不要自己传 confirm。",
+            "7. 请用户在 Crab 控制台建账号并填凭证（或绑定授权器账号、连接 MCP OAuth）。不要向用户索要口令、Cookie 或令牌，也不要写进 YAML。",
+            "8. HTTP 包和授权器用 hermit_dev__test_login 验证登录和导出变量；MCP 包用 hermit_dev__mcp_refresh 拉取上游工具，"
+                    + "再用 hermit_dev__mcp_configure 整理分组、只读和敏感。",
+            "9. 用 hermit_dev__trial_run 试跑每个能力；要测文件上传先用 hermit_dev__stage_text_file 生成 fileId。"
+                    + "试跑会真实调用上游：会修改数据的能力先告诉用户，敏感能力先取得用户同意。",
+            "10. 失败时用 hermit_dev__debug_trace_list 找到追踪，再用 hermit_dev__debug_trace 看每一步的请求和响应，改完从第 5 步重来。");
+
     private static final List<String> PITFALLS = List.of(
             "❌ 省略或写旧的 min_crab_version: 1.0.0（导致 if/repeat/retry/groups/origins/expired_when/授权器/加解密函数 报错） → ✅ 新规则包统一写 min_crab_version: 1.14.0。",
             "❌ 省略 credentials、把密钥放进 config(type: secret) 或把抓包里的密码/Cookie/Bearer 原文写进 YAML → ✅ 无登录写 credentials: {}；有秘密放 credentials(type: secret)，步骤里写 {{credential.xxx}}，绝不把真值写进 YAML。",
@@ -306,6 +328,10 @@ final class AuthoringGuide {
                 Map.of("id", STARTER_AUTH_SECTION, "driver", "auth", "title", "可复用授权器（driver: auth）起始模板"),
                 Map.of("id", STARTER_AUTH_USE_SECTION, "driver", "http", "title", "引用授权器的 HTTP 业务包（auth.use）起始模板"),
                 Map.of("id", STARTER_MCP_SECTION, "driver", "mcp", "title", "上游 MCP 规则包（driver: mcp）起始骨架模板"));
+    }
+
+    static List<String> workflow() {
+        return WORKFLOW;
     }
 
     static List<String> pitfalls() {

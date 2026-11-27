@@ -240,7 +240,7 @@ final class AuthoringGuide {
                     + "再用 hermit_dev__mcp_configure 整理分组、只读和敏感。",
             "9. 用 hermit_dev__trial_run 试跑每个能力；要测文件上传先用 hermit_dev__stage_text_file 生成 fileId。"
                     + "试跑会真实调用上游：会修改数据的能力先告诉用户，敏感能力先取得用户同意。",
-            "10. 失败时用 hermit_dev__debug_trace_list 找到追踪，再用 hermit_dev__debug_trace 看每一步的请求和响应，改完从第 5 步重来。");
+            "10. 失败时用 hermit_dev__debug_trace_list 找到追踪，再用 hermit_dev__debug_trace 看每一步的请求和响应，改完从第 5 步重来，只重新试跑失败的那个能力；已经成功的写能力不要重复试跑，免得重复写入。");
 
     private static final List<String> PITFALLS = List.of(
             "❌ 省略或写旧的 min_crab_version: 1.0.0（导致 if/repeat/retry/groups/origins/expired_when/授权器/加解密函数 报错） → ✅ 新规则包统一写 min_crab_version: 1.14.0。",

@@ -771,7 +771,7 @@ final class McpCatalog {
         String groupTitle = action.group() == null ? null : CapabilityGroups.displayTitle(ref.conch(), action.group());
         McpSchema.Tool.Builder builder = McpSchema.Tool.builder(ref.toolName(), withAccount(action))
                 .title(action.title())
-                .description(localMark(ref.local(), toolDescription(action, related(ref, visible), groupTitle)))
+                .description(localMark(ref.local(), sensitiveMark(action, toolDescription(action, related(ref, visible), groupTitle))))
                 .annotations(McpSchema.ToolAnnotations.builder()
                         .readOnlyHint(readOnly)
                         .destructiveHint(action.effectiveDestructive())
@@ -1465,6 +1465,13 @@ final class McpCatalog {
         return LOCAL_PREFIX + (text == null ? "" : text);
     }
 
+    static final String SENSITIVE_NOTE = "敏感操作：调用前先向用户说明要做什么和参数，得到同意后再调用。";
+
+    /** 有的客户端不把 destructiveHint 给模型看，直接模式的敏感能力在说明里再写一遍。 */
+    private static String sensitiveMark(Action action, String description) {
+        return action.kind() == CapabilityKind.SENSITIVE ? description + "\n" + SENSITIVE_NOTE : description;
+    }
+
     static String toolDescription(Action action, List<String> related) {
         return toolDescription(action, related, null);
     }
@@ -1807,7 +1814,12 @@ final class McpCatalog {
         if (!blank(action.description())) {
             text.append(action.description()).append("\n\n");
         }
-        text.append("- 只读: ").append(CapabilityHttp.readOnly(action) ? "是" : "否").append('\n');
+        CapabilityKind kind = action.kind();
+        text.append("- 类别: ").append(kind == CapabilityKind.READ ? "只读" : kind == CapabilityKind.WRITE ? "普通写" : "敏感").append("（kind=").append(kind.wire()).append("）\n");
+        text.append("- 目录模式调用工具: `").append(callWith(kind)).append("`\n");
+        if (kind == CapabilityKind.SENSITIVE) {
+            text.append("- ").append(SENSITIVE_NOTE).append('\n');
+        }
         text.append("- 幂等: ").append(action.idempotent() ? "是" : "否").append('\n');
         List<String> related = related(ref, visibleInConch);
         if (!related.isEmpty()) {

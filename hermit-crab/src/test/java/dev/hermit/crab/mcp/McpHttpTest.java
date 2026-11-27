@@ -283,7 +283,7 @@ class McpHttpTest {
                     Map.of("uri", "hermit://conches/legacy_oa/guide")));
             String markdown = guide.json().path("result").path("contents").get(0).path("text").asText();
             assertThat(guide.json().path("result").path("contents").get(0).path("mimeType").asText()).isEqualTo("text/markdown");
-            assertThat(markdown).contains("查询待办").contains("账号").contains("只读: 是");
+            assertThat(markdown).contains("查询待办").contains("账号").contains("类别: 只读（kind=read）");
             SecretChecks.absent(markdown, PASSWORD);
             Reply hiddenGuide = server.post(narrow.plaintext(), narrowSession, null, request(4, "resources/read",
                     Map.of("uri", "hermit://conches/legacy_oa/guide")));
@@ -553,6 +553,41 @@ class McpHttpTest {
             assertThat(both.path("readOnlyHint").asBoolean()).isFalse();
             assertThat(both.path("destructiveHint").asBoolean()).isTrue();
             assertThat(look.path("readOnlyHint").asBoolean()).isTrue();
+            // 有的客户端不把注解给模型看：敏感能力的说明里再写一遍，只读和普通写不写。
+            assertThat(tool(tools, "kinds_conch__both").path("description").asText()).contains(McpCatalog.SENSITIVE_NOTE);
+            assertThat(tool(tools, "kinds_conch__purge").path("description").asText()).contains(McpCatalog.SENSITIVE_NOTE);
+            assertThat(tool(tools, "kinds_conch__look").path("description").asText()).doesNotContain("敏感操作");
+            assertThat(tool(tools, "kinds_conch__save").path("description").asText()).doesNotContain("敏感操作");
+            String guide = server.post(full.plaintext(), session, null, request(3, "resources/read",
+                            Map.of("uri", "hermit://conches/kinds_conch/guide")))
+                    .json().path("result").path("contents").get(0).path("text").asText();
+            assertThat(guide).contains("- 类别: 只读（kind=read）").contains("- 目录模式调用工具: `call_capability`")
+                    .contains("- 类别: 普通写（kind=write）").contains("- 目录模式调用工具: `call_write_capability`")
+                    .contains("- 类别: 敏感（kind=sensitive）").contains("- 目录模式调用工具: `call_sensitive_capability`")
+                    .contains("- " + McpCatalog.SENSITIVE_NOTE);
+
+            // 只读 Key：双标记能力是敏感的，直接模式下看不到、调不了，HTTP 接口同样拒绝。
+            server.runtime.admin().createAccount("kinds_conch", "main", Actors.CLI);
+            CreatedApiKey readOnly = server.runtime.admin().createApiKey(
+                    "kinds-ro", new ApiKeyScope(Set.of("kinds_conch"), Set.of(), true, false, Set.of(), true), Actors.CLI);
+            String roSession = server.post(readOnly.plaintext(), null, null, initialize("{}")).header("Mcp-Session-Id");
+            assertThat(names(server.post(readOnly.plaintext(), roSession, null, request(2, "tools/list", null))
+                    .json().path("result").path("tools"))).containsExactly("kinds_conch__look");
+            Reply roBoth = server.post(readOnly.plaintext(), roSession, null, request(3, "tools/call",
+                    Map.of("name", "kinds_conch__both", "arguments", Map.of("account", "main"))));
+            assertThat(toolError(roBoth).path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(roBoth.body()).doesNotContain("call_sensitive_capability");
+            for (String action : List.of("both", "look")) {
+                HttpResponse<String> viaHttp = HttpClient.newHttpClient().send(
+                        HttpRequest.newBuilder(URI.create(server.base + "/api/kinds_conch/" + action))
+                                .header("Authorization", "Bearer " + readOnly.plaintext())
+                                .header("Content-Type", "application/json")
+                                .header("X-Hermit-Account", "main")
+                                .POST(HttpRequest.BodyPublishers.ofString("{}")).build(),
+                        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                assertThat(viaHttp.statusCode()).as(action).isEqualTo("both".equals(action) ? 403 : 200);
+            }
+            assertThat(server.runtime.callLogs().list("kinds_conch", "both", 20)).isEmpty();
         }
     }
 
@@ -669,10 +704,30 @@ class McpHttpTest {
             assertThat(toolError(roWrite).path("code").asText()).isEqualTo("NOT_FOUND");
             assertThat(roWrite.body()).doesNotContain("call_write_capability");
             assertThat(server.runtime.callLogs().list("kinds_conch", "save", 20)).hasSize(saves);
+
+            // 双标记能力（read_only 加 destructive）是敏感的：只读 Key 在目录里看不到它，调用也不会被引去敏感入口。
+            int boths = server.runtime.callLogs().list("kinds_conch", "both", 20).size();
+            JsonNode roMatches = call(server, readOnly.plaintext(), roSession, "search_capabilities", Map.of("conch", "kinds_conch"))
+                    .json().path("result").path("structuredContent").path("matches");
+            assertThat(roMatches).hasSize(1);
+            assertThat(roMatches.get(0).path("name").asText()).isEqualTo("kinds_conch__look");
+            Reply roBoth = call(server, readOnly.plaintext(), roSession, "call_capability",
+                    Map.of("name", "kinds_conch__both", "arguments", Map.of(), "account", "main"));
+            assertThat(toolError(roBoth).path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(roBoth.body()).doesNotContain("call_sensitive_capability");
+            Reply roBothDirect = server.post(readOnly.plaintext(), roSession, null, request(9, "tools/call",
+                    Map.of("name", "kinds_conch__both", "arguments", Map.of())));
+            assertThat(roBothDirect.body()).doesNotContain("call_sensitive_capability");
+            assertThat(server.runtime.callLogs().list("kinds_conch", "both", 20)).hasSize(boths);
+            // 读写 Key 看到的 readOnly 和 kind 不矛盾。
+            JsonNode described = call(server, full.plaintext(), session, "describe_capability",
+                    Map.of("name", "kinds_conch__both")).json().path("result").path("structuredContent");
+            assertThat(described.path("readOnly").asBoolean(true)).isFalse();
+            assertThat(described.path("kind").asText()).isEqualTo("sensitive");
         }
     }
 
-    private static String kindsYaml() {
+    static String kindsYaml() {
         StringBuilder yaml = new StringBuilder("""
                 conch: kinds_conch
                 version: 1.0.0

@@ -208,6 +208,31 @@ class AuthorizedSnapshotTest {
                     .contains(Invoker.CHANGED_AFTER_CONFIRM)
                     .doesNotContain(NEW_MARKER);
 
+            // 普通写同样要带快照：不带就拒绝。
+            ConchDoc writeDoc = ConchParser.parse(conchYaml("1.4.0", false, NEW_MARKER, true, false));
+            registry.put(writeDoc, Origin.OFFICIAL);
+            assertThat(writeDoc.actions().get(ACTION).kind()).isEqualTo(dev.hermit.common.model.CapabilityKind.WRITE);
+            InvokeOutcome unconfirmedWrite = invoker.invoke(
+                    InvokeRequest.of(full, CONCH, ACTION, Map.of(), "mcp-unconfirmed-write")
+                            .channel(dev.hermit.crab.store.CallChannel.MCP));
+            assertThat(unconfirmedWrite.status()).isEqualTo(409);
+            assertThat(new String(unconfirmedWrite.body(), StandardCharsets.UTF_8))
+                    .contains(Invoker.CHANGED_AFTER_CONFIRM)
+                    .doesNotContain(NEW_MARKER);
+
+            // 按只读放行之后包被换成普通写：带着只读那份快照也拒绝。
+            ConchDoc readDoc = ConchParser.parse(conchYaml("1.4.0", true, OLD_MARKER, true, false));
+            assertThat(readDoc.actions().get(ACTION).kind()).isEqualTo(dev.hermit.common.model.CapabilityKind.READ);
+            InvokeOutcome readToWrite = invoker.invoke(
+                    InvokeRequest.of(full, CONCH, ACTION, Map.of(), "mcp-read-to-write")
+                            .channel(dev.hermit.crab.store.CallChannel.MCP)
+                            .confirmedAgainst(readDoc, Origin.OFFICIAL));
+            assertThat(readToWrite.status()).isEqualTo(409);
+            assertThat(new String(readToWrite.body(), StandardCharsets.UTF_8))
+                    .contains(Invoker.CHANGED_AFTER_CONFIRM)
+                    .doesNotContain(NEW_MARKER);
+            registry.put(destructiveDoc, Origin.OFFICIAL);
+
             // Matching snapshot + origin succeeds.
             InvokeOutcome confirmedOk = invoker.invoke(
                     InvokeRequest.of(full, CONCH, ACTION, Map.of(), "mcp-confirmed-ok")

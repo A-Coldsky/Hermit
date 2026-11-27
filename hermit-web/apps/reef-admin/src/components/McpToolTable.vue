@@ -44,8 +44,8 @@ function groupLabel(row: McpToolRow): string {
     </el-table-column>
     <el-table-column label="类型" width="200">
       <template #default="{ row }">
-        <el-tag v-if="row.readOnly" size="small" type="success" effect="plain">只读</el-tag>
-        <el-tag v-else size="small" effect="plain">写入</el-tag>
+        <el-tag v-if="row.readOnly && !row.destructive" size="small" type="success" effect="plain">只读</el-tag>
+        <el-tag v-else-if="!row.readOnly" size="small" effect="plain">写入</el-tag>
         <el-tag v-if="row.destructive" size="small" type="danger" effect="plain" class="gap">敏感</el-tag>
       </template>
     </el-table-column>

@@ -1508,6 +1508,50 @@ class AuthoringMcpTest {
         }
     }
 
+    /**
+     * 只读的开发者 Key：目录模式下调写类开发者工具直接回「这把 Key 只允许只读」，不引它去换写入口；
+     * 试跑同时写了 read_only 和 destructive 的能力（敏感）也拒绝，目录模式和 hermit_dev 入口都一样。
+     */
+    @org.junit.jupiter.api.Test
+    void readOnlyDevKeyIsRefusedOutrightForWriteToolsAndDualMarkedTrials() throws Exception {
+        for (int limit : List.of(0, 40)) {
+            CrabConfig config = CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(limit);
+            try (Harness server = Harness.open(temp.resolve("ro-dev-" + limit), config)) {
+                server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+                assertThat(server.consoleImport(McpHttpTest.kindsYaml()).statusCode()).isEqualTo(200);
+                server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "kinds_conch", "main", Actors.CONSOLE);
+                CreatedApiKey readOnly = server.runtime.apiKeys().create(
+                        "ro-dev-" + limit, new ApiKeyScope(Set.of(), Set.of(), true, true, Set.of(), true), Actors.CONSOLE);
+                String session = server.initialize(readOnly.plaintext(), false);
+                String outer = limit == 0 ? "call_capability" : "hermit_dev";
+                String nameKey = limit == 0 ? "name" : "tool";
+
+                if (limit == 0) {
+                    for (String tool : List.of("hermit_dev__save_local", "hermit_dev__test_login", "hermit_dev__mcp_refresh",
+                            "hermit_dev__mcp_configure", "hermit_dev__stage_text_file")) {
+                        JsonNode denied = server.rpc(readOnly.plaintext(), session, 3, "tools/call", Map.of(
+                                "name", outer, "arguments", Map.of(nameKey, tool, "arguments", Map.of())));
+                        assertThat(toolError(denied).path("code").asText()).as(tool).isEqualTo("FORBIDDEN");
+                        assertThat(toolMessage(denied)).as(tool).isEqualTo(McpCalls.READ_ONLY_KEY);
+                        assertThat(denied.toString()).as(tool).doesNotContain("call_write_capability");
+                    }
+                }
+
+                JsonNode look = server.rpc(readOnly.plaintext(), session, 4, "tools/call", Map.of(
+                        "name", outer, "arguments", Map.of(nameKey, "hermit_dev__trial_run", "arguments",
+                                Map.of("conch", "kinds_conch", "action", "look", "account", "main"))));
+                assertThat(look.path("result").path("isError").asBoolean(true)).as(look.toString()).isFalse();
+                JsonNode both = server.rpc(readOnly.plaintext(), session, 5, "tools/call", Map.of(
+                        "name", outer, "arguments", Map.of(nameKey, "hermit_dev__trial_run", "arguments",
+                                Map.of("conch", "kinds_conch", "action", "both", "account", "main"))));
+                assertThat(toolError(both).path("code").asText()).as(both.toString()).isEqualTo("FORBIDDEN");
+                assertThat(toolMessage(both)).isEqualTo(AuthoringCalls.READ_ONLY_TRIAL_PREFIX + "both 不是只读，已拒绝。");
+                assertThat(both.toString()).doesNotContain("call_sensitive_capability");
+                assertThat(server.runtime.callLogs().list("kinds_conch", "both", 5)).isEmpty();
+            }
+        }
+    }
+
     /** Issue 5a: trialLocal 原子核对快照与 Key 权限；窄 Key 试跑未加载或正式包也拒；保存本地包只看本地账号。 */
     @org.junit.jupiter.api.Test
     void trialLocalEnforcesSnapshotPrincipalAndLocalAccountGuidance() throws Exception {

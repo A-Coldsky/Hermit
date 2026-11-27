@@ -276,11 +276,25 @@ describe('Reef 分组展示与版本差异', () => {
             upstreamAnnotations: {},
             schemaSha256: '0123456789abcdef0123456789abcdef',
           },
+          {
+            name: 'purge_leave',
+            upstreamName: 'purgeLeave',
+            group: 'approval/leave',
+            readOnly: true,
+            destructive: true,
+            upstreamAnnotations: {},
+            schemaSha256: 'fedcba9876543210fedcba9876543210',
+          },
         ],
       },
     })
     await flushPromises()
     expect(toolsWrapper.text()).toContain('审批管理 / 请假审批')
+    // 同时标了只读和敏感的工具按敏感算，只显示「敏感」
+    const tags = toolsWrapper.findAll('.el-tag').map((tag) => tag.text())
+    expect(tags.filter((text) => text === '只读')).toHaveLength(1)
+    expect(tags.filter((text) => text === '敏感')).toHaveLength(1)
+    expect(tags).not.toContain('写入')
 
     const diffWrapper = await mountPage(DiffSummary, {
       props: {

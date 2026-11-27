@@ -27,6 +27,7 @@ import dev.hermit.common.http.SiteAddress;
 import dev.hermit.common.validate.AuthenticatorChecks;
 import dev.hermit.common.validate.ScriptCryptoChecks;
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.CapabilityKind;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
 import dev.hermit.common.model.AuthExport;
@@ -195,7 +196,7 @@ public final class RuleEngine implements ConchExecutor {
             }
             key = new SessionKey(request.origin(), request.conch(), request.account());
             boolean locked;
-            if (conch.auth() != null && conch.auth().concurrentReads() && action.mcp().readOnly()) {
+            if (conch.auth() != null && conch.auth().concurrentReads() && action.kind() == CapabilityKind.READ) {
                 // 只读能力先拿共享锁；会话不能直接用（没登录、要探活、中途失效）时放开，改走下面的独占锁。
                 handoff = new Handoff();
                 try {

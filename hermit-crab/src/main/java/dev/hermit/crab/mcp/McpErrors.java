@@ -215,7 +215,7 @@ final class McpErrors {
     }
 
     /**
-     * 直接模式没有 {@code search_capabilities}。目录模式才建议用它和 {@code tools/list} 查找能力。
+     * 直接模式没有 {@code search_capabilities}。目录模式只建议用它查找能力，不提 {@code tools/list}。
      */
     static String toolHint(String code, String message, boolean directory) {
         return toolHint(code, message, directory, false);

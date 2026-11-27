@@ -228,7 +228,9 @@ final class AuthoringGuide {
             "1. 先和用户确认要做哪些功能，只为确认过的功能写能力。用户在 Crab 控制台录制或导入过抓包时，用 hermit_dev__capture_list 看快照目录，"
                     + "按方法、路径和用途向用户列出像业务接口的请求，再用 hermit_dev__capture_get 按序号读登录链和确认过的接口。",
             "2. 涉及单点登录或多个系统共用登录时，先用 hermit_dev__auth_list 看本机有没有可复用的授权器（driver: auth）；有就在业务包里写 auth.use 引用它。",
-            "3. 修改已有规则包前先用 hermit_dev__read_yaml 读原文（MCP 多工具包可传 omitSchemas=true）。Reef 订阅的正式包只读，要改就另存为本地规则包。",
+            "3. 修改已有规则包前先用 hermit_dev__read_yaml 读原文。Reef 订阅的正式包只读，要改就另存为本地规则包。"
+                    + "MCP 多工具包可传 omitSchemas=true 只看结构；省略了 schema 的这份不能拿去校验和保存，"
+                    + "改它的分组、标题和类别用 hermit_dev__mcp_configure 在原地改。",
             "4. 复制本次返回的 starterTemplate（授权器、引用授权器、MCP 包按 section 取 starter_auth / starter_auth_use / starter_mcp）按接口修改，对照 pitfalls；"
                     + "拿不准的语法用 section 或 query 查对应章节。每个能力写清 title 和 description，并标类别："
                     + "不改数据写 mcp.read_only: true；撤不回、涉及钱、影响别人或一次影响很多条的写 mcp.destructive: true；其余写操作两个都不写。",

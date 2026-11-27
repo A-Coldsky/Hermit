@@ -25,6 +25,7 @@ import dev.hermit.common.http.HostNames;
 import dev.hermit.common.http.AuthOrigins;
 import dev.hermit.common.http.SiteAddress;
 import dev.hermit.common.validate.AuthenticatorChecks;
+import dev.hermit.common.validate.ScriptCryptoChecks;
 import dev.hermit.common.model.Action;
 import dev.hermit.common.model.AliveCheck;
 import dev.hermit.common.model.Auth;
@@ -1931,9 +1932,11 @@ public final class RuleEngine implements ConchExecutor {
     /** 一定会跑的步骤引用的登录名字必须有；if / repeat 里的不提前要求，也不为它重新登录，真用到时缺了再报。 */
     private void requireStepLoginRefs(LoginScope scope, List<Step> steps) {
         LinkedHashSet<String> must = new LinkedHashSet<>();
+        Map<String, String> scripts = scope.conch == null ? Map.of() : scope.conch.scripts();
         for (Step step : steps) {
             if (!FlowSteps.isFlow(step)) {
                 collectLoginNames(step, must);
+                ScriptCryptoChecks.collectCredentialScriptLoginRefs(step, scripts, must);
             }
         }
         for (String name : must) {
@@ -2964,6 +2967,39 @@ public final class RuleEngine implements ConchExecutor {
             }
 
             @Override
+            public Map<String, String> snapshotForScript() {
+                LinkedHashMap<String, String> map = new LinkedHashMap<>();
+                if (authenticator) {
+                    for (String origin : authOrigins) {
+                        try {
+                            for (Map.Entry<String, String> entry
+                                    : sessions.readableCookies(key, URI.create(origin)).entrySet()) {
+                                map.putIfAbsent(entry.getKey(), entry.getValue());
+                            }
+                        } catch (IllegalArgumentException ignored) {
+                            // 跳过无效地址
+                        }
+                    }
+                }
+                map.putAll(sessions.readableCookies(key, base));
+                if (conch.auth() != null) {
+                    for (String alias : conch.auth().cookies().keySet()) {
+                        String val = lookup(alias);
+                        if (val != null) {
+                            map.put(alias, val);
+                        }
+                    }
+                }
+                for (Map.Entry<String, String> entry : sessions.loginSnapshot(key).entrySet()) {
+                    if (entry.getValue() != null) {
+                        map.put(entry.getKey(), entry.getValue());
+                    }
+                }
+                remember(map.values());
+                return map;
+            }
+
+            @Override
             public Object peek(String name) {
                 return lookup(name);
             }
@@ -3011,6 +3047,21 @@ public final class RuleEngine implements ConchExecutor {
                     }
                 }
                 return List.copyOf(values);
+            }
+
+            @Override
+            public Map<String, String> snapshotForScript() {
+                if (bound == null || bound.conch.auth() == null) {
+                    return Map.of();
+                }
+                LinkedHashMap<String, String> map = new LinkedHashMap<>();
+                for (String name : bound.conch.auth().exports().keySet()) {
+                    String value = exported(name);
+                    if (value != null) {
+                        map.put(name, value);
+                    }
+                }
+                return map;
             }
 
             @Override

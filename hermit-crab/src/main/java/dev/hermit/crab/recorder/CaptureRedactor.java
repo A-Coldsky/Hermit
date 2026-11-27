@@ -127,31 +127,67 @@ public final class CaptureRedactor {
         if (status >= 300 && status < 400) {
             return false;
         }
-        if (resourceType != null && STATIC_RESOURCE_TYPES.contains(resourceType.trim().toLowerCase(Locale.ROOT))) {
+        String resType = resourceType == null ? "" : resourceType.trim().toLowerCase(Locale.ROOT);
+        String mime = mimeType == null ? "" : baseMime(mimeType);
+        if (!resType.isEmpty() && !"image".equals(resType) && STATIC_RESOURCE_TYPES.contains(resType)) {
             return true;
         }
-        if (mimeType != null && !mimeType.isBlank()) {
-            String m = baseMime(mimeType);
-            if (m.startsWith("image/") || m.startsWith("font/") || m.startsWith("audio/") || m.startsWith("video/")
-                    || "text/css".equals(m)
-                    || "application/javascript".equals(m)
-                    || "text/javascript".equals(m)
-                    || "application/x-javascript".equals(m)
-                    || "application/wasm".equals(m)) {
-                return true;
-            }
+        if (!mime.isEmpty()
+                && (mime.startsWith("font/") || mime.startsWith("audio/") || mime.startsWith("video/")
+                        || "text/css".equals(mime)
+                        || "application/javascript".equals(mime)
+                        || "text/javascript".equals(mime)
+                        || "application/x-javascript".equals(mime)
+                        || "application/wasm".equals(mime))) {
+            return true;
         }
         String path = extractPath(url).toLowerCase(Locale.ROOT);
         int semi = path.indexOf(';');
         if (semi >= 0) {
             path = path.substring(0, semi);
         }
-        for (String ext : STATIC_EXTENSIONS) {
-            if (path.endsWith(ext)) {
-                return true;
+        boolean imageCandidate = "image".equals(resType) || mime.startsWith("image/");
+        if (!imageCandidate) {
+            for (String ext : STATIC_EXTENSIONS) {
+                if (path.endsWith(ext)) {
+                    if (isImageExtension(ext)) {
+                        imageCandidate = true;
+                        break;
+                    }
+                    return true;
+                }
             }
         }
+        if (imageCandidate) {
+            return !isLikelyCaptchaImageUrl(url, path);
+        }
         return false;
+    }
+
+    private static boolean isImageExtension(String ext) {
+        return ".png".equals(ext) || ".jpg".equals(ext) || ".jpeg".equals(ext)
+                || ".gif".equals(ext) || ".webp".equals(ext) || ".svg".equals(ext)
+                || ".ico".equals(ext) || ".bmp".equals(ext) || ".avif".equals(ext);
+    }
+
+    private static boolean isLikelyCaptchaImageUrl(String url, String lowerPath) {
+        String lowerUrl = url == null ? lowerPath : url.toLowerCase(Locale.ROOT);
+        return lowerUrl.contains("captcha")
+                || lowerUrl.contains("kaptcha")
+                || lowerUrl.contains("valicode")
+                || lowerUrl.contains("validcode")
+                || lowerUrl.contains("verifycode")
+                || lowerUrl.contains("verify_code")
+                || lowerUrl.contains("verify-code")
+                || lowerUrl.contains("vcode")
+                || lowerUrl.contains("checkcode")
+                || lowerUrl.contains("check_code")
+                || lowerUrl.contains("authcode")
+                || lowerUrl.contains("auth_code")
+                || lowerUrl.contains("randcode")
+                || lowerUrl.contains("yzm")
+                || lowerPath.contains("/verify")
+                || lowerPath.endsWith("verify");
     }
 
     public static boolean isBinaryContent(String mimeType, String contentDisposition) {

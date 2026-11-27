@@ -413,8 +413,13 @@ class AuthenticatorValidationTest {
                                 + "          return vars.auth['bracket_tok'] + vars.auth[\"dq_tok\"];")
                 .replace("path: /api/todos",
                         "path: \"/api/todos?a={{input.x['a}}b'] | default(auth.pipe_tok)}}&u={{input.fallback | default('https://auth.corp.example')}}\"");
-        assertThat(validate(yaml).errors()).isEmpty();
-        assertThat(AuthenticatorChecks.referencedExports(ConchParser.parse(yaml)))
+        assertThat(validate(yaml).errors())
+                .anyMatch(issue -> issue.code().equals(ValidationCodes.MIN_CRAB_VERSION)
+                        && issue.message().contains("1.14.0"));
+        ConchDoc on114 = ConchParser.parse(yaml.replace("min_crab_version: 1.13.0", "min_crab_version: 1.14.0"));
+        assertThat(ConchValidator.validate(on114, ConchValidator.Context.of(SemVer.parse("1.14.0"))).errors())
+                .isEmpty();
+        assertThat(AuthenticatorChecks.referencedExports(on114))
                 .containsExactlyInAnyOrder("access_token", "input_tok", "bracket_tok", "dq_tok", "pipe_tok");
     }
 

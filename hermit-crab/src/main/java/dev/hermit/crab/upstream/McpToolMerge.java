@@ -140,6 +140,266 @@ public final class McpToolMerge {
         }
     }
 
+    /**
+     * 为 {@code hermit_dev__read_yaml(omitSchemas=true)} 生成省略大体积 schema/哈希后的轻量视图。
+     * 仅对 {@code driver: mcp} 包脱去每个能力的 {@code input_schema}、{@code output_schema}、
+     * {@code upstream_annotations}、{@code schema_sha256}（保留 {@code param_names} 参数名清单），
+     * 其余类型包返回 {@code null}。
+     */
+    public static String compactYaml(byte[] yaml) {
+        if (yaml == null) {
+            return null;
+        }
+        JsonNode rootNode;
+        try {
+            rootNode = YAML.readTree(yaml);
+        } catch (java.io.IOException ex) {
+            return null;
+        }
+        if (!(rootNode instanceof ObjectNode root)) {
+            return null;
+        }
+        if (!"mcp".equals(text(root.get("driver")))) {
+            return null;
+        }
+        if (root.get("actions") instanceof ObjectNode actions) {
+            actions.fields().forEachRemaining(entry -> {
+                if (entry.getValue() instanceof ObjectNode action) {
+                    if (action.get("input_schema") instanceof ObjectNode inSchema
+                            && inSchema.get("properties") instanceof ObjectNode props) {
+                        var names = action.putArray("param_names");
+                        props.fieldNames().forEachRemaining(names::add);
+                    }
+                    action.remove("input_schema");
+                    action.remove("output_schema");
+                    action.remove("upstream_annotations");
+                    action.remove("schema_sha256");
+                }
+            });
+        }
+        try {
+            return YAML.writeValueAsString(root);
+        } catch (java.io.IOException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * 在原地修改本地 {@code driver: mcp} 规则包的分组、过滤与能力元数据（{@code title}、{@code description}、
+     * {@code group}、{@code mcp}、{@code confirm}、{@code notes}、{@code related}），
+     * 原样保留 {@code input_schema}、{@code output_schema}、{@code upstream_annotations}、
+     * {@code schema_sha256} 与 {@code snapshot}，避免 AI 为多工具 MCP 包回传整份巨型 YAML。
+     */
+    public static ConfigureOutcome configure(byte[] yaml, Map<String, Object> spec) {
+        if (yaml == null || spec == null) {
+            throw new Rejected(ErrorCode.INVALID_INPUT, "需要配置参数。");
+        }
+        JsonNode rootNode;
+        try {
+            rootNode = YAML.readTree(yaml);
+        } catch (java.io.IOException ex) {
+            throw new Rejected(ErrorCode.INVALID_INPUT, "本地规则包无法解析为 YAML。");
+        }
+        if (!(rootNode instanceof ObjectNode root)) {
+            throw new Rejected(ErrorCode.INVALID_INPUT, "本地规则包根节点必须是映射。");
+        }
+        if (!"mcp".equals(text(root.get("driver")))) {
+            throw new Rejected(ErrorCode.INVALID_INPUT, "hermit_dev__mcp_configure 只适用于 driver: mcp 的本地规则包。");
+        }
+        if (spec.get("version") instanceof String ver && !ver.isBlank()) {
+            root.put("version", ver.trim());
+        }
+        boolean usesGroups = false;
+        if (spec.containsKey("groups")) {
+            Object rawGroups = spec.get("groups");
+            if (rawGroups == null || (rawGroups instanceof Map<?, ?> m && m.isEmpty())) {
+                root.remove("groups");
+            } else if (rawGroups instanceof Map<?, ?> groupsMap) {
+                root.set("groups", YAML.valueToTree(groupsMap));
+                usesGroups = true;
+            } else {
+                throw new Rejected(ErrorCode.INVALID_INPUT, "groups 必须是对象映射。");
+            }
+        }
+        if (spec.containsKey("tools")) {
+            Object rawTools = spec.get("tools");
+            if (rawTools == null || (rawTools instanceof Map<?, ?> m && m.isEmpty())) {
+                root.remove("tools");
+            } else if (rawTools instanceof Map<?, ?> toolsMap) {
+                root.set("tools", YAML.valueToTree(toolsMap));
+            } else {
+                throw new Rejected(ErrorCode.INVALID_INPUT, "tools 必须是包含 include / exclude 的对象。");
+            }
+        }
+        ObjectNode actions = root.get("actions") instanceof ObjectNode node ? node : root.putObject("actions");
+        LinkedHashSet<String> updatedActions = new LinkedHashSet<>();
+
+        Object rawDefaults = spec.get("defaults");
+        if (rawDefaults != null) {
+            List<?> rules = rawDefaults instanceof List<?> list ? list : List.of(rawDefaults);
+            for (Object item : rules) {
+                if (!(item instanceof Map<?, ?> rule)) {
+                    throw new Rejected(ErrorCode.INVALID_INPUT, "defaults 规则必须是对象。");
+                }
+                String match = rule.get("match") instanceof String s && !s.isBlank() ? s.trim() : "*";
+                actions.fields().forEachRemaining(entry -> {
+                    if (entry.getValue() instanceof ObjectNode action) {
+                        String localName = entry.getKey();
+                        String upstreamTool = text(action.get("tool"));
+                        if (glob(match, localName) || (upstreamTool != null && glob(match, upstreamTool))) {
+                            applyActionPatch(action, rule, true);
+                            updatedActions.add(localName);
+                        }
+                    }
+                });
+            }
+        }
+
+        Object rawActions = spec.get("actions");
+        if (rawActions != null) {
+            if (!(rawActions instanceof Map<?, ?> actionPatches)) {
+                throw new Rejected(ErrorCode.INVALID_INPUT, "actions 必须是 { 能力名: 配置 } 映射。");
+            }
+            for (Map.Entry<?, ?> entry : actionPatches.entrySet()) {
+                String actionName = String.valueOf(entry.getKey());
+                JsonNode target = actions.get(actionName);
+                if (!(target instanceof ObjectNode actionNode)) {
+                    throw new Rejected(ErrorCode.INVALID_INPUT, "本地 MCP 规则包中不存在能力 " + actionName + "。");
+                }
+                if (!(entry.getValue() instanceof Map<?, ?> patch)) {
+                    throw new Rejected(ErrorCode.INVALID_INPUT, "actions." + actionName + " 必须是对象。");
+                }
+                applyActionPatch(actionNode, patch, false);
+                updatedActions.add(actionName);
+            }
+        }
+
+        // 检查是否有任意 action 声明了 group 或顶层存在非空 groups：若有则确保 min_crab_version >= 1.10.0。
+        if (!usesGroups && root.get("groups") instanceof ObjectNode g && !g.isEmpty()) {
+            usesGroups = true;
+        }
+        if (!usesGroups) {
+            var it = actions.fields();
+            while (it.hasNext()) {
+                if (it.next().getValue() instanceof ObjectNode a && text(a.get("group")) != null) {
+                    usesGroups = true;
+                    break;
+                }
+            }
+        }
+        if (usesGroups) {
+            String curMin = text(root.get("min_crab_version"));
+            try {
+                dev.hermit.common.version.SemVer minVer = curMin == null
+                        ? dev.hermit.common.version.SemVer.parse("1.0.0")
+                        : dev.hermit.common.version.SemVer.parse(curMin);
+                if (minVer.compareTo(dev.hermit.common.model.CapabilityGroups.MIN_CRAB_VERSION) < 0) {
+                    root.put("min_crab_version", dev.hermit.common.model.CapabilityGroups.MIN_CRAB_VERSION.toString());
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 留给后续 ConchValidator 给出规范报错。
+            }
+        }
+
+        try {
+            return new ConfigureOutcome(YAML.writeValueAsBytes(root), List.copyOf(updatedActions));
+        } catch (java.io.IOException ex) {
+            throw new Rejected(ErrorCode.INTERNAL, "本地规则包无法序列化为 YAML。");
+        }
+    }
+
+    private static void applyActionPatch(ObjectNode action, Map<?, ?> patch, boolean isBulkDefault) {
+        Set<String> allowed = isBulkDefault
+                ? Set.of("match", "group", "expose", "readOnly", "read_only", "destructive", "confirm")
+                : Set.of("title", "description", "group", "expose", "readOnly", "read_only", "destructive", "confirm",
+                        "notes", "related", "mcp");
+        for (Object rawKey : patch.keySet()) {
+            String key = String.valueOf(rawKey);
+            if (!allowed.contains(key)) {
+                throw new Rejected(ErrorCode.INVALID_INPUT,
+                        "不支持的能力配置字段 " + key + "（input_schema/tool/schema_sha256 由 mcp_refresh 维护，不可手工覆写）。");
+            }
+        }
+        if (!isBulkDefault) {
+            if (patch.containsKey("title") && patch.get("title") != null) {
+                if (!(patch.get("title") instanceof String s) || s.isBlank()) {
+                    throw new Rejected(ErrorCode.INVALID_INPUT, "title 必须是非空字符串。");
+                }
+                action.put("title", s.trim());
+            }
+            if (patch.containsKey("description") && patch.get("description") != null) {
+                if (!(patch.get("description") instanceof String s) || s.isBlank()) {
+                    throw new Rejected(ErrorCode.INVALID_INPUT, "description 必须是非空字符串。");
+                }
+                action.put("description", s.trim());
+            }
+            if (patch.containsKey("notes")) {
+                Object n = patch.get("notes");
+                if (n == null || (n instanceof String s && s.isBlank())) {
+                    action.remove("notes");
+                } else if (n instanceof String s) {
+                    action.put("notes", s.trim());
+                } else {
+                    throw new Rejected(ErrorCode.INVALID_INPUT, "notes 必须是字符串或 null。");
+                }
+            }
+            if (patch.containsKey("related")) {
+                Object r = patch.get("related");
+                if (r == null) {
+                    action.remove("related");
+                } else if (r instanceof List<?> list) {
+                    action.set("related", YAML.valueToTree(list));
+                } else {
+                    throw new Rejected(ErrorCode.INVALID_INPUT, "related 必须是字符串数组。");
+                }
+            }
+        }
+        if (patch.containsKey("group")) {
+            Object g = patch.get("group");
+            if (g == null || (g instanceof String s && s.isBlank())) {
+                action.remove("group");
+            } else if (g instanceof String s) {
+                action.put("group", s.trim());
+            } else {
+                throw new Rejected(ErrorCode.INVALID_INPUT, "group 必须是字符串或 null。");
+            }
+        }
+        ObjectNode mcp = action.get("mcp") instanceof ObjectNode m ? m : action.putObject("mcp");
+        if (patch.get("mcp") instanceof Map<?, ?> nestedMcp) {
+            putBoolIfPresent(mcp, "expose", nestedMcp, "expose");
+            putBoolIfPresent(mcp, "read_only", nestedMcp, "read_only");
+            putBoolIfPresent(mcp, "read_only", nestedMcp, "readOnly");
+            putBoolIfPresent(mcp, "destructive", nestedMcp, "destructive");
+        }
+        putBoolIfPresent(mcp, "expose", patch, "expose");
+        putBoolIfPresent(mcp, "read_only", patch, "read_only");
+        putBoolIfPresent(mcp, "read_only", patch, "readOnly");
+        putBoolIfPresent(mcp, "destructive", patch, "destructive");
+        if (patch.containsKey("confirm")) {
+            Object c = patch.get("confirm");
+            if (c == null) {
+                action.remove("confirm");
+            } else if (c instanceof Boolean b) {
+                action.put("confirm", b);
+            } else {
+                throw new Rejected(ErrorCode.INVALID_INPUT, "confirm 必须是布尔值。");
+            }
+        }
+    }
+
+    private static void putBoolIfPresent(ObjectNode target, String targetField, Map<?, ?> source, String key) {
+        if (!source.containsKey(key) || source.get(key) == null) {
+            return;
+        }
+        if (!(source.get(key) instanceof Boolean flag)) {
+            throw new Rejected(ErrorCode.INVALID_INPUT, key + " 必须是布尔值。");
+        }
+        target.put(targetField, flag);
+    }
+
+    public record ConfigureOutcome(byte[] yaml, List<String> updatedActions) {
+    }
+
     static boolean selected(String name, ToolFilter filter) {
         if (filter == null || name == null) {
             return filter == null && name != null;

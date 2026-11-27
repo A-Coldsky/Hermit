@@ -16,6 +16,7 @@ const crab = vi.hoisted(() => ({
   accounts: vi.fn(),
   config: vi.fn(),
   debug: vi.fn(),
+  submitLocalConch: vi.fn(),
 }))
 
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
@@ -162,6 +163,60 @@ describe('停用状态说真话', () => {
     await page.get('[data-test="source-to-reef"]').trigger('click')
     await flushPromises()
     expect(box().checked).toBe(false)
+    page.unmount()
+  })
+
+  it('同名两份时切到本地包：默认不复制，勾选后带 copy=true 并提示未签名风险', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), source: 'REEF', localVersion: '1.1.0', reefVersion: '1.0.1' })
+    crab.setConchSource.mockResolvedValue({ conch: 'legacy_oa', source: 'LOCAL', copied: true, copiedAccounts: 1, copiedConfigKeys: 1 })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' }, attach: true })
+    await flushPromises()
+
+    await page.get('[data-test="source-to-local"]').trigger('click')
+    await flushPromises()
+    const dialog = document.querySelector('[data-test="to-local-dialog"]') as HTMLElement
+    expect(dialog.textContent).toContain('未经 Reef 签名')
+    const box = () => document.querySelector('[data-test="to-local-copy"] input') as HTMLInputElement
+    expect(box().checked).toBe(false)
+    const confirm = () => document.querySelector('[data-test="to-local-confirm"]') as HTMLElement
+    expect(confirm().textContent?.trim()).toBe('切换')
+
+    box().click()
+    await flushPromises()
+    expect(confirm().textContent?.trim()).toBe('复制并切换')
+    confirm().click()
+    await flushPromises()
+    expect(crab.setConchSource).toHaveBeenCalledWith('legacy_oa', 'LOCAL', true)
+    page.unmount()
+  })
+
+  it('本地包已连接 Reef 时可手动提交到 Reef 待审批队列，未连接时不显示入口', async () => {
+    crab.conch.mockResolvedValue({ ...detail(false), source: 'LOCAL', reefConnected: false })
+    const disconnected = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' }, attach: true })
+    await flushPromises()
+    expect(disconnected.find('[data-test="submit-to-reef"]').exists()).toBe(false)
+    disconnected.unmount()
+
+    crab.conch.mockResolvedValue({ ...detail(false), source: 'LOCAL', reefConnected: true })
+    crab.submitLocalConch.mockResolvedValue({
+      id: 42,
+      conch: 'legacy_oa',
+      version: '1.0.1',
+      status: 'PENDING',
+      warnings: ['引用的授权器同样处于待审批状态'],
+    })
+    const page = await mountPage(ConchDetailView, { props: { conch: 'legacy_oa' }, attach: true })
+    await flushPromises()
+    expect(page.find('[data-test="submit-to-reef"]').exists()).toBe(true)
+    await page.get('[data-test="submit-to-reef"]').trigger('click')
+    await flushPromises()
+    const note = document.querySelector('[data-test="submit-reef-note"]') as HTMLTextAreaElement
+    note.value = '新增报销接口'
+    note.dispatchEvent(new Event('input'))
+    await flushPromises()
+    ;(document.querySelector('[data-test="submit-reef-confirm"]') as HTMLElement).click()
+    await flushPromises()
+    expect(crab.submitLocalConch).toHaveBeenCalledWith('legacy_oa', '新增报销接口')
     page.unmount()
   })
 

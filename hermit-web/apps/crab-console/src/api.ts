@@ -101,6 +101,14 @@ export interface ConfigDeclaration extends CredentialField {
   defaultValue: unknown
 }
 
+export interface CapabilityInputField {
+  name: string
+  type: string
+  required: boolean
+  defaultValue?: unknown
+  description?: string | null
+}
+
 export interface CapabilityState {
   action: string
   title: string
@@ -110,6 +118,8 @@ export interface CapabilityState {
   disabled: boolean
   /** 所属分组路径（如 approval 或 approval/leave）；未分组为 null。 */
   group?: string | null
+  /** 能力入参字段摘要，供开发者模式试跑自动填充骨架与上传测试文件。 */
+  input?: CapabilityInputField[]
 }
 
 /**
@@ -125,8 +135,19 @@ export interface SessionContention {
   lastAt: string
 }
 
+export interface SubmittedLocalConch {
+  id: number
+  conch: string
+  version: string
+  status: string
+  submittedBy?: string | null
+  warnings?: string[]
+}
+
 export interface ConchDetail {
   conch: string
+  /** 本机当前是否已连接 Reef 服务（连接时本地包详情页提供手动「提交到 Reef 审批」入口）。 */
+  reefConnected?: boolean
   /** 这是一个授权器（`driver: auth`）：只负责登录，没有能力，不能被调用。 */
   isAuthenticator?: boolean
   /** 这个包的登录由哪个授权器提供；不引用时为 null。 */
@@ -1197,11 +1218,11 @@ export const api = {
   setConchEnabled: (conch: string, enabled: boolean) =>
     http.post<{ conch: string; switchedOff: boolean; sameSite?: string[]; sameAuth?: string[] }>(`${conchPath(conch)}/${enabled ? 'enable' : 'disable'}`),
 
-  /** 同名的本地包和正式包之间切换生效的那份。copy 只在切到 REEF 时有效：复制本地包的账号、凭证和配置。 */
+  /** 同名的本地包和正式包之间切换生效的那份。copy 为 true 时把另一来源的账号、凭证和配置复制到目标来源。 */
   setConchSource: (conch: string, source: 'LOCAL' | 'REEF', copy = false) =>
     http.post<{ conch: string; source: 'LOCAL' | 'REEF'; copied: boolean; copiedAccounts: number; copiedConfigKeys: number; sameSite?: string[]; sameAuth?: string[] }>(
       `${conchPath(conch)}/source`,
-      source === 'REEF' ? { source, copy } : { source },
+      source === 'REEF' || copy ? { source, copy } : { source },
     ),
 
   setCapability: (conch: string, action: string, enabled: boolean) =>
@@ -1338,6 +1359,12 @@ export const api = {
     http.del<{ conch: string; deleted: boolean }>(`${base}/local-conches/${seg(conch)}`),
   /** 响应体是原始 YAML 文本，与磁盘文件一致。 */
   exportLocalConch: (conch: string) => http.text(`${base}/local-conches/${seg(conch)}/export`),
+  /** 仅限控制台会话：将本地规则包手动提交至已连接的 Reef 待审批队列。 */
+  submitLocalConch: (conch: string, note?: string) =>
+    http.post<SubmittedLocalConch>(
+      `${base}/local-conches/${seg(conch)}/submit`,
+      note && note.trim() ? { note: note.trim() } : {},
+    ),
   /**
    * 本地 HTTP 或 MCP 包试跑。正式包为 409 `CONFLICT`。开关关掉为 409 `NOT_CONFIGURED`。
    * 成功时 data 是能力输出。MCP 成功时优先 structuredContent，否则 `{content}`。追踪在调用详情的 `devTrace`。

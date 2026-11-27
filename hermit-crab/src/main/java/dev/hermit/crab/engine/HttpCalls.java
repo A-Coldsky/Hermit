@@ -515,6 +515,10 @@ final class HttpCalls {
     /** 为按需取值的变量视图（如 login）提供全部已知敏感值，避免空 entrySet 漏掉跨源头剥离。 */
     interface SecretSource {
         Collection<String> knownValues();
+
+        default Map<String, String> snapshotForScript() {
+            return Map.of();
+        }
     }
 
     static Set<String> sensitiveValues(Map<String, Object> vars, CookieStore cookies) {

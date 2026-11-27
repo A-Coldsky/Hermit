@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { CopyDocument } from '@element-plus/icons-vue'
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import JsonBlock from '@shared/components/JsonBlock.vue'
 import { ApiError, type Envelope } from '@shared/http'
 import { copyText, errorCodeLabels, errorText, notifyError } from '@shared/format'
 import { buildGroupTree, type GroupDef } from '@shared/groups'
-import { api, type Account, type CapabilityState, type McpRefreshResult } from '../api'
+import { api, type Account, type CapabilityInputField, type CapabilityState, type McpRefreshResult } from '../api'
 import ShellPicker from './ShellPicker.vue'
 import TrustJump from './TrustJump.vue'
 
@@ -47,6 +47,35 @@ const trial = reactive({
   input: '{}',
   running: false,
 })
+const selectedCapability = computed(
+  () => runnable.value.find((c) => c.action === (trial.action || runnable.value[0]?.action)) ?? null,
+)
+const fileInputs = computed<CapabilityInputField[]>(() =>
+  (selectedCapability.value?.input ?? []).filter((f) => f.type === 'file'),
+)
+const uploadingField = ref<string | null>(null)
+const uploadedNames = reactive<Record<string, string>>({})
+let lastAutoInput = '{}'
+
+function defaultFieldSample(field: CapabilityInputField): unknown {
+  if (field.defaultValue !== undefined && field.defaultValue !== null) return field.defaultValue
+  if (field.type === 'integer' || field.type === 'number') return 0
+  if (field.type === 'boolean') return false
+  if (field.type === 'array') return []
+  if (field.type === 'object') return {}
+  return ''
+}
+
+function skeletonFor(cap: CapabilityState | null): string {
+  const fields = cap?.input ?? []
+  if (!fields.length) return '{}'
+  const obj: Record<string, unknown> = {}
+  for (const field of fields) {
+    obj[field.name] = defaultFieldSample(field)
+  }
+  return JSON.stringify(obj, null, 2)
+}
+
 const trialResult = reactive({
   open: false,
   success: false,
@@ -71,7 +100,26 @@ watch(
     trial.action = ''
     trial.account = ''
     refresh.account = ''
+    for (const key of Object.keys(uploadedNames)) {
+      delete uploadedNames[key]
+    }
+    const nextSkeleton = skeletonFor(selectedCapability.value)
+    trial.input = nextSkeleton
+    lastAutoInput = nextSkeleton
   },
+)
+
+watch(
+  selectedCapability,
+  (cap) => {
+    const nextSkeleton = skeletonFor(cap)
+    const trimmed = trial.input.trim()
+    if (!trimmed || trimmed === '{}' || trial.input === lastAutoInput) {
+      trial.input = nextSkeleton
+      lastAutoInput = nextSkeleton
+    }
+  },
+  { immediate: true },
 )
 
 watch(runnable, (items) => {
@@ -104,6 +152,34 @@ function parseInput(): Record<string, unknown> | null {
   } catch {
     ElMessage.warning('入参不是合法 JSON')
     return null
+  }
+}
+
+async function onPickTrialFile(fieldName: string, event: Event) {
+  const target = event.target as HTMLInputElement | null
+  const file = target?.files?.[0]
+  if (target) target.value = ''
+  if (!file) return
+  uploadingField.value = fieldName
+  try {
+    const staged = await api.uploadFile(file)
+    let current: Record<string, unknown> = {}
+    try {
+      const parsed = JSON.parse(trial.input.trim() || '{}') as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        current = parsed as Record<string, unknown>
+      }
+    } catch {
+      current = {}
+    }
+    current[fieldName] = staged.fileId
+    trial.input = JSON.stringify(current, null, 2)
+    uploadedNames[fieldName] = `${staged.name} (${staged.fileId})`
+    ElMessage.success(`已暂存文件 ${staged.name}，fileId 已填入 ${fieldName}`)
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    uploadingField.value = null
   }
 }
 
@@ -204,6 +280,25 @@ async function refreshTools() {
           <el-select v-model="trial.account" clearable :placeholder="defaultAccount ? `默认 ${defaultAccount}` : '选择账号'">
             <el-option v-for="account in accounts" :key="account.name" :label="account.name" :value="account.name" />
           </el-select>
+        </el-form-item>
+        <el-form-item v-if="fileInputs.length" label="测试文件参数" data-test="trial-file-pickers">
+          <div class="file-pickers">
+            <div v-for="field in fileInputs" :key="field.name" class="file-picker-row">
+              <span class="mono">{{ field.name }}</span>
+              <el-tag v-if="field.required" size="small" type="warning" effect="plain">必填</el-tag>
+              <label class="el-button el-button--small is-plain file-picker-btn">
+                {{ uploadingField === field.name ? '上传中…' : '选择文件并填入 fileId' }}
+                <input
+                  type="file"
+                  class="hidden-file"
+                  :disabled="uploadingField !== null"
+                  :data-test="`trial-file-${field.name}`"
+                  @change="onPickTrialFile(field.name, $event)"
+                />
+              </label>
+              <span v-if="uploadedNames[field.name]" class="hm-muted file-staged-note mono">{{ uploadedNames[field.name] }}</span>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="入参 JSON">
           <el-input v-model="trial.input" type="textarea" :rows="6" class="mono" data-test="trial-input" />
@@ -306,6 +401,32 @@ h4 {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.file-pickers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.file-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.file-picker-btn {
+  cursor: pointer;
+}
+
+.hidden-file {
+  display: none;
+}
+
+.file-staged-note {
+  font-size: 12px;
 }
 
 .account {

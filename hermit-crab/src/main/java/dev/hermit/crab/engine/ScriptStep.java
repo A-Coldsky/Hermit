@@ -268,21 +268,25 @@ final class ScriptStep {
         return copy;
     }
 
-    /** A new map so a script cannot mutate the account credential fields used by later templates. */
+    /** A new map so a script cannot mutate the account credential or login/auth fields used by later templates. */
     private static Map<String, Object> copyWithCredential(Map<String, Object> vars) {
         LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : vars.entrySet()) {
-            if ("login".equals(entry.getKey()) || entry.getValue() instanceof HttpCalls.SecretSource) {
-                continue;
-            }
-            if ("credential".equals(entry.getKey())) {
-                Map<String, Object> fields = Values.map(entry.getValue());
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if (value instanceof HttpCalls.SecretSource source) {
+                copy.put(key, new LinkedHashMap<>(source.snapshotForScript()));
+            } else if ("login".equals(key)) {
+                Map<String, Object> fields = Values.map(value);
+                copy.put("login", fields == null ? new LinkedHashMap<>() : new LinkedHashMap<>(fields));
+            } else if ("credential".equals(key)) {
+                Map<String, Object> fields = Values.map(value);
                 if (fields == null) {
                     throw mismatch("脚本变量类型无效");
                 }
                 copy.put("credential", new LinkedHashMap<>(fields));
             } else {
-                copy.put(entry.getKey(), entry.getValue());
+                copy.put(key, value);
             }
         }
         return copy;

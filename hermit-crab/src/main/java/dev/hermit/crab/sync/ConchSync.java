@@ -2001,6 +2001,46 @@ public final class ConchSync {
         }
     }
 
+    public SubmittedConch submitSubmission(byte[] yaml, String note) {
+        ReefClient.SubmittedConch done = reef.submitSubmission(yaml, note);
+        return new SubmittedConch(
+                done.id(),
+                done.conch(),
+                done.version(),
+                done.status(),
+                done.submittedBy(),
+                done.warnings());
+    }
+
+    public record SubmittedConch(
+            long id,
+            String conch,
+            String version,
+            String status,
+            String submittedBy,
+            List<String> warnings
+    ) {
+    }
+
+    public static final class SubmissionRejectedException extends RuntimeException {
+        private final int httpStatus;
+        private final String errorCode;
+
+        public SubmissionRejectedException(int httpStatus, String errorCode, String message) {
+            super(message);
+            this.httpStatus = httpStatus;
+            this.errorCode = errorCode;
+        }
+
+        public int httpStatus() {
+            return httpStatus;
+        }
+
+        public String errorCode() {
+            return errorCode;
+        }
+    }
+
     private static final class Fetched {
         private final VerifiedConch verified;
         private final byte[] zip;

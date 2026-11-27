@@ -105,6 +105,8 @@ final class AuthoringCalls {
             "结合这些脱敏请求编写或修改规则包：1) 先调用 hermit_dev__guide 获取 starterTemplate 与 pitfalls（涉及登录/SSO/会话失效/文件上传下载时按 section 查阅对应章节）；"
                     + "2) 凭证只在 credentials 声明字段，Cookie 由 Crab 自动管理不要写 Cookie 请求头；"
                     + "3) 写完先调用 hermit_dev__validate 校验至 ok=true，再调用 hermit_dev__save_local 保存。";
+    static final String NEXT_CAPTURE_MULTI_ORIGIN =
+            "检测到抓包跨越多个源站（如统一认证 SSO 与业务系统分离）：落盘前请先询问用户该登录是否会被多个内部系统共用——若多系统共用，建议拆分为可复用授权器（driver: auth）+ 业务包（auth.use）；若仅当前单一系统使用，直接在业务包配置 auth.origins 即可。";
     static final String GUIDE_OVERVIEW_NOTE =
             "建议直接复制 starterTemplate（或按 section 传 starter_auth / starter_auth_use / starter_mcp 获取授权器、引用授权器、MCP 起始模板）按抓包或接口结构修改，并对照 pitfalls 避坑；传 section（章节 id、章节标题、子标题，或 all 获取全文）按需阅读；也可传 query 按关键词定位章节。同源资源 URI 为 hermit://conches/hermit_dev/guide。";
     static final String REEF_READ_ONLY_NOTE =
@@ -115,12 +117,20 @@ final class AuthoringCalls {
             "这是本地规则包，修改后可用 hermit_dev__validate 校验并用 hermit_dev__save_local 保存。";
     static final String LOCAL_INACTIVE_NOTE =
             "这是本地规则包，但当前生效的是同名 Reef 正式包；修改保存不会影响 Reef 正式包，试跑前需先在 Crab 控制台将来源切换为本地规则包。";
+    static final String OMIT_SCHEMAS_NOTE_SUFFIX =
+            "（已省略 MCP 工具 schema；修改分组或只读/确认等元数据请直接用 hermit_dev__mcp_configure 原地更新，切勿将省略了 schema 的 YAML 传给 hermit_dev__save_local。）";
 
     private static final Pattern ACCOUNT = Pattern.compile(McpCatalog.ACCOUNT_PATTERN);
     private static final Pattern CONCH_NAME = Pattern.compile("^[a-z][a-z0-9_]{1,63}$");
     private static final Set<String> GUIDE_FIELDS = Set.of("section", "query");
-    private static final Set<String> READ_YAML_FIELDS = Set.of("conch", "source");
+    private static final Set<String> READ_YAML_FIELDS = Set.of("conch", "source", "omitSchemas");
     private static final Set<String> CAPTURE_GET_FIELDS = Set.of("captureId", "index", "indices", "includeBody", "maxBodyChars");
+    private static final Set<String> MCP_CONFIGURE_FIELDS = Set.of(
+            "conch", "version", "groups", "tools", "defaults", "actions");
+    private static final Set<String> DRY_RUN_FIELDS = Set.of(
+            "captureId", "index", "response", "vars", "extract", "script", "expiredWhen", "output");
+    private static final Set<String> STAGE_TEXT_FILE_FIELDS = Set.of("filename", "content", "mimeType");
+    private static final int MAX_STAGED_TEXT_BYTES = 64 * 1024;
     private static final int MAX_CAPTURE_BATCH = 10;
     private static final int DEFAULT_CAPTURE_BODY_CHARS = 8_000;
     private static final int MAX_CAPTURE_BODY_CHARS = 32_000;
@@ -132,6 +142,8 @@ final class AuthoringCalls {
     private static final Set<String> LOCAL_ACCOUNT_FIELDS = Set.of("conch", "account");
 
     private final CrabRuntime runtime;
+    private final dev.hermit.crab.engine.ResponseDryRunner dryRunner =
+            new dev.hermit.crab.engine.ResponseDryRunner(java.time.Clock.systemUTC());
 
     AuthoringCalls(CrabRuntime runtime) {
         this.runtime = runtime;
@@ -319,6 +331,13 @@ final class AuthoringCalls {
                 }
             }
         }
+        boolean omitSchemas = false;
+        if (arguments.containsKey("omitSchemas") && arguments.get("omitSchemas") != null) {
+            if (!(arguments.get("omitSchemas") instanceof Boolean flag)) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "omitSchemas 必须是布尔值。", "omitSchemas");
+            }
+            omitSchemas = flag;
+        }
         // 在探测磁盘与注册表之前先校验权限，避免窄范围 Key 探测其他包是否存在。
         // 若该名字正是这把 Key 在 hermit_dev__auth_list 里可见的授权器，直接给出授权器需要全部权限的明确提示，不给出无法做到的“点名该包”建议。
         if (principal != null && !canSaveExisting(principal, conch)) {
@@ -354,6 +373,9 @@ final class AuthoringCalls {
             }
             byte[] bytes = exported.bytes();
             boolean active = activeOrigin == Origin.LOCAL;
+            String compact = omitSchemas ? dev.hermit.crab.upstream.McpToolMerge.compactYaml(bytes) : null;
+            boolean stripped = compact != null;
+            String baseNote = !active && hasReef ? LOCAL_INACTIVE_NOTE : LOCAL_ACTIVE_NOTE;
             LinkedHashMap<String, Object> body = new LinkedHashMap<>();
             body.put("conch", conch);
             body.put("source", "local");
@@ -365,8 +387,9 @@ final class AuthoringCalls {
                 body.put("version", exported.version());
             }
             body.put("sha256", sha256(bytes));
-            body.put("yaml", new String(bytes, StandardCharsets.UTF_8));
-            body.put("note", !active && hasReef ? LOCAL_INACTIVE_NOTE : LOCAL_ACTIVE_NOTE);
+            body.put("schemasOmitted", stripped);
+            body.put("yaml", stripped ? compact : new String(bytes, StandardCharsets.UTF_8));
+            body.put("note", stripped ? baseNote + OMIT_SCHEMAS_NOTE_SUFFIX : baseNote);
             return McpCalls.ok(body);
         }
         Optional<InstalledConches.VerifiedYaml> verified = runtime.readOfficialYaml(conch);
@@ -376,6 +399,9 @@ final class AuthoringCalls {
         InstalledConches.VerifiedYaml official = verified.get();
         byte[] bytes = official.bytes();
         boolean active = activeOrigin == Origin.OFFICIAL;
+        String compact = omitSchemas ? dev.hermit.crab.upstream.McpToolMerge.compactYaml(bytes) : null;
+        boolean stripped = compact != null;
+        String baseNote = hasLocal ? REEF_READ_ONLY_WITH_LOCAL_NOTE : REEF_READ_ONLY_NOTE;
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("conch", conch);
         body.put("source", "reef");
@@ -385,8 +411,9 @@ final class AuthoringCalls {
         body.put("hasReef", true);
         body.put("version", official.version());
         body.put("sha256", sha256(bytes));
-        body.put("yaml", new String(bytes, StandardCharsets.UTF_8));
-        body.put("note", hasLocal ? REEF_READ_ONLY_WITH_LOCAL_NOTE : REEF_READ_ONLY_NOTE);
+        body.put("schemasOmitted", stripped);
+        body.put("yaml", stripped ? compact : new String(bytes, StandardCharsets.UTF_8));
+        body.put("note", stripped ? baseNote + OMIT_SCHEMAS_NOTE_SUFFIX : baseNote);
         return McpCalls.ok(body);
     }
 
@@ -403,7 +430,11 @@ final class AuthoringCalls {
         }
         List<CaptureSnapshot> snapshots = runtime.recorder().listSnapshots();
         ArrayList<Map<String, Object>> rows = new ArrayList<>(snapshots.size());
+        boolean anyMultiOrigin = false;
         for (CaptureSnapshot snapshot : snapshots) {
+            if (snapshot.origins().size() > 1) {
+                anyMultiOrigin = true;
+            }
             LinkedHashMap<String, Object> row = new LinkedHashMap<>();
             row.put("captureId", snapshot.id());
             row.put("title", snapshot.title());
@@ -441,7 +472,11 @@ final class AuthoringCalls {
         body.put("total", rows.size());
         body.put("note", UNTRUSTED);
         body.put("untrusted", true);
-        body.put("next", rows.isEmpty() ? NEXT_CAPTURE_LIST_EMPTY : NEXT_CAPTURE_LIST);
+        String nextText = rows.isEmpty() ? NEXT_CAPTURE_LIST_EMPTY : NEXT_CAPTURE_LIST;
+        if (anyMultiOrigin) {
+            nextText = nextText + " " + NEXT_CAPTURE_MULTI_ORIGIN;
+        }
+        body.put("next", nextText);
         return McpCalls.ok(body);
     }
 
@@ -541,7 +576,9 @@ final class AuthoringCalls {
         body.put("missingIndices", missing);
         body.put("note", UNTRUSTED);
         body.put("untrusted", true);
-        body.put("next", NEXT_CAPTURE_GET);
+        body.put("next", snapshot.origins().size() > 1
+                ? NEXT_CAPTURE_GET + " " + NEXT_CAPTURE_MULTI_ORIGIN
+                : NEXT_CAPTURE_GET);
         return McpCalls.ok(body);
     }
 
@@ -693,9 +730,10 @@ final class AuthoringCalls {
                     return importFailure(same, attempt);
                 }
             }
-            boolean boundLocal = runtime.identities().hasBoundLocal(ex.replaceConch());
-            boolean boundAuth = runtime.authenticators().hasBoundLocal(ex.replaceConch());
-            if (!boundLocal) {
+            boolean boundIdentity = runtime.identities().hasSharedIdentityLocal(ex.replaceConch());
+            boolean boundOfficialAuth = runtime.authenticators().hasBoundToOfficial(ex.replaceConch());
+            boolean boundAnyAuth = runtime.authenticators().hasBoundLocal(ex.replaceConch());
+            if (!boundIdentity) {
                 try {
                     Optional<LocalConches.ImportResult> granted =
                             runtime.localConches().applyIfGranted(raw, Actors.MCP, keyName);
@@ -716,7 +754,7 @@ final class AuthoringCalls {
             if (canElicit) {
                 String baseSha = runtime.localConches().diskSha(ex.replaceConch());
                 McpSchema.CallToolResult confirmed = confirmOverwrite(
-                        session, ex.replaceConch(), before, after, boundLocal, boundAuth, attempt);
+                        session, ex.replaceConch(), before, after, boundIdentity, boundOfficialAuth, boundAnyAuth, attempt);
                 if (confirmed != null) {
                     return confirmed;
                 }
@@ -742,28 +780,42 @@ final class AuthoringCalls {
                     }
                 }
             }
-            boundLocal = boundLocal || runtime.identities().hasBoundLocal(ex.replaceConch());
-            boundAuth = boundAuth || runtime.authenticators().hasBoundLocal(ex.replaceConch());
+            boundIdentity = boundIdentity || runtime.identities().hasSharedIdentityLocal(ex.replaceConch());
+            boundOfficialAuth = boundOfficialAuth || runtime.authenticators().hasBoundToOfficial(ex.replaceConch());
+            boundAnyAuth = boundAnyAuth || runtime.authenticators().hasBoundLocal(ex.replaceConch());
             return McpCalls.failAsRequest(
-                    attempt, "CONFIRM_REQUIRED", confirmRequiredMessage(boundary, boundLocal, boundAuth));
+                    attempt,
+                    "CONFIRM_REQUIRED",
+                    confirmRequiredMessage(boundary, boundIdentity, boundOfficialAuth, boundAnyAuth));
         }
     }
 
     static String confirmRequiredMessage(ConchDestinations.Boundary boundary) {
-        return confirmRequiredMessage(boundary, false, false);
+        return confirmRequiredMessage(boundary, false, false, false);
     }
 
     static String confirmRequiredMessage(ConchDestinations.Boundary boundary, boolean boundIdentity) {
-        return confirmRequiredMessage(boundary, boundIdentity, false);
+        return confirmRequiredMessage(boundary, boundIdentity, false, false);
     }
 
     static String confirmRequiredMessage(
             ConchDestinations.Boundary boundary, boolean boundLocal, boolean boundAuth) {
-        String boundNotice = boundAuth
-                ? "该本地规则包存在授权器绑定，覆盖需要用户到 Crab 控制台确认，确认覆盖后会自动解除现有授权器绑定。"
-                : "该本地规则包已绑定共享身份，覆盖需要用户到 Crab 控制台确认，确认覆盖后会自动将其移出共享身份。";
-        if (boundLocal && boundary.sameBoundary()) {
-            return boundNotice + "请把这句话转告用户，不要换包名重新保存。";
+        return confirmRequiredMessage(boundary, boundLocal && !boundAuth, boundAuth, boundAuth);
+    }
+
+    static String confirmRequiredMessage(
+            ConchDestinations.Boundary boundary,
+            boolean boundIdentity,
+            boolean boundOfficialAuth,
+            boolean boundAnyAuth
+    ) {
+        if (boundary.sameBoundary()) {
+            if (boundIdentity) {
+                return "该本地规则包已绑定共享身份，覆盖需要用户到 Crab 控制台确认，确认覆盖后会自动将其移出共享身份。请把这句话转告用户，不要换包名重新保存。";
+            }
+            if (boundOfficialAuth) {
+                return "该本地规则包存在正式授权器绑定，覆盖需要用户到 Crab 控制台确认（同边界确认覆盖后会保留现有授权器绑定；勾选“本次开发者模式内不再询问”后后续同边界修改无需重复确认）。请把这句话转告用户，不要换包名重新保存。";
+            }
         }
         String list;
         if (boundary.addedDestinations().isEmpty() && !boundary.undetermined() && boundary.authChanged()) {
@@ -773,8 +825,11 @@ final class AuthoringCalls {
         }
         String base = "这次修改让规则包访问新的地址 " + list
                 + "，需要用户到 Crab 控制台确认。请把这句话转告用户，不要换包名重新保存。";
-        if (boundLocal) {
-            return boundNotice + base;
+        if (boundIdentity) {
+            return "该本地规则包已绑定共享身份，覆盖需要用户到 Crab 控制台确认，确认覆盖后会自动将其移出共享身份。" + base;
+        }
+        if (boundAnyAuth) {
+            return "该本地规则包存在授权器绑定，覆盖需要用户到 Crab 控制台确认，确认覆盖后会自动解除现有授权器绑定。" + base;
         }
         return base;
     }
@@ -975,14 +1030,284 @@ final class AuthoringCalls {
         if (toolCount == 0) {
             refreshNext = "上游返回的过滤后工具列表为空，请检查 tools.include / tools.exclude 或上游服务。";
         } else if (!outcome.added().isEmpty()) {
-            refreshNext = "已同步上游工具快照（共 " + toolCount + " 个能力）。新加入的工具默认按保守安全策略设为 read_only: false、destructive: true、confirm: true；请先用 hermit_dev__read_yaml 审阅生成的工具定义，核实只读查询工具后改为 read_only: true、destructive: false、confirm: false 并用 hermit_dev__save_local 保存，再调用 hermit_dev__trial_run 试跑验证。";
+            refreshNext = "已同步上游工具快照（共 " + toolCount + " 个能力）。新加入的工具默认按保守安全策略设为 read_only: false、destructive: true、confirm: true；请先用 hermit_dev__read_yaml(conch=\"" + conch + "\", omitSchemas=true) 轻量审阅工具清单，再用 hermit_dev__mcp_configure 在原地批量整理分组与只读/确认标志（无需手改整份 schema YAML），最后调用 hermit_dev__trial_run 试跑验证。";
         } else {
-            refreshNext = "已同步上游工具快照（共 " + toolCount + " 个能力），可用 hermit_dev__read_yaml 查看生成的工具定义，或用 hermit_dev__trial_run 试跑验证。";
+            refreshNext = "已同步上游工具快照（共 " + toolCount + " 个能力），可用 hermit_dev__read_yaml(conch=\"" + conch + "\", omitSchemas=true) 查看轻量工具摘要、用 hermit_dev__mcp_configure 调整分组或权限，或用 hermit_dev__trial_run 试跑验证。";
         }
         body.put("next", refreshNext);
         body.put("note", UNTRUSTED);
         body.put("untrusted", true);
         return McpCalls.ok(body);
+    }
+
+    McpSchema.CallToolResult mcpConfigure(
+            ApiKeyPrincipal principal,
+            Map<String, Object> arguments,
+            McpCalls.Attempt attempt
+    ) {
+        if (!devMode()) {
+            return McpCalls.fail(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
+        }
+        if (principal != null && principal.scope().readOnlyOnly()) {
+            return McpCalls.failAsRequest(attempt, "FORBIDDEN", READ_ONLY_SAVE);
+        }
+        String unknown = unknownField(arguments, MCP_CONFIGURE_FIELDS);
+        if (unknown != null) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "未知字段 " + unknown + "。");
+        }
+        String conch = requiredText(arguments, "conch");
+        if (conch == null) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "需要包名。", "conch");
+        }
+        conch = conch.trim();
+        if (!CONCH_NAME.matcher(conch).matches()) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "规则包名称无效。", "conch");
+        }
+        if (!canSaveExisting(principal, conch)) {
+            if (visibleAuthenticatorTo(principal, conch)) {
+                return McpCalls.failAsRequest(attempt, "FORBIDDEN", AUTH_SCOPE_DENIED);
+            }
+            String message = inScope(principal, conch) ? narrowedSave(conch) : notInScope(conch);
+            return McpCalls.failAsRequest(attempt, "FORBIDDEN", message);
+        }
+        LocalConches.Export exported;
+        try {
+            exported = runtime.localConches().export(conch);
+        } catch (LocalConchException ex) {
+            if (runtime.hasOfficialPackage(conch)) {
+                return McpCalls.failAsRequest(attempt, "CONFLICT", OFFICIAL);
+            }
+            return McpCalls.failAsRequest(attempt, "NOT_FOUND", "本机没有可读的本地规则包 " + conch + "。");
+        }
+        dev.hermit.crab.upstream.McpToolMerge.ConfigureOutcome configured;
+        try {
+            configured = dev.hermit.crab.upstream.McpToolMerge.configure(exported.bytes(), arguments);
+        } catch (dev.hermit.crab.upstream.McpToolMerge.Rejected ex) {
+            return McpCalls.failAsRequest(attempt, ex.code().name(), ex.getMessage());
+        }
+        LocalConches.CheckResult checked;
+        try {
+            checked = runtime.localConches().check(configured.yaml());
+        } catch (LocalConchException ex) {
+            return McpCalls.fail(attempt, ex.code().name(), ex.getMessage());
+        }
+        if (!checked.ok()) {
+            return issues(false, conch, null, checked.errors(), checked.warnings(), "MCP 规则包配置校验失败", null, null,
+                    attempt.traceId());
+        }
+        ConchDoc beforeDoc = runtime.registry().find(conch, Origin.LOCAL).orElse(null);
+        Set<String> beforeKeys = beforeDoc == null ? null : credentialNames(beforeDoc);
+        String keyName = principal == null ? null : principal.name();
+        try {
+            LocalConches.ImportResult saved =
+                    runtime.localConches().replaceIfSameBoundary(configured.yaml(), Actors.MCP, keyName);
+            return saved(saved, beforeKeys);
+        } catch (LocalConchException ex) {
+            return importFailure(ex, attempt);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    McpSchema.CallToolResult dryRunResponse(
+            ApiKeyPrincipal principal,
+            Map<String, Object> arguments,
+            McpCalls.Attempt attempt
+    ) {
+        if (!devMode()) {
+            return McpCalls.fail(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
+        }
+        String unknown = unknownField(arguments, DRY_RUN_FIELDS);
+        if (unknown != null) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "未知字段 " + unknown + "。");
+        }
+        boolean hasCapture = arguments.get("captureId") != null;
+        boolean hasInline = arguments.get("response") != null;
+        if (hasCapture == hasInline) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT",
+                    "请提供 captureId（配合 index 读取抓包快照响应）或 response（内联模拟响应），二者必选其一且互斥。");
+        }
+        dev.hermit.crab.engine.ResponseDryRunner.MockResponse mock;
+        if (hasCapture) {
+            if (principal != null && !principal.scope().grantsAllOfficial()) {
+                return McpCalls.failAsRequest(attempt, "FORBIDDEN", CAPTURE_SCOPE_DENIED);
+            }
+            if (!(arguments.get("captureId") instanceof String cid) || cid.isBlank()) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "captureId 必须是非空字符串。", "captureId");
+            }
+            Integer idx = parsePositiveInt(arguments.get("index"));
+            if (idx == null) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "使用 captureId 时需要大于 0 的整数 index。", "index");
+            }
+            Optional<CaptureSnapshot> found = runtime.recorder().getSnapshot(cid.trim());
+            if (found.isEmpty()) {
+                return McpCalls.failAsRequest(attempt, "NOT_FOUND",
+                        "没有找到抓包快照 " + cid.trim() + "。请先调用 hermit_dev__capture_list。", "captureId");
+            }
+            CaptureSnapshot snap = found.get();
+            if (idx > snap.entries().size()) {
+                return McpCalls.failAsRequest(attempt, "NOT_FOUND",
+                        "抓包快照仅有 " + snap.entries().size() + " 条记录，不存在序号 " + idx + "。", "index");
+            }
+            RecordedEntry entry = snap.entries().get(idx - 1);
+            LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
+            if (entry.responseHeaders() != null) {
+                entry.responseHeaders().forEach(h -> {
+                    if (h != null && h.name() != null && h.value() != null) {
+                        hdrs.putIfAbsent(h.name(), h.value());
+                    }
+                });
+            }
+            mock = new dev.hermit.crab.engine.ResponseDryRunner.MockResponse(
+                    entry.status(),
+                    entry.url(),
+                    entry.method(),
+                    entry.path(),
+                    hdrs,
+                    entry.responseBody(),
+                    entry.redirectTo());
+        } else {
+            if (!(arguments.get("response") instanceof Map<?, ?> respMap)) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "response 必须是对象。", "response");
+            }
+            int status = 200;
+            if (respMap.get("status") != null) {
+                if (!(respMap.get("status") instanceof Number num)) {
+                    return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "response.status 必须是整数。");
+                }
+                status = num.intValue();
+            }
+            LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
+            if (respMap.get("headers") instanceof Map<?, ?> rawHeaders) {
+                rawHeaders.forEach((k, v) -> {
+                    if (k != null && v != null) {
+                        hdrs.put(String.valueOf(k), String.valueOf(v));
+                    }
+                });
+            }
+            String body = respMap.get("body") == null ? "" : String.valueOf(respMap.get("body"));
+            String url = respMap.get("url") instanceof String u ? u : "https://dry-run.local/";
+            String redirect = respMap.get("redirect") instanceof String r ? r : null;
+            mock = new dev.hermit.crab.engine.ResponseDryRunner.MockResponse(
+                    status, url, "GET", "/", hdrs, body, redirect);
+        }
+
+        Map<String, Object> initialVars = null;
+        if (arguments.get("vars") != null) {
+            if (!(arguments.get("vars") instanceof Map<?, ?> m)) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "vars 必须是对象。", "vars");
+            }
+            initialVars = (Map<String, Object>) m;
+        }
+        Map<String, Object> extractSpec = null;
+        if (arguments.get("extract") != null) {
+            if (!(arguments.get("extract") instanceof Map<?, ?> m)) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "extract 必须是对象。", "extract");
+            }
+            extractSpec = (Map<String, Object>) m;
+        }
+        Map<String, Object> scriptSpec = null;
+        if (arguments.get("script") != null) {
+            if (!(arguments.get("script") instanceof Map<?, ?> m)) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "script 必须是对象。", "script");
+            }
+            scriptSpec = (Map<String, Object>) m;
+        }
+        List<Map<String, Object>> expiredRules = null;
+        if (arguments.get("expiredWhen") != null) {
+            if (!(arguments.get("expiredWhen") instanceof List<?> list)) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "expiredWhen 必须是对象数组。", "expiredWhen");
+            }
+            ArrayList<Map<String, Object>> casted = new ArrayList<>(list.size());
+            for (Object item : list) {
+                if (!(item instanceof Map<?, ?> m)) {
+                    return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "expiredWhen 元素必须是对象。", "expiredWhen");
+                }
+                casted.add((Map<String, Object>) m);
+            }
+            expiredRules = casted;
+        }
+        Map<String, Object> outputSpec = null;
+        if (arguments.get("output") != null) {
+            if (!(arguments.get("output") instanceof Map<?, ?> m)) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "output 必须是对象。", "output");
+            }
+            outputSpec = (Map<String, Object>) m;
+        }
+
+        dev.hermit.crab.engine.ResponseDryRunner.DryRunResult res;
+        try {
+            res = dryRunner.run(mock, initialVars, extractSpec, scriptSpec, expiredRules, outputSpec);
+        } catch (IllegalArgumentException ex) {
+            return McpCalls.failAsRequest(attempt, "RULE_MISMATCH", ex.getMessage());
+        }
+        LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("extractCount", res.extractCount());
+        out.put("extracted", res.extracted());
+        out.put("expired", res.expired());
+        if (res.matchedExpiredRuleIndex() != null) {
+            out.put("matchedExpiredRuleIndex", res.matchedExpiredRuleIndex());
+        }
+        if (res.renderedOutput() != null) {
+            out.put("output", res.renderedOutput());
+        }
+        out.put("untrusted", hasCapture);
+        if (hasCapture) {
+            out.put("note", UNTRUSTED);
+        }
+        return McpCalls.ok(out);
+    }
+
+    McpSchema.CallToolResult stageTextFile(
+            ApiKeyPrincipal principal,
+            Map<String, Object> arguments,
+            McpCalls.Attempt attempt
+    ) {
+        if (!devMode()) {
+            return McpCalls.fail(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
+        }
+        if (principal != null && principal.scope().readOnlyOnly()) {
+            return McpCalls.failAsRequest(attempt, "FORBIDDEN", "这把 API Key 只允许调用只读能力，不能写入文件暂存区。");
+        }
+        String unknown = unknownField(arguments, STAGE_TEXT_FILE_FIELDS);
+        if (unknown != null) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "未知字段 " + unknown + "。");
+        }
+        String filename = requiredText(arguments, "filename");
+        if (filename == null) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "需要文件名 filename。", "filename");
+        }
+        if (!(arguments.get("content") instanceof String content)) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "需要文本内容 content。", "content");
+        }
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_STAGED_TEXT_BYTES) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "测试文本文件大小不能超过 64 KiB。", "content");
+        }
+        String mimeType = "text/plain; charset=utf-8";
+        if (arguments.get("mimeType") != null) {
+            if (!(arguments.get("mimeType") instanceof String m) || m.isBlank()) {
+                return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "mimeType 必须是非空字符串。", "mimeType");
+            }
+            mimeType = m.trim();
+        }
+        String owner = principal == null ? null : principal.id();
+        dev.hermit.crab.files.StagedFile staged;
+        try {
+            staged = runtime.fileStage().store(bytes, filename.trim(), mimeType, owner);
+        } catch (dev.hermit.crab.files.FileStageException ex) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT", ex.getMessage());
+        }
+        LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("fileId", staged.fileId());
+        out.put("filename", staged.name());
+        out.put("size", staged.size());
+        out.put("mimeType", staged.mime());
+        out.put("sha256", staged.sha256());
+        out.put("expiresAt", staged.expiresAt().toString());
+        out.put("next", "可将此 fileId 填入 hermit_dev__trial_run 的 type: file 入参测试 multipart 文件上传能力。");
+        return McpCalls.ok(out);
     }
 
     McpSchema.CallToolResult trial(
@@ -1247,25 +1572,29 @@ final class AuthoringCalls {
             String conch,
             ConchDoc before,
             ConchDoc after,
-            boolean boundLocal,
-            boolean boundAuth,
+            boolean boundIdentity,
+            boolean boundOfficialAuth,
+            boolean boundAnyAuth,
             McpCalls.Attempt attempt
     ) {
+        ConchDestinations.Boundary boundary = ConchDestinations.between(before, after);
         if (session == null || !session.supportsElicitation() || !session.streaming()) {
             return McpCalls.failAsRequest(
                     attempt,
                     "CONFIRM_REQUIRED",
-                    confirmRequiredMessage(ConchDestinations.between(before, after), boundLocal, boundAuth));
+                    confirmRequiredMessage(boundary, boundIdentity, boundOfficialAuth, boundAnyAuth));
         }
         LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", Map.of(
                 "confirm", Map.of("type", "boolean", "description", "确认覆盖这个本地规则包")));
         String prompt = LocalConches.overwriteConfirm(conch, before, after);
-        if (boundLocal) {
-            prompt = prompt + (boundAuth
-                    ? "\n注意：该本地规则包存在授权器绑定，确认覆盖后会自动解除现有授权器绑定。"
-                    : "\n注意：该本地规则包已绑定共享身份，确认覆盖后会自动将其移出共享身份。");
+        if (boundIdentity) {
+            prompt = prompt + "\n注意：该本地规则包已绑定共享身份，确认覆盖后会自动将其移出共享身份。";
+        } else if (boundary.sameBoundary() && boundOfficialAuth) {
+            prompt = prompt + "\n注意：该本地规则包绑定了正式授权器账号，同边界确认覆盖后会保留现有授权器绑定。";
+        } else if (!boundary.sameBoundary() && boundAnyAuth) {
+            prompt = prompt + "\n注意：该本地规则包存在授权器绑定，边界扩大确认覆盖后会自动解除现有授权器绑定。";
         }
         JsonNode answer;
         try {
@@ -1406,7 +1735,7 @@ final class AuthoringCalls {
                     sections.add("fields");
                 }
                 case ValidationCodes.MIN_CRAB_VERSION -> {
-                    hints.add("将顶层 min_crab_version 调整为 " + CrabVersion.CURRENT + "（当前 Crab 兼容版本），即可支持 1.1–1.13 全部规则特性。");
+                    hints.add("将顶层 min_crab_version 调整为 " + CrabVersion.CURRENT + "（当前 Crab 兼容版本），即可支持 1.1–1.14 全部规则特性。");
                     sections.add("fields");
                 }
                 case ValidationCodes.CONCH_NAME, ValidationCodes.ACTION_NAME -> {
@@ -1489,6 +1818,11 @@ final class AuthoringCalls {
                     hints.add("检查 {{ ... }} 模板语法：带连字符的头名请用点号加引号下标 {{response.headers['content-type']}}；credential/login/config/input/now 后一律用点号。");
                     sections.add("templates_scripts");
                 }
+                case ValidationCodes.IGNORED_REQUEST_FIELD -> {
+                    hints.add("request 存在不支持的字段（注意字符集编码字段名为 encoding，如 encoding: GBK，而非 charset）。");
+                    sections.add(AuthoringGuide.QUICK_REFERENCE_ID);
+                    sections.add("steps");
+                }
                 case ValidationCodes.UNSUPPORTED_STEP,
                         ValidationCodes.FLOW_STEP,
                         ValidationCodes.RETRY,
@@ -1506,7 +1840,7 @@ final class AuthoringCalls {
                     sections.add("steps");
                 }
                 case ValidationCodes.SCRIPT_STEP -> {
-                    hints.add("检查 script 步骤与顶层 scripts：库名不可重复，use 引用的库必须在顶层 scripts 声明，单段 code 不超过 64 KiB。");
+                    hints.add("检查 script 步骤与顶层 scripts：库名不可重复，use 引用的库必须在顶层 scripts 声明，单段 code 不超过 64 KiB；读取 vars.login / vars.auth 必须声明 credential: true 且 min_crab_version >= 1.14.0。");
                     sections.add("templates_scripts");
                 }
                 case ValidationCodes.SESSION_EXPIRY -> {

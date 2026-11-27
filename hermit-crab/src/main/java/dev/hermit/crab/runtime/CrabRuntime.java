@@ -314,8 +314,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         this.localConches = new LocalConches(
                 paths, registry.scoped(Origin.LOCAL), database.dataSource(), () -> debug.get().enabled(), clock);
         this.localConches.onWidened(this::clearWidenedSessions);
+        this.localConches.onAuthSpecChanged(this::invalidateLocalAuthSnapshots);
         this.localConches.onDeleted((name, actor) -> identities.packageRemoved(Origin.LOCAL, name, actor));
-        this.localConches.onBoundCheck(conch -> identities.hasBoundLocal(conch));
+        this.localConches.onBoundCheck(identities::hasSharedIdentityLocal);
+        this.localConches.onBoundAuthChecks(authenticators::hasBoundToOfficial, authenticators::hasBoundLocal);
         this.admin.bindOriginFallback(name -> localConches.occupies(name) ? Origin.LOCAL : null);
         this.admin.bindAccountRemoved(mcpForwarder::forgetAccount);
         this.admin.bindIdentities(identities);
@@ -472,6 +474,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         sessions.pending().discardConch(Origin.LOCAL, conch);
         // 先离开身份：新地址不该拿到别的包登录出来的 Cookie，也不该因为它清掉别的成员的会话。
         identities.widened(conch);
+        for (Account account : accounts.list(Origin.LOCAL, conch)) {
+            sessions.invalidate(new SessionKey(Origin.LOCAL, conch, account.account()));
+        }
+    }
+
+    private void invalidateLocalAuthSnapshots(String conch) {
+        sessions.pending().discardConch(Origin.LOCAL, conch);
         for (Account account : accounts.list(Origin.LOCAL, conch)) {
             sessions.invalidate(new SessionKey(Origin.LOCAL, conch, account.account()));
         }
@@ -1556,8 +1565,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
 
     /**
      * 同名的本地包和正式包之间切换生效的那份。API Key 范围和整包开关按包名，不随来源变。
-     * {@code copy} 只在切到正式包时有效：把本地包的账号、凭证和配置复制到正式包，
-     * 只复制正式包声明了的字段，正式包已有的同名值被覆盖。不传 {@code copy} 时两边互不影响。
+     * {@code copy} 为 true 时把另一来源的账号、凭证和配置复制到目标来源（只复制目标包声明了的字段，已有的同名值被覆盖）。
+     * 不传 {@code copy} 时两边互不影响。
      */
     public SourceSwitch switchSource(String conch, Origin origin, boolean copy, String actor) {
         if (conch == null || origin == null || !registry.has(conch, origin)) {
@@ -1565,20 +1574,21 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
         int copiedAccounts = 0;
         int copiedConfig = 0;
-        boolean copied = copy && origin == Origin.OFFICIAL && registry.has(conch, Origin.LOCAL);
+        Origin sourceOrigin = origin == Origin.OFFICIAL ? Origin.LOCAL : Origin.OFFICIAL;
+        boolean copied = copy && registry.has(conch, sourceOrigin);
         if (copied) {
-            ConchDoc target = registry.find(conch, Origin.OFFICIAL)
+            ConchDoc target = registry.find(conch, origin)
                     .orElseThrow(() -> new IllegalArgumentException(SOURCE_MISSING));
-            // 先在 LOCAL 锁内把要复制的值全部读出并按正式包的声明校验，释放后再获取 OFFICIAL 锁，避免嵌套锁死锁。
+            // 先在源来源锁内把要复制的值全部读出并按目标包的声明校验，释放后再获取目标来源锁，避免嵌套锁死锁。
             LinkedHashMap<String, Map<String, String>> secrets = new LinkedHashMap<>();
             LinkedHashMap<String, String> values = new LinkedHashMap<>();
-            String localDefault = null;
-            synchronized (dev.hermit.crab.store.ConchLocks.of(database.dataSource(), Origin.LOCAL, conch)) {
-                for (Account account : accounts.list(Origin.LOCAL, conch)) {
+            String fromDefault = null;
+            synchronized (dev.hermit.crab.store.ConchLocks.of(database.dataSource(), sourceOrigin, conch)) {
+                for (Account account : accounts.list(sourceOrigin, conch)) {
                     LinkedHashMap<String, String> fields = new LinkedHashMap<>();
                     for (Map.Entry<String, String> entry
-                            : vault.decryptForExecution(Origin.LOCAL, conch, account.account()).entrySet()) {
-                        // OAuth 令牌由系统写入，不复制；正式包上重新连接一次。
+                            : vault.decryptForExecution(sourceOrigin, conch, account.account()).entrySet()) {
+                        // OAuth 令牌由系统写入，不复制；切换后重新连接一次。
                         if (target.credentials() != null
                                 && target.credentials().containsKey(entry.getKey())
                                 && !dev.hermit.crab.upstream.McpOAuthToken.FIELD.equals(entry.getKey())) {
@@ -1590,10 +1600,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     }
                     secrets.put(account.account(), fields);
                     if (account.defaultAccount()) {
-                        localDefault = account.account();
+                        fromDefault = account.account();
                     }
                 }
-                for (Map.Entry<String, String> entry : conchConfig.all(Origin.LOCAL, conch).entrySet()) {
+                for (Map.Entry<String, String> entry : conchConfig.all(sourceOrigin, conch).entrySet()) {
                     if (target.config() != null
                             && target.config().containsKey(entry.getKey())
                             && !entry.getValue().isEmpty()) {
@@ -1602,13 +1612,13 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                     }
                 }
             }
-            // 账号、凭证和配置在一个事务里写：中途失败时正式包保持原样。
-            String defaultAccount = localDefault;
+            // 账号、凭证和配置在一个事务里写：中途失败时目标包保持原样。
+            String defaultAccount = fromDefault;
             copiedAccounts = dev.hermit.crab.store.ConchLocks.atomic(
-                    database.dataSource(), Origin.OFFICIAL, conch, () -> {
+                    database.dataSource(), origin, conch, () -> {
                         int written = 0;
                         Set<String> existing = new java.util.HashSet<>();
-                        for (Account account : accounts.list(Origin.OFFICIAL, conch)) {
+                        for (Account account : accounts.list(origin, conch)) {
                             existing.add(account.account());
                         }
                         boolean hadAccounts = !existing.isEmpty();
@@ -1616,25 +1626,25 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                         for (Map.Entry<String, Map<String, String>> entry : secrets.entrySet()) {
                             boolean created = !existing.contains(entry.getKey());
                             if (created) {
-                                Account inserted = accounts.create(Origin.OFFICIAL, conch, entry.getKey(), actor);
+                                Account inserted = accounts.create(origin, conch, entry.getKey(), actor);
                                 if (inserted.defaultAccount()) {
                                     initialDefault = inserted.account();
                                 }
                             }
                             boolean wroteCredentials = !entry.getValue().isEmpty();
                             if (wroteCredentials) {
-                                vault.write(Origin.OFFICIAL, conch, entry.getKey(), entry.getValue(), actor);
+                                vault.write(origin, conch, entry.getKey(), entry.getValue(), actor);
                             }
                             if (created || wroteCredentials) {
                                 written++;
                             }
                         }
-                        // 正式包原来没有账号时，默认账号跟本地包一致；原来有账号时不动它的默认账号。
+                        // 目标包原来没有账号时，默认账号跟源包一致；原来有账号时不动它的默认账号。
                         if (!hadAccounts && defaultAccount != null && !defaultAccount.equals(initialDefault)) {
-                            accounts.setDefault(Origin.OFFICIAL, conch, defaultAccount, actor);
+                            accounts.setDefault(origin, conch, defaultAccount, actor);
                         }
                         if (!values.isEmpty()) {
-                            conchConfig.putAll(Origin.OFFICIAL, conch, values, actor);
+                            conchConfig.putAll(origin, conch, values, actor);
                         }
                         return written;
                     });
@@ -1645,7 +1655,7 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             }
             for (Map.Entry<String, Map<String, String>> entry : secrets.entrySet()) {
                 if (!entry.getValue().isEmpty()) {
-                    sessions.invalidate(new dev.hermit.crab.engine.SessionKey(Origin.OFFICIAL, conch, entry.getKey()));
+                    sessions.invalidate(new dev.hermit.crab.engine.SessionKey(origin, conch, entry.getKey()));
                 }
             }
         }
@@ -1658,6 +1668,24 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         }
         notifyCatalogListeners();
         return new SourceSwitch(conch, origin, copied, copiedAccounts, copiedConfig);
+    }
+
+    public ConchSync.SubmittedConch submitLocalConchToReef(String conch, String note, String actor) {
+        ConchSync sync = conchSync;
+        if (sync == null) {
+            throw new dev.hermit.crab.sync.SyncException("尚未连接 Reef 服务，请先在「Reef 连接」配置连接后再提交审批");
+        }
+        LocalConches.Export exported = localConches.export(conch);
+        LocalConches.CheckResult checked = localConches.check(exported.bytes());
+        if (!checked.ok()) {
+            String detail = checked.errors().isEmpty() ? "" : checked.errors().get(0).message();
+            throw dev.hermit.crab.sync.LocalConchException.invalid(
+                    "本地规则包尚未通过发布校验：" + detail,
+                    checked.errors(),
+                    checked.warnings(),
+                    conch);
+        }
+        return sync.submitSubmission(exported.bytes(), note);
     }
 
     public void setCapabilityDisabled(String conch, String action, boolean disabled, String actor) {

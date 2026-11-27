@@ -96,8 +96,15 @@ class ConchSubmissionTransaction {
             }
         }
         List<ValidationIssue> dependencyProblems = authDependencies.uploadProblems(doc);
+        ValidationIssue pendingAuthWarning = null;
         if (!dependencyProblems.isEmpty()) {
-            throw ConchUploadService.dependencyFailed(prepared, dependencyProblems);
+            PendingAuthResolution resolved = resolvePendingAuthenticator(doc, dependencyProblems);
+            if (resolved.satisfied()) {
+                dependencyProblems = List.of();
+                pendingAuthWarning = resolved.warning();
+            } else {
+                throw ConchUploadService.dependencyFailed(prepared, dependencyProblems);
+            }
         }
         ConchDoc previous = currentRow == null ? null : readConchDoc(currentRow);
         JsonNode diff = previous == null
@@ -106,6 +113,9 @@ class ConchSubmissionTransaction {
         List<ValidationIssue> warnings = append(
                 ConchUploadTransaction.withAddedAuthOrigins(prepared.warnings(), previous, doc),
                 sameSiteWarnings);
+        if (pendingAuthWarning != null) {
+            warnings = append(warnings, List.of(pendingAuthWarning));
+        }
         String validationJson = json(warnings);
         String diffJson = json(diff);
         String sha256 = ConchHashes.sha256(prepared.yaml());
@@ -173,6 +183,47 @@ class ConchSubmissionTransaction {
             }
             throw ex;
         }
+    }
+
+    private record PendingAuthResolution(boolean satisfied, ValidationIssue warning) {
+    }
+
+    private PendingAuthResolution resolvePendingAuthenticator(
+            ConchDoc consumer,
+            List<ValidationIssue> publishedProblems
+    ) {
+        if (!dev.hermit.common.validate.AuthenticatorChecks.uses(consumer)) {
+            return new PendingAuthResolution(false, null);
+        }
+        if (!authDependencies.brokenConsumers(consumer.conch(), consumer).isEmpty()) {
+            return new PendingAuthResolution(false, null);
+        }
+        String authName = consumer.auth().use();
+        AvailabilityRow authAvail = availability.lock(authName);
+        if (authAvail != null && authAvail.disabled()) {
+            return new PendingAuthResolution(false, null);
+        }
+        for (SubmissionRow pending : submissions.findPendingByConch(authName)) {
+            if (pending.yamlPath() == null || pending.yamlPath().isBlank()) {
+                continue;
+            }
+            try {
+                byte[] yaml = submissionStorage.readYaml(pending.id());
+                ConchDoc pendingAuthDoc = ConchParser.parse(new String(yaml, StandardCharsets.UTF_8));
+                if (dev.hermit.common.validate.AuthenticatorChecks.isAuthenticator(pendingAuthDoc)
+                        && dev.hermit.common.validate.AuthenticatorChecks.link(consumer, pendingAuthDoc).isEmpty()) {
+                    ValidationIssue note = new ValidationIssue(
+                            dev.hermit.common.validate.ValidationCodes.AUTHENTICATOR,
+                            "auth.use",
+                            "引用的授权器 " + authName + "（v" + pendingAuthDoc.version()
+                                    + "）当前处于待审批状态，审批时须先批准该授权器再批准本规则包");
+                    return new PendingAuthResolution(true, note);
+                }
+            } catch (RuntimeException ignored) {
+                // 跳过不可读的候选，继续检查其余待审批记录。
+            }
+        }
+        return new PendingAuthResolution(false, null);
     }
 
     public List<SubmissionSummary> list(String actor, boolean admin, SubmissionStatus statusFilter) {

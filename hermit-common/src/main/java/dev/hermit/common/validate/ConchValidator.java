@@ -257,6 +257,7 @@ public final class ConchValidator {
                     errors,
                     warnings);
         }
+        ScriptCryptoChecks.check(doc, loginVars, usesLogin, errors, warnings);
         if (usesLogin.get() && doc.minCrabVersion().compareTo(LOGIN_MIN_CRAB) < 0) {
             errors.add(issue(
                     ValidationCodes.MIN_CRAB_VERSION,

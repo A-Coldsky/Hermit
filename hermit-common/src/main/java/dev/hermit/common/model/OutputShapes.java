@@ -10,14 +10,14 @@ import java.util.Map;
  * 字符串值是映射写法；含 {@code type} 的映射是说明写法，取值模板在可选键 {@code value}，缺省为 {@code {{字段名}}}。
  * 说明写法里的 {@code items} 若自身含 {@code type}，视为单个 schema；否则视为元素对象的字段表。
  */
-final class OutputShapes {
+public final class OutputShapes {
 
     private static final List<String> PASSTHROUGH = List.of("enum", "minimum", "maximum", "default", "format");
 
     private OutputShapes() {
     }
 
-    static Map<String, Object> template(Map<String, Object> output) {
+    public static Map<String, Object> template(Map<String, Object> output) {
         LinkedHashMap<String, Object> result = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : output.entrySet()) {
             result.put(entry.getKey(), templateValue(entry.getKey(), entry.getValue()));

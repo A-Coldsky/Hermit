@@ -61,7 +61,7 @@ final class McpCatalog {
     static final String DEV_DESCRIPTION =
             "Hermit Crab 内置的开发者工具包，用于写规则：编写、修改或调试规则包（Conch）。"
                     + "开始前先调用 hermit_dev__guide（不带参数），按返回的 workflow 做。"
-                    + "工具列表里有 hermit_dev 时用 hermit_dev(tool=工具名, arguments=参数) 调用，否则按工具清单里的 callWith 调用。"
+                    + "工具列表里有 hermit_dev 时用 hermit_dev(tool=工具名, arguments=参数) 调用，否则按 search_capabilities(conch=hermit_dev) 列出的 callWith 调用。"
                     + "不要向用户索要口令、Cookie 或令牌。";
     /** initialize 里对看得到开发者工具的 Key 多说的一句。 */
     static final String DEV_INSTRUCTIONS =

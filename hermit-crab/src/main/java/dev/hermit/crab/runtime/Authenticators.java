@@ -196,6 +196,19 @@ public final class Authenticators implements AuthBindings {
                 || !store.consumersOf(Origin.LOCAL, conch).isEmpty());
     }
 
+    /** 这个本地业务包是否有账号绑定到了正式来源（OFFICIAL）的授权器账号。不查库。 */
+    public boolean hasBoundToOfficial(String conch) {
+        if (conch == null) {
+            return false;
+        }
+        for (AuthBinding binding : store.bindingsOf(Origin.LOCAL, conch)) {
+            if (binding.authenticator().origin() == Origin.OFFICIAL) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public Check check(Origin origin, String conch, String account, String authAccount) {
         ConchDoc doc = registry.find(conch, origin).orElse(null);
         if (doc == null) {

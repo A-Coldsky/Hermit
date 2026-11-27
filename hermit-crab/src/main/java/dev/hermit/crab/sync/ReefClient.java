@@ -100,6 +100,71 @@ final class ReefClient {
         }
     }
 
+    SubmittedConch submitSubmission(byte[] yaml, String note) {
+        byte[] payload;
+        try {
+            java.util.LinkedHashMap<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("yaml", new String(yaml, java.nio.charset.StandardCharsets.UTF_8));
+            if (note != null && !note.isBlank()) {
+                body.put("note", note.trim());
+            }
+            payload = JSON.writeValueAsBytes(body);
+        } catch (IOException ex) {
+            throw new SyncException("submission payload encoding failed");
+        }
+        HttpRequest.Builder builder = HttpRequest.newBuilder(endpoint("agent/submissions"))
+                .timeout(REQUEST_TIMEOUT)
+                .header("X-Hermit-Instance", settings().instanceId().toString())
+                .header("Content-Type", "application/json; charset=utf-8")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(payload));
+        settings().token().ifPresent(token -> builder.header("X-Hermit-Token", token));
+        HttpResponse<InputStream> response = send(builder);
+        try (InputStream in = response.body()) {
+            int status = response.statusCode();
+            byte[] bytes = readLimited(in, ConchFiles.MAX_ZIP_BYTES);
+            if (bytes == null) {
+                throw new SyncException("Reef 响应过大");
+            }
+            JsonNode root = null;
+            try {
+                root = JSON.readTree(bytes);
+            } catch (IOException ignored) {
+                // 非 JSON 响应退回 HTTP 状态码提示
+            }
+            if (status == 200 && root != null && root.path("success").asBoolean(false) && root.path("data").isObject()) {
+                JsonNode data = root.get("data");
+                java.util.ArrayList<String> warningTexts = new java.util.ArrayList<>();
+                if (data.path("warnings").isArray()) {
+                    for (JsonNode w : data.get("warnings")) {
+                        String msg = w != null && w.isTextual() ? w.asText() : textOrNull(w, "message");
+                        if (msg != null && !msg.isBlank()) {
+                            warningTexts.add(msg);
+                        }
+                    }
+                }
+                return new SubmittedConch(
+                        data.path("id").asLong(0),
+                        textOrNull(data, "conch"),
+                        textOrNull(data, "version"),
+                        textOrNull(data, "status"),
+                        textOrNull(data, "submittedBy"),
+                        List.copyOf(warningTexts));
+            }
+            if (root != null && root.path("error").isObject()) {
+                JsonNode err = root.get("error");
+                String code = textOrNull(err, "code");
+                String message = textOrNull(err, "message");
+                throw new ConchSync.SubmissionRejectedException(
+                        status,
+                        code == null ? "UPSTREAM_ERROR" : code,
+                        message == null || message.isBlank() ? SyncReasons.http(status) : message);
+            }
+            throw new ConchSync.SubmissionRejectedException(status, "UPSTREAM_ERROR", "Reef 返回 HTTP " + status);
+        } catch (IOException ex) {
+            throw new SyncException("submission response unreadable");
+        }
+    }
+
     private HttpRequest.Builder get(URI uri) {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                 .timeout(REQUEST_TIMEOUT)
@@ -268,5 +333,15 @@ final class ReefClient {
         static Download failed(int status) {
             return new Download(status, null, false);
         }
+    }
+
+    record SubmittedConch(
+            long id,
+            String conch,
+            String version,
+            String status,
+            String submittedBy,
+            List<String> warnings
+    ) {
     }
 }

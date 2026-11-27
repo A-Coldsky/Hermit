@@ -123,6 +123,16 @@ class SubmissionRepository {
         return rows;
     }
 
+    List<SubmissionRow> findPendingByConch(String conch) {
+        if (conch == null || conch.isBlank()) {
+            return List.of();
+        }
+        return jdbc.query(
+                COLUMNS + "WHERE conch = ? AND status = 'PENDING' ORDER BY submitted_at DESC, id DESC",
+                ROWS,
+                conch);
+    }
+
     long countPending(String submittedByOrNull) {
         Long count;
         if (submittedByOrNull == null) {

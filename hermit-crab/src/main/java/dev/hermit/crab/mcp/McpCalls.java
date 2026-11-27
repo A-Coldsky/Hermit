@@ -233,6 +233,15 @@ final class McpCalls {
         if (McpCatalog.MCP_REFRESH.equals(name)) {
             return authoring.mcpRefresh(principal, arguments, attempt);
         }
+        if (McpCatalog.MCP_CONFIGURE.equals(name)) {
+            return authoring.mcpConfigure(principal, arguments, attempt);
+        }
+        if (McpCatalog.DRY_RUN_RESPONSE.equals(name)) {
+            return authoring.dryRunResponse(principal, arguments, attempt);
+        }
+        if (McpCatalog.STAGE_TEXT_FILE.equals(name)) {
+            return authoring.stageTextFile(principal, arguments, attempt);
+        }
         if (McpCatalog.TRIAL_RUN.equals(name)) {
             return authoring.trial(principal, session, arguments, attempt);
         }

@@ -143,6 +143,11 @@ class CaptureRedactorTest {
     @Test
     void classifiesStaticAssetsAndRoundTripsHarSafely() {
         assertThat(CaptureRedactor.isStaticAsset("GET", 200, "Image", "https://oa.local/logo.png", "image/png")).isTrue();
+        assertThat(CaptureRedactor.isStaticAsset("GET", 200, "Image", "https://oa.local/sso/captcha.jpg?t=1", "image/jpeg")).isFalse();
+        assertThat(CaptureRedactor.isStaticAsset("GET", 200, "Image", "https://oa.local/kaptcha", "image/png")).isFalse();
+        assertThat(CaptureRedactor.isStaticAsset("GET", 200, "Image", "https://oa.local/verifyCode?r=9", "image/gif")).isFalse();
+        assertThat(CaptureRedactor.isStaticAsset("GET", 200, "Script", "https://oa.local/captcha-sdk.js", "application/javascript")).isTrue();
+        assertThat(CaptureRedactor.isStaticAsset("GET", 200, "Stylesheet", "https://oa.local/captcha.css", "text/css")).isTrue();
         assertThat(CaptureRedactor.isStaticAsset("GET", 200, "Stylesheet", "https://oa.local/app.css", "text/css")).isTrue();
         assertThat(CaptureRedactor.isStaticAsset("GET", 200, "Script", "https://oa.local/app.js", "application/javascript")).isTrue();
         assertThat(CaptureRedactor.isStaticAsset("POST", 200, "XHR", "https://oa.local/api/login", "application/json")).isFalse();

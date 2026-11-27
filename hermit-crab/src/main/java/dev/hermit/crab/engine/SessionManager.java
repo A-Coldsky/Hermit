@@ -926,6 +926,20 @@ public final class SessionManager implements AutoCloseable {
         return null;
     }
 
+    Map<String, String> readableCookies(SessionKey key, URI base) {
+        if (base == null) {
+            return Map.of();
+        }
+        AccountState state = state(key);
+        LinkedHashMap<String, String> result = new LinkedHashMap<>();
+        for (Cookie cookie : state.jar.cookies.getCookies()) {
+            if (!result.containsKey(cookie.getName()) && AuthReach.readable(cookie, base, state.jar.cookies)) {
+                result.put(cookie.getName(), cookie.getValue());
+            }
+        }
+        return result;
+    }
+
     /**
      * 本次打码用的值：已见 Cookie、当前罐里的值，以及登录快照。短于 4 个字符的不放入。
      * 不写 {@code config_audit}，也不写进程级已知秘密。

@@ -43,6 +43,9 @@ final class McpCatalog {
     static final String SAVE_LOCAL = "hermit_dev__save_local";
     static final String TEST_LOGIN = "hermit_dev__test_login";
     static final String MCP_REFRESH = "hermit_dev__mcp_refresh";
+    static final String MCP_CONFIGURE = "hermit_dev__mcp_configure";
+    static final String DRY_RUN_RESPONSE = "hermit_dev__dry_run_response";
+    static final String STAGE_TEXT_FILE = "hermit_dev__stage_text_file";
     static final String TRIAL_RUN = "hermit_dev__trial_run";
     /** 内置开发者工具包。不是 YAML 规则包：没有账号和上游，只在 MCP 里按规则包的样子出现。 */
     static final String DEV_CONCH = dev.hermit.common.validate.ConchValidator.DEV_CONCH;
@@ -51,10 +54,11 @@ final class McpCatalog {
     static final String DEV_DESCRIPTION =
             "Hermit Crab 内置的开发者工具包，用于编写或修改规则包（Conch），只在本机开发者模式打开、并且 API Key 勾选了开发者工具时出现。"
                     + "如果用户在 Crab 控制台录制或导入并保存了脱敏抓包快照，优先用 hermit_dev__capture_list 查看快照目录，再用 hermit_dev__capture_get 按序号读取详情；"
+                    + "写操作或不便重放的接口可用 hermit_dev__dry_run_response 基于抓包或模拟响应离线验证 extract、script、expired_when 与 output 模板；"
                     + "涉及单点登录或多系统共用认证时，先用 hermit_dev__auth_list 查看本机可复用的 driver: auth 授权器组件与导出变量；"
                     + "写或改 YAML 前先用 hermit_dev__guide（或读取资源 hermit://conches/hermit_dev/guide）获取可直接复制修改的 starterTemplate（以及 starter_auth / starter_auth_use / starter_mcp 起始模板）、pitfalls 避坑清单、步骤速查与相关章节；"
-                    + "修改已有规则包前先用 hermit_dev__read_yaml 读取原文（Reef 订阅的正式包只读不可直接修改，如需改动请用 hermit_dev__save_local 保存为本地规则包，可起新包名立即生效，或保存为同名本地副本再由用户在控制台切换来源）。"
-                    + "推荐顺序：先和用户确认要做哪些功能 → hermit_dev__validate 校验至无错（失败可按 fixHints/suggestedSections 修正） → hermit_dev__save_local 保存 → 用户在控制台建账号填凭证（或绑定授权器账号、连接 MCP OAuth） → HTTP/授权器用 hermit_dev__test_login（或控制台「测试登录」）验证登录与导出变量，MCP 包用 hermit_dev__mcp_refresh 拉取工具快照 → hermit_dev__trial_run 试跑；测试登录、验证码续登、MCP 刷新或试跑失败时，用 hermit_dev__debug_trace 查 traceId，或直接用 hermit_dev__debug_trace_list 列出最近本机开发追踪排查原因。"
+                    + "修改已有规则包前先用 hermit_dev__read_yaml 读取原文（MCP 多工具包可传 omitSchemas=true 省略大体积 schema，并用 hermit_dev__mcp_configure 在原地批量配置分组与权限标志；Reef 订阅的正式包只读不可直接修改，如需改动请用 hermit_dev__save_local 保存为本地规则包）。"
+                    + "推荐顺序：先和用户确认要做哪些功能 → hermit_dev__validate 校验至无错（失败可按 fixHints/suggestedSections 修正） → hermit_dev__save_local 保存 → 用户在控制台建账号填凭证（或绑定授权器账号、连接 MCP OAuth） → HTTP/授权器用 hermit_dev__test_login 验证登录与导出变量，MCP 包用 hermit_dev__mcp_refresh 拉取工具快照并用 hermit_dev__mcp_configure 整理只读/确认/分组 → 如需测文件上传可用 hermit_dev__stage_text_file 生成测试 fileId → hermit_dev__trial_run 试跑；失败时用 hermit_dev__debug_trace 或 hermit_dev__debug_trace_list 排查。"
                     + "不要向用户索要口令、Cookie 或令牌，也不要写入 YAML。"
                     + "这些工具不直接出现在工具列表里：工具列表里有 hermit_dev 时用 hermit_dev(tool=工具名, arguments=参数) 调用，"
                     + "有 call_capability 时用 call_capability(name=工具名, arguments=参数) 调用。";
@@ -126,7 +130,8 @@ final class McpCatalog {
 
     private static final Set<String> DEV_TOOL_NAMES = Set.of(
             DEBUG_TRACE, DEBUG_TRACE_LIST, GUIDE, READ_YAML, AUTH_LIST,
-            CAPTURE_LIST, CAPTURE_GET, VALIDATE, SAVE_LOCAL, TEST_LOGIN, MCP_REFRESH, TRIAL_RUN);
+            CAPTURE_LIST, CAPTURE_GET, DRY_RUN_RESPONSE, VALIDATE,
+            SAVE_LOCAL, TEST_LOGIN, MCP_REFRESH, MCP_CONFIGURE, STAGE_TEXT_FILE, TRIAL_RUN);
 
     /** 只认内置的那几个名字：hermit_dev__sandbox 这类包的能力名同样以 hermit_dev__ 开头，仍按普通能力走。 */
     static boolean devToolName(String name) {
@@ -854,6 +859,13 @@ final class McpCatalog {
                     true,
                     false));
         }
+        tools.add(tool(DRY_RUN_RESPONSE,
+                "离线试炼单步响应解析：基于抓包快照条目（captureId + index）或内联模拟响应（response），用与引擎完全一致的规则求值器离线测试 extract、script、auth.expired_when 与 output 模板渲染，不发起任何网络请求，适合零副作用调试写接口或复杂提取逻辑。",
+                dryRunResponseSchema(includeCapture),
+                outputSchema ? dryRunResponseOutputSchema() : null,
+                true,
+                true,
+                false));
         tools.add(tool(VALIDATE,
                         "校验一份规则包 YAML，不写文件。写 YAML 前先调用 hermit_dev__guide（或读取资源 hermit://conches/hermit_dev/guide）查阅起始模板、避坑清单与语法示例。"
                                 + "错误码、路径、行号和中文原因与控制台导入、命令行导入一致；校验失败时另附 fixHints 修正建议和 suggestedSections 推荐查阅章节。"
@@ -891,6 +903,20 @@ final class McpCatalog {
                     false,
                     false,
                     true));
+            tools.add(tool(MCP_CONFIGURE,
+                    "在原地修改本地 driver: mcp 规则包的 groups、tools 过滤、批量权限规则（defaults）及单个能力的 title/description/group/readOnly/destructive/confirm/notes/related，自动原样保留完整的 input_schema、output_schema、schema_sha256 与 snapshot，无需读写巨型 schema YAML。",
+                    mcpConfigureSchema(),
+                    issues,
+                    false,
+                    false,
+                    true));
+            tools.add(tool(STAGE_TEXT_FILE,
+                    "向本机 Crab 文件暂存区写入一份不超过 64 KiB 的纯文本测试文件（如 CSV/JSON/TXT），返回当前 API Key 专属的 fileId，便于直接通过 hermit_dev__trial_run 端到端测试 type: file 与 multipart 文件上传能力。",
+                    stageTextFileSchema(),
+                    outputSchema ? stageTextFileOutputSchema() : null,
+                    false,
+                    false,
+                    false));
         }
         tools.add(tool(TRIAL_RUN,
                 "试跑一个已保存的本地规则包，会真实调用该包的上游。正式包拒绝。"
@@ -1048,6 +1074,9 @@ final class McpCatalog {
         source.put("enum", List.of("local", "reef"));
         source.put("description", "可选。指定读取本地规则包（local）或 Reef 订阅的正式规则包（reef）。省略时读取当前生效来源。");
         properties.put("source", source);
+        properties.put("omitSchemas", Map.of(
+                "type", "boolean",
+                "description", "可选。对 driver: mcp 多工具规则包传 true 可省略大体积 input_schema/output_schema/schema_sha256，仅返回能力清单与参数名摘要（配合 hermit_dev__mcp_configure 原地编辑）。默认 false。"));
         LinkedHashMap<String, Object> schema = objectSchema(properties);
         schema.put("required", List.of("conch"));
         schema.put("additionalProperties", false);
@@ -1064,8 +1093,86 @@ final class McpCatalog {
         properties.put("hasReef", Map.of("type", "boolean"));
         properties.put("version", Map.of("type", "string"));
         properties.put("sha256", Map.of("type", "string"));
+        properties.put("schemasOmitted", Map.of("type", "boolean"));
         properties.put("yaml", Map.of("type", "string"));
         properties.put("note", Map.of("type", "string"));
+        return objectSchema(properties);
+    }
+
+    private static Map<String, Object> mcpConfigureSchema() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("conch", Map.of("type", "string", "description", "本地 driver: mcp 规则包名"));
+        properties.put("version", Map.of("type", "string", "description", "可选。更新规则包版本号（如 1.0.1）"));
+        properties.put("groups", Map.of(
+                "type", "object",
+                "description", "可选。顶层两级分组映射（如 { query: { title: '查询' } }），传空对象清空分组"));
+        properties.put("tools", Map.of(
+                "type", "object",
+                "description", "可选。上游工具过滤规则 { include?: string[], exclude?: string[] }"));
+        properties.put("defaults", Map.of(
+                "description", "可选。按通配符批量设置能力权限与分组（单个对象或数组）：[{ match: 'list_*', readOnly: true, destructive: false, confirm: false, group: 'query' }]"));
+        properties.put("actions", Map.of(
+                "type", "object",
+                "description", "可选。按本地能力名精细覆盖：{ 能力名: { title?, description?, group?, expose?, readOnly?, destructive?, confirm?, notes?, related? } }"));
+        LinkedHashMap<String, Object> schema = objectSchema(properties);
+        schema.put("required", List.of("conch"));
+        schema.put("additionalProperties", false);
+        return schema;
+    }
+
+    private static Map<String, Object> dryRunResponseSchema(boolean includeCapture) {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        if (includeCapture) {
+            properties.put("captureId", Map.of("type", "string", "description", "可选。抓包快照 ID（与 index 配合读取快照响应，与 response 二选一）"));
+            properties.put("index", Map.of("type", "integer", "description", "可选。抓包快照中的请求序号（从 1 开始）"));
+        }
+        properties.put("response", Map.of(
+                "type", "object",
+                "description", "可选。内联模拟响应 { status?: integer, headers?: object, body?: string, url?: string, redirect?: string }"));
+        properties.put("vars", Map.of("type", "object", "description", "可选。初始模拟变量（如 { input: { page: 1 } }）"));
+        properties.put("extract", Map.of("type", "object", "description", "可选。要测试的 extract 步骤规格映射"));
+        properties.put("script", Map.of("type", "object", "description", "可选。要测试的普通 script 步骤规格映射（{ code, into? }）"));
+        properties.put("expiredWhen", arraySchema(Map.of("type", "object")));
+        properties.put("output", Map.of("type", "object", "description", "可选。要测试的 action.output 模板映射"));
+        LinkedHashMap<String, Object> schema = objectSchema(properties);
+        schema.put("additionalProperties", false);
+        return schema;
+    }
+
+    private static Map<String, Object> dryRunResponseOutputSchema() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("ok", Map.of("type", "boolean"));
+        properties.put("extractCount", Map.of("type", "integer"));
+        properties.put("extracted", Map.of("type", "object"));
+        properties.put("expired", Map.of("type", "boolean"));
+        properties.put("matchedExpiredRuleIndex", Map.of("type", "integer"));
+        properties.put("output", Map.of());
+        properties.put("untrusted", Map.of("type", "boolean"));
+        properties.put("note", Map.of("type", "string"));
+        return objectSchema(properties);
+    }
+
+    private static Map<String, Object> stageTextFileSchema() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("filename", Map.of("type", "string", "description", "测试文件名（如 sample.csv 或 test.txt）"));
+        properties.put("content", Map.of("type", "string", "description", "UTF-8 文本内容（不超过 64 KiB）"));
+        properties.put("mimeType", Map.of("type", "string", "description", "可选。MIME 类型，默认 text/plain; charset=utf-8"));
+        LinkedHashMap<String, Object> schema = objectSchema(properties);
+        schema.put("required", List.of("filename", "content"));
+        schema.put("additionalProperties", false);
+        return schema;
+    }
+
+    private static Map<String, Object> stageTextFileOutputSchema() {
+        LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
+        properties.put("ok", Map.of("type", "boolean"));
+        properties.put("fileId", Map.of("type", "string"));
+        properties.put("filename", Map.of("type", "string"));
+        properties.put("size", Map.of("type", "integer"));
+        properties.put("mimeType", Map.of("type", "string"));
+        properties.put("sha256", Map.of("type", "string"));
+        properties.put("expiresAt", Map.of("type", "string"));
+        properties.put("next", Map.of("type", "string"));
         return objectSchema(properties);
     }
 

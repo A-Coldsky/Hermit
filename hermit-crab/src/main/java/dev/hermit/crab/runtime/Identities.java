@@ -120,11 +120,15 @@ public final class Identities {
         return store.identityOf(key);
     }
 
-    /** 这个本地包有没有任意账号绑到了身份。不查库。 */
+    /** 这个本地包有没有任意账号绑到了共享身份或授权器。不查库。 */
     public boolean hasBoundLocal(String conch) {
         Authenticators bindings = authenticators;
-        return conch != null && (!store.boundAccounts(Origin.LOCAL, conch).isEmpty()
-                || (bindings != null && bindings.hasBoundLocal(conch)));
+        return hasSharedIdentityLocal(conch) || (bindings != null && bindings.hasBoundLocal(conch));
+    }
+
+    /** 这个本地包有没有任意账号绑到了共享身份（不含授权器绑定）。不查库。 */
+    public boolean hasSharedIdentityLocal(String conch) {
+        return conch != null && !store.boundAccounts(Origin.LOCAL, conch).isEmpty();
     }
 
     public SessionManager.Cleared lastCleared(String identity) {
@@ -557,9 +561,15 @@ public final class Identities {
                 return true;
             }
         }
+        LinkedHashSet<String> scriptLoginRefs = new LinkedHashSet<>();
         for (Action action : doc.actions().values()) {
             for (Step step : action.steps()) {
                 if (LOGIN_REF.matcher(String.valueOf(step.def())).find()) {
+                    return true;
+                }
+                dev.hermit.common.validate.ScriptCryptoChecks.collectCredentialScriptLoginRefs(
+                        step, doc.scripts(), scriptLoginRefs);
+                if (!scriptLoginRefs.isEmpty()) {
                     return true;
                 }
             }

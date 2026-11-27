@@ -739,6 +739,43 @@ class AuthenticatorEngineTest {
     }
 
     @Test
+    void credentialScriptReadsVarsAuthComputesHmacAndKeepsPlainScriptsBlind() {
+        try (Fixture fixture = new Fixture()) {
+            String signed = apiYaml("api_auth_sig")
+                    .replace("min_crab_version: 1.13.0", "min_crab_version: 1.14.0")
+                    .replace("      value: { type: string, description: 值 }\n",
+                            "      value: { type: string, description: 值 }\n"
+                                    + "      sigOut: { type: string, description: 签名 }\n"
+                                    + "      plainSeen: { type: string, description: 普通脚本可见性 }\n")
+                    + """
+                          - script:
+                              credential: true
+                              into: sig_val
+                              code: |
+                                return hermit.hex(hermit.hmacSha256(vars.auth.access_token, "req-body"));
+                          - script:
+                              into: plain_seen
+                              code: |
+                                return [typeof vars.auth, typeof vars.sig_val].join("|");
+                    """
+                    .replace("sigOut: { type: string, description: 签名 }", "")
+                    + "";
+            // 显式在 output 中渲染 sig_val 与 plain_seen
+            signed = signed.replace(
+                    "      plainSeen: { type: string, description: 普通脚本可见性 }\n",
+                    "      sigOut: { type: string, description: 签名, value: \"{{sig_val}}\" }\n"
+                            + "      plainSeen: { type: string, description: 普通脚本可见性, value: \"{{plain_seen}}\" }\n");
+            fixture.install(signed);
+            ExecutionResult res = fixture.call(new SessionKey(Origin.LOCAL, "api_auth_sig", "main"));
+            assertThat(res.success()).as(String.valueOf(res.error())).isTrue();
+            Map<?, ?> data = (Map<?, ?>) res.data();
+            assertThat(data.get("plainSeen")).isEqualTo("undefined|undefined");
+            assertThat(data.get("sigOut")).isEqualTo("***");
+            assertThat(passwordLogins.get()).isEqualTo(1);
+        }
+    }
+
+    @Test
     void borrowingAccountNeverSeedsOldStandaloneCookiesIntoAuthenticatorJar() {
         ConcurrentHashMap<SessionKey, List<StoredCookie>> standalone = new ConcurrentHashMap<>();
         standalone.put(OA, List.of(new StoredCookie("TGC", "stale-oa-cookie", "localhost", "/", null, false, true)));

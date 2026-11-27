@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Delete, Download, Refresh } from '@element-plus/icons-vue'
+import { Delete, Download, Refresh, Upload } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -408,29 +408,27 @@ async function setEnabled(enabled: boolean) {
 
 const twoSources = computed(() => !!detail.value?.localVersion && !!detail.value?.reefVersion)
 
-/** 切到正式包的确认框。复制会覆盖正式包已有的值，所以默认不勾选。 */
+/** 切到正式包/本地包的确认框。复制会覆盖目标来源已有的值，所以默认不勾选。 */
 const toReef = reactive({ open: false, copy: false })
+const toLocal = reactive({ open: false, copy: false })
+const submitDialog = reactive({ open: false, note: '', submitting: false })
 
-async function switchSource(target: 'LOCAL' | 'REEF') {
+function switchSource(target: 'LOCAL' | 'REEF') {
   if (target === 'REEF') {
     Object.assign(toReef, { open: true, copy: false })
     return
   }
-  try {
-    await ElMessageBox.confirm(
-      '切换后调用的是本机的本地包，包名、API Key 和工具名都不变。本地包使用它自己的账号、凭证和配置，正式包的不会带过来。',
-      `切到本地包 ${props.conch}`,
-      { confirmButtonText: '切换', cancelButtonText: '取消', type: 'info' },
-    )
-  } catch {
-    return
-  }
-  await applySource('LOCAL', false)
+  Object.assign(toLocal, { open: true, copy: false })
 }
 
 async function confirmToReef() {
   toReef.open = false
   await applySource('REEF', toReef.copy)
+}
+
+async function confirmToLocal() {
+  toLocal.open = false
+  await applySource('LOCAL', toLocal.copy)
 }
 
 async function applySource(target: 'LOCAL' | 'REEF', copy: boolean) {
@@ -439,7 +437,9 @@ async function applySource(target: 'LOCAL' | 'REEF', copy: boolean) {
     const done = await api.setConchSource(props.conch, target, copy)
     ElMessage.success(
       target === 'LOCAL'
-        ? '已切到本地包'
+        ? done.copied
+          ? `已切到本地包，复制了 ${done.copiedAccounts} 个账号、${done.copiedConfigKeys} 项配置`
+          : '已切到本地包，没有复制凭证和配置'
         : done.copied
           ? `已切到正式包，复制了 ${done.copiedAccounts} 个账号、${done.copiedConfigKeys} 项配置`
           : '已切到正式包，没有复制凭证和配置',
@@ -451,6 +451,24 @@ async function applySource(target: 'LOCAL' | 'REEF', copy: boolean) {
     notifyError(error)
   } finally {
     working.value = false
+  }
+}
+
+function openSubmitToReef() {
+  Object.assign(submitDialog, { open: true, note: '', submitting: false })
+}
+
+async function confirmSubmitToReef() {
+  submitDialog.submitting = true
+  try {
+    const res = await api.submitLocalConch(props.conch, submitDialog.note)
+    submitDialog.open = false
+    const warn = res.warnings?.length ? `（提示：${res.warnings.join('；')}）` : ''
+    ElMessage.success(`已提交 ${res.conch} v${res.version} 到 Reef 待审批队列${warn}`)
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    submitDialog.submitting = false
   }
 }
 
@@ -543,6 +561,8 @@ watch(
     config.value = {}
     partsFailed.value = false
     toReef.open = false
+    toLocal.open = false
+    submitDialog.open = false
     void load()
     void loadDebug()
   },
@@ -575,6 +595,15 @@ watch(
         <el-button v-else type="warning" plain :disabled="working" data-test="conch-disable" @click="setEnabled(false)">停用规则包</el-button>
       </template>
       <template v-if="local">
+        <el-button
+          v-if="detail && !detail.ruleDisabled && detail.reefConnected"
+          type="primary"
+          plain
+          :icon="Upload"
+          :disabled="working"
+          data-test="submit-to-reef"
+          @click="openSubmitToReef"
+        >提交到 Reef 审批</el-button>
         <el-button :icon="Download" :loading="working" @click="exportYaml">导出 YAML</el-button>
         <el-button type="danger" plain :icon="Delete" :disabled="working" @click="removeLocal">删除</el-button>
       </template>
@@ -909,6 +938,37 @@ watch(
       <template #footer>
         <el-button data-test="to-reef-cancel" @click="toReef.open = false">取消</el-button>
         <el-button type="primary" data-test="to-reef-confirm" @click="confirmToReef">{{ toReef.copy ? '复制并切换' : '切换' }}</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="toLocal.open" :title="`切到本地包 ${props.conch}`" width="min(520px, 94vw)" data-test="to-local-dialog">
+      <p class="to-reef-text">
+        切换后调用的是本机的本地包，包名、API Key 和工具名都不变。本地包的账号、凭证和配置与正式包分开保存。
+      </p>
+      <el-checkbox v-model="toLocal.copy" data-test="to-local-copy">同时把正式包的账号、凭证和配置复制到本地包</el-checkbox>
+      <p class="to-reef-note">
+        注意：<strong>本地规则包未经 Reef 签名</strong>，勾选后会把正式包的凭证写入本地包（覆盖本地包已有的同名值）。仅复制本地包声明了的字段，OAuth 连接不复制。
+      </p>
+      <template #footer>
+        <el-button data-test="to-local-cancel" @click="toLocal.open = false">取消</el-button>
+        <el-button type="primary" data-test="to-local-confirm" @click="confirmToLocal">{{ toLocal.copy ? '复制并切换' : '切换' }}</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="submitDialog.open" :title="`提交到 Reef 审批：${props.conch}`" width="min(520px, 94vw)" data-test="submit-reef-dialog">
+      <p class="to-reef-text">
+        将当前本地规则包（<span class="mono">v{{ detail?.version }}</span>）上传至已连接的 Reef 待审批队列。管理员审核通过后才会签名并发布给订阅方。
+      </p>
+      <el-input
+        v-model="submitDialog.note"
+        type="textarea"
+        :rows="3"
+        maxlength="500"
+        show-word-limit
+        placeholder="可选：填写本次变更说明或测试备注"
+        data-test="submit-reef-note"
+      />
+      <template #footer>
+        <el-button data-test="submit-reef-cancel" :disabled="submitDialog.submitting" @click="submitDialog.open = false">取消</el-button>
+        <el-button type="primary" :loading="submitDialog.submitting" data-test="submit-reef-confirm" @click="confirmSubmitToReef">提交审批</el-button>
       </template>
     </el-dialog>
   </div>

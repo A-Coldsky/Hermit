@@ -111,10 +111,25 @@ class ConchSourceHttpTest {
             assertThat(server.runtime.admin().listAccounts("legacy_oa")).hasSize(2);
             assertThat(server.call("GET", CALL, key, "alice", null, null).status()).isEqualTo(200);
 
-            // 参数不对或没有那个来源时拒绝，不改生效来源。
+            // 参数不对时拒绝，不改生效来源；API Key 不能调控制台来源切换接口。
             assertThat(switchTo(server, "OTHER", null).status()).isEqualTo(400);
-            assertThat(switchTo(server, "LOCAL", true).status()).isEqualTo(400);
+            assertThat(server.call("POST", "/console/api/conches/legacy_oa/source", key, null,
+                    "{\"source\":\"LOCAL\",\"copy\":true}", null).status()).isIn(401, 403);
             assertThat(detail(server).path("source").asText()).isEqualTo("REEF");
+
+            // 控制台从正式包切回本地包时显式传 copy=true：清空本地账号与配置后，把正式包的账号、凭证和配置复制到本地包。
+            server.runtime.admin().deleteAccount(Origin.LOCAL, "legacy_oa", "alice", Actors.CONSOLE);
+            server.runtime.admin().deleteAccount(Origin.LOCAL, "legacy_oa", "bob", Actors.CONSOLE);
+            new dev.hermit.crab.store.ConchConfigStore(server.runtime.dataSource())
+                    .delete(Origin.LOCAL, "legacy_oa", "base_url", Actors.CONSOLE);
+            TestServer.Reply toLocalCopy = switchTo(server, "LOCAL", true);
+            assertThat(toLocalCopy.status()).as(toLocalCopy.body()).isEqualTo(200);
+            assertThat(toLocalCopy.json().path("data").path("source").asText()).isEqualTo("LOCAL");
+            assertThat(toLocalCopy.json().path("data").path("copied").asBoolean()).isTrue();
+            assertThat(toLocalCopy.json().path("data").path("copiedAccounts").asInt()).isEqualTo(2);
+            assertThat(toLocalCopy.json().path("data").path("copiedConfigKeys").asInt()).isEqualTo(1);
+            assertThat(server.call("GET", CALL, key, "alice", null, null).status()).isEqualTo(200);
+            assertThat(switchTo(server, "REEF", false).status()).isEqualTo(200);
 
             // 删掉本地那份：正式包继续生效，记录清掉，不能再切到本地。
             server.runtime.localConches().delete("legacy_oa", Actors.CONSOLE);
@@ -122,6 +137,65 @@ class ConchSourceHttpTest {
             assertThat(new ConchSourceStore(server.runtime.dataSource()).load()).isEmpty();
             assertThat(switchTo(server, "LOCAL", null).status()).isEqualTo(400);
             assertThat(server.call("GET", CALL, key, "alice", null, null).status()).isEqualTo(200);
+        }
+    }
+
+    @Test
+    void consoleSubmitLocalConchForwardsToReefAndRejectsApiKeys() throws Exception {
+        com.sun.net.httpserver.HttpServer reef = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        java.util.concurrent.atomic.AtomicReference<String> receivedBody = new java.util.concurrent.atomic.AtomicReference<>("");
+        java.util.concurrent.atomic.AtomicReference<String> receivedToken = new java.util.concurrent.atomic.AtomicReference<>("");
+        reef.createContext("/agent/version", exchange -> {
+            byte[] resp = "{\"success\":true,\"data\":{\"latestVersion\":\"1.14.0\"}}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        reef.createContext("/agent/submissions", exchange -> {
+            receivedToken.set(exchange.getRequestHeaders().getFirst("X-Hermit-Token"));
+            receivedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] resp = """
+                    {"success":true,"data":{"id":77,"conch":"legacy_oa","version":"9.9.9","status":"PENDING","submittedBy":"alice","warnings":[{"code":"AUTHENTICATOR","path":"auth.use","message":"引用的授权器同样处于待审批状态"}]}}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        reef.start();
+        try {
+            String reefUrl = "http://127.0.0.1:" + reef.getAddress().getPort();
+            java.security.KeyPair kp = dev.hermit.common.pkg.Ed25519Keys.generate();
+            Path pubFile = temp.resolve("reef-pub.pem");
+            java.nio.file.Files.writeString(pubFile, dev.hermit.common.pkg.Ed25519Keys.writePublicPem(kp.getPublic()));
+            CrabConfig config = CrabConfig.defaults()
+                    .withListen("127.0.0.1", 0)
+                    .withReef(reefUrl, "user-agent-tok", pubFile.toString());
+            try (TestServer server = TestServer.open(temp.resolve("submit-reef"), PASSWORD, config)) {
+                String localYaml = TestServer.conchYaml().replaceFirst("(?m)^version:.*$", "version: 9.9.9");
+                server.runtime.localConches().importBytes(localYaml.getBytes(StandardCharsets.UTF_8), Actors.CONSOLE);
+                assertThat(switchTo(server, "LOCAL", false).status()).isEqualTo(200);
+                assertThat(detail(server).path("reefConnected").asBoolean()).isTrue();
+
+                // API Key 不能触发提交到 Reef
+                assertThat(server.call("POST", "/console/api/local-conches/legacy_oa/submit",
+                        server.apiKey.plaintext(), null, "{\"note\":\"try\"}", null).status()).isIn(401, 403);
+                assertThat(receivedBody.get()).isEmpty();
+
+                // 控制台会话可手动提交并携带备注
+                TestServer.Reply submitted = server.console("POST", "/console/api/local-conches/legacy_oa/submit",
+                        "{\"note\":\"补齐 GBK 登录\"}", true);
+                assertThat(submitted.status()).as(submitted.body()).isEqualTo(200);
+                assertThat(submitted.json().path("data").path("id").asLong()).isEqualTo(77L);
+                assertThat(submitted.json().path("data").path("status").asText()).isEqualTo("PENDING");
+                assertThat(submitted.json().path("data").path("warnings").get(0).asText()).contains("待审批");
+                assertThat(receivedToken.get()).isEqualTo("user-agent-tok");
+                assertThat(receivedBody.get()).contains("version: 9.9.9").contains("补齐 GBK 登录");
+            }
+        } finally {
+            reef.stop(0);
         }
     }
 

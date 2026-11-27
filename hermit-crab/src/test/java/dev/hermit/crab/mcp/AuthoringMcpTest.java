@@ -826,8 +826,10 @@ class AuthoringMcpTest {
                     """, Map.of());
             assertThat(remoteResources.body()).doesNotContain(AuthoringGuide.URI);
             for (String tool : java.util.List.of(
-                    "hermit_dev__debug_trace_list", "hermit_dev__guide", "hermit_dev__read_yaml", "hermit_dev__auth_list", "hermit_dev__capture_list", "hermit_dev__capture_get",
-                    "hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__test_login", "hermit_dev__mcp_refresh", "hermit_dev__trial_run")) {
+                    "hermit_dev__debug_trace_list", "hermit_dev__guide", "hermit_dev__read_yaml", "hermit_dev__auth_list",
+                    "hermit_dev__capture_list", "hermit_dev__capture_get", "hermit_dev__dry_run_response",
+                    "hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__test_login",
+                    "hermit_dev__mcp_refresh", "hermit_dev__mcp_configure", "hermit_dev__stage_text_file", "hermit_dev__trial_run")) {
                 String payload = switch (tool) {
                     case "hermit_dev__debug_trace_list" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__debug_trace_list","arguments":{}}}
@@ -846,6 +848,15 @@ class AuthoringMcpTest {
                             """;
                     case "hermit_dev__capture_get" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__capture_get","arguments":{"captureId":"cap_00000000"}}}
+                            """;
+                    case "hermit_dev__dry_run_response" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__dry_run_response","arguments":{"response":{"status":200,"body":"{}"}}}}
+                            """;
+                    case "hermit_dev__mcp_configure" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__mcp_configure","arguments":{"conch":"remote_ping"}}}
+                            """;
+                    case "hermit_dev__stage_text_file" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__stage_text_file","arguments":{"filename":"a.txt","content":"hi"}}}
                             """;
                     case "hermit_dev__test_login", "hermit_dev__mcp_refresh" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"%s","arguments":{"conch":"remote_ping"}}}
@@ -1978,7 +1989,7 @@ class AuthoringMcpTest {
             assertThat(overData.path("quickReference").asText()).contains("- if:").contains("- repeat:");
             assertThat(overData.path("starterTemplate").asText())
                     .contains("conch: my_system")
-                    .contains("min_crab_version: 1.13.0")
+                    .contains("min_crab_version: 1.14.0")
                     .contains("related: []");
             assertThat(overData.path("pitfalls").isArray()).isTrue();
             assertThat(overData.path("pitfalls").size()).isGreaterThanOrEqualTo(8);
@@ -2057,7 +2068,7 @@ class AuthoringMcpTest {
                 assertThat(body.path("ok").asBoolean()).isFalse();
                 assertThat(body.path("fixHints").isArray()).isTrue();
                 assertThat(body.path("fixHints").toString())
-                        .contains("1.13.0")
+                        .contains("1.14.0")
                         .contains("credentials: {}")
                         .contains("examples")
                         .contains("{{login.xxx}}");
@@ -2532,10 +2543,21 @@ class AuthoringMcpTest {
             assertThat(consumerTrial.path("ok").asBoolean()).isTrue();
             assertThat(consumerTrial.path("data").path("item").asText()).isEqualTo("approved-doc");
 
-            // 覆盖已绑定授权器的本地业务包时，确认文案明确说“授权器绑定”而非“共享身份”
-            JsonNode overwriteBound = server.rpc(scopedKey.plaintext(), scopedSession, 17, "tools/call",
+            // 同边界覆盖绑定到本地授权器的业务包：直接保存且保留 auth_bindings，无需重新绑定即可继续试跑
+            JsonNode sameBound = structured(server.rpc(scopedKey.plaintext(), scopedSession, 17, "tools/call",
                     Map.of("name", "hermit_dev__save_local", "arguments",
-                            Map.of("yaml", consumerYaml.replace("version: 1.0.0", "version: 1.0.1"))));
+                            Map.of("yaml", consumerYaml.replace("version: 1.0.0", "version: 1.0.1")))));
+            assertThat(sameBound.path("ok").asBoolean()).isTrue();
+            JsonNode afterSameBoundTrial = structured(server.rpc(scopedKey.plaintext(), scopedSession, 18, "tools/call",
+                    Map.of("name", "hermit_dev__trial_run", "arguments", Map.of("conch", "local_consumer", "action", "fetch_item"))));
+            assertThat(afterSameBoundTrial.path("ok").asBoolean()).isTrue();
+
+            // 扩大目的地覆盖已绑定授权器的本地业务包时，确认文案明确说“授权器绑定”而非“共享身份”
+            JsonNode overwriteBound = server.rpc(scopedKey.plaintext(), scopedSession, 19, "tools/call",
+                    Map.of("name", "hermit_dev__save_local", "arguments",
+                            Map.of("yaml", consumerYaml
+                                    .replace("version: 1.0.0", "version: 1.0.2")
+                                    .replace(appUrl, "http://127.0.0.1:9"))));
             assertThat(toolError(overwriteBound).path("code").asText()).isEqualTo("CONFIRM_REQUIRED");
             assertThat(toolMessage(overwriteBound)).contains("授权器绑定").doesNotContain("共享身份");
 
@@ -2599,22 +2621,32 @@ class AuthoringMcpTest {
             assertThat(refreshed.path("toolCount").asInt()).isEqualTo(1);
             assertThat(refreshed.path("added")).extracting(JsonNode::asText).containsExactly("pingtool");
             assertThat(refreshed.path("traceId").asText()).isNotBlank();
-            assertThat(refreshed.path("next").asText()).contains("hermit_dev__read_yaml").contains("confirm: false");
+            assertThat(refreshed.path("next").asText())
+                    .contains("hermit_dev__read_yaml")
+                    .contains("hermit_dev__mcp_configure");
 
             // 新刷出来的工具默认保守需要确认，不支持 elicitation 的会话直接试跑会被拦下
             JsonNode unreviewedTrial = server.call(session, "hermit_dev__trial_run",
                     Map.of("conch", "local_mcp", "action", "pingtool", "input", Map.of("q", "hello")));
             assertThat(toolMessage(unreviewedTrial)).isEqualTo(McpCalls.NO_CONFIRM);
 
-            // 按指引读出刷新后的 YAML，审阅核实只读查询后设为 read_only: true / destructive: false / confirm: false 保存，即可无阻试跑
-            String refreshedYaml = structured(server.call(session, "hermit_dev__read_yaml", Map.of("conch", "local_mcp")))
+            // 使用 omitSchemas=true 轻量读取不含膨胀 input_schema，再用 hermit_dev__mcp_configure 原地配置只读与确认标志
+            JsonNode compactRead = structured(server.call(session, "hermit_dev__read_yaml",
+                    Map.of("conch", "local_mcp", "omitSchemas", true)));
+            assertThat(compactRead.path("schemasOmitted").asBoolean()).isTrue();
+            assertThat(compactRead.path("yaml").asText()).doesNotContain("input_schema:");
+
+            JsonNode configured = structured(server.call(session, "hermit_dev__mcp_configure",
+                    Map.of(
+                            "conch", "local_mcp",
+                            "groups", Map.of("diag", Map.of("title", "诊断")),
+                            "defaults", Map.of("read_only", true, "destructive", false, "confirm", false),
+                            "actions", Map.of("pingtool", Map.of("title", "连通性探测", "group", "diag")))));
+            assertThat(configured.path("ok").asBoolean()).as(configured.toString()).isTrue();
+            assertThat(configured.path("replaced").asBoolean()).isTrue();
+            String fullAfterConfigure = structured(server.call(session, "hermit_dev__read_yaml", Map.of("conch", "local_mcp")))
                     .path("yaml").asText();
-            String reviewedYaml = refreshedYaml
-                    .replace("read_only: false", "read_only: true")
-                    .replace("destructive: true", "destructive: false")
-                    .replace("confirm: true", "confirm: false");
-            JsonNode savedReviewed = structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", reviewedYaml)));
-            assertThat(savedReviewed.path("ok").asBoolean()).isTrue();
+            assertThat(fullAfterConfigure).contains("input_schema:").contains("schema_sha256:").contains("group: diag");
 
             JsonNode mcpTrial = structured(server.call(session, "hermit_dev__trial_run",
                     Map.of("conch", "local_mcp", "action", "pingtool", "input", Map.of("q", "hello"))));
@@ -2624,6 +2656,259 @@ class AuthoringMcpTest {
             sso.stop(0);
             app.stop(0);
             mcpUpstream.stop(0);
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void authoring114OfficialAuthGrantDryRunMultiOriginAndFileStageWorkEndToEnd() throws Exception {
+        java.util.concurrent.atomic.AtomicReference<String> uploadedPayload = new java.util.concurrent.atomic.AtomicReference<>("");
+        com.sun.net.httpserver.HttpServer sso = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        sso.createContext("/login", exchange -> {
+            byte[] resp = "{\"token\":\"OFF-TOK-9999\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        sso.createContext("/me", exchange -> {
+            byte[] resp = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        sso.start();
+
+        com.sun.net.httpserver.HttpServer app = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        app.createContext("/api/upload", exchange -> {
+            String auth = exchange.getRequestHeaders().getFirst("Authorization");
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            uploadedPayload.set(body);
+            int code = "Bearer OFF-TOK-9999".equals(auth) ? 200 : 401;
+            byte[] resp = "{\"uploaded\":true}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(code, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        app.start();
+
+        String ssoUrl = "http://127.0.0.1:" + sso.getAddress().getPort();
+        String appUrl = "http://127.0.0.1:" + app.getAddress().getPort();
+        try (Harness server = Harness.open(temp.resolve("authoring-114"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String session = server.initialize(false);
+            CreatedApiKey readOnly = server.runtime.apiKeys().create(
+                    "ro-dev", new ApiKeyScope(Set.of(), Set.of(), true, true, Set.of(), true), Actors.CONSOLE);
+            String roSession = server.initialize(readOnly.plaintext(), false);
+
+            // 1. 绑定到 OFFICIAL 正式授权器的本地业务包：首次同边界覆盖需确认（保留绑定），remember=true 后再次同边界保存直接放行且绑定仍在
+            String officialAuthYaml = """
+                    conch: official_sso
+                    version: 1.0.0
+                    driver: auth
+                    min_crab_version: 1.14.0
+                    title: 正式统一登录
+                    description: 正式授权器
+                    credentials:
+                      password: { type: secret, label: 口令, required: true }
+                    auth:
+                      origins: ["%s"]
+                      steps:
+                        - request:
+                            method: POST
+                            url: %s/login
+                            json: { password: "{{credential.password}}" }
+                        - extract:
+                            access_token: { jsonpath: "$.token" }
+                      alive_check:
+                        request:
+                          method: GET
+                          url: %s/me
+                          headers: { Authorization: "Bearer {{login.access_token}}" }
+                      exports:
+                        access_token: { description: 访问令牌 }
+                    """.formatted(ssoUrl, ssoUrl, ssoUrl);
+            server.runtime.registry().put(ConchParser.parse(officialAuthYaml), dev.hermit.crab.store.Origin.OFFICIAL);
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.OFFICIAL, "official_sso", "corp", Actors.CONSOLE);
+            server.runtime.admin().writeCredentials(
+                    dev.hermit.crab.store.Origin.OFFICIAL,
+                    server.runtime.registry().authenticator("official_sso").orElseThrow().doc(),
+                    "corp",
+                    Map.of("password", "OfficialPass#1"),
+                    Actors.CONSOLE);
+
+            String consumerV1 = """
+                    conch: local_doc_uploader
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.14.0
+                    base_url: %s
+                    title: 本地附件上传
+                    description: 复用正式授权器并支持文件上传
+                    auth:
+                      use: official_sso
+                      alive_check:
+                        request: { method: GET, path: /api/upload }
+                    actions:
+                      upload_csv:
+                        title: 上传报表
+                        description: 上传 CSV 附件
+                        method: POST
+                        idempotent: false
+                        mcp: { expose: true, read_only: false, destructive: false }
+                        input:
+                          report: { type: file, required: true, description: 报表文件 }
+                        steps:
+                          - request:
+                              method: POST
+                              path: /api/upload
+                              headers: { Authorization: "Bearer {{auth.access_token}}" }
+                              multipart:
+                                file: { file: "{{input.report}}" }
+                          - extract:
+                              uploaded: { jsonpath: "$.uploaded" }
+                        output:
+                          uploaded: { type: boolean, description: 是否成功 }
+                        examples:
+                          - input: { report: file_demo }
+                            output: { uploaded: true }
+                        notes: 测试上传
+                        related: []
+                    """.formatted(appUrl);
+            JsonNode savedConsumerV1 = structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", consumerV1)));
+            assertThat(savedConsumerV1.path("ok").asBoolean()).as(savedConsumerV1.toString()).isTrue();
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "local_doc_uploader", "alice", Actors.CONSOLE);
+            HttpResponse<String> bindResp = server.http.send(HttpRequest.newBuilder(
+                            URI.create(server.base + "/console/api/conches/local_doc_uploader/accounts/alice/authenticator"))
+                    .header("X-Hermit-Console", "1")
+                    .header("Content-Type", "application/json")
+                    .PUT(HttpRequest.BodyPublishers.ofString(
+                            "{\"authAccount\":\"corp\",\"baseUrl\":\"" + appUrl + "\",\"confirm\":true}"))
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(bindResp.statusCode()).as(bindResp.body()).isEqualTo(200);
+
+            String consumerV101 = consumerV1.replace("version: 1.0.0", "version: 1.0.1");
+            JsonNode needOfficialConfirm = server.call(session, "hermit_dev__save_local", Map.of("yaml", consumerV101));
+            assertThat(toolError(needOfficialConfirm).path("code").asText()).isEqualTo("CONFIRM_REQUIRED");
+            assertThat(toolMessage(needOfficialConfirm)).contains("正式授权器绑定").contains("保留现有授权器绑定");
+
+            HttpResponse<String> pendingResp = server.http.send(HttpRequest.newBuilder(
+                            URI.create(server.base + "/console/api/local-conches/pending"))
+                    .header("X-Hermit-Console", "1")
+                    .GET()
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            String pendingSha = ApiJson.tree(pendingResp.body()).path("data").path("pending").get(0).path("sha256").asText();
+            HttpResponse<String> confirmResp = server.http.send(HttpRequest.newBuilder(
+                            URI.create(server.base + "/console/api/local-conches/local_doc_uploader/pending/confirm"))
+                    .header("X-Hermit-Console", "1")
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"sha256\":\"" + pendingSha + "\",\"remember\":true}"))
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(confirmResp.statusCode()).as(confirmResp.body()).isEqualTo(200);
+            assertThat(server.runtime.authenticators().hasBoundToOfficial("local_doc_uploader")).isTrue();
+
+            // remember=true 生效后，再次同边界修改无需确认且正式授权器绑定保持完好
+            String consumerV102 = consumerV1.replace("version: 1.0.0", "version: 1.0.2");
+            assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", consumerV102)))
+                    .path("ok").asBoolean()).isTrue();
+            assertThat(server.runtime.authenticators().hasBoundToOfficial("local_doc_uploader")).isTrue();
+
+            // 2. hermit_dev__stage_text_file 拒绝只读 Key，读写 Key 生成测试文件后直接传给 trial_run 上传
+            JsonNode roStage = server.rpc(readOnly.plaintext(), roSession, 21, "tools/call",
+                    Map.of("name", "hermit_dev__stage_text_file", "arguments",
+                            Map.of("filename", "demo.csv", "content", "id,amount\n1,100\n")));
+            assertThat(toolError(roStage).path("code").asText()).isEqualTo("FORBIDDEN");
+
+            JsonNode staged = structured(server.call(session, "hermit_dev__stage_text_file",
+                    Map.of("filename", "demo.csv", "content", "id,amount\n1,100\n", "mimeType", "text/csv")));
+            String fileId = staged.path("fileId").asText();
+            assertThat(fileId).isNotBlank();
+
+            JsonNode uploadTrial = structured(server.call(session, "hermit_dev__trial_run",
+                    Map.of("conch", "local_doc_uploader", "action", "upload_csv", "input", Map.of("report", fileId))));
+            assertThat(uploadTrial.path("ok").asBoolean()).as(uploadTrial.toString()).isTrue();
+            assertThat(uploadTrial.path("data").path("uploaded").asBoolean()).isTrue();
+            assertThat(uploadedPayload.get()).contains("filename=\"demo.csv\"").contains("id,amount\n1,100\n");
+
+            // 3. 多源站抓包快照提示 + hermit_dev__dry_run_response 零网络离线试炼（快照与内联响应均支持）
+            String multiOriginHar = """
+                    {
+                      "log": {
+                        "version": "1.2",
+                        "entries": [
+                          {
+                            "startedDateTime": "2026-11-26T12:00:00Z",
+                            "time": 12,
+                            "request": { "method": "POST", "url": "https://sso.corp.local/cas/login", "headers": [] },
+                            "response": {
+                              "status": 200,
+                              "statusText": "OK",
+                              "headers": [{"name": "Content-Type", "value": "application/json"}],
+                              "content": { "size": 30, "mimeType": "application/json", "text": "{\\"ticket\\":\\"ST-1\\"}" }
+                            }
+                          },
+                          {
+                            "startedDateTime": "2026-11-26T12:00:01Z",
+                            "time": 15,
+                            "request": { "method": "GET", "url": "https://oa.corp.local/api/orders", "headers": [] },
+                            "response": {
+                              "status": 200,
+                              "statusText": "OK",
+                              "headers": [{"name": "Content-Type", "value": "application/json"}],
+                              "content": {
+                                "size": 68,
+                                "mimeType": "application/json",
+                                "text": "{\\"code\\":40100,\\"items\\":[{\\"id\\":\\"A1\\",\\"cents\\":2500}]}"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                    """;
+            server.runtime.recorder().importHar(multiOriginHar.getBytes(StandardCharsets.UTF_8), "multi.har");
+            var entries = server.runtime.recorder().listSessionEntries(false);
+            var snap = server.runtime.recorder().createSnapshot(
+                    "跨站登录与订单", entries.stream().map(dev.hermit.crab.recorder.RecordedEntry::id).toList(), List.of());
+
+            JsonNode capList = structured(server.call(session, "hermit_dev__capture_list", Map.of()));
+            assertThat(capList.path("next").asText()).contains("driver: auth").contains("auth.origins");
+            JsonNode capGet = structured(server.call(session, "hermit_dev__capture_get",
+                    Map.of("captureId", snap.id(), "index", 2)));
+            assertThat(capGet.path("next").asText()).contains("driver: auth").contains("auth.origins");
+
+            JsonNode dryFromSnap = structured(server.call(session, "hermit_dev__dry_run_response",
+                    Map.of(
+                            "captureId", snap.id(),
+                            "index", 2,
+                            "extract", Map.of("first_id", Map.of("jsonpath", "$.items[0].id"),
+                                    "cents", Map.of("jsonpath", "$.items[0].cents")),
+                            "script", Map.of("code", "return { yuan: Number(vars.cents) / 100, sig: hermit.hex(hermit.md5(vars.first_id)) };"),
+                            "expiredWhen", List.of(Map.of("json_equals", Map.of("$.code", 40100))),
+                            "output", Map.of(
+                                    "orderId", Map.of("type", "string", "description", "单号", "value", "{{first_id}}"),
+                                    "yuan", Map.of("type", "number", "description", "金额", "value", "{{yuan}}"),
+                                    "sig", Map.of("type", "string", "description", "摘要", "value", "{{sig}}")))));
+            assertThat(dryFromSnap.path("ok").asBoolean()).as(dryFromSnap.toString()).isTrue();
+            assertThat(dryFromSnap.path("expired").asBoolean()).isTrue();
+            assertThat(dryFromSnap.path("matchedExpiredRuleIndex").asInt()).isZero();
+            assertThat(dryFromSnap.path("output").path("orderId").asText()).isEqualTo("A1");
+            assertThat(dryFromSnap.path("output").path("yuan").asDouble()).isEqualTo(25.0);
+            assertThat(dryFromSnap.path("output").path("sig").asText()).hasSize(32);
+
+            JsonNode dryInline = structured(server.call(session, "hermit_dev__dry_run_response",
+                    Map.of(
+                            "response", Map.of("status", 200, "headers", Map.of("X-Rate", "7"), "body", "<div>Total: 42</div>"),
+                            "extract", Map.of("total", Map.of("regex", "Total:\\s*(\\d+)", "group", 1)),
+                            "output", Map.of("count", Map.of("type", "integer", "description", "总数", "value", "{{total}}")))));
+            assertThat(dryInline.path("ok").asBoolean()).as(dryInline.toString()).isTrue();
+            assertThat(dryInline.path("output").path("count").asInt()).isEqualTo(42);
+        } finally {
+            sso.stop(0);
+            app.stop(0);
         }
     }
 

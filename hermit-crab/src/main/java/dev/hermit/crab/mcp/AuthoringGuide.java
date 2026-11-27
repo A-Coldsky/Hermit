@@ -51,7 +51,7 @@ final class AuthoringGuide {
             conch: my_system
             version: 1.0.0
             driver: http
-            min_crab_version: 1.13.0
+            min_crab_version: 1.14.0
             base_url: http://127.0.0.1:8080
             title: 示例系统（请替换为实际系统名）
             description: 登录后查询业务数据。凭证只声明字段，真实值由用户在 Crab 控制台填写。
@@ -110,7 +110,7 @@ final class AuthoringGuide {
             conch: corp_sso
             version: 1.0.0
             driver: auth
-            min_crab_version: 1.13.0
+            min_crab_version: 1.14.0
             title: 统一认证中心（请替换为实际 SSO 名称）
             description: 登录企业统一认证中心（SSO），为多个业务规则包提供共享会话 Cookie 与导出令牌。
             credentials:
@@ -155,7 +155,7 @@ final class AuthoringGuide {
             conch: corp_portal_app
             version: 1.0.0
             driver: http
-            min_crab_version: 1.13.0
+            min_crab_version: 1.14.0
             base_url: https://oa.example.internal
             title: 协同办公系统（请替换为实际业务系统名）
             description: 复用统一认证授权器登录，分页查询协同办公系统中的待办审批事项。
@@ -201,7 +201,7 @@ final class AuthoringGuide {
             conch: vendor_mcp
             version: 1.0.0
             driver: mcp
-            min_crab_version: 1.13.0
+            min_crab_version: 1.14.0
             title: 上游 MCP 服务（请替换为实际系统名）
             description: 连接上游 Streamable HTTP MCP 服务并按刷新后的工具快照对外暴露能力。
             credentials:
@@ -221,15 +221,15 @@ final class AuthoringGuide {
             """;
 
     private static final List<String> PITFALLS = List.of(
-            "❌ 省略或写旧的 min_crab_version: 1.0.0（导致 if/repeat/retry/groups/origins/expired_when/授权器/引号下标 报错） → ✅ 新规则包统一写 min_crab_version: 1.13.0。",
+            "❌ 省略或写旧的 min_crab_version: 1.0.0（导致 if/repeat/retry/groups/origins/expired_when/授权器/加解密函数 报错） → ✅ 新规则包统一写 min_crab_version: 1.14.0。",
             "❌ 省略 credentials、把密钥放进 config(type: secret) 或把抓包里的密码/Cookie/Bearer 原文写进 YAML → ✅ 无登录写 credentials: {}；有秘密放 credentials(type: secret)，步骤里写 {{credential.xxx}}，绝不把真值写进 YAML。",
             "❌ 在能力步骤里直接写 {{token}} 引用登录提取值，或手写 Cookie/Host/Content-Length 请求头 → ✅ 跨登录读取一律写 {{login.token}}（带连字符 Cookie 先在 auth.cookies 映射）；Cookie 由 Crab 自动管理，不要写 Cookie/Host/Content-Length 头。",
             "❌ 写成 assert: {status: \"200\"}（带引号）或 if: \"{{count}} > 0\" / while / elif → ✅ status 写数字（200 或 [200, 302]）；分支和循环用 if / repeat + until，比较大小先用 script 算成变量再用 equals 判断。",
             "❌ 在 if/until/assert 的 equals/not_equals/present/not_present 里写 {{var}}（如 present: \"{{next}}\"） → ✅ 变量判断键直接写变量名，不加双花括号：present: next、equals: {code: \"0\"}；repeat 的 collect 也写变量名：collect: {all_rows: rows}。",
             "❌ 用点号读带连字符的响应头（{{response.headers.content-type}}）或在 credential/login/input 后写方括号 → ✅ 带连字符用点号加引号下标：{{response.headers['content-type']}}；credential/login/config/input/now 一律用点号。",
-            "❌ 同一 request 同时写 json 和 body/form/multipart，或需要 302 跳转时漏写 follow_redirects: true → ✅ body/form/json/multipart 四选一互斥；默认不跟随重定向，需跟随写 follow_redirects: true；跨认证域名登录要在 auth.origins 声明。",
+            "❌ 同一 request 同时写 json 和 body/form/multipart，GBK 老系统错写 charset: GBK，或需 302 跳转时漏写 follow_redirects: true → ✅ body/form/json/multipart 互斥；字符集写 encoding: GBK；需跟随跳转写 follow_redirects: true。",
             "❌ HTTP 规则包漏写 actions.<name>.examples、output，或省略 related 产生警告 → ✅ 每个 HTTP 能力必须写 title、description、output、examples；无关联能力显式写 related: []；只读查询标 idempotent: true 与 mcp: {expose: true, read_only: true}。",
-            "❌ 在 script 里把 vars.response 当字符串、不写 credential: true 就读 vars.credential，或直接 return Uint8Array/Date → ✅ 响应正文是 vars.response.body（JSON 先 JSON.parse）；读凭证加 credential: true；字节数组先转 hermit.hex/base64，不能用 class/async/fetch。",
+            "❌ 在 script 里不写 credential: true 就读 vars.credential/vars.login/vars.auth，手写百行 RSA/AES，或直接 return Uint8Array/Date → ✅ 读凭证/登录/授权器变量加 credential: true；直接调 hermit.md5/sha256/hmacSha256/aesEncrypt/rsaEncrypt/gbk，结果转 hermit.hex/base64。",
             "❌ HTTP 200 业务错误码或登录页 HTML 只靠默认 401/403，或试图修改 Reef 正式包/换包名绕过确认 → ✅ 业务码/登录页失效写 auth.expired_when（如 json_equals: {\"$.code\": 40100}）；Reef 正式包只读，改规则用 hermit_dev__save_local 存本地包，改已有本地包保持同名。");
 
     private static final String STARTER_SECTION_CONTENT = buildStarterSection();
@@ -677,7 +677,7 @@ final class AuthoringGuide {
         sb.append("1. **鉴权选择**：请求头令牌写 `upstream.auth: {type: headers}` 并在 `upstream.headers` 写请求头模板，同时在顶层 `credentials` 声明秘密字段；OAuth 2.1 PKCE 写 `credentials: {}` 与 `upstream.auth: {type: oauth, client_id: \"...\"}`（端点支持 RFC 9728/8414 自动发现或显式填写）。无需鉴权时写 `credentials: {}` 与 `upstream.auth: {type: headers}`。\n");
         sb.append("2. **过滤工具（可选）**：可在顶层加 `tools: {include: [\"search_*\"], exclude: [\"admin_*\"]}` 控制刷新保留哪些上游工具。\n");
         sb.append("3. **保存与建号**：校验通过后调用 `hermit_dev__save_local` 保存，让用户在 Crab 控制台为该包新建账号（填写凭证，或 OAuth 点「连接上游」完成浏览器授权）。\n");
-        sb.append("4. **刷新快照、审阅权限与试跑**：调用 `hermit_dev__mcp_refresh`（或用户在控制台点「刷新工具列表」）将上游 `tools/list` 写入本地 YAML 的 `actions` 与 `snapshot`。新加入的工具默认按保守策略设为 `read_only: false`、`destructive: true`、`confirm: true`（不直接采信上游注解）；请用 `hermit_dev__read_yaml` 审阅后将核实为只读的工具改为 `read_only: true`、`destructive: false`、`confirm: false` 并补充中文说明，保存后再用 `hermit_dev__trial_run` 试跑验证。注意：必须在刷新出至少一个工具后才能关闭开发者模式或导出发布到 Reef。\n");
+        sb.append("4. **刷新快照、整理权限与试跑**：调用 `hermit_dev__mcp_refresh`（或用户在控制台点「刷新工具列表」）将上游 `tools/list` 写入本地 YAML 的 `actions` 与 `snapshot`。新加入的工具默认按保守策略设为 `read_only: false`、`destructive: true`、`confirm: true`（不直接采信上游注解）；请先用 `hermit_dev__read_yaml(conch=..., omitSchemas=true)` 轻量查看能力清单，再用 `hermit_dev__mcp_configure` 在原地批量整理分组与 `readOnly`/`destructive`/`confirm` 标志（无需手改整份巨型 schema YAML），最后用 `hermit_dev__trial_run` 试跑验证。注意：必须在刷新出至少一个工具后才能关闭开发者模式或导出发布到 Reef。\n");
         return sb.toString().stripTrailing();
     }
 

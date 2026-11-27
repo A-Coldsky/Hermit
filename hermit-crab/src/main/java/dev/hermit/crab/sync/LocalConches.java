@@ -112,9 +112,13 @@ public final class LocalConches {
     private final LinkedHashMap<String, OverrideGrant> grants = new LinkedHashMap<>();
     private volatile Consumer<String> onWidened = name -> {
     };
+    private volatile Consumer<String> onAuthSpecChanged = name -> {
+    };
     private volatile java.util.function.BiConsumer<String, String> onDeleted = (name, actor) -> {
     };
     private volatile Predicate<String> boundToIdentity = conch -> false;
+    private volatile Predicate<String> boundToOfficialAuth = conch -> false;
+    private volatile Predicate<String> boundToAnyAuth = conch -> false;
     /** 第一次清会话返回之后、写文件之前。测试在这个窗口里插入登录。生产路径是空操作。 */
     private volatile Runnable widenedGap = () -> {
     };
@@ -161,6 +165,12 @@ public final class LocalConches {
         } : listener;
     }
 
+    /** 同边界覆盖但包的 {@code auth} 段变化时调用：刷新登录/换票快照，不解除授权器绑定。 */
+    public void onAuthSpecChanged(Consumer<String> listener) {
+        this.onAuthSpecChanged = listener == null ? name -> {
+        } : listener;
+    }
+
     /** 本地包被使用者删掉之后调用，参数是包名和操作者。放开本地包的锁之后才调用。 */
     public void onDeleted(java.util.function.BiConsumer<String, String> listener) {
         this.onDeleted = listener == null ? (name, actor) -> {
@@ -170,6 +180,16 @@ public final class LocalConches {
     /** 检查本地包是否有任意账号绑到了共享身份。已绑共享身份的包覆盖前必须确认，确认后自动移出共享身份。 */
     public void onBoundCheck(Predicate<String> check) {
         this.boundToIdentity = check == null ? conch -> false : check;
+    }
+
+    /**
+     * 检查本地包与授权器的绑定状态：
+     * {@code officialAuthCheck} 为绑定到正式来源授权器（同边界首次覆盖需确认，确认后保留绑定，勾选免确认后同边界免询问）；
+     * {@code anyAuthCheck} 为存在任意授权器绑定（仅当边界扩大时拒绝免确认并在确认后解绑）。
+     */
+    public void onBoundAuthChecks(Predicate<String> officialAuthCheck, Predicate<String> anyAuthCheck) {
+        this.boundToOfficialAuth = officialAuthCheck == null ? conch -> false : officialAuthCheck;
+        this.boundToAnyAuth = anyAuthCheck == null ? conch -> false : anyAuthCheck;
     }
 
     /** 测试用：第一次清会话返回之后、写文件之前。 */
@@ -205,7 +225,7 @@ public final class LocalConches {
     }
 
     /**
-     * 已有本地包且目的地没有扩大、也没有绑定共享身份时直接覆盖。否则抛 {@link LocalConchException#replaceRequired(String)}，
+     * 已有本地包且目的地没有扩大、未绑共享身份、也未绑正式授权器时直接覆盖。否则抛 {@link LocalConchException#replaceRequired(String)}，
      * 不写文件。判断和写入在同一把锁里。
      */
     public ImportResult replaceIfSameBoundary(byte[] raw, String actor, String keyName) {
@@ -220,6 +240,7 @@ public final class LocalConches {
             }
             ConchDoc before = readableDoc(conch).orElse(null);
             if (boundToIdentity.test(conch)
+                    || boundToOfficialAuth.test(conch)
                     || !ConchDestinations.between(before, parsed.doc()).sameBoundary()) {
                 throw LocalConchException.replaceRequired(conch);
             }
@@ -228,7 +249,7 @@ public final class LocalConches {
     }
 
     /**
-     * 地址扩大或已绑定共享身份、客户端不能当场确认时记下一条待确认覆盖。已经是同一边界且未绑身份，或包已经不在了，返回 empty，不写文件。
+     * 地址扩大、已绑共享身份或已绑正式授权器、客户端不能当场确认时记下一条待确认覆盖。已经是同一边界且无需确认，或包已经不在了，返回 empty，不写文件。
      */
     public Optional<PendingOverwrite> stagePending(byte[] raw, String actor, String submittedBy) {
         String checked = actor(actor);
@@ -242,7 +263,7 @@ public final class LocalConches {
             }
             ConchDoc before = readableDoc(conch).orElse(null);
             ConchDestinations.Boundary boundary = ConchDestinations.between(before, parsed.doc());
-            if (boundary.sameBoundary() && !boundToIdentity.test(conch)) {
+            if (boundary.sameBoundary() && !boundToIdentity.test(conch) && !boundToOfficialAuth.test(conch)) {
                 return Optional.empty();
             }
             byte[] disk = readIfRegular(conch);
@@ -350,6 +371,10 @@ public final class LocalConches {
             String conch = parsed.doc().conch();
             OverrideGrant grant = grants.get(conch);
             if (grant == null || boundToIdentity.test(conch)) {
+                return Optional.empty();
+            }
+            ConchDoc before = readableDoc(conch).orElse(null);
+            if (!ConchDestinations.between(before, parsed.doc()).sameBoundary() && boundToAnyAuth.test(conch)) {
                 return Optional.empty();
             }
             return Optional.of(writeUnlocked(
@@ -1042,6 +1067,8 @@ public final class LocalConches {
             }
             boolean widened = replaced && !boundary.sameBoundary();
             boolean clearSessions = replaced && (widened || boundToIdentity.test(doc.conch()));
+            boolean authSpecChanged = replaced && !clearSessions && before != null
+                    && !Objects.equals(before.auth(), doc.auth());
             if (clearSessions) {
                 onWidened.accept(doc.conch());
                 widenedGap.run();
@@ -1058,6 +1085,8 @@ public final class LocalConches {
             }
             if (clearSessions) {
                 onWidened.accept(doc.conch());
+            } else if (authSpecChanged) {
+                onAuthSpecChanged.accept(doc.conch());
             }
             if (dropUpstreamSecrets(before, doc, existed)) {
                 deleteUpstreamSecrets(doc.conch());

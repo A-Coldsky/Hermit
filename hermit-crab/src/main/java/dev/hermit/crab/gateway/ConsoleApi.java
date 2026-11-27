@@ -180,6 +180,7 @@ final class ConsoleApi {
         post(app, "/console/api/local-conches/{conch}/history/{id}/restore", ctx -> restoreHistory(runtime, ctx));
         post(app, "/console/api/local-conches/{conch}/actions/{action}/run", ctx -> runLocal(runtime, ctx));
         post(app, "/console/api/local-conches/{conch}/mcp/refresh", ctx -> refreshLocalMcp(runtime, ctx));
+        post(app, "/console/api/local-conches/{conch}/submit", ctx -> submitLocalConch(runtime, ctx));
         get(app, "/console/api/tls/trust", ctx -> GatewayResponses.writeData(ctx, runtime.tlsTrust().view()));
         get(app, "/console/api/tls/failures", ctx -> GatewayResponses.writeData(ctx, runtime.tlsTrust().failures()));
         post(app, "/console/api/tls/ca", ctx -> importTlsCa(runtime, ctx));
@@ -321,6 +322,7 @@ final class ConsoleApi {
         } else {
             body.put("authUse", null);
         }
+        body.put("reefConnected", runtime.conchSync() != null);
         body.put("ruleDisabled", false);
         GatewayResponses.writeData(ctx, body);
     }
@@ -538,9 +540,70 @@ final class ConsoleApi {
             row.put("readOnly", CapabilityHttp.readOnly(action));
             row.put("disabled", runtime.capabilityDisabled(doc.conch(), action.name()));
             row.put("group", action.group());
+            row.put("input", actionInputs(action));
             capabilities.add(row);
         }
         body.put("capabilities", capabilities);
+    }
+
+    private static List<Map<String, Object>> actionInputs(Action action) {
+        if (action == null) {
+            return List.of();
+        }
+        if (action.tool() != null && action.tool().inputSchema() != null) {
+            Object rawProps = action.tool().inputSchema().get("properties");
+            if (!(rawProps instanceof Map<?, ?> props) || props.isEmpty()) {
+                return List.of();
+            }
+            Set<String> req = new java.util.HashSet<>();
+            if (action.tool().inputSchema().get("required") instanceof List<?> reqList) {
+                reqList.forEach(item -> {
+                    if (item != null) {
+                        req.add(String.valueOf(item));
+                    }
+                });
+            }
+            ArrayList<Map<String, Object>> list = new ArrayList<>(props.size());
+            props.forEach((k, v) -> {
+                String name = String.valueOf(k);
+                LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+                item.put("name", name);
+                String type = "string";
+                Object defVal = null;
+                String desc = "";
+                if (v instanceof Map<?, ?> pm) {
+                    if (pm.get("type") instanceof String t && !t.isBlank()) {
+                        type = t;
+                    }
+                    defVal = pm.get("default");
+                    if (pm.get("description") instanceof String d) {
+                        desc = d;
+                    }
+                }
+                item.put("type", type);
+                item.put("required", req.contains(name));
+                item.put("defaultValue", defVal);
+                item.put("description", desc);
+                list.add(item);
+            });
+            return list;
+        }
+        if (action.input().isEmpty()) {
+            return List.of();
+        }
+        ArrayList<Map<String, Object>> list = new ArrayList<>(action.input().size());
+        action.input().forEach((name, spec) -> {
+            if (spec != null) {
+                LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+                item.put("name", name);
+                item.put("type", text(spec.type()));
+                item.put("required", spec.required());
+                item.put("defaultValue", spec.defaultValue());
+                item.put("description", text(spec.description()));
+                list.add(item);
+            }
+        });
+        return list;
     }
 
     private static List<Map<String, Object>> groupDecls(ConchDoc doc) {
@@ -1302,8 +1365,8 @@ final class ConsoleApi {
             throw new IllegalArgumentException("source must be LOCAL or REEF");
         }
         boolean copy = bool(body, "copy", false);
-        if (copy && origin != Origin.OFFICIAL) {
-            throw new IllegalArgumentException("copy is only for switching to REEF");
+        if (copy && origin == Origin.LOCAL && apiKeyPresented(ctx)) {
+            throw LocalConchException.forbidden("API Key 不能将正式包的凭证复制到本地规则包，请在 Crab 控制台操作。");
         }
         CrabRuntime.SourceSwitch done = runtime.switchSource(conch, origin, copy, Actors.CONSOLE);
         LinkedHashMap<String, Object> data = new LinkedHashMap<>();
@@ -2314,6 +2377,57 @@ final class ConsoleApi {
         LocalConches.Export export = runtime.localConches().export(ctx.pathParam("conch"));
         ctx.header("Content-Disposition", "attachment; filename=\"" + export.conch() + "-" + export.version() + ".yaml\"");
         GatewayResponses.writeBytes(ctx, 200, "application/yaml", "no-store", export.bytes());
+    }
+
+    private static void submitLocalConch(CrabRuntime runtime, Context ctx) throws Exception {
+        if (apiKeyPresented(ctx)) {
+            throw LocalConchException.forbidden("API Key 不能向 Reef 提交规则包审批，请在 Crab 控制台操作。");
+        }
+        String conch = ctx.pathParam("conch");
+        String note = null;
+        byte[] rawBody = RequestBodies.read(ctx.req());
+        if (rawBody != null && rawBody.length > 0) {
+            JsonNode body = ApiJson.tree(rawBody);
+            if (body != null && !body.isNull()) {
+                if (!body.isObject()) {
+                    throw new IllegalArgumentException("请求体必须是 JSON 对象");
+                }
+                rejectUnknownFields(body, Set.of("note"));
+                JsonNode noteNode = body.get("note");
+                if (noteNode != null && !noteNode.isNull()) {
+                    if (!noteNode.isTextual()) {
+                        throw new IllegalArgumentException("note 必须是字符串");
+                    }
+                    String trimmed = noteNode.asText().trim();
+                    if (!trimmed.isEmpty()) {
+                        note = trimmed;
+                    }
+                }
+            }
+        }
+        try {
+            ConchSync.SubmittedConch submitted = runtime.submitLocalConchToReef(conch, note, Actors.CONSOLE);
+            LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+            out.put("id", submitted.id());
+            out.put("conch", submitted.conch());
+            out.put("version", submitted.version());
+            out.put("status", submitted.status());
+            out.put("submittedBy", submitted.submittedBy());
+            out.put("warnings", submitted.warnings());
+            GatewayResponses.writeData(ctx, out);
+        } catch (ConchSync.SubmissionRejectedException ex) {
+            ErrorCode mapped = switch (ex.httpStatus()) {
+                case 401 -> ErrorCode.AUTH_FAILED;
+                case 403 -> ErrorCode.FORBIDDEN;
+                case 409 -> ErrorCode.CONFLICT;
+                case 400, 422 -> ErrorCode.INVALID_INPUT;
+                default -> ErrorCode.UPSTREAM_ERROR;
+            };
+            int status = ex.httpStatus() >= 400 && ex.httpStatus() < 600 ? ex.httpStatus() : StatusCodes.of(mapped);
+            GatewayResponses.writeError(ctx, status, mapped, ex.getMessage());
+        } catch (dev.hermit.crab.sync.SyncException ex) {
+            GatewayResponses.writeError(ctx, StatusCodes.of(ErrorCode.NOT_CONFIGURED), ErrorCode.NOT_CONFIGURED, ex.getMessage());
+        }
     }
 
     private static byte[] localBody(Context ctx) throws Exception {

@@ -78,6 +78,8 @@ class ConchSubmissionApiTest {
         jdbc.update("DELETE FROM hermit_conch_submissions");
         jdbc.update("DELETE FROM hermit_conch_versions");
         jdbc.update("DELETE FROM hermit_conch_availability");
+        jdbc.update("DELETE FROM hermit_crab_instances");
+        jdbc.update("DELETE FROM hermit_agent_tokens");
         jdbc.update("DELETE FROM hermit_audit_log");
         jdbc.update("DELETE FROM hermit_admin_login_failures");
         jdbc.update("DELETE FROM hermit_admin_users");
@@ -305,6 +307,138 @@ class ConchSubmissionApiTest {
                         .file(new MockMultipartFile("file", "demo_disabled.yaml", "text/yaml", yamlV2))
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + aliceToken))
                 .andExpect(status().isConflict());
+    }
+
+    @Test
+    void agentSubmissionRequiresUserOwnedTokenAndSupportsPendingAuthenticatorQueue() throws Exception {
+        String instanceId = "123e4567-e89b-12d3-a456-426614174001";
+        String authYaml = """
+                conch: corp_sso
+                version: 1.2.0
+                driver: auth
+                min_crab_version: 1.14.0
+                title: 统一登录
+                description: 公司统一登录授权器
+                credentials:
+                  username: { type: text, label: 账号 }
+                  password: { type: secret, label: 密码 }
+                auth:
+                  origins: ["https://sso.corp.example"]
+                  steps:
+                    - request:
+                        method: POST
+                        url: https://sso.corp.example/login
+                        form: { u: "{{credential.username}}", p: "{{credential.password}}" }
+                    - extract:
+                        access_token: { jsonpath: "$.token" }
+                  alive_check:
+                    request:
+                      method: GET
+                      url: https://sso.corp.example/me
+                      headers: { Authorization: "Bearer {{login.access_token}}" }
+                  exports:
+                    access_token: { description: 访问令牌 }
+                """;
+        String consumerYaml = """
+                conch: corp_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.14.0
+                base_url: https://oa.corp.example
+                title: 协同办公
+                description: 复用统一登录的 OA 规则包
+                auth:
+                  use: corp_sso
+                  min_version: 1.2.0
+                  alive_check:
+                    request: { method: GET, path: /api/me }
+                actions:
+                  list_todos:
+                    title: 待办
+                    description: 查询待办
+                    output:
+                      ok: { type: string, description: 结果, value: ok }
+                    examples:
+                      - input: {}
+                        output: { ok: ok }
+                    notes: 只读查询
+                    steps:
+                      - request:
+                          method: GET
+                          path: /api/todos
+                          headers: { Authorization: "Bearer {{auth.access_token}}" }
+                """;
+
+        // 环境变量静态 Agent 令牌没有归属用户，拒绝提交（403）
+        mockMvc.perform(post("/agent/submissions")
+                        .header(AgentAccessFilter.INSTANCE_HEADER, instanceId)
+                        .header(AgentAccessFilter.TOKEN_HEADER, AGENT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("yaml", authYaml, "note", "静态令牌尝试"))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+
+        // Alice 生成个人归属的数据库 Agent 令牌
+        MvcResult issuedRes = mockMvc.perform(post("/api/admin/tokens")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + aliceToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"alice-crab\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String aliceAgentSecret = objectMapper.readTree(issuedRes.getResponse().getContentAsString())
+                .path("data").path("secret").asText();
+
+        // 1. 提交未发布的授权器 corp_sso -> PENDING，归属人记为 alice
+        MvcResult ssoSub = mockMvc.perform(post("/agent/submissions")
+                        .header(AgentAccessFilter.INSTANCE_HEADER, instanceId)
+                        .header(AgentAccessFilter.TOKEN_HEADER, aliceAgentSecret)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("yaml", authYaml, "note", "统一登录首版"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conch").value("corp_sso"))
+                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.submittedBy").value(ALICE))
+                .andReturn();
+        long ssoSubId = objectMapper.readTree(ssoSub.getResponse().getContentAsString())
+                .path("data").path("id").asLong();
+
+        // 2. 授权器尚在待审队列时，匹配的业务包 corp_oa 允许一并进待审队列并附带提示；不匹配的业务包仍被拒绝
+        String mismatchedConsumer = consumerYaml.replace("{{auth.access_token}}", "{{auth.missing_export}}");
+        mockMvc.perform(post("/agent/submissions")
+                        .header(AgentAccessFilter.INSTANCE_HEADER, instanceId)
+                        .header(AgentAccessFilter.TOKEN_HEADER, aliceAgentSecret)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("yaml", mismatchedConsumer))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("INVALID_INPUT"));
+
+        MvcResult oaSub = mockMvc.perform(post("/agent/submissions")
+                        .header(AgentAccessFilter.INSTANCE_HEADER, instanceId)
+                        .header(AgentAccessFilter.TOKEN_HEADER, aliceAgentSecret)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("yaml", consumerYaml, "note", "依赖待审授权器"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.conch").value("corp_oa"))
+                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.warnings[0]").exists())
+                .andReturn();
+        long oaSubId = objectMapper.readTree(oaSub.getResponse().getContentAsString())
+                .path("data").path("id").asLong();
+
+        // 3. 管理员若先批准业务包 corp_oa，因 corp_sso 尚未发布被 409 拦截；先批准 corp_sso 再批准 corp_oa 即成功
+        mockMvc.perform(post("/api/admin/submissions/" + oaSubId + "/approve")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(post("/api/admin/submissions/" + ssoSubId + "/approve")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("APPROVED"));
+
+        mockMvc.perform(post("/api/admin/submissions/" + oaSubId + "/approve")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("APPROVED"));
     }
 
     private static String sampleYaml(String conch, String version, String actionName) {

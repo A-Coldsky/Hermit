@@ -16,6 +16,7 @@ const crab = vi.hoisted(() => ({
   syncStatus: vi.fn(),
   runLocal: vi.fn(),
   refreshLocalMcp: vi.fn(),
+  uploadFile: vi.fn(),
 }))
 
 vi.mock('../apps/crab-console/src/api', () => ({ api: crab }))
@@ -337,5 +338,64 @@ describe('Crab 开发者模式', () => {
     expect(document.body.textContent).toContain('上游返回 502')
     expect(document.body.textContent).toContain('t-fail')
     wrapper.unmount()
+  })
+
+  it('能力含 type=file 参数时自动填充入参骨架，选择文件后上传暂存区并写入 fileId', async () => {
+    crab.conch.mockResolvedValue(
+      detail({
+        capabilities: [
+          {
+            action: 'upload_invoice',
+            title: '上传发票',
+            description: '',
+            method: 'POST',
+            readOnly: false,
+            disabled: false,
+            input: [
+              { name: 'title', type: 'string', required: true, defaultValue: '差旅报销' },
+              { name: 'attachment', type: 'file', required: true },
+            ],
+          },
+        ],
+      }),
+    )
+    crab.debug.mockResolvedValue({ enabled: true, expiresAt: '2026-11-06T08:00:00Z' })
+    crab.uploadFile.mockResolvedValue({
+      fileId: 'file_abc123',
+      name: 'invoice.pdf',
+      size: 128,
+      mime: 'application/pdf',
+      expiresAt: '2026-11-06T09:00:00Z',
+    })
+    crab.runLocal.mockResolvedValue({
+      success: true,
+      data: { ok: true },
+      error: null,
+      traceId: 't-upload',
+    })
+
+    const page = await mountPage(ConchDetailView, { attach: true, props: { conch: 'local_echo' } })
+    await flushPromises()
+
+    const textarea = page.get('[data-test="trial-input"]').element as HTMLTextAreaElement
+    expect(JSON.parse(textarea.value)).toEqual({ title: '差旅报销', attachment: '' })
+    expect(page.find('[data-test="trial-file-pickers"]').exists()).toBe(true)
+
+    const fileInput = page.get('[data-test="trial-file-attachment"]').element as HTMLInputElement
+    const sample = new File(['%PDF-1.4'], 'invoice.pdf', { type: 'application/pdf' })
+    Object.defineProperty(fileInput, 'files', { value: [sample], configurable: true })
+    await page.get('[data-test="trial-file-attachment"]').trigger('change')
+    await flushPromises()
+
+    expect(crab.uploadFile).toHaveBeenCalledWith(sample)
+    expect(JSON.parse(textarea.value)).toEqual({ title: '差旅报销', attachment: 'file_abc123' })
+
+    await page.get('[data-test="trial-run"]').trigger('click')
+    await flushPromises()
+    expect(crab.runLocal).toHaveBeenCalledWith('local_echo', 'upload_invoice', {
+      account: 'alice',
+      input: { title: '差旅报销', attachment: 'file_abc123' },
+    })
+    page.unmount()
   })
 })

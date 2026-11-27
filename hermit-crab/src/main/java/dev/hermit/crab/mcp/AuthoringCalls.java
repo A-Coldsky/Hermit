@@ -1634,7 +1634,7 @@ final class AuthoringCalls {
         LinkedHashMap<String, String> error = new LinkedHashMap<>();
         error.put("code", code);
         error.put("message", message == null ? "" : message);
-        error.put("hint", McpErrors.toolHint(code, message, attempt.directory()));
+        error.put("hint", McpErrors.toolHint(code, message, attempt.directory(), true));
         error.put("traceId", traceId);
         LinkedHashMap<String, Object> structured = new LinkedHashMap<>();
         structured.put("error", error);

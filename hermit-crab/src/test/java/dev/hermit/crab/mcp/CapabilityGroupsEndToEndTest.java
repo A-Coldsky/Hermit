@@ -196,7 +196,11 @@ class CapabilityGroupsEndToEndTest {
             assertThat(oaSys.path("topLevelCapabilities")).hasSize(1);
             assertThat(oaSys.path("topLevelCapabilities").get(0).path("name").asText()).isEqualTo("sample_oa__get_me");
             assertThat(flatSys.has("groups")).isFalse();
-            assertThat(flatSys.has("topLevelCapabilities")).isFalse();
+            // 没有分组的包同样附上能力名和标题，调用方不用再猜关键词。
+            assertThat(flatSys.has("ungroupedCount")).isFalse();
+            assertThat(flatSys.path("topLevelCapabilities")).hasSize(flatSys.path("capabilities").asInt());
+            assertThat(flatSys.path("topLevelCapabilities").get(0).path("name").asText()).startsWith("old_flat__");
+            assertThat(flatSys.path("topLevelCapabilities").get(0).has("readOnly")).isTrue();
 
             // 3) search_capabilities: browse by 1st-level group, 2nd-level group, ungrouped, and group-title query
             JsonNode byParent = mcpCall(baseUrl, fullKey.plaintext(), session, 4, "search_capabilities",

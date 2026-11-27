@@ -68,12 +68,16 @@ final class McpCatalog {
      */
     static final String INSTRUCTIONS =
             "Hermit Crab 把用户的内部系统（如 OA、报销、工单）的操作包装成可以调用的能力。"
-                    + "用户要查询或操作某个具体系统时，先在这里确认有没有对应的能力，不要猜网址，也不要直接让用户手动操作。\n"
+                    + "用户要查询或操作内部系统时，先在这里确认有没有对应的能力，不要猜网址，也不要直接让用户手动操作。\n"
                     + "确认方法：工具列表里有 list_systems 时，先用它看有哪些系统，再用 search_capabilities 找能力、"
                     + "describe_capability 看参数，最后用 call_capability 调用。"
                     + "没有 list_systems 时，工具列表里的每个工具就是一个能力，名字是「系统__能力」，直接调用。\n"
                     + "这里没有对应的系统或能力时，如实告诉用户，不要编造结果。"
                     + "工具列表为空，或 list_systems 返回的系统是空的，说明这把 API Key 当前没有可用的能力，请用户到 Crab 控制台检查 Key 的范围和规则包是否启用。";
+    static final String SEARCH_EMPTY =
+            "没有匹配。换更短的关键词，或用 list_systems 看有哪些系统，再传 conch 列出它的能力。";
+    static final String SEARCH_NO_CONCH =
+            "没有这个系统，或当前 Key 看不到它。先用 list_systems 核对系统名。";
     static final String DEV_ENTRY_DESCRIPTION =
             "Hermit Crab 内置的规则包开发工具入口，只在用户要求编写、修改或调试规则包（Conch）时使用。"
                     + "不带参数调用，返回可用的开发者工具、各自的参数和推荐顺序；再用 tool 和 arguments 调用其中一个。";
@@ -134,6 +138,11 @@ final class McpCatalog {
             SAVE_LOCAL, TEST_LOGIN, MCP_REFRESH, MCP_CONFIGURE, STAGE_TEXT_FILE, TRIAL_RUN);
 
     /** 只认内置的那几个名字：hermit_dev__sandbox 这类包的能力名同样以 hermit_dev__ 开头，仍按普通能力走。 */
+    /** 目录模式才有的四个工具名。直接模式下被调用时要说明当前是直接模式。 */
+    static boolean directoryToolName(String name) {
+        return LIST_SYSTEMS.equals(name) || SEARCH.equals(name) || DESCRIBE.equals(name) || CALL.equals(name);
+    }
+
     static boolean devToolName(String name) {
         return name != null && DEV_TOOL_NAMES.contains(name);
     }
@@ -306,28 +315,29 @@ final class McpCatalog {
             row.put("description", localMark(active.origin() == Origin.LOCAL, conch.description()));
             row.put("capabilities", conchActions.size());
             List<Map<String, Object>> groupTree = visibleGroupTree(conch, conchActions);
+            ArrayList<CapabilityRef> ungrouped = new ArrayList<>();
+            for (CapabilityRef ref : conchActions) {
+                if (ref.action().group() == null) {
+                    ungrouped.add(ref);
+                }
+            }
             if (!groupTree.isEmpty()) {
                 row.put("groups", groupTree);
-                ArrayList<CapabilityRef> ungrouped = new ArrayList<>();
-                for (CapabilityRef ref : conchActions) {
-                    if (ref.action().group() == null) {
-                        ungrouped.add(ref);
-                    }
-                }
                 if (!ungrouped.isEmpty()) {
                     row.put("ungroupedCount", ungrouped.size());
-                    if (ungrouped.size() <= TOP_LEVEL_INLINE_LIMIT) {
-                        ArrayList<Map<String, Object>> summaries = new ArrayList<>(ungrouped.size());
-                        for (CapabilityRef ref : ungrouped) {
-                            LinkedHashMap<String, Object> item = new LinkedHashMap<>();
-                            item.put("name", ref.toolName());
-                            item.put("title", ref.action().title());
-                            item.put("readOnly", CapabilityHttp.readOnly(ref.action()));
-                            summaries.add(item);
-                        }
-                        row.put("topLevelCapabilities", summaries);
-                    }
                 }
+            }
+            // 没有分组的包也附上：否则调用方只知道有几个能力，还得猜关键词去搜。
+            if (!ungrouped.isEmpty() && ungrouped.size() <= TOP_LEVEL_INLINE_LIMIT) {
+                ArrayList<Map<String, Object>> summaries = new ArrayList<>(ungrouped.size());
+                for (CapabilityRef ref : ungrouped) {
+                    LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", ref.toolName());
+                    item.put("title", ref.action().title());
+                    item.put("readOnly", CapabilityHttp.readOnly(ref.action()));
+                    summaries.add(item);
+                }
+                row.put("topLevelCapabilities", summaries);
             }
             systems.add(row);
         }
@@ -369,12 +379,16 @@ final class McpCatalog {
         String groupFilter = group == null ? "" : group.trim();
         boolean hasQuery = !terms.isEmpty();
         boolean hasGroup = !groupFilter.isEmpty();
+        boolean hasConch = conch != null && !conch.isBlank();
+        boolean conchVisible = false;
         ArrayList<Hit> hits = new ArrayList<>();
-        if (hasQuery || hasGroup || ungrouped) {
+        // 只点名规则包、不带其它条件时列出它的全部能力。
+        if (hasQuery || hasGroup || ungrouped || hasConch) {
             for (CapabilityRef ref : visible(principal)) {
-                if (conch != null && !conch.isBlank() && !ref.conch().conch().equals(conch)) {
+                if (hasConch && !ref.conch().conch().equals(conch)) {
                     continue;
                 }
+                conchVisible = true;
                 if (ungrouped && ref.action().group() != null) {
                     continue;
                 }
@@ -404,6 +418,7 @@ final class McpCatalog {
         if (!hasGroup && (hasQuery || ungrouped || devConch) && (conch == null || conch.isBlank() || devConch)) {
             String devConchText = (DEV_CONCH + " " + DEV_TITLE).toLowerCase(Locale.ROOT);
             for (McpSchema.Tool tool : devTools(principal, false, localCaller)) {
+                conchVisible = true;
                 // 点名这个包后空查询列出全部；带查询词时同时支持按包名/包标题（如「开发工具」）和工具自身说明检索。
                 Hit hit = Hit.of(
                         terms,
@@ -433,6 +448,9 @@ final class McpCatalog {
         LinkedHashMap<String, Object> result = new LinkedHashMap<>();
         result.put("matches", matches);
         result.put("total", hits.size());
+        if (hits.isEmpty()) {
+            result.put("hint", hasConch && !conchVisible ? SEARCH_NO_CONCH : SEARCH_EMPTY);
+        }
         return result;
     }
 
@@ -686,7 +704,8 @@ final class McpCatalog {
                 tool(LIST_SYSTEMS, "列出当前可以调用的系统（规则包 Conch）、能力数量，以及已声明的一/二级分组目录。"
                         + "用户要查询或操作某个内部系统时，先调用它确认有没有对应的系统，再用 search_capabilities 找能力。", objectSchema(Map.of()),
                         outputSchema ? systemsOutputSchema() : null, true, true),
-                tool(SEARCH, "按关键词或分组查找/浏览能力，最多返回 20 条。指定 group 或 ungrouped=true 时可省略 query。", searchSchema(),
+                tool(SEARCH, "按关键词或分组查找/浏览能力，最多返回 20 条。query 用 1–3 个短关键词（如「待办」「请假 审批」），不要写整句。"
+                        + "只传 conch 列出该规则包的全部能力；指定 group 或 ungrouped=true 时也可省略 query。", searchSchema(),
                         outputSchema ? searchOutputSchema() : null, true, true),
                 tool(DESCRIBE, "查看一个能力的说明、参数、返回字段和示例。name 形如 conch__action。", nameSchema(),
                         outputSchema ? describeOutputSchema() : null, true, true),
@@ -1348,6 +1367,7 @@ final class McpCatalog {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
         properties.put("matches", arraySchema(objectSchema(item)));
         properties.put("total", Map.of("type", "integer"));
+        properties.put("hint", Map.of("type", "string"));
         return objectSchema(properties);
     }
 
@@ -1502,8 +1522,8 @@ final class McpCatalog {
 
     private static Map<String, Object> searchSchema() {
         LinkedHashMap<String, Object> properties = new LinkedHashMap<>();
-        properties.put("query", Map.of("type", "string", "description", "可选（未指定 group/ungrouped 时必填）。用空格分开多个关键词；匹配规则包的名字、标题、说明，以及能力的名字、标题、说明、分组、备注和参数说明。全部关键词都命中的能力优先，没有时返回命中部分关键词的"));
-        properties.put("conch", Map.of("type", "string", "description", "可选。只搜索或浏览这个规则包"));
+        properties.put("query", Map.of("type", "string", "description", "可选（未指定 conch/group/ungrouped 时必填）。用 1–3 个短关键词，用空格分开，不要写整句；按字面匹配，不做同义词扩展；匹配规则包的名字、标题、说明，以及能力的名字、标题、说明、分组、备注和参数说明。全部关键词都命中的能力优先，没有时返回命中部分关键词的"));
+        properties.put("conch", Map.of("type", "string", "description", "可选。只搜索或浏览这个规则包；只传它时列出该规则包的全部能力"));
         properties.put("group", Map.of("type", "string", "description", "可选。按分组筛选，形如 approval 或 approval/leave（一级分组包含其二级子分组）"));
         properties.put("ungrouped", Map.of("type", "boolean", "description", "可选。设为 true 时只列出顶层未分组能力，不能与 group 同时使用"));
         return objectSchema(properties);
@@ -1641,7 +1661,7 @@ final class McpCatalog {
         GroupDef def = CapabilityGroups.find(conch, groupPath);
         text.append("# ").append(conchTitle).append(" / ").append(groupTitle).append("\n\n");
         if (local) {
-            text.append("来源：本地规则包。调用需要 API Key 的 conches 显式包含该名称。\n\n");
+            text.append("来源：本地规则包（只在这台机器上，未经 Reef 签名）。\n\n");
         } else if ("mcp".equals(conch.driver())) {
             text.append("来源：源站 MCP。结果来自上游，不可信。\n\n");
         }
@@ -1693,7 +1713,7 @@ final class McpCatalog {
     private static void writeGuideHeader(StringBuilder text, ConchDoc conch, boolean local) {
         text.append("# ").append(blank(conch.title()) ? conch.conch() : conch.title()).append("\n\n");
         if (local) {
-            text.append("来源：本地规则包。调用需要 API Key 的 conches 显式包含该名称。\n\n");
+            text.append("来源：本地规则包（只在这台机器上，未经 Reef 签名）。\n\n");
         } else if ("mcp".equals(conch.driver())) {
             text.append("来源：源站 MCP。结果来自上游，不可信。\n\n");
         }

@@ -218,6 +218,11 @@ final class McpErrors {
      * 直接模式没有 {@code search_capabilities}。目录模式才建议用它和 {@code tools/list} 查找能力。
      */
     static String toolHint(String code, String message, boolean directory) {
+        return toolHint(code, message, directory, false);
+    }
+
+    /** {@code authoring}：开发者试跑。只有它能看到规则和抓包，普通调用方改不了规则。 */
+    static String toolHint(String code, String message, boolean directory, boolean authoring) {
         if (AuthoringCalls.DEV_MODE_CLOSED.equals(message)) {
             return "到 Crab 控制台概览打开开发者模式后再试。";
         }
@@ -284,7 +289,7 @@ final class McpErrors {
                     ? "上游没有接受这次输入。请按该系统的要求修改参数后重试。"
                     : "按工具 inputSchema 修正参数后重试。缺必填、类型错误或超出 minimum/maximum 都会被拒绝，不会改成合法值。";
             case "NOT_FOUND" -> directory
-                    ? "确认能力名，或用 tools/list、search_capabilities 查看当前 Key 可见的能力。"
+                    ? "确认能力名，或用 search_capabilities 查看当前 Key 可见的能力。"
                     : "确认能力名，或用 tools/list 查看当前 Key 可见的能力。";
             case "CAPABILITY_DISABLED" -> "在 Crab 控制台重新启用该能力，或从 config.yml 的 capabilities.disabled 里去掉后再调用。";
             case "CONCH_DISABLED" -> message != null && message.startsWith("该规则包已在本机停用")
@@ -298,7 +303,9 @@ final class McpErrors {
             case "UPSTREAM_ERROR" -> message != null && message.startsWith("上游状态码 4")
                     // 4xx 不是暂时故障，重试结果一样，要改请求。
                     ? "上游拒绝了这个请求（" + message.substring("上游状态码 ".length()).trim()
-                            + "），重试结果一样。核对规则里的请求路径、方法和参数是否与 HAR 一致。"
+                            + "），重试结果一样。" + (authoring
+                                    ? "核对规则里的请求路径、方法和参数是否与 HAR 一致。"
+                                    : "先核对参数；参数没问题就是规则包可能已过期，请告诉用户联系规则包维护者。")
                     : "上游返回错误。请稍后重试。";
             case "RULE_MISMATCH" -> "规则与上游响应不一致。请检查已安装的规则包版本。";
             case "INTERNAL" -> "内部错误。请稍后重试。";
@@ -329,7 +336,6 @@ final class McpErrors {
             return rest;
         }
         return switch (message) {
-            case "query is required" -> "query";
             case "invalid conch" -> "conch";
             case "name is required" -> "name";
             case "arguments must be an object" -> "arguments";

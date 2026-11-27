@@ -212,6 +212,10 @@ final class McpCalls {
         }
         // 试跑按被试跑能力的类别判断，在 AuthoringCalls.trial 里查。
         if (!McpCatalog.TRIAL_RUN.equals(name) && !McpCatalog.devKind(name).allowedBy(entry)) {
+            // 只读 Key 没有写入口：不要让它换工具，直接说明这把 Key 不能写。
+            if (principal != null && principal.scope().readOnlyOnly()) {
+                return fail(attempt, "FORBIDDEN", READ_ONLY_KEY);
+            }
             return wrongEntry(attempt, name, McpCatalog.devKind(name));
         }
         if (McpCatalog.DEBUG_TRACE.equals(name)) {

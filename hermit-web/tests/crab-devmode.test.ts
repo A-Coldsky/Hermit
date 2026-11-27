@@ -96,6 +96,8 @@ describe('Crab 开发者模式', () => {
     expect(prompt).toContain('改已有包沿用原包名，需确认时让我确认，不要自己填 confirm')
     expect(prompt).not.toContain('换一个新包名')
     expect(prompt).toContain('hermit_dev__trial_run')
+    expect(prompt).toContain('hermit_dev__test_login')
+    expect(prompt).toContain('hermit_dev__mcp_refresh')
     expect(prompt).toContain('hermit_dev__debug_trace_list')
     expect(prompt).toContain('测试登录')
     expect(prompt).toContain('/mcp')
@@ -223,7 +225,7 @@ describe('Crab 开发者模式', () => {
     page.unmount()
   })
 
-  it('本地 MCP 包可以刷新工具列表', async () => {
+  it('本地 MCP 包可以刷新工具列表，且账号区不显示测试登录按钮', async () => {
     crab.conch.mockResolvedValue(detail({ driver: 'mcp', capabilities: [] }))
     crab.debug.mockResolvedValue({ enabled: true, expiresAt: '2026-11-06T08:00:00Z' })
     crab.refreshLocalMcp.mockResolvedValue({
@@ -235,6 +237,7 @@ describe('Crab 开发者模式', () => {
     })
     const wrapper = await mountPage(ConchDetailView, { attach: true, props: { conch: 'local_echo' } })
     await flushPromises()
+    expect(wrapper.find('[data-test="test-login"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="refresh"]').exists()).toBe(true)
     await wrapper.get('[data-test="refresh-run"]').trigger('click')
     await flushPromises()

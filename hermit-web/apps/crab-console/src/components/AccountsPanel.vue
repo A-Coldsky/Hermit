@@ -11,6 +11,7 @@ import TrustJump from './TrustJump.vue'
 
 const props = defineProps<{
   conch: string
+  driver?: 'http' | 'mcp' | 'auth' | string | null
   accounts: Account[]
   credentials: CredentialField[]
   /** 这版规则已停用：不在调用路径上，测试登录也跑不了，按钮不出现。 */
@@ -224,6 +225,20 @@ function extractTraceId(data: unknown): string | null {
     }
   }
   return null
+}
+
+function exportedOf(data: unknown): string[] {
+  if (data && typeof data === 'object' && 'exported' in data) {
+    const raw = (data as { exported?: unknown }).exported
+    if (Array.isArray(raw)) {
+      return raw.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    }
+  }
+  return []
+}
+
+function aliveCheckPassedOf(data: unknown): boolean {
+  return Boolean(data && typeof data === 'object' && (data as { aliveCheckPassed?: unknown }).aliveCheckPassed === true)
 }
 
 async function testLogin(account: Account) {
@@ -711,6 +726,9 @@ async function disconnect(account: Account) {
       <router-link :to="`/conches/${encodeURIComponent(authUse.conch)}`">{{ authUse.conch }}</router-link>
       提供：账号不填凭证，绑定一个授权器账号后才能调用。
     </p>
+    <p v-else-if="driver === 'mcp'" class="hm-muted hint" data-test="mcp-account-hint">
+      调用时用请求头 <code>X-Hermit-Account</code> 选择账号，不带时使用默认账号。每个账号各自保存上游凭证或 OAuth 连接令牌。
+    </p>
     <p v-else class="hm-muted hint">
       调用时用请求头 <code>X-Hermit-Account</code> 选择账号，不带时使用默认账号。每个账号有自己的凭证和登录会话。
     </p>
@@ -791,7 +809,7 @@ async function disconnect(account: Account) {
           <span v-else class="hm-muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="自动登录" min-width="200">
+      <el-table-column v-if="driver !== 'mcp'" label="自动登录" min-width="200">
         <template #default="{ row }">
           <template v-if="row.loginPaused">
             <el-tag type="warning" effect="plain" size="small">已暂停</el-tag>
@@ -855,7 +873,7 @@ async function disconnect(account: Account) {
             </template>
             <el-button v-else link type="primary" :disabled="!credentials.length" @click="editCredentials(row)">填写凭证</el-button>
             <el-button
-              v-if="!ruleDisabled"
+              v-if="!ruleDisabled && driver !== 'mcp'"
               link
               type="primary"
               data-test="test-login"
@@ -943,7 +961,12 @@ async function disconnect(account: Account) {
   >
     <div data-test="login-input">
       <div v-if="loginInput.result" data-test="login-input-result">
-        <el-result v-if="loginInput.result.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存">
+        <el-result
+          v-if="loginInput.result.success"
+          icon="success"
+          title="登录成功"
+          :sub-title="isAuthenticator ? '登录与探活通过，会话已缓存' : '凭证可用，会话已缓存'"
+        >
           <template v-if="loginInput.result.traceId" #extra>
             <div class="trace-line" data-test="login-input-trace">
               <span class="hm-muted">开发追踪编号</span>
@@ -1063,9 +1086,20 @@ async function disconnect(account: Account) {
   </el-dialog>
 
   <el-dialog v-model="testResult.open" :title="`测试登录 · ${testResult.account}`" width="560px">
-    <el-result v-if="testResult.success" icon="success" title="登录成功" sub-title="凭证可用，会话已缓存">
-      <template v-if="testResult.traceId" #extra>
-        <div class="trace-line" data-test="test-login-trace">
+    <el-result
+      v-if="testResult.success"
+      icon="success"
+      title="登录成功"
+      :sub-title="isAuthenticator || aliveCheckPassedOf(testResult.data) ? '登录与探活通过，会话已缓存' : '凭证可用，会话已缓存'"
+    >
+      <template v-if="testResult.traceId || exportedOf(testResult.data).length" #extra>
+        <div v-if="exportedOf(testResult.data).length" class="trace-line" data-test="test-login-exported">
+          <span class="hm-muted">已验证导出变量</span>
+          <el-tag v-for="name in exportedOf(testResult.data)" :key="name" size="small" effect="plain" class="mono">
+            {{ name }}
+          </el-tag>
+        </div>
+        <div v-if="testResult.traceId" class="trace-line" data-test="test-login-trace">
           <span class="hm-muted">开发追踪编号</span>
           <router-link :to="{ path: '/calls', query: { trace: testResult.traceId } }" class="mono">
             {{ testResult.traceId }}

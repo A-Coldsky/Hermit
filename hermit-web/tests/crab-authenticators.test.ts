@@ -255,4 +255,45 @@ describe('授权器', () => {
     expect(text).not.toContain('sso_oa')
     wrapper.unmount()
   })
+
+  it('授权器测试登录成功后显示探活通过与已验证的导出变量名，MCP 包不显示测试登录按钮', async () => {
+    crab.testLogin.mockResolvedValue({
+      ok: true,
+      aliveCheckPassed: true,
+      exported: ['access_token', 'csrf_token'],
+      traceId: 'tr-auth-1',
+    })
+    const authWrapper = await mountPage(AccountsPanel, {
+      attach: true,
+      props: {
+        conch: 'corp_sso',
+        driver: 'auth',
+        accounts: [account({ name: 'zhangsan' })],
+        credentials: [],
+        isAuthenticator: true,
+      },
+    })
+    await flushPromises()
+    await authWrapper.get('[data-test="test-login"]').trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('登录与探活通过，会话已缓存')
+    const exported = document.body.querySelector('[data-test="test-login-exported"]')?.textContent ?? ''
+    expect(exported).toContain('access_token')
+    expect(exported).toContain('csrf_token')
+    authWrapper.unmount()
+
+    const mcpWrapper = await mountPage(AccountsPanel, {
+      props: {
+        conch: 'vendor_mcp',
+        driver: 'mcp',
+        accounts: [account({ name: 'alice' })],
+        credentials: [],
+      },
+    })
+    await flushPromises()
+    expect(mcpWrapper.find('[data-test="test-login"]').exists()).toBe(false)
+    expect(mcpWrapper.text()).not.toContain('自动登录')
+    expect(mcpWrapper.find('[data-test="mcp-account-hint"]').exists()).toBe(true)
+    mcpWrapper.unmount()
+  })
 })

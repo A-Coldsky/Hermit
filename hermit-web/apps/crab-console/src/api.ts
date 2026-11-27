@@ -391,6 +391,19 @@ export interface LoginInput {
   resendAfter: number
 }
 
+/**
+ * `POST /console/api/conches/{conch}/accounts/{account}/test-login` 与验证码提交成功返回。
+ * 授权器返回 `{ok: true, aliveCheckPassed: true, exported}`（只含导出变量名，不含值）；
+ * 本地包在开发者模式下还会附带 `traceId`。
+ */
+export interface TestLoginResult {
+  ok?: boolean
+  aliveCheckPassed?: boolean
+  exported?: string[]
+  traceId?: string | null
+  [key: string]: unknown
+}
+
 export interface OAuthStatus {
   connected: boolean
   /** ISO-8601。未连接，或上游没有给到期时间时为 null。 */
@@ -1145,7 +1158,8 @@ export const api = {
     http.get<{ fields: string[] }>(`${accountPath(conch, account)}/credentials`),
   writeCredentials: (conch: string, account: string, values: Record<string, string>) =>
     http.put<{ updated: boolean }>(`${accountPath(conch, account)}/credentials`, values),
-  testLogin: (conch: string, account: string) => http.post<unknown>(`${accountPath(conch, account)}/test-login`),
+  testLogin: (conch: string, account: string) =>
+    http.post<TestLoginResult>(`${accountPath(conch, account)}/test-login`),
   /**
    * 待输入登录。路径接在账号接口下：
    * `GET/POST/DELETE /console/api/conches/{conch}/accounts/{account}/login-input`，
@@ -1159,7 +1173,7 @@ export const api = {
   loginInputImage: (conch: string, account: string) =>
     http.blob(`${accountPath(conch, account)}/login-input/image`, { t: Date.now() }),
   submitLoginInput: (conch: string, account: string, value: string) =>
-    http.post<unknown>(`${accountPath(conch, account)}/login-input`, { value }),
+    http.post<TestLoginResult>(`${accountPath(conch, account)}/login-input`, { value }),
   resendLoginInput: (conch: string, account: string) =>
     http.post<unknown>(`${accountPath(conch, account)}/login-input/resend`),
   abandonLoginInput: (conch: string, account: string) =>

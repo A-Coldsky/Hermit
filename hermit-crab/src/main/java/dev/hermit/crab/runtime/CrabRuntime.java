@@ -798,6 +798,12 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
         if (!missingConfig.isEmpty()) {
             throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, Invoker.missingConfig(missingConfig), true);
         }
+        if (AuthenticatorChecks.uses(doc)) {
+            String problem = authenticators.bindingProblem(new SessionKey(Origin.LOCAL, doc.conch(), resolved.account()), doc);
+            if (problem != null) {
+                throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, problem, true);
+            }
+        }
         List<String> missingCredentials = DeclaredSettings.missingCredentials(
                 doc, vault.fieldNames(Origin.LOCAL, doc.conch(), resolved.account()));
         if (!missingCredentials.isEmpty()) {
@@ -811,6 +817,20 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
             throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialDecryptException.MESSAGE, true);
         }
         return new ReadyAccount(resolved.account(), secrets, DeclaredSettings.mergedConfig(doc, stored));
+    }
+
+    /** 解析本地规则包的指定账号或默认账号；无任何账号或指定账号不存在时抛 {@link TrialRejected}。 */
+    public String resolveLocalAccountName(String conch, Optional<String> account) {
+        try {
+            return accounts.resolve(Origin.LOCAL, conch, account == null ? Optional.empty() : account).account();
+        } catch (AccountNotFoundException ex) {
+            if (ex.account() == null && accounts.list(Origin.LOCAL, conch).isEmpty()) {
+                throw new TrialRejected(409, ErrorCode.NOT_CONFIGURED, CredentialMessages.NO_ACCOUNT, true);
+            }
+            throw new TrialRejected(404, ErrorCode.ACCOUNT_NOT_FOUND, Invoker.ACCOUNT_NOT_FOUND_MESSAGE, true);
+        } catch (IllegalArgumentException ex) {
+            throw new TrialRejected(400, ErrorCode.INVALID_INPUT, TRIAL_ACCOUNT_INVALID, true);
+        }
     }
 
     private static ExecutionResult httpView(ExecutionResult result) {

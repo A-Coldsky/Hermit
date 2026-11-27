@@ -182,11 +182,24 @@ class AuthoringGuideTest {
 
         CrabRuntime runtime = CrabRuntime.open(new CrabPaths(temp.resolve("starter")), CrabConfig.defaults());
         try {
-            LocalConches.CheckResult checked = runtime.localConches().check(
-                    AuthoringGuide.starterTemplate().getBytes(StandardCharsets.UTF_8));
-            assertThat(checked.ok()).isTrue();
-            assertThat(codes(checked.errors())).isEmpty();
-            assertThat(codes(checked.warnings())).isEmpty();
+            for (String yaml : List.of(
+                    AuthoringGuide.starterTemplate(),
+                    AuthoringGuide.starterAuthTemplate(),
+                    AuthoringGuide.starterAuthUseTemplate())) {
+                LocalConches.CheckResult checked = runtime.localConches().check(yaml.getBytes(StandardCharsets.UTF_8));
+                assertThat(checked.ok()).isTrue();
+                assertThat(codes(checked.errors())).isEmpty();
+                assertThat(codes(checked.warnings())).isEmpty();
+            }
+            runtime.debug().setEnabled(true, dev.hermit.crab.store.Actors.CONSOLE);
+            LocalConches.CheckResult mcpStarter = runtime.localConches().check(
+                    AuthoringGuide.starterMcpTemplate().getBytes(StandardCharsets.UTF_8));
+            assertThat(mcpStarter.ok()).isTrue();
+            assertThat(codes(mcpStarter.errors())).isEmpty();
+            assertThat(AuthoringGuide.starterSections()).hasSize(4);
+            for (var entry : AuthoringGuide.starterSections()) {
+                assertThat(AuthoringGuide.findSection(entry.get("id"))).isPresent();
+            }
         } finally {
             runtime.close();
         }

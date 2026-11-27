@@ -20,6 +20,9 @@ final class AuthoringGuide {
     static final String URI = "hermit://conches/hermit_dev/guide";
     static final String ALL_SECTION = "all";
     static final String STARTER_SECTION = "starter";
+    static final String STARTER_AUTH_SECTION = "starter_auth";
+    static final String STARTER_AUTH_USE_SECTION = "starter_auth_use";
+    static final String STARTER_MCP_SECTION = "starter_mcp";
     static final String QUICK_REFERENCE_ID = "quick_reference";
     private static final String RESOURCE = "authoring/conch-reference.md";
     private static final Pattern MARKDOWN_LINK = Pattern.compile("!?\\[([^\\]\\n]*)\\]\\(([^)\\n]*)\\)");
@@ -103,6 +106,120 @@ final class AuthoringGuide {
                 related: []
             """;
 
+    private static final String STARTER_AUTH_TEMPLATE = """
+            conch: corp_sso
+            version: 1.0.0
+            driver: auth
+            min_crab_version: 1.13.0
+            title: 统一认证中心（请替换为实际 SSO 名称）
+            description: 登录企业统一认证中心（SSO），为多个业务规则包提供共享会话 Cookie 与导出令牌。
+            credentials:
+              username:
+                type: text
+                label: 用户名
+                required: true
+                description: 统一认证账号
+              password:
+                type: secret
+                label: 密码
+                required: true
+                description: 统一认证密码
+            auth:
+              origins:
+                - https://sso.example.internal
+              allow_hosts:
+                - https://*.example.internal
+              steps:
+                - request:
+                    method: POST
+                    url: https://sso.example.internal/api/login
+                    json:
+                      username: "{{credential.username}}"
+                      password: "{{credential.password}}"
+                - assert: {status: 200}
+                - extract:
+                    access_token: {jsonpath: "$.data.access_token"}
+              alive_check:
+                request:
+                  method: GET
+                  url: https://sso.example.internal/api/session
+                  headers:
+                    Authorization: "Bearer {{login.access_token}}"
+                expect: {status: 200}
+              exports:
+                access_token:
+                  description: 统一认证签发的访问令牌
+            """;
+
+    private static final String STARTER_AUTH_USE_TEMPLATE = """
+            conch: corp_portal_app
+            version: 1.0.0
+            driver: http
+            min_crab_version: 1.13.0
+            base_url: https://oa.example.internal
+            title: 协同办公系统（请替换为实际业务系统名）
+            description: 复用统一认证授权器登录，分页查询协同办公系统中的待办审批事项。
+            auth:
+              use: corp_sso
+              min_version: 1.0.0
+              exchange:
+                - request:
+                    method: POST
+                    path: /api/sso/exchange
+                    headers:
+                      Authorization: "Bearer {{auth.access_token}}"
+                - assert: {status: 200}
+            actions:
+              list_todos:
+                title: 查询待办事项
+                description: 分页查询当前登录人在协同办公系统中的待办审批事项列表。
+                method: GET
+                idempotent: true
+                mcp: {expose: true, read_only: true}
+                input:
+                  page: {type: integer, default: 1, minimum: 1, description: 页码，从 1 开始}
+                steps:
+                  - request:
+                      method: GET
+                      path: /api/todos
+                      query: {page: "{{input.page}}"}
+                  - assert: {status: 200}
+                  - extract:
+                      items: {jsonpath: "$.data.items"}
+                output:
+                  items: {type: array, description: 待办事项列表}
+                examples:
+                  - input: {page: 1}
+                    output:
+                      items:
+                        - {id: "101", title: 采购申请审批}
+                notes: 只读接口，不会修改业务数据；若无需换票可省略 auth.exchange，直接在业务请求头写 Bearer {{auth.access_token}}。
+                related: []
+            """;
+
+    private static final String STARTER_MCP_TEMPLATE = """
+            conch: vendor_mcp
+            version: 1.0.0
+            driver: mcp
+            min_crab_version: 1.13.0
+            title: 上游 MCP 服务（请替换为实际系统名）
+            description: 连接上游 Streamable HTTP MCP 服务并按刷新后的工具快照对外暴露能力。
+            credentials:
+              api_token:
+                type: secret
+                label: 访问令牌
+                required: true
+                description: 上游 MCP 服务的 Bearer 访问令牌
+            upstream:
+              url: https://mcp.example.internal/mcp
+              transport: streamable_http
+              auth:
+                type: headers
+              headers:
+                Authorization: "Bearer {{credential.api_token}}"
+            actions: {}
+            """;
+
     private static final List<String> PITFALLS = List.of(
             "❌ 省略或写旧的 min_crab_version: 1.0.0（导致 if/repeat/retry/groups/origins/expired_when/授权器/引号下标 报错） → ✅ 新规则包统一写 min_crab_version: 1.13.0。",
             "❌ 省略 credentials、把密钥放进 config(type: secret) 或把抓包里的密码/Cookie/Bearer 原文写进 YAML → ✅ 无登录写 credentials: {}；有秘密放 credentials(type: secret)，步骤里写 {{credential.xxx}}，绝不把真值写进 YAML。",
@@ -116,6 +233,9 @@ final class AuthoringGuide {
             "❌ HTTP 200 业务错误码或登录页 HTML 只靠默认 401/403，或试图修改 Reef 正式包/换包名绕过确认 → ✅ 业务码/登录页失效写 auth.expired_when（如 json_equals: {\"$.code\": 40100}）；Reef 正式包只读，改规则用 hermit_dev__save_local 存本地包，改已有本地包保持同名。");
 
     private static final String STARTER_SECTION_CONTENT = buildStarterSection();
+    private static final String STARTER_AUTH_SECTION_CONTENT = buildStarterAuthSection();
+    private static final String STARTER_AUTH_USE_SECTION_CONTENT = buildStarterAuthUseSection();
+    private static final String STARTER_MCP_SECTION_CONTENT = buildStarterMcpSection();
 
     private static final byte[] REFERENCE = readReference();
     private static final String TEXT = stripDocLinks(new String(REFERENCE, StandardCharsets.UTF_8));
@@ -168,6 +288,26 @@ final class AuthoringGuide {
         return STARTER_TEMPLATE;
     }
 
+    static String starterAuthTemplate() {
+        return STARTER_AUTH_TEMPLATE;
+    }
+
+    static String starterAuthUseTemplate() {
+        return STARTER_AUTH_USE_TEMPLATE;
+    }
+
+    static String starterMcpTemplate() {
+        return STARTER_MCP_TEMPLATE;
+    }
+
+    static List<Map<String, String>> starterSections() {
+        return List.of(
+                Map.of("id", STARTER_SECTION, "driver", "http", "title", "标准 HTTP 规则包起始模板（独立登录与业务查询）"),
+                Map.of("id", STARTER_AUTH_SECTION, "driver", "auth", "title", "可复用授权器（driver: auth）起始模板"),
+                Map.of("id", STARTER_AUTH_USE_SECTION, "driver", "http", "title", "引用授权器的 HTTP 业务包（auth.use）起始模板"),
+                Map.of("id", STARTER_MCP_SECTION, "driver", "mcp", "title", "上游 MCP 规则包（driver: mcp）起始骨架模板"));
+    }
+
     static List<String> pitfalls() {
         return PITFALLS;
     }
@@ -208,6 +348,37 @@ final class AuthoringGuide {
                     null,
                     STARTER_SECTION_CONTENT,
                     utf8Bytes(STARTER_SECTION_CONTENT),
+                    List.of()));
+        }
+        if (STARTER_AUTH_SECTION.equalsIgnoreCase(needle)
+                || "授权器模板".equals(needle)) {
+            return Optional.of(new SectionMatch(
+                    STARTER_AUTH_SECTION,
+                    "可直接复制的授权器（driver: auth）起始模板",
+                    null,
+                    STARTER_AUTH_SECTION_CONTENT,
+                    utf8Bytes(STARTER_AUTH_SECTION_CONTENT),
+                    List.of()));
+        }
+        if (STARTER_AUTH_USE_SECTION.equalsIgnoreCase(needle)
+                || "引用授权器模板".equals(needle)) {
+            return Optional.of(new SectionMatch(
+                    STARTER_AUTH_USE_SECTION,
+                    "可直接复制的引用授权器（auth.use）业务包起始模板",
+                    null,
+                    STARTER_AUTH_USE_SECTION_CONTENT,
+                    utf8Bytes(STARTER_AUTH_USE_SECTION_CONTENT),
+                    List.of()));
+        }
+        if (STARTER_MCP_SECTION.equalsIgnoreCase(needle)
+                || "mcp模板".equalsIgnoreCase(needle)
+                || "MCP起始模板".equalsIgnoreCase(needle)) {
+            return Optional.of(new SectionMatch(
+                    STARTER_MCP_SECTION,
+                    "可直接复制的 MCP 上游包（driver: mcp）起始骨架模板",
+                    null,
+                    STARTER_MCP_SECTION_CONTENT,
+                    utf8Bytes(STARTER_MCP_SECTION_CONTENT),
                     List.of()));
         }
         for (Section section : SECTIONS) {
@@ -445,10 +616,68 @@ final class AuthoringGuide {
         for (int i = 0; i < PITFALLS.size(); i++) {
             sb.append(i + 1).append(". ").append(PITFALLS.get(i)).append('\n');
         }
+        sb.append("\n## 其它类型规则包起始模板\n\n");
+        sb.append("- 可复用统一登录授权器（`driver: auth`）：`hermit_dev__guide(section=\"starter_auth\")`\n");
+        sb.append("- 引用授权器的业务包（`driver: http` + `auth.use`）：`hermit_dev__guide(section=\"starter_auth_use\")`\n");
+        sb.append("- 上游 MCP 规则包（`driver: mcp`）：`hermit_dev__guide(section=\"starter_mcp\")`\n");
         sb.append("\n## 写完后确认别的 AI 找得到\n\n");
         sb.append("其它 AI 的工具列表里看不到你写的能力，只能用 `list_systems` 和 `search_capabilities` 按文字查找。");
         sb.append("包和能力的 `title`、`description` 要用用户平时的叫法并带上同义说法，");
         sb.append("写法见章节 `discoverability`（让其他 AI 找得到）。\n");
+        return sb.toString().stripTrailing();
+    }
+
+    private static String buildStarterAuthSection() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 可直接复制的授权器（driver: auth）起始模板\n\n");
+        sb.append("下面是一份能直接通过 `hermit_dev__validate`（0 错误、0 警告）的完整可复用授权器骨架：\n\n");
+        sb.append("```yaml\n");
+        sb.append(STARTER_AUTH_TEMPLATE);
+        if (!STARTER_AUTH_TEMPLATE.endsWith("\n")) {
+            sb.append('\n');
+        }
+        sb.append("```\n\n");
+        sb.append("## 授权器开发与验收要点\n\n");
+        sb.append("1. 授权器只负责登录：必须写 `min_crab_version: 1.13.0`、`auth.origins`、`auth.steps`、`auth.alive_check`（请求写完整 `url`），**不能**写 `base_url`、`actions`、`groups`、`auth.expired_when`。\n");
+        sb.append("2. 导出的令牌或票据在 `auth.exports` 声明，并且建议在 `auth.alive_check.request` 中引用至少一个 `{{login.导出名}}`，避免令牌早于会话过期时探活误判通过。\n");
+        sb.append("3. 用 `hermit_dev__save_local` 保存后，让用户在 Crab 控制台「授权器」新建账号并填写凭证，随后调用 `hermit_dev__test_login`（或在控制台点「测试登录」）：Crab 会依次验证 `auth.steps`、`auth.alive_check` 和 `auth.exports` 全部非空。\n");
+        sb.append("4. 编写和调试 `driver: auth` 需要勾选了「开发者工具」的全部权限 API Key。\n");
+        return sb.toString().stripTrailing();
+    }
+
+    private static String buildStarterAuthUseSection() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 可直接复制的引用授权器（auth.use）业务包起始模板\n\n");
+        sb.append("下面是一份复用统一认证授权器的 `driver: http` 业务规则包骨架（0 错误、0 警告）：\n\n");
+        sb.append("```yaml\n");
+        sb.append(STARTER_AUTH_USE_TEMPLATE);
+        if (!STARTER_AUTH_USE_TEMPLATE.endsWith("\n")) {
+            sb.append('\n');
+        }
+        sb.append("```\n\n");
+        sb.append("## 引用授权器的业务包开发要点\n\n");
+        sb.append("1. 先调用 `hermit_dev__auth_list` 查看本机已安装的授权器名称、版本、`allowHosts` 与 `exports` 导出变量名。\n");
+        sb.append("2. 写了 `auth.use` 的业务包**不能**声明顶层 `credentials`，也**不能**写 `auth.steps` 或 `auth.origins`；读取授权器导出值统一写 `{{auth.导出名}}`。\n");
+        sb.append("3. 若业务系统直接认授权器的同域 Cookie 或 `Bearer {{auth.xxx}}`，可省略 `auth.exchange`；若需用导出票据换取本系统独立会话，写在 `auth.exchange` 中。\n");
+        sb.append("4. 用 `hermit_dev__save_local` 保存后，请用户在 Crab 控制台该业务包「账号」页新建账号并点「绑定授权器」确认站点地址，随后可用 `hermit_dev__test_login` 测换票、用 `hermit_dev__trial_run` 试跑业务能力。\n");
+        return sb.toString().stripTrailing();
+    }
+
+    private static String buildStarterMcpSection() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 可直接复制的 MCP 上游包（driver: mcp）起始骨架模板\n\n");
+        sb.append("开发者模式开启时，本地 MCP 规则包允许先以空 `actions: {}` 保存骨架，再连接上游拉取工具快照：\n\n");
+        sb.append("```yaml\n");
+        sb.append(STARTER_MCP_TEMPLATE);
+        if (!STARTER_MCP_TEMPLATE.endsWith("\n")) {
+            sb.append('\n');
+        }
+        sb.append("```\n\n");
+        sb.append("## MCP 规则包开发流程\n\n");
+        sb.append("1. **鉴权选择**：请求头令牌写 `upstream.auth: {type: headers}` 并在 `upstream.headers` 写请求头模板，同时在顶层 `credentials` 声明秘密字段；OAuth 2.1 PKCE 写 `credentials: {}` 与 `upstream.auth: {type: oauth, client_id: \"...\"}`（端点支持 RFC 9728/8414 自动发现或显式填写）。无需鉴权时写 `credentials: {}` 与 `upstream.auth: {type: headers}`。\n");
+        sb.append("2. **过滤工具（可选）**：可在顶层加 `tools: {include: [\"search_*\"], exclude: [\"admin_*\"]}` 控制刷新保留哪些上游工具。\n");
+        sb.append("3. **保存与建号**：校验通过后调用 `hermit_dev__save_local` 保存，让用户在 Crab 控制台为该包新建账号（填写凭证，或 OAuth 点「连接上游」完成浏览器授权）。\n");
+        sb.append("4. **刷新快照、审阅权限与试跑**：调用 `hermit_dev__mcp_refresh`（或用户在控制台点「刷新工具列表」）将上游 `tools/list` 写入本地 YAML 的 `actions` 与 `snapshot`。新加入的工具默认按保守策略设为 `read_only: false`、`destructive: true`、`confirm: true`（不直接采信上游注解）；请用 `hermit_dev__read_yaml` 审阅后将核实为只读的工具改为 `read_only: true`、`destructive: false`、`confirm: false` 并补充中文说明，保存后再用 `hermit_dev__trial_run` 试跑验证。注意：必须在刷新出至少一个工具后才能关闭开发者模式或导出发布到 Reef。\n");
         return sb.toString().stripTrailing();
     }
 

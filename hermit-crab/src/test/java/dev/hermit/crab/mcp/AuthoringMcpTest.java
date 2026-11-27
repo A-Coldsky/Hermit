@@ -818,6 +818,8 @@ class AuthoringMcpTest {
                     .doesNotContain("hermit_dev__capture_get")
                     .doesNotContain("hermit_dev__validate")
                     .doesNotContain("hermit_dev__save_local")
+                    .doesNotContain("hermit_dev__test_login")
+                    .doesNotContain("hermit_dev__mcp_refresh")
                     .doesNotContain("hermit_dev__trial_run");
             HttpResponse<String> remoteResources = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, """
                     {"jsonrpc":"2.0","id":3,"method":"resources/list"}
@@ -825,7 +827,7 @@ class AuthoringMcpTest {
             assertThat(remoteResources.body()).doesNotContain(AuthoringGuide.URI);
             for (String tool : java.util.List.of(
                     "hermit_dev__debug_trace_list", "hermit_dev__guide", "hermit_dev__read_yaml", "hermit_dev__auth_list", "hermit_dev__capture_list", "hermit_dev__capture_get",
-                    "hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__trial_run")) {
+                    "hermit_dev__validate", "hermit_dev__save_local", "hermit_dev__test_login", "hermit_dev__mcp_refresh", "hermit_dev__trial_run")) {
                 String payload = switch (tool) {
                     case "hermit_dev__debug_trace_list" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__debug_trace_list","arguments":{}}}
@@ -845,6 +847,9 @@ class AuthoringMcpTest {
                     case "hermit_dev__capture_get" -> """
                             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"hermit_dev__capture_get","arguments":{"captureId":"cap_00000000"}}}
                             """;
+                    case "hermit_dev__test_login", "hermit_dev__mcp_refresh" -> """
+                            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"%s","arguments":{"conch":"remote_ping"}}}
+                            """.formatted(tool);
                     default -> callJson(tool, yaml);
                 };
                 HttpResponse<String> called = server.postRaw(remote + "/mcp", server.key.plaintext(), remoteSession, payload, Map.of());
@@ -1250,7 +1255,11 @@ class AuthoringMcpTest {
     private static String toolMessage(JsonNode response) {
         JsonNode content = response.path("result").path("content");
         if (content.isArray() && !content.isEmpty()) {
-            return ApiJson.tree(content.get(0).path("text").asText()).path("message").asText();
+            JsonNode tree = ApiJson.tree(content.get(0).path("text").asText());
+            if (tree.hasNonNull("message")) {
+                return tree.path("message").asText();
+            }
+            return tree.path("error").path("message").asText();
         }
         return toolError(response).path("message").asText();
     }
@@ -2243,6 +2252,378 @@ class AuthoringMcpTest {
                     .path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(toolError(server.call(fullSession, "hermit_dev__read_yaml", Map.of("conch", "missing_pkg")))
                     .path("code").asText()).isEqualTo("NOT_FOUND");
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void developerModeSupportsFullAuthoringLoopsAcrossAllThreeDrivers() throws Exception {
+        String ssoSecret = "S3cr3t-sso-pass";
+        String ssoToken = "sso-export-tok-8842";
+        String mcpSecret = "mcp-bearer-tok-7711";
+        java.util.concurrent.atomic.AtomicBoolean probeOk = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        HttpServer sso = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        sso.createContext("/login", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            if (!body.contains(ssoSecret)) {
+                byte[] resp = "{\"error\":\"denied\"}".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(401, resp.length);
+                exchange.getResponseBody().write(resp);
+                exchange.close();
+                return;
+            }
+            exchange.getResponseHeaders().add("Set-Cookie", "SSO_SID=sid-ok-1; Path=/");
+            byte[] resp = ("{\"token\":\"" + ssoToken + "\"}").getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        sso.createContext("/me", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            boolean ok = probeOk.get()
+                    && ("Bearer " + ssoToken).equals(exchange.getRequestHeaders().getFirst("Authorization"));
+            byte[] resp = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(ok ? 200 : 401, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        sso.start();
+
+        HttpServer app = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        app.createContext("/exchange", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            boolean ok = ("Bearer " + ssoToken).equals(exchange.getRequestHeaders().getFirst("Authorization"));
+            if (ok) {
+                exchange.getResponseHeaders().add("Set-Cookie", "APP_SID=app-ok-1; Path=/");
+            }
+            byte[] resp = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(ok ? 200 : 401, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        app.createContext("/items", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            boolean ok = String.valueOf(exchange.getRequestHeaders().getFirst("Cookie")).contains("APP_SID=app-ok-1");
+            byte[] resp = "{\"item\":\"approved-doc\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(ok ? 200 : 401, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        app.start();
+
+        HttpServer mcpUpstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        mcpUpstream.createContext("/mcp", exchange -> {
+            String rawReq = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            if (!("Bearer " + mcpSecret).equals(exchange.getRequestHeaders().getFirst("Authorization"))) {
+                exchange.sendResponseHeaders(401, -1);
+                exchange.close();
+                return;
+            }
+            if ("DELETE".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(200, -1);
+                exchange.close();
+                return;
+            }
+            JsonNode rpc = ApiJson.tree(rawReq);
+            String method = rpc.path("method").asText("");
+            if ("notifications/initialized".equals(method)) {
+                exchange.sendResponseHeaders(202, -1);
+                exchange.close();
+                return;
+            }
+            String replyJson;
+            if ("initialize".equals(method)) {
+                replyJson = """
+                        {"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"demo-mcp","version":"1.0.0"}}}
+                        """.formatted(rpc.get("id"));
+            } else if ("tools/list".equals(method)) {
+                replyJson = """
+                        {"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"pingTool","title":"探测工具","description":"返回固定回声。","inputSchema":{"type":"object","properties":{"q":{"type":"string"}}},"annotations":{"readOnlyHint":true,"destructiveHint":false}}]}}
+                        """.formatted(rpc.get("id"));
+            } else {
+                String q = rpc.path("params").path("arguments").path("q").asText("none");
+                replyJson = """
+                        {"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong:%s"}],"structuredContent":{"reply":"pong:%s"}}}
+                        """.formatted(rpc.get("id"), q, q);
+            }
+            byte[] resp = replyJson.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.getResponseHeaders().add("Mcp-Session-Id", "up-sess-1");
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        mcpUpstream.start();
+
+        String ssoUrl = "http://127.0.0.1:" + sso.getAddress().getPort();
+        String appUrl = "http://127.0.0.1:" + app.getAddress().getPort();
+        String mcpUrl = "http://127.0.0.1:" + mcpUpstream.getAddress().getPort() + "/mcp";
+
+        try (Harness server = Harness.open(temp.resolve("all-drivers"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String session = server.initialize(false);
+
+            // 0. 指南概览包含多驱动起始模板索引，且可按 section 读出各驱动骨架
+            JsonNode guideOverview = structured(server.call(session, "hermit_dev__guide", Map.of()));
+            assertThat(guideOverview.path("starterSections")).hasSize(4);
+            for (String sec : List.of("starter_auth", "starter_auth_use", "starter_mcp")) {
+                JsonNode matched = structured(server.call(session, "hermit_dev__guide", Map.of("section", sec)));
+                assertThat(matched.path("id").asText()).isEqualTo(sec);
+                assertThat(matched.path("content").asText()).contains("conch:");
+            }
+
+            // 1. driver: auth —— 限定范围的 Key 不能新建或读写授权器；全范围 Key 可保存并用 hermit_dev__test_login 验收探活与导出变量
+            String authYaml = """
+                    conch: local_sso
+                    version: 1.0.0
+                    driver: auth
+                    min_crab_version: 1.13.0
+                    title: 本地统一认证
+                    description: 本地 SSO 登录授权器。
+                    credentials:
+                      password: { type: secret, label: 密码, required: true }
+                    auth:
+                      origins: ["%s"]
+                      steps:
+                        - request:
+                            method: POST
+                            url: %s/login
+                            json: { password: "{{credential.password}}" }
+                        - assert: { status: 200 }
+                        - extract: { access_token: { jsonpath: "$.token" } }
+                      alive_check:
+                        request:
+                          method: GET
+                          url: %s/me
+                          headers: { Authorization: "Bearer {{login.access_token}}" }
+                        expect: { status: 200 }
+                      exports:
+                        access_token: { description: 访问令牌 }
+                    """.formatted(ssoUrl, ssoUrl, ssoUrl);
+
+            CreatedApiKey scopedKey = server.runtime.apiKeys().create(
+                    "scoped-consumer", new ApiKeyScope(Set.of("local_consumer"), Set.of(), false, false, Set.of(), true), Actors.CONSOLE);
+            String scopedSession = server.initialize(scopedKey.plaintext(), false);
+            JsonNode scopedCreateAuth = server.rpc(scopedKey.plaintext(), scopedSession, 10, "tools/call",
+                    Map.of("name", "hermit_dev__save_local", "arguments", Map.of("yaml", authYaml)));
+            assertThat(toolError(scopedCreateAuth).path("code").asText()).isEqualTo("FORBIDDEN");
+            assertThat(toolMessage(scopedCreateAuth)).isEqualTo(AuthoringCalls.AUTH_SCOPE_DENIED);
+
+            // 在安装授权器前先校验引用它的业务包：ok=true 且给出缺少授权器警告
+            String consumerYaml = """
+                    conch: local_consumer
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.13.0
+                    base_url: %s
+                    title: 本地协同业务
+                    description: 引用本地授权器的业务包。
+                    auth:
+                      use: local_sso
+                      exchange:
+                        - request:
+                            method: POST
+                            path: /exchange
+                            headers: { Authorization: "Bearer {{auth.access_token}}" }
+                        - assert: { status: 200 }
+                    actions:
+                      fetch_item:
+                        title: 查询条目
+                        description: 读取当前登录账号的业务条目。
+                        method: GET
+                        idempotent: true
+                        mcp: { expose: true, read_only: true }
+                        steps:
+                          - request: { method: GET, path: /items }
+                          - assert: { status: 200 }
+                          - extract: { item: { jsonpath: "$.item" } }
+                        output:
+                          item: { type: string, description: 条目 }
+                        examples:
+                          - input: {}
+                            output: { item: demo }
+                        notes: 只读查询。
+                        related: []
+                    """.formatted(appUrl);
+            JsonNode preCheck = structured(server.call(session, "hermit_dev__validate", Map.of("yaml", consumerYaml)));
+            assertThat(preCheck.path("ok").asBoolean()).isTrue();
+            assertThat(preCheck.path("warnings").toString()).contains("local_sso");
+
+            JsonNode savedAuth = structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", authYaml)));
+            assertThat(savedAuth.path("ok").asBoolean()).isTrue();
+            assertThat(savedAuth.path("next").asText()).contains("hermit_dev__test_login");
+
+            // 授权器安装后，校验引用不存在导出变量的业务包会给出导出名不匹配告警
+            String badExportConsumer = consumerYaml.replace("{{auth.access_token}}", "{{auth.missing_export}}");
+            JsonNode linkWarn = structured(server.call(session, "hermit_dev__validate", Map.of("yaml", badExportConsumer)));
+            assertThat(linkWarn.path("ok").asBoolean()).isTrue();
+            assertThat(linkWarn.path("warnings").toString()).contains("missing_export");
+
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "local_sso", "admin", Actors.CONSOLE);
+            server.runtime.admin().writeCredentials(
+                    dev.hermit.crab.store.Origin.LOCAL,
+                    server.runtime.registry().authenticator("local_sso").orElseThrow().doc(),
+                    "admin",
+                    Map.of("password", ssoSecret),
+                    Actors.CONSOLE);
+
+            // 探活未通过时，hermit_dev__test_login 返回 AUTH_FAILED 且带可追踪的 traceId
+            JsonNode failedProbe = server.call(session, "hermit_dev__test_login", Map.of("conch", "local_sso"));
+            assertThat(toolError(failedProbe).path("code").asText()).isEqualTo("AUTH_FAILED");
+            assertThat(toolMessage(failedProbe)).contains("alive_check");
+            String failedTraceId = toolError(failedProbe).path("traceId").asText();
+            assertThat(failedTraceId).isNotBlank();
+            JsonNode probeTrace = structured(server.call(session, "hermit_dev__debug_trace", Map.of("traceId", failedTraceId)));
+            assertThat(probeTrace.path("action").asText()).isEqualTo("test_login");
+            assertThat(probeTrace.toString()).doesNotContain(ssoSecret).doesNotContain(ssoToken);
+
+            // 探活恢复后，hermit_dev__test_login 验证登录、探活与导出变量名（不回显秘密值）
+            probeOk.set(true);
+            JsonNode okLogin = structured(server.call(session, "hermit_dev__test_login", Map.of("conch", "local_sso")));
+            assertThat(okLogin.path("ok").asBoolean()).isTrue();
+            assertThat(okLogin.path("aliveCheckPassed").asBoolean()).isTrue();
+            assertThat(okLogin.path("exported")).extracting(JsonNode::asText).containsExactly("access_token");
+            assertThat(okLogin.toString()).doesNotContain(ssoSecret).doesNotContain(ssoToken);
+
+            // 2. auth.use 业务包 —— 保存、未绑定前精确诊断、绑定后测换票与试跑、窄范围 Key 对可见授权器的清晰拒绝
+            JsonNode savedConsumer = structured(server.rpc(scopedKey.plaintext(), scopedSession, 11, "tools/call",
+                    Map.of("name", "hermit_dev__save_local", "arguments", Map.of("yaml", consumerYaml))));
+            assertThat(savedConsumer.path("ok").asBoolean()).isTrue();
+            assertThat(savedConsumer.path("next").asText()).contains("绑定授权器账号");
+
+            // 窄范围 Key 现在通过 local_consumer 看得到 local_sso，读/改/测 local_sso 均给出 AUTH_SCOPE_DENIED，而读无关包仍给普通提示
+            for (Map<String, Object> call : List.of(
+                    Map.of("name", "hermit_dev__read_yaml", "arguments", Map.of("conch", "local_sso")),
+                    Map.of("name", "hermit_dev__test_login", "arguments", Map.of("conch", "local_sso")))) {
+                JsonNode denied = server.rpc(scopedKey.plaintext(), scopedSession, 12, "tools/call", call);
+                assertThat(toolError(denied).path("code").asText()).isEqualTo("FORBIDDEN");
+                assertThat(toolMessage(denied)).isEqualTo(AuthoringCalls.AUTH_SCOPE_DENIED);
+            }
+            JsonNode ghostRead = server.rpc(scopedKey.plaintext(), scopedSession, 13, "tools/call",
+                    Map.of("name", "hermit_dev__read_yaml", "arguments", Map.of("conch", "unreferenced_other")));
+            assertThat(toolMessage(ghostRead)).doesNotContain("授权器");
+
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "local_consumer", "alice", Actors.CONSOLE);
+            JsonNode unboundTrial = server.rpc(scopedKey.plaintext(), scopedSession, 14, "tools/call",
+                    Map.of("name", "hermit_dev__trial_run", "arguments", Map.of("conch", "local_consumer", "action", "fetch_item")));
+            assertThat(toolError(unboundTrial).path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(toolMessage(unboundTrial)).contains("还没有绑定授权器账号");
+            assertThat(toolError(unboundTrial).has("traceId")).isFalse();
+
+            HttpResponse<String> bindResp = server.http.send(HttpRequest.newBuilder(
+                    URI.create(server.base + "/console/api/conches/local_consumer/accounts/alice/authenticator"))
+                    .header("X-Hermit-Console", "1")
+                    .header("Content-Type", "application/json")
+                    .PUT(HttpRequest.BodyPublishers.ofString(
+                            "{\"authAccount\":\"admin\",\"baseUrl\":\"" + appUrl + "\",\"confirm\":true}"))
+                    .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertThat(bindResp.statusCode()).as(bindResp.body()).isEqualTo(200);
+
+            JsonNode exchangeOk = structured(server.rpc(scopedKey.plaintext(), scopedSession, 15, "tools/call",
+                    Map.of("name", "hermit_dev__test_login", "arguments", Map.of("conch", "local_consumer"))));
+            assertThat(exchangeOk.path("ok").asBoolean()).isTrue();
+            JsonNode consumerTrial = structured(server.rpc(scopedKey.plaintext(), scopedSession, 16, "tools/call",
+                    Map.of("name", "hermit_dev__trial_run", "arguments", Map.of("conch", "local_consumer", "action", "fetch_item"))));
+            assertThat(consumerTrial.path("ok").asBoolean()).isTrue();
+            assertThat(consumerTrial.path("data").path("item").asText()).isEqualTo("approved-doc");
+
+            // 覆盖已绑定授权器的本地业务包时，确认文案明确说“授权器绑定”而非“共享身份”
+            JsonNode overwriteBound = server.rpc(scopedKey.plaintext(), scopedSession, 17, "tools/call",
+                    Map.of("name", "hermit_dev__save_local", "arguments",
+                            Map.of("yaml", consumerYaml.replace("version: 1.0.0", "version: 1.0.1"))));
+            assertThat(toolError(overwriteBound).path("code").asText()).isEqualTo("CONFIRM_REQUIRED");
+            assertThat(toolMessage(overwriteBound)).contains("授权器绑定").doesNotContain("共享身份");
+
+            // 3. driver: mcp —— 空骨架保存提示、拒绝 test_login、hermit_dev__mcp_refresh 拉取快照并试跑
+            String mcpYaml = """
+                    conch: local_mcp
+                    version: 1.0.0
+                    driver: mcp
+                    min_crab_version: 1.13.0
+                    title: 本地 MCP 接入
+                    description: 连接本地测试 MCP 上游并拉取工具快照。
+                    credentials:
+                      api_token: { type: secret, label: 令牌, required: true }
+                    upstream:
+                      url: %s
+                      transport: streamable_http
+                      auth:
+                        type: headers
+                      headers:
+                        Authorization: "Bearer {{credential.api_token}}"
+                    actions: {}
+                    """.formatted(mcpUrl);
+            JsonNode savedMcp = structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", mcpYaml)));
+            assertThat(savedMcp.path("ok").asBoolean()).isTrue();
+            assertThat(savedMcp.path("next").asText()).contains("hermit_dev__mcp_refresh");
+
+            String oauthSkeleton = """
+                    conch: local_oauth_mcp
+                    version: 1.0.0
+                    driver: mcp
+                    min_crab_version: 1.13.0
+                    title: 本地 OAuth MCP
+                    description: OAuth 鉴权的上游 MCP 骨架。
+                    credentials: {}
+                    upstream:
+                      url: %s
+                      transport: streamable_http
+                      auth:
+                        type: oauth
+                        client_id: demo-client
+                    actions: {}
+                    """.formatted(mcpUrl);
+            JsonNode savedOauthMcp = structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", oauthSkeleton)));
+            assertThat(savedOauthMcp.path("ok").asBoolean()).isTrue();
+            assertThat(savedOauthMcp.path("next").asText()).contains("连接上游").doesNotContain("填写凭证");
+
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "local_mcp", "bot", Actors.CONSOLE);
+            server.runtime.admin().writeCredentials(
+                    dev.hermit.crab.store.Origin.LOCAL,
+                    server.runtime.registry().find("local_mcp", dev.hermit.crab.store.Origin.LOCAL).orElseThrow(),
+                    "bot",
+                    Map.of("api_token", mcpSecret),
+                    Actors.CONSOLE);
+
+            JsonNode mcpLoginRejected = server.call(session, "hermit_dev__test_login", Map.of("conch", "local_mcp"));
+            assertThat(toolError(mcpLoginRejected).path("code").asText()).isEqualTo("NOT_CONFIGURED");
+            assertThat(toolMessage(mcpLoginRejected)).contains("MCP 规则包没有登录步骤").doesNotContain("base_url");
+
+            JsonNode refreshed = structured(server.call(session, "hermit_dev__mcp_refresh", Map.of("conch", "local_mcp")));
+            assertThat(refreshed.path("ok").asBoolean()).isTrue();
+            assertThat(refreshed.path("toolCount").asInt()).isEqualTo(1);
+            assertThat(refreshed.path("added")).extracting(JsonNode::asText).containsExactly("pingtool");
+            assertThat(refreshed.path("traceId").asText()).isNotBlank();
+            assertThat(refreshed.path("next").asText()).contains("hermit_dev__read_yaml").contains("confirm: false");
+
+            // 新刷出来的工具默认保守需要确认，不支持 elicitation 的会话直接试跑会被拦下
+            JsonNode unreviewedTrial = server.call(session, "hermit_dev__trial_run",
+                    Map.of("conch", "local_mcp", "action", "pingtool", "input", Map.of("q", "hello")));
+            assertThat(toolMessage(unreviewedTrial)).isEqualTo(McpCalls.NO_CONFIRM);
+
+            // 按指引读出刷新后的 YAML，审阅核实只读查询后设为 read_only: true / destructive: false / confirm: false 保存，即可无阻试跑
+            String refreshedYaml = structured(server.call(session, "hermit_dev__read_yaml", Map.of("conch", "local_mcp")))
+                    .path("yaml").asText();
+            String reviewedYaml = refreshedYaml
+                    .replace("read_only: false", "read_only: true")
+                    .replace("destructive: true", "destructive: false")
+                    .replace("confirm: true", "confirm: false");
+            JsonNode savedReviewed = structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", reviewedYaml)));
+            assertThat(savedReviewed.path("ok").asBoolean()).isTrue();
+
+            JsonNode mcpTrial = structured(server.call(session, "hermit_dev__trial_run",
+                    Map.of("conch", "local_mcp", "action", "pingtool", "input", Map.of("q", "hello"))));
+            assertThat(mcpTrial.path("ok").asBoolean()).as(mcpTrial.toString()).isTrue();
+            assertThat(mcpTrial.path("data").toString()).contains("pong:hello").doesNotContain(mcpSecret);
+        } finally {
+            sso.stop(0);
+            app.stop(0);
+            mcpUpstream.stop(0);
         }
     }
 

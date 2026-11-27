@@ -887,6 +887,7 @@ watch(
         <!-- 账号面板不放进标签页：未选中的页是 display:none，会把验证码弹窗一起藏起来。卡片自己按标签显隐，弹窗一直挂着。 -->
         <AccountsPanel
           :conch="conch"
+          :driver="detail.driver"
           :accounts="accounts"
           :credentials="detail.credentials"
           :rule-disabled="detail.ruleDisabled === true"

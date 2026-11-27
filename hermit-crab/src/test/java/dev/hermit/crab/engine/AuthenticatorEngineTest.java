@@ -770,6 +770,57 @@ class AuthenticatorEngineTest {
         }
     }
 
+    @Test
+    void authenticatorTestLoginAndCaptchaContinueVerifyAliveCheckAndExports() {
+        try (Fixture fixture = new Fixture()) {
+            ExecutionResult ok = fixture.engine.testLogin(fixture.request(SSO, "run"));
+            assertThat(ok.success()).as(String.valueOf(ok.error())).isTrue();
+            assertThat(ok.data()).isInstanceOf(Map.class);
+            Map<?, ?> data = (Map<?, ?>) ok.data();
+            assertThat(data.get("ok")).isEqualTo(true);
+            assertThat(data.get("aliveCheckPassed")).isEqualTo(true);
+            assertThat(data.get("exported")).isEqualTo(List.of("access_token"));
+            assertThat(data.toString()).doesNotContain("token-").doesNotContain(PASSWORD);
+
+            // alive_check 不通过时，授权器测试登录必须判为 AUTH_FAILED 并清空登录态。
+            String badProbe = authenticator().replace(
+                    "      headers: { Authorization: \"Bearer {{login.access_token}}\" }\n",
+                    "      headers: { Authorization: \"Bearer {{login.access_token}}\" }\n    expect: { status: 204 }\n");
+            fixture.install(badProbe);
+            ExecutionResult failedProbe = fixture.engine.testLogin(fixture.request(SSO, "run"));
+            assertThat(failedProbe.success()).isFalse();
+            assertThat(failedProbe.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            assertThat(failedProbe.error().message()).contains("alive_check");
+            assertThat(fixture.sessions.loggedIn(SSO)).isFalse();
+
+            // auth.steps 未产出声明的导出变量（为空或可选未命中）时，测试登录同样判为 AUTH_FAILED。
+            String emptyExport = authenticator()
+                    .replace("\"$.token\"", "\"$.nonexistent_field\", optional: true");
+            fixture.install(emptyExport);
+            ExecutionResult failedExport = fixture.engine.testLogin(fixture.request(SSO, "run"));
+            assertThat(failedExport.success()).isFalse();
+            assertThat(failedExport.error().code()).isEqualTo(ErrorCode.AUTH_FAILED);
+            assertThat(failedExport.error().message()).contains("access_token");
+            assertThat(fixture.sessions.loggedIn(SSO)).isFalse();
+        }
+
+        // 带 ask 验证码的授权器在提交验证码续登成功后，同样校验探活与导出变量。
+        wantsOtp = true;
+        try (Fixture otpFixture = new Fixture(true)) {
+            ExecutionResult paused = otpFixture.engine.testLogin(otpFixture.request(SSO, "run"));
+            assertThat(paused.success()).isFalse();
+            assertThat(paused.error().code()).isEqualTo(ErrorCode.LOGIN_INPUT_REQUIRED);
+
+            ExecutionResult resumed = otpFixture.engine.continueLogin(otpFixture.request(SSO, "run"), "246810");
+            assertThat(resumed.success()).as(String.valueOf(resumed.error())).isTrue();
+            Map<?, ?> resumedData = (Map<?, ?>) resumed.data();
+            assertThat(resumedData.get("aliveCheckPassed")).isEqualTo(true);
+            assertThat(resumedData.get("exported")).isEqualTo(List.of("access_token"));
+        } finally {
+            wantsOtp = false;
+        }
+    }
+
     private static final class AuthShared implements SharedSessions {
         private final Map<SessionKey, String> bound = new ConcurrentHashMap<>();
         private final Map<String, List<StoredCookie>> saved = new ConcurrentHashMap<>();

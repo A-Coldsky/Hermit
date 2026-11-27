@@ -480,6 +480,21 @@ public final class Authenticators implements AuthBindings {
         return null;
     }
 
+    /** 检查业务包当前的有效站点地址是否落在授权器 {@code auth.allow_hosts} 允许范围内；站点尚未确定或允许时返回 {@code null}。 */
+    public String linkHostProblem(Origin consumerOrigin, ConchDoc consumer, Origin authOrigin, ConchDoc authenticator) {
+        if (consumer == null || authenticator == null || !AuthenticatorChecks.isAuthenticator(authenticator)) {
+            return null;
+        }
+        String site = site(consumerOrigin, consumer);
+        if (site == null) {
+            return null;
+        }
+        if (!allowed(authenticator, authOrigin, site)) {
+            return "授权器 " + authenticator.conch() + " 的 auth.allow_hosts 不允许用于 " + site;
+        }
+        return null;
+    }
+
     private String site(Origin origin, ConchDoc doc) {
         Map<String, String> merged = DeclaredSettings.mergedConfig(doc, conchConfig.all(origin, doc.conch()));
         return SiteAddress.effective(doc, merged.get("base_url"));

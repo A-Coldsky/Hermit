@@ -330,7 +330,7 @@ public final class RuleEngine implements ConchExecutor {
                     sessions.resetShared(key);
                 }
                 login(scope);
-                return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
+                return finish(true, verifyAfterLogin(scope), null, null, null, null, null, List.of(), version, request,
                         credentials, scope.redactionValues(), start, traceBase);
             } catch (StepFailure ex) {
                 Integer index = ex.index < 0 ? null : ex.index;
@@ -1010,7 +1010,7 @@ public final class RuleEngine implements ConchExecutor {
                 scope = open(conch, request.rawInput(), credentials, config, key, base, deadline);
                 scope.remember(value);
                 login(scope, pending, value, false);
-                return finish(true, Map.of("ok", true), null, null, null, null, null, List.of(), version, request,
+                return finish(true, verifyAfterLogin(scope), null, null, null, null, null, List.of(), version, request,
                         credentials, scope.redactionValues(), start, traceBase);
             } catch (StepFailure ex) {
                 Integer index = ex.index < 0 ? null : ex.index;
@@ -1031,6 +1031,59 @@ public final class RuleEngine implements ConchExecutor {
         } catch (RuntimeException ex) {
             return internal(request, credentials, supplied, version, start, ex, traceBase);
         }
+    }
+
+    /**
+     * 授权器没有能力，测试登录与验证码续登是它唯一的在线验收入口：
+     * 登录步骤完成后立即执行一次 {@code alive_check} 探活，并核对 {@code auth.exports} 中声明的每个变量都已建立非空字符串值。
+     * 返回值只包含导出变量名，绝不回显导出值。
+     */
+    private Map<String, Object> verifyAfterLogin(LoginScope scope) {
+        if (!scope.authenticator) {
+            return Map.of("ok", true);
+        }
+        ArrayList<String> missingExports = new ArrayList<>();
+        for (String name : scope.conch.auth().exports().keySet()) {
+            String exported = scope.lookup(name);
+            if (exported == null || exported.isEmpty()) {
+                missingExports.add(name);
+            }
+        }
+        if (!missingExports.isEmpty()) {
+            sessions.markLoggedOut(scope.key);
+            throw new StepFailure(
+                    ErrorCode.AUTH_FAILED,
+                    "登录没有建立授权器声明的导出变量：" + String.join("、", missingExports)
+                            + "（请检查 auth.steps 提取步骤，且导出值须为非空字符串）",
+                    -1,
+                    "extract",
+                    List.of());
+        }
+        AliveCheck alive = scope.conch.auth().aliveCheck();
+        if (alive != null) {
+            boolean probeOk;
+            try {
+                requireLoginRefs(scope, alive.request());
+                probeOk = probe(scope);
+            } catch (RuntimeException ex) {
+                sessions.markLoggedOut(scope.key);
+                throw ex;
+            }
+            if (!probeOk) {
+                sessions.markLoggedOut(scope.key);
+                throw new StepFailure(
+                        ErrorCode.AUTH_FAILED,
+                        "登录步骤已执行，但授权器 alive_check 探活未通过，请检查 alive_check 请求与期望条件",
+                        -1,
+                        "request",
+                        List.of());
+            }
+        }
+        LinkedHashMap<String, Object> data = new LinkedHashMap<>();
+        data.put("ok", true);
+        data.put("aliveCheckPassed", true);
+        data.put("exported", List.copyOf(scope.conch.auth().exports().keySet()));
+        return java.util.Collections.unmodifiableMap(data);
     }
 
     private ExecutionResult resendCaptured(ExecutionRequest request) {

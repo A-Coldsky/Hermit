@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.hermit.common.error.ErrorCode;
+import dev.hermit.common.model.CapabilityKind;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.template.FilterRegistry;
@@ -513,6 +514,19 @@ class McpForwardTest {
             assertThat(refused.path("result").path("isError").asBoolean(false)).as(refused.toString()).isFalse();
             assertThat(upstream.tools()).isEqualTo(2);
         }
+    }
+
+    /** 「写了 destructive: false」换成「没写」后文档仍相等，但没写时非只读默认敏感：快照检查必须认出类别变了。 */
+    @Test
+    void snapshotCheckSeesAKindChangeHiddenByUnspecifiedDestructive() {
+        ConchDoc write = ConchParser.parse(mcpYaml("http://127.0.0.1:9/mcp", "false"));
+        ConchDoc sensitive = ConchParser.parse(mcpYaml("http://127.0.0.1:9/mcp", "false")
+                .replace("mcp: {read_only: false, destructive: false}", "mcp: {read_only: false}"));
+        assertThat(write.actions().get("create_ticket").kind()).isEqualTo(CapabilityKind.WRITE);
+        assertThat(sensitive.actions().get("create_ticket").kind()).isEqualTo(CapabilityKind.SENSITIVE);
+        assertThat(sensitive).isEqualTo(write);
+        assertThat(Invoker.sameSnapshot(sensitive, write)).isFalse();
+        assertThat(Invoker.sameSnapshot(write, ConchParser.parse(mcpYaml("http://127.0.0.1:9/mcp", "false")))).isTrue();
     }
 
     @Test

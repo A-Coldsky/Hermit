@@ -621,7 +621,21 @@ public final class Invoker {
 
     /** Same instance, or the same content reloaded (records compare by value). */
     public static boolean sameSnapshot(ConchDoc current, ConchDoc confirmed) {
-        return current == confirmed || current.equals(confirmed);
+        return current == confirmed || (current.equals(confirmed) && sameKinds(current, confirmed));
+    }
+
+    /**
+     * McpHints 的相等性不看 destructive 是不是显式写的，而 MCP 包没写时的有效值取自上游注解。
+     * 所以「写了 false」换成「没写」可以让能力从普通写变成敏感而两份文档仍然相等，这里单独比类别。
+     */
+    private static boolean sameKinds(ConchDoc current, ConchDoc confirmed) {
+        for (Map.Entry<String, Action> entry : current.actions().entrySet()) {
+            Action other = confirmed.actions().get(entry.getKey());
+            if (other == null || other.kind() != entry.getValue().kind()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

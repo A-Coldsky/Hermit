@@ -515,7 +515,7 @@ MCP 工具 `hermit_dev__debug_trace` 只在开发者模式打开时出现在 `to
 
 `hermit_dev__mcp_refresh` 入参是必填 `conch` 与可选 `account`（仅非只读且对该包有完整范围的 `devTools` Key 可见可用，`destructiveHint: true`）。底层与控制台 `POST /local-conches/{conch}/mcp/refresh` 复用同一条 `refreshLocalMcp` 链路，连接上游 `tools/list` 重写本地 `driver: mcp` 规则包的 `actions` 与 `snapshot`，成功返回 `{ok: true, conch, version, toolCount, added, removed, changed, traceId, next, untrusted: true, note}`；上游失败且留有开发追踪时返回带 `traceId` 的错误以便 `hermit_dev__debug_trace` 排查。
 
-`hermit_dev__mcp_configure` 入参是必填 `conch`，以及可选 `version`、`groups`（一/二级分组映射）、`tools`（`include`/`exclude`）、`defaults`（对全体能力批量覆写 `read_only`/`destructive`/`confirm`/`expose`）与 `actions`（按能力单独覆写 `title`、`description`、`group`、`read_only`、`destructive`、`confirm`、`expose`）。仅非只读且对该本地 `driver: mcp` 包拥有完整范围的 `devTools` Key 可见可用；在原地重写元数据并完整保留每个工具的 `input_schema`、`output_schema` 与 `schema_sha256` 快照，通过校验后直接保存。
+`hermit_dev__mcp_configure` 入参是必填 `conch`，以及可选 `version`、`groups`（一/二级分组映射）、`tools`（`include`/`exclude`）、`defaults`（对全体能力批量覆写 `read_only`/`destructive`/`confirm`/`expose`）与 `actions`（按能力单独覆写 `title`、`description`、`group`、`read_only`、`destructive`、`confirm`、`expose`）。仅非只读且对该本地 `driver: mcp` 包拥有完整范围的 `devTools` Key 可见可用；在原地重写元数据、按 `tools` 过滤规则即时裁剪被排除的已有 `actions`（裁剪列表写入返回字段 `removed`），并完整保留剩余工具的 `input_schema`、`output_schema`、`snapshot` 与 `schema_sha256`，通过校验后直接保存。
 
 `hermit_dev__dry_run_response` 为只读离线试炼工具（`readOnlyHint: true`），入参支持 `captureId` + `index`（引用抓包快照条目，仅全部权限 Key 可用）或内联 `response`（`{status, headers, body, url, redirect}`），加上可选初始变量 `vars`、`extract`、`script`、`expiredWhen`（规则对象数组）与 `output`，复用引擎求值器在零网络请求下验证提取、脚本转换、自定义会话失效判定与输出模板渲染，返回 `{ok: true, extractCount, extracted, expired, matchedExpiredRuleIndex?, output?, untrusted, note?}`。
 

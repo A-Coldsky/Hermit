@@ -228,8 +228,8 @@ final class AuthoringGuide {
             "❌ 在 if/until/assert 的 equals/not_equals/present/not_present 里写 {{var}}（如 present: \"{{next}}\"） → ✅ 变量判断键直接写变量名，不加双花括号：present: next、equals: {code: \"0\"}；repeat 的 collect 也写变量名：collect: {all_rows: rows}。",
             "❌ 用点号读带连字符的响应头（{{response.headers.content-type}}）或在 credential/login/input 后写方括号 → ✅ 带连字符用点号加引号下标：{{response.headers['content-type']}}；credential/login/config/input/now 一律用点号。",
             "❌ 同一 request 同时写 json 和 body/form/multipart，GBK 老系统错写 charset: GBK，或需 302 跳转时漏写 follow_redirects: true → ✅ body/form/json/multipart 互斥；字符集写 encoding: GBK；需跟随跳转写 follow_redirects: true。",
-            "❌ HTTP 规则包漏写 actions.<name>.examples、output，或省略 related 产生警告 → ✅ 每个 HTTP 能力必须写 title、description、output、examples；无关联能力显式写 related: []；只读查询标 idempotent: true 与 mcp: {expose: true, read_only: true}。",
-            "❌ 在 script 里不写 credential: true 就读 vars.credential/vars.login/vars.auth，手写百行 RSA/AES，或直接 return Uint8Array/Date → ✅ 读凭证/登录/授权器变量加 credential: true；直接调 hermit.md5/sha256/hmacSha256/aesEncrypt/rsaEncrypt/gbk，结果转 hermit.hex/base64。",
+            "❌ HTTP 规则包漏写 actions.<name>.examples、output，省略 related 产生警告，或在 HTTP 能力里写 confirm 字段 → ✅ 每个 HTTP 能力必须写 title、description、output、examples 与 related: []；只读查询标 idempotent: true 与 mcp: {expose: true, read_only: true}，写操作需确认标 mcp: {expose: true, read_only: false, destructive: true}（HTTP 能力不写 confirm）。",
+            "❌ 在 script 里不写 credential: true 就读 vars.credential/vars.login/vars.auth，手写百行 RSA/AES，或直接 return Uint8Array/Date → ✅ 读凭证/登录/授权器变量加 credential: true；md5/sha1/sha256/sha512/hmacSha1/hmacSha256/aesEncrypt/rsaEncrypt/gbk 均返回 Uint8Array，返回前必须包一层 hermit.hex(...) 或 hermit.base64(...)。",
             "❌ HTTP 200 业务错误码或登录页 HTML 只靠默认 401/403，或试图修改 Reef 正式包/换包名绕过确认 → ✅ 业务码/登录页失效写 auth.expired_when（如 json_equals: {\"$.code\": 40100}）；Reef 正式包只读，改规则用 hermit_dev__save_local 存本地包，改已有本地包保持同名。");
 
     private static final String STARTER_SECTION_CONTENT = buildStarterSection();

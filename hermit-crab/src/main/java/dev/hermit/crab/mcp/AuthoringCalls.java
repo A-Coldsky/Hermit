@@ -1101,7 +1101,15 @@ final class AuthoringCalls {
         try {
             LocalConches.ImportResult saved =
                     runtime.localConches().replaceIfSameBoundary(configured.yaml(), Actors.MCP, keyName);
-            return saved(saved, beforeKeys);
+            McpSchema.CallToolResult result = saved(saved, beforeKeys);
+            if (!configured.removedActions().isEmpty()
+                    && result.structuredContent() instanceof Map<?, ?> rawMap) {
+                LinkedHashMap<String, Object> enriched = new LinkedHashMap<>();
+                rawMap.forEach((k, v) -> enriched.put(String.valueOf(k), v));
+                enriched.put("removed", configured.removedActions());
+                return McpCalls.ok(enriched);
+            }
+            return result;
         } catch (LocalConchException ex) {
             return importFailure(ex, attempt);
         }
@@ -1728,11 +1736,26 @@ final class AuthoringCalls {
         }
         for (ValidationIssue issue : errors) {
             String code = issue == null || issue.code() == null ? "" : issue.code();
+            String path = issue == null || issue.path() == null ? "" : issue.path();
             switch (code) {
                 case "PARSE" -> {
+                    if (path.endsWith(".mcp.confirm") || path.endsWith(".mcp.readOnly")) {
+                        hints.add("actions.<name>.mcp 只支持 expose、read_only、destructive 三个键：driver: http 能力不写 confirm 字段（是否需要确认直接由 mcp.destructive: true/false 决定）；driver: mcp 能力的 confirm 位于 actions.<name>.confirm（与 mcp 同级，推荐用 hermit_dev__mcp_configure 修改）。");
+                        sections.add("http_semantics");
+                    }
                     hints.add("YAML 解析或层级结构有误：请检查缩进、冒号、引号（含 {{...}} 模板值建议加双引号）以及是否写了该层不支持的键，可对照 hermit_dev__guide(section=\"starter\") 核对骨架。");
                     sections.add(AuthoringGuide.STARTER_SECTION);
                     sections.add("fields");
+                }
+                case ValidationCodes.MCP_UPSTREAM -> {
+                    if (path.startsWith("actions.")) {
+                        hints.add("driver: http 能力不支持 confirm 或 tool/input_schema 字段：是否触发执行前确认直接由 mcp: { expose: true, read_only: false, destructive: true/false } 中的 destructive 决定；confirm 仅用于 driver: mcp 能力。");
+                        sections.add("http_semantics");
+                    } else {
+                        hints.add("检查 driver: mcp 专属字段边界：upstream、tools、snapshot 以及 action 下的 tool/input_schema/confirm 只能用于 driver: mcp 的规则包。");
+                        sections.add("mcp_upstream");
+                        sections.add(AuthoringGuide.STARTER_MCP_SECTION);
+                    }
                 }
                 case ValidationCodes.MIN_CRAB_VERSION -> {
                     hints.add("将顶层 min_crab_version 调整为 " + CrabVersion.CURRENT + "（当前 Crab 兼容版本），即可支持 1.1–1.14 全部规则特性。");
@@ -1863,8 +1886,7 @@ final class AuthoringCalls {
                     hints.add("actions 下存在重名的能力，请合并或重命名。");
                     sections.add("fields");
                 }
-                case ValidationCodes.MCP_UPSTREAM,
-                        ValidationCodes.MCP_SCHEMA_REF,
+                case ValidationCodes.MCP_SCHEMA_REF,
                         ValidationCodes.MCP_HEADER,
                         ValidationCodes.MCP_DESCRIPTION,
                         ValidationCodes.MCP_NO_ACTIONS -> {

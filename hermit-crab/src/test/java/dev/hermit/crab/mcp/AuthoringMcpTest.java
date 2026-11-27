@@ -2912,6 +2912,198 @@ class AuthoringMcpTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void blindTestPolishFixesConfirmHintsMcpConfigurePruningAndTraceNote() throws Exception {
+        com.sun.net.httpserver.HttpServer app = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        app.createContext("/submit", ex -> {
+            byte[] b = "{\"expenseNo\":\"BX-1001\",\"status\":\"OK\"}".getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            ex.sendResponseHeaders(200, b.length);
+            ex.getResponseBody().write(b);
+            ex.close();
+        });
+        com.sun.net.httpserver.HttpServer mcpUp = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        mcpUp.createContext("/mcp", ex -> {
+            if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
+                ex.sendResponseHeaders(204, -1);
+                ex.close();
+                return;
+            }
+            JsonNode req = McpJson.tree(ex.getRequestBody().readAllBytes());
+            String method = req.path("method").asText("");
+            if (method.startsWith("notifications/")) {
+                ex.sendResponseHeaders(202, -1);
+                ex.close();
+                return;
+            }
+            String reqId = req.get("id").toString();
+            String resp;
+            if ("initialize".equals(method)) {
+                resp = "{\"jsonrpc\":\"2.0\",\"id\":" + reqId + ",\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"serverInfo\":{\"name\":\"up\",\"version\":\"1.0.0\"}}}";
+            } else {
+                resp = """
+                        {"jsonrpc":"2.0","id":%s,"result":{"tools":[
+                          {"name":"keep_query","description":"保留查询工具","inputSchema":{"type":"object","properties":{"q":{"type":"string"}}}},
+                          {"name":"debug_raw_dump","description":"高危内存调试工具","inputSchema":{"type":"object","properties":{}}}
+                        ]}}
+                        """.formatted(reqId);
+            }
+            byte[] b = resp.getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            ex.getResponseHeaders().set("Mcp-Session-Id", "up-s1");
+            ex.sendResponseHeaders(200, b.length);
+            ex.getResponseBody().write(b);
+            ex.close();
+        });
+        app.start();
+        mcpUp.start();
+        String appUrl = "http://127.0.0.1:" + app.getAddress().getPort();
+        String mcpUrl = "http://127.0.0.1:" + mcpUp.getAddress().getPort() + "/mcp";
+
+        try (Harness server = Harness.open(temp.resolve("blind-polish"))) {
+            server.runtime.debug().setEnabled(true, Actors.CONSOLE);
+            String session = server.initialize(false);
+
+            // 1. 指南正文无旧版本残留且精确说明 Uint8Array 返回值与 4 参数 AES
+            JsonNode guideFields = structured(server.call(session, "hermit_dev__guide", Map.of("section", "fields")));
+            assertThat(guideFields.path("content").asText())
+                    .contains("当前 Crab 兼容版本为 1.14.0")
+                    .doesNotContain("当前 Crab 兼容版本为 1.13.0");
+            JsonNode guideScripts = structured(server.call(session, "hermit_dev__guide", Map.of("section", "templates_scripts")));
+            assertThat(guideScripts.path("content").asText())
+                    .contains("统一返回 `Uint8Array`")
+                    .contains("(mode, key, iv, data)");
+
+            // 2. HTTP 规则包误写 actions.<name>.mcp.confirm 或 actions.<name>.confirm 均有定向修复提示
+            String misplacedMcpConfirm = """
+                    conch: bad_confirm
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.14.0
+                    base_url: %s
+                    title: 错位确认测试
+                    description: 测试 mcp.confirm 提示。
+                    credentials: {}
+                    actions:
+                      do_write:
+                        title: 写操作
+                        description: 提交表单。
+                        mcp: { expose: true, read_only: false, destructive: true, confirm: true }
+                        steps:
+                          - request: { method: POST, path: /submit }
+                        output:
+                          ok: { type: string, description: 状态 }
+                        examples:
+                          - input: {}
+                            output: { ok: "1" }
+                    """.formatted(appUrl);
+            JsonNode v1 = structured(server.call(session, "hermit_dev__validate", Map.of("yaml", misplacedMcpConfirm)));
+            assertThat(v1.path("ok").asBoolean()).isFalse();
+            assertThat(v1.path("fixHints").toString()).contains("driver: http 能力不写 confirm 字段");
+
+            String misplacedActionConfirm = misplacedMcpConfirm.replace(
+                    "mcp: { expose: true, read_only: false, destructive: true, confirm: true }",
+                    "mcp: { expose: true, read_only: false, destructive: true }\n    confirm: true");
+            JsonNode v2 = structured(server.call(session, "hermit_dev__validate", Map.of("yaml", misplacedActionConfirm)));
+            assertThat(v2.path("ok").asBoolean()).isFalse();
+            assertThat(v2.path("fixHints").toString()).contains("driver: http 能力不支持 confirm");
+
+            // 3. hermit_dev__mcp_configure 设置 tools.exclude 后立即原地裁剪被排除 action，无需二次 mcp_refresh
+            String mcpSkeleton = """
+                    conch: devops_mcp
+                    version: 1.0.0
+                    driver: mcp
+                    min_crab_version: 1.14.0
+                    title: 流水线 MCP
+                    description: 测试原地过滤裁剪。
+                    credentials: {}
+                    upstream:
+                      url: %s
+                      transport: streamable_http
+                      auth: { type: headers }
+                    actions: {}
+                    """.formatted(mcpUrl);
+            assertThat(structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", mcpSkeleton)))
+                    .path("ok").asBoolean()).isTrue();
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "devops_mcp", "default", Actors.CONSOLE);
+            JsonNode refreshed = structured(server.call(session, "hermit_dev__mcp_refresh", Map.of("conch", "devops_mcp")));
+            assertThat(refreshed.path("toolCount").asInt()).isEqualTo(2);
+
+            JsonNode configured = structured(server.call(session, "hermit_dev__mcp_configure", Map.of(
+                    "conch", "devops_mcp",
+                    "tools", Map.of("exclude", List.of("debug_*")),
+                    "actions", Map.of("keep_query", Map.of("readOnly", true, "destructive", false, "confirm", false)))));
+            assertThat(configured.path("ok").asBoolean()).as(configured.toString()).isTrue();
+            assertThat(configured.path("removed")).extracting(JsonNode::asText).containsExactly("debug_raw_dump");
+            assertThat(configured.path("warnings").toString()).doesNotContain("debug_raw_dump");
+            assertThat(server.runtime.registry().find("devops_mcp", dev.hermit.crab.store.Origin.LOCAL)
+                    .orElseThrow().actions().keySet()).containsExactly("keep_query");
+
+            // 4. 携带 credential: true 派生签名的请求在 debug_trace 的 note 中给出明确脱敏原因提示
+            String signedHttp = """
+                    conch: signed_app
+                    version: 1.0.0
+                    driver: http
+                    min_crab_version: 1.14.0
+                    base_url: %s
+                    title: 签名提交系统
+                    description: "测试 credential: true 脚本签名请求的追踪提示。"
+                    credentials:
+                      api_secret: { type: secret, label: 密钥, required: true }
+                    actions:
+                      submit_order:
+                        title: 提交单据
+                        description: 附带 HMAC 签名提交单据。
+                        method: POST
+                        mcp: { expose: true, read_only: false, destructive: false }
+                        steps:
+                          - script:
+                              credential: true
+                              into: sig
+                              code: |
+                                return hermit.hex(hermit.hmacSha256(vars.credential.api_secret, "BX-1001"));
+                          - request:
+                              method: POST
+                              path: /submit
+                              headers:
+                                X-Sign: "{{sig}}"
+                          - extract:
+                              expenseNo: { jsonpath: "$.expenseNo" }
+                        output:
+                          expenseNo: { type: string, description: 单号 }
+                        examples:
+                          - input: {}
+                            output: { expenseNo: "BX-1001" }
+                        notes: 写操作示例。
+                        related: []
+                    """.formatted(appUrl);
+            JsonNode savedSigned = structured(server.call(session, "hermit_dev__save_local", Map.of("yaml", signedHttp)));
+            assertThat(savedSigned.path("ok").asBoolean()).as(savedSigned.toString()).isTrue();
+            server.runtime.admin().createAccount(dev.hermit.crab.store.Origin.LOCAL, "signed_app", "default", Actors.CONSOLE);
+            server.runtime.admin().writeCredentials(
+                    dev.hermit.crab.store.Origin.LOCAL,
+                    server.runtime.registry().find("signed_app", dev.hermit.crab.store.Origin.LOCAL).orElseThrow(),
+                    "default",
+                    Map.of("api_secret", "TopSecret#Key99"),
+                    Actors.CONSOLE);
+            JsonNode trial = structured(server.call(session, "hermit_dev__trial_run",
+                    Map.of("conch", "signed_app", "action", "submit_order")));
+            assertThat(trial.path("ok").asBoolean()).as(trial.toString()).isTrue();
+            assertThat(trial.path("data").path("expenseNo").asText()).isEqualTo("BX-1001");
+
+            JsonNode trace = structured(server.call(session, "hermit_dev__debug_trace",
+                    Map.of("traceId", trial.path("traceId").asText())));
+            assertThat(trace.path("note").asText())
+                    .contains("正文已脱敏")
+                    .contains("credentialBearing=true");
+        } finally {
+            app.stop(0);
+            mcpUp.stop(0);
+        }
+    }
+
     private static String writable(String name, String version) {
         return """
                 conch: %s

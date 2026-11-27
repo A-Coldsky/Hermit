@@ -520,17 +520,36 @@ final class McpCalls {
         } catch (RuntimeException ex) {
             return fail(attempt, "NOT_FOUND", "not found");
         }
+        String note = DevTraceDraft.UNTRUSTED_NOTE;
+        if (hasCredentialBearingStep(devTrace)) {
+            note = note + "（含 credentialBearing=true 步骤：携带凭证或 credential: true 脚本派生签名的请求，其响应正文与紧邻提取的变量摘要在追踪中按防泄密策略显示为 ***，不影响非敏感字段的正式返回结果。）";
+        }
         LinkedHashMap<String, Object> body = new LinkedHashMap<>();
         body.put("traceId", trace.traceId());
         body.put("conch", trace.conch());
         body.put("account", trace.account());
         body.put("action", trace.action());
-        body.put("note", DevTraceDraft.UNTRUSTED_NOTE);
+        body.put("note", note);
         body.put("untrusted", true);
         body.put("createdAt", trace.createdAt() == null ? null : trace.createdAt().toString());
         body.put("expiresAt", trace.expiresAt() == null ? null : trace.expiresAt().toString());
         body.put("devTrace", devTrace);
         return ok(body);
+    }
+
+    private static boolean hasCredentialBearingStep(Object devTrace) {
+        if (!(devTrace instanceof Map<?, ?> map)) {
+            return false;
+        }
+        if (!(map.get("steps") instanceof java.util.List<?> steps)) {
+            return false;
+        }
+        for (Object item : steps) {
+            if (item instanceof Map<?, ?> step && Boolean.TRUE.equals(step.get("credentialBearing"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static final Set<String> TRACE_LIST_FIELDS = Set.of("conch", "action", "limit");

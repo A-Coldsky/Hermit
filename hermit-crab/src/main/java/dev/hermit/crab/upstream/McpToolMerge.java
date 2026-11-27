@@ -232,6 +232,24 @@ public final class McpToolMerge {
             }
         }
         ObjectNode actions = root.get("actions") instanceof ObjectNode node ? node : root.putObject("actions");
+        ArrayList<String> removedActions = new ArrayList<>();
+        if (root.get("tools") instanceof ObjectNode toolsNode) {
+            ToolFilter filter = parseToolFilter(toolsNode);
+            ArrayList<String> toRemove = new ArrayList<>();
+            actions.fields().forEachRemaining(entry -> {
+                if (entry.getValue() instanceof ObjectNode action) {
+                    String upstreamName = text(action.get("tool"));
+                    String matchTarget = upstreamName != null ? upstreamName : entry.getKey();
+                    if (!selected(matchTarget, filter)) {
+                        toRemove.add(entry.getKey());
+                    }
+                }
+            });
+            for (String key : toRemove) {
+                actions.remove(key);
+                removedActions.add(key);
+            }
+        }
         LinkedHashSet<String> updatedActions = new LinkedHashSet<>();
 
         Object rawDefaults = spec.get("defaults");
@@ -302,10 +320,41 @@ public final class McpToolMerge {
         }
 
         try {
-            return new ConfigureOutcome(YAML.writeValueAsBytes(root), List.copyOf(updatedActions));
+            return new ConfigureOutcome(
+                    YAML.writeValueAsBytes(root), List.copyOf(updatedActions), List.copyOf(removedActions));
         } catch (java.io.IOException ex) {
             throw new Rejected(ErrorCode.INTERNAL, "本地规则包无法序列化为 YAML。");
         }
+    }
+
+    private static ToolFilter parseToolFilter(ObjectNode toolsNode) {
+        var it = toolsNode.fieldNames();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (!"include".equals(k) && !"exclude".equals(k)) {
+                throw new Rejected(ErrorCode.INVALID_INPUT, "tools 只允许 include 与 exclude 字段。");
+            }
+        }
+        return new ToolFilter(
+                stringPatterns(toolsNode.get("include"), "tools.include"),
+                stringPatterns(toolsNode.get("exclude"), "tools.exclude"));
+    }
+
+    private static List<String> stringPatterns(JsonNode node, String path) {
+        if (node == null || node.isNull()) {
+            return List.of();
+        }
+        if (!node.isArray()) {
+            throw new Rejected(ErrorCode.INVALID_INPUT, path + " 必须是字符串数组。");
+        }
+        ArrayList<String> out = new ArrayList<>(node.size());
+        for (JsonNode item : node) {
+            if (item == null || !item.isTextual() || item.asText().isBlank()) {
+                throw new Rejected(ErrorCode.INVALID_INPUT, path + " 元素必须是非空字符串。");
+            }
+            out.add(item.asText().trim());
+        }
+        return List.copyOf(out);
     }
 
     private static void applyActionPatch(ObjectNode action, Map<?, ?> patch, boolean isBulkDefault) {
@@ -397,7 +446,7 @@ public final class McpToolMerge {
         target.put(targetField, flag);
     }
 
-    public record ConfigureOutcome(byte[] yaml, List<String> updatedActions) {
+    public record ConfigureOutcome(byte[] yaml, List<String> updatedActions, List<String> removedActions) {
     }
 
     static boolean selected(String name, ToolFilter filter) {

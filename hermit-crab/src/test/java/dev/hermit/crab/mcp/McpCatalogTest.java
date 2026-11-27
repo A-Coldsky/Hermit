@@ -43,7 +43,9 @@ class McpCatalogTest {
                 McpCatalog.LIST_SYSTEMS,
                 McpCatalog.SEARCH,
                 McpCatalog.DESCRIBE,
-                McpCatalog.CALL);
+                McpCatalog.CALL,
+                McpCatalog.CALL_WRITE,
+                McpCatalog.CALL_SENSITIVE);
     }
 
     @Test
@@ -166,7 +168,7 @@ class McpCatalogTest {
         assertThat(catalog.describe(ALL_KEY, "vendor_crm__ping").orElseThrow()).doesNotContainKey("outputSchema");
 
         assertThat(catalog.guide(ALL_KEY, "hermit://conches/vendor_crm/guide").orElseThrow())
-                .contains("经 `call_capability` 调用时，用它自己的 `account` 参数")
+                .contains("经 `call_capability`、`call_write_capability` 或 `call_sensitive_capability` 调用时，用它自己的 `account` 参数")
                 .contains("不放进 `arguments`");
     }
 

@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.CapabilityKind;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.crab.engine.DevTraceDraft;
 import dev.hermit.crab.sync.DisabledConches;
@@ -36,8 +37,8 @@ final class McpCalls {
     static final String DIRECT_MODE_HINT = "当前是直接模式，工具列表里的每个工具就是一个能力，直接调用。";
     private static final List<String> SEARCH_FIELDS = List.of("query", "conch", "group", "ungrouped");
     private static final List<String> CALL_FIELDS = List.of("name", "arguments", "account");
-    static final String NO_CONFIRM = "客户端不支持确认，拒绝执行写操作";
-    static final String REJECTED = "用户拒绝执行";
+    /** 只读 Key 调用两个写入口，或经它们调写能力。 */
+    static final String READ_ONLY_KEY = "这把 API Key 只允许调用只读能力。";
     static final String TRACE_DENIED =
             "这把 API Key 不能读取这条追踪。点名了该本地规则包的读写 Key 可以读，本机全部权限读写 Key 可读自己用 hermit_dev__trial_run 试跑出来的以及控制台触发的本地调试追踪（含授权器测试登录）。其他 API Key 和正式包的追踪不能读。";
     static final String TRACE_ABSENT = "没有这条追踪。编号不存在。";
@@ -141,7 +142,7 @@ final class McpCalls {
             return devEntry(principal, session, arguments, localCaller, attempt);
         }
         if (McpCatalog.devToolName(name)) {
-            return devCall(principal, session, name, arguments, localCaller, attempt);
+            return devCall(principal, session, name, arguments, localCaller, attempt, CapabilityKind.SENSITIVE);
         }
         if (attempt.directory()) {
             return directory(principal, session, headerAccount, name, arguments, localCaller, attempt);
@@ -188,19 +189,34 @@ final class McpCalls {
         if (raw != null && input == null) {
             return fail(attempt, "INVALID_INPUT", "arguments must be an object");
         }
-        return devCall(principal, session, text, input == null ? Map.of() : input, localCaller, attempt);
+        // 入口工具自己标成有破坏性，客户端按最严的一类审批。
+        return devCall(principal, session, text, input == null ? Map.of() : input, localCaller, attempt,
+                CapabilityKind.SENSITIVE);
     }
 
+    /**
+     * {@code entry} 是调用方用的入口对应的类别：call_capability 是 READ，call_write_capability 是 WRITE，
+     * 其余（call_sensitive_capability、直接调用、hermit_dev 入口）是 SENSITIVE。
+     */
     private McpSchema.CallToolResult devCall(
             ApiKeyPrincipal principal,
             McpSession session,
             String name,
             Map<String, Object> arguments,
             boolean localCaller,
-            Attempt attempt
+            Attempt attempt,
+            CapabilityKind entry
     ) {
         if (principal != null && !principal.scope().devTools()) {
             return fail(attempt, "FORBIDDEN", AuthoringCalls.NEEDS_DEV_SCOPE);
+        }
+        // 试跑按被试跑能力的类别判断，在 AuthoringCalls.trial 里查。
+        if (!McpCatalog.TRIAL_RUN.equals(name) && !McpCatalog.devKind(name).allowedBy(entry)) {
+            // 只读 Key 没有写入口：不要让它换工具，直接说明这把 Key 不能写。
+            if (principal != null && principal.scope().readOnlyOnly()) {
+                return fail(attempt, "FORBIDDEN", READ_ONLY_KEY);
+            }
+            return wrongEntry(attempt, name, McpCatalog.devKind(name));
         }
         if (McpCatalog.DEBUG_TRACE.equals(name)) {
             return readTrace(principal, arguments, attempt, localCaller);
@@ -250,7 +266,7 @@ final class McpCalls {
             return authoring.stageTextFile(principal, arguments, attempt);
         }
         if (McpCatalog.TRIAL_RUN.equals(name)) {
-            return authoring.trial(principal, session, arguments, attempt);
+            return authoring.trial(principal, arguments, attempt, entry);
         }
         return failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL);
     }
@@ -268,14 +284,33 @@ final class McpCalls {
             case McpCatalog.LIST_SYSTEMS -> ok(catalog.listSystems(principal, localCaller));
             case McpCatalog.SEARCH -> search(principal, arguments, localCaller, attempt);
             case McpCatalog.DESCRIBE -> describe(principal, arguments, localCaller, attempt);
-            case McpCatalog.CALL -> callCapability(principal, session, headerAccount, arguments, localCaller, attempt);
+            case McpCatalog.CALL -> callCapability(
+                    principal, session, headerAccount, arguments, localCaller, attempt, CapabilityKind.READ);
+            case McpCatalog.CALL_WRITE -> callCapability(
+                    principal, session, headerAccount, arguments, localCaller, attempt, CapabilityKind.WRITE);
+            case McpCatalog.CALL_SENSITIVE -> callCapability(
+                    principal, session, headerAccount, arguments, localCaller, attempt, CapabilityKind.SENSITIVE);
             default -> catalog.find(principal, name).isPresent()
                     // 升级前的提示词会按「规则包__能力」直接调用。工具列表里只有目录工具，要告诉它怎么调。
                     ? failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL, null,
-                            "能力不直接出现在工具列表里。请用 " + McpCatalog.CALL + "(name=\"" + name
-                                    + "\", arguments={…}) 调用。")
+                            "能力不直接出现在工具列表里。请用 "
+                                    + McpCatalog.callWith(catalog.find(principal, name).get().action().kind())
+                                    + "(name=\"" + name + "\", arguments={…}) 调用。")
                     : missingTool(attempt, name);
         };
+    }
+
+    /** 用更宽松的入口调更严的能力：不执行，告诉调用方该用哪个入口。 */
+    static McpSchema.CallToolResult wrongEntry(Attempt attempt, String name, CapabilityKind kind) {
+        return failAsRequest(attempt, "INVALID_INPUT", wrongEntryMessage(kind), "name",
+                "请改用 " + McpCatalog.callWith(kind) + "(name=\"" + name + "\", arguments={…})。"
+                        + (kind == CapabilityKind.SENSITIVE ? "调用前先向用户说明要做什么和参数，取得同意。" : ""));
+    }
+
+    static String wrongEntryMessage(CapabilityKind kind) {
+        return kind == CapabilityKind.SENSITIVE
+                ? "这个能力是敏感操作，没有执行。要用 " + McpCatalog.CALL_SENSITIVE + " 调用。"
+                : "这个能力会修改数据，没有执行。要用 " + McpCatalog.CALL_WRITE + " 调用。";
     }
 
     /** 目录工具只认声明过的字段。多出来的字段悄悄丢掉会让调用方以为它生效了。 */
@@ -354,8 +389,13 @@ final class McpCalls {
             Optional<String> headerAccount,
             Map<String, Object> arguments,
             boolean localCaller,
-            Attempt attempt
+            Attempt attempt,
+            CapabilityKind entry
     ) {
+        // 两个写入口不出现在只读 Key 的工具列表里；直接按名字调也拒绝。
+        if (entry != CapabilityKind.READ && principal != null && principal.scope().readOnlyOnly()) {
+            return fail(attempt, "FORBIDDEN", READ_ONLY_KEY);
+        }
         // 先于开发者工具分流：否则 call_capability(name=hermit_dev__read_yaml, conch=…) 仍会丢参数。
         McpSchema.CallToolResult unknown = unknownField(
                 arguments, CALL_FIELDS, "只接受 name、arguments、account；能力参数要放进 arguments。", attempt);
@@ -372,7 +412,8 @@ final class McpCalls {
             if (raw != null && devInput == null) {
                 return fail(attempt, "INVALID_INPUT", "arguments must be an object");
             }
-            return devCall(principal, session, text, devInput == null ? Map.of() : devInput, localCaller, attempt);
+            return devCall(
+                    principal, session, text, devInput == null ? Map.of() : devInput, localCaller, attempt, entry);
         }
         Optional<McpCatalog.CapabilityRef> found = catalog.find(principal, text);
         if (found.isEmpty()) {
@@ -390,14 +431,14 @@ final class McpCalls {
         if (account == null) {
             return failAsRequest(attempt, "INVALID_INPUT", Invoker.INVALID_ACCOUNT_NAME, "account");
         }
-        boolean confirm = found.get().action().effectiveConfirm();
-        if (confirm) {
-            McpSchema.CallToolResult confirmed = confirm(session, found.get().action(), input, account, attempt);
-            if (confirmed != null) {
-                return confirmed;
+        CapabilityKind kind = found.get().action().kind();
+        if (!kind.allowedBy(entry)) {
+            if (principal != null && principal.scope().readOnlyOnly()) {
+                return fail(attempt, "FORBIDDEN", READ_ONLY_KEY);
             }
+            return wrongEntry(attempt, text, kind);
         }
-        return invoke(principal, found.get(), input, account, attempt, confirm);
+        return invoke(principal, found.get(), input, account, attempt);
     }
 
     private McpSchema.CallToolResult invokeDirect(
@@ -416,57 +457,7 @@ final class McpCalls {
         if (account == null) {
             return failAsRequest(attempt, "INVALID_INPUT", Invoker.INVALID_ACCOUNT_NAME, selector);
         }
-        boolean confirm = ref.action().effectiveConfirm();
-        if (confirm) {
-            McpSchema.CallToolResult confirmed = confirm(session, ref.action(), input, account, attempt);
-            if (confirmed != null) {
-                return confirmed;
-            }
-        }
-        return invoke(principal, ref, input, account, attempt, confirm);
-    }
-
-    /** Elicitation for a destructive call. {@code null} means the user accepted. */
-    static McpSchema.CallToolResult confirm(
-            McpSession session,
-            Action action,
-            Map<String, Object> input,
-            Optional<String> account,
-            Attempt attempt
-    ) {
-        if (session == null || !session.supportsElicitation() || !session.streaming()) {
-            return fail(attempt, "FORBIDDEN", NO_CONFIRM);
-        }
-        StringBuilder message = new StringBuilder("确认执行 ");
-        message.append(action.title() == null || action.title().isBlank() ? action.name() : action.title());
-        message.append("？");
-        for (Map.Entry<String, Object> entry : input.entrySet()) {
-            message.append('\n').append(entry.getKey()).append('=').append(ApiJson.write(entry.getValue()));
-        }
-        if (account.isPresent()) {
-            message.append("\naccount=").append(ApiJson.write(account.get()));
-        }
-        LinkedHashMap<String, Object> schema = new LinkedHashMap<>();
-        schema.put("type", "object");
-        schema.put("properties", Map.of("confirm", Map.of("type", "boolean", "description", "确认执行")));
-        JsonNode answer;
-        try {
-            answer = session.elicit(McpSchema.ElicitFormRequest.builder(message.toString(), schema).build());
-        } catch (TimeoutException ex) {
-            return fail(attempt, "TIMEOUT", CONFIRM_TIMEOUT);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            return fail(attempt, "INTERNAL", "internal error");
-        }
-        JsonNode confirm = answer == null ? null : answer.path("content").path("confirm");
-        boolean accepted = answer != null
-                && "accept".equals(answer.path("action").asText(""))
-                && confirm.isBoolean()
-                && confirm.booleanValue();
-        if (!accepted) {
-            return fail(attempt, "FORBIDDEN", REJECTED);
-        }
-        return null;
+        return invoke(principal, ref, input, account, attempt);
     }
 
     /**
@@ -749,18 +740,18 @@ final class McpCalls {
             McpCatalog.CapabilityRef ref,
             Map<String, Object> input,
             Optional<String> account,
-            Attempt attempt,
-            boolean confirmed
+            Attempt attempt
     ) {
         InvokeOutcome outcome;
         try {
             // MCP 不传 Idempotency-Key。同键回放只在 HTTP POST。
-            // 确认过的调用带上确认时那份规则包和来源：等待期间换了版本或来源就拒绝，不执行没确认过的内容。
+            // 每次都带上按类别放行时看到的那份规则包和来源：之后换了版本或来源就拒绝（审计 A01），
+            // 不会按只读放行、执行的却是写操作。
             outcome = runtime.invoker().invoke(
                     InvokeRequest.of(principal, ref.conch().conch(), ref.action().name(), input, attempt.traceId())
                             .account(account)
                             .channel(CallChannel.MCP)
-                            .confirmedAgainst(confirmed ? ref.conch() : null, confirmed ? ref.origin() : null));
+                            .confirmedAgainst(ref.conch(), ref.origin()));
         } catch (RuntimeException ex) {
             return fail(attempt, "INTERNAL", "internal error");
         }

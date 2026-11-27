@@ -132,12 +132,12 @@ public record Action(
         return !mcp.readOnly();
     }
 
-    /** 没写 {@code confirm} 时等于 {@link #effectiveDestructive()}。 */
-    public boolean effectiveConfirm() {
-        if (tool != null && tool.confirm() != null) {
-            return tool.confirm();
+    /** 敏感（{@link #effectiveDestructive()}）优先，其次只读，其余是普通写。 */
+    public CapabilityKind kind() {
+        if (effectiveDestructive()) {
+            return CapabilityKind.SENSITIVE;
         }
-        return effectiveDestructive();
+        return mcp.readOnly() ? CapabilityKind.READ : CapabilityKind.WRITE;
     }
 
     public Map<String, Object> inputJsonSchema() {

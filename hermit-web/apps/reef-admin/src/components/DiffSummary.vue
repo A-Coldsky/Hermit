@@ -59,10 +59,7 @@ function toolParts(change: ToolChange): string[] {
     parts.push(change.readOnly ? '改为只读' : '改为写入')
   }
   if (change.previousDestructive !== change.destructive) {
-    parts.push(change.destructive ? '变为破坏性' : '不再是破坏性')
-  }
-  if (change.previousConfirm !== change.confirm) {
-    parts.push(change.confirm ? '改为需确认' : '不再需确认')
+    parts.push(change.destructive ? '改为敏感' : '不再敏感')
   }
   return parts
 }
@@ -149,7 +146,7 @@ function show(value: unknown): string {
           </li>
         </ul>
         <p v-if="toolsAdded.some((c) => c.destructive) || toolsChanged.some((c) => c.destructive && !c.previousDestructive)" class="warn">
-          有新的破坏性工具。发布前请核对工具说明，以及调用前是否需要确认。
+          有新的敏感工具（调用前需要用户同意）。发布前请核对工具说明和它是否真的敏感。
         </p>
       </section>
       <section v-if="d.addedCredentials?.length || d.removedCredentials?.length || d.credentialRequiredChanges?.length">

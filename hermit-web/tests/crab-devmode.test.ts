@@ -86,7 +86,7 @@ describe('Crab 开发者模式', () => {
     const prompt = wrapper.get('[data-test="authoring-prompt"]').text()
     expect(prompt).toContain('hermit_dev__guide')
     expect(prompt).toContain('hermit_dev(tool=工具名, arguments=参数)')
-    expect(prompt).toContain('call_capability(name=工具名, arguments=参数)')
+    expect(prompt).toContain('call_write_capability(name=工具名, arguments=参数)')
     expect(prompt).toContain('hermit_dev__read_yaml')
     expect(prompt).toContain('hermit_dev__capture_list')
     expect(prompt).toContain('hermit_dev__capture_get')

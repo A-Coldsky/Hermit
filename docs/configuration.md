@@ -19,7 +19,7 @@
 | `capabilities.disabled` | `[]` | `conch.action` 列表，与数据库禁用状态取并集 |
 | `aliases` | `{}` | URL 路径 → `conch.action`；不可占用 api/console/mcp/openapi 路径 |
 | `mcp.allowed_origins` | `[]` | 额外允许访问 `/mcp` 的浏览器 Origin。没有 `Origin` 的客户端仍允许。本机源站见下方 |
-| `mcp.direct_limit` | `0` | 整数 0–500。默认 `0`：`/mcp` 只给四个目录工具（`list_systems`、`search_capabilities`、`describe_capability`、`call_capability`），能力按需查询，不占 AI 的上下文。设成 `1–500` 时，可见能力不超过此值就把每个能力直接作为一个工具，超过仍是目录模式；直接模式少 2–3 步调用，并且可以在 AI 客户端里对单个能力授权，但每个能力的完整定义都会进 AI 的上下文 |
+| `mcp.direct_limit` | `0` | 整数 0–500。默认 `0`：`/mcp` 只给六个目录工具（`list_systems`、`search_capabilities`、`describe_capability` 和三个调用工具 `call_capability`、`call_write_capability`、`call_sensitive_capability`），能力按需查询，不占 AI 的上下文。设成 `1–500` 时，可见能力不超过此值就把每个能力直接作为一个工具，超过仍是目录模式；直接模式少 2–3 步调用，并且可以在 AI 客户端里对单个能力授权，但每个能力的完整定义都会进 AI 的上下文 |
 | `engine.capability_timeout_seconds` | `60` | 正整数。能力执行的总 deadline，到点返回 `TIMEOUT`。未写步骤 `timeout_ms` 时，有长度或分块的上游空闲读也停在这个 deadline，不再先用 15 秒。规则写了更短的 `timeout_ms` 时，空闲读到点是 `UPSTREAM_ERROR`，message 为「步骤超时」。持续慢速输出会在 deadline 被取消。TCP 连接超时见 `engine.connect_timeout_ms` |
 | `engine.session_idle_minutes` | `10` | 空闲超过此阈值且配置 alive_check 时检测会话 |
 | `engine.max_login_failures` | `3` | 连续登录失败后暂停该账号自动登录；只有测试登录成功才解除，失败不会清掉暂停 |

@@ -34,6 +34,7 @@ import java.util.stream.Stream;
 
 import dev.hermit.common.error.ErrorCode;
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.CapabilityKind;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.model.McpAuth;
 import dev.hermit.common.model.McpUpstream;
@@ -631,8 +632,8 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     /**
-     * {@code confirmedAgainst} 是 MCP 已经据此让用户确认过的那份本地包。确认期间被重新导入时拒绝，
-     * 不执行没确认过的内容。控制台试跑和不需要确认的试跑传 null。
+     * {@code confirmedAgainst} 是调用方按类别放行时看到的那份本地包。之后被重新导入时拒绝。
+     * 控制台试跑传 null。
      */
     public ExecutionResult trialLocal(
             String conch,
@@ -647,8 +648,9 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
     }
 
     /**
-     * 原子读出当前生效的本地规则包，核对快照一致、API Key 范围与只读权限，以及破坏性确认。
-     * {@code principal} 为 null 时表示控制台或 CLI 试跑，不检查 API Key 权限与 MCP 确认。
+     * 原子读出当前生效的本地规则包，核对快照一致、API Key 范围与只读权限，以及敏感能力的入口。
+     * {@code principal} 为 null 时表示控制台或 CLI 试跑，不检查 API Key 权限与入口。
+     * {@code confirmed} 表示 MCP 调用方用的是敏感写入口。
      */
     public ExecutionResult trialLocal(
             String conch,
@@ -695,7 +697,10 @@ public final class CrabRuntime implements AutoCloseable, Invoker.CapabilityGate 
                         "能力 " + action + " 未对 MCP 暴露，不能通过 MCP 试跑。",
                         true);
             }
-            if (capability.effectiveConfirm() && (!confirmed || expectedSnapshot == null)) {
+            // 调用方按类别放行时没看到这份包（expectedSnapshot 为 null）：只有只读能力可以继续。
+            // 敏感能力还要求调用方用的是最严的入口。
+            if ((capability.kind() != CapabilityKind.READ && expectedSnapshot == null)
+                    || (capability.effectiveDestructive() && !confirmed)) {
                 throw new TrialRejected(409, ErrorCode.CONFLICT, Invoker.CHANGED_AFTER_CONFIRM, true);
             }
         }

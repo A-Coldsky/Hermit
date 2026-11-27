@@ -102,7 +102,6 @@ class McpRefreshTest {
                 assertThat(search.idempotent()).isTrue();
                 assertThat(search.mcp().readOnly()).isTrue();
                 assertThat(search.mcp().destructive()).isFalse();
-                assertThat(search.tool().confirm()).isFalse();
                 assertThat(search.tool().inputSchema()).containsKey("properties");
                 assertThat(search.tool().schemaSha256()).isEqualTo(
                         ToolSnapshots.schemaSha256(search.tool().inputSchema(), search.tool().outputSchema()));
@@ -110,11 +109,9 @@ class McpRefreshTest {
                         .doesNotContain("\u001B").doesNotContain("\u200B");
                 assertThat(updated.actions().get("gzip_file").mcp().readOnly()).isFalse();
                 assertThat(updated.actions().get("gzip_file").mcp().destructive()).isTrue();
-                assertThat(updated.actions().get("gzip_file").tool().confirm()).isTrue();
                 assertThat(updated.actions().get("gzip_file").tool().upstreamAnnotations())
                         .containsEntry("destructiveHint", false);
                 assertThat(updated.actions().get("purge_file").mcp().destructive()).isTrue();
-                assertThat(updated.actions().get("purge_file").tool().confirm()).isTrue();
                 assertThat(updated.actions()).doesNotContainKey("admin_drop");
 
                 String traceId = data.path("traceId").asText();
@@ -527,7 +524,6 @@ class McpRefreshTest {
                     title: 搜索客户
                     description: 按名称或手机号搜索客户。
                     mcp: {read_only: true, destructive: false}
-                    confirm: false
                     idempotent: true
                     input_schema: {type: object}
                     output_schema: {type: object}
@@ -540,7 +536,6 @@ class McpRefreshTest {
                     title: 创建工单
                     description: 将被删除。
                     mcp: {read_only: false, destructive: true}
-                    confirm: true
                     input_schema: {type: object}
                 """.formatted(base);
     }
@@ -603,7 +598,6 @@ class McpRefreshTest {
                     title: 搜索客户
                     description: 按名称搜索。
                     mcp: {read_only: true, destructive: false}
-                    confirm: false
                     input_schema:
                       type: object
                       properties:
@@ -636,7 +630,6 @@ class McpRefreshTest {
                     title: 创建工单
                     description: 为客户创建服务工单。
                     mcp: {read_only: false, destructive: true}
-                    confirm: true
                     input_schema: {type: object}
                 """;
     }

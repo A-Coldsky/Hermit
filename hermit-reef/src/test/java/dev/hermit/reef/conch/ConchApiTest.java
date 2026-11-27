@@ -1206,7 +1206,6 @@ class ConchApiTest {
                     title: 搜索客户
                     description: 按名称或手机号搜索客户。
                     mcp: {expose: true, read_only: false}
-                    confirm: false
                     input_schema: {type: object, properties: {name: {type: string}}}
                   close_ticket:
                     tool: closeTicket
@@ -1238,13 +1237,11 @@ class ConchApiTest {
                 .andExpect(jsonPath("$.data[0].tools[0].upstreamName").value("searchCustomer"))
                 .andExpect(jsonPath("$.data[0].tools[0].readOnly").value(true))
                 .andExpect(jsonPath("$.data[0].tools[0].destructive").value(false))
-                .andExpect(jsonPath("$.data[0].tools[0].confirm").value(false))
                 .andExpect(jsonPath("$.data[0].tools[0].upstreamAnnotations.readOnlyHint").value(true))
                 .andExpect(jsonPath("$.data[0].tools[1].name").value("create_ticket"))
                 .andExpect(jsonPath("$.data[0].tools[1].upstreamName").value("createTicket"))
                 .andExpect(jsonPath("$.data[0].tools[1].readOnly").value(false))
                 .andExpect(jsonPath("$.data[0].tools[1].destructive").value(true))
-                .andExpect(jsonPath("$.data[0].tools[1].confirm").value(true))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
@@ -1276,7 +1273,6 @@ class ConchApiTest {
         assertThat(diff.get("toolChanges").get(2).get("kind").asText()).isEqualTo("added");
         assertThat(diff.get("toolChanges").get(2).get("name").asText()).isEqualTo("close_ticket");
         assertThat(diff.get("toolChanges").get(2).get("destructive").asBoolean()).isTrue();
-        assertThat(diff.get("toolChanges").get(2).get("confirm").asBoolean()).isTrue();
 
         mockMvc.perform(get("/api/admin/conches").header(HttpHeaders.AUTHORIZATION, bearer()))
                 .andExpect(jsonPath("$.data[0].version").value(nullValue()))

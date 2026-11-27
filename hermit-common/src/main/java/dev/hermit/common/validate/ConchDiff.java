@@ -385,8 +385,7 @@ public record ConchDiff(
                 && Objects.equals(schemaSha(previous), schemaSha(current))
                 && Objects.equals(previous.description(), current.description())
                 && previous.mcp().readOnly() == current.mcp().readOnly()
-                && previous.effectiveDestructive() == current.effectiveDestructive()
-                && previous.effectiveConfirm() == current.effectiveConfirm();
+                && previous.effectiveDestructive() == current.effectiveDestructive();
     }
 
     private static ToolChange toolView(String name, String kind, Action previous, Action current) {
@@ -402,9 +401,7 @@ public record ConchDiff(
                 previous == null ? null : previous.mcp().readOnly(),
                 current == null ? null : current.mcp().readOnly(),
                 previous == null ? null : previous.effectiveDestructive(),
-                current == null ? null : current.effectiveDestructive(),
-                previous == null ? null : previous.effectiveConfirm(),
-                current == null ? null : current.effectiveConfirm());
+                current == null ? null : current.effectiveDestructive());
     }
 
     private static String upstreamName(Action action) {

@@ -283,7 +283,7 @@ Action 还支持 `group`、`method`、`input`、`output`、`steps`、`idempotent
 
 ## 让其他 AI 找得到
 
-写好的规则包是给别的 AI 调用的。Crab 的 MCP 默认是目录模式：AI 的工具列表里只有 `list_systems`、`search_capabilities`、`describe_capability`、`call_capability` 四个工具，看不到任何一个能力。它只能靠你写的文字判断「这里有没有用户要的系统和能力」，写得含糊就搜不到，也就不会调用。
+写好的规则包是给别的 AI 调用的。Crab 的 MCP 默认是目录模式：AI 的工具列表里只有 `list_systems`、`search_capabilities`、`describe_capability` 和三个调用工具 `call_capability`、`call_write_capability`、`call_sensitive_capability`，看不到任何一个能力。它只能靠你写的文字判断「这里有没有用户要的系统和能力」，写得含糊就搜不到，也就不会调用。
 
 AI 分两步找：
 
@@ -376,7 +376,7 @@ actions:
 
 不能写顶层 `base_url`、`auth`、`health_check`。顶层 `steps` 仍是未知字段，解析失败。每个 action 不能写 `method`、`input`、`output`、`steps`。空的 `input`、`output`、`steps` 映射和省略无法区分，同样拒绝。Reef 上传和正式包要求 `actions` 至少一项，否则错误码 `MCP_NO_ACTIONS`，message 为「mcp 包必须至少有一个 action」。开发者模式打开时，本地规则包的空 `actions` 只是同一错误码的警告，message 为「mcp 包还没有 action，刷新工具列表后才能调用。」。开发者模式关掉时，空文件仍不能导入。`tools.include` / `exclude` 在刷新时过滤：`include` 省略或为空表示全部，`exclude` 优先，`*` 与 `?` 按整段、区分大小写匹配。能调用的名字仍只有刷新之后留下的 `actions`。
 
-本地刷新按上游工具名合并，不改 `version`。顶层 `groups` 与已有 action 的 `group` 原样保留，已有 action 还保留本地名字、标题、描述、`read_only`、`destructive`、`confirm`、`idempotent` 和 `notes`，更新 schema、上游注解和 `schema_sha256`。新工具的本地名把非 `[a-z0-9]` 换成 `_`，长度 2–64，冲突时加 `_2`、`_3`。新描述去掉 C0 控制字符（保留换行、回车、制表）、零宽与双向字符，以及 ANSI CSI/OSC，截到 2 KiB UTF-8；空了就写成「（上游未提供描述）」。不删 URL，也不删「忽略之前的指令」。新工具的 `read_only` 只在 `readOnlyHint` 为 true 时为 true；`destructiveHint` 是布尔就用它（显式 false 保持 false），没有这个布尔时非只读为 true；`confirm` 写成与 `destructive` 相同。不把 `idempotentHint` 抄到 `idempotent`。注解去掉 `_meta`。没有 `inputSchema` 时写成 `{type: object}`；上游没有 `outputSchema` 就不写 `output_schema`。`snapshot.tools_sha256` 哈希的是过滤前的完整列表。`initialize` 的 `capabilities` 仍是 `{}`，依赖 elicitation 或 sampling 才出现的工具不会进包。写回会丢掉 YAML 注释和原来的排版。上游工具超过 500 个、超过 20 页，或分页游标不前进时整次失败，不改文件。
+本地刷新按上游工具名合并，不改 `version`。顶层 `groups` 与已有 action 的 `group` 原样保留，已有 action 还保留本地名字、标题、描述、`read_only`、`destructive`、`idempotent` 和 `notes`，更新 schema、上游注解和 `schema_sha256`。新工具的本地名把非 `[a-z0-9]` 换成 `_`，长度 2–64，冲突时加 `_2`、`_3`。新描述去掉 C0 控制字符（保留换行、回车、制表）、零宽与双向字符，以及 ANSI CSI/OSC，截到 2 KiB UTF-8；空了就写成「（上游未提供描述）」。不删 URL，也不删「忽略之前的指令」。新工具的 `read_only` 只在 `readOnlyHint` 为 true 时为 true；`destructiveHint` 是布尔就用它（显式 false 保持 false），没有这个布尔时非只读为 true。不写 `confirm`：这个字段已删除，规则包里任何能力写了它都是解析错误「confirm 字段已删除。调用前需要用户同意的操作请写 mcp.destructive: true。」。不把 `idempotentHint` 抄到 `idempotent`。注解去掉 `_meta`。没有 `inputSchema` 时写成 `{type: object}`；上游没有 `outputSchema` 就不写 `output_schema`。`snapshot.tools_sha256` 哈希的是过滤前的完整列表。`initialize` 的 `capabilities` 仍是 `{}`，依赖 elicitation 或 sampling 才出现的工具不会进包。写回会丢掉 YAML 注释和原来的排版。上游工具超过 500 个、超过 20 页，或分页游标不前进时整次失败，不改文件。
 
 `upstream.auth.type` 是 `headers` 或 `oauth`。`headers` 的请求头模板只能引用 `{{credential.*}}` 和 `{{config.*}}`，不能引用 `input`。HTTP 包允许模板里出现未声明的 `config.base_url`，mcp 请求头没有这项豁免。`oauth` 必须写 `client_id`。`scopes` 里不能有空字符串。`authorization_endpoint` 和 `token_endpoint` 可以省略。省略时 Crab 先看 MCP 地址返回 401 时 `WWW-Authenticate` 里的 `resource_metadata`，再按 RFC 9728 请求路径感知和根上的 `/.well-known/oauth-protected-resource`，然后按 RFC 8414 读取授权服务器元数据；没有再试 `/.well-known/openid-configuration`。每个 URL 都要过 `allowed_hosts` 和地址检查，不跟随重定向，也不做动态客户端注册。写了的端点必须是不带模板、用户信息和片段的 http 或 https URL。https 的主机要落在 `allowed_hosts`。http 还要和 `upstream.url` 同一源（协议、主机、端口；省略端口时 https 为 443、http 为 80）。`oauth` 不能再设置 `Authorization`。
 
@@ -396,13 +396,13 @@ actions:
 
 `snapshot` 可省略。写了就必须有能解析成时间的 `fetched_at`、`protocol_version`，以及 64 位小写十六进制的 `tools_sha256`。`server` 可省略；写了则 `name` 和 `version` 都要有。校验不按 actions 重算 `tools_sha256`。`tools_sha256` 只取 `tools` 数组，按 `name` 排序，键排序并去掉 `_meta`，忽略 `nextCursor`。版本对比和本地刷新共用这个算法；刷新写入的是过滤前的完整列表。
 
-没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。没写 `confirm` 时等于有效破坏性。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。带上游工具的 action，对外方法固定 POST，Crab 对外注解的 `destructiveHint` 用这个有效破坏性，`readOnlyHint` 用 `mcp.read_only`，`idempotentHint` 用 `idempotent`。HTTP 能力的注解里，`destructiveHint` 同样是声明的 destructive（缺省 false），不再从「非只读且非幂等」推导。目录元工具 `call_capability` 仍用那条旧公式。MCP 能力对外的入参 schema 就是原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文。管理 API 的列表和详情另外给出 `upstream`、`snapshot` 和 `tools`。Reef 管理端目录和详情已列出这些工具。
+没写 `mcp.destructive` 时，有效破坏性取上游布尔 `destructiveHint`；注解里没有这个布尔，则非只读为 true。写了就用声明值。有效破坏性为 true 的能力就是「敏感」能力。HTTP 能力没有上游工具，破坏性仍只看声明，缺省 false。带上游工具的 action，对外方法固定 POST，Crab 对外注解的 `destructiveHint` 用这个有效破坏性，`readOnlyHint` 用 `mcp.read_only`，`idempotentHint` 用 `idempotent`。HTTP 能力的注解里，`destructiveHint` 同样是声明的 destructive（缺省 false），不再从「非只读且非幂等」推导。目录模式的三个调用工具按类别固定标注，见下。MCP 能力对外的入参 schema 就是原始 `input_schema`，不补 `additionalProperties: false`。Reef 详情里已有的入参 schema 因此会看到这份原文。管理 API 的列表和详情另外给出 `upstream`、`snapshot` 和 `tools`。Reef 管理端目录和详情已列出这些工具。
 
 缺 `examples` 是警告 `MISSING_EXAMPLES`，不是错误。省略 `notes` 或 `related` 的原有警告仍在；显式 `related: []` 不报「缺少 related」。描述警告 `MCP_DESCRIPTION` 不拦发布：UTF-8 超过 2 KiB，含控制字符、零宽字符或 ANSI，含 `<IMPORTANT>` 一类标签，「忽略之前的指令」或英文同类句子，以及夹带 URL。刷新只在新工具的描述和标题上去掉控制字符、零宽字符和 ANSI，并截到 2 KiB；已有描述原样保留，URL 和「忽略之前的指令」也留下。
 
 `min_crab_version` 低于 1.1.0 是 `MIN_CRAB_VERSION`，message 为「driver 为 mcp 时 min_crab_version 必须不低于 1.1.0」。Reef 上传的校验上下文没有当前 Crab 版本，所以 1.1.0 的包可以上传。当前 Crab 兼容版本是 1.14.0，可以载入 1.1.0 至 1.14.0 的 mcp 包。要求 1.0.0 的 mcp 包在当前 Crab 上只报必须不低于 1.1.0；要求高于 1.14.0 时会报高于当前 Crab。请求头模板用了 `xml_escape` 时还要不低于 1.7.0；使用了 `groups` 或 action 的 `group` 时还要不低于 1.10.0。
 
-`GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only`、有效破坏性或有效确认有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
+`GET /diff` 的 `toolChanges` 比较两个已上传版本，不连上游。同一 action 的上游名、schema 摘要、描述、`mcp.read_only` 或有效破坏性有变化时为 `changed`。只改标题不是工具变化。schema 键顺序不同不是变化。HTTP 包的 `toolChanges` 是空数组。新增错误码只有 `MCP_UPSTREAM`、`MCP_SCHEMA_REF`、`MCP_HEADER`、`MCP_DESCRIPTION`、`MCP_NO_ACTIONS`。
 
 ## HTTP 方法、只读和幂等是不同概念
 
@@ -411,7 +411,7 @@ actions:
 - 权限中的只读仅由 `mcp.read_only` 决定，不能因为 GET 或 idempotent 就推断只读。
 - `idempotent` 决定能力步骤执行中检测到会话失效后，是否允许重新登录并重放一次，默认 false。会话失效包括重定向到 `alive_check.expect_not_redirect` 前缀或 `auth.origins` 认证地址、能力请求返回 HTTP 401/403、命中 `auth.expired_when` 规则（1.12.0 起），以及能力步骤里带 `on_fail: session_expired` 的 `assert` 未通过（1.12.0 起）。重放前清掉登录快照；重新登录成功后换成新快照，重放使用新值。第二次仍失效则 `SESSION_EXPIRED`，快照再次删掉，不再重放。执行前的首次登录或 alive_check 失效后登录不受此开关限制。
 - POST 的 `Idempotency-Key` 是网关独立缓存机制，不等于上述声明。同键换请求体返回 `IDEMPOTENCY_CONFLICT`。
-- `mcp.expose` 默认 true，read_only/destructive 默认 false。能力工具的 `destructiveHint` 用上一节的有效破坏性。目录元工具 `call_capability` 仍从「非只读且非幂等」计算 `destructiveHint`。需要确认时，HTTP 要同时带 `X-Hermit-Confirm: true` 和与当前规则包一致的 `X-Hermit-Confirm-Token`，Hermit 自己的 MCP 两种模式都走 elicitation。
+- `mcp.expose` 默认 true，read_only/destructive 默认 false。能力工具的 `destructiveHint` 用上一节的有效破坏性。能力按这两个字段分三类：`read_only: true` 是只读；两个都不写是普通写；`destructive: true` 是敏感（做了撤不回、涉及钱、影响别人或一次影响很多条，满足任意一条就标）。保存草稿、提交审查、打卡、标记已读这类后果小、能撤回的写操作不标。两个都写 true 按敏感处理，校验给不阻断的警告 `READ_ONLY_DESTRUCTIVE`。目录模式下三类分别经 `call_capability`（`readOnlyHint: true`）、`call_write_capability`、`call_sensitive_capability`（`destructiveHint: true`）调用；更严的工具可以调更松的能力，反过来不执行并在 `hint` 里指明该用的工具。敏感能力在 HTTP 上要同时带 `X-Hermit-Confirm: true` 和与当前规则包一致的 `X-Hermit-Confirm-Token`；在 MCP 上 Crab 不发起确认，由 AI 客户端的工具审批负责，敏感调用工具的说明要求 AI 先向用户说明操作和参数并取得同意。
 
 ## 同一账号的只读能力并行
 

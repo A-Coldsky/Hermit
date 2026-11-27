@@ -263,7 +263,7 @@ record SnapshotView(
 }
 
 /**
- * 工具表的一行。破坏性和确认是有效值，与 {@code ConchDiff} 的工具差异相同。
+ * 工具表的一行。是否敏感（destructive）是有效值，与 {@code ConchDiff} 的工具差异相同。
  * {@code schemaSha256} 按 {@code ToolSnapshots.schemaSha256} 计算，不看 YAML 里声明的原文。
  */
 record ToolView(
@@ -272,7 +272,6 @@ record ToolView(
         String group,
         boolean readOnly,
         boolean destructive,
-        boolean confirm,
         Map<String, Object> upstreamAnnotations,
         String schemaSha256) {
 }

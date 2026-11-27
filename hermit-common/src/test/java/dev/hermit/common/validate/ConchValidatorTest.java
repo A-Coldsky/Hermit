@@ -1,5 +1,11 @@
 package dev.hermit.common.validate;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.List;
+
+import dev.hermit.common.model.CapabilityKind;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
@@ -411,6 +417,70 @@ class ConchValidatorTest {
                 .containsExactly(
                         "description 和 title 相同；其它 AI 靠它判断该不该用，请写清能做什么、用户平时怎么称呼",
                         "description 不足 6 个字；其它 AI 靠它判断该不该用，请写清能做什么、用户平时怎么称呼");
+    }
+
+    @Test
+    void readOnlyTogetherWithDestructiveWarnsWithoutBlockingSave() {
+        String yaml = """
+                conch: sample_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:8080
+                title: 集团 OA
+                description: 集团办公系统的待办查询
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 查询待办
+                    description: 查询当前用户的待办列表
+                    mcp: %s
+                    input: {}
+                    output:
+                      items: { type: string, description: 结果 }
+                    examples:
+                      - input: {}
+                        output: { items: ok }
+                    notes: 注意
+                    related: []
+                """;
+        ValidationResult both = ConchValidator.validate(
+                ConchParser.parse(yaml.formatted("{read_only: true, destructive: true}")),
+                ConchValidator.Context.of(null));
+        assertThat(both.errors()).isEmpty();
+        assertThat(both.warnings()).extracting(ValidationIssue::code, ValidationIssue::path)
+                .containsExactly(tuple(ValidationCodes.READ_ONLY_DESTRUCTIVE, "actions.list_todo.mcp"));
+        assertThat(ConchParser.parse(yaml.formatted("{read_only: true, destructive: true}"))
+                .actions().get("list_todo").kind()).isEqualTo(CapabilityKind.SENSITIVE);
+
+        for (String mcp : List.of("{read_only: true}", "{read_only: false}", "{read_only: false, destructive: true}")) {
+            assertThat(ConchValidator.validate(ConchParser.parse(yaml.formatted(mcp)), ConchValidator.Context.of(null))
+                    .warnings()).as(mcp).isEmpty();
+        }
+        assertThat(ConchParser.parse(yaml.formatted("{read_only: true}")).actions().get("list_todo").kind())
+                .isEqualTo(CapabilityKind.READ);
+        assertThat(ConchParser.parse(yaml.formatted("{read_only: false}")).actions().get("list_todo").kind())
+                .isEqualTo(CapabilityKind.WRITE);
+    }
+
+    @Test
+    void httpActionWithConfirmIsRejected() {
+        assertThatThrownBy(() -> ConchParser.parse("""
+                conch: sample_oa
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                base_url: http://127.0.0.1:8080
+                title: 集团 OA
+                description: 集团办公系统
+                credentials: {}
+                actions:
+                  list_todo:
+                    title: 查询待办
+                    description: 查询当前用户的待办列表
+                    confirm: true
+                    input: {}
+                """)).hasMessageContaining(ConchParser.CONFIRM_REMOVED);
     }
 
     @Test

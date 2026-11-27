@@ -35,7 +35,6 @@ class McpConchDiffTest {
                     title: 搜索
                     description: 新描述
                     mcp: {read_only: false}
-                    confirm: false
                     input_schema: {type: object, properties: {name: {type: string}}}
                   close_ticket:
                     tool: closeTicket
@@ -62,7 +61,6 @@ class McpConchDiffTest {
         assertThat(edited.readOnly()).isFalse();
         assertThat(edited.previousDestructive()).isFalse();
         assertThat(edited.destructive()).isTrue();
-        assertThat(edited.confirm()).isFalse();
         assertThat(edited.schemaSha256()).isNotEqualTo(edited.previousSchemaSha256());
         assertThat(edited.schemaSha256()).isEqualTo(ToolSnapshots.schemaSha256(
                 current.actions().get("search_customer").tool().inputSchema(), null));
@@ -76,7 +74,6 @@ class McpConchDiffTest {
         assertThat(added.kind()).isEqualTo(ToolChange.ADDED);
         assertThat(added.upstreamName()).isEqualTo("closeTicket");
         assertThat(added.destructive()).isTrue();
-        assertThat(added.confirm()).isTrue();
         assertThat(added.previousUpstreamName()).isNull();
     }
 
@@ -139,8 +136,6 @@ class McpConchDiffTest {
         assertThat(change.kind()).isEqualTo(ToolChange.CHANGED);
         assertThat(change.previousDestructive()).isTrue();
         assertThat(change.destructive()).isFalse();
-        assertThat(change.previousConfirm()).isTrue();
-        assertThat(change.confirm()).isFalse();
         assertThat(change.schemaSha256()).isEqualTo(change.previousSchemaSha256());
     }
 

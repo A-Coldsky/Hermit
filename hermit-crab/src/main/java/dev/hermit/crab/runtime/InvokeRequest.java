@@ -15,8 +15,8 @@ import java.util.Optional;
  *   <li>{@code bodySha256}：幂等键对应的原始请求体摘要；null 只和另一个 null 相等（进程内调用）。</li>
  *   <li>{@code channel}：请求进来的入口，null 记作 {@link CallChannel#HTTP}。</li>
  *   <li>{@code httpConfirmed}、{@code confirmToken}：HTTP 的 {@code X-Hermit-Confirm} 和
- *       {@code X-Hermit-Confirm-Token}；MCP 的确认走 elicitation，不看这两项。</li>
- *   <li>{@code confirmedAgainst}、{@code confirmedOrigin}：调用方已经据此做过确认的那份规则包和来源；
+ *       {@code X-Hermit-Confirm-Token}；MCP 的确认交给客户端，不看这两项。</li>
+ *   <li>{@code confirmedAgainst}、{@code confirmedOrigin}：调用方按类别放行（MCP）时看到的那份规则包和来源；
  *       注册表里的版本或来源和它不一样时拒绝。</li>
  *   <li>{@code httpMethod}：HTTP 网关传入的请求方法，在原子读出当前文档后校验 HTTP 方法，消除预读与执行之间的竞态。</li>
  * </ul>

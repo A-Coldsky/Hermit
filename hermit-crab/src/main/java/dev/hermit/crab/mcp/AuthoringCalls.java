@@ -18,6 +18,7 @@ import java.util.regex.Pattern;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import dev.hermit.common.model.Action;
+import dev.hermit.common.model.CapabilityKind;
 import dev.hermit.common.model.ConchDoc;
 import dev.hermit.common.parse.ConchParser;
 import dev.hermit.common.validate.AuthenticatorChecks;
@@ -1030,7 +1031,7 @@ final class AuthoringCalls {
         if (toolCount == 0) {
             refreshNext = "上游返回的过滤后工具列表为空，请检查 tools.include / tools.exclude 或上游服务。";
         } else if (!outcome.added().isEmpty()) {
-            refreshNext = "已同步上游工具快照（共 " + toolCount + " 个能力）。新加入的工具默认按保守安全策略设为 read_only: false、destructive: true、confirm: true；请先用 hermit_dev__read_yaml(conch=\"" + conch + "\", omitSchemas=true) 轻量审阅工具清单，再用 hermit_dev__mcp_configure 在原地批量整理分组与只读/确认标志（无需手改整份 schema YAML），最后调用 hermit_dev__trial_run 试跑验证。";
+            refreshNext = "已同步上游工具快照（共 " + toolCount + " 个能力）。新加入的工具默认按保守安全策略设为 read_only: false、destructive: true（敏感）；请先用 hermit_dev__read_yaml(conch=\"" + conch + "\", omitSchemas=true) 轻量审阅工具清单，再用 hermit_dev__mcp_configure 在原地批量整理分组与只读/敏感标志（无需手改整份 schema YAML），最后调用 hermit_dev__trial_run 试跑验证。";
         } else {
             refreshNext = "已同步上游工具快照（共 " + toolCount + " 个能力），可用 hermit_dev__read_yaml(conch=\"" + conch + "\", omitSchemas=true) 查看轻量工具摘要、用 hermit_dev__mcp_configure 调整分组或权限，或用 hermit_dev__trial_run 试跑验证。";
         }
@@ -1318,11 +1319,12 @@ final class AuthoringCalls {
         return McpCalls.ok(out);
     }
 
+    /** {@code entry} 是调用方用的入口对应的类别，见 {@code McpCalls.devCall}。 */
     McpSchema.CallToolResult trial(
             ApiKeyPrincipal principal,
-            McpSession session,
             Map<String, Object> arguments,
-            McpCalls.Attempt attempt
+            McpCalls.Attempt attempt,
+            CapabilityKind entry
     ) {
         if (!devMode()) {
             return McpCalls.failAsRequest(attempt, "NOT_CONFIGURED", DEV_MODE_CLOSED);
@@ -1354,12 +1356,12 @@ final class AuthoringCalls {
                 return McpCalls.failAsRequest(attempt, "INVALID_INPUT", "input 必须是对象。", "input");
             }
             LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                copy.put(String.valueOf(entry.getKey()), entry.getValue());
+            for (Map.Entry<?, ?> item : map.entrySet()) {
+                copy.put(String.valueOf(item.getKey()), item.getValue());
             }
             input = copy;
         }
-        // 试跑用的是这个包已经保存的账号凭证，和普通调用一样要求范围与确认。
+        // 试跑用的是这个包已经保存的账号凭证，和普通调用一样要求范围，并按能力的类别要求入口。
         if (principal != null && !inScope(principal, conch)) {
             if (visibleAuthenticatorTo(principal, conch)) {
                 return McpCalls.failAsRequest(attempt, "FORBIDDEN", AUTH_SCOPE_DENIED);
@@ -1378,13 +1380,16 @@ final class AuthoringCalls {
                 return McpCalls.failAsRequest(attempt, "FORBIDDEN", notInScope(conch));
             }
         }
-        boolean confirmed = capability != null && capability.effectiveConfirm();
-        if (confirmed) {
-            McpSchema.CallToolResult confirmedResult = McpCalls.confirm(session, capability, input, account, attempt);
-            if (confirmedResult != null) {
-                return confirmedResult;
-            }
+        if (capability != null && !capability.kind().allowedBy(entry)) {
+            return McpCalls.failAsRequest(attempt, "INVALID_INPUT",
+                    "被试跑的" + McpCalls.wrongEntryMessage(capability.kind()), "action",
+                    "请改用 " + McpCatalog.callWith(capability.kind()) + "(name=\"" + McpCatalog.TRIAL_RUN
+                            + "\", arguments={…}) 试跑。"
+                            + (capability.kind() == CapabilityKind.SENSITIVE
+                                    ? "调用前先向用户说明要做什么和参数，取得同意。" : ""));
         }
+        // 敏感能力只有经最严的入口才执行；local 是按类别放行时看到的那份包，之后被替换就拒绝（审计 A01）。
+        boolean confirmed = entry == CapabilityKind.SENSITIVE;
         ExecutionResult result;
         try {
             result = runtime.trialLocal(
@@ -1740,7 +1745,7 @@ final class AuthoringCalls {
             switch (code) {
                 case "PARSE" -> {
                     if (path.endsWith(".mcp.confirm") || path.endsWith(".mcp.readOnly")) {
-                        hints.add("actions.<name>.mcp 只支持 expose、read_only、destructive 三个键：driver: http 能力不写 confirm 字段（是否需要确认直接由 mcp.destructive: true/false 决定）；driver: mcp 能力的 confirm 位于 actions.<name>.confirm（与 mcp 同级，推荐用 hermit_dev__mcp_configure 修改）。");
+                        hints.add("actions.<name>.mcp 只支持 expose、read_only、destructive 三个键，键名是 read_only 不是 readOnly。没有 confirm 字段：调用前需要用户同意的敏感操作写 mcp.destructive: true。");
                         sections.add("http_semantics");
                     }
                     hints.add("YAML 解析或层级结构有误：请检查缩进、冒号、引号（含 {{...}} 模板值建议加双引号）以及是否写了该层不支持的键，可对照 hermit_dev__guide(section=\"starter\") 核对骨架。");
@@ -1749,10 +1754,10 @@ final class AuthoringCalls {
                 }
                 case ValidationCodes.MCP_UPSTREAM -> {
                     if (path.startsWith("actions.")) {
-                        hints.add("driver: http 能力不支持 confirm 或 tool/input_schema 字段：是否触发执行前确认直接由 mcp: { expose: true, read_only: false, destructive: true/false } 中的 destructive 决定；confirm 仅用于 driver: mcp 能力。");
+                        hints.add("driver: http 能力不支持 tool/input_schema 字段。是否敏感（调用前要用户同意）由 mcp: { expose: true, read_only: false, destructive: true/false } 中的 destructive 决定。");
                         sections.add("http_semantics");
                     } else {
-                        hints.add("检查 driver: mcp 专属字段边界：upstream、tools、snapshot 以及 action 下的 tool/input_schema/confirm 只能用于 driver: mcp 的规则包。");
+                        hints.add("检查 driver: mcp 专属字段边界：upstream、tools、snapshot 以及 action 下的 tool/input_schema 只能用于 driver: mcp 的规则包。");
                         sections.add("mcp_upstream");
                         sections.add(AuthoringGuide.STARTER_MCP_SECTION);
                     }

@@ -48,6 +48,8 @@ public final class ValidationCodes {
      * 其它 AI 靠这些文字判断有没有对应的系统和能力。警告，不阻止保存。
      */
     public static final String VAGUE_DESCRIPTION = "VAGUE_DESCRIPTION";
+    /** 能力又是只读又是敏感，两个标记互相矛盾。按敏感处理。警告，不阻止保存。 */
+    public static final String READ_ONLY_DESTRUCTIVE = "READ_ONLY_DESTRUCTIVE";
     public static final String UNKNOWN_RELATED = "UNKNOWN_RELATED";
     public static final String SCRIPT_STEP = "SCRIPT_STEP";
     public static final String MCP_UPSTREAM = "MCP_UPSTREAM";

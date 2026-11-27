@@ -283,7 +283,7 @@ class McpHttpTest {
                     Map.of("uri", "hermit://conches/legacy_oa/guide")));
             String markdown = guide.json().path("result").path("contents").get(0).path("text").asText();
             assertThat(guide.json().path("result").path("contents").get(0).path("mimeType").asText()).isEqualTo("text/markdown");
-            assertThat(markdown).contains("查询待办").contains("账号").contains("只读: 是");
+            assertThat(markdown).contains("查询待办").contains("账号").contains("类别: 只读（kind=read）");
             SecretChecks.absent(markdown, PASSWORD);
             Reply hiddenGuide = server.post(narrow.plaintext(), narrowSession, null, request(4, "resources/read",
                     Map.of("uri", "hermit://conches/legacy_oa/guide")));
@@ -379,7 +379,7 @@ class McpHttpTest {
     }
 
     @Test
-    void directoryModeConfirmsWrites() throws Exception {
+    void directoryModeFindsDescribesAndCalls() throws Exception {
         try (Harness server = Harness.open(temp.resolve("directory"), PASSWORD)) {
             ConchDoc bulk = ConchParser.parse(bulkYaml());
             ConchDoc secret = ConchParser.parse(readOnlyConch("secret_conch", "hidden", "隐藏能力"));
@@ -393,7 +393,8 @@ class McpHttpTest {
             String session = initialized.header("Mcp-Session-Id");
             Reply listed = server.post(scoped.plaintext(), session, null, request(2, "tools/list", null));
             assertThat(names(listed.json().path("result").path("tools")))
-                    .containsExactlyInAnyOrder("list_systems", "search_capabilities", "describe_capability", "call_capability");
+                    .containsExactlyInAnyOrder("list_systems", "search_capabilities", "describe_capability",
+                            "call_capability", "call_write_capability", "call_sensitive_capability");
             assertThat(tool(listed.json().path("result").path("tools"), "list_systems").has("outputSchema")).isFalse();
 
             Reply modern = server.post(scoped.plaintext(), null, null, initialize("2025-06-18", "{}"));
@@ -454,13 +455,14 @@ class McpHttpTest {
             int closed = 0;
             for (JsonNode tool : schemas.json().path("result").path("tools")) {
                 String toolName = tool.path("name").asText();
-                if (List.of("search_capabilities", "describe_capability", "call_capability").contains(toolName)) {
+                if (List.of("search_capabilities", "describe_capability", "call_capability",
+                        "call_write_capability", "call_sensitive_capability").contains(toolName)) {
                     assertThat(tool.path("inputSchema").path("additionalProperties").isBoolean()).as(toolName).isTrue();
                     assertThat(tool.path("inputSchema").path("additionalProperties").asBoolean()).as(toolName).isFalse();
                     closed++;
                 }
             }
-            assertThat(closed).isEqualTo(3);
+            assertThat(closed).isEqualTo(5);
             Reply searchExtra = call(server, scoped.plaintext(), session, "search_capabilities",
                     Map.of("query", "只读项", "page", 2));
             assertThat(toolError(searchExtra).path("code").asText()).isEqualTo("INVALID_INPUT");
@@ -505,60 +507,262 @@ class McpHttpTest {
             assertThat(read.json().path("result").path("isError").asBoolean(false)).isFalse();
             assertThat(read.json().path("result").path("structuredContent").path("marker").asBoolean()).isTrue();
 
+            // 用只读入口调敏感能力：不执行，告诉调用方该用哪个工具。
             Reply blocked = call(server, scoped.plaintext(), session, "call_capability",
                     Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "hello"), "account", "main"));
             assertThat(blocked.json().path("result").path("isError").asBoolean()).isTrue();
-            assertThat(toolError(blocked).path("code").asText()).isEqualTo("FORBIDDEN");
-            assertThat(toolError(blocked).path("message").asText()).isEqualTo(McpCalls.NO_CONFIRM);
+            assertThat(toolError(blocked).path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(toolError(blocked).path("hint").asText())
+                    .contains("call_sensitive_capability(name=\"bulk_conch__act_w\"").contains("取得同意");
+            assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).isEmpty();
+            Reply half = call(server, scoped.plaintext(), session, "call_write_capability",
+                    Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "hello"), "account", "main"));
+            assertThat(toolError(half).path("code").asText()).isEqualTo("INVALID_INPUT");
             assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).isEmpty();
 
-            Reply confirmed = server.post(scoped.plaintext(), null, null, initialize("{\"elicitation\":{}}"));
-            String confirming = confirmed.header("Mcp-Session-Id");
-            try (Sse sse = Sse.open(server, confirming, scoped.plaintext())) {
-                sse.awaitPrefix(": open");
-                AtomicReference<Reply> declined = new AtomicReference<>();
-                Thread decline = new Thread(() -> declined.set(callUnchecked(server, scoped.plaintext(), confirming,
-                        "call_capability", Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "no"), "account", "main"))));
-                decline.start();
-                JsonNode question = sse.awaitMethod("elicitation/create");
-                assertThat(question.path("params").path("message").asText()).contains("确认执行 写入确认项？").contains("text=");
-                server.post(scoped.plaintext(), confirming, null, """
-                        {"jsonrpc":"2.0","id":"%s","result":{"action":"decline"}}
-                        """.formatted(question.get("id").asText()));
-                decline.join(15_000);
-                assertThat(declined.get().json().path("result").path("isError").asBoolean()).isTrue();
-                assertThat(toolError(declined.get()).path("code").asText()).isEqualTo("FORBIDDEN");
-                assertThat(toolError(declined.get()).path("message").asText()).isEqualTo(McpCalls.REJECTED);
-                assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).isEmpty();
-
-                AtomicReference<Reply> unchecked = new AtomicReference<>();
-                Thread uncheck = new Thread(() -> unchecked.set(callUnchecked(server, scoped.plaintext(), confirming,
-                        "call_capability", Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "nope"), "account", "main"))));
-                uncheck.start();
-                JsonNode form = sse.awaitMethod("elicitation/create");
-                server.post(scoped.plaintext(), confirming, null, """
-                        {"jsonrpc":"2.0","id":"%s","result":{"action":"accept","content":{"confirm":false}}}
-                        """.formatted(form.get("id").asText()));
-                uncheck.join(15_000);
-                assertThat(unchecked.get().json().path("result").path("isError").asBoolean()).isTrue();
-                assertThat(toolError(unchecked.get()).path("code").asText()).isEqualTo("FORBIDDEN");
-                assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).isEmpty();
-
-                AtomicReference<Reply> accepted = new AtomicReference<>();
-                Thread accept = new Thread(() -> accepted.set(callUnchecked(server, scoped.plaintext(), confirming,
-                        "call_capability", Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "yes"), "account", "main"))));
-                accept.start();
-                JsonNode again = sse.awaitMethod("elicitation/create");
-                server.post(scoped.plaintext(), confirming, null, """
-                        {"jsonrpc":"2.0","id":"%s","result":{"action":"accept","content":{"confirm":true}}}
-                        """.formatted(again.get("id").asText()));
-                accept.join(15_000);
-                assertThat(accepted.get().json().path("result").path("isError").asBoolean(false)).isFalse();
-                assertThat(accepted.get().json().path("result").path("structuredContent").path("saved").asBoolean()).isTrue();
-                assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).hasSize(1);
-                SecretChecks.absent(accepted.get().body(), PASSWORD);
-            }
+            // 敏感入口直接执行：确认交给客户端的工具审批，不支持 elicitation 的客户端也能调。
+            Reply accepted = call(server, scoped.plaintext(), session, "call_sensitive_capability",
+                    Map.of("name", "bulk_conch__act_w", "arguments", Map.of("text", "yes"), "account", "main"));
+            assertThat(accepted.json().path("result").path("isError").asBoolean(false)).isFalse();
+            assertThat(accepted.json().path("result").path("structuredContent").path("saved").asBoolean()).isTrue();
+            assertThat(server.runtime.callLogs().list("bulk_conch", "act_w", 5)).hasSize(1);
+            SecretChecks.absent(accepted.body(), PASSWORD);
         }
+    }
+
+    /** 直接模式：同时写了 read_only 和 destructive 的能力按敏感处理，不能对外标成只读。 */
+    @Test
+    void directModeDoesNotAdvertiseADualMarkedCapabilityAsReadOnly() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("kinds-direct"), PASSWORD)) {
+            server.runtime.registry().put(ConchParser.parse(kindsYaml()));
+            CreatedApiKey full = server.runtime.admin().createApiKey(
+                    "kinds", new ApiKeyScope(Set.of("kinds_conch"), Set.of(), false, false, Set.of(), true), Actors.CLI);
+            String session = server.post(full.plaintext(), null, null, initialize("{}")).header("Mcp-Session-Id");
+            JsonNode tools = server.post(full.plaintext(), session, null, request(2, "tools/list", null))
+                    .json().path("result").path("tools");
+            JsonNode both = null;
+            JsonNode look = null;
+            for (JsonNode tool : tools) {
+                if ("kinds_conch__both".equals(tool.path("name").asText())) {
+                    both = tool.path("annotations");
+                } else if ("kinds_conch__look".equals(tool.path("name").asText())) {
+                    look = tool.path("annotations");
+                }
+            }
+            assertThat(both).isNotNull();
+            assertThat(both.path("readOnlyHint").asBoolean()).isFalse();
+            assertThat(both.path("destructiveHint").asBoolean()).isTrue();
+            assertThat(look.path("readOnlyHint").asBoolean()).isTrue();
+            // 有的客户端不把注解给模型看：敏感能力的说明里再写一遍，只读和普通写不写。
+            assertThat(tool(tools, "kinds_conch__both").path("description").asText()).contains(McpCatalog.SENSITIVE_NOTE);
+            assertThat(tool(tools, "kinds_conch__purge").path("description").asText()).contains(McpCatalog.SENSITIVE_NOTE);
+            assertThat(tool(tools, "kinds_conch__look").path("description").asText()).doesNotContain("敏感操作");
+            assertThat(tool(tools, "kinds_conch__save").path("description").asText()).doesNotContain("敏感操作");
+            String guide = server.post(full.plaintext(), session, null, request(3, "resources/read",
+                            Map.of("uri", "hermit://conches/kinds_conch/guide")))
+                    .json().path("result").path("contents").get(0).path("text").asText();
+            assertThat(guide).contains("- 类别: 只读（kind=read）").contains("- 目录模式调用工具: `call_capability`")
+                    .contains("- 类别: 普通写（kind=write）").contains("- 目录模式调用工具: `call_write_capability`")
+                    .contains("- 类别: 敏感（kind=sensitive）").contains("- 目录模式调用工具: `call_sensitive_capability`")
+                    .contains("- " + McpCatalog.SENSITIVE_NOTE);
+
+            // 只读 Key：双标记能力是敏感的，直接模式下看不到、调不了，HTTP 接口同样拒绝。
+            server.runtime.admin().createAccount("kinds_conch", "main", Actors.CLI);
+            CreatedApiKey readOnly = server.runtime.admin().createApiKey(
+                    "kinds-ro", new ApiKeyScope(Set.of("kinds_conch"), Set.of(), true, false, Set.of(), true), Actors.CLI);
+            String roSession = server.post(readOnly.plaintext(), null, null, initialize("{}")).header("Mcp-Session-Id");
+            assertThat(names(server.post(readOnly.plaintext(), roSession, null, request(2, "tools/list", null))
+                    .json().path("result").path("tools"))).containsExactly("kinds_conch__look");
+            Reply roBoth = server.post(readOnly.plaintext(), roSession, null, request(3, "tools/call",
+                    Map.of("name", "kinds_conch__both", "arguments", Map.of("account", "main"))));
+            assertThat(toolError(roBoth).path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(roBoth.body()).doesNotContain("call_sensitive_capability");
+            for (String action : List.of("both", "look")) {
+                HttpResponse<String> viaHttp = HttpClient.newHttpClient().send(
+                        HttpRequest.newBuilder(URI.create(server.base + "/api/kinds_conch/" + action))
+                                .header("Authorization", "Bearer " + readOnly.plaintext())
+                                .header("Content-Type", "application/json")
+                                .header("X-Hermit-Account", "main")
+                                .POST(HttpRequest.BodyPublishers.ofString("{}")).build(),
+                        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                assertThat(viaHttp.statusCode()).as(action).isEqualTo("both".equals(action) ? 403 : 200);
+            }
+            assertThat(server.runtime.callLogs().list("kinds_conch", "both", 20)).isEmpty();
+        }
+    }
+
+    @Test
+    void directoryRoutesTheThreeKindsToTheirCallTools() throws Exception {
+        try (Harness server = Harness.open(temp.resolve("kinds"), PASSWORD, 0)) {
+            server.runtime.registry().put(ConchParser.parse(kindsYaml()));
+            server.runtime.admin().createAccount("kinds_conch", "main", Actors.CLI);
+            CreatedApiKey full = server.runtime.admin().createApiKey(
+                    "kinds", new ApiKeyScope(Set.of("kinds_conch"), Set.of(), false, false, Set.of(), true), Actors.CLI);
+            CreatedApiKey readOnly = server.runtime.admin().createApiKey(
+                    "kinds-ro", new ApiKeyScope(Set.of("kinds_conch"), Set.of(), true, false, Set.of(), true), Actors.CLI);
+            String session = server.post(full.plaintext(), null, null, initialize("2025-06-18", "{}")).header("Mcp-Session-Id");
+
+            JsonNode tools = server.post(full.plaintext(), session, null, request(2, "tools/list", null))
+                    .json().path("result").path("tools");
+            assertThat(names(tools)).containsExactlyInAnyOrder("list_systems", "search_capabilities",
+                    "describe_capability", "call_capability", "call_write_capability", "call_sensitive_capability");
+            assertThat(tool(tools, "call_capability").path("annotations").path("readOnlyHint").asBoolean()).isTrue();
+            assertThat(tool(tools, "call_capability").path("annotations").path("destructiveHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "call_write_capability").path("annotations").path("readOnlyHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "call_write_capability").path("annotations").path("destructiveHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "call_sensitive_capability").path("annotations").path("readOnlyHint").asBoolean()).isFalse();
+            assertThat(tool(tools, "call_sensitive_capability").path("annotations").path("destructiveHint").asBoolean()).isTrue();
+            assertThat(tool(tools, "call_sensitive_capability").path("description").asText()).contains("得到用户明确同意");
+            for (String caller : List.of("call_capability", "call_write_capability", "call_sensitive_capability")) {
+                assertThat(tool(tools, caller).path("inputSchema").path("additionalProperties").asBoolean(true))
+                        .as(caller).isFalse();
+                assertThat(tool(tools, caller).has("outputSchema")).as(caller).isFalse();
+            }
+            for (String lister : List.of("search_capabilities", "describe_capability")) {
+                assertThat(tool(tools, lister).path("outputSchema").toString()).as(lister)
+                        .contains("\"kind\"").contains("\"callWith\"");
+            }
+            assertThat(tool(tools, "list_systems").path("outputSchema").toString())
+                    .contains("\"kind\"").contains("\"callWith\"");
+
+            // 三处目录返回都带类别和该用的工具。
+            Map<String, String> expected = Map.of("look", "read", "save", "write", "purge", "sensitive", "both", "sensitive");
+            Map<String, String> callWith = Map.of("read", "call_capability", "write", "call_write_capability",
+                    "sensitive", "call_sensitive_capability");
+            JsonNode top = call(server, full.plaintext(), session, "list_systems", Map.of())
+                    .json().path("result").path("structuredContent").path("systems").get(0).path("topLevelCapabilities");
+            assertThat(top).hasSize(4);
+            for (JsonNode row : top) {
+                String action = row.path("name").asText().substring("kinds_conch__".length());
+                assertThat(row.path("kind").asText()).as(action).isEqualTo(expected.get(action));
+                assertThat(row.path("callWith").asText()).as(action).isEqualTo(callWith.get(expected.get(action)));
+            }
+            JsonNode matches = call(server, full.plaintext(), session, "search_capabilities", Map.of("conch", "kinds_conch"))
+                    .json().path("result").path("structuredContent").path("matches");
+            assertThat(matches).hasSize(4);
+            for (JsonNode row : matches) {
+                String action = row.path("name").asText().substring("kinds_conch__".length());
+                assertThat(row.path("kind").asText()).as(action).isEqualTo(expected.get(action));
+                assertThat(row.path("callWith").asText()).as(action).isEqualTo(callWith.get(expected.get(action)));
+            }
+            for (Map.Entry<String, String> item : expected.entrySet()) {
+                JsonNode described = call(server, full.plaintext(), session, "describe_capability",
+                        Map.of("name", "kinds_conch__" + item.getKey())).json().path("result").path("structuredContent");
+                assertThat(described.path("kind").asText()).as(item.getKey()).isEqualTo(item.getValue());
+                assertThat(described.path("callWith").asText()).as(item.getKey()).isEqualTo(callWith.get(item.getValue()));
+            }
+
+            // 更严的入口可以调更松的能力，反过来不执行并指明该用的工具。
+            List<String> entries = List.of("call_capability", "call_write_capability", "call_sensitive_capability");
+            List<String> order = List.of("read", "write", "sensitive");
+            for (Map.Entry<String, String> item : expected.entrySet()) {
+                String name = "kinds_conch__" + item.getKey();
+                for (String entry : entries) {
+                    int before = server.runtime.callLogs().list("kinds_conch", item.getKey(), 20).size();
+                    Reply reply = call(server, full.plaintext(), session, entry,
+                            Map.of("name", name, "arguments", Map.of(), "account", "main"));
+                    boolean allowed = entries.indexOf(entry) >= order.indexOf(item.getValue());
+                    String label = entry + " -> " + item.getKey();
+                    if (allowed) {
+                        assertThat(reply.json().path("result").path("isError").asBoolean(false)).as(label).isFalse();
+                        assertThat(server.runtime.callLogs().list("kinds_conch", item.getKey(), 20)).as(label).hasSize(before + 1);
+                    } else {
+                        assertThat(toolError(reply).path("code").asText()).as(label).isEqualTo("INVALID_INPUT");
+                        assertThat(toolError(reply).path("field").asText()).as(label).isEqualTo("name");
+                        assertThat(toolError(reply).path("hint").asText()).as(label)
+                                .contains(callWith.get(item.getValue()) + "(name=\"" + name + "\"");
+                        assertThat(server.runtime.callLogs().list("kinds_conch", item.getKey(), 20)).as(label).hasSize(before);
+                    }
+                }
+            }
+            // 两个写入口同样拦未知字段。
+            for (String entry : List.of("call_write_capability", "call_sensitive_capability")) {
+                Reply extra = call(server, full.plaintext(), session, entry,
+                        Map.of("name", "kinds_conch__save", "text", "x"));
+                assertThat(toolError(extra).path("code").asText()).as(entry).isEqualTo("INVALID_INPUT");
+                assertThat(toolError(extra).path("field").asText()).as(entry).isEqualTo("text");
+            }
+
+            // 只读 Key：工具列表里没有两个写入口，按名字调也拒绝；写能力对它不可见。
+            String roSession = server.post(readOnly.plaintext(), null, null, initialize("{}")).header("Mcp-Session-Id");
+            assertThat(names(server.post(readOnly.plaintext(), roSession, null, request(2, "tools/list", null))
+                    .json().path("result").path("tools")))
+                    .containsExactlyInAnyOrder("list_systems", "search_capabilities", "describe_capability", "call_capability");
+            Reply roRead = call(server, readOnly.plaintext(), roSession, "call_capability",
+                    Map.of("name", "kinds_conch__look", "arguments", Map.of(), "account", "main"));
+            assertThat(roRead.json().path("result").path("isError").asBoolean(false)).isFalse();
+            for (String entry : List.of("call_write_capability", "call_sensitive_capability")) {
+                Reply denied = call(server, readOnly.plaintext(), roSession, entry,
+                        Map.of("name", "kinds_conch__look", "arguments", Map.of(), "account", "main"));
+                assertThat(toolError(denied).path("code").asText()).as(entry).isEqualTo("FORBIDDEN");
+                assertThat(toolError(denied).path("message").asText()).as(entry).isEqualTo(McpCalls.READ_ONLY_KEY);
+            }
+            int saves = server.runtime.callLogs().list("kinds_conch", "save", 20).size();
+            Reply roWrite = call(server, readOnly.plaintext(), roSession, "call_capability",
+                    Map.of("name", "kinds_conch__save", "arguments", Map.of(), "account", "main"));
+            // 只读 Key 看不到写能力，和以前一样按「没有这个能力」回，不提示换工具。
+            assertThat(toolError(roWrite).path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(roWrite.body()).doesNotContain("call_write_capability");
+            assertThat(server.runtime.callLogs().list("kinds_conch", "save", 20)).hasSize(saves);
+
+            // 双标记能力（read_only 加 destructive）是敏感的：只读 Key 在目录里看不到它，调用也不会被引去敏感入口。
+            int boths = server.runtime.callLogs().list("kinds_conch", "both", 20).size();
+            JsonNode roMatches = call(server, readOnly.plaintext(), roSession, "search_capabilities", Map.of("conch", "kinds_conch"))
+                    .json().path("result").path("structuredContent").path("matches");
+            assertThat(roMatches).hasSize(1);
+            assertThat(roMatches.get(0).path("name").asText()).isEqualTo("kinds_conch__look");
+            Reply roBoth = call(server, readOnly.plaintext(), roSession, "call_capability",
+                    Map.of("name", "kinds_conch__both", "arguments", Map.of(), "account", "main"));
+            assertThat(toolError(roBoth).path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(roBoth.body()).doesNotContain("call_sensitive_capability");
+            Reply roBothDirect = server.post(readOnly.plaintext(), roSession, null, request(9, "tools/call",
+                    Map.of("name", "kinds_conch__both", "arguments", Map.of())));
+            assertThat(roBothDirect.body()).doesNotContain("call_sensitive_capability");
+            assertThat(server.runtime.callLogs().list("kinds_conch", "both", 20)).hasSize(boths);
+            // 读写 Key 看到的 readOnly 和 kind 不矛盾。
+            JsonNode described = call(server, full.plaintext(), session, "describe_capability",
+                    Map.of("name", "kinds_conch__both")).json().path("result").path("structuredContent");
+            assertThat(described.path("readOnly").asBoolean(true)).isFalse();
+            assertThat(described.path("kind").asText()).isEqualTo("sensitive");
+        }
+    }
+
+    static String kindsYaml() {
+        StringBuilder yaml = new StringBuilder("""
+                conch: kinds_conch
+                version: 1.0.0
+                driver: http
+                min_crab_version: 1.0.0
+                title: 分类测试
+                description: 用来测试三类能力的规则包
+                base_url: "http://127.0.0.1:9"
+                credentials: {}
+                actions:
+                """);
+        Map<String, String> kinds = new java.util.LinkedHashMap<>();
+        kinds.put("look", "{ read_only: true }");
+        kinds.put("save", "{ read_only: false }");
+        kinds.put("purge", "{ read_only: false, destructive: true }");
+        kinds.put("both", "{ read_only: true, destructive: true }");
+        kinds.forEach((name, mcp) -> yaml.append("""
+                  %s:
+                    title: 能力 %s
+                    description: 分类测试能力 %s
+                    method: POST
+                    input: {}
+                    steps:
+                      - set:
+                          done: true
+                    output:
+                      done: { type: boolean, description: 是否完成 }
+                    examples:
+                      - input: {}
+                        output: { done: true }
+                    notes: 测试
+                    related: []
+                    mcp: %s
+                """.formatted(name, name, name, mcp)));
+        return yaml.toString();
     }
 
     @Test
@@ -1263,8 +1467,12 @@ class McpHttpTest {
         }
 
         static Harness open(Path root, String password) throws Exception {
+            return open(root, password, 40);
+        }
+
+        static Harness open(Path root, String password, int directLimit) throws Exception {
             LegacyOaFixture fixture = new LegacyOaFixture(password);
-            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(root), CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(40), name -> null);
+            CrabRuntime runtime = CrabRuntime.open(new CrabPaths(root), CrabConfig.defaults().withListen("127.0.0.1", 0).withMcpDirectLimit(directLimit), name -> null);
             try {
                 runtime.registry().put(ConchParser.parse(legacyYaml()));
                 runtime.registry().put(ConchParser.parse(accountConch()));

@@ -233,7 +233,8 @@ final class AuthoringGuide {
                     + "改它的分组、标题和类别用 hermit_dev__mcp_configure 在原地改。",
             "4. 复制本次返回的 starterTemplate（授权器、引用授权器、MCP 包按 section 取 starter_auth / starter_auth_use / starter_mcp）按接口修改，对照 pitfalls；"
                     + "拿不准的语法用 section 或 query 查对应章节。每个能力写清 title 和 description，并标类别："
-                    + "不改数据写 mcp.read_only: true；撤不回、涉及钱、影响别人或一次影响很多条的写 mcp.destructive: true；其余写操作两个都不写。",
+                    + "不改数据写 mcp.read_only: true；撤不回、涉及钱、影响别人或一次影响很多条的写 mcp.destructive: true；其余写操作 driver: http 的包两个都不写，"
+                    + "driver: mcp 的包要明确写 mcp.destructive: false（刷新出的工具默认是敏感）。",
             "5. 用 hermit_dev__validate 校验到没有错误，失败按 fixHints 和 suggestedSections 修正。"
                     + "写操作或不便重放的接口，可用 hermit_dev__dry_run_response 基于抓包或模拟响应离线验证 extract、script、expired_when 和 output。",
             "6. 用 hermit_dev__save_local 保存成本地规则包。改已有包沿用原包名；覆盖已有包需要确认时，Crab 会向用户发起确认，由用户决定。",

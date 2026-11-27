@@ -206,7 +206,7 @@ final class McpCatalog {
     Map<String, Object> devOverview(ApiKeyPrincipal principal, boolean localCaller) {
         ArrayList<Map<String, Object>> rows = new ArrayList<>();
         for (McpSchema.Tool tool : devTools(principal, false, localCaller)) {
-            LinkedHashMap<String, Object> row = new LinkedHashMap<>(devSummary(tool));
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>(devSummary(tool, principal));
             row.put("description", tool.description());
             row.put("inputSchema", tool.inputSchema());
             if (tool.annotations() != null) {
@@ -226,12 +226,14 @@ final class McpCatalog {
         return body;
     }
 
-    private static Map<String, Object> devSummary(McpSchema.Tool tool) {
+    private static Map<String, Object> devSummary(McpSchema.Tool tool, ApiKeyPrincipal principal) {
         LinkedHashMap<String, Object> row = new LinkedHashMap<>();
         row.put("name", tool.name());
         row.put("title", devTitle(tool));
         row.put("readOnly", devReadOnly(tool));
-        putKind(row, devKind(tool.name()));
+        // 只读 Key 只能试跑只读能力，也看不到两个写入口：给它指只读入口。
+        boolean readOnlyTrial = TRIAL_RUN.equals(tool.name()) && principal != null && principal.scope().readOnlyOnly();
+        putKind(row, readOnlyTrial ? CapabilityKind.READ : devKind(tool.name()));
         return row;
     }
 
@@ -462,7 +464,7 @@ final class McpCatalog {
                 if (hasQuery && hit.matched() == 0) {
                     continue;
                 }
-                hits.add(hit.with(devSummary(tool)));
+                hits.add(hit.with(devSummary(tool, principal)));
             }
         }
         if (hasQuery) {
@@ -531,7 +533,7 @@ final class McpCatalog {
         if (devToolName(name)) {
             for (McpSchema.Tool tool : devTools(principal, false, localCaller)) {
                 if (tool.name().equals(name)) {
-                    LinkedHashMap<String, Object> body = new LinkedHashMap<>(devSummary(tool));
+                    LinkedHashMap<String, Object> body = new LinkedHashMap<>(devSummary(tool, principal));
                     body.put("description", tool.description());
                     body.put("inputSchema", tool.inputSchema());
                     return Optional.of(body);

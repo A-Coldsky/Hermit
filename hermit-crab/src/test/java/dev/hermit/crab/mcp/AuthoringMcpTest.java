@@ -740,6 +740,9 @@ class AuthoringMcpTest {
                     server.devOverview(readOnly.plaintext(), readOnlySession));
             assertThat(toolNames(readOnlyTools)).doesNotContain("hermit_dev__save_local")
                     .contains("hermit_dev__validate", "hermit_dev__trial_run", "hermit_dev__debug_trace");
+            // 只读 Key 没有两个写入口，试跑只能跑只读能力：清单给它指只读入口；读写 Key 仍是普通写入口。
+            assertThat(trialCallWith(server.devOverview(readOnly.plaintext(), readOnlySession))).isEqualTo("call_capability");
+            assertThat(trialCallWith(server.devOverview(server.key.plaintext(), session))).isEqualTo("call_write_capability");
 
             JsonNode validated = server.rpc(readOnly.plaintext(), readOnlySession, 3, "tools/call", Map.of(
                     "name", "hermit_dev__validate", "arguments", Map.of("yaml", yaml)));
@@ -1464,6 +1467,15 @@ class AuthoringMcpTest {
             JsonNode called = server.call(plain, "write_pkg__write_note", Map.of());
             assertThat(called.toString()).contains("wrote-write_pkg");
         }
+    }
+
+    private static String trialCallWith(JsonNode overview) {
+        for (JsonNode row : structured(overview).path("tools")) {
+            if ("hermit_dev__trial_run".equals(row.path("name").asText())) {
+                return row.path("callWith").asText();
+            }
+        }
+        throw new AssertionError(overview.toString());
     }
 
     /** 目录模式下试跑按被试跑能力的类别选调用工具：用更松的入口不执行，并指明该用的工具。 */

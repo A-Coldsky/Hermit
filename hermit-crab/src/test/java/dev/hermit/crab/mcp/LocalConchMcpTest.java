@@ -73,7 +73,7 @@ class LocalConchMcpTest {
             assertThat(catalog.describe(openPrincipal, "local_ping__ping").orElseThrow().get("description").toString())
                     .startsWith("[本地] ");
             assertThat(catalog.guide(openPrincipal, "hermit://conches/local_ping/guide").orElseThrow())
-                    .contains("来源：本地规则包");
+                    .contains("来源：本地规则包（只在这台机器上，未经 Reef 签名）。").doesNotContain("显式包含");
 
             JsonNode params = ApiJson.tree("{\"name\":\"local_ping__ping\",\"arguments\":{}}");
             assertThat(calls.call(openPrincipal, null, Optional.empty(), params).isError()).isFalse();

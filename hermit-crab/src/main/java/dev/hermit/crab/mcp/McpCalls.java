@@ -2,6 +2,7 @@ package dev.hermit.crab.mcp;
 
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -32,6 +33,9 @@ import dev.hermit.crab.store.Origin;
 import io.modelcontextprotocol.spec.McpSchema;
 
 final class McpCalls {
+    static final String DIRECT_MODE_HINT = "当前是直接模式，工具列表里的每个工具就是一个能力，直接调用。";
+    private static final List<String> SEARCH_FIELDS = List.of("query", "conch", "group", "ungrouped");
+    private static final List<String> CALL_FIELDS = List.of("name", "arguments", "account");
     static final String NO_CONFIRM = "客户端不支持确认，拒绝执行写操作";
     static final String REJECTED = "用户拒绝执行";
     static final String TRACE_DENIED =
@@ -144,6 +148,9 @@ final class McpCalls {
         }
         Optional<McpCatalog.CapabilityRef> found = catalog.find(principal, name);
         if (found.isEmpty()) {
+            if (McpCatalog.directoryToolName(name)) {
+                return failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL, null, DIRECT_MODE_HINT);
+            }
             return missingTool(attempt, name);
         }
         return invokeDirect(principal, session, headerAccount, found.get(), arguments, attempt);
@@ -262,17 +269,38 @@ final class McpCalls {
             case McpCatalog.SEARCH -> search(principal, arguments, localCaller, attempt);
             case McpCatalog.DESCRIBE -> describe(principal, arguments, localCaller, attempt);
             case McpCatalog.CALL -> callCapability(principal, session, headerAccount, arguments, localCaller, attempt);
-            default -> failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL);
+            default -> catalog.find(principal, name).isPresent()
+                    // 升级前的提示词会按「规则包__能力」直接调用。工具列表里只有目录工具，要告诉它怎么调。
+                    ? failAsRequest(attempt, "NOT_FOUND", McpErrors.UNKNOWN_TOOL, null,
+                            "能力不直接出现在工具列表里。请用 " + McpCatalog.CALL + "(name=\"" + name
+                                    + "\", arguments={…}) 调用。")
+                    : missingTool(attempt, name);
         };
+    }
+
+    /** 目录工具只认声明过的字段。多出来的字段悄悄丢掉会让调用方以为它生效了。 */
+    private static McpSchema.CallToolResult unknownField(
+            Map<String, Object> arguments, List<String> allowed, String advice, Attempt attempt) {
+        for (String key : arguments.keySet()) {
+            if (!allowed.contains(key)) {
+                return fail(attempt, "INVALID_INPUT", "不认识的字段 " + key + "。" + advice, key);
+            }
+        }
+        return null;
     }
 
     private McpSchema.CallToolResult search(
             ApiKeyPrincipal principal, Map<String, Object> arguments, boolean localCaller, Attempt attempt) {
+        McpSchema.CallToolResult unknown = unknownField(
+                arguments, SEARCH_FIELDS, "只接受 query、conch、group、ungrouped。", attempt);
+        if (unknown != null) {
+            return unknown;
+        }
         Object rawQuery = arguments.get("query");
         String query = null;
         if (rawQuery != null) {
             if (!(rawQuery instanceof String text)) {
-                return fail(attempt, "INVALID_INPUT", "query must be a string", "query");
+                return fail(attempt, "INVALID_INPUT", "query 必须是字符串。", "query");
             }
             if (!text.isBlank()) {
                 query = text;
@@ -280,33 +308,37 @@ final class McpCalls {
         }
         Object rawConch = arguments.get("conch");
         if (rawConch != null && !(rawConch instanceof String)) {
-            return fail(attempt, "INVALID_INPUT", "invalid conch", "conch");
+            return fail(attempt, "INVALID_INPUT", "conch 必须是字符串。", "conch");
         }
         String conch = rawConch instanceof String name && !name.isBlank() ? name : null;
         Object rawGroup = arguments.get("group");
         if (rawGroup != null && !(rawGroup instanceof String)) {
-            return fail(attempt, "INVALID_INPUT", "group must be a string", "group");
+            return fail(attempt, "INVALID_INPUT", "group 必须是字符串。", "group");
         }
         String group = rawGroup instanceof String path && !path.isBlank() ? path : null;
         Object rawUngrouped = arguments.get("ungrouped");
         boolean ungrouped = false;
         if (rawUngrouped != null) {
             if (!(rawUngrouped instanceof Boolean flag)) {
-                return fail(attempt, "INVALID_INPUT", "ungrouped must be a boolean", "ungrouped");
+                return fail(attempt, "INVALID_INPUT", "ungrouped 必须是布尔值。", "ungrouped");
             }
             ungrouped = flag;
         }
         if (group != null && ungrouped) {
-            return fail(attempt, "INVALID_INPUT", "group and ungrouped cannot both be set", "group");
+            return fail(attempt, "INVALID_INPUT", "group 和 ungrouped 不能同时使用。", "group");
         }
-        if (query == null && group == null && !ungrouped && !McpCatalog.DEV_CONCH.equals(conch)) {
-            return fail(attempt, "INVALID_INPUT", "query is required", "query");
+        if (query == null && group == null && !ungrouped && conch == null) {
+            return fail(attempt, "INVALID_INPUT", "缺少 query。传 query 搜索，或传 conch 列出该规则包的能力。", "query");
         }
         return ok(catalog.search(principal, query, conch, group, ungrouped, localCaller));
     }
 
     private McpSchema.CallToolResult describe(
             ApiKeyPrincipal principal, Map<String, Object> arguments, boolean localCaller, Attempt attempt) {
+        McpSchema.CallToolResult unknown = unknownField(arguments, List.of("name"), "只接受 name。", attempt);
+        if (unknown != null) {
+            return unknown;
+        }
         Object name = arguments.get("name");
         if (!(name instanceof String text) || text.isBlank()) {
             return fail(attempt, "INVALID_INPUT", "name is required");
@@ -324,6 +356,12 @@ final class McpCalls {
             boolean localCaller,
             Attempt attempt
     ) {
+        // 先于开发者工具分流：否则 call_capability(name=hermit_dev__read_yaml, conch=…) 仍会丢参数。
+        McpSchema.CallToolResult unknown = unknownField(
+                arguments, CALL_FIELDS, "只接受 name、arguments、account；能力参数要放进 arguments。", attempt);
+        if (unknown != null) {
+            return unknown;
+        }
         Object name = arguments.get("name");
         if (!(name instanceof String text) || text.isBlank()) {
             return fail(attempt, "INVALID_INPUT", "name is required");
@@ -850,13 +888,19 @@ final class McpCalls {
     }
 
     static McpSchema.CallToolResult failAsRequest(Attempt attempt, String code, String message, String field) {
+        return failAsRequest(attempt, code, message, field, null);
+    }
+
+    /** {@code hint} 非空时替换按错误码推出的默认提示。 */
+    static McpSchema.CallToolResult failAsRequest(
+            Attempt attempt, String code, String message, String field, String hint) {
         String resolved = code == null || code.isBlank() ? "INTERNAL" : code;
         String english = message == null ? "" : message;
         String text = UserMessages.zh(english);
         LinkedHashMap<String, String> error = new LinkedHashMap<>();
         error.put("code", resolved);
         error.put("message", text);
-        error.put("hint", McpErrors.toolHint(resolved, english, attempt.directory()));
+        error.put("hint", hint != null ? hint : McpErrors.toolHint(resolved, english, attempt.directory()));
         error.put("requestId", attempt.traceId());
         error.put("requestNote", ApiEnvelope.REQUEST_NOTE);
         String named = field == null || field.isBlank() ? McpErrors.fieldOf(english) : field;

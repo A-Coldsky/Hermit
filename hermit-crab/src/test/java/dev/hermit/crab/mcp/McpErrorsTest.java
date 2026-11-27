@@ -18,7 +18,7 @@ class McpErrorsTest {
         String direct = McpErrors.toolHint("NOT_FOUND", McpErrors.UNKNOWN_TOOL, false);
         assertThat(direct).contains("tools/list").doesNotContain("search_capabilities");
         String directory = McpErrors.toolHint("NOT_FOUND", McpErrors.UNKNOWN_TOOL, true);
-        assertThat(directory).contains("tools/list").contains("search_capabilities");
+        assertThat(directory).contains("search_capabilities").doesNotContain("tools/list");
         assertThat(McpErrors.toolHint("CAPABILITY_DISABLED", "该能力已在本机停用，调用前需要重新启用。"))
                 .contains("控制台")
                 .contains("capabilities.disabled")
@@ -31,5 +31,13 @@ class McpErrorsTest {
         assertThat(McpErrors.toolHint("UPSTREAM_ERROR", "上游状态码 404"))
                 .contains("404").contains("重试结果一样").doesNotContain("稍后重试");
         assertThat(McpErrors.toolHint("UPSTREAM_ERROR", "上游状态码 503")).contains("稍后重试");
+    }
+
+    /** 普通调用方看不到规则和抓包，不能叫它去核对 HAR；只有开发者试跑给这句。 */
+    @Test
+    void upstreamClientErrorMentionsHarOnlyForTrialRuns() {
+        assertThat(McpErrors.toolHint("UPSTREAM_ERROR", "上游状态码 404", true, false))
+                .contains("核对参数").contains("维护者").doesNotContain("HAR").doesNotContain("规则里");
+        assertThat(McpErrors.toolHint("UPSTREAM_ERROR", "上游状态码 404", true, true)).contains("HAR");
     }
 }

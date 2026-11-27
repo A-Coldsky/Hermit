@@ -249,6 +249,11 @@ class McpHttpTest {
             assertThat(deniedError.path("code").asText()).isEqualTo("NOT_FOUND");
             assertThat(deniedError.path("message").asText()).isEqualTo(McpErrors.UNKNOWN_TOOL);
             assertThat(deniedError.path("hint").asText()).contains("tools/list").doesNotContain("search_capabilities");
+            // 直接模式下按目录工具的名字调用：说明当前是直接模式。
+            Reply directoryName = server.post(narrow.plaintext(), narrowSession, null, request(4, "tools/call",
+                    Map.of("name", "list_systems", "arguments", Map.of())));
+            assertThat(toolError(directoryName).path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(toolError(directoryName).path("hint").asText()).isEqualTo(McpCalls.DIRECT_MODE_HINT);
             assertThat(denied.header("X-Hermit-Trace")).isNull();
             assertThat(deniedError.has("traceId")).isFalse();
             assertThat(deniedError.path("requestId").asText()).isNotBlank();
@@ -425,6 +430,57 @@ class McpHttpTest {
             Reply missingQuery = call(server, scoped.plaintext(), session, "search_capabilities", Map.of());
             assertThat(missingQuery.json().path("result").path("structuredContent").path("error").path("field").asText())
                     .isEqualTo("query");
+            assertThat(toolError(missingQuery).path("message").asText()).contains("conch");
+
+            // 只传 conch 列出该包的全部能力（仍是 20 条窗口）。
+            Reply browsed = call(server, scoped.plaintext(), session, "search_capabilities", Map.of("conch", "bulk_conch"));
+            JsonNode browsedBody = browsed.json().path("result").path("structuredContent");
+            assertThat(browsedBody.path("total").asInt()).isEqualTo(41);
+            assertThat(browsedBody.path("matches")).hasSize(20);
+            assertThat(browsedBody.has("hint")).isFalse();
+            assertThat(found.json().path("result").path("structuredContent").has("hint")).isFalse();
+            // 整句搜不到时给下一步；点名了看不到的包时说的是包。
+            Reply sentence = call(server, scoped.plaintext(), session, "search_capabilities",
+                    Map.of("query", "帮我查看一下全部的写入确认事项"));
+            assertThat(sentence.json().path("result").path("structuredContent").path("total").asInt()).isZero();
+            assertThat(sentence.json().path("result").path("structuredContent").path("hint").asText())
+                    .isEqualTo(McpCatalog.SEARCH_EMPTY);
+            Reply unseen = call(server, scoped.plaintext(), session, "search_capabilities", Map.of("conch", "secret_conch"));
+            assertThat(unseen.json().path("result").path("structuredContent").path("hint").asText())
+                    .isEqualTo(McpCatalog.SEARCH_NO_CONCH);
+            // 目录工具不认识的字段要报错，不能悄悄丢掉。
+            // 公布的 inputSchema 也要写明不收多余字段，和实际行为一致。
+            Reply schemas = server.post(scoped.plaintext(), session, null, request(90, "tools/list", null));
+            int closed = 0;
+            for (JsonNode tool : schemas.json().path("result").path("tools")) {
+                String toolName = tool.path("name").asText();
+                if (List.of("search_capabilities", "describe_capability", "call_capability").contains(toolName)) {
+                    assertThat(tool.path("inputSchema").path("additionalProperties").isBoolean()).as(toolName).isTrue();
+                    assertThat(tool.path("inputSchema").path("additionalProperties").asBoolean()).as(toolName).isFalse();
+                    closed++;
+                }
+            }
+            assertThat(closed).isEqualTo(3);
+            Reply searchExtra = call(server, scoped.plaintext(), session, "search_capabilities",
+                    Map.of("query", "只读项", "page", 2));
+            assertThat(toolError(searchExtra).path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(toolError(searchExtra).path("field").asText()).isEqualTo("page");
+            Reply describeExtra = call(server, scoped.plaintext(), session, "describe_capability",
+                    Map.of("name", "bulk_conch__act_w", "verbose", true));
+            assertThat(toolError(describeExtra).path("field").asText()).isEqualTo("verbose");
+            Reply flat = call(server, scoped.plaintext(), session, "call_capability",
+                    Map.of("name", "bulk_conch__act_00", "q", "a", "account", "main"));
+            assertThat(toolError(flat).path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(toolError(flat).path("field").asText()).isEqualTo("q");
+            assertThat(toolError(flat).path("message").asText()).contains("arguments");
+            assertThat(server.runtime.callLogs().list("bulk_conch", "act_00", 5)).isEmpty();
+            // 按旧名字直接调用：告诉它经 call_capability 调。
+            Reply oldStyle = call(server, scoped.plaintext(), session, "bulk_conch__act_00", Map.of("q", "a"));
+            assertThat(toolError(oldStyle).path("code").asText()).isEqualTo("NOT_FOUND");
+            assertThat(toolError(oldStyle).path("hint").asText())
+                    .contains("call_capability(name=\"bulk_conch__act_00\"").doesNotContain("tools/list");
+            Reply oldHidden = call(server, scoped.plaintext(), session, "secret_conch__hidden", Map.of());
+            assertThat(toolError(oldHidden).path("hint").asText()).doesNotContain("call_capability(");
 
             Reply described = call(server, scoped.plaintext(), session, "describe_capability",
                     Map.of("name", "bulk_conch__act_w"));
@@ -439,10 +495,10 @@ class McpHttpTest {
                     Map.of("name", "secret_conch__hidden"));
             assertThat(toolError(hidden).path("code").asText()).isEqualTo("NOT_FOUND");
             assertThat(toolError(hidden).path("message").asText()).isEqualTo(McpErrors.UNKNOWN_TOOL);
-            assertThat(toolError(hidden).path("hint").asText()).contains("tools/list").contains("search_capabilities");
+            assertThat(toolError(hidden).path("hint").asText()).contains("search_capabilities").doesNotContain("tools/list");
             Reply missingTool = call(server, scoped.plaintext(), session, "not_a_directory_tool", Map.of());
             assertThat(toolError(missingTool).path("message").asText()).isEqualTo(McpErrors.UNKNOWN_TOOL);
-            assertThat(toolError(missingTool).path("hint").asText()).contains("search_capabilities").contains("tools/list");
+            assertThat(toolError(missingTool).path("hint").asText()).contains("search_capabilities").doesNotContain("tools/list");
 
             Reply read = call(server, scoped.plaintext(), session, "call_capability",
                     Map.of("name", "bulk_conch__act_00", "arguments", Map.of("q", "a"), "account", "main"));
